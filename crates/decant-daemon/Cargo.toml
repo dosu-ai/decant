@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # conflicting libsqlite3-sys.
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 r2d2 = "0.8"
-notify = "6"
+notify = "8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Adapts the change-event `broadcast::Receiver` into a `Stream` for the SSE
 # endpoint (`BroadcastStream`); `Lagged`/`Closed` surface as stream items we

@@ -68,7 +68,7 @@ defmodule Decant.MixProject do
       {:contex, "~> 0.5"},
       {:file_system, "~> 1.0"},
       # HTTP client for the local decant daemon API (pulls in Finch).
-      {:req, "~> 0.5.18"},
+      {:req, "~> 0.6.2"},
       # SSE parsing for the daemon change-stream (GET /api/v1/events).
       {:server_sent_events, "~> 1.1"},
       # Mock the HTTP layer in tests (no real network connections).

@@ -39,6 +39,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 tempfile = "3"
 futures-util = "0.3"

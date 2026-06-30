@@ -15,7 +15,7 @@ clap_complete = "4.6.5"
 comfy-table = "7.2.2"
 decant-core = { path = "../decant-core" }
 decant-daemon = { path = "../decant-daemon" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1", features = ["rt-multi-thread"] }

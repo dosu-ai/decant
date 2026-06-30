@@ -4,6 +4,6 @@
   "private": true,
   "description": "Client dependencies for the decant web app (bundled by esbuild).",
   "dependencies": {
-    "echarts": "^5.5.0"
+    "echarts": "^6.1.0"
   }
 }

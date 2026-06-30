@@ -61,7 +61,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Publish Rust test report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         # Runs on success or failure (but not cancellation) so results are
         # surfaced even when tests fail.
         if: ${{ !cancelled() }}
@@ -131,7 +131,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Publish Elixir test report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         # Runs on success or failure (but not cancellation) so results are
         # surfaced even when tests fail.
         if: ${{ !cancelled() }}

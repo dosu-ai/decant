@@ -80,10 +80,19 @@ Release workflow publishes `ghcr.io/dosu-ai/decant:latest`.
 The container binds `0.0.0.0` inside the network namespace so Docker port
 publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.
 Do not use `-p 3000:3000` unless you intentionally want to expose the archive
-port on every host interface. The image sets
-`DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from Docker bridge
-peers can pass the local-only API guard; override it with a narrower peer or
-CIDR if your Docker network uses a different gateway.
+port on every host interface.
+
+`serve` allows API requests from peers in `DECANT_TRUSTED_PEERS`
+(comma-separated IPs or IPv4 CIDRs) **unioned** with any `--trusted-peer
+<cidr>` flags (repeatable, or comma-separated) passed on the command line —
+the two sources add together and neither one silently drops the other. The
+image sets `DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from the
+default Docker bridge gateway pass the guard out of the box. Overriding the
+container command with extra `--trusted-peer` flags only *adds* peers; it
+cannot narrow the image's baked-in default. To narrow or clear the trusted set,
+override the environment variable itself at `docker run` time instead, for
+example `-e DECANT_TRUSTED_PEERS=10.0.0.0/24`, or `-e DECANT_TRUSTED_PEERS=` to
+trust no forwarded peers and rely on the `127.0.0.1` host publish alone.
 
 ## Source
 
@@ -96,3 +105,50 @@ bun run dev
 `bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, performs
 the startup sync, and keeps the archive current. Source installs require Bun.
 npm and Docker installs do not.
+
+## Verify a release
+
+Every release artifact is independently verifiable; none of the checks below
+require trusting the registry or a maintainer's word alone. See
+[docs/releasing.md](releasing.md) for who runs a release; this section is for
+anyone verifying one after the fact.
+
+**Checksums.** Download `SHA256SUMS` from the same GitHub Release as the
+tarball and verify before extracting:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing      # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+```
+
+**Build provenance.** Tarballs, raw binaries, and the GHCR image each carry a
+GitHub SLSA build-provenance attestation:
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
+gh attestation verify oci://ghcr.io/dosu-ai/decant:0.1.0 -R dosu-ai/decant
+```
+
+The `oci://` form needs a registry login first (`docker login ghcr.io`).
+
+**npm provenance.** Confirm the published packages carry Sigstore-signed
+provenance:
+
+```sh
+npm audit signatures
+```
+
+**LICENSE and NOTICE.** Every published package (the launcher and all four
+platform packages) stages both files. Confirm they are declared and actually
+packed:
+
+```sh
+npm pack --dry-run             # run inside npm/decant or any npm/decant-<platform> dir
+tar -tzf dosu-decant-*.tgz | grep -E 'LICENSE|NOTICE'
+```
+
+**macOS signing.** darwin binaries are Developer ID-signed and notarized from
+v0.1.0 onward, so there are no Gatekeeper workarounds to document anywhere in
+this repo: a browser-downloaded tarball runs after extraction with no
+`xattr -d` or "Open Anyway" step. `spctl -a -t exec -vv ./decant` reports
+`accepted`, `source=Notarized Developer ID`.

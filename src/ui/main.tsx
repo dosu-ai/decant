@@ -1,4 +1,3 @@
-import * as echarts from "echarts";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
@@ -50,6 +49,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { type ChartOption, echarts } from "./echarts.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import "./styles.css";
 
@@ -2396,7 +2396,7 @@ function buildChartOption({
   metric: AnalyticsChartMetric;
   values: number[];
   variant: AnalyticsChartVariant;
-}): echarts.EChartsOption {
+}): ChartOption {
   const colors = chartColors();
   const moneyMetric = metric === "money";
   const seriesType = variant;

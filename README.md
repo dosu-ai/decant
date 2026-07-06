@@ -3,50 +3,57 @@
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Extract Claude Code and Codex CLI sessions into a normalized,
-full-text-searchable SQLite archive, then browse, search, analyze, and distill
-that history from a fast local CLI or web UI.
+decant turns your local Claude Code and Codex CLI session logs into a
+searchable, analyzable SQLite archive — with a CLI and a local web UI, and
+nothing ever leaves your machine.
 
-decant reads the JSONL logs those tools already write
+<!-- TODO: capture docs/assets/decant-serve.png after Phase 5 lands -->
+<!-- ![decant serve UI](docs/assets/decant-serve.png) -->
+
+## What and Why
+
+decant reads the JSONL logs Claude Code and Codex already write
 (`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalizes
-the formats into one WAL + FTS5 SQLite archive, and keeps everything local. Your
-transcripts never leave your machine.
+both formats into one WAL + FTS5 SQLite archive, and keeps everything local.
+Browse, search, and analyze that history from a fast local CLI or the bundled
+web UI (`decant serve`). Use it to:
 
-## Features
+- **Find that command from last week** — full-text search across every
+  message and tool call, from the CLI or the UI's search page.
+- **See where token spend goes** — cost, tool, MCP, file-hotspot, and
+  activity analytics broken down by model, project, or day.
+- **Turn a repeated workflow into a script** — `decant distill` generates a
+  runnable shell/just/make script, a faithful session replay, or a
+  SKILL.md/AGENTS.md snippet straight from your real command history.
 
-- One archive for Claude Code and Codex sessions.
-- Full-text search across messages and tool calls.
-- Usage, cost, tool, MCP, file-hotspot, and activity analytics.
-- Deterministic `distill` artifacts from real command history: scripts, replays,
-  and skill/AGENTS snippets.
-- Persisted recommendations with implemented-state tracking.
-- Local React UI served by the same Bun process: `decant serve`.
-- Watch mode with native filesystem events plus a periodic sweep.
-- Scriptable JSON output, shell completions, and stable exit codes.
+## Requirements
+
+Bun 1.3+ — only if you're building or running from source. The npm,
+`curl | sh`, and Docker installs need nothing but Node, `curl`, and Docker
+respectively.
 
 ## Quick Start
 
-Use source during the pre-release TypeScript migration:
+Run from source — this works today, before any package or image is published:
 
 ```bash
 bun run dev
 ```
 
-Requires Bun 1.3+. `bun run dev` installs dependencies with the lockfile
-frozen, starts `decant serve`, runs the startup sync, and keeps watching your
-source logs. The UI runs at `http://127.0.0.1:3000`.
+`bun run dev` installs dependencies with the lockfile frozen, starts `decant
+serve`, runs the startup sync, and keeps watching your source logs. Open
+`http://127.0.0.1:3000`.
 
-After the first Release workflow publishes packages, install from npm without
-installing Bun:
+**Available from v0.1.0**, once the Release workflow has published a version:
 
 ```bash
-npx @dosu/decant sync
-npx @dosu/decant ls
-npx @dosu/decant search "auth bug"
 npx @dosu/decant serve
 ```
 
-After the first Release workflow publishes an image, run the GHCR image:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+decant serve
+```
 
 ```bash
 docker run --rm \
@@ -57,12 +64,8 @@ docker run --rm \
   ghcr.io/dosu-ai/decant:latest
 ```
 
-Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
-`-p 3000:3000` exposes the archive port on every host interface. The container
-binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
-publish can reach it. The image trusts Docker bridge peers by default via
-`DECANT_TRUSTED_PEERS=172.16.0.0/12`; use a narrower value if your local Docker
-network is different.
+See [Install Matrix](#install-matrix) below for the full set of options, and
+[docs/distribution.md](docs/distribution.md) for the detail behind each one.
 
 ## CLI
 
@@ -72,6 +75,7 @@ decant ls
 decant show 1
 decant search "auth bug"
 decant stats --by model
+decant tokens
 decant files --group ext
 decant tool stats
 decant mcp stats
@@ -83,28 +87,28 @@ decant export 1 > session.md
 decant completion zsh
 ```
 
-All read commands support `--json`. Use `--db /path/to/decant.db` or
-`DECANT_DB` for an alternate archive. Use `decant sync --path /path/to/log-or-dir`
-to ingest only specific source files or a temporary source tree, including raw
-Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths.
+All read commands support `--json` (`--format json` is equivalent; `--format
+md` is also available). Use `--db /path/to/decant.db` or `DECANT_DB` for an
+alternate archive. Every command also accepts `-q`/`--quiet`, `--no-color`,
+and `--no-sync` (skip the sync-on-read that read commands otherwise perform).
+Use `decant sync --path /path/to/log-or-dir` to ingest only specific source
+files or a temporary source tree, including raw Claude `stream-json` logs;
+pass `--path` more than once to ingest multiple paths.
 
 ## Configuration
 
-- `DECANT_DB`: archive path, default `~/.decant/decant.db`.
-- `DECANT_CLAUDE_DIR`: Claude projects directory, default
-  `~/.claude/projects`.
-- `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
-- `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
-- `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
-  the local API guard when `serve` is bound to a non-loopback host.
+| Variable | Purpose | Default |
+|---|---|---|
+| `DECANT_DB` | Archive path | `~/.decant/decant.db` |
+| `DECANT_CLAUDE_DIR` | Claude projects directory | `~/.claude/projects` |
+| `DECANT_CODEX_DIR` | Codex home directory | `~/.codex` |
+| `DECANT_CONFIG_DIR` | Settings directory | `~/.config/decant` |
+| `DECANT_TRUSTED_PEERS` | Comma-separated peer IPs/IPv4 CIDRs allowed through the local API guard when `serve` is bound to a non-loopback host; unions with repeatable `serve --trusted-peer <cidr>` flags | unset |
+| `DECANT_SKILLS_DIR` | Working directory the UI's "open in agent" launcher `cd`s into (macOS only) | `$HOME` |
+| `DECANT_NO_SYNC` | Set to any value to skip sync-on-read for read commands (same as `--no-sync`) | unset |
 
 `decant serve` binds `127.0.0.1:3000` by default. Override with
 `--host`/`--port`.
-
-Archives older than schema v8 are rebuild-only. v8 and v9 archives migrate to
-v10 on open; the next `decant sync` backfills persisted economics vectors for
-unchanged sessions. Older archives should be deleted and rebuilt with
-`decant sync`. Source logs remain the source of truth.
 
 ## How It Works
 
@@ -121,48 +125,86 @@ unchanged sessions. Older archives should be deleted and rebuilt with
 
 There is no background daemon and no cross-process API contract. The old
 Rust/Phoenix/Swift implementation is preserved in the signed `pre-typescript`
-tag.
+tag. Route reference for the local UI lives in
+[docs/api/routes.md](docs/api/routes.md).
 
-Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
-Distribution notes live in [docs/distribution.md](docs/distribution.md).
-Release automation is configured to publish npm packages and the GHCR image from
-the `Release` workflow once a version is dispatched.
+## Install Matrix
 
-## Development
+Ordered from the most streamlined to the most manual. Everything except
+"Build from source" is **available from v0.1.0**, once the Release workflow
+has published a version. See [docs/distribution.md](docs/distribution.md)
+for build details and release verification, including the full explanation
+behind the Docker command below.
 
-Run the local UI and watcher:
+1. **npx / npm** — zero persistent install, or a global one:
 
-```bash
-bun run dev
-```
+   ```bash
+   npx @dosu/decant sync
+   npm i -g @dosu/decant   # persistent install
+   ```
 
-Run quality gates:
+2. **Install script** — for machines without Node:
 
-```bash
-bun test
-bunx tsc --noEmit
-bunx biome check .
-just check
-```
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+   ```
 
-Build distribution artifacts:
+   Detects your platform, downloads the matching release tarball, verifies it
+   against `SHA256SUMS`, and installs to `${DECANT_INSTALL_DIR:-~/.local/bin}`.
+   Pin a version with `DECANT_VERSION`, or skip the `PATH` edit with
+   `DECANT_NO_MODIFY_PATH=1`.
 
-```bash
-bun run scripts/build-binaries.ts --target native
-bun run scripts/build-npm.ts --target native --no-build
-docker build --platform linux/amd64 -t decant:local .
-```
+3. **Docker**:
 
-See [AGENTS.md](AGENTS.md) for the full command list, conventions, and project
-invariants.
+   ```bash
+   docker run --rm \
+     -p 127.0.0.1:3000:3000 \
+     -v decant-data:/var/lib/decant \
+     -v "$HOME/.claude/projects:/sources/claude:ro" \
+     -v "$HOME/.codex:/sources/codex:ro" \
+     ghcr.io/dosu-ai/decant:latest
+   ```
 
-## Security and Privacy
+   Keep the `127.0.0.1:` host prefix on the port publish — see
+   [docs/distribution.md](docs/distribution.md#docker) for why, and for how
+   the container's trusted-peer allowlist works.
 
-decant is local-first and offline at runtime. It reads files already on disk and
-makes no outbound runtime network calls. Do not commit real session data,
-personal archives, tokens, keys, or `.env` files. To report a vulnerability, see
-[SECURITY.md](SECURITY.md).
+4. **Build from source** — the contributor path, and the only one that works
+   today:
 
-## License
+   ```bash
+   bun run dev
+   ```
 
-Licensed under the [Apache License 2.0](LICENSE).
+> `brew install dosu-ai/dosu/decant` also works, as an optional one-liner via
+> the community tap (it auto-taps in one command; no separate `brew tap`
+> step). It's a convenience, not a requirement — nothing above depends on
+> Homebrew. Details in [docs/distribution.md](docs/distribution.md).
+
+## Upgrading and Troubleshooting
+
+- **Schema rebuilds.** Archives older than schema v8 are rebuild-only. v8 and
+  v9 archives migrate to v10 on open; the next `decant sync` backfills
+  persisted economics vectors for unchanged sessions. If `decant` refuses to
+  open an old archive, delete it and re-run `decant sync` — source logs remain
+  the source of truth, so nothing is lost.
+- **Upgrading.** `npx @dosu/decant@latest` always resolves the newest
+  published version. For a persistent install, run `npm i -g
+  @dosu/decant@latest`, re-run the install script, or `docker pull
+  ghcr.io/dosu-ai/decant:latest`.
+- **`decant --version` prints `0.0.0-dev`.** Expected for an unstamped build —
+  anything built from source, or by CI without an explicit version, reports
+  this. Released binaries and packages carry a real version.
+- **Docker API requests come back `403`.** See
+  [docs/distribution.md](docs/distribution.md#docker) — the container's
+  trusted-peer allowlist unions the image's baked-in default with any
+  `--trusted-peer` flags you add; to narrow it, override the
+  `DECANT_TRUSTED_PEERS` environment variable itself rather than adding a
+  flag.
+
+## Contributing, Security, and License
+
+- Contributing guide: [CONTRIBUTING.md](CONTRIBUTING.md). Full command
+  reference and project invariants: [AGENTS.md](AGENTS.md).
+- Security policy and vulnerability reporting: [SECURITY.md](SECURITY.md).
+- Licensed under the [Apache License 2.0](LICENSE).

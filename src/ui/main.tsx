@@ -1,3 +1,4 @@
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
@@ -51,6 +52,7 @@ import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { type ChartOption, echarts } from "./echarts.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
+import { flattenSessionRows, virtualTablePadding } from "./session-rows.ts";
 import "./styles.css";
 
 type Summary = {
@@ -424,6 +426,8 @@ const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
 const SESSION_PAGE_SIZE = 50;
+const SESSION_ROW_ESTIMATE_PX = 53;
+const SESSION_ROW_OVERSCAN = 12;
 const SESSION_DETAIL_MESSAGE_LIMIT = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
@@ -865,6 +869,8 @@ function SessionsView({
   const [query, setQuery] = useState("");
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const [tableOffset, setTableOffset] = useState(0);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const hasMore = !loading && data.sessions.length < total;
@@ -872,6 +878,38 @@ function SessionsView({
     isLoading: loading,
     loadedRows: data.sessions.length,
     query,
+  });
+  const flatRows = useMemo(
+    () => flattenSessionRows(filtered, expandedSessions),
+    [expandedSessions, filtered],
+  );
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const element = tableWrapRef.current;
+      if (element == null) {
+        return;
+      }
+      const next = element.getBoundingClientRect().top + window.scrollY;
+      setTableOffset((current) => (Math.abs(current - next) > 1 ? next : current));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  const virtualizer = useWindowVirtualizer<HTMLTableRowElement>({
+    count: flatRows.length,
+    estimateSize: () => SESSION_ROW_ESTIMATE_PX,
+    getItemKey: (index) => flatRows[index]?.session.id ?? index,
+    overscan: SESSION_ROW_OVERSCAN,
+    scrollMargin: tableOffset,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  const padding = virtualTablePadding({
+    items: virtualItems,
+    scrollMargin: virtualizer.options.scrollMargin,
+    totalSize: virtualizer.getTotalSize(),
   });
 
   useEffect(() => {
@@ -901,25 +939,6 @@ function SessionsView({
       }
       return next;
     });
-  };
-
-  const renderRows = (session: SessionSummary, depth = 0): ReactNode[] => {
-    const expanded = expandedSessions.has(session.id);
-    const rows: ReactNode[] = [
-      <SessionTableRow
-        depth={depth}
-        expanded={expanded}
-        key={session.id}
-        onToggle={toggleSession}
-        session={session}
-      />,
-    ];
-    if (expanded) {
-      for (const subagent of session.subagents ?? []) {
-        rows.push(...renderRows(subagent, depth + 1));
-      }
-    }
-    return rows;
   };
 
   return (
@@ -966,7 +985,7 @@ function SessionsView({
             value={query}
           />
         </div>
-        <div className="table-scroll">
+        <div className="table-scroll" ref={tableWrapRef}>
           <table className="data-table sessions-table">
             <colgroup>
               <col className="col-session-tool" />
@@ -999,7 +1018,35 @@ function SessionsView({
                   </td>
                 </tr>
               ) : null}
-              {!waitingForSessions ? filtered.flatMap((session) => renderRows(session)) : null}
+              {!waitingForSessions && padding.top > 0 ? (
+                <tr aria-hidden="true" className="virtual-spacer">
+                  <td colSpan={7} style={{ height: padding.top }} />
+                </tr>
+              ) : null}
+              {!waitingForSessions
+                ? virtualItems.map((item) => {
+                    const row = flatRows[item.index];
+                    if (row == null) {
+                      return null;
+                    }
+                    return (
+                      <SessionTableRow
+                        depth={row.depth}
+                        expanded={expandedSessions.has(row.session.id)}
+                        index={item.index}
+                        key={item.key}
+                        measureRef={virtualizer.measureElement}
+                        onToggle={toggleSession}
+                        session={row.session}
+                      />
+                    );
+                  })
+                : null}
+              {!waitingForSessions && padding.bottom > 0 ? (
+                <tr aria-hidden="true" className="virtual-spacer">
+                  <td colSpan={7} style={{ height: padding.bottom }} />
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -1282,11 +1329,15 @@ function sessionsCaption(
 function SessionTableRow({
   depth,
   expanded,
+  index,
+  measureRef,
   onToggle,
   session,
 }: {
   depth: number;
   expanded: boolean;
+  index?: number;
+  measureRef?: (element: HTMLTableRowElement | null) => void;
   onToggle: (id: number) => void;
   session: SessionSummary;
 }) {
@@ -1296,7 +1347,11 @@ function SessionTableRow({
   const hasChildren = childCount > 0;
   const indentStyle = { "--depth": Math.max(0, Math.min(depth - 1, 5)) } as CSSProperties;
   return (
-    <tr className={`session-row${isSubagent ? " is-subagent" : ""}`}>
+    <tr
+      className={`session-row${isSubagent ? " is-subagent" : ""}`}
+      data-index={index}
+      ref={measureRef}
+    >
       <td>
         <span className="session-tool-cell">
           {hasChildren ? (

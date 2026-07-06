@@ -833,6 +833,16 @@ td a:hover {
   background: transparent;
 }
 
+.virtual-spacer,
+.virtual-spacer:hover {
+  background: transparent;
+}
+
+.virtual-spacer td {
+  border: 0;
+  padding: 0;
+}
+
 .table-skeleton-line {
   height: 16px;
 }

@@ -34,6 +34,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.5",
     "commander": "^15.0.0",
     "echarts": "^6.1.0",
     "lucide-react": "^1.23.0",

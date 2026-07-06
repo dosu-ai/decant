@@ -7,8 +7,8 @@
 #
 # Downloads the prebuilt decant release tarball for this platform, verifies
 # its SHA256 checksum against the release's SHA256SUMS file, and installs the
-# decant binary. No sudo. No macOS quarantine/Gatekeeper handling: curl and
-# tar never set com.apple.quarantine, so there is nothing to work around.
+# decant binary. No sudo. No macOS quarantine/Gatekeeper handling: curl/wget
+# and tar never set com.apple.quarantine, so there is nothing to work around.
 #
 # Environment variables:
 #   DECANT_VERSION          version to install, with or without a leading "v"
@@ -17,6 +17,9 @@
 #   DECANT_INSTALL_DIR      install directory (default: $HOME/.local/bin)
 #   DECANT_NO_MODIFY_PATH   set to "1" to skip editing shell rc files; the
 #                           PATH export line is printed instead
+#   DECANT_BASE_URL         release download base (default:
+#                           https://github.com/dosu-ai/decant/releases); point
+#                           it at a mirror that lays assets out the same way
 
 set -eu
 
@@ -76,10 +79,12 @@ case "$version" in
   v*) version="${version#v}" ;;
 esac
 
+base_url="${DECANT_BASE_URL:-https://github.com/${repo}/releases}"
+
 if [ "$version" = "latest" ]; then
-  release_base="https://github.com/${repo}/releases/latest/download"
+  release_base="${base_url}/latest/download"
 else
-  release_base="https://github.com/${repo}/releases/download/v${version}"
+  release_base="${base_url}/download/v${version}"
 fi
 
 tarball_name="${target}.tar.gz"
@@ -88,7 +93,17 @@ sums_url="${release_base}/SHA256SUMS"
 
 # --- 3. download + checksum verify --------------------------------------------
 
-need_cmd curl || err "curl is required to install decant but was not found on PATH"
+if need_cmd curl; then
+  download() {
+    curl -fsSL -o "$1" "$2"
+  }
+elif need_cmd wget; then
+  download() {
+    wget -q -O "$1" "$2"
+  }
+else
+  err "curl or wget is required to install decant but neither was found on PATH"
+fi
 
 if ! need_cmd sha256sum && ! need_cmd shasum; then
   err "neither sha256sum nor shasum was found on PATH; cannot verify the download checksum"
@@ -104,8 +119,8 @@ tarball_path="$tmp_dir/$tarball_name"
 sums_path="$tmp_dir/SHA256SUMS"
 
 info "downloading $tarball_name (version: $version)"
-curl -fsSL -o "$tarball_path" "$tarball_url" || err "failed to download $tarball_url"
-curl -fsSL -o "$sums_path" "$sums_url" || err "failed to download $sums_url"
+download "$tarball_path" "$tarball_url" || err "failed to download $tarball_url"
+download "$sums_path" "$sums_url" || err "failed to download $sums_url"
 
 expected_hash=""
 while read -r sum_hash sum_file; do

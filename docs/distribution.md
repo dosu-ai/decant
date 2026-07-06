@@ -52,6 +52,33 @@ The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
 deferred.
 
+## Shell installer
+
+For machines without Node, `install.sh` fetches the prebuilt release tarball
+for the current platform, verifies its SHA256 against the release's
+`SHA256SUMS` (aborting on any mismatch), runs a best-effort
+`gh attestation verify` when `gh` is available, and installs the binary
+without sudo. Inspect it before running if you like
+(`curl -fsSL <url> | less`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+```
+
+Knobs, all optional:
+
+- A positional argument or `DECANT_VERSION` pins a version (with or without
+  the leading `v`); the default is the latest stable release.
+- `DECANT_INSTALL_DIR` overrides the install directory
+  (default `~/.local/bin`).
+- `DECANT_NO_MODIFY_PATH=1` prints the `PATH` export line instead of appending
+  it to your shell rc file.
+- `DECANT_BASE_URL` points downloads at a mirror that lays assets out like
+  GitHub Releases (default `https://github.com/dosu-ai/decant/releases`).
+
+The script uses `curl` when present and falls back to `wget`; it errors
+clearly when neither exists.
+
 ## Docker
 
 The image compiles Decant in an `oven/bun` builder and runs the standalone

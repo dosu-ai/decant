@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,6 +11,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -156,6 +158,86 @@ esac
 `,
   );
   return binDir;
+}
+
+/**
+ * An isolated bin dir holding symlinks to every host tool install.sh needs —
+ * but no `curl` (and no `gh`) — so PATH can be pinned to exactly this dir to
+ * exercise the wget-fallback and no-downloader paths hermetically. The fake
+ * `wget` mirrors the fake `curl`: it serves fixture files by URL basename and
+ * logs each requested URL to WGET_LOG.
+ */
+function buildToolFarm(dir: string, options: { wget: boolean }): { binDir: string; wgetLog: string } {
+  const binDir = join(dir, "tool-farm");
+  mkdirSync(binDir, { recursive: true });
+  const wgetLog = join(dir, "wget.log");
+
+  const tools = [
+    "sh",
+    "uname",
+    "mktemp",
+    "tar",
+    "install",
+    "mkdir",
+    "rm",
+    "grep",
+    "awk",
+    "dirname",
+    "basename",
+  ];
+  const hashTool =
+    spawnSync("sh", ["-c", "command -v sha256sum"]).status === 0 ? "sha256sum" : "shasum";
+  tools.push(hashTool);
+  for (const tool of tools) {
+    const resolved = spawnSync("sh", ["-c", `command -v ${tool}`], { encoding: "utf8" });
+    const toolPath = resolved.stdout.trim();
+    if (resolved.status !== 0 || toolPath === "") {
+      throw new Error(`buildToolFarm: required host tool not found: ${tool}`);
+    }
+    symlinkSync(toolPath, join(binDir, tool));
+  }
+
+  if (options.wget) {
+    writeStub(
+      join(binDir, "wget"),
+      `#!/bin/sh
+set -eu
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -O)
+      out="$2"
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+if [ -n "\${WGET_LOG:-}" ]; then
+  printf '%s\\n' "$url" >> "$WGET_LOG"
+fi
+base=$(basename "$url")
+src="\${FIXTURE_DIR:-}/$base"
+if [ ! -f "$src" ]; then
+  echo "fake wget: no fixture for $url (looked for $src)" >&2
+  exit 1
+fi
+cp "$src" "$out"
+`,
+    );
+    // the fake wget itself shells out to basename/cp — cp isn't needed by
+    // install.sh, so link it just for the stub
+    const cp = spawnSync("sh", ["-c", "command -v cp"], { encoding: "utf8" }).stdout.trim();
+    symlinkSync(cp, join(binDir, "cp"));
+  }
+
+  return { binDir, wgetLog };
 }
 
 function decantTempEntries(): Set<string> {
@@ -440,5 +522,84 @@ describe("install.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("unsupported architecture 'riscv64'");
+  });
+
+  test("honors DECANT_BASE_URL as the download base (file:// mirror, real curl)", () => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 9.9.9-mirror"\n');
+    // Lay the mirror out exactly like GitHub Releases: <base>/download/v<ver>/<asset>
+    const mirrorRoot = join(dir, "mirror");
+    const assetDir = join(mirrorRoot, "download", "v9.9.9");
+    mkdirSync(assetDir, { recursive: true });
+    copyFileSync(fixture.tarballPath, join(assetDir, tarballName));
+    copyFileSync(fixture.sumsPath, join(assetDir, "SHA256SUMS"));
+
+    // Only `gh` is stubbed (attestation must stay offline); curl is the real one.
+    const ghDir = join(dir, "gh-bin");
+    mkdirSync(ghDir, { recursive: true });
+    writeStub(join(ghDir, "gh"), "#!/bin/sh\nexit 1\n");
+
+    const installDir = join(dir, "install-target");
+    const home = freshHome(dir);
+
+    const result = runInstall(["9.9.9"], {
+      PATH: `${ghDir}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      DECANT_BASE_URL: `file://${mirrorRoot}`,
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+    });
+
+    expect(result.stderr).not.toContain("error:");
+    expect(result.status).toBe(0);
+    const installedBinary = join(installDir, "decant");
+    expect(existsSync(installedBinary)).toBe(true);
+    expect(readFileSync(installedBinary, "utf8")).toBe(fixture.binaryContents);
+    expect(result.stdout).toContain("checksum verified");
+  });
+
+  test("falls back to wget when curl is absent", () => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
+    const farm = buildToolFarm(dir, { wget: true });
+    const installDir = join(dir, "install-target");
+    const home = freshHome(dir);
+
+    const result = runInstall(["1.2.3"], {
+      PATH: farm.binDir,
+      HOME: home,
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+      FIXTURE_DIR: fixture.fixtureDir,
+      WGET_LOG: farm.wgetLog,
+    });
+
+    expect(result.stderr).not.toContain("error:");
+    expect(result.status).toBe(0);
+    const installedBinary = join(installDir, "decant");
+    expect(readFileSync(installedBinary, "utf8")).toBe(fixture.binaryContents);
+    const requestedUrls = readFileSync(farm.wgetLog, "utf8").trim().split("\n");
+    expect(requestedUrls).toEqual([
+      `https://github.com/dosu-ai/decant/releases/download/v1.2.3/${tarballName}`,
+      "https://github.com/dosu-ai/decant/releases/download/v1.2.3/SHA256SUMS",
+    ]);
+  });
+
+  test("errors clearly when neither curl nor wget is on PATH", () => {
+    const dir = caseDir();
+    const farm = buildToolFarm(dir, { wget: false });
+    const installDir = join(dir, "install-target");
+    const home = freshHome(dir);
+
+    const result = runInstall(["1.2.3"], {
+      PATH: farm.binDir,
+      HOME: home,
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("curl or wget is required");
+    expect(existsSync(join(installDir, "decant"))).toBe(false);
   });
 });

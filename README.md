@@ -151,8 +151,9 @@ behind the Docker command below.
 
    Detects your platform, downloads the matching release tarball, verifies it
    against `SHA256SUMS`, and installs to `${DECANT_INSTALL_DIR:-~/.local/bin}`.
-   Pin a version with `DECANT_VERSION`, or skip the `PATH` edit with
-   `DECANT_NO_MODIFY_PATH=1`.
+   Pin a version with `DECANT_VERSION`, skip the `PATH` edit with
+   `DECANT_NO_MODIFY_PATH=1`, or point `DECANT_BASE_URL` at a mirror — see
+   [docs/distribution.md](docs/distribution.md) for the full knob list.
 
 3. **Docker**:
 

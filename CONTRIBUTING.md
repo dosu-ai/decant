@@ -51,7 +51,8 @@ bunx biome check .
 3. decant is local-first and offline: no outbound runtime network calls and no
    LLM calls.
 4. Never commit secrets, private transcripts, or a personal archive DB.
-5. The v8 schema is the baseline. Pre-v8 archives are rebuild-only.
+5. The schema baseline is v9; v8 archives migrate to v9 automatically on
+   open. Anything older than v8 is rebuild-only.
 
 Adding model pricing? Update `src/cost.ts`, include string normalization, and add
 tests.

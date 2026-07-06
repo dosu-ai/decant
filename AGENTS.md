@@ -20,7 +20,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 
 Start from `src/cli.ts`; parsers live in `src/sources/` (the extension
 point). Docs: `docs/api/routes.md` (serve routes) and `docs/distribution.md`
-(npm/Docker/source).
+(npm/Docker/source), and `docs/releasing.md` (release operations).
 
 ## Setup
 
@@ -46,6 +46,15 @@ Run from the repo root.
 - Settings dir: `DECANT_CONFIG_DIR`; settings default to
   `~/.config/decant/settings.json`.
 - `serve` binds `127.0.0.1:3000` by default; override with `--host`/`--port`.
+- `DECANT_TRUSTED_PEERS` (comma-separated IPs/CIDRs) and repeatable
+  `serve --trusted-peer <cidr>` union together; unset or override the env var
+  to narrow trust, since the flag only ever adds peers.
+- `DECANT_SKILLS_DIR`: working directory the "open in agent" launcher `cd`s
+  into (macOS only); defaults to `$HOME`.
+- `DECANT_NO_SYNC` (any value) or `--no-sync`: skip the sync-on-read that read
+  commands otherwise perform.
+- Global flags on every command: `--db`, `--json`, `--format table|json|md`,
+  `-q/--quiet`, `--no-color`, `--no-sync`.
 
 ## Definition of done
 
@@ -73,9 +82,9 @@ A change is ready when:
 3. **Local-first only.** No outbound network calls, no hosted service dependency,
    and no LLM calls. The only networking is the loopback UI/API served by
    `decant serve`.
-4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
-   session row. Editing pricing does not rewrite historical rows; rebuild the
-   archive to recompute.
+4. **Costs are computed at ingest** with `estimateCost` (`src/cost.ts`) and
+   stored on the session row. Editing pricing does not rewrite historical
+   rows; rebuild the archive to recompute.
 5. **The schema baseline is v10.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow

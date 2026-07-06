@@ -8,6 +8,7 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 
 - `GET /`
 - `GET /projects`
+- `GET /sessions`
 - `GET /sessions/:id`
 - `GET /search`
 - `GET /analytics`
@@ -57,6 +58,7 @@ backfills vectors for unchanged sessions.
 Current event names:
 
 - `hello`
+- `ping` (heartbeat, emitted every 5 seconds)
 - `ready`
 - `sync`
 - `archive_updated`

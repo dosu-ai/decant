@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:1.3.14-slim AS build
+# Builder tag must match .bun-version — CI asserts this (single source of truth
+# for the Bun toolchain; the pin is load-bearing for macOS binary integrity too).
+FROM oven/bun:1.3.9-slim AS build
 
 WORKDIR /app
 
@@ -21,7 +23,9 @@ RUN case "${TARGETPLATFORM}" in \
     bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin --version "${DECANT_VERSION}"; \
     cp "/tmp/decant-bin/${DECANT_TARGET}/decant" /usr/local/bin/decant
 
-FROM debian:bookworm-slim AS runtime
+# Runtime base pinned by digest for reproducibility; Dependabot maintains the
+# digest (multi-arch OCI index digest for debian:bookworm-slim).
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime
 
 RUN groupadd --system decant \
     && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \

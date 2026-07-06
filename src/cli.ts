@@ -33,6 +33,7 @@ import {
   publishServerEvent,
   serve as serveApp,
 } from "./server.ts";
+import { getSettings } from "./settings.ts";
 import {
   byDimension,
   fileHotspots,
@@ -42,12 +43,14 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import { runSyncWorker } from "./sync-runner.ts";
 import { tokenEconomics } from "./token-economics.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
   startWatch,
   type WatchEvent,
+  type WatchHandle,
 } from "./watch.ts";
 
 export interface CliResult {
@@ -149,7 +152,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const program = new Command();
   program
     .name("decant")
-    .description("extract, browse, and search Claude Code and Codex sessions")
+    .description("extract, browse, and search Claude Code, Codex, and Cursor sessions")
     .version(DECANT_VERSION)
     .exitOverride()
     .configureOutput({
@@ -169,6 +172,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       dbPath: globals().db,
       env: options.env,
       homeDir: options.homeDir,
+      cursorChatsEnabled: getSettings({ env: options.env, homeDir: options.homeDir }).experimental
+        .cursorChats,
       ...overrides,
     });
   const output = (value: unknown, renderHuman: () => string): void => {
@@ -189,6 +194,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const runSync = (commandOptions: {
     claudeDir?: string;
     codexDir?: string;
+    cursorDir?: string;
+    cursorChatsDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -198,7 +205,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     }
 
     const archive = openArchive(
-      resolve({ claudeDir: commandOptions.claudeDir, codexDir: commandOptions.codexDir }),
+      resolve({
+        claudeDir: commandOptions.claudeDir,
+        codexDir: commandOptions.codexDir,
+        cursorDir: commandOptions.cursorDir,
+        cursorChatsDir: commandOptions.cursorChatsDir,
+      }),
     );
     try {
       const report = ingestSync(archive.db, {
@@ -232,13 +244,24 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option(
+      "--cursor-dir <dir>",
+      "ingest staged Cursor stream-json transcripts from this directory",
+    )
+    .option("--cursor-chats-dir <dir>", "override the Cursor native transcript directory")
+    .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
       collectOption,
       [] as string[],
     )
-    .action((commandOptions: { claudeDir?: string; codexDir?: string; path?: string[] }) =>
-      run(() => runSync(commandOptions)),
+    .action(
+      (commandOptions: {
+        claudeDir?: string;
+        codexDir?: string;
+        cursorDir?: string;
+        cursorChatsDir?: string;
+        path?: string[];
+      }) => run(() => runSync(commandOptions)),
     );
 
   const emitWatchEvent = (event: WatchEvent): void => {
@@ -256,12 +279,22 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option(
+      "--cursor-dir <dir>",
+      "ingest staged Cursor stream-json transcripts from this directory",
+    )
+    .option("--cursor-chats-dir <dir>", "override the Cursor native transcript directory")
+    .option(
       "--trusted-peer <peer>",
       "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
       collectOption,
       [] as string[],
     )
-    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
+    .option(
+      "--interval-ms <ms>",
+      "fallback sweep interval (0 disables)",
+      parseInteger,
+      DEFAULT_SYNC_INTERVAL_MS,
+    )
     .option(
       "--debounce-ms <ms>",
       "filesystem event debounce window",
@@ -273,6 +306,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       (commandOptions: {
         claudeDir?: string;
         codexDir?: string;
+        cursorDir?: string;
+        cursorChatsDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -282,6 +317,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            cursorDir: commandOptions.cursorDir,
+            cursorChatsDir: commandOptions.cursorChatsDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -303,7 +340,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
-    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
+    .option(
+      "--cursor-dir <dir>",
+      "ingest staged Cursor stream-json transcripts from this directory",
+    )
+    .option("--cursor-chats-dir <dir>", "override the Cursor native transcript directory")
+    .option("--interval-ms <ms>", "fallback sweep interval (0 disables)", parseInteger, 0)
     .option(
       "--debounce-ms <ms>",
       "filesystem event debounce window",
@@ -317,6 +359,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         port?: number;
         claudeDir?: string;
         codexDir?: string;
+        cursorDir?: string;
+        cursorChatsDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -326,18 +370,27 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            cursorDir: commandOptions.cursorDir,
+            cursorChatsDir: commandOptions.cursorChatsDir,
           });
+          let handle: WatchHandle | null = null;
           const server = serveApp({
             config,
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
             port: commandOptions.port ?? DEFAULT_SERVE_PORT,
             trustedPeers: trustedPeers(commandOptions.trustedPeer),
+            onConfigChanged: () => {
+              handle?.refresh();
+              handle?.trigger("manual");
+            },
           });
-          const handle = startWatch({
+          handle = startWatch({
             config,
             intervalMs: commandOptions.intervalMs,
             debounceMs: commandOptions.debounceMs,
             enableWatch: commandOptions.fsWatch !== false,
+            syncOnStart: false,
+            runSync: runSyncWorker,
             onEvent: emitWatchEvent,
           });
           if (!isJson(globals()) && !globals().quiet) {
@@ -349,7 +402,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             await waitForProcessSignal();
           } finally {
             server.stop();
-            await handle.stop();
+            await handle?.stop();
           }
         }),
     );

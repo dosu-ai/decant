@@ -6,9 +6,12 @@ symlink to this file; tool-specific files should stay thin and defer here.
 
 ## What this is
 
-**decant** extracts Claude Code (`~/.claude/projects/*.jsonl`) and Codex
-(`~/.codex/sessions/rollout-*.jsonl`) CLI sessions into a normalized,
-full-text-searchable SQLite archive (WAL + FTS5).
+**decant** extracts Claude Code (`~/.claude/projects/*.jsonl`), Codex
+(`~/.codex/sessions/rollout-*.jsonl`), and Cursor Agent JSONL sessions into a
+normalized, full-text-searchable SQLite archive (WAL + FTS5). Cursor staged
+`stream-json` imports are configured explicitly; native discovery reads
+`~/.cursor/projects/*/agent-transcripts` plus `~/.cursor/chats/*/*/meta.json`
+when the experimental settings preview is enabled.
 
 The repo is now a single Bun + TypeScript app. The same `decant` CLI owns
 parsing, ingest, reads, distillation, recommendations, watch mode, and the local
@@ -22,14 +25,14 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 |---|---|
 | `src/cli.ts` | Commander CLI entrypoint and all stdout/stderr/exit-code policy. |
 | `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v9 baseline schema. |
-| `src/sources/` | Per-tool parsers: `claude.ts`, `codex.ts`. |
+| `src/sources/` | Per-tool parsers: `claude.ts`, `codex.ts`, `cursor.ts`. |
 | `src/ingest.ts` | Idempotent sync from source logs into the archive. |
 | `src/query.ts`, `src/stats.ts`, `src/export.ts` | Read/query/render surfaces. |
 | `src/distill.ts`, `src/recommendations.ts` | Deterministic artifact and recommendation generation. |
 | `src/watch.ts`, `src/server.ts` | Watch loop, local JSON routes, SSE, and UI serving. |
 | `src/ui/` | React UI bundled by Bun HTML imports. |
 | `src/settings.ts`, `src/launcher.ts` | Local settings and native launcher helpers. |
-| `fixtures/` | Tiny synthetic Claude/Codex session files. |
+| `fixtures/` | Tiny synthetic Claude/Codex/Cursor session files. |
 | `test/golden/` | Static golden snapshots frozen from the pre-TypeScript implementation. |
 | `npm/` | Publishable npm launcher package plus platform binary package manifests. |
 | `scripts/` | Distribution build/staging helpers. |
@@ -48,7 +51,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 Run from the repo root.
 
 ```sh
-# One-command local UI + startup sync
+# One-command local UI + filesystem watch
 bun run dev
 
 # Quality gates
@@ -80,7 +83,8 @@ docker build --platform linux/amd64 -t decant:local .
 Config:
 
 - Archive DB: `~/.decant/decant.db`, override with `DECANT_DB` or `--db`.
-- Source dirs: `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, or command flags.
+- Source dirs: `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_CURSOR_DIR`,
+  `DECANT_CURSOR_CHATS_DIR`, or command flags.
 - Settings dir: `DECANT_CONFIG_DIR`; settings default to
   `~/.config/decant/settings.json`.
 - `serve` binds `127.0.0.1:3000` by default; override with `--host`/`--port`.
@@ -117,7 +121,8 @@ A change is ready when:
    v8-to-v9 migration preserves existing TypeScript-cutover archives.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
-   and golden updates.
+   and golden updates. Cursor is the current third parser; keep its native
+   preview gated unless the transcript format is promoted to stable.
 7. **Serve routes are internal app routes.** `docs/api/routes.md` is a reference,
    not a versioned public contract.
 

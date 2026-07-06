@@ -349,13 +349,30 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   if (sessions.length === 0) {
     return sessions;
   }
-  const placeholders = sessions.map(() => "?").join(", ");
+  const titleBySession = new Map<number, string>();
+  const needsLookup: SessionSummary[] = [];
+  for (const session of sessions) {
+    const title = readableStoredTitle(session.title);
+    if (title == null) {
+      needsLookup.push(session);
+    } else {
+      titleBySession.set(session.id, title);
+    }
+  }
+  if (needsLookup.length === 0) {
+    return sessions.map((session) => ({
+      ...session,
+      title: titleBySession.get(session.id) ?? null,
+    }));
+  }
+
+  const placeholders = needsLookup.map(() => "?").join(", ");
   const rows = db
     .query(
       `SELECT s.id AS session_id, b.text
        FROM session s
        JOIN message m ON m.session_id = s.id
-       JOIN block b ON b.message_id = m.id
+       JOIN block b INDEXED BY idx_block_message ON b.message_id = m.id
        WHERE s.id IN (${placeholders})
          AND m.role = 'user'
          AND b.type = 'text'
@@ -363,8 +380,7 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
          AND TRIM(b.text) != ''
        ORDER BY s.id, m.seq, b.ordinal`,
     )
-    .all(...sessions.map((session) => session.id)) as { session_id: number; text: string }[];
-  const titleBySession = new Map<number, string>();
+    .all(...needsLookup.map((session) => session.id)) as { session_id: number; text: string }[];
   for (const row of rows) {
     if (titleBySession.has(row.session_id)) {
       continue;
@@ -385,7 +401,60 @@ function readableUserTitle(text: string): string | null {
   if (trimmed === "" || isAgentContextText(trimmed)) {
     return null;
   }
-  return preview(trimmed.replace(/\s+/g, " "), 180);
+  return preview(readablePromptText(trimmed).replace(/\s+/g, " "), 180);
+}
+
+function readableStoredTitle(text: string | null | undefined): string | null {
+  if (text == null) {
+    return null;
+  }
+  const trimmed = stripAnsi(text).trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return null;
+  }
+  if (readableFallbackTitle(text) != null || isAgentContextText(text)) {
+    return null;
+  }
+  return readableUserTitle(text);
+}
+
+function readablePromptText(text: string): string {
+  const parsed = parseJsonTextContent(text);
+  const normalized = parsed ?? text;
+  const userQuery = normalized.match(/<user_query>([\s\S]*?)<\/user_query>/i)?.[1]?.trim();
+  if (userQuery != null && userQuery !== "") {
+    return userQuery;
+  }
+  return normalized.replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "").trim();
+}
+
+function parseJsonTextContent(text: string): string | null {
+  if (!text.startsWith("{") && !text.startsWith("[")) {
+    return null;
+  }
+  try {
+    return collectJsonText(JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function collectJsonText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const parts = value.flatMap((item) => {
+      const text = collectJsonText(item);
+      return text == null ? [] : [text];
+    });
+    return parts.length === 0 ? null : parts.join("\n");
+  }
+  if (value == null || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return collectJsonText(record.content) ?? collectJsonText(record.text);
 }
 
 function readableFallbackTitle(text: string | null | undefined): string | null {

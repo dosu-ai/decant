@@ -112,6 +112,18 @@ describe("fileRefs", () => {
     const shell = oneBlockSession("codex", toolUse("shell", "ls -la"));
     expect(fileRefs(shell)).toEqual([]);
   });
+
+  test("Cursor path-bearing tools become refs", () => {
+    const write = oneBlockSession(
+      "cursor",
+      toolUse("write", { path: "/Users/dev/proj/notes.txt", fileText: "done" }),
+    );
+    write.cwd = "/Users/dev/proj";
+    expect(fileRefs(write).map(brief)).toEqual([["notes.txt", "write", "txt"]]);
+
+    const edit = oneBlockSession("cursor", toolUse("edit_file", { path: "src/app.ts" }));
+    expect(fileRefs(edit).map(brief)).toEqual([["src/app.ts", "edit", "ts"]]);
+  });
 });
 
 describe("facets", () => {

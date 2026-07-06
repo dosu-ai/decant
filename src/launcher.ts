@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
@@ -7,6 +7,7 @@ import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts"
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
   claude: { bin: "claude", label: "Claude" },
   codex: { bin: "codex", label: "Codex" },
+  cursor: { bin: "cursor-agent", label: "Cursor" },
 };
 
 const ideApps: Record<IdeKey, { app: string; label: string }> = {
@@ -69,7 +70,9 @@ export function launchAgent(
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
     `rm -f ${shellQuote(promptFile)})"`;
-  return launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env);
+  return launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env, {
+    warpScriptPath: `${promptFile}.command`,
+  });
 }
 
 export function openIde(
@@ -91,10 +94,13 @@ function launchIn(
   cmd: string,
   run: (bin: string, args: string[]) => LaunchResult,
   env: Record<string, string | undefined> | undefined,
+  options: { warpScriptPath?: string } = {},
 ): LaunchResult {
   switch (terminal) {
     case "iterm":
       return run("osascript", ["-e", itermScript(cmd)]);
+    case "warp":
+      return launchWarp(cmd, options.warpScriptPath, run);
     case "ghostty":
       return openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
     case "alacritty":
@@ -106,6 +112,23 @@ function launchIn(
     default:
       return run("osascript", ["-e", terminalAppScript(cmd)]);
   }
+}
+
+function launchWarp(
+  cmd: string,
+  scriptPath: string | undefined,
+  run: (bin: string, args: string[]) => LaunchResult,
+): LaunchResult {
+  const path = scriptPath ?? join(tmpdir(), `decant-warp-${Date.now()}.command`);
+  writeFileSync(path, `#!/bin/zsh\n${cmd}\nstatus=$?\nrm -f ${shellQuote(path)}\nexit $status\n`, {
+    mode: 0o700,
+  });
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    // Best effort on filesystems that do not support POSIX mode bits.
+  }
+  return run("open", ["-a", "Warp", path]);
 }
 
 function openArgs(

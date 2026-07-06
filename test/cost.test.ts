@@ -117,6 +117,32 @@ describe("estimateCost", () => {
     expect(estimateCost("codex-auto-review", u, pricing)).toBeCloseTo(15.75, 6);
   });
 
+  test("cursor composer and auto models are priced", () => {
+    const pricing = defaultPricing();
+    const u: TokenUsage = {
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheCreation: 1_000_000,
+      reasoning: 0,
+    };
+    expect(estimateCost("composer-2.5", u, pricing)).toBeCloseTo(3.7, 6);
+    expect(estimateCost("cursor/composer-2", u, pricing)).toBeCloseTo(3.7, 6);
+    expect(estimateCost("cursor/composer-2.5", u, pricing)).toBeCloseTo(3.7, 6);
+    expect(estimateCost("composer-1", u, pricing)).toBeCloseTo(12.625, 6);
+    expect(estimateCost("composer-1.5", u, pricing)).toBeCloseTo(24.85, 6);
+    expect(estimateCost("composer-1.5-20260209", u, pricing)).toBeCloseTo(24.85, 6);
+    expect(estimateCost("auto", u, pricing)).toBeCloseTo(8.75, 6);
+    expect(isPriceable("composer-2.5")).toBe(true);
+  });
+
+  test("cursor composer fast models do not fall through to standard composer rates", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    expect(estimateCost("composer-2-fast", u, pricing)).toBeCloseTo(9.0, 6);
+    expect(estimateCost("composer-2.5-fast", u, pricing)).toBeCloseTo(18.0, 6);
+  });
+
   test("openai models without a cached-input discount do not make cache reads free", () => {
     const usage: TokenUsage = { ...emptyUsage(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
     expect(estimateCost("gpt-5-pro", usage, defaultPricing())).toBeCloseTo(30.0, 6);

@@ -119,7 +119,10 @@ export function decodeCommand(toolName: string, input: string | null | undefined
   const key =
     toolName === "Bash"
       ? "command"
-      : toolName === "exec_command" || toolName === "shell" || toolName === "local_shell"
+      : toolName === "exec_command" ||
+          toolName === "shell" ||
+          toolName === "terminal" ||
+          toolName === "local_shell"
         ? "cmd"
         : null;
   if (key == null) {
@@ -772,6 +775,16 @@ function fileOp(
       const [content, redacted] = redact(get("content") ?? "");
       return make("file_write", relToRoot(path, cwd), content, redacted);
     }
+    case "write":
+    case "write_file":
+    case "create": {
+      const path = pathFromToolInput(value);
+      if (path == null) {
+        return null;
+      }
+      const [content, redacted] = redact(get("fileText") ?? get("content") ?? "");
+      return make("file_write", relToRoot(path, cwd), content, redacted);
+    }
     case "Edit": {
       const path = get("file_path");
       if (path == null) {
@@ -781,6 +794,22 @@ function fileOp(
       const newText = oneLine(get("new_string") ?? "", 60);
       const [payload, redacted] = redact(`replace \`${oldText}\` -> \`${newText}\``);
       return make("file_edit", relToRoot(path, cwd), payload, redacted);
+    }
+    case "edit":
+    case "edit_file":
+    case "apply": {
+      const path = pathFromToolInput(value);
+      if (path == null) {
+        return null;
+      }
+      const oldText = oneLine(get("oldText") ?? get("old_string") ?? "", 60);
+      const newText = oneLine(get("newText") ?? get("new_string") ?? get("fileText") ?? "", 60);
+      const [payload, redacted] = redact(`replace \`${oldText}\` -> \`${newText}\``);
+      return make("file_edit", relToRoot(path, cwd), payload, redacted);
+    }
+    case "delete": {
+      const path = pathFromToolInput(value);
+      return path == null ? null : make("file_delete", relToRoot(path, cwd), null, false);
     }
     case "NotebookEdit": {
       const path = get("notebook_path") ?? get("file_path");
@@ -805,6 +834,11 @@ function parseToolInputObject(input: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function pathFromToolInput(value: Record<string, unknown>): string | null {
+  const path = value.path ?? value.filePath ?? value.file_path;
+  return typeof path === "string" ? path : null;
 }
 
 function relToRoot(path: string, cwd: string | null): string {

@@ -93,6 +93,7 @@ Source remains the contributor path and the fastest dev loop:
 bun run dev
 ```
 
-`bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, performs
-the startup sync, and keeps the archive current. Source installs require Bun.
+`bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, opens
+from the existing archive immediately, and keeps watching source logs. Source
+installs require Bun.
 npm and Docker installs do not.

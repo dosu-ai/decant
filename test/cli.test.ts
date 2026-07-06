@@ -6,7 +6,16 @@ import { runCli } from "../src/cli.ts";
 import { openDb } from "../src/db.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
-afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+const priorConfigDir = process.env.DECANT_CONFIG_DIR;
+process.env.DECANT_CONFIG_DIR = join(workDir, "settings-global");
+afterAll(() => {
+  if (priorConfigDir == null) {
+    delete process.env.DECANT_CONFIG_DIR;
+  } else {
+    process.env.DECANT_CONFIG_DIR = priorConfigDir;
+  }
+  rmSync(workDir, { recursive: true, force: true });
+});
 
 let caseCounter = 0;
 function freshCase(): { dbPath: string; claudeDir: string; codexDir: string } {
@@ -26,6 +35,30 @@ function freshCase(): { dbPath: string; claudeDir: string; codexDir: string } {
     );
   }
   return { dbPath: join(dir, "archive.db"), claudeDir, codexDir };
+}
+
+function emptySourceCase(): {
+  dbPath: string;
+  claudeDir: string;
+  codexDir: string;
+  cursorDir: string;
+  env: Record<string, string>;
+} {
+  caseCounter += 1;
+  const dir = join(workDir, `case-${caseCounter}`);
+  const claudeDir = join(dir, "sources", "claude");
+  const codexDir = join(dir, "sources", "codex");
+  const cursorDir = join(dir, "sources", "cursor");
+  mkdirSync(claudeDir, { recursive: true });
+  mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
+  return {
+    dbPath: join(dir, "archive.db"),
+    claudeDir,
+    codexDir,
+    cursorDir,
+    env: { DECANT_CONFIG_DIR: join(dir, "settings") },
+  };
 }
 
 async function syncedCase(): Promise<{ dbPath: string }> {
@@ -217,6 +250,41 @@ describe("runCli", () => {
     ).toEqual(["sess-codex-1", "claude-one"]);
   });
 
+  test("sync --cursor-dir ingests staged Cursor transcripts", async () => {
+    const fixtureCase = emptySourceCase();
+    copyFileSync(
+      join(import.meta.dir, "..", "fixtures", "cursor", "stream.jsonl"),
+      join(fixtureCase.cursorDir, "stream.jsonl"),
+    );
+
+    const result = await runCli(
+      [
+        "--db",
+        fixtureCase.dbPath,
+        "--json",
+        "sync",
+        "--claude-dir",
+        fixtureCase.claudeDir,
+        "--codex-dir",
+        fixtureCase.codexDir,
+        "--cursor-dir",
+        fixtureCase.cursorDir,
+      ],
+      { env: fixtureCase.env },
+    );
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 1, ingested: 1, issues: 0 });
+
+    const list = await runCli(
+      ["--db", fixtureCase.dbPath, "--json", "--no-sync", "ls", "--tool", "cursor"],
+      { env: fixtureCase.env },
+    );
+    expect(list.code).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([
+      expect.objectContaining({ tool: "cursor", source_session_id: "stream" }),
+    ]);
+  });
+
   test("invalid options return code 2 with an error", async () => {
     const { dbPath } = await syncedCase();
     const unknownOption = await runCli(["--definitely-not-real"]);
@@ -301,6 +369,7 @@ describe("runCli", () => {
     expect(watch).toMatchObject({ code: 0, stderr: "" });
     expect(watch.stdout).toContain("keep the archive current");
     expect(watch.stdout).toContain("--interval-ms");
+    expect(watch.stdout).toMatch(/default:\s+45000/);
     expect(watch.stdout).toContain("--no-fs-watch");
 
     const serve = await runCli(["serve", "--help"]);
@@ -309,5 +378,6 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
     expect(serve.stdout).toContain("(default: 3000)");
+    expect(serve.stdout).toContain("(default: 0)");
   });
 });

@@ -29,9 +29,24 @@ function openAiPrice(
   };
 }
 
+function cursorPrice(
+  inputPerMtok: number,
+  cacheReadPerMtok: number,
+  outputPerMtok: number,
+  cacheWritePerMtok = inputPerMtok,
+): Price {
+  return {
+    inputPerMtok,
+    outputPerMtok,
+    cacheReadPerMtok,
+    cacheWritePerMtok,
+  };
+}
+
 export function defaultPricing(): Map<string, Price> {
   // Standard first-party API text-token rates per 1M tokens. Claude cache writes use
   // the 5-minute cache-write rate because session logs do not distinguish 1h writes.
+  // Cursor entries are API-equivalent token estimates; subscription/request billing can differ.
   return new Map<string, Price>([
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus", claudePrice(5.0, 25.0)],
@@ -83,60 +98,85 @@ export function defaultPricing(): Map<string, Price> {
     ["gpt-3.5-turbo-16k-0613", openAiPrice(3.0, null, 4.0)],
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
+    ["cursor-auto", cursorPrice(1.25, 0.25, 6.0)],
+    ["cursor-composer-1", cursorPrice(1.25, 0.125, 10.0)],
+    ["cursor-composer-1.5", cursorPrice(3.5, 0.35, 17.5)],
+    ["cursor-composer-2", cursorPrice(0.5, 0.2, 2.5)],
+    ["cursor-composer-2.5", cursorPrice(0.5, 0.2, 2.5)],
+    // Cursor publishes fast input/output rates but not a cache-read discount.
+    ["cursor-composer-2-fast", cursorPrice(1.5, 1.5, 7.5)],
+    ["cursor-composer-2.5-fast", cursorPrice(3.0, 3.0, 15.0)],
   ]);
 }
 
 function canonicalModel(raw: string): string | null {
-  const model = raw.toLowerCase().replace(/^openai[/:]/, "");
+  const model = raw
+    .toLowerCase()
+    .replace(/^openai[/:]/, "")
+    .replace(/^cursor[/:]/, "");
+  const normalized = model.replace(/\s+/g, "-");
+
+  if (normalized.startsWith("codex-auto-review") || normalized.startsWith("gpt-5.3-codex")) {
+    return "gpt-5.2";
+  }
 
   if (
-    model.includes("claude") ||
-    model === "opus" ||
-    model === "sonnet" ||
-    model === "haiku" ||
-    model === "fable"
+    normalized === "auto" ||
+    normalized.startsWith("auto-") ||
+    normalized.endsWith("-auto") ||
+    normalized.includes("-auto-") ||
+    normalized.includes("auto+")
   ) {
-    if (model.includes("fable") || model.includes("mythos")) {
+    return "cursor-auto";
+  }
+  if (normalized.includes("composer")) {
+    return cursorComposerModel(normalized);
+  }
+
+  if (
+    normalized.includes("claude") ||
+    normalized === "opus" ||
+    normalized === "sonnet" ||
+    normalized === "haiku" ||
+    normalized === "fable"
+  ) {
+    if (normalized.includes("fable") || normalized.includes("mythos")) {
       return "claude-fable";
     }
-    if (model.includes("opus")) {
-      if (model.includes("opus-4-1") || model.includes("opus-4.1")) {
+    if (normalized.includes("opus")) {
+      if (normalized.includes("opus-4-1") || normalized.includes("opus-4.1")) {
         return "claude-opus-4.1";
       }
       if (
-        model.includes("opus-4-5") ||
-        model.includes("opus-4.5") ||
-        model.includes("opus-4-6") ||
-        model.includes("opus-4.6") ||
-        model.includes("opus-4-7") ||
-        model.includes("opus-4.7") ||
-        model.includes("opus-4-8") ||
-        model.includes("opus-4.8")
+        normalized.includes("opus-4-5") ||
+        normalized.includes("opus-4.5") ||
+        normalized.includes("opus-4-6") ||
+        normalized.includes("opus-4.6") ||
+        normalized.includes("opus-4-7") ||
+        normalized.includes("opus-4.7") ||
+        normalized.includes("opus-4-8") ||
+        normalized.includes("opus-4.8")
       ) {
         return "claude-opus";
       }
-      if (model.includes("opus-4")) {
+      if (normalized.includes("opus-4")) {
         return "claude-opus-4";
       }
       return "claude-opus";
     }
-    if (model.includes("sonnet")) {
-      if (model.includes("sonnet-5")) {
+    if (normalized.includes("sonnet")) {
+      if (normalized.includes("sonnet-5")) {
         return "claude-sonnet-5";
       }
       return "claude-sonnet";
     }
-    if (model.includes("haiku")) {
-      if (model.includes("haiku-3-5") || model.includes("haiku-3.5")) {
+    if (normalized.includes("haiku")) {
+      if (normalized.includes("haiku-3-5") || normalized.includes("haiku-3.5")) {
         return "claude-haiku-3.5";
       }
       return "claude-haiku";
     }
     return null;
-  }
-
-  if (model.startsWith("codex-auto-review") || model.startsWith("gpt-5.3-codex")) {
-    return "gpt-5.2";
   }
 
   for (const key of [
@@ -183,12 +223,31 @@ function canonicalModel(raw: string): string | null {
     "davinci-002",
     "babbage-002",
   ]) {
-    if (model.startsWith(key)) {
+    if (normalized.startsWith(key)) {
       return key;
     }
   }
 
   return null;
+}
+
+function cursorComposerModel(normalized: string): string | null {
+  const version = normalized.match(/(?:^|[-_/])composer[-_/]?(1(?:[.-]5)?|2(?:[.-]5)?)/)?.[1];
+  if (version == null) {
+    return null;
+  }
+  const canonicalVersion = version.replace("-", ".");
+  const fast = /(?:^|[-_/])fast(?:$|[-_/])/.test(normalized);
+  if (canonicalVersion === "2.5") {
+    return fast ? "cursor-composer-2.5-fast" : "cursor-composer-2.5";
+  }
+  if (canonicalVersion === "2") {
+    return fast ? "cursor-composer-2-fast" : "cursor-composer-2";
+  }
+  if (canonicalVersion === "1.5") {
+    return "cursor-composer-1.5";
+  }
+  return canonicalVersion === "1" ? "cursor-composer-1" : null;
 }
 
 export function isPriceable(model: string): boolean {

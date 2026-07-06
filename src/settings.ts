@@ -2,14 +2,26 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-export type AgentKey = "claude" | "codex";
-export type TerminalKey = "terminal" | "iterm" | "ghostty" | "wezterm" | "kitty" | "alacritty";
+export type AgentKey = "claude" | "codex" | "cursor";
+export type TerminalKey =
+  | "terminal"
+  | "iterm"
+  | "warp"
+  | "ghostty"
+  | "wezterm"
+  | "kitty"
+  | "alacritty";
 export type IdeKey = "vscode" | "cursor" | "zed" | "sublime" | "intellij";
+
+export interface ExperimentalSettings {
+  cursorChats: boolean;
+}
 
 export interface UserSettings {
   agent: AgentKey;
   terminal: TerminalKey;
   ide: IdeKey;
+  experimental: ExperimentalSettings;
 }
 
 export interface SettingsOptions {
@@ -18,10 +30,11 @@ export interface SettingsOptions {
   appExists?: (name: string) => boolean;
 }
 
-const validAgents = new Set<AgentKey>(["claude", "codex"]);
+const validAgents = new Set<AgentKey>(["claude", "codex", "cursor"]);
 const validTerminals = new Set<TerminalKey>([
   "terminal",
   "iterm",
+  "warp",
   "ghostty",
   "wezterm",
   "kitty",
@@ -32,11 +45,13 @@ const validIdes = new Set<IdeKey>(["vscode", "cursor", "zed", "sublime", "intell
 export const agentOptions: [AgentKey, string][] = [
   ["claude", "Claude"],
   ["codex", "Codex"],
+  ["cursor", "Cursor"],
 ];
 
 export const terminalOptions: [TerminalKey, string][] = [
   ["terminal", "Terminal"],
   ["iterm", "iTerm"],
+  ["warp", "Warp"],
   ["ghostty", "Ghostty"],
   ["wezterm", "WezTerm"],
   ["kitty", "kitty"],
@@ -63,6 +78,7 @@ export function detectedSettings(options: SettingsOptions = {}): UserSettings {
     agent: "claude",
     terminal: detectTerminal(options.env ?? process.env),
     ide: detectIde(options.appExists ?? ((name) => existsSync(`/Applications/${name}.app`))),
+    experimental: defaultExperimental(),
   };
 }
 
@@ -76,14 +92,14 @@ export function loadSettings(options: SettingsOptions = {}): Partial<UserSetting
 }
 
 export function getSettings(options: SettingsOptions = {}): UserSettings {
-  return { ...detectedSettings(options), ...loadSettings(options) };
+  return mergeSettings(detectedSettings(options), loadSettings(options));
 }
 
 export function saveSettings(
   attrs: Record<string, unknown>,
   options: SettingsOptions = {},
 ): UserSettings {
-  const merged = { ...loadSettings(options), ...sanitize(attrs) };
+  const merged = mergeSettings(loadSettings(options), sanitize(attrs));
   const path = settingsPath(options);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`);
@@ -92,7 +108,7 @@ export function saveSettings(
   } catch {
     // Best effort on filesystems that do not support POSIX mode bits.
   }
-  return { ...detectedSettings(options), ...merged };
+  return mergeSettings(detectedSettings(options), merged);
 }
 
 function sanitize(attrs: unknown): Partial<UserSettings> {
@@ -110,13 +126,43 @@ function sanitize(attrs: unknown): Partial<UserSettings> {
   if (typeof raw.ide === "string" && validIdes.has(raw.ide as IdeKey)) {
     out.ide = raw.ide as IdeKey;
   }
+  if (raw.experimental != null && typeof raw.experimental === "object") {
+    const experimental = raw.experimental as Record<string, unknown>;
+    if (typeof experimental.cursorChats === "boolean") {
+      out.experimental = { cursorChats: experimental.cursorChats };
+    }
+  }
   return out;
+}
+
+function defaultExperimental(): ExperimentalSettings {
+  return { cursorChats: false };
+}
+
+function mergeSettings<A extends Partial<UserSettings>, B extends Partial<UserSettings>>(
+  base: A,
+  patch: B,
+): A & B {
+  const merged = {
+    ...base,
+    ...patch,
+  } as A & B;
+  const experimental = {
+    ...(base.experimental ?? {}),
+    ...(patch.experimental ?? {}),
+  };
+  if (Object.keys(experimental).length > 0) {
+    merged.experimental = experimental as (A & B)["experimental"];
+  }
+  return merged;
 }
 
 function detectTerminal(env: Record<string, string | undefined>): TerminalKey {
   switch (env.TERM_PROGRAM) {
     case "iTerm.app":
       return "iterm";
+    case "WarpTerminal":
+      return "warp";
     case "ghostty":
       return "ghostty";
     case "WezTerm":

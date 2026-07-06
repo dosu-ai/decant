@@ -1,0 +1,4 @@
+{"role":"user","message":"Open the README and summarize the setup."}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I'll read the README first."},{"type":"tool_use","id":"tool-readme","name":"Read","input":{"path":"README.md"}}]}}
+{"role":"assistant","message":"The setup uses Bun and stores the archive locally."}
+{"type":"turn_ended","status":"completed"}

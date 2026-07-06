@@ -218,12 +218,18 @@ type ConfigView = {
   dbPath: string;
   claudeDir: string;
   codexDir: string;
+  cursorDir: string | null;
+  cursorChatsDir: string;
+  cursorChatsEnabled: boolean;
 };
 
 type UserSettings = {
   agent: string;
   terminal: string;
   ide: string;
+  experimental: {
+    cursorChats: boolean;
+  };
 };
 
 type SettingsInfo = {
@@ -386,84 +392,6 @@ function App() {
   }, [dateQuery]);
 
   useEffect(() => {
-    void reloadKey;
-    let cancelled = false;
-    Promise.all([
-      getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
-      getJson<ProjectSummary[]>("/api/projects"),
-      getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)),
-      getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
-      getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
-      getJson<Recommendation[]>("/api/recommendations?status=all"),
-      getJson<ConfigView>("/api/config"),
-      getJson<SettingsInfo>("/api/settings"),
-      getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)),
-      getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
-      getJson<TokenEconomics>(withDateQuery("/api/analytics/token-economics", dateQuery)),
-      getJson<NowView>("/api/analytics/now"),
-      getJson<DateBounds>("/api/date-bounds"),
-    ])
-      .then(
-        ([
-          summary,
-          byTool,
-          byModel,
-          byProject,
-          byDay,
-          projects,
-          tools,
-          mcp,
-          files,
-          recommendations,
-          config,
-          settings,
-          activity,
-          modelSparklines,
-          tokenEconomics,
-          now,
-          dateBounds,
-        ]) => {
-          if (cancelled) {
-            return;
-          }
-          setData((current) => ({
-            summary,
-            sessions: current.sessions,
-            byTool,
-            byModel,
-            byProject,
-            byDay,
-            projects,
-            tools,
-            mcp,
-            files,
-            recommendations,
-            config,
-            settings,
-            activity,
-            modelSparklines,
-            tokenEconomics,
-            now,
-            dateBounds,
-          }));
-          setError(null);
-        },
-      )
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(errorMessage(err));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dateQuery, reloadKey]);
-
-  useEffect(() => {
     let cancelled = false;
     const plan = planSessionLoad({
       loadedRequestKey: loadedSessionKey,
@@ -477,10 +405,7 @@ function App() {
     }
     setSessionsLoading(true);
     void getJson<SessionSummary[]>(
-      withDateQuery(
-        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true`,
-        dateQuery,
-      ),
+      withDateQuery(`/api/sessions?limit=${plan.limit}&offset=${plan.offset}`, dateQuery),
     )
       .then((sessions) => {
         if (cancelled) {
@@ -509,12 +434,94 @@ function App() {
   }, [data.sessions.length, dateQuery, loadedSessionKey, sessionLimit, sessionLoadKey]);
 
   useEffect(() => {
+    void reloadKey;
+    let cancelled = false;
+    const load = <T,>(promise: Promise<T>, apply: (value: T) => Partial<DashboardData>) => {
+      void promise
+        .then((value) => {
+          if (cancelled) {
+            return;
+          }
+          setData((current) => ({ ...current, ...apply(value) }));
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            setError(errorMessage(err));
+          }
+        });
+    };
+    const dashboardDelay = activeRouteKey(path) === "sessions" ? 150 : 0;
+    const timer = window.setTimeout(() => {
+      load(getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)), (summary) => ({
+        summary,
+      }));
+      load(
+        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
+        (byTool) => ({ byTool }),
+      );
+      load(
+        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
+        (byModel) => ({ byModel }),
+      );
+      load(
+        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
+        (byProject) => ({ byProject }),
+      );
+      load(
+        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
+        (byDay) => ({ byDay }),
+      );
+      load(getJson<ProjectSummary[]>("/api/projects"), (projects) => ({ projects }));
+      load(getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)), (tools) => ({
+        tools,
+      }));
+      load(
+        getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
+        (mcp) => ({
+          mcp,
+        }),
+      );
+      load(
+        getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
+        (files) => ({
+          files,
+        }),
+      );
+      load(getJson<Recommendation[]>("/api/recommendations?status=all"), (recommendations) => ({
+        recommendations,
+      }));
+      load(getJson<ConfigView>("/api/config"), (config) => ({ config }));
+      load(getJson<SettingsInfo>("/api/settings"), (settings) => ({ settings }));
+      load(getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)), (activity) => ({
+        activity,
+      }));
+      load(
+        getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
+        (modelSparklines) => ({ modelSparklines }),
+      );
+      load(
+        getJson<TokenEconomics>(withDateQuery("/api/analytics/token-economics", dateQuery)),
+        (tokenEconomics) => ({ tokenEconomics }),
+      );
+      load(getJson<NowView>("/api/analytics/now"), (now) => ({ now }));
+      load(getJson<DateBounds>("/api/date-bounds"), (dateBounds) => ({ dateBounds }));
+    }, dashboardDelay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [dateQuery, path, reloadKey]);
+
+  useEffect(() => {
     const events = new EventSource("/api/events");
     events.addEventListener("sync", requestRefresh);
     events.addEventListener("archive_updated", requestRefresh);
+    events.addEventListener("config_changed", requestRefresh);
     return () => {
       events.removeEventListener("sync", requestRefresh);
       events.removeEventListener("archive_updated", requestRefresh);
+      events.removeEventListener("config_changed", requestRefresh);
       events.close();
     };
   }, [requestRefresh]);
@@ -741,7 +748,7 @@ function renderView(
         />
       );
     case "Settings":
-      return <SettingsView config={data.config} settingsInfo={data.settings} />;
+      return <SettingsView settingsInfo={data.settings} />;
     default:
       return (
         <SessionsView
@@ -773,6 +780,10 @@ function SessionsView({
 }) {
   const [query, setQuery] = useState("");
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
+  const [lazySubagents, setLazySubagents] = useState<Map<number, SessionSummary[]>>(
+    () => new Map(),
+  );
+  const [subagentErrors, setSubagentErrors] = useState<Map<number, string>>(() => new Map());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
@@ -800,20 +811,51 @@ function SessionsView({
     return () => observer.disconnect();
   }, [hasMore, limit, onLimitChange, total]);
 
-  const toggleSession = (id: number) => {
+  const loadSubagents = (session: SessionSummary) => {
+    if (
+      session.subagent_count <= 0 ||
+      session.subagents != null ||
+      lazySubagents.has(session.id) ||
+      subagentErrors.has(session.id)
+    ) {
+      return;
+    }
+    void getJson<SessionDetailData>(`/api/sessions/${session.id}?message_limit=1`)
+      .then((detail) => {
+        setLazySubagents((current) => {
+          const next = new Map(current);
+          next.set(session.id, detail.subagents.map(subagentDetailToSummary));
+          return next;
+        });
+      })
+      .catch((err: unknown) => {
+        setSubagentErrors((current) => {
+          const next = new Map(current);
+          next.set(session.id, errorMessage(err));
+          return next;
+        });
+      });
+  };
+
+  const toggleSession = (session: SessionSummary) => {
+    const willExpand = !expandedSessions.has(session.id);
     setExpandedSessions((current) => {
       const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(session.id)) {
+        next.delete(session.id);
       } else {
-        next.add(id);
+        next.add(session.id);
       }
       return next;
     });
+    if (willExpand) {
+      loadSubagents(session);
+    }
   };
 
   const renderRows = (session: SessionSummary, depth = 0): ReactNode[] => {
     const expanded = expandedSessions.has(session.id);
+    const subagents = session.subagents ?? lazySubagents.get(session.id);
     const rows: ReactNode[] = [
       <SessionTableRow
         depth={depth}
@@ -824,8 +866,17 @@ function SessionsView({
       />,
     ];
     if (expanded) {
-      for (const subagent of session.subagents ?? []) {
-        rows.push(...renderRows(subagent, depth + 1));
+      const error = subagentErrors.get(session.id);
+      if (error != null) {
+        rows.push(<SessionChildStatus key={`${session.id}-subagent-error`} text={error} />);
+      } else if (subagents == null && session.subagent_count > 0) {
+        rows.push(
+          <SessionChildStatus key={`${session.id}-subagent-loading`} text="Loading subagents..." />,
+        );
+      } else {
+        for (const subagent of subagents ?? []) {
+          rows.push(...renderRows(subagent, depth + 1));
+        }
       }
     }
     return rows;
@@ -836,7 +887,7 @@ function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code and Codex session in your local archive.</p>
+          <p>Every Claude Code, Codex, and Cursor session in your local archive.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
@@ -920,6 +971,16 @@ function SessionsView({
         </div>
       </section>
     </div>
+  );
+}
+
+function SessionChildStatus({ text }: { text: string }) {
+  return (
+    <tr className="session-row is-subagent">
+      <td colSpan={7}>
+        <span className="subagent-loading-row">{text}</span>
+      </td>
+    </tr>
   );
 }
 
@@ -1196,7 +1257,7 @@ function SessionTableRow({
 }: {
   depth: number;
   expanded: boolean;
-  onToggle: (id: number) => void;
+  onToggle: (session: SessionSummary) => void;
   session: SessionSummary;
 }) {
   const isSubagent = depth > 0;
@@ -1213,7 +1274,7 @@ function SessionTableRow({
               aria-expanded={expanded}
               aria-label={`${expanded ? "Collapse" : "Expand"} subagents for ${title}`}
               className="subagent-disclosure"
-              onClick={() => onToggle(session.id)}
+              onClick={() => onToggle(session)}
               type="button"
             >
               <Icon name={expanded ? "minus" : "plus"} />
@@ -2566,6 +2627,9 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "cursor") {
+    return <Badge tone="info">Cursor</Badge>;
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -3082,6 +3146,9 @@ function brandTone(model: string | null | undefined): BadgeTone {
     normalized.startsWith("o3")
   ) {
     return "openai";
+  }
+  if (normalized.includes("cursor") || normalized.includes("composer")) {
+    return "info";
   }
   return "neutral";
 }
@@ -3766,15 +3833,32 @@ function FilesView({
   );
 }
 
-function SettingsView({
-  settingsInfo,
-}: {
-  config: ConfigView | null;
-  settingsInfo: SettingsInfo | null;
-}) {
+function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const loading = settingsInfo == null;
+  const agentOptions = settingsInfo?.options.agents ?? [
+    ["claude", "Claude"],
+    ["codex", "Codex"],
+    ["cursor", "Cursor"],
+  ];
+  const terminalOptions = settingsInfo?.options.terminals ?? [
+    ["terminal", "Terminal"],
+    ["iterm", "iTerm"],
+    ["warp", "Warp"],
+    ["ghostty", "Ghostty"],
+    ["wezterm", "WezTerm"],
+    ["kitty", "kitty"],
+    ["alacritty", "Alacritty"],
+  ];
+  const ideOptions = settingsInfo?.options.ides ?? [
+    ["vscode", "VS Code"],
+    ["cursor", "Cursor"],
+    ["zed", "Zed"],
+    ["sublime", "Sublime Text"],
+    ["intellij", "IntelliJ IDEA"],
+  ];
 
   useEffect(() => {
     setSettings(settingsInfo?.settings ?? null);
@@ -3787,7 +3871,11 @@ function SettingsView({
       return;
     }
     const previous = settings;
-    const next = { ...base, ...patch };
+    const next = {
+      ...base,
+      ...patch,
+      experimental: { ...base.experimental, ...patch.experimental },
+    };
     setSettings(next);
     setSaveError(null);
     setSaving(true);
@@ -3813,50 +3901,96 @@ function SettingsView({
         </p>
       </header>
 
-      <section className="panel">
+      <section className="settings-section settings-controls">
+        <div className="settings-section-heading">
+          <h2>Launch Defaults</h2>
+        </div>
         <div className="settings-form">
           <SettingSelect
+            disabled={loading || saving}
             help="The agent the Run button opens first across Insights."
             label="Preferred agent"
-            options={settingsInfo?.options.agents ?? []}
+            options={agentOptions}
             value={settings?.agent ?? "claude"}
             onChange={(agent) => save({ agent })}
           />
           <SettingSelect
+            disabled={loading || saving}
             help="Where a session opens when you run an agent."
             label="Terminal"
-            options={settingsInfo?.options.terminals ?? []}
+            options={terminalOptions}
             value={settings?.terminal ?? "terminal"}
             onChange={(terminal) => save({ terminal })}
           />
           <SettingSelect
+            disabled={loading || saving}
             help="Which editor Open in editor uses for a session's project."
             label="Editor"
-            options={settingsInfo?.options.ides ?? []}
+            options={ideOptions}
             value={settings?.ide ?? "vscode"}
             onChange={(ide) => save({ ide })}
           />
+          <SettingToggle
+            checked={settings?.experimental.cursorChats === true}
+            disabled={loading || saving}
+            help="Feature preview for local Cursor agent-transcripts under ~/.cursor/projects."
+            label="Cursor native transcripts"
+            onChange={(cursorChats) => save({ experimental: { cursorChats } })}
+          />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
-        <p className="settings-note">
-          {saving
-            ? "Saving preferences..."
-            : settingsInfo?.can_launch === true
-              ? "Native launcher is available on this Mac."
-              : "Native launcher is unavailable on this platform."}
-        </p>
+        {loading || saving ? (
+          <p className="settings-note">
+            {loading ? "Loading preferences..." : "Saving preferences..."}
+          </p>
+        ) : null}
       </section>
     </div>
   );
 }
 
+function SettingToggle({
+  checked,
+  disabled = false,
+  help,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  help: string;
+  label: string;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className="setting-select">
+      <span>
+        <strong>{label}</strong>
+        <small>{help}</small>
+      </span>
+      <button
+        aria-label={label}
+        aria-pressed={checked}
+        className="switch-toggle"
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        type="button"
+      >
+        <span />
+      </button>
+    </div>
+  );
+}
+
 function SettingSelect({
+  disabled = false,
   help,
   label,
   options,
   value,
   onChange,
 }: {
+  disabled?: boolean;
   help: string;
   label: string;
   options: [string, string][];
@@ -3870,7 +4004,11 @@ function SettingSelect({
         <small>{help}</small>
       </span>
       <span className="select-shell">
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select
+          disabled={disabled}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        >
           {options.map(([key, name]) => (
             <option key={key} value={key}>
               {name}
@@ -4051,6 +4189,11 @@ type SubagentDetailData = SessionDetailData & {
   agent_type: string | null;
   spawn_depth: number | null;
 };
+
+function subagentDetailToSummary(detail: SubagentDetailData): SessionSummary {
+  const subagents = detail.subagents.map(subagentDetailToSummary);
+  return subagents.length === 0 ? detail.summary : { ...detail.summary, subagents };
+}
 
 type TranscriptBlockData = {
   ordinal: number;
@@ -4482,7 +4625,7 @@ function roleLabel(role: string, tool: string): string {
     return "You";
   }
   if (role === "assistant") {
-    return tool === "codex" ? "Codex" : "Claude";
+    return tool === "codex" ? "Codex" : tool === "cursor" ? "Cursor" : "Claude";
   }
   if (role === "tool") {
     return "Tool";
@@ -4499,9 +4642,21 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw new Error(await responseError(response));
   }
   return (await response.json()) as T;
+}
+
+async function responseError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.trim() !== "") {
+      return body.error;
+    }
+  } catch {
+    // Fall back to the HTTP status when the body is not JSON.
+  }
+  return `${response.status} ${response.statusText}`;
 }
 
 function applyDatePreset(

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, type FSWatcher, mkdirSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
+import { cursorNativeProjectsDir } from "./cursor-native.ts";
 import { openDb } from "./db.ts";
 import { sync as ingestSync, type SyncReport } from "./ingest.ts";
 
@@ -55,11 +56,13 @@ export interface WatchOptions {
   open?: (path: string) => Database;
   enableWatch?: boolean;
   syncOnStart?: boolean;
+  runSync?: (config: Config, cancel: { aborted: boolean }) => SyncReport | Promise<SyncReport>;
 }
 
 export interface WatchHandle {
   status: SyncStatusStore;
   dirs: string[];
+  refresh(): string[];
   trigger(reason?: SyncReason): void;
   stop(): Promise<void>;
   done: Promise<void>;
@@ -113,7 +116,12 @@ export function watchDirs(config: Config): string[] {
     config.claudeDir,
     join(config.codexDir, "sessions"),
     join(config.codexDir, "archived_sessions"),
-  ].filter((dir) => {
+    config.cursorDir,
+    config.cursorChatsEnabled ? cursorNativeProjectsDir(config.cursorChatsDir) : null,
+  ].filter((dir): dir is string => {
+    if (dir == null) {
+      return false;
+    }
     try {
       return existsSync(dir) && statSync(dir).isDirectory();
     } catch {
@@ -128,32 +136,63 @@ export function runSyncOnce(
   cancel: { aborted: boolean } = { aborted: false },
   open: (path: string) => Database = openDb,
 ): SyncReport {
-  status.start();
-  let db: Database | null = null;
+  return runSyncWithStatusSync(status, () => syncArchive(config, cancel, open));
+}
+
+function syncArchive(
+  config: Config,
+  cancel: { aborted: boolean },
+  open: (path: string) => Database,
+): SyncReport {
+  mkdirSync(dirname(config.dbPath), { recursive: true });
+  const db = open(config.dbPath);
   try {
-    mkdirSync(dirname(config.dbPath), { recursive: true });
-    db = open(config.dbPath);
-    const report = ingestSync(db, config, cancel);
+    return ingestSync(db, config, cancel);
+  } finally {
+    db.close();
+  }
+}
+
+function runSyncWithStatusSync(status: SyncStatusStore, run: () => SyncReport): SyncReport {
+  status.start();
+  try {
+    const report = run();
     status.finishOk(report);
     return report;
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     throw error;
-  } finally {
-    db?.close();
+  }
+}
+
+async function runSyncWithStatus(
+  status: SyncStatusStore,
+  run: () => SyncReport | Promise<SyncReport>,
+): Promise<SyncReport> {
+  status.start();
+  try {
+    const report = await run();
+    status.finishOk(report);
+    return report;
+  } catch (error) {
+    status.finishErr(error instanceof Error ? error.message : String(error));
+    throw error;
   }
 }
 
 export function startWatch(options: WatchOptions): WatchHandle {
   const status = new SyncStatusStore();
-  const dirs = watchDirs(options.config);
+  let dirs = watchDirs(options.config);
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const open = options.open ?? openDb;
   const enableWatch = options.enableWatch !== false;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
-  const watchers: FSWatcher[] = [];
+  const runSync =
+    options.runSync ??
+    ((config: Config, state: { aborted: boolean }) => syncArchive(config, state, open));
+  const watchers = new Map<string, FSWatcher>();
   let stopped = false;
   let debounceTimer: Timer | null = null;
   let intervalTimer: Timer | null = null;
@@ -166,6 +205,53 @@ export function startWatch(options: WatchOptions): WatchHandle {
   });
 
   const emit = (event: WatchEvent): void => options.onEvent?.(event);
+
+  const closeWatcher = (dir: string): void => {
+    const watcher = watchers.get(dir);
+    if (watcher == null) {
+      return;
+    }
+    watcher.close();
+    watchers.delete(dir);
+  };
+
+  const openWatcher = (dir: string): void => {
+    if (watchers.has(dir)) {
+      return;
+    }
+    try {
+      const watcher = watch(dir, { recursive: true }, (eventType) => {
+        if (eventType === "rename" || eventType === "change") {
+          schedule("watch", debounceMs);
+        }
+      });
+      watcher.on("error", (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });
+      });
+      watchers.set(dir, watcher);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });
+    }
+  };
+
+  const refresh = (): string[] => {
+    const next = watchDirs(options.config);
+    if (enableWatch) {
+      const wanted = new Set(next);
+      for (const dir of watchers.keys()) {
+        if (!wanted.has(dir)) {
+          closeWatcher(dir);
+        }
+      }
+      for (const dir of next) {
+        openWatcher(dir);
+      }
+    }
+    dirs = next;
+    return [...dirs];
+  };
 
   const requestRun = (reason: SyncReason): void => {
     if (running) {
@@ -208,7 +294,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = runSyncOnce(options.config, status, cancel, open);
+          const report = await runSyncWithStatus(status, () => runSync(options.config, cancel));
           emit({ type: "sync", reason: current, report, status: status.snapshot() });
         } catch (error) {
           emit({
@@ -240,32 +326,17 @@ export function startWatch(options: WatchOptions): WatchHandle {
       clearInterval(intervalTimer);
       intervalTimer = null;
     }
-    for (const watcher of watchers) {
+    for (const watcher of watchers.values()) {
       watcher.close();
     }
+    watchers.clear();
     await activeRun;
     emit({ type: "stopped", status: status.snapshot() });
     resolveDone?.();
   };
 
   if (enableWatch) {
-    for (const dir of dirs) {
-      try {
-        const watcher = watch(dir, { recursive: true }, (eventType) => {
-          if (eventType === "rename" || eventType === "change") {
-            schedule("watch", debounceMs);
-          }
-        });
-        watcher.on("error", (error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });
-        });
-        watchers.push(watcher);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });
-      }
-    }
+    refresh();
   }
 
   if (intervalMs > 0) {
@@ -288,7 +359,10 @@ export function startWatch(options: WatchOptions): WatchHandle {
 
   const handle: WatchHandle = {
     status,
-    dirs,
+    get dirs() {
+      return [...dirs];
+    },
+    refresh,
     trigger(reason = "manual") {
       schedule(reason, 0);
     },

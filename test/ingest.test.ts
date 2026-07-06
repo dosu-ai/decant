@@ -33,7 +33,7 @@ function openFreshDb(dir: string): Database {
   return openDb(join(dir, "archive.db"));
 }
 
-function fixture(tool: "claude" | "codex", name: string): string {
+function fixture(tool: "claude" | "codex" | "cursor", name: string): string {
   return readFileSync(join(fixtureRoot, tool, name), "utf8");
 }
 
@@ -264,12 +264,26 @@ describe("sync", () => {
     const config: IngestConfig = {
       claudeDir: join(dir, "claude"),
       codexDir: join(dir, "codex"),
+      cursorDir: join(dir, "cursor"),
+      cursorChatsDir: join(dir, "cursor-root"),
     };
     write(join(config.claudeDir, "project", "a.jsonl"), "");
     write(join(config.claudeDir, "project", "notes.txt"), "");
     write(join(config.codexDir, "sessions", "rollout-a.jsonl"), "");
     write(join(config.codexDir, "sessions", "a.jsonl"), "");
     write(join(config.codexDir, "archived_sessions", "rollout-b.jsonl"), "");
+    write(join(config.cursorDir ?? "", "stream.jsonl"), "");
+    write(
+      join(
+        config.cursorChatsDir ?? "",
+        "projects",
+        "Users-dev-proj",
+        "agent-transcripts",
+        "native",
+        "native.jsonl",
+      ),
+      "",
+    );
 
     expect(
       discover(config).map((file) => ({
@@ -281,7 +295,12 @@ describe("sync", () => {
       { tool: "claude_code", name: "a.jsonl", archived: false },
       { tool: "codex", name: "rollout-a.jsonl", archived: false },
       { tool: "codex", name: "rollout-b.jsonl", archived: true },
+      { tool: "cursor", name: "stream.jsonl", archived: false },
     ]);
+
+    expect(
+      discover({ ...config, cursorChatsEnabled: true }).map((file) => basename(file.path)),
+    ).toContain("native.jsonl");
   });
 
   test("discovers only explicitly requested source paths when sourcePaths is set", () => {
@@ -310,6 +329,23 @@ describe("sync", () => {
       { tool: "codex", name: "rollout-old.jsonl", archived: true },
       { tool: "codex", name: "rollout-one.jsonl", archived: false },
     ]);
+  });
+
+  test("sourcePaths detect staged Cursor stream-json outside a cursor-named path", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      sourcePaths: [join(dir, "probes")],
+    };
+    write(join(dir, "probes", "probe-read.jsonl"), fixture("cursor", "stream.jsonl"));
+
+    expect(
+      discover(config).map((file) => ({
+        tool: file.tool,
+        name: basename(file.path),
+      })),
+    ).toEqual([{ tool: "cursor", name: "probe-read.jsonl" }]);
   });
 
   test("is idempotent, records parse issues, and refreshes issues on reingest", () => {
@@ -357,6 +393,203 @@ describe("sync", () => {
         }
       ).score,
     ).toBe(0);
+    db.close();
+  });
+
+  test("ingests staged Cursor stream-json transcripts", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      cursorDir: join(dir, "cursor"),
+    };
+    write(join(config.cursorDir ?? "", "stream.jsonl"), fixture("cursor", "stream.jsonl"));
+    write(join(config.cursorDir ?? "", "stream.meta.json"), fixture("cursor", "stream.meta.json"));
+    const db = openFreshDb(dir);
+
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 1, ingested: 1, skipped: 0, issues: 0, failed: 0 });
+    expect(listSessions(db, { tool: "cursor" })).toEqual([
+      expect.objectContaining({
+        tool: "cursor",
+        source_session_id: "stream",
+        model: "composer-2.5",
+        total_input_tokens: 1000,
+        total_output_tokens: 200,
+      }),
+    ]);
+    expect(
+      rows(db, "SELECT tool_name FROM tool_call ORDER BY ordinal").map(
+        (row) => (row as { tool_name: string }).tool_name,
+      ),
+    ).toEqual(["read", "write", "shell"]);
+    expect(rows(db, "SELECT rel_path, operation FROM file_ref ORDER BY operation")).toEqual([
+      { rel_path: "package.json", operation: "read" },
+      { rel_path: "notes.txt", operation: "write" },
+    ]);
+    db.close();
+  });
+
+  test("ignores native Cursor transcripts until the preview flag is enabled", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      cursorChatsDir: join(dir, "cursor-root"),
+    };
+    write(
+      join(
+        config.cursorChatsDir ?? "",
+        "projects",
+        "Users-dev-proj",
+        "agent-transcripts",
+        "native",
+        "native.jsonl",
+      ),
+      fixture("cursor", "native.jsonl"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 0, ingested: 0 });
+    expect(sync(db, { ...config, cursorChatsEnabled: true })).toMatchObject({
+      scanned: 1,
+      ingested: 1,
+      issues: 0,
+    });
+    expect(listSessions(db, { tool: "cursor" })[0]).toMatchObject({
+      source_session_id: "Users-dev-proj/agent-transcripts/native/native",
+      title: "Open the README and summarize the setup.",
+    });
+    db.close();
+  });
+
+  test("joins native Cursor chat metadata by transcript uuid", () => {
+    const dir = freshCase();
+    const createdAtMs = Date.parse("2026-07-06T10:01:00.000Z");
+    const updatedAtMs = Date.parse("2026-07-06T10:03:00.000Z");
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      cursorChatsDir: join(dir, "cursor-root"),
+      cursorChatsEnabled: true,
+    };
+    write(
+      join(
+        config.cursorChatsDir ?? "",
+        "projects",
+        "Users-dev-proj",
+        "agent-transcripts",
+        "native",
+        "native.jsonl",
+      ),
+      fixture("cursor", "native.jsonl"),
+    );
+    write(
+      join(config.cursorChatsDir ?? "", "chats", "project-hash", "native", "meta.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        createdAtMs,
+        updatedAtMs,
+        cwd: "/Users/dev/proj",
+        hasConversation: true,
+      }),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, issues: 0 });
+    expect(listSessions(db, { tool: "cursor" })[0]).toMatchObject({
+      source_session_id: "Users-dev-proj/agent-transcripts/native/native",
+      project_path: "/Users/dev/proj",
+      started_at: new Date(createdAtMs).toISOString(),
+      ended_at: new Date(updatedAtMs).toISOString(),
+    });
+    db.close();
+  });
+
+  test("reingests native Cursor transcripts when chat metadata changes", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      cursorChatsDir: join(dir, "cursor-root"),
+      cursorChatsEnabled: true,
+    };
+    write(
+      join(
+        config.cursorChatsDir ?? "",
+        "projects",
+        "Users-dev-proj",
+        "agent-transcripts",
+        "native",
+        "native.jsonl",
+      ),
+      fixture("cursor", "native.jsonl"),
+    );
+    const metaPath = join(
+      config.cursorChatsDir ?? "",
+      "chats",
+      "project-hash",
+      "native",
+      "meta.json",
+    );
+    write(
+      metaPath,
+      JSON.stringify({
+        createdAtMs: Date.parse("2026-07-06T10:01:00.000Z"),
+        updatedAtMs: Date.parse("2026-07-06T10:03:00.000Z"),
+        cwd: "/Users/dev/old-proj",
+      }),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, skipped: 0 });
+    write(
+      metaPath,
+      JSON.stringify({
+        createdAtMs: Date.parse("2026-07-06T10:01:00.000Z"),
+        updatedAtMs: Date.parse("2026-07-06T10:04:00.000Z"),
+        cwd: "/Users/dev/new-project",
+      }),
+    );
+
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, skipped: 0 });
+    expect(listSessions(db, { tool: "cursor" })[0]).toMatchObject({
+      project_path: "/Users/dev/new-project",
+      ended_at: "2026-07-06T10:04:00.000Z",
+    });
+    db.close();
+  });
+
+  test("keeps native Cursor transcripts distinct when basenames collide", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      cursorChatsDir: join(dir, "cursor-root"),
+      cursorChatsEnabled: true,
+    };
+    for (const project of ["Users-dev-proj-a", "Users-dev-proj-b"]) {
+      write(
+        join(
+          config.cursorChatsDir ?? "",
+          "projects",
+          project,
+          "agent-transcripts",
+          "native",
+          "native.jsonl",
+        ),
+        fixture("cursor", "native.jsonl"),
+      );
+    }
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, issues: 0 });
+    expect(
+      listSessions(db, { tool: "cursor" }).map((session) => session.source_session_id),
+    ).toEqual([
+      "Users-dev-proj-a/agent-transcripts/native/native",
+      "Users-dev-proj-b/agent-transcripts/native/native",
+    ]);
     db.close();
   });
 

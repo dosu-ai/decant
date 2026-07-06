@@ -3,7 +3,7 @@ import type { Json } from "./model.ts";
 export const ACTIVITY_BUCKETS = ["planning", "communicating", "context", "code"] as const;
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
-const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "shell"]);
+const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "shell", "terminal"]);
 const CONTEXT_TOOLS = new Set([
   "read",
   "grep",
@@ -17,8 +17,26 @@ const CONTEXT_TOOLS = new Set([
   "bashoutput",
   "listmcpresourcestool",
   "readmcpresourcetool",
+  "list",
+  "search",
+  "codebase_search",
+  "semantic_search",
+  "fetch",
+  "web",
+  "read_file",
 ]);
-const CODE_TOOLS = new Set(["apply_patch", "edit", "write", "notebookedit", "multiedit"]);
+const CODE_TOOLS = new Set([
+  "apply_patch",
+  "edit",
+  "write",
+  "notebookedit",
+  "multiedit",
+  "create",
+  "apply",
+  "edit_file",
+  "write_file",
+  "delete",
+]);
 const PLANNING_TOOLS = new Set(["enterplanmode", "exitplanmode", "todowrite", "update_plan"]);
 const READONLY_BASH = new Set([
   "ls",

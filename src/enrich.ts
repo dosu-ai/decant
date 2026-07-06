@@ -37,10 +37,16 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
       if (block.blockType !== "tool_use") {
         continue;
       }
-      if (session.tool === "claude_code") {
-        claudeRef(messageIdx, message, block, session.cwd, refs);
-      } else {
-        codexRefs(messageIdx, message, block, session.cwd, refs);
+      switch (session.tool) {
+        case "claude_code":
+          claudeRef(messageIdx, message, block, session.cwd, refs);
+          break;
+        case "codex":
+          codexRefs(messageIdx, message, block, session.cwd, refs);
+          break;
+        case "cursor":
+          cursorRef(messageIdx, message, block, session.cwd, refs);
+          break;
       }
     }
   }
@@ -72,6 +78,34 @@ function claudeRef(
     return;
   }
   refs.push(makeRef(messageIdx, message, path, pair.operation, cwd));
+}
+
+function cursorRef(
+  messageIdx: number,
+  message: NormalizedMessage,
+  block: NormalizedBlock,
+  cwd: string | null,
+  refs: FileRef[],
+): void {
+  const name = block.toolName?.toLowerCase() ?? "";
+  const operation: Operation | null =
+    name === "read" || name === "read_file"
+      ? "read"
+      : name === "write" || name === "write_file" || name === "create"
+        ? "write"
+        : name === "edit" || name === "edit_file" || name === "apply"
+          ? "edit"
+          : name === "delete"
+            ? "delete"
+            : null;
+  if (operation == null || !isObject(block.toolInput)) {
+    return;
+  }
+  const path = block.toolInput.path ?? block.toolInput.filePath ?? block.toolInput.file_path;
+  if (typeof path !== "string") {
+    return;
+  }
+  refs.push(makeRef(messageIdx, message, path, operation, cwd));
 }
 
 function codexRefs(

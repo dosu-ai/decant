@@ -1,7 +1,7 @@
 {
   "name": "@dosu/decant",
   "version": "0.0.0",
-  "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
+  "description": "Extract Claude Code, Codex, and Cursor CLI sessions into a normalized, full-text-searchable local SQLite archive.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

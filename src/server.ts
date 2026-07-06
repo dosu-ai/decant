@@ -5,7 +5,6 @@ import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import type { Operation } from "./enrich.ts";
-import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
@@ -34,6 +33,7 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import { runSyncWorker } from "./sync-runner.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import uiBundle from "./ui/index.html";
 
@@ -45,6 +45,7 @@ export interface ServeOptions {
   port?: number;
   hostname?: string;
   trustedPeers?: string[];
+  onConfigChanged?: (config: Config) => void;
 }
 
 type Db = ReturnType<typeof openDb>;
@@ -54,6 +55,10 @@ interface RequestContext {
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
+  onConfigChanged?: (config: Config) => void;
+  getSettings?: typeof getSettings;
+  launchAgent?: typeof launchAgent;
+  openIde?: typeof openIde;
 }
 
 const syncStatus = {
@@ -102,6 +107,9 @@ export async function handleRequest(
         dbPath: config.dbPath,
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
+        cursorDir: config.cursorDir,
+        cursorChatsDir: config.cursorChatsDir,
+        cursorChatsEnabled: config.cursorChatsEnabled,
       });
     }
     if (request.method === "GET" && url.pathname === "/api/settings") {
@@ -113,7 +121,14 @@ export async function handleRequest(
         return contentTypeFailure;
       }
       const body = await readJson<Record<string, unknown>>(request);
-      return json({ ...settingsResponse(saveSettings(body)), saved: true });
+      const saved = saveSettings(body);
+      config.cursorChatsEnabled = saved.experimental.cursorChats;
+      context.onConfigChanged?.(config);
+      publishServerEvent({
+        type: "config_changed",
+        cursorChatsEnabled: config.cursorChatsEnabled,
+      } as ServerEvent);
+      return json({ ...settingsResponse(saved), saved: true });
     }
     if (request.method === "POST" && url.pathname === "/api/launch/agent") {
       const contentTypeFailure = requireJsonRequest(request);
@@ -124,7 +139,13 @@ export async function handleRequest(
       if (body.agent == null || body.prompt == null || body.prompt.trim() === "") {
         return json({ ok: false, error: "agent and prompt are required" }, 400);
       }
-      const result = launchAgent(body.agent, body.prompt, body.key ?? null, getSettings());
+      const settings = (context.getSettings ?? getSettings)();
+      const result = (context.launchAgent ?? launchAgent)(
+        body.agent,
+        body.prompt,
+        body.key ?? null,
+        settings,
+      );
       return json(
         result.ok
           ? result
@@ -141,7 +162,7 @@ export async function handleRequest(
       if (body.dir == null || body.dir.trim() === "") {
         return json({ ok: false, error: "dir is required" }, 400);
       }
-      const result = openIde(body.dir, getSettings());
+      const result = (context.openIde ?? openIde)(body.dir, (context.getSettings ?? getSettings)());
       return json(result, result.ok ? 200 : 400);
     }
     if (
@@ -177,7 +198,9 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/projects") {
-      return withDb(config, context, (db) => json(listProjects(db)));
+      return withDb(config, context, (db) => json(listProjects(db)), {
+        hydrateMetadata: true,
+      });
     }
     const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
     if (request.method === "GET" && sessionEconomicsMatch != null) {
@@ -352,28 +375,6 @@ async function syncNow(config: Config): Promise<Response> {
   }
 }
 
-function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
-    worker.addEventListener("message", (event) => {
-      const data = event.data as
-        | { ok: true; report: ReturnType<typeof ingestSync> }
-        | { ok: false; error: string };
-      worker.terminate();
-      if (data.ok) {
-        resolve(data.report);
-      } else {
-        reject(new Error(data.error));
-      }
-    });
-    worker.addEventListener("error", (event) => {
-      worker.terminate();
-      reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
-    });
-    worker.postMessage(config);
-  });
-}
-
 interface EventClient {
   send(event: ServerEvent): void;
   close(): void;
@@ -434,10 +435,10 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
-  ensureDerivedMetadata(db);
   const server = Bun.serve({
     hostname,
     port,
+    idleTimeout: 255,
     routes: {
       "/": uiBundle,
       "/projects": uiBundle,
@@ -456,6 +457,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
         boundHostname: hostname,
         remoteAddress: bunServer.requestIP(request)?.address ?? null,
         trustedPeers,
+        onConfigChanged: options.onConfigChanged,
       }),
   });
   const stop = server.stop.bind(server);
@@ -473,15 +475,24 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   return server;
 }
 
-function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
+function withDb(
+  config: Config,
+  context: RequestContext,
+  callback: (db: Db) => Response,
+  options: { hydrateMetadata?: boolean } = {},
+): Response {
   if (context.db != null) {
-    ensureDerivedMetadata(context.db);
+    if (options.hydrateMetadata === true) {
+      ensureDerivedMetadata(context.db);
+    }
     return callback(context.db);
   }
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const db = openDb(config.dbPath);
   try {
-    ensureDerivedMetadata(db);
+    if (options.hydrateMetadata === true) {
+      ensureDerivedMetadata(db);
+    }
     return callback(db);
   } finally {
     db.close();
@@ -508,7 +519,7 @@ function isSearchSyntaxError(error: unknown): boolean {
 }
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value, null, 2), {
+  return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });

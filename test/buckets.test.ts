@@ -11,6 +11,9 @@ describe("activity bucket classifier", () => {
     expect(toolBucket("Read")).toBe("context");
     expect(toolBucket("Task")).toBe("context");
     expect(toolBucket("mcp__github__search_issues")).toBe("context");
+    expect(toolBucket("read")).toBe("context");
+    expect(toolBucket("write")).toBe("code");
+    expect(toolBucket("edit_file")).toBe("code");
     expect(toolBucket("UnknownFutureTool")).toBe("context");
   });
 
@@ -32,6 +35,8 @@ describe("activity bucket classifier", () => {
     expect(toolBucket("local_shell", JSON.stringify(JSON.stringify({ cmd: "bun test" })))).toBe(
       "code",
     );
+    expect(toolBucket("shell", { command: "git status --short" })).toBe("context");
+    expect(toolBucket("terminal", { cmd: "bun test" })).toBe("code");
   });
 
   test("classifies transcript block families", () => {

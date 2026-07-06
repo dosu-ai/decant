@@ -46,6 +46,13 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 - `POST /api/launch/agent`
 - `POST /api/launch/ide`
 
+`GET /api/config` includes `dbPath`, `claudeDir`, `codexDir`, `cursorDir`,
+`cursorChatsDir`, and `cursorChatsEnabled`.
+
+`GET /api/settings` and `POST /api/settings` include
+`settings.experimental.cursorChats`, the feature-preview toggle for native
+Cursor `agent-transcripts` discovery.
+
 ## Events
 
 - `GET /api/events` returns an SSE stream.
@@ -56,5 +63,6 @@ Current event names:
 - `ready`
 - `sync`
 - `archive_updated`
+- `config_changed`
 - `error`
 - `stopped`

@@ -1,7 +1,7 @@
 // Normalized domain model shared by every source parser (port of model.rs).
 // The const tuples are the wire strings stored in SQLite — never reworded.
 
-export const TOOLS = ["claude_code", "codex"] as const;
+export const TOOLS = ["claude_code", "codex", "cursor"] as const;
 export type Tool = (typeof TOOLS)[number];
 
 export const ROLES = ["user", "assistant", "system", "tool", "other"] as const;

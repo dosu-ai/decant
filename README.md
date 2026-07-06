@@ -3,18 +3,20 @@
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Extract Claude Code and Codex CLI sessions into a normalized,
+Extract Claude Code, Codex, and Cursor CLI sessions into a normalized,
 full-text-searchable SQLite archive, then browse, search, analyze, and distill
 that history from a fast local CLI or web UI.
 
 decant reads the JSONL logs those tools already write
-(`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalizes
-the formats into one WAL + FTS5 SQLite archive, and keeps everything local. Your
-transcripts never leave your machine.
+(`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`, and staged
+Cursor Agent `stream-json` transcripts), normalizes the formats into one WAL +
+FTS5 SQLite archive, and keeps everything local. Experimental Cursor native
+transcript discovery can also read `~/.cursor/projects/*/agent-transcripts`
+when enabled in settings. Your transcripts never leave your machine.
 
 ## Features
 
-- One archive for Claude Code and Codex sessions.
+- One archive for Claude Code, Codex, and Cursor sessions.
 - Full-text search across messages and tool calls.
 - Usage, cost, tool, MCP, file-hotspot, and activity analytics.
 - Deterministic `distill` artifacts from real command history: scripts, replays,
@@ -33,8 +35,8 @@ bun run dev
 ```
 
 Requires Bun 1.3+. `bun run dev` installs dependencies with the lockfile
-frozen, starts `decant serve`, runs the startup sync, and keeps watching your
-source logs. The UI runs at `http://127.0.0.1:3000`.
+frozen, starts `decant serve`, opens from the existing archive immediately, and
+watches your source logs. The UI runs at `http://127.0.0.1:3000`.
 
 After the first Release workflow publishes packages, install from npm without
 installing Bun:
@@ -54,8 +56,13 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.cursor:/sources/cursor:ro" \
+  -e DECANT_CURSOR_CHATS_DIR=/sources/cursor \
   ghcr.io/dosu-ai/decant:latest
 ```
+
+The Cursor native mount only sets the source path. Native Cursor transcript
+ingest is a feature preview and stays off until you enable it in Settings.
 
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
 `-p 3000:3000` exposes the archive port on every host interface. The container
@@ -87,6 +94,8 @@ All read commands support `--json`. Use `--db /path/to/decant.db` or
 `DECANT_DB` for an alternate archive. Use `decant sync --path /path/to/log-or-dir`
 to ingest only specific source files or a temporary source tree, including raw
 Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths.
+Use `decant sync --cursor-dir /path/to/cursor-jsonl` for staged Cursor Agent
+`--output-format stream-json` captures.
 
 ## Configuration
 
@@ -94,6 +103,10 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
 - `DECANT_CLAUDE_DIR`: Claude projects directory, default
   `~/.claude/projects`.
 - `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
+- `DECANT_CURSOR_DIR`: staged Cursor Agent `stream-json` directory. No default.
+- `DECANT_CURSOR_CHATS_DIR`: Cursor native root, default `~/.cursor`; native
+  transcript ingest reads `projects/*/agent-transcripts` under that root and is
+  off until enabled in Settings.
 - `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
   the local API guard when `serve` is bound to a non-loopback host.
@@ -108,7 +121,7 @@ logs remain the source of truth.
 ## How It Works
 
 ```
-~/.claude + ~/.codex
+~/.claude + ~/.codex + staged/native Cursor JSONL
         |
         v
  Bun + TypeScript decant process

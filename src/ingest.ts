@@ -1,10 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, basename as pathBasename } from "node:path";
 import { outcome, workType } from "./classify.ts";
 import { defaultPricing, estimateCost } from "./cost.ts";
+import {
+  cursorNativeChatsDir,
+  cursorNativeProjectsDir,
+  cursorNativeTranscriptUuid,
+} from "./cursor-native.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
 import type { Json, NormalizedBlock, ParsedSession, Tool } from "./model.ts";
@@ -12,12 +17,16 @@ import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
+import { parseCursorSession } from "./sources/cursor.ts";
 import { classifyTool, preview } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
 
 export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
+  cursorDir?: string | null;
+  cursorChatsDir?: string | null;
+  cursorChatsEnabled?: boolean;
   sourcePaths?: string[];
 }
 
@@ -44,6 +53,11 @@ interface Prepared {
   hash: string;
 }
 
+interface SourceFingerprint {
+  size: number;
+  mtime: number;
+}
+
 interface ToolUseBlock {
   messageId: number;
   callBlockId: number;
@@ -60,6 +74,12 @@ export function discover(config: IngestConfig): SourceFile[] {
   collect(config.claudeDir, "claude_code", false, (name) => name.endsWith(".jsonl"), out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
+  if (config.cursorDir != null) {
+    collect(config.cursorDir, "cursor", false, isJsonl, out);
+  }
+  if (config.cursorChatsEnabled === true && config.cursorChatsDir != null) {
+    collectCursorNative(config.cursorChatsDir, out);
+  }
   return out;
 }
 
@@ -79,6 +99,7 @@ export function sync(
   seedModelPricing(db);
   const files = discover(config);
   const titles = codexTitles(config);
+  const cursorMeta = new CursorNativeMetaIndex(config.cursorChatsDir);
   const report: SyncReport = {
     scanned: files.length,
     ingested: 0,
@@ -100,12 +121,11 @@ export function sync(
     } catch {
       continue;
     }
-    const size = stats.size;
-    const mtime = mtimeSecs(stats);
+    let fingerprint = sourceFingerprint(file, stats, cursorMeta);
     const prior = db
       .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
       .get(file.path) as { size: number; mtime: number } | null;
-    if (prior != null && prior.size === size && prior.mtime === mtime) {
+    if (prior != null && prior.size === fingerprint.size && prior.mtime === fingerprint.mtime) {
       report.skipped += 1;
       continue;
     }
@@ -114,26 +134,33 @@ export function sync(
     try {
       content = readFileSync(file.path, "utf8");
       stats = statSync(file.path);
+      fingerprint = sourceFingerprint(file, stats, cursorMeta);
     } catch {
       report.failed += 1;
       continue;
     }
 
-    const stem = fileStem(file.path);
+    const sourceSessionId =
+      file.tool === "cursor" ? cursorSourceSessionId(file.path) : fileStem(file.path);
     const parsed =
       file.tool === "claude_code"
-        ? parseClaudeSession(stem, content, {
+        ? parseClaudeSession(sourceSessionId, content, {
             sourcePath: file.path,
-            sidecarMeta: readClaudeSidecarMeta(file.path),
+            sidecarMeta: readJsonSidecarMeta(file.path),
           })
-        : parseCodexSession(stem, content, titles);
+        : file.tool === "codex"
+          ? parseCodexSession(sourceSessionId, content, titles)
+          : parseCursorSession(sourceSessionId, content, {
+              sourcePath: file.path,
+              sidecarMeta: readCursorSidecarMeta(file.path, cursorMeta),
+            });
     parsed.session.isArchived = file.archived;
 
     const prepared: Prepared = {
       file,
       lineCount: lineCount(content),
-      mtime: mtimeSecs(stats),
-      size: stats.size,
+      mtime: fingerprint.mtime,
+      size: fingerprint.size,
       hash: hashContent(content),
     };
 
@@ -712,6 +739,9 @@ function sourceFileForPath(path: string): SourceFile | null {
   if (isCodexRollout(name)) {
     return { tool: "codex", path, archived: hasPathSegment(path, "archived_sessions") };
   }
+  if (isCursorSourcePath(path) || looksLikeCursorStreamJson(path)) {
+    return { tool: "cursor", path, archived: false };
+  }
   return { tool: "claude_code", path, archived: false };
 }
 
@@ -732,11 +762,87 @@ function isCodexRollout(name: string): boolean {
   return name.startsWith("rollout-") && name.endsWith(".jsonl");
 }
 
+function isJsonl(name: string): boolean {
+  return name.endsWith(".jsonl");
+}
+
+function collectCursorNative(root: string, out: SourceFile[]): void {
+  const projectsRoot = cursorNativeProjectsDir(root);
+  if (!existsSync(projectsRoot)) {
+    return;
+  }
+  for (const path of walk(projectsRoot)) {
+    if (isCursorNativeTranscript(path)) {
+      out.push({ tool: "cursor", path, archived: false });
+    }
+  }
+}
+
+function isCursorNativeTranscript(path: string): boolean {
+  return path.endsWith(".jsonl") && hasPathSegment(path, "agent-transcripts");
+}
+
+function isCursorSourcePath(path: string): boolean {
+  return (
+    path.endsWith(".jsonl") && (isCursorNativeTranscript(path) || hasPathSegment(path, "cursor"))
+  );
+}
+
+function looksLikeCursorStreamJson(path: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  const line = content
+    .split(/\n/, 8)
+    .find((candidate) => candidate.trim() !== "")
+    ?.trim();
+  if (line == null) {
+    return false;
+  }
+  try {
+    const first = JSON.parse(line) as Json;
+    return (
+      asString(get(first, "type")) === "system" &&
+      asString(get(first, "subtype")) === "init" &&
+      (get(first, "apiKeySource") !== undefined ||
+        /\bcomposer\b/i.test(asString(get(first, "model")) ?? "") ||
+        asString(get(first, "permissionMode")) != null)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function cursorSourceSessionId(path: string): string {
+  if (!isCursorNativeTranscript(path)) {
+    return fileStem(path);
+  }
+
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  const projectsIndex = parts.lastIndexOf("projects");
+  const transcriptIndex = parts.lastIndexOf("agent-transcripts");
+  const start =
+    projectsIndex >= 0
+      ? projectsIndex + 1
+      : transcriptIndex > 0
+        ? transcriptIndex - 1
+        : Math.max(0, parts.length - 3);
+  const sourceParts = parts.slice(start);
+  const last = sourceParts.at(-1);
+  if (last != null) {
+    sourceParts[sourceParts.length - 1] = stripJsonl(last);
+  }
+  return sourceParts.length === 0 ? fileStem(path) : sourceParts.join("/");
+}
+
 function hasPathSegment(path: string, segment: string): boolean {
   return path.split(/[\\/]+/).includes(segment);
 }
 
-function readClaudeSidecarMeta(path: string): Json | null {
+function readJsonSidecarMeta(path: string): Json | null {
   if (!path.endsWith(".jsonl")) {
     return null;
   }
@@ -751,6 +857,110 @@ function readClaudeSidecarMeta(path: string): Json | null {
     return JSON.parse(content) as Json;
   } catch {
     return null;
+  }
+}
+
+function readCursorSidecarMeta(path: string, meta: CursorNativeMetaIndex): Json | null {
+  if (isCursorNativeTranscript(path)) {
+    return readCursorNativeMeta(path, meta) ?? readJsonSidecarMeta(path);
+  }
+  return readJsonSidecarMeta(path);
+}
+
+function readCursorNativeMeta(path: string, meta: CursorNativeMetaIndex): Json | null {
+  const metaPath = meta.pathForTranscript(path);
+  if (metaPath == null) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(metaPath, "utf8")) as Json;
+  } catch {
+    return null;
+  }
+}
+
+function sourceFingerprint(
+  file: SourceFile,
+  sourceStats: Stats,
+  cursorMeta: CursorNativeMetaIndex,
+): SourceFingerprint {
+  let size = sourceStats.size;
+  let mtime = mtimeMarker(sourceStats);
+  if (file.tool !== "cursor" || !isCursorNativeTranscript(file.path)) {
+    return { size, mtime };
+  }
+
+  const metaPath = cursorMeta.pathForTranscript(file.path);
+  if (metaPath == null) {
+    return { size, mtime };
+  }
+  try {
+    const metaStats = statSync(metaPath);
+    size += metaStats.size;
+    mtime = Math.max(mtime, mtimeMarker(metaStats));
+  } catch {
+    return { size, mtime };
+  }
+  return { size, mtime };
+}
+
+class CursorNativeMetaIndex {
+  private readonly root: string | null;
+  private paths: Map<string, string> | null = null;
+
+  constructor(root: string | null | undefined) {
+    this.root = root ?? null;
+  }
+
+  pathForTranscript(path: string): string | null {
+    if (this.root == null || !isCursorNativeTranscript(path)) {
+      return null;
+    }
+    const uuid = cursorNativeTranscriptUuid(path);
+    if (uuid == null) {
+      return null;
+    }
+    return this.index().get(uuid) ?? null;
+  }
+
+  private index(): Map<string, string> {
+    if (this.paths != null) {
+      return this.paths;
+    }
+    const paths = new Map<string, string>();
+    if (this.root == null) {
+      this.paths = paths;
+      return paths;
+    }
+    const chatsDir = cursorNativeChatsDir(this.root);
+    let roots: Dirent[];
+    try {
+      roots = readdirSync(chatsDir, { withFileTypes: true });
+    } catch {
+      this.paths = paths;
+      return paths;
+    }
+    for (const root of roots.sort((left, right) => compareCodePoints(left.name, right.name))) {
+      if (!root.isDirectory()) {
+        continue;
+      }
+      const rootPath = join(chatsDir, root.name);
+      let sessions: Dirent[];
+      try {
+        sessions = readdirSync(rootPath, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const session of sessions.sort((left, right) =>
+        compareCodePoints(left.name, right.name),
+      )) {
+        if (session.isDirectory() && !paths.has(session.name)) {
+          paths.set(session.name, join(rootPath, session.name, "meta.json"));
+        }
+      }
+    }
+    this.paths = paths;
+    return paths;
   }
 }
 
@@ -807,6 +1017,10 @@ function fileStem(path: string): string {
   return ext === "" ? base : base.slice(0, -ext.length);
 }
 
+function stripJsonl(value: string): string {
+  return value.endsWith(".jsonl") ? value.slice(0, -".jsonl".length) : value;
+}
+
 function lineCount(content: string): number {
   if (content === "") {
     return 0;
@@ -815,8 +1029,8 @@ function lineCount(content: string): number {
   return trimmed.split(/\r?\n/).length;
 }
 
-function mtimeSecs(stats: Stats): number {
-  return Math.trunc(stats.mtimeMs / 1000);
+function mtimeMarker(stats: Stats): number {
+  return Math.trunc(stats.mtimeMs);
 }
 
 function hashContent(content: string): string {

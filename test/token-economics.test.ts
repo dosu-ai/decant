@@ -7,6 +7,7 @@ import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { parseCursorSession } from "../src/sources/cursor.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "../src/token-economics.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-token-economics-test-"));
@@ -249,6 +250,49 @@ describe("token economics", () => {
     );
     expect(scoped?.buckets.some((row) => row.sessions > 1)).toBe(true);
     expect(tokenEconomicsForSession(db, 999_999)).toBeNull();
+    db.close();
+  });
+
+  test("session scope classifies Cursor read-only shell calls using tool input", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        cwd: "/repo",
+        model: "composer-2.5",
+      }),
+      JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-shell",
+        tool_call: {
+          shellToolCall: {
+            args: { command: "git status" },
+            result: { exitCode: 0 },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        usage: { inputTokens: 1000, outputTokens: 100 },
+      }),
+    ].join("\n");
+    const id = upsertSession(
+      db,
+      parseCursorSession("cursor-shell", content),
+      "/x/cursor.jsonl",
+      1,
+      2,
+      "cursor",
+    );
+
+    const global = tokenEconomics(db);
+    const scoped = tokenEconomicsForSession(db, id);
+    expect(global.buckets.find((row) => row.bucket === "context")?.tool_calls).toBe(1);
+    expect(global.buckets.find((row) => row.bucket === "code")?.tool_calls).toBe(0);
+    expect(scoped?.buckets.find((row) => row.bucket === "context")?.tool_calls).toBe(1);
+    expect(scoped?.buckets.find((row) => row.bucket === "code")?.tool_calls).toBe(0);
     db.close();
   });
 });

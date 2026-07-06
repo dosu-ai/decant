@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
@@ -20,17 +20,24 @@ function freshConfig(): Config {
   const root = join(workDir, `case-${dbCounter}`);
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
+  const cursorDir = join(root, "cursor");
+  const cursorChatsDir = join(root, "cursor-projects");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(codexDir, "archived_sessions"), { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
+  mkdirSync(cursorChatsDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    cursorDir,
+    cursorChatsDir,
+    cursorChatsEnabled: false,
   };
 }
 
-function fixture(tool: "claude" | "codex", name: string): string {
+function fixture(tool: "claude" | "codex" | "cursor", name: string): string {
   return readFileSync(join(import.meta.dir, "..", "fixtures", tool, name), "utf8");
 }
 
@@ -121,6 +128,9 @@ describe("server routes", () => {
       dbPath: config.dbPath,
       claudeDir: config.claudeDir,
       codexDir: config.codexDir,
+      cursorDir: config.cursorDir,
+      cursorChatsDir: config.cursorChatsDir,
+      cursorChatsEnabled: false,
     });
   });
 
@@ -245,6 +255,47 @@ describe("server routes", () => {
     });
   });
 
+  test("launch agent route uses saved Warp settings through the HTTP path", async () => {
+    const config = freshConfig();
+    const calls: unknown[] = [];
+    const response = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/launch/agent", {
+        method: "POST",
+        headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+        body: JSON.stringify({ agent: "cursor", prompt: "ship it", key: "catalog:test" }),
+      }),
+      config,
+      {
+        getSettings: () => ({
+          agent: "cursor",
+          terminal: "warp",
+          ide: "cursor",
+          experimental: { cursorChats: false },
+        }),
+        launchAgent: (agent, prompt, key, settings) => {
+          calls.push({ agent, prompt, key, settings });
+          return { ok: true };
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(calls).toEqual([
+      {
+        agent: "cursor",
+        prompt: "ship it",
+        key: "catalog:test",
+        settings: {
+          agent: "cursor",
+          terminal: "warp",
+          ide: "cursor",
+          experimental: { cursorChats: false },
+        },
+      },
+    ]);
+  });
+
   test("settings routes read options and persist sanitized choices", async () => {
     const config = freshConfig();
     const prior = process.env.DECANT_CONFIG_DIR;
@@ -253,19 +304,52 @@ describe("server routes", () => {
       const settings = await route(config, "/api/settings");
       expect(settings.status).toBe(200);
       expect(settings.body).toMatchObject({
-        settings: expect.objectContaining({ agent: "claude" }),
-        options: expect.objectContaining({ agents: expect.any(Array) }),
+        settings: expect.objectContaining({
+          agent: "claude",
+          experimental: { cursorChats: false },
+        }),
+        options: expect.objectContaining({
+          agents: expect.arrayContaining([["cursor", "Cursor"]]),
+          terminals: expect.arrayContaining([["warp", "Warp"]]),
+        }),
       });
 
-      const saved = await route(config, "/api/settings", {
-        method: "POST",
-        body: JSON.stringify({ agent: "codex", terminal: "wezterm", ide: "zed", extra: "no" }),
-      });
+      let configChanged = false;
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/settings", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "cursor",
+            terminal: "wezterm",
+            ide: "zed",
+            experimental: { cursorChats: true },
+            extra: "no",
+          }),
+        }),
+        config,
+        {
+          onConfigChanged(next) {
+            configChanged = next === config;
+          },
+        },
+      );
+      const saved = {
+        status: response.status,
+        body: await response.json(),
+      };
       expect(saved.status).toBe(200);
       expect(saved.body).toMatchObject({
         saved: true,
-        settings: { agent: "codex", terminal: "wezterm", ide: "zed" },
+        settings: {
+          agent: "cursor",
+          terminal: "wezterm",
+          ide: "zed",
+          experimental: { cursorChats: true },
+        },
       });
+      expect(config.cursorChatsEnabled).toBe(true);
+      expect(configChanged).toBe(true);
     } finally {
       if (prior == null) {
         delete process.env.DECANT_CONFIG_DIR;
@@ -458,12 +542,13 @@ describe("server routes", () => {
 
   test("sync route ingests configured source directories", async () => {
     const config = freshConfig();
+    writeFileSync(join(config.cursorDir ?? "", "stream.jsonl"), fixture("cursor", "stream.jsonl"));
 
     const result = await route(config, "/api/sync", { method: "POST", body: "{}" });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      scanned: 0,
-      ingested: 0,
+      scanned: 1,
+      ingested: 1,
       failed: 0,
       cancelled: false,
     });
@@ -472,7 +557,7 @@ describe("server routes", () => {
     expect(status.status).toBe(200);
     expect(status.body).toMatchObject({
       in_progress: false,
-      ingested_count: 0,
+      ingested_count: 1,
       last_error: null,
     });
   });

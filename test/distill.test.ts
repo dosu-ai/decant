@@ -24,6 +24,7 @@ import {
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { parseCursorSession } from "../src/sources/cursor.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-distill-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -34,7 +35,7 @@ function freshDb(): Database {
   return openDb(join(workDir, `distill-${dbCounter}.db`));
 }
 
-function fixture(tool: "claude" | "codex", name: string): string {
+function fixture(tool: "claude" | "codex" | "cursor", name: string): string {
   return readFileSync(join(import.meta.dir, "..", "fixtures", tool, name), "utf8");
 }
 
@@ -202,6 +203,60 @@ describe("distill timeline and renderers", () => {
     const commands = timeline(db).ops.map((op) => op.normalized);
     expect(commands.some((command) => command.includes("cargo build --workspace"))).toBe(true);
     expect(commands.some((command) => command.includes("cargo test --workspace"))).toBe(true);
+    db.close();
+  });
+
+  test("cursor commands and file operations are extracted", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseCursorSession("cursor-distill", fixture("cursor", "stream.jsonl")),
+      "/x/cursor.jsonl",
+      1,
+      2,
+      "hcursor",
+    );
+    const commands = timeline(db).ops.map((op) => op.normalized);
+    expect(commands).toContain("bun test");
+
+    const replay = renderReplay(db, firstSessionId(db), false);
+    expect(replay).toContain("bun test");
+    expect(replay).toContain("cat > 'notes.txt'");
+    db.close();
+  });
+
+  test("cursor replay accepts filePath path aliases for file operations", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        cwd: "/repo",
+        model: "composer-2.5",
+      }),
+      JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-write",
+        tool_call: {
+          writeFileToolCall: {
+            args: { filePath: "/repo/src/app.ts", content: "export const ok = true;" },
+            result: { ok: true },
+          },
+        },
+      }),
+    ].join("\n");
+    upsertSession(
+      db,
+      parseCursorSession("cursor-file-path", content),
+      "/x/cursor.jsonl",
+      1,
+      2,
+      "h",
+    );
+
+    const replay = renderReplay(db, firstSessionId(db), false);
+    expect(replay).toContain("cat > 'src/app.ts'");
     db.close();
   });
 

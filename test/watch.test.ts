@@ -24,12 +24,19 @@ function freshConfig(): Config {
   const root = join(workDir, `case-${caseCounter}`);
   const claudeDir = join(root, "claude", "projects");
   const codexDir = join(root, "codex");
+  const cursorDir = join(root, "cursor");
+  const cursorChatsDir = join(root, "cursor-root");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
+  mkdirSync(join(cursorChatsDir, "projects"), { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    cursorDir,
+    cursorChatsDir,
+    cursorChatsEnabled: false,
   };
 }
 
@@ -61,7 +68,17 @@ function onceSync(events: WatchEvent[]): Promise<SyncEvent> {
 describe("watch mode", () => {
   test("watchDirs returns existing source directories only", () => {
     const config = freshConfig();
-    expect(watchDirs(config)).toEqual([config.claudeDir, join(config.codexDir, "sessions")]);
+    expect(watchDirs(config)).toEqual([
+      config.claudeDir,
+      join(config.codexDir, "sessions"),
+      config.cursorDir ?? "",
+    ]);
+    expect(watchDirs({ ...config, cursorChatsEnabled: true })).toEqual([
+      config.claudeDir,
+      join(config.codexDir, "sessions"),
+      config.cursorDir ?? "",
+      join(config.cursorChatsDir, "projects"),
+    ]);
   });
 
   test("runSyncOnce updates status around a real ingest", () => {
@@ -118,6 +135,38 @@ describe("watch mode", () => {
     expect(events.at(-1)?.type).toBe("stopped");
   });
 
+  test("manual trigger can use an async sync runner", async () => {
+    const config = freshConfig();
+    const events: WatchEvent[] = [];
+    let yielded = false;
+    const handle = startWatch({
+      config,
+      enableWatch: false,
+      intervalMs: 0,
+      syncOnStart: false,
+      runSync: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(yielded).toBe(true);
+        return {
+          scanned: 1,
+          ingested: 0,
+          skipped: 1,
+          issues: 0,
+          failed: 0,
+          cancelled: false,
+        };
+      },
+      onEvent: (event) => events.push(event),
+    });
+
+    handle.trigger("manual");
+    yielded = true;
+    const event = await onceSync(events);
+    expect(event.reason).toBe("manual");
+    expect(event.report).toMatchObject({ scanned: 1, skipped: 1 });
+    await handle.stop();
+  });
+
   test("periodic sweep is enough to ingest when native watch is disabled", async () => {
     const config = freshConfig();
     seedClaude(config);
@@ -133,6 +182,24 @@ describe("watch mode", () => {
     const event = await onceSync(events);
     expect(event.reason).toBe("sweep");
     expect(event.report.ingested).toBe(1);
+    await handle.stop();
+  });
+
+  test("refresh reconfigures watched directories after Cursor preview changes", async () => {
+    const config = freshConfig();
+    const events: WatchEvent[] = [];
+    const handle = startWatch({
+      config,
+      enableWatch: false,
+      intervalMs: 0,
+      syncOnStart: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(handle.dirs).not.toContain(join(config.cursorChatsDir, "projects"));
+    config.cursorChatsEnabled = true;
+    expect(handle.refresh()).toContain(join(config.cursorChatsDir, "projects"));
+    expect(handle.dirs).toContain(join(config.cursorChatsDir, "projects"));
     await handle.stop();
   });
 });

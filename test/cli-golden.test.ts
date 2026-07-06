@@ -7,8 +7,17 @@ import { compareCodePoints } from "../src/order.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
 const goldenDir = join(import.meta.dir, "golden");
+const priorConfigDir = process.env.DECANT_CONFIG_DIR;
+process.env.DECANT_CONFIG_DIR = join(workDir, "settings");
 
-afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+afterAll(() => {
+  if (priorConfigDir == null) {
+    delete process.env.DECANT_CONFIG_DIR;
+  } else {
+    process.env.DECANT_CONFIG_DIR = priorConfigDir;
+  }
+  rmSync(workDir, { recursive: true, force: true });
+});
 
 function fixtureFiles(tool: string): string[] {
   return readdirSync(join(import.meta.dir, "..", "fixtures", tool))

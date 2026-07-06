@@ -100,6 +100,29 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("session summaries extract Cursor native JSON-string user queries", () => {
+    const db = freshDb();
+    const raw = JSON.stringify({
+      content: [
+        {
+          text: "<timestamp>Monday, Jul 6, 2026</timestamp>\n<user_query>\nPlease format this text for Discord markdown\n</user_query>",
+          type: "text",
+        },
+      ],
+    });
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent)
+      VALUES (1, 'cursor', 'native-json', '${raw.replaceAll("'", "''")}', '2026-07-05T00:00:00Z', 0);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES (1, 1, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES (1, 1, 0, 'text', '${raw.replaceAll("'", "''")}');
+    `);
+
+    expect(listSessions(db)[0]?.title).toBe("Please format this text for Discord markdown");
+    db.close();
+  });
+
   test("session summaries label generated context instead of leaking raw tags", () => {
     const db = freshDb();
     db.exec(`

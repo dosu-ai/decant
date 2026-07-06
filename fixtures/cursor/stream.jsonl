@@ -1,0 +1,10 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/Users/dev/proj","session_id":"cursor-init-1","model":"composer-2.5","permissionMode":"default","version":"2026.07.01"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Read package.json and add a note"}]},"session_id":"cursor-init-1"}
+{"type":"thinking","subtype":"delta","delta":"Need inspect package metadata first."}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll inspect the package file."}]},"session_id":"cursor-init-1"}
+{"type":"tool_call","subtype":"started","call_id":"call-read","tool_call":{"readToolCall":{"args":{"path":"package.json"}}},"session_id":"cursor-init-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call-read","tool_call":{"readToolCall":{"args":{"path":"package.json"},"result":{"success":{"content":"{\"name\":\"demo\"}","isEmpty":false,"exceededLimit":false,"totalLines":1,"totalChars":15}}}},"session_id":"cursor-init-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call-write","tool_call":{"writeToolCall":{"args":{"path":"notes.txt","fileText":"done","toolCallId":"call-write"},"result":{"success":{"path":"/Users/dev/proj/notes.txt","linesCreated":1,"fileSize":4}}}},"session_id":"cursor-init-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call-shell","tool_call":{"shellToolCall":{"args":{"command":"bun test"},"result":{"success":{"exitCode":0,"output":"ok"}}}},"session_id":"cursor-init-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done. I added notes.txt."}]},"session_id":"cursor-init-1"}
+{"type":"result","subtype":"success","duration_ms":1000,"duration_api_ms":1000,"is_error":false,"result":"Done. I added notes.txt.","session_id":"cursor-init-1","usage":{"inputTokens":1000,"outputTokens":200,"cacheReadTokens":50,"cacheWriteTokens":25}}

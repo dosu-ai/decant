@@ -923,6 +923,13 @@ td a:hover {
   border-top-color: color-mix(in oklab, var(--line) 70%, transparent);
 }
 
+.subagent-loading-row {
+  display: block;
+  padding-left: 26px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
 .session-title-stack {
   position: relative;
   display: grid;
@@ -1235,7 +1242,8 @@ select {
 }
 
 .settings-page {
-  width: min(100%, 42rem);
+  width: min(100%, 62rem);
+  gap: 30px;
 }
 
 .search-form {
@@ -1980,18 +1988,40 @@ mark {
   padding-top: 16px;
 }
 
+.settings-section {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-section-heading h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .settings-form {
   display: grid;
-  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
 .setting-select {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(16rem, 1fr) minmax(12rem, 24rem);
   align-items: center;
-  gap: 20px;
+  gap: 24px;
   border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
-  padding: 16px 20px;
+  padding: 14px 0;
 }
 
 .setting-select:last-child {
@@ -2008,7 +2038,9 @@ mark {
 }
 
 .setting-select strong {
-  font-size: 15px;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .setting-select small {
@@ -2021,15 +2053,18 @@ mark {
 .select-shell {
   position: relative;
   display: inline-flex;
-  width: 16rem;
-  max-width: 100%;
+  width: min(24rem, 100%);
+  justify-self: end;
 }
 
 .select-shell select {
   width: 100%;
   min-width: 0;
-  height: 38px;
-  border-radius: 9px;
+  height: 40px;
+  border-color: var(--line-strong);
+  border-radius: 8px;
+  background: var(--elevated);
+  color: var(--fg);
   padding-right: 42px;
   padding-left: 14px;
 }
@@ -2045,7 +2080,42 @@ mark {
   transform: translateY(-50%);
 }
 
+.switch-toggle {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  justify-self: end;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--elevated);
+  padding: 0;
+}
+
+.switch-toggle span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.switch-toggle[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--success) 55%, var(--line));
+  background: color-mix(in oklab, var(--success) 15%, var(--elevated));
+}
+
+.switch-toggle[aria-pressed="true"] span {
+  background: var(--success);
+  transform: translateX(20px);
+}
+
 .settings-note {
+  margin: 0;
   color: var(--faint);
   font-size: 12px;
 }
@@ -2675,7 +2745,16 @@ pre {
   .setting-select {
     grid-template-columns: 1fr;
     gap: 10px;
-    padding: 14px 16px;
+    padding: 14px 0;
+  }
+
+  .select-shell,
+  .switch-toggle {
+    justify-self: stretch;
+  }
+
+  .switch-toggle {
+    justify-self: start;
   }
 
   .session-filter,

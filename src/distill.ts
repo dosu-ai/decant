@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { compareCodePoints } from "./order.ts";
 
-export const DECANT_VERSION = process.env.DECANT_BUILD_VERSION ?? "0.1.0";
+export const DECANT_VERSION = process.env.DECANT_BUILD_VERSION ?? "0.0.0-dev";
 
 export const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
 export type OpKind = (typeof OP_KINDS)[number];

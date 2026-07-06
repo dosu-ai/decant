@@ -7,7 +7,12 @@ import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import { handleRequest, publishServerEvent, serve } from "../src/server.ts";
+import {
+  handleRequest,
+  publishServerEvent,
+  resolveTrustedPeers,
+  serve,
+} from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -204,6 +209,17 @@ describe("server routes", () => {
       { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
     );
     expect(browserLocalWrite.status).toBe(200);
+  });
+
+  test("resolves trusted peers from env and serve flags as a union", () => {
+    expect(resolveTrustedPeers([], "172.16.0.0/12")).toEqual(["172.16.0.0/12"]);
+    expect(resolveTrustedPeers(["10.0.0.5"], undefined)).toEqual(["10.0.0.5"]);
+    expect(resolveTrustedPeers(["10.0.0.5, 10.0.0.6"], "172.16.0.0/12")).toEqual([
+      "172.16.0.0/12",
+      "10.0.0.5",
+      "10.0.0.6",
+    ]);
+    expect(resolveTrustedPeers(["172.16.0.0/12"], "172.16.0.0/12")).toEqual(["172.16.0.0/12"]);
   });
 
   test("rejects cross-origin and non-json mutating requests", async () => {

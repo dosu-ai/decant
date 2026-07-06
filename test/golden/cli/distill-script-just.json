@@ -1,8 +1,8 @@
 {
-  "artifact": "# Distilled by decant 0.1.0 from all sessions\n# 7 session(s) (2026-05-01..2026-05-06). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n\nbuild:\n    cargo build --workspace\n\ntest:\n    cargo test --workspace\n",
+  "artifact": "# Distilled by decant 0.0.0-dev from all sessions\n# 7 session(s) (2026-05-01..2026-05-06). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n\nbuild:\n    cargo build --workspace\n\ntest:\n    cargo test --workspace\n",
   "date_from": "2026-05-01T10:00:00.000Z",
   "date_to": "2026-05-06T09:00:00.000Z",
-  "generated_with": "0.1.0",
+  "generated_with": "0.0.0-dev",
   "ops": [
     {
       "is_error": false,

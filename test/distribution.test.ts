@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -111,7 +111,21 @@ describe("distribution helpers", () => {
       const platform = await Bun.file(join(outDir, "decant-linux-x64", "package.json")).json();
       expect(launcher.version).toBe("1.2.3");
       expect(launcher.optionalDependencies).toEqual({ "@dosu/decant-linux-x64": "1.2.3" });
+      expect(launcher.files).toEqual([
+        "bin/decant.cjs",
+        "targets.json",
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+      ]);
+      for (const file of ["README.md", "LICENSE", "NOTICE"]) {
+        expect(existsSync(join(outDir, "decant", file)), `launcher ${file}`).toBe(true);
+      }
       expect(platform.version).toBe("1.2.3");
+      expect(platform.files).toEqual(["bin/decant", "README.md", "LICENSE", "NOTICE"]);
+      for (const file of ["README.md", "LICENSE", "NOTICE"]) {
+        expect(existsSync(join(outDir, "decant-linux-x64", file)), `platform ${file}`).toBe(true);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -12,12 +12,13 @@ COPY src ./src
 RUN bun install --frozen-lockfile
 
 ARG TARGETPLATFORM
+ARG DECANT_VERSION=0.0.0-dev
 RUN case "${TARGETPLATFORM}" in \
       "linux/amd64") DECANT_TARGET="linux-x64" ;; \
       "linux/arm64") DECANT_TARGET="linux-arm64" ;; \
       *) echo "unsupported Docker target platform: ${TARGETPLATFORM}" >&2; exit 1 ;; \
     esac; \
-    bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin; \
+    bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin --version "${DECANT_VERSION}"; \
     cp "/tmp/decant-bin/${DECANT_TARGET}/decant" /usr/local/bin/decant
 
 FROM debian:bookworm-slim AS runtime

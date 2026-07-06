@@ -257,12 +257,6 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("watch session directories and keep the archive current")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
-    .option(
-      "--trusted-peer <peer>",
-      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
-      collectOption,
-      [] as string[],
-    )
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -278,7 +272,6 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
-        trustedPeer?: string[];
       }) =>
         runAsync(async () => {
           const config = resolve({
@@ -305,6 +298,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option(
+      "--trusted-peer <peer>",
+      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
+      collectOption,
+      [] as string[],
+    )
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",

@@ -14,7 +14,10 @@
     "arm64"
   ],
   "files": [
-    "bin/decant"
+    "bin/decant",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "publishConfig": {
     "access": "public"

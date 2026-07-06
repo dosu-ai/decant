@@ -474,7 +474,7 @@ function formatSse(event: ServerEvent): string {
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
   const port = options.port ?? DEFAULT_SERVE_PORT;
-  const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
+  const trustedPeers = resolveTrustedPeers(options.trustedPeers);
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
   ensureDerivedMetadata(db);
@@ -727,6 +727,17 @@ export function parsePeerList(value: string | null | undefined): string[] {
     .split(",")
     .map((peer) => peer.trim())
     .filter((peer) => peer !== "");
+}
+
+export function resolveTrustedPeers(
+  configured: string[] | undefined,
+  env: string | null | undefined = process.env.DECANT_TRUSTED_PEERS,
+): string[] {
+  const peers = [
+    ...parsePeerList(env),
+    ...(configured ?? []).flatMap((peer) => parsePeerList(peer)),
+  ];
+  return [...new Set(peers)];
 }
 
 function ipv4CidrContains(cidr: string, address: string): boolean {

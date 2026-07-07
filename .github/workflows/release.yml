@@ -435,6 +435,26 @@ jobs:
       - name: Assert npm supports trusted publishing (>= 11.5.1)
         run: dpkg --compare-versions "$(npm --version)" ge 11.5.1 || exit 1
 
+      # Plan §3 0.4: prove the real optionalDependencies resolution path — the
+      # code path every npx user hits — against the STAGED packages, before
+      # anything is irrevocably published. No DECANT_BINARY_PATH override.
+      - name: Pack-and-install smoke on staged packages (pre-publish)
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          launcher_tgz="$(cd dist/npm/decant && npm pack --silent | tail -n1)"
+          platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
+          ( cd "$smoke_dir"
+            npm init -y >/dev/null
+            npm install --ignore-scripts --no-audit --no-fund \
+              "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
+              "$GITHUB_WORKSPACE/dist/npm/decant/$launcher_tgz"
+            out="$(env -u DECANT_BINARY_PATH node node_modules/@dosu/decant/bin/decant.cjs --version)"
+            echo "staged launcher reports: $out"
+            [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher reported '$out', expected version $VERSION (plan §3 0.4)"; exit 1; }
+          )
+          rm -rf "$smoke_dir" dist/npm/decant/"$launcher_tgz" dist/npm/decant-linux-x64/"$platform_tgz"
+
       # Dist-tag chosen at publish time: `npm dist-tag add` is not OIDC-capable and
       # would silently need the token D2 exists to remove (plan §4a).
       - name: Derive npm dist-tag channel
@@ -513,7 +533,10 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [meta, build, npm]
+    # npm-smoke is a release GATE (plan §4/§11): the Latest release page —
+    # which releases/latest/download/ and install.sh resolve — and the tap
+    # formula behind it must not advance if the published launcher can't run.
+    needs: [meta, build, npm, npm-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

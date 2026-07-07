@@ -80,6 +80,7 @@ case "$version" in
 esac
 
 base_url="${DECANT_BASE_URL:-https://github.com/${repo}/releases}"
+base_url="${base_url%/}"
 
 if [ "$version" = "latest" ]; then
   release_base="${base_url}/latest/download"
@@ -114,6 +115,7 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 130' INT TERM
 
 tarball_path="$tmp_dir/$tarball_name"
 sums_path="$tmp_dir/SHA256SUMS"
@@ -182,7 +184,7 @@ else
 
   shell_name=$(basename "${SHELL:-sh}")
   case "$shell_name" in
-    fish) export_line="set -gx PATH $install_dir \$PATH" ;;
+    fish) export_line="set -gx PATH \"$install_dir\" \$PATH" ;;
     *) export_line="export PATH=\"$install_dir:\$PATH\"" ;;
   esac
 
@@ -202,7 +204,7 @@ else
       *) rc_file="$HOME/.profile" ;;
     esac
 
-    if [ -f "$rc_file" ] && grep -Fq "$path_marker" "$rc_file"; then
+    if [ -f "$rc_file" ] && grep -Fq "$export_line" "$rc_file"; then
       info "$install_dir PATH entry already present in $rc_file"
     else
       rc_dir=$(dirname "$rc_file")

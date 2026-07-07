@@ -184,6 +184,7 @@ function buildToolFarm(dir: string, options: { wget: boolean }): { binDir: strin
     "awk",
     "dirname",
     "basename",
+    "gzip",
   ];
   const hashTool =
     spawnSync("sh", ["-c", "command -v sha256sum"]).status === 0 ? "sha256sum" : "shasum";
@@ -255,7 +256,9 @@ function runInstall(
 ): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync("sh", [installShPath, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...envOverrides },
+    // SHELL is pinned so rc-file detection is hermetic regardless of the
+    // developer's login shell; individual tests can still override it.
+    env: { ...process.env, SHELL: "/bin/bash", ...envOverrides },
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -583,6 +586,63 @@ describe("install.sh", () => {
       `https://github.com/dosu-ai/decant/releases/download/v1.2.3/${tarballName}`,
       "https://github.com/dosu-ai/decant/releases/download/v1.2.3/SHA256SUMS",
     ]);
+  });
+
+  test("strips a trailing slash from DECANT_BASE_URL", () => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
+    const { binDir, curlLog } = buildStubBinDir(dir);
+    const installDir = join(dir, "install-target");
+    const home = freshHome(dir);
+
+    const result = runInstall(["1.2.3"], {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      DECANT_BASE_URL: "https://mirror.example.com/decant/releases/",
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+      FIXTURE_DIR: fixture.fixtureDir,
+      CURL_LOG: curlLog,
+    });
+
+    expect(result.status).toBe(0);
+    const requestedUrls = readFileSync(curlLog, "utf8").trim().split("\n");
+    expect(requestedUrls[0]).toBe(
+      `https://mirror.example.com/decant/releases/download/v1.2.3/${tarballName}`,
+    );
+    for (const url of requestedUrls) {
+      expect(url.replace("https://", "")).not.toContain("//");
+    }
+  });
+
+  test("re-running with a different DECANT_INSTALL_DIR appends a second PATH entry", () => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
+    const { binDir } = buildStubBinDir(dir);
+    const home = freshHome(dir);
+    // install.sh picks .bash_profile for bash on Darwin, .bashrc elsewhere
+    const rcFile = join(home, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
+    writeFileSync(rcFile, "# existing content\n");
+
+    const common = {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      SHELL: "/bin/bash",
+      FIXTURE_DIR: fixture.fixtureDir,
+    };
+    const first = runInstall(["1.2.3"], { ...common, DECANT_INSTALL_DIR: join(dir, "bin-a") });
+    expect(first.status).toBe(0);
+    const second = runInstall(["1.2.3"], { ...common, DECANT_INSTALL_DIR: join(dir, "bin-b") });
+    expect(second.status).toBe(0);
+
+    const rc = readFileSync(rcFile, "utf8");
+    expect(rc).toContain(`export PATH="${join(dir, "bin-a")}:$PATH"`);
+    expect(rc).toContain(`export PATH="${join(dir, "bin-b")}:$PATH"`);
+    // and a same-dir re-run stays deduplicated
+    const third = runInstall(["1.2.3"], { ...common, DECANT_INSTALL_DIR: join(dir, "bin-b") });
+    expect(third.status).toBe(0);
+    const rcAfter = readFileSync(rcFile, "utf8");
+    expect(rcAfter.split(`export PATH="${join(dir, "bin-b")}:$PATH"`).length - 1).toBe(1);
   });
 
   test("errors clearly when neither curl nor wget is on PATH", () => {

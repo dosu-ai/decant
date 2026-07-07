@@ -3822,7 +3822,9 @@ function FilesView({
     if (group === "path" && op == null) {
       // The dashboard batch already loads the default grouping; the effect
       // above mirrors it into local state, so refetching here would duplicate
-      // the mount (and every date-change) request.
+      // the mount (and every date-change) request. An error from a previous
+      // non-default fetch must not outlive the view that caused it.
+      setFilesError(null);
       return;
     }
     let cancelled = false;

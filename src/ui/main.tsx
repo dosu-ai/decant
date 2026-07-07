@@ -50,8 +50,15 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import {
+  type DashboardEndpoint,
+  dashboardEndpointStamp,
+  dashboardRouteForPath,
+  planDashboardFetches,
+  routeLoadsSessionList,
+} from "./dashboard-plan.ts";
 import { type ChartOption, echarts } from "./echarts.ts";
-import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
+import { planSessionLoad, sessionTableBodyState } from "./loading-state.ts";
 import { flattenSessionRows, virtualTablePadding } from "./session-rows.ts";
 import "./styles.css";
 
@@ -283,122 +290,88 @@ const emptyData: DashboardData = {
   dateBounds: null,
 };
 
-type DataSlice = Exclude<keyof DashboardData, "sessions">;
-
-// Each page fetches only the slices it renders; fetching everything for every
-// page made first paint wait on the slowest analytics endpoint. Slices are
-// cached per (date filter, reload generation), so navigating back is free and
-// SSE-triggered refreshes only refetch what the active page shows.
-const SLICE_LOADERS: Record<
-  DataSlice,
-  { dateScoped: boolean; load: (dateQuery: string) => Promise<Partial<DashboardData>> }
+/**
+ * One fetcher per dashboard endpoint, returning the slice of DashboardData it
+ * fills. Which of these run — and when — is decided by planDashboardFetches
+ * (route gating plus date/archive staleness) in src/ui/dashboard-plan.ts.
+ */
+const dashboardFetchers: Record<
+  DashboardEndpoint,
+  (dateQuery: string, signal: AbortSignal) => Promise<Partial<DashboardData>>
 > = {
-  summary: {
-    dateScoped: true,
-    load: async (q) => ({
-      summary: await getJson<Summary>(withDateQuery("/api/stats/summary", q)),
+  activity: async (dateQuery, signal) => ({
+    activity: await getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery), {
+      signal,
     }),
-  },
-  byModel: {
-    dateScoped: true,
-    load: async (q) => ({
-      byModel: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", q)),
+  }),
+  byDay: async (dateQuery, signal) => ({
+    byDay: await getJson<DimensionRow[]>(
+      withDateQuery("/api/stats/by-dimension?dim=day", dateQuery),
+      { signal },
+    ),
+  }),
+  byModel: async (dateQuery, signal) => ({
+    byModel: await getJson<DimensionRow[]>(
+      withDateQuery("/api/stats/by-dimension?dim=model", dateQuery),
+      { signal },
+    ),
+  }),
+  byProject: async (dateQuery, signal) => ({
+    byProject: await getJson<DimensionRow[]>(
+      withDateQuery("/api/stats/by-dimension?dim=project", dateQuery),
+      { signal },
+    ),
+  }),
+  config: async (_dateQuery, signal) => ({
+    config: await getJson<ConfigView>("/api/config", { signal }),
+  }),
+  dateBounds: async (_dateQuery, signal) => ({
+    dateBounds: await getJson<DateBounds>("/api/date-bounds", { signal }),
+  }),
+  files: async (dateQuery, signal) => ({
+    files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery), {
+      signal,
     }),
-  },
-  byProject: {
-    dateScoped: true,
-    load: async (q) => ({
-      byProject: await getJson<DimensionRow[]>(
-        withDateQuery("/api/stats/by-dimension?dim=project", q),
-      ),
+  }),
+  mcp: async (dateQuery, signal) => ({
+    mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery), {
+      signal,
     }),
-  },
-  byDay: {
-    dateScoped: true,
-    load: async (q) => ({
-      byDay: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", q)),
+  }),
+  modelSparklines: async (dateQuery, signal) => ({
+    modelSparklines: await getJson<ModelSparklines>(
+      withDateQuery("/api/analytics/model-sparklines", dateQuery),
+      { signal },
+    ),
+  }),
+  now: async (_dateQuery, signal) => ({
+    now: await getJson<NowView>("/api/analytics/now", { signal }),
+  }),
+  projects: async (_dateQuery, signal) => ({
+    projects: await getJson<ProjectSummary[]>("/api/projects", { signal }),
+  }),
+  recommendations: async (_dateQuery, signal) => ({
+    recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all", {
+      signal,
     }),
-  },
-  projects: {
-    dateScoped: false,
-    load: async () => ({ projects: await getJson<ProjectSummary[]>("/api/projects") }),
-  },
-  tools: {
-    dateScoped: true,
-    load: async (q) => ({
-      tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", q)),
+  }),
+  settings: async (_dateQuery, signal) => ({
+    settings: await getJson<SettingsInfo>("/api/settings", { signal }),
+  }),
+  summary: async (dateQuery, signal) => ({
+    summary: await getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery), { signal }),
+  }),
+  tokenEconomics: async (dateQuery, signal) => ({
+    tokenEconomics: await getJson<TokenEconomics>(
+      withDateQuery("/api/analytics/token-economics", dateQuery),
+      { signal },
+    ),
+  }),
+  tools: async (dateQuery, signal) => ({
+    tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery), {
+      signal,
     }),
-  },
-  mcp: {
-    dateScoped: true,
-    load: async (q) => ({
-      mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", q)),
-    }),
-  },
-  files: {
-    dateScoped: true,
-    load: async (q) => ({
-      files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", q)),
-    }),
-  },
-  recommendations: {
-    dateScoped: false,
-    load: async () => ({
-      recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),
-    }),
-  },
-  config: {
-    dateScoped: false,
-    load: async () => ({ config: await getJson<ConfigView>("/api/config") }),
-  },
-  settings: {
-    dateScoped: false,
-    load: async () => ({ settings: await getJson<SettingsInfo>("/api/settings") }),
-  },
-  activity: {
-    dateScoped: true,
-    load: async (q) => ({
-      activity: await getJson<Activity>(withDateQuery("/api/analytics/activity", q)),
-    }),
-  },
-  modelSparklines: {
-    dateScoped: true,
-    load: async (q) => ({
-      modelSparklines: await getJson<ModelSparklines>(
-        withDateQuery("/api/analytics/model-sparklines", q),
-      ),
-    }),
-  },
-  tokenEconomics: {
-    dateScoped: true,
-    load: async (q) => ({
-      tokenEconomics: await getJson<TokenEconomics>(
-        withDateQuery("/api/analytics/token-economics", q),
-      ),
-    }),
-  },
-  now: {
-    dateScoped: false,
-    load: async () => ({ now: await getJson<NowView>("/api/analytics/now") }),
-  },
-  dateBounds: {
-    dateScoped: false,
-    load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
-  },
-};
-
-// Slices the app shell itself renders (sidebar stats, sync button, pickers).
-const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds"];
-
-const ROUTE_SLICES: Record<string, DataSlice[]> = {
-  Sessions: [],
-  Projects: ["projects"],
-  Search: [],
-  Analytics: ["byDay", "byModel", "byProject", "activity", "modelSparklines", "tokenEconomics"],
-  Insights: ["recommendations", "settings"],
-  "Tools & MCP": ["tools", "mcp"],
-  Files: ["files"],
-  Settings: ["config", "settings"],
+  }),
 };
 
 type NavItem = {
@@ -455,15 +428,16 @@ function App() {
   const [reloadKey, setReloadKey] = useState(0);
   const [loadedSessionKey, setLoadedSessionKey] = useState<string | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sseConnected, setSseConnected] = useState(false);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionLoadKey = `${dateQuery}:${reloadKey}`;
+  const route = dashboardRouteForPath(pathOnly(path));
   const refreshTimerRef = useRef<number | null>(null);
-  const loadedSlicesRef = useRef(new Map<DataSlice, string>());
-  const activeView = activeRoute(path);
-  const showsSessions = activeView === "Sessions";
+  const loadedEndpointsRef = useRef<Partial<Record<DashboardEndpoint, string>>>({});
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -506,32 +480,34 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    void dateQuery;
-    setData((current) => ({ ...current, sessions: [] }));
-    setLoadedSessionKey(null);
-    setSessionLimit(SESSION_PAGE_SIZE);
-  }, [dateQuery]);
-
-  useEffect(() => {
-    const sliceKey = (slice: DataSlice): string =>
-      SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
-    const needed = [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
-    const missing = needed.filter(
-      (slice) => loadedSlicesRef.current.get(slice) !== sliceKey(slice),
-    );
-    if (missing.length === 0) {
+    const plan = planDashboardFetches({
+      dateQuery,
+      loaded: loadedEndpointsRef.current,
+      reloadKey,
+      route,
+    });
+    if (plan.length === 0) {
       return;
     }
     let cancelled = false;
-    Promise.all(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
+    const controller = new AbortController();
+    Promise.all(plan.map((endpoint) => dashboardFetchers[endpoint](dateQuery, controller.signal)))
       .then((parts) => {
         if (cancelled) {
           return;
         }
-        const merged = Object.assign({}, ...parts) as Partial<DashboardData>;
-        setData((current) => ({ ...current, ...merged }));
-        for (const slice of missing) {
-          loadedSlicesRef.current.set(slice, sliceKey(slice));
+        setData((current) => {
+          const next = { ...current };
+          for (const part of parts) {
+            Object.assign(next, part);
+          }
+          return next;
+        });
+        for (const endpoint of plan) {
+          loadedEndpointsRef.current[endpoint] = dashboardEndpointStamp(endpoint, {
+            dateQuery,
+            reloadKey,
+          });
         }
         setError(null);
       })
@@ -542,14 +518,14 @@ function App() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [activeView, dateQuery, reloadKey]);
+  }, [dateQuery, reloadKey, route]);
 
   useEffect(() => {
-    if (!showsSessions) {
+    if (!routeLoadsSessionList(route)) {
       return;
     }
-    let cancelled = false;
     const plan = planSessionLoad({
       loadedRequestKey: loadedSessionKey,
       loadedRows: data.sessions.length,
@@ -560,12 +536,16 @@ function App() {
     if (plan == null) {
       return;
     }
+    let cancelled = false;
+    const controller = new AbortController();
     setSessionsLoading(true);
+    setSessionsError(null);
     void getJson<SessionSummary[]>(
       withDateQuery(
         `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true`,
         dateQuery,
       ),
+      { signal: controller.signal },
     )
       .then((sessions) => {
         if (cancelled) {
@@ -576,11 +556,11 @@ function App() {
           sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
         }));
         setLoadedSessionKey(sessionLoadKey);
-        setError(null);
+        setSessionsError(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(errorMessage(err));
+          setSessionsError(errorMessage(err));
         }
       })
       .finally(() => {
@@ -590,28 +570,28 @@ function App() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [
-    data.sessions.length,
-    dateQuery,
-    loadedSessionKey,
-    sessionLimit,
-    sessionLoadKey,
-    showsSessions,
-  ]);
+  }, [data.sessions.length, dateQuery, loadedSessionKey, route, sessionLimit, sessionLoadKey]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
+    const onOpen = () => setSseConnected(true);
+    const onError = () => setSseConnected(false);
+    events.addEventListener("open", onOpen);
+    events.addEventListener("error", onError);
     events.addEventListener("sync", requestRefresh);
     events.addEventListener("archive_updated", requestRefresh);
     return () => {
+      events.removeEventListener("open", onOpen);
+      events.removeEventListener("error", onError);
       events.removeEventListener("sync", requestRefresh);
       events.removeEventListener("archive_updated", requestRefresh);
       events.close();
     };
   }, [requestRefresh]);
 
-  const active = activeView;
+  const active = activeRoute(path);
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
   // Prefer the loaded (date-filtered) session list, matching the sidebar's
@@ -671,8 +651,11 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Live and auto-syncing">
-            <span className="live-dot" />
+          <div
+            className="sidebar-stat"
+            title={sseConnected ? "Live and auto-syncing" : "Reconnecting to live updates"}
+          >
+            <span className={`live-dot${sseConnected ? "" : " is-offline"}`} />
             <span>
               <strong>{formatInt(metrics?.sessions ?? 0)}</strong> sessions
             </span>
@@ -759,6 +742,7 @@ function App() {
               },
               refresh: requestRefresh,
               sessionLimit,
+              sessionsError,
               sessionsLoading,
               setSessionLimit,
             })}
@@ -778,6 +762,7 @@ function renderView(
     onDateRangeChange: (range: DateRangeSelection) => void;
     refresh: () => void;
     sessionLimit: number;
+    sessionsError: string | null;
     sessionsLoading: boolean;
     setSessionLimit: (limit: number) => void;
   },
@@ -792,10 +777,12 @@ function renderView(
         <SessionsView
           data={data}
           dateRange={actions.dateRange}
+          error={actions.sessionsError}
           limit={actions.sessionLimit}
           loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
+          onRetry={actions.refresh}
         />
       );
     case "Projects":
@@ -842,10 +829,12 @@ function renderView(
         <SessionsView
           data={data}
           dateRange={actions.dateRange}
+          error={actions.sessionsError}
           limit={actions.sessionLimit}
           loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
+          onRetry={actions.refresh}
         />
       );
   }
@@ -854,17 +843,21 @@ function renderView(
 function SessionsView({
   data,
   dateRange,
+  error,
   limit,
   loading,
   onDateRangeChange,
   onLimitChange,
+  onRetry,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
+  error: string | null;
   limit: number;
   loading: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
+  onRetry: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
@@ -874,7 +867,9 @@ function SessionsView({
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const hasMore = !loading && data.sessions.length < total;
-  const waitingForSessions = shouldShowSessionSkeleton({
+  const bodyState = sessionTableBodyState({
+    errored: error != null,
+    filteredRows: filtered.length,
     isLoading: loading,
     loadedRows: data.sessions.length,
     query,
@@ -985,6 +980,17 @@ function SessionsView({
             value={query}
           />
         </div>
+        {error != null && data.sessions.length > 0 ? (
+          <div className="notice danger inline-notice">
+            <span className="table-inline-error">
+              <span>Refresh failed, showing previous results: {error}</span>
+              <button className="secondary-button" onClick={onRetry} type="button">
+                <Icon name="refresh" />
+                Retry
+              </button>
+            </span>
+          </div>
+        ) : null}
         <div className="table-scroll" ref={tableWrapRef}>
           <table className="data-table sessions-table">
             <colgroup>
@@ -1008,8 +1014,21 @@ function SessionsView({
               </tr>
             </thead>
             <tbody>
-              {waitingForSessions ? <SessionTableSkeletonRows /> : null}
-              {!waitingForSessions && filtered.length === 0 ? (
+              {bodyState === "skeleton" ? <SessionTableSkeletonRows /> : null}
+              {bodyState === "error" ? (
+                <tr>
+                  <td colSpan={7}>
+                    <span className="table-inline-error">
+                      <span>Couldn't load sessions: {error}</span>
+                      <button className="secondary-button" onClick={onRetry} type="button">
+                        <Icon name="refresh" />
+                        Retry
+                      </button>
+                    </span>
+                  </td>
+                </tr>
+              ) : null}
+              {bodyState === "empty" ? (
                 <tr>
                   <td colSpan={7}>
                     {query.trim() === ""
@@ -1018,12 +1037,12 @@ function SessionsView({
                   </td>
                 </tr>
               ) : null}
-              {!waitingForSessions && padding.top > 0 ? (
-                <tr aria-hidden="true" className="virtual-spacer">
+              {bodyState === "rows" && padding.top > 0 ? (
+                <tr className="virtual-spacer">
                   <td colSpan={7} style={{ height: padding.top }} />
                 </tr>
               ) : null}
-              {!waitingForSessions
+              {bodyState === "rows"
                 ? virtualItems.map((item) => {
                     const row = flatRows[item.index];
                     if (row == null) {
@@ -1042,8 +1061,8 @@ function SessionsView({
                     );
                   })
                 : null}
-              {!waitingForSessions && padding.bottom > 0 ? (
-                <tr aria-hidden="true" className="virtual-spacer">
+              {bodyState === "rows" && padding.bottom > 0 ? (
+                <tr className="virtual-spacer">
                   <td colSpan={7} style={{ height: padding.bottom }} />
                 </tr>
               ) : null}
@@ -3783,6 +3802,7 @@ function FilesView({
   const [group, setGroup] = useState<"path" | "ext">("path");
   const [op, setOp] = useState<"read" | "edit" | "write" | "delete" | null>(null);
   const [fileRows, setFileRows] = useState(rows);
+  const [filesError, setFilesError] = useState<string | null>(null);
   const [fileSort, setFileSort] = useState<SortState<FileSortKey>>({
     key: "total",
     direction: "desc",
@@ -3799,17 +3819,33 @@ function FilesView({
   }, [group, op, rows]);
 
   useEffect(() => {
+    if (group === "path" && op == null) {
+      // The dashboard batch already loads the default grouping; the effect
+      // above mirrors it into local state, so refetching here would duplicate
+      // the mount (and every date-change) request.
+      return;
+    }
     let cancelled = false;
+    const controller = new AbortController();
     const opParam = op == null ? "" : `&op=${op}`;
+    setFilesError(null);
     void getJson<FileRow[]>(
       withDateQuery(`/api/files?group=${group}&limit=100${opParam}`, dateRangeQuery(dateRange)),
-    ).then((nextRows) => {
-      if (!cancelled) {
-        setFileRows(nextRows);
-      }
-    });
+      { signal: controller.signal },
+    )
+      .then((nextRows) => {
+        if (!cancelled) {
+          setFileRows(nextRows);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setFilesError(errorMessage(err));
+        }
+      });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [dateRange, group, op]);
 
@@ -3848,6 +3884,12 @@ function FilesView({
           ))}
         </fieldset>
       </div>
+
+      {filesError != null ? (
+        <div className="notice danger inline-notice">
+          Unable to load file activity: {filesError}
+        </div>
+      ) : null}
 
       <section className="panel">
         <div className="panel-heading">
@@ -4105,8 +4147,10 @@ function SessionDetailView({ id }: { id: number }) {
       setError("Invalid session id.");
       return;
     }
+    const controller = new AbortController();
     void getJson<SessionDetailData>(
       `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+      { signal: controller.signal },
     )
       .then((nextDetail) => {
         if (!cancelled) {
@@ -4118,7 +4162,9 @@ function SessionDetailView({ id }: { id: number }) {
           setError(errorMessage(err));
         }
       });
-    void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
+    void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`, {
+      signal: controller.signal,
+    })
       .then((nextEconomics) => {
         if (!cancelled) {
           setEconomics(nextEconomics);
@@ -4131,6 +4177,7 @@ function SessionDetailView({ id }: { id: number }) {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [id]);
 

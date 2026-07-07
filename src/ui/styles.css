@@ -243,6 +243,12 @@ nav a[aria-current="page"] {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
+.live-dot.is-offline {
+  background: var(--warning);
+  animation: none;
+  opacity: 0.8;
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -841,6 +847,15 @@ td a:hover {
 .virtual-spacer td {
   border: 0;
   padding: 0;
+}
+
+.table-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--danger);
 }
 
 .table-skeleton-line {

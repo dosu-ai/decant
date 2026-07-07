@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { planSessionLoad, shouldShowSessionSkeleton } from "../src/ui/loading-state.ts";
+import {
+  planSessionLoad,
+  sessionTableBodyState,
+  shouldShowSessionSkeleton,
+} from "../src/ui/loading-state.ts";
 
 describe("session loading state", () => {
   test("refreshes the first page without depending on currently rendered rows", () => {
@@ -44,5 +48,88 @@ describe("session loading state", () => {
       false,
     );
     expect(shouldShowSessionSkeleton({ isLoading: true, loadedRows: 0, query: "" })).toBe(true);
+  });
+});
+
+describe("session table body state", () => {
+  test("a failed first load shows the inline error, not a skeleton or empty state", () => {
+    expect(
+      sessionTableBodyState({
+        errored: true,
+        filteredRows: 0,
+        isLoading: false,
+        loadedRows: 0,
+        query: "",
+      }),
+    ).toBe("error");
+  });
+
+  test("a failed background refresh keeps the loaded rows on screen", () => {
+    expect(
+      sessionTableBodyState({
+        errored: true,
+        filteredRows: 80,
+        isLoading: false,
+        loadedRows: 100,
+        query: "",
+      }),
+    ).toBe("rows");
+  });
+
+  test("first load without rows shows the skeleton", () => {
+    expect(
+      sessionTableBodyState({
+        errored: false,
+        filteredRows: 0,
+        isLoading: true,
+        loadedRows: 0,
+        query: "",
+      }),
+    ).toBe("skeleton");
+  });
+
+  test("a filter that matches nothing shows the empty message, never a skeleton", () => {
+    expect(
+      sessionTableBodyState({
+        errored: false,
+        filteredRows: 0,
+        isLoading: false,
+        loadedRows: 100,
+        query: "zzz",
+      }),
+    ).toBe("empty");
+    expect(
+      sessionTableBodyState({
+        errored: false,
+        filteredRows: 0,
+        isLoading: true,
+        loadedRows: 0,
+        query: "zzz",
+      }),
+    ).toBe("empty");
+  });
+
+  test("an empty archive shows the empty message once loading settles", () => {
+    expect(
+      sessionTableBodyState({
+        errored: false,
+        filteredRows: 0,
+        isLoading: false,
+        loadedRows: 0,
+        query: "",
+      }),
+    ).toBe("empty");
+  });
+
+  test("loaded rows render", () => {
+    expect(
+      sessionTableBodyState({
+        errored: false,
+        filteredRows: 100,
+        isLoading: false,
+        loadedRows: 100,
+        query: "",
+      }),
+    ).toBe("rows");
   });
 });

@@ -7,8 +7,7 @@ decant turns your local Claude Code and Codex CLI session logs into a
 searchable, analyzable SQLite archive — with a CLI and a local web UI, and
 nothing ever leaves your machine.
 
-<!-- TODO: capture docs/assets/decant-serve.png after Phase 5 lands -->
-<!-- ![decant serve UI](docs/assets/decant-serve.png) -->
+![decant serve UI showing the session archive with synthetic demo data](docs/assets/decant-serve.png)
 
 ## What and Why
 

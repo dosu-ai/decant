@@ -159,18 +159,22 @@ gh attestation verify oci://ghcr.io/dosu-ai/decant:0.1.0 -R dosu-ai/decant
 The `oci://` form needs a registry login first (`docker login ghcr.io`).
 
 **npm provenance.** Confirm the published packages carry Sigstore-signed
-provenance:
+provenance. `npm audit signatures` checks the packages installed in the
+current project, so install the release into a scratch project first:
 
 ```sh
+mkdir -p /tmp/decant-verify && cd /tmp/decant-verify
+npm init -y >/dev/null
+npm install @dosu/decant@0.1.0
 npm audit signatures
 ```
 
 **LICENSE and NOTICE.** Every published package (the launcher and all four
-platform packages) stages both files. Confirm they are declared and actually
-packed:
+platform packages) ships both files. `npm pack <pkg>@<version>` downloads the
+registry tarball so you can inspect exactly what users receive:
 
 ```sh
-npm pack --dry-run             # run inside npm/decant or any npm/decant-<platform> dir
+npm pack @dosu/decant@0.1.0    # repeat for @dosu/decant-<os>-<arch> packages
 tar -tzf dosu-decant-*.tgz | grep -E 'LICENSE|NOTICE'
 ```
 

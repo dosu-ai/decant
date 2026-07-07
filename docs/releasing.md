@@ -56,7 +56,9 @@ Ordered — later steps assume earlier ones landed.
 8. **Verify like a user.** Before calling v0.1.0 done:
    - `npx @dosu/decant@0.1.0 --version` on macOS and Linux.
    - The `install.sh` path end to end on both OSes.
-   - `gh attestation verify` on a downloaded asset; `npm audit signatures`.
+   - `gh attestation verify` on a downloaded asset; `npm audit signatures`
+     (from a scratch project with the release installed — see
+     "Verify a release" in distribution.md).
    - `docker logout ghcr.io && docker pull ghcr.io/dosu-ai/decant:0.1.0`
      (anonymous — this is what catches a still-private GHCR package that an
      authenticated pull would silently mask), then a `docker run` smoke test

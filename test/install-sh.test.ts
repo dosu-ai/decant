@@ -167,7 +167,10 @@ esac
  * `wget` mirrors the fake `curl`: it serves fixture files by URL basename and
  * logs each requested URL to WGET_LOG.
  */
-function buildToolFarm(dir: string, options: { wget: boolean }): { binDir: string; wgetLog: string } {
+function buildToolFarm(
+  dir: string,
+  options: { wget: boolean },
+): { binDir: string; wgetLog: string } {
   const binDir = join(dir, "tool-farm");
   mkdirSync(binDir, { recursive: true });
   const wgetLog = join(dir, "wget.log");

@@ -1,25 +1,30 @@
 :root {
   color-scheme: dark;
-  --canvas: #0b0e14;
-  --surface: #11151f;
-  --elevated: #161c28;
-  --overlay: #1b2230;
-  --line: #232b3b;
-  --line-strong: #303a4e;
-  --fg: #e7eaf0;
-  --muted: #9aa6b8;
-  --faint: #6b7689;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --on-accent: #f5f3ff;
-  --claude: #d97757;
-  --claude-strong: #c6613f;
-  --success: #34d399;
-  --warning: #fbbf24;
+  --canvas: #0e0d0e;
+  --surface: #161516;
+  --elevated: #1d1c1d;
+  --overlay: #242224;
+  --line: #2a282a;
+  --line-strong: #3a3739;
+  --fg: #f8f8f2;
+  --muted: #a8a29c;
+  --faint: #736f6b;
+  --accent: #d0e421;
+  --accent-hover: #dded55;
+  --on-accent: #1d1c1d;
+  --gold: #c9a771;
+  --gold-soft: #ecd5b0;
+  --claude: #ffb86c;
+  --claude-strong: #e8935a;
+  --success: #43b74f;
+  --warning: #ffb86c;
   --danger: #f87171;
-  --info: #60a5fa;
+  --info: #1086f4;
+  --magenta: #e159fc;
+  --lavender: #b184ff;
   --radius-lg: 10px;
   --radius-xl: 14px;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -27,43 +32,51 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --canvas: #f6f7f9;
+    --canvas: #f8f8f2;
     --surface: #ffffff;
-    --elevated: #f3f5f8;
+    --elevated: #f1f0ea;
     --overlay: #ffffff;
-    --line: #e4e8ef;
-    --line-strong: #d2d8e2;
-    --fg: #131722;
-    --muted: #5a6473;
-    --faint: #97a1b0;
-    --accent: #7c3aed;
-    --accent-hover: #6d28d9;
-    --on-accent: #ffffff;
-    --success: #059669;
+    --line: #e5e2da;
+    --line-strong: #d0ccc2;
+    --fg: #1d1c1d;
+    --muted: #5f5b56;
+    --faint: #97928b;
+    --accent: #1d1c1d;
+    --accent-hover: #3a3739;
+    --on-accent: #f8f8f2;
+    --gold: #a8834e;
+    --gold-soft: #c9a771;
+    --success: #2e8f3a;
     --warning: #b45309;
     --danger: #dc2626;
-    --info: #2563eb;
+    --info: #0b6ecf;
+    --magenta: #c026d3;
+    --lavender: #7c5cff;
   }
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --canvas: #f6f7f9;
+  --canvas: #f8f8f2;
   --surface: #ffffff;
-  --elevated: #f3f5f8;
+  --elevated: #f1f0ea;
   --overlay: #ffffff;
-  --line: #e4e8ef;
-  --line-strong: #d2d8e2;
-  --fg: #131722;
-  --muted: #5a6473;
-  --faint: #97a1b0;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
-  --on-accent: #ffffff;
-  --success: #059669;
+  --line: #e5e2da;
+  --line-strong: #d0ccc2;
+  --fg: #1d1c1d;
+  --muted: #5f5b56;
+  --faint: #97928b;
+  --accent: #1d1c1d;
+  --accent-hover: #3a3739;
+  --on-accent: #f8f8f2;
+  --gold: #a8834e;
+  --gold-soft: #c9a771;
+  --success: #2e8f3a;
   --warning: #b45309;
   --danger: #dc2626;
-  --info: #2563eb;
+  --info: #0b6ecf;
+  --magenta: #c026d3;
+  --lavender: #7c5cff;
 }
 
 [data-theme="dark"] {
@@ -326,7 +339,7 @@ nav a[aria-current="page"] {
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--faint);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   padding: 1px 6px;
 }
@@ -1029,7 +1042,7 @@ td a:hover {
 }
 
 .mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -1144,7 +1157,7 @@ select {
 }
 
 .badge.is-mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .badge svg {
@@ -2117,7 +2130,7 @@ mark {
   max-width: 18rem;
   overflow: hidden;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2420,7 +2433,7 @@ mark {
 
 .tool-call > div span {
   overflow: hidden;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2505,7 +2518,7 @@ mark {
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--faint);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 2px 6px;
 }
@@ -2602,7 +2615,7 @@ pre {
   max-width: 100%;
   margin: 8px 0 0;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

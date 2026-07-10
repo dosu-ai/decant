@@ -2,7 +2,13 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectedSettings, getSettings, saveSettings, settingsPath } from "../src/settings.ts";
+import {
+  detectedSettings,
+  getSettings,
+  saveSettings,
+  settingsPath,
+  terminalOptions,
+} from "../src/settings.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-settings-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -40,5 +46,29 @@ describe("settings", () => {
     const merged = saveSettings({ agent: "nope", terminal: "wezterm" }, { env });
     expect(merged).toMatchObject({ agent: "codex", terminal: "wezterm", ide: "zed" });
     expect(getSettings({ env }).terminal).toBe("wezterm");
+  });
+
+  test("detects Warp from TERM_PROGRAM and accepts it as a saved value", () => {
+    const detected = detectedSettings({
+      env: { TERM_PROGRAM: "WarpTerminal" },
+      appExists: () => false,
+    });
+    expect(detected.terminal).toBe("warp");
+    expect(terminalOptions.map(([key]) => key)).toContain("warp");
+  });
+
+  test("saveSettings round-trips Warp terminal through getSettings", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "warp") };
+    const saved = saveSettings(
+      {
+        agent: "claude",
+        terminal: "warp",
+        ide: "vscode",
+      },
+      { env, appExists: () => false },
+    );
+    expect(saved.terminal).toBe("warp");
+    const loaded = getSettings({ env });
+    expect(loaded.terminal).toBe("warp");
   });
 });

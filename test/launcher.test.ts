@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canLaunch, command, launchAgent, openIde } from "../src/launcher.ts";
@@ -45,6 +45,35 @@ describe("launcher", () => {
     expect(calls[0]?.bin).toBe("open");
     expect(calls[0]?.args).toContain("Ghostty");
     expect(calls[0]?.args.join(" ")).toContain("claude");
+  });
+
+  test("launchAgent writes a Warp launch configuration and opens it by name", () => {
+    const home = mkdtempSync(join(tmpdir(), "decant-warp-"));
+    const calls: { bin: string; args: string[] }[] = [];
+    const result = launchAgent(
+      "claude",
+      "review the flaky test",
+      null,
+      { agent: "claude", terminal: "warp", ide: "vscode" },
+      {
+        platform: "darwin",
+        env: { HOME: home, DECANT_SKILLS_DIR: home, SHELL: "/bin/zsh" },
+        run: (bin, args) => {
+          calls.push({ bin, args });
+          return { ok: true };
+        },
+        tempName: () => "decant-prompt-warp-test.txt",
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([{ bin: "open", args: ["warp://launch/decant-handoff"] }]);
+    const config = readFileSync(
+      join(home, ".warp", "launch_configurations", "decant-handoff.yaml"),
+      "utf8",
+    );
+    expect(config).toContain("name: decant-handoff");
+    expect(config).toContain("decant-prompt-warp-test.txt");
+    expect(config).toContain(JSON.stringify(home)); // cwd as quoted YAML scalar
   });
 
   test("openIde validates platform and directory before running open", () => {

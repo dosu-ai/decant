@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
@@ -103,6 +103,8 @@ function launchIn(
       return openArgs("kitty", [shell(env), "-lc", cmd], run);
     case "wezterm":
       return openArgs("WezTerm", ["start", "--", shell(env), "-lc", cmd], run);
+    case "warp":
+      return launchWarp(cmd, run, env);
     default:
       return run("osascript", ["-e", terminalAppScript(cmd)]);
   }
@@ -147,6 +149,48 @@ function itermScript(cmd: string): string {
   set w to (create window with default profile)
   tell current session of w to write text ${applescriptString(cmd)}
 end tell`;
+}
+
+// Warp has no AppleScript/exec API; the only scriptable entry point that runs
+// a command is a Launch Configuration opened by file stem, and the file must
+// live inside launch_configurations (absolute paths elsewhere do not resolve).
+function launchWarp(
+  cmd: string,
+  run: (bin: string, args: string[]) => LaunchResult,
+  env: Record<string, string | undefined> | undefined,
+): LaunchResult {
+  const home = env?.HOME ?? process.env.HOME;
+  if (home == null || home === "") {
+    return {
+      ok: false,
+      error: "Could not find a home directory for Warp launch configurations.",
+    };
+  }
+  const dir = join(home, ".warp", "launch_configurations");
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "decant-handoff.yaml"), warpConfigYaml(cmd, env));
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  return run("open", ["warp://launch/decant-handoff"]);
+}
+
+function warpConfigYaml(cmd: string, env: Record<string, string | undefined> | undefined): string {
+  // Same working-dir chain as launchAgent; Warp requires an absolute cwd.
+  const cwd = env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir();
+  // JSON.stringify produces valid YAML double-quoted scalars, so the shell
+  // command's quoting survives YAML parsing untouched.
+  return `---
+name: decant-handoff
+windows:
+  - tabs:
+      - title: decant
+        layout:
+          cwd: ${JSON.stringify(cwd)}
+          commands:
+            - exec: ${JSON.stringify(cmd)}
+`;
 }
 
 function shell(env: Record<string, string | undefined> | undefined): string {

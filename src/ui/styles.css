@@ -46,6 +46,8 @@
     --on-accent: #f8f8f2;
     --gold: #a8834e;
     --gold-soft: #c9a771;
+    --claude: #b4571e;
+    --claude-strong: #9c4a17;
     --success: #2e8f3a;
     --warning: #b45309;
     --danger: #dc2626;
@@ -71,6 +73,8 @@
   --on-accent: #f8f8f2;
   --gold: #a8834e;
   --gold-soft: #c9a771;
+  --claude: #b4571e;
+  --claude-strong: #9c4a17;
   --success: #2e8f3a;
   --warning: #b45309;
   --danger: #dc2626;

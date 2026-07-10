@@ -22,6 +22,7 @@ describe("ui routes", () => {
   });
 
   test("search and settings stay routable without sidebar slots", () => {
+    expect(navItems.map((item) => item.key)).not.toContain("search");
     expect(activeRoute("/search")).toBe("Search");
     expect(activeRoute("/settings")).toBe("Settings");
   });

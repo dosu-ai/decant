@@ -207,6 +207,24 @@ nav a[aria-current="page"] {
   color: var(--accent);
 }
 
+.nav-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-section + .nav-section {
+  margin-top: 14px;
+}
+
+.nav-section-label {
+  padding: 0 20px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
 .sidebar-footer {
   display: grid;
   gap: 6px;

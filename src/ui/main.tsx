@@ -51,7 +51,7 @@ import {
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
-import { activeRoute, activeRouteKey, navItems, pathOnly, titleFor } from "./routes.ts";
+import { activeRoute, activeRouteKey, navSections, pathOnly, titleFor } from "./routes.ts";
 import "./styles.css";
 
 type Summary = {
@@ -631,19 +631,26 @@ function App() {
           </button>
         </div>
         <nav aria-label="Primary">
-          {navItems.map((item) => (
-            <a
-              aria-current={activeKey === item.key ? "page" : undefined}
-              href={item.href}
-              key={item.href}
-              onClick={(event) => {
-                setMenuOpen(false);
-                navigate(event, item.href, setPath);
-              }}
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </a>
+          {navSections.map((section) => (
+            <div className="nav-section" key={section.label ?? "overview"}>
+              {section.label != null ? (
+                <div className="nav-section-label">{section.label}</div>
+              ) : null}
+              {section.items.map((item) => (
+                <a
+                  aria-current={activeKey === item.key ? "page" : undefined}
+                  href={item.href}
+                  key={item.href}
+                  onClick={(event) => {
+                    setMenuOpen(false);
+                    navigate(event, item.href, setPath);
+                  }}
+                >
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </a>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="sidebar-footer">

@@ -195,6 +195,7 @@ nav a {
   display: flex;
   align-items: center;
   gap: 12px;
+  border-left: 2px solid transparent;
   border-radius: 8px;
   color: var(--muted);
   font-size: 14px;
@@ -216,8 +217,9 @@ nav a:hover {
 }
 
 nav a[aria-current="page"] {
-  background: color-mix(in oklab, var(--accent) 12%, transparent);
-  color: var(--accent);
+  border-left: 2px solid var(--gold);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  color: var(--fg);
 }
 
 .nav-section {
@@ -270,7 +272,7 @@ nav a[aria-current="page"] {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--success);
+  background: var(--accent);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
@@ -304,6 +306,22 @@ nav a[aria-current="page"] {
   background: color-mix(in oklab, var(--canvas) 84%, transparent);
   padding: 0 24px;
   backdrop-filter: blur(14px);
+}
+
+.topbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--gold) 0%, transparent) 0%,
+    color-mix(in oklab, var(--gold) 55%, transparent) 25%,
+    color-mix(in oklab, var(--gold-soft) 55%, transparent) 50%,
+    color-mix(in oklab, var(--gold) 55%, transparent) 75%,
+    color-mix(in oklab, var(--gold) 0%, transparent) 100%
+  );
+  pointer-events: none;
 }
 
 .topbar h1 {

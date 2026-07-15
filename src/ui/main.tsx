@@ -128,6 +128,7 @@ type TokenEconomics = {
     tool_calls: number;
     sessions: number;
     cost_share: number;
+    active_ms: number;
   }[];
   totals: {
     generation_tokens: number;
@@ -135,6 +136,7 @@ type TokenEconomics = {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    active_ms: number;
   };
 };
 
@@ -1988,6 +1990,10 @@ function TokenEconomicsPanel({
               <strong>{compact(economics.totals.context_window_tokens)}</strong>
               window
             </span>
+            <span>
+              <strong>{duration(economics.totals.active_ms)}</strong>
+              time
+            </span>
           </div>
         ) : null}
       </div>
@@ -2009,6 +2015,7 @@ function TokenEconomicsPanel({
               <col className="col-activity-number" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
+              <col className="col-activity-number" />
             </colgroup>
             <thead>
               <tr className="activity-table-head">
@@ -2016,6 +2023,9 @@ function TokenEconomicsPanel({
                 <th scope="col">Cost share</th>
                 <th className="numeric activity-number" scope="col">
                   Cost
+                </th>
+                <th className="numeric activity-number" scope="col">
+                  Time
                 </th>
                 <th className="numeric activity-number" scope="col">
                   Generated
@@ -2060,6 +2070,9 @@ function TokenEconomicsPanel({
                         </td>
                         <td className="numeric activity-number">
                           {money(bucket.estimated_cost_usd)}
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {duration(bucket.active_ms)}
                         </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.generation_tokens)}
@@ -3223,6 +3236,19 @@ function compact(value: number): string {
 
 function money(value: number): string {
   return `$${value.toFixed(2)}`;
+}
+
+function duration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function relativeTime(value: string | null | undefined): string {

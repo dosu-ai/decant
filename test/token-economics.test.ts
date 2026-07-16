@@ -210,6 +210,7 @@ describe("token economics", () => {
       "claude",
     );
     const expected = tokenEconomicsForSession(db, sessionId);
+    const expectedAggregate = tokenEconomics(db);
     const stored = db
       .query(
         "SELECT format_version, json_valid(vector_json) AS valid FROM session_economics WHERE session_id = ?1",
@@ -224,10 +225,28 @@ describe("token economics", () => {
       DELETE FROM message;
     `);
     expect(tokenEconomicsForSession(db, sessionId)).toEqual(expected);
+    expect(tokenEconomics(db)).toEqual(expectedAggregate);
     db.close();
   });
 
-  test("backfills missing or stale vectors for existing sessions", () => {
+  test("server cache warmup never falls back to an uncached transcript scan", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    db.exec("DELETE FROM session_economics");
+
+    expect(computeSessionEconomicsVectors(db)).toEqual([]);
+    expect(tokenEconomics(db).totals.generation_tokens).toBeGreaterThan(0);
+    db.close();
+  });
+
+  test("backfills stale, malformed, or structurally incomplete vectors", () => {
     const db = freshDb();
     const sessionId = upsertSession(
       db,
@@ -237,7 +256,8 @@ describe("token economics", () => {
       2,
       "claude",
     );
-    db.query("UPDATE session_economics SET format_version = 0 WHERE session_id = ?1").run(
+    db.query("UPDATE session_economics SET format_version = ?1 WHERE session_id = ?2").run(
+      SESSION_ECONOMICS_FORMAT_VERSION - 1,
       sessionId,
     );
 
@@ -250,6 +270,24 @@ describe("token economics", () => {
       ).format_version,
     ).toBe(SESSION_ECONOMICS_FORMAT_VERSION);
     expect(materializeMissingSessionEconomics(db)).toBe(0);
+
+    db.query("UPDATE session_economics SET vector_json = '{' WHERE session_id = ?1").run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(
+      (
+        db
+          .query(
+            "SELECT json_valid(vector_json) AS valid FROM session_economics WHERE session_id = ?1",
+          )
+          .get(sessionId) as { valid: number }
+      ).valid,
+    ).toBe(1);
+
+    db.query(
+      "UPDATE session_economics SET vector_json = json_remove(vector_json, '$.billed_input_tokens') WHERE session_id = ?1",
+    ).run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(tokenEconomicsForSession(db, sessionId)).not.toBeNull();
     db.close();
   });
 

@@ -12,8 +12,8 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-// Version 2 includes the corrected wall-clock attribution and billed-input
-// fields introduced by the v10 implementation's rebase onto main.
+// Version 2 includes corrected wall-clock attribution plus the billed-input
+// and waiting-on-user fields required by the current activity model.
 export const SESSION_ECONOMICS_FORMAT_VERSION = 2;
 
 // Cap every inter-message gap so long model, tool, or human pauses do not
@@ -170,14 +170,11 @@ export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenE
   );
 }
 
-/**
- * Per-session activity vectors for the whole archive. Sums of these vectors
- * reproduce tokenEconomics() exactly for any date scope, so a caller can
- * compute them once (off the request path) and answer arbitrary date filters
- * from memory via aggregateEconomicsVectors().
- */
+/** Load persisted per-session activity vectors for the in-memory server cache.
+ * This intentionally never falls back to transcript scans: startup sync
+ * backfills missing rows and then invalidates the cache. */
 export function computeSessionEconomicsVectors(db: Database): SessionEconomicsVector[] {
-  return vectorsForScopeWithCache(db, "WITH scoped_session AS (SELECT id FROM session)", []);
+  return cachedVectorsForScope(db, "WITH scoped_session AS (SELECT id FROM session)", []);
 }
 
 /** Mirrors sessionDatePredicate: string-compare on the YYYY-MM-DD prefix. */
@@ -299,9 +296,6 @@ function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconom
   });
 }
 
-/** Load ordered block rows for generation and latency allocation. Tool-result
- * blocks do not duplicate their calling tool metadata, so resolve it through
- * the ingest-time tool_call linkage. */
 /** Persist the complete per-session vector while its normalized rows are hot
  * in the ingest transaction. Descendant rollups stay dynamic: parent reads
  * aggregate the independently cached vectors for the current subtree. */
@@ -331,10 +325,12 @@ export function materializeMissingSessionEconomics(db: Database): number {
        WHERE e.session_id IS NULL
           OR e.format_version != ?1
           OR NOT json_valid(e.vector_json)
-          OR COALESCE(json_type(e.vector_json, '$.id'), '') != 'integer'
-          OR COALESCE(json_type(e.vector_json, '$.billed_input_tokens'), '') NOT IN ('integer', 'real')
-          OR COALESCE(json_type(e.vector_json, '$.waiting_on_user_ms'), '') NOT IN ('integer', 'real')
-          OR COALESCE(json_type(e.vector_json, '$.buckets'), '') != 'object'
+          OR CASE WHEN json_valid(e.vector_json) THEN
+               COALESCE(json_type(e.vector_json, '$.id'), '') != 'integer'
+               OR COALESCE(json_type(e.vector_json, '$.billed_input_tokens'), '') NOT IN ('integer', 'real')
+               OR COALESCE(json_type(e.vector_json, '$.waiting_on_user_ms'), '') NOT IN ('integer', 'real')
+               OR COALESCE(json_type(e.vector_json, '$.buckets'), '') != 'object'
+             ELSE 0 END
      )`,
     [SESSION_ECONOMICS_FORMAT_VERSION],
   );

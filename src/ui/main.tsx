@@ -117,7 +117,7 @@ type NowView = {
   sync_in_progress: boolean;
 };
 
-type ActivityBucket = "planning" | "communicating" | "context" | "code";
+type ActivityBucket = "context" | "planning" | "code" | "communicating";
 
 type TokenEconomics = {
   buckets: {

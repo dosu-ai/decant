@@ -822,7 +822,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .command("tokens")
     .alias("economics")
     .description(
-      "break tokens, cost, agent time, and user wait into planning, communicating, context, and code",
+      "break tokens, cost, agent time, and user wait into context, planning, code, and communicating",
     )
     .action(() =>
       run(() => {

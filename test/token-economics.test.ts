@@ -110,10 +110,27 @@ describe("token economics", () => {
     const context = economics.buckets.find((row) => row.bucket === "context");
     expect(context?.phases?.orientation.context_window_tokens).toBeGreaterThan(0);
 
-    // The fast per-session path cannot order turns, so it omits the phase split.
+    // The per-session path uses the same ordered allocator while retaining its
+    // billed-input Window total.
     const scoped = tokenEconomicsForSession(db, sessionId);
-    expect(scoped?.buckets.every((row) => row.phases === undefined)).toBe(true);
-    expect(scoped?.totals.phases).toBeUndefined();
+    expect(scoped?.totals.generation_tokens).toBe(economics.totals.generation_tokens);
+    const billedInput = (
+      db
+        .query(
+          `SELECT total_input_tokens + total_cache_read_tokens + total_cache_creation_tokens AS tokens
+           FROM session WHERE id = ?1`,
+        )
+        .get(sessionId) as { tokens: number }
+    ).tokens;
+    expect(
+      Math.abs(
+        (scoped?.totals.context_window_tokens ?? 0) -
+          economics.totals.context_window_tokens -
+          billedInput,
+      ),
+    ).toBeLessThanOrEqual(2);
+    expect(scoped?.totals.estimated_cost_usd).toBe(economics.totals.estimated_cost_usd);
+    expect(scoped?.buckets.every((row) => row.phases !== undefined)).toBe(true);
     db.close();
   });
 
@@ -165,15 +182,18 @@ describe("token economics", () => {
     expect(
       economics.buckets.find((row) => row.bucket === "code")?.phases?.orientation.active_ms,
     ).toBe(0);
-
-    // The fast per-session path has no phase ordering but still reports time,
-    // and its total matches the aggregate for the same session.
+    // The scoped result uses the same block-level allocation for generated
+    // messages and time, while allocating the full billed input window.
     const scoped = tokenEconomicsForSession(db, sessionId);
     expect(scoped?.totals.active_ms).toBe(economics.totals.active_ms);
     expect(scoped?.totals.waiting_on_user_ms).toBe(economics.totals.waiting_on_user_ms);
     expect(scoped?.totals.attributed_ms).toBe(economics.totals.attributed_ms);
     expect(scoped?.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(60_000);
-    expect(scoped?.buckets.every((row) => row.phases === undefined)).toBe(true);
+    const communicating = scoped?.buckets.find((row) => row.bucket === "communicating");
+    expect(communicating?.active_ms).toBeGreaterThan(0);
+    expect(communicating?.generation_tokens).toBeGreaterThan(0);
+    expect(communicating?.estimated_cost_usd).toBeGreaterThan(0);
+    expect(communicating?.sessions).toBe(1);
     db.close();
   });
 
@@ -221,6 +241,48 @@ describe("token economics", () => {
       db.query("SELECT active_seconds FROM session").get() as { active_seconds: number }
     ).active_seconds;
     expect(economics.totals.attributed_ms).toBeLessThan(activeSeconds * 1000);
+    db.close();
+  });
+
+  test("counts an agent run when it contributes only wall-clock activity", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-05-06T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 0, output_tokens: 0 },
+          content: [{ type: "text", text: "Starting." }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-05-06T09:00:10.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 0, output_tokens: 0 },
+          content: [{ type: "text", text: "Done." }],
+        },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-time-only", `${content}\n`),
+      "/x/time-only.jsonl",
+      1,
+      2,
+      "time-only",
+    );
+
+    const economics = tokenEconomicsForSession(db, sessionId);
+    expect(economics?.buckets.find((row) => row.bucket === "communicating")).toMatchObject({
+      active_ms: 10_000,
+      generation_tokens: 0,
+      sessions: 1,
+    });
     db.close();
   });
 

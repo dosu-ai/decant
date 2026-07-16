@@ -1975,6 +1975,7 @@ function TokenEconomicsPanel({
     .slice()
     .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd);
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
+  const totalActiveMs = economics?.totals.active_ms ?? 0;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
       <div className="panel-heading">
@@ -2040,7 +2041,9 @@ function TokenEconomicsPanel({
                   Window
                 </th>
                 <th className="numeric activity-number" scope="col">
-                  Sessions
+                  <span title="Root sessions and nested subagent runs contributing to this activity">
+                    Agent runs
+                  </span>
                 </th>
               </tr>
             </thead>
@@ -2048,6 +2051,7 @@ function TokenEconomicsPanel({
               {buckets.map((bucket) => {
                 const tone = activityTone(bucket.bucket);
                 const share = Math.max(0, Math.min(1, bucket.cost_share));
+                const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
                 return (
                   <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
                     {(tooltipProps) => (
@@ -2078,7 +2082,7 @@ function TokenEconomicsPanel({
                           {money(bucket.estimated_cost_usd)}
                         </td>
                         <td className="numeric muted activity-number">
-                          {duration(bucket.active_ms)}
+                          {duration(bucket.active_ms)} · {Math.round(timeShare * 100)}%
                         </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.generation_tokens)}

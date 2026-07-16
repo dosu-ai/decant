@@ -1,6 +1,6 @@
--- decant:schema_version=9
--- Effective decant schema (migrations 1..8 applied), frozen at the
--- pre-typescript cutover. Do not edit without updating schema tests.
+-- decant:schema_version=10
+-- Effective decant schema (migrations 1..10 applied), frozen as the current
+-- baseline. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -152,6 +152,12 @@ CREATE TABLE model_pricing (
   cache_write_per_mtok REAL,
   source TEXT,
   updated_at TEXT
+);
+CREATE TABLE session_economics (
+  session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
+  format_version INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  computed_at TEXT NOT NULL
 );
 CREATE TABLE recommendation (
   key            TEXT PRIMARY KEY,

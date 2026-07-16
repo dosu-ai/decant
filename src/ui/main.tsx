@@ -4038,31 +4038,40 @@ function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [economicsError, setEconomicsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setEconomics(null);
     setError(null);
+    setEconomicsError(null);
     if (!Number.isFinite(id)) {
       setError("Invalid session id.");
       return;
     }
-    void Promise.all([
-      getJson<SessionDetailData>(
-        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
-      ),
-      getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`),
-    ])
-      .then(([nextDetail, nextEconomics]) => {
+    void getJson<SessionDetailData>(
+      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+    )
+      .then((nextDetail) => {
         if (!cancelled) {
           setDetail(nextDetail);
-          setEconomics(nextEconomics);
         }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(errorMessage(err));
+        }
+      });
+    void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
+      .then((nextEconomics) => {
+        if (!cancelled) {
+          setEconomics(nextEconomics);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEconomicsError(errorMessage(err));
         }
       });
     return () => {
@@ -4132,7 +4141,11 @@ function SessionDetailView({ id }: { id: number }) {
           subagentRuns={subagentRuns}
           title="Activity breakdown"
         />
-      ) : null}
+      ) : economicsError != null ? (
+        <div className="notice inline-notice">Activity breakdown unavailable: {economicsError}</div>
+      ) : (
+        <SessionEconomicsSkeleton />
+      )}
 
       <div className="transcript-layout">
         <aside className="toc">
@@ -4289,22 +4302,7 @@ function SessionDetailSkeleton() {
         </div>
       </header>
       <span className="skeleton-line skeleton-back" />
-      <section className="panel token-economics-panel is-compact skeleton-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="skeleton-line skeleton-heading" />
-            <span className="skeleton-line skeleton-subheading" />
-          </div>
-          <span className="skeleton-line skeleton-summary" />
-        </div>
-        <div className="activity-table-wrap">
-          <div className="skeleton-table">
-            {["context", "planning", "code", "communicating"].map((key) => (
-              <span className="skeleton-line" key={key} />
-            ))}
-          </div>
-        </div>
-      </section>
+      <SessionEconomicsSkeleton />
       <div className="transcript-layout">
         <aside className="toc">
           <div className="toc-inner">
@@ -4325,6 +4323,31 @@ function SessionDetailSkeleton() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SessionEconomicsSkeleton() {
+  return (
+    <section
+      aria-label="Loading activity breakdown"
+      className="panel token-economics-panel is-compact skeleton-panel"
+      role="status"
+    >
+      <div className="panel-heading">
+        <div>
+          <span className="skeleton-line skeleton-heading" />
+          <span className="skeleton-line skeleton-subheading" />
+        </div>
+        <span className="skeleton-line skeleton-summary" />
+      </div>
+      <div className="activity-table-wrap">
+        <div className="skeleton-table">
+          {["context", "planning", "code", "communicating"].map((key) => (
+            <span className="skeleton-line" key={key} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

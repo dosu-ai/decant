@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
-import { openDb } from "../src/db.ts";
+import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -79,7 +79,7 @@ describe("runCli", () => {
     expect(dbInfo.code).toBe(0);
     expect(JSON.parse(dbInfo.stdout)).toMatchObject({
       path: dbPath,
-      schema_version: 9,
+      schema_version: LATEST_SCHEMA_VERSION,
       sessions: 7,
     });
 

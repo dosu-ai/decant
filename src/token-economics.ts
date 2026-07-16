@@ -11,6 +11,10 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
+// Bump when vector semantics change so the next sync rebuilds derived rows.
+// Version 2 includes the corrected wall-clock attribution and billed-input
+// fields introduced by the v10 implementation's rebase onto main.
+export const SESSION_ECONOMICS_FORMAT_VERSION = 2;
 
 // Cap every inter-message gap so long model, tool, or human pauses do not
 // dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for
@@ -156,7 +160,7 @@ export interface SessionEconomicsVector {
 export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenEconomics {
   const date = sessionDatePredicate("s", filter);
   return aggregateEconomicsVectors(
-    vectorsForScope(
+    vectorsForScopeWithCache(
       db,
       `WITH scoped_session AS (
          SELECT s.id FROM session s ${whereClause(date)}
@@ -173,7 +177,7 @@ export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenE
  * from memory via aggregateEconomicsVectors().
  */
 export function computeSessionEconomicsVectors(db: Database): SessionEconomicsVector[] {
-  return vectorsForScope(db, "WITH scoped_session AS (SELECT id FROM session)", []);
+  return vectorsForScopeWithCache(db, "WITH scoped_session AS (SELECT id FROM session)", []);
 }
 
 /** Mirrors sessionDatePredicate: string-compare on the YYYY-MM-DD prefix. */
@@ -252,8 +256,13 @@ export function tokenEconomicsForSession(db: Database, sessionId: number): Token
     FROM session child
     JOIN scoped_session parent ON parent.id = child.parent_session_id
   )`;
-  const vectors = vectorsForScope(db, scopeCte, [sessionId]);
-  return vectors.length === 0 ? null : aggregateEconomicsVectors(withBilledInputWindow(vectors));
+  const expected = scopeCount(db, scopeCte, [sessionId]);
+  if (expected === 0) {
+    return null;
+  }
+  const cached = cachedVectorsForScope(db, scopeCte, [sessionId]);
+  const vectors = cached.length === expected ? cached : vectorsForScope(db, scopeCte, [sessionId]);
+  return aggregateEconomicsVectors(withBilledInputWindow(vectors));
 }
 
 /** Session panels retain their billed-input Window total while using the same
@@ -293,6 +302,158 @@ function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconom
 /** Load ordered block rows for generation and latency allocation. Tool-result
  * blocks do not duplicate their calling tool metadata, so resolve it through
  * the ingest-time tool_call linkage. */
+/** Persist the complete per-session vector while its normalized rows are hot
+ * in the ingest transaction. Descendant rollups stay dynamic: parent reads
+ * aggregate the independently cached vectors for the current subtree. */
+export function materializeSessionEconomics(db: Database, sessionId: number): boolean {
+  const vectors = vectorsForScope(
+    db,
+    "WITH scoped_session AS (SELECT id FROM session WHERE id = ?1)",
+    [sessionId],
+  );
+  const vector = vectors[0];
+  if (vector == null) {
+    return false;
+  }
+  storeEconomicsVector(db, vector);
+  return true;
+}
+
+/** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
+ * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
+export function materializeMissingSessionEconomics(db: Database): number {
+  const vectors = vectorsForScope(
+    db,
+    `WITH scoped_session AS (
+       SELECT s.id
+       FROM session s
+       LEFT JOIN session_economics e ON e.session_id = s.id
+       WHERE e.session_id IS NULL
+          OR e.format_version != ?1
+          OR NOT json_valid(e.vector_json)
+          OR COALESCE(json_type(e.vector_json, '$.id'), '') != 'integer'
+          OR COALESCE(json_type(e.vector_json, '$.billed_input_tokens'), '') NOT IN ('integer', 'real')
+          OR COALESCE(json_type(e.vector_json, '$.waiting_on_user_ms'), '') NOT IN ('integer', 'real')
+          OR COALESCE(json_type(e.vector_json, '$.buckets'), '') != 'object'
+     )`,
+    [SESSION_ECONOMICS_FORMAT_VERSION],
+  );
+  if (vectors.length === 0) {
+    return 0;
+  }
+  const persist = db.transaction((items: SessionEconomicsVector[]) => {
+    for (const vector of items) {
+      storeEconomicsVector(db, vector);
+    }
+  });
+  persist(vectors);
+  return vectors.length;
+}
+
+function vectorsForScopeWithCache(
+  db: Database,
+  scopeCte: string,
+  params: QueryParam[],
+): SessionEconomicsVector[] {
+  const expected = scopeCount(db, scopeCte, params);
+  if (expected === 0) {
+    return [];
+  }
+  const cached = cachedVectorsForScope(db, scopeCte, params);
+  return cached.length === expected ? cached : vectorsForScope(db, scopeCte, params);
+}
+
+function scopeCount(db: Database, scopeCte: string, params: QueryParam[]): number {
+  return (
+    db.query(`${scopeCte} SELECT COUNT(*) AS count FROM scoped_session`).get(...params) as {
+      count: number;
+    }
+  ).count;
+}
+
+function cachedVectorsForScope(
+  db: Database,
+  scopeCte: string,
+  params: QueryParam[],
+): SessionEconomicsVector[] {
+  const versionParam = `?${params.length + 1}`;
+  const rows = db
+    .query(
+      `${scopeCte}
+       SELECT e.session_id, e.vector_json, s.started_at
+       FROM scoped_session fs
+       JOIN session s ON s.id = fs.id
+       JOIN session_economics e ON e.session_id = fs.id
+       WHERE e.format_version = ${versionParam}
+       ORDER BY e.session_id`,
+    )
+    .all(...params, SESSION_ECONOMICS_FORMAT_VERSION) as {
+    session_id: number;
+    vector_json: string;
+    started_at: string | null;
+  }[];
+  const vectors: SessionEconomicsVector[] = [];
+  for (const row of rows) {
+    const vector = parseEconomicsVector(row.vector_json);
+    if (vector != null && vector.id === row.session_id) {
+      vector.started_at = row.started_at;
+      vectors.push(vector);
+    }
+  }
+  return vectors;
+}
+
+function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
+  try {
+    const vector = JSON.parse(raw) as SessionEconomicsVector;
+    if (
+      typeof vector.id !== "number" ||
+      typeof vector.input_cost !== "number" ||
+      typeof vector.output_cost !== "number" ||
+      typeof vector.billed_input_tokens !== "number" ||
+      typeof vector.waiting_on_user_ms !== "number" ||
+      vector.buckets == null ||
+      typeof vector.buckets !== "object"
+    ) {
+      return null;
+    }
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const part = vector.buckets[bucket];
+      if (
+        part == null ||
+        typeof part.generation !== "number" ||
+        typeof part.context_window !== "number" ||
+        typeof part.tool_calls !== "number" ||
+        typeof part.touched !== "boolean" ||
+        typeof part.generation_orientation !== "number" ||
+        typeof part.context_window_orientation !== "number" ||
+        typeof part.active_ms !== "number" ||
+        typeof part.active_ms_orientation !== "number"
+      ) {
+        return null;
+      }
+    }
+    return vector;
+  } catch {
+    return null;
+  }
+}
+
+function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
+  db.query(
+    `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)
+     VALUES (?1, ?2, ?3, datetime('now'))
+     ON CONFLICT(session_id) DO UPDATE SET
+       format_version = excluded.format_version,
+       vector_json = excluded.vector_json,
+       computed_at = excluded.computed_at`,
+  ).run(vector.id, SESSION_ECONOMICS_FORMAT_VERSION, JSON.stringify(vector));
+}
+
+/** Load ordered block rows for generation and latency allocation. Tool-result
+ * blocks do not duplicate their calling tool metadata, so resolve it through
+ * the ingest-time tool_call linkage. The scope-first join is intentional: it
+ * prevents SQLite from scanning the whole block table for a single session. */
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
   return db
     .query(
@@ -306,10 +467,11 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
                    THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
                    ELSE COALESCE(length(CAST(b.text AS BLOB)), 0)
               END AS text_bytes
-       FROM block b
+       FROM scoped_session fs
+       CROSS JOIN block b INDEXED BY idx_block_session
        JOIN message m ON m.id = b.message_id
-       JOIN scoped_session fs ON fs.id = b.session_id
        LEFT JOIN tool_call tc ON tc.result_block_id = b.id
+       WHERE b.session_id = fs.id
        ORDER BY b.session_id, m.seq, b.ordinal`,
     )
     .all(...params) as BlockRow[];
@@ -372,11 +534,12 @@ function vectorsForScope(
        SELECT t.session_id, t.tool_name, t.input,
               COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
               cm.seq AS call_seq
-       FROM tool_call t
-       JOIN scoped_session fs ON fs.id = t.session_id
+       FROM scoped_session fs
+       CROSS JOIN tool_call t INDEXED BY idx_toolcall_session
        LEFT JOIN block rb ON rb.id = t.result_block_id
        LEFT JOIN block cb ON cb.id = t.call_block_id
-       LEFT JOIN message cm ON cm.id = cb.message_id`,
+       LEFT JOIN message cm ON cm.id = cb.message_id
+       WHERE t.session_id = fs.id`,
     )
     .all(...params) as ResultRow[];
   for (const row of results) {

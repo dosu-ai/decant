@@ -130,10 +130,25 @@ describe("upsertSession", () => {
            (SELECT COUNT(*) FROM message) AS messages,
            (SELECT COUNT(*) FROM block) AS blocks,
            (SELECT COUNT(*) FROM tool_call) AS calls,
-           (SELECT COUNT(*) FROM file_ref) AS refs`,
+           (SELECT COUNT(*) FROM file_ref) AS refs,
+           (SELECT COUNT(*) FROM session_economics) AS economics`,
       )
-      .get() as { sessions: number; messages: number; blocks: number; calls: number; refs: number };
-    expect(counts).toEqual({ sessions: 1, messages: 10, blocks: 15, calls: 6, refs: 4 });
+      .get() as {
+      sessions: number;
+      messages: number;
+      blocks: number;
+      calls: number;
+      refs: number;
+      economics: number;
+    };
+    expect(counts).toEqual({
+      sessions: 1,
+      messages: 10,
+      blocks: 15,
+      calls: 6,
+      refs: 4,
+      economics: 1,
+    });
 
     const ref = db
       .query(
@@ -191,13 +206,21 @@ describe("upsertSession", () => {
            (SELECT COUNT(*) FROM session) AS sessions,
            (SELECT COUNT(*) FROM message) AS messages,
            (SELECT COUNT(*) FROM block) AS blocks,
+           (SELECT COUNT(*) FROM session_economics) AS economics,
            (SELECT source_path FROM session) AS source_path`,
       )
-      .get() as { sessions: number; messages: number; blocks: number; source_path: string };
+      .get() as {
+      sessions: number;
+      messages: number;
+      blocks: number;
+      economics: number;
+      source_path: string;
+    };
     expect(counts).toMatchObject({
       sessions: 1,
       messages: 4,
       blocks: 6,
+      economics: 1,
       source_path: "/x/sample-again.jsonl",
     });
     db.close();
@@ -245,13 +268,21 @@ describe("upsertSession", () => {
            (SELECT COUNT(*) FROM session) AS sessions,
            (SELECT COUNT(*) FROM message) AS messages,
            (SELECT COUNT(*) FROM block) AS blocks,
+           (SELECT COUNT(*) FROM session_economics) AS economics,
            (SELECT source_path FROM session) AS source_path`,
       )
-      .get() as { sessions: number; messages: number; blocks: number; source_path: string };
+      .get() as {
+      sessions: number;
+      messages: number;
+      blocks: number;
+      economics: number;
+      source_path: string;
+    };
     expect(counts).toEqual({
       sessions: 1,
       messages: 4,
       blocks: 6,
+      economics: 1,
       source_path: "/x/sample.jsonl",
     });
     db.close();
@@ -331,10 +362,15 @@ describe("sync", () => {
       (db.query("SELECT COUNT(*) AS n FROM model_pricing").get() as { n: number }).n,
     ).toBeGreaterThan(0);
 
+    // Simulate opening a migrated v9 archive whose transcripts are unchanged.
+    db.exec("DELETE FROM session_economics");
     db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
     const second = sync(db, config);
     expect(second).toMatchObject({ scanned: 1, ingested: 0, skipped: 1, issues: 0, failed: 0 });
     expect((db.query("SELECT COUNT(*) AS n FROM session").get() as { n: number }).n).toBe(1);
+    expect((db.query("SELECT COUNT(*) AS n FROM session_economics").get() as { n: number }).n).toBe(
+      1,
+    );
     expect(
       (
         db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get() as {

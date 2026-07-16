@@ -10,13 +10,13 @@ import {
 /**
  * Serves /api/analytics/token-economics from precomputed per-session vectors.
  *
- * Recomputing token economics from the archive walks every block row, which
- * takes seconds on multi-GB archives — far beyond any per-request budget. The
- * cache computes per-session vectors once, off the request thread, and then
- * answers any date filter by summing vectors in memory. `PRAGMA data_version`
- * cheaply detects archive writes from other connections (sync workers, CLI
- * runs); a stale cache serves the previous model while a rebuild runs in the
- * background, and onRebuilt lets the server nudge clients to refetch.
+ * Ingest persists versioned per-session vectors, so warming this cache reads
+ * compact derived rows instead of walking every transcript block. The cache
+ * then answers any date filter by summing vectors in memory.
+ * `PRAGMA data_version` cheaply detects archive writes from other connections
+ * (sync workers, CLI runs); a stale cache serves the previous model while a
+ * refresh runs in the background, and onRebuilt lets the server nudge clients
+ * to refetch.
  */
 export interface ComputeVectorsOptions {
   signal: AbortSignal;

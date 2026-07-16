@@ -822,7 +822,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .command("tokens")
     .alias("economics")
     .description(
-      "break token, cost, and time usage into planning, communicating, context, and code",
+      "break tokens, cost, agent time, and user wait into planning, communicating, context, and code",
     )
     .action(() =>
       run(() => {
@@ -839,7 +839,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                   `${formatDuration(bucket.active_ms)}`,
               )
               .join("\n")
-              .concat(row.buckets.length > 0 ? "\n" : ""),
+              .concat(row.buckets.length > 0 ? "\n" : "")
+              .concat(
+                `waiting_on_user\t-\t-\t-\t${formatDuration(row.totals.waiting_on_user_ms)}\n`,
+              ),
           );
         } finally {
           archive.db.close();

@@ -137,6 +137,8 @@ type TokenEconomics = {
     input_cost_usd: number;
     output_cost_usd: number;
     active_ms: number;
+    waiting_on_user_ms: number;
+    attributed_ms: number;
   };
 };
 
@@ -1960,7 +1962,7 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
 
 function TokenEconomicsPanel({
   compact: isCompact = false,
-  description = "Estimated tokens and cost by planning, communicating, context, and code",
+  description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
   title = "Activity breakdown",
 }: {
@@ -1992,7 +1994,11 @@ function TokenEconomicsPanel({
             </span>
             <span>
               <strong>{duration(economics.totals.active_ms)}</strong>
-              time
+              agent time
+            </span>
+            <span>
+              <strong>{duration(economics.totals.waiting_on_user_ms)}</strong>
+              waiting
             </span>
           </div>
         ) : null}
@@ -4092,7 +4098,7 @@ function SessionDetailView({ id }: { id: number }) {
       {economics != null ? (
         <TokenEconomicsPanel
           compact
-          description="Estimated activity inside this session, including nested subagents."
+          description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
           title="Activity breakdown"
         />

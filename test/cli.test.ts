@@ -104,8 +104,15 @@ describe("runCli", () => {
       buckets: expect.arrayContaining([
         expect.objectContaining({ bucket: "context", active_ms: expect.any(Number) }),
       ]),
-      totals: expect.objectContaining({ active_ms: expect.any(Number) }),
+      totals: expect.objectContaining({
+        active_ms: expect.any(Number),
+        waiting_on_user_ms: expect.any(Number),
+        attributed_ms: expect.any(Number),
+      }),
     });
+    const humanTokens = await runCli(["--db", dbPath, "--no-sync", "tokens"]);
+    expect(humanTokens).toMatchObject({ code: 0, stderr: "" });
+    expect(humanTokens.stdout).toContain("waiting_on_user\t-\t-\t-");
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);

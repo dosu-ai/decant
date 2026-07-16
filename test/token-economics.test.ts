@@ -129,8 +129,9 @@ describe("token economics", () => {
     );
 
     const economics = tokenEconomics(db);
-    // Total attributed time equals the session's active_seconds (both are the
-    // sum of the same capped inter-message gaps), within rounding.
+    // This synthetic fixture has one blockless system message. The four agent
+    // buckets plus explicit user wait approximately reconcile to the broader
+    // active_seconds chain, within rounding.
     const activeSeconds = (
       db.query("SELECT active_seconds FROM session WHERE id = ?1").get(sessionId) as {
         active_seconds: number;
@@ -138,7 +139,11 @@ describe("token economics", () => {
     ).active_seconds;
     expect(activeSeconds).toBeGreaterThan(0);
     expect(economics.totals.active_ms).toBeGreaterThan(0);
-    expect(economics.totals.active_ms).toBeCloseTo(activeSeconds * 1000, -2);
+    expect(economics.totals.waiting_on_user_ms).toBe(330_000);
+    expect(economics.totals.attributed_ms).toBeCloseTo(activeSeconds * 1000, -2);
+    // The fixture spends 30s generating mutating tool calls and 30s executing
+    // an Edit result; both portions belong to code.
+    expect(economics.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(60_000);
 
     // Buckets' time sums to the total, and each bucket's phase split sums back
     // to the bucket (rounding can drift the two rounded halves by <=1ms).
@@ -165,29 +170,38 @@ describe("token economics", () => {
     // and its total matches the aggregate for the same session.
     const scoped = tokenEconomicsForSession(db, sessionId);
     expect(scoped?.totals.active_ms).toBe(economics.totals.active_ms);
+    expect(scoped?.totals.waiting_on_user_ms).toBe(economics.totals.waiting_on_user_ms);
+    expect(scoped?.totals.attributed_ms).toBe(economics.totals.attributed_ms);
+    expect(scoped?.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(60_000);
     expect(scoped?.buckets.every((row) => row.phases === undefined)).toBe(true);
     db.close();
   });
 
-  test("caps idle gaps so waiting on the human never inflates activity time", () => {
+  test("caps waiting on the user and keeps it out of agent activity", () => {
     const db = freshDb();
-    // Two assistant turns an hour apart: the raw gap is 3600s but a single
-    // capped gap can contribute at most 300s of attributed time.
+    // A blockless system message splits the raw 3600s gap for active_seconds,
+    // while block-based attribution sees one gap capped at 300s.
     const content = [
       JSON.stringify({
-        type: "user",
-        timestamp: "2026-05-06T09:00:00.000Z",
-        message: { role: "user", content: [{ type: "text", text: "start" }] },
-      }),
-      JSON.stringify({
         type: "assistant",
-        timestamp: "2026-05-06T10:00:00.000Z",
+        timestamp: "2026-05-06T09:00:00.000Z",
         message: {
           role: "assistant",
           model: "claude-opus-4-7",
           usage: { input_tokens: 10, output_tokens: 5 },
-          content: [{ type: "text", text: "done thinking after a long human pause" }],
+          content: [{ type: "text", text: "Ready for your response." }],
         },
+      }),
+      JSON.stringify({
+        type: "system",
+        timestamp: "2026-05-06T09:04:10.000Z",
+        subtype: "compact_boundary",
+        content: "Conversation compacted",
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-05-06T10:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "Continue." }] },
       }),
     ].join("\n");
     upsertSession(
@@ -200,7 +214,65 @@ describe("token economics", () => {
     );
 
     const economics = tokenEconomics(db);
-    expect(economics.totals.active_ms).toBe(300_000);
+    expect(economics.totals.active_ms).toBe(0);
+    expect(economics.totals.waiting_on_user_ms).toBe(300_000);
+    expect(economics.totals.attributed_ms).toBe(300_000);
+    const activeSeconds = (
+      db.query("SELECT active_seconds FROM session").get() as { active_seconds: number }
+    ).active_seconds;
+    expect(economics.totals.attributed_ms).toBeLessThan(activeSeconds * 1000);
+    db.close();
+  });
+
+  test("weights mixed tool results and user text by their actual bytes", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-05-06T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_edit",
+              name: "Edit",
+              input: { file_path: "/x/a.ts", old_string: "a", new_string: "b" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-05-06T09:00:10.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_edit", content: "123456789" },
+            { type: "text", text: "x" },
+          ],
+        },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-mixed-result", `${content}\n`),
+      "/x/mixed-result.jsonl",
+      1,
+      2,
+      "mixed-result",
+    );
+
+    const economics = tokenEconomics(db);
+    expect(economics.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(9_000);
+    expect(economics.totals.waiting_on_user_ms).toBe(1_000);
+    expect(economics.totals.attributed_ms).toBe(10_000);
+
+    const scoped = tokenEconomicsForSession(db, sessionId);
+    expect(scoped?.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(9_000);
+    expect(scoped?.totals.waiting_on_user_ms).toBe(1_000);
     db.close();
   });
 
@@ -227,6 +299,8 @@ describe("token economics", () => {
       tool_calls: 1,
       sessions: 1,
     });
+    expect(aggregate.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(3_000);
+    expect(aggregate.buckets.find((row) => row.bucket === "context")?.active_ms).toBe(2_000);
 
     const scoped = tokenEconomicsForSession(db, sessionId);
     expect(scoped?.buckets.find((row) => row.bucket === "code")).toMatchObject({
@@ -237,6 +311,8 @@ describe("token economics", () => {
       tool_calls: 1,
       sessions: 1,
     });
+    expect(scoped?.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(3_000);
+    expect(scoped?.buckets.find((row) => row.bucket === "context")?.active_ms).toBe(2_000);
     db.close();
   });
 
@@ -323,12 +399,16 @@ describe("token economics", () => {
     const aggregateCode = tokenEconomics(db).buckets.find((row) => row.bucket === "code");
     expect(aggregateCode).toMatchObject({ tool_calls: 1, sessions: 1 });
     expect(aggregateCode?.generation_tokens).toBeGreaterThan(0);
+    // One second generated the call and one second executed it. The latter is
+    // resolved through tool_call.result_block_id rather than defaulting to context.
+    expect(aggregateCode?.active_ms).toBe(2_000);
 
-    const scopedCode = tokenEconomicsForSession(db, sessionId)?.buckets.find(
-      (row) => row.bucket === "code",
-    );
+    const scopedEconomics = tokenEconomicsForSession(db, sessionId);
+    const scopedCode = scopedEconomics?.buckets.find((row) => row.bucket === "code");
     expect(scopedCode).toMatchObject({ tool_calls: 1, sessions: 1 });
     expect(scopedCode?.generation_tokens).toBeGreaterThan(0);
+    expect(scopedCode?.active_ms).toBe(2_000);
+
     db.close();
   });
 

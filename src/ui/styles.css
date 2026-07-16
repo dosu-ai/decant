@@ -1454,7 +1454,7 @@ mark {
 }
 
 .token-economics-panel.is-compact .activity-table {
-  min-width: max(100%, 1040px);
+  min-width: max(100%, 960px);
   font-size: 12px;
 }
 
@@ -1468,6 +1468,18 @@ mark {
 
 .activity-table .col-activity-number {
   width: 9%;
+}
+
+.token-economics-panel.is-compact .activity-table .col-activity {
+  width: 18%;
+}
+
+.token-economics-panel.is-compact .activity-table .col-share {
+  width: 22%;
+}
+
+.token-economics-panel.is-compact .activity-table .col-activity-number {
+  width: 9.5%;
 }
 
 .activity-table th,

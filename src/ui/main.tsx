@@ -1964,16 +1964,19 @@ function TokenEconomicsPanel({
   compact: isCompact = false,
   description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
+  subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
   description?: string;
   economics: TokenEconomics | null;
+  subagentRuns?: number;
   title?: string;
 }) {
   const buckets = economics?.buckets ?? [];
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
   const totalActiveMs = economics?.totals.active_ms ?? 0;
+  const showAgentRuns = !isCompact;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
       <div className="panel-heading">
@@ -1999,6 +2002,12 @@ function TokenEconomicsPanel({
               <strong>{duration(economics.totals.waiting_on_user_ms)}</strong>
               waiting
             </span>
+            {isCompact && subagentRuns > 0 ? (
+              <span>
+                <strong>1 root + {formatInt(subagentRuns)}</strong>
+                {subagentRuns === 1 ? "subagent" : "subagents"}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -2021,7 +2030,7 @@ function TokenEconomicsPanel({
               <col className="col-activity-number" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
-              <col className="col-activity-number" />
+              {showAgentRuns ? <col className="col-activity-number" /> : null}
             </colgroup>
             <thead>
               <tr className="activity-table-head">
@@ -2040,11 +2049,13 @@ function TokenEconomicsPanel({
                 <th className="numeric activity-number" scope="col">
                   Window
                 </th>
-                <th className="numeric activity-number" scope="col">
-                  <span title="Root sessions and nested subagent runs contributing to this activity">
-                    Agent runs
-                  </span>
-                </th>
+                {showAgentRuns ? (
+                  <th className="numeric activity-number" scope="col">
+                    <span title="Root sessions and nested subagent runs contributing to this activity">
+                      Agent runs
+                    </span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -2101,9 +2112,11 @@ function TokenEconomicsPanel({
                         <td className="numeric muted activity-number">
                           {compact(bucket.context_window_tokens)}
                         </td>
-                        <td className="numeric muted activity-number">
-                          {formatInt(bucket.sessions)}
-                        </td>
+                        {showAgentRuns ? (
+                          <td className="numeric muted activity-number">
+                            {formatInt(bucket.sessions)}
+                          </td>
+                        ) : null}
                       </tr>
                     )}
                   </Tooltip>
@@ -4069,6 +4082,7 @@ function SessionDetailView({ id }: { id: number }) {
   const toc = threadToc(messages);
   const stats = threadStats(detail.summary, messages, toc);
   const subagentsByToolUse = subagentMap(detail.subagents);
+  const subagentRuns = countSubagentRuns(detail.subagents);
 
   return (
     <div className="session-detail">
@@ -4115,6 +4129,7 @@ function SessionDetailView({ id }: { id: number }) {
           compact
           description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
+          subagentRuns={subagentRuns}
           title="Activity breakdown"
         />
       ) : null}
@@ -4523,6 +4538,13 @@ function subagentMap(subagents: SubagentDetailData[]): Map<string, SubagentDetai
     }
   }
   return map;
+}
+
+function countSubagentRuns(subagents: SubagentDetailData[]): number {
+  return subagents.reduce(
+    (total, subagent) => total + 1 + countSubagentRuns(subagent.subagents),
+    0,
+  );
 }
 
 function renderableMessages(

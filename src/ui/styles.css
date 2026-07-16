@@ -1448,26 +1448,26 @@ mark {
 }
 
 .activity-table {
-  min-width: 760px;
+  min-width: 1040px;
   table-layout: fixed;
   font-size: 13px;
 }
 
 .token-economics-panel.is-compact .activity-table {
-  min-width: 100%;
+  min-width: max(100%, 1040px);
   font-size: 12px;
 }
 
 .activity-table .col-activity {
-  width: 20%;
+  width: 17%;
 }
 
 .activity-table .col-share {
-  width: 30%;
+  width: 19%;
 }
 
 .activity-table .col-activity-number {
-  width: 12.5%;
+  width: 9%;
 }
 
 .activity-table th,

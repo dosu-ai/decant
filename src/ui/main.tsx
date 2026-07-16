@@ -1971,9 +1971,7 @@ function TokenEconomicsPanel({
   economics: TokenEconomics | null;
   title?: string;
 }) {
-  const buckets = (economics?.buckets ?? [])
-    .slice()
-    .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd);
+  const buckets = economics?.buckets ?? [];
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
   const totalActiveMs = economics?.totals.active_ms ?? 0;
   return (
@@ -2019,6 +2017,7 @@ function TokenEconomicsPanel({
               <col className="col-activity" />
               <col className="col-share" />
               <col className="col-activity-number" />
+              <col className="col-share" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
@@ -2031,6 +2030,7 @@ function TokenEconomicsPanel({
                 <th className="numeric activity-number" scope="col">
                   Cost
                 </th>
+                <th scope="col">Time spent</th>
                 <th className="numeric activity-number" scope="col">
                   Time
                 </th>
@@ -2081,8 +2081,19 @@ function TokenEconomicsPanel({
                         <td className="numeric activity-number">
                           {money(bucket.estimated_cost_usd)}
                         </td>
+                        <td className="activity-share">
+                          <span className="activity-share-inner">
+                            <span className="activity-bar">
+                              <span
+                                className={`tone-${tone}`}
+                                style={{ width: `${timeShare * 100}%` }}
+                              />
+                            </span>
+                            <small>{Math.round(timeShare * 100)}%</small>
+                          </span>
+                        </td>
                         <td className="numeric muted activity-number">
-                          {duration(bucket.active_ms)} · {Math.round(timeShare * 100)}%
+                          {duration(bucket.active_ms)}
                         </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.generation_tokens)}
@@ -4273,7 +4284,7 @@ function SessionDetailSkeleton() {
         </div>
         <div className="activity-table-wrap">
           <div className="skeleton-table">
-            {["context", "planning", "communicating", "code"].map((key) => (
+            {["context", "planning", "code", "communicating"].map((key) => (
               <span className="skeleton-line" key={key} />
             ))}
           </div>

@@ -50,10 +50,10 @@ describe("token economics", () => {
 
     const economics = tokenEconomics(db);
     expect(economics.buckets.map((row) => row.bucket)).toEqual([
-      "planning",
-      "communicating",
       "context",
+      "planning",
       "code",
+      "communicating",
     ]);
     expect(economics.totals.generation_tokens).toBeGreaterThan(0);
     expect(economics.totals.context_window_tokens).toBeGreaterThan(

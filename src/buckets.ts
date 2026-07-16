@@ -1,6 +1,6 @@
 import type { Json } from "./model.ts";
 
-export const ACTIVITY_BUCKETS = ["planning", "communicating", "context", "code"] as const;
+export const ACTIVITY_BUCKETS = ["context", "planning", "code", "communicating"] as const;
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
 const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "shell"]);

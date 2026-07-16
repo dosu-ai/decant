@@ -821,7 +821,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .command("tokens")
     .alias("economics")
-    .description("break token and cost usage into planning, communicating, context, and code")
+    .description(
+      "break token, cost, and time usage into planning, communicating, context, and code",
+    )
     .action(() =>
       run(() => {
         const archive = readArchive();
@@ -833,7 +835,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                 (bucket) =>
                   `${bucket.bucket}\t${formatNumber(bucket.generation_tokens)}\t` +
                   `${formatNumber(bucket.context_window_tokens)}\t` +
-                  `${bucket.estimated_cost_usd.toFixed(4)}`,
+                  `${bucket.estimated_cost_usd.toFixed(4)}\t` +
+                  `${formatDuration(bucket.active_ms)}`,
               )
               .join("\n")
               .concat(row.buckets.length > 0 ? "\n" : ""),
@@ -1059,6 +1062,19 @@ function trustedPeers(values: string[] | undefined): string[] {
 
 function formatNumber(value: number): string {
   return String(Math.round(value));
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function parseOperation(value: string): Operation | null {

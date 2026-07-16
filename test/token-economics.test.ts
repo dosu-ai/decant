@@ -117,6 +117,93 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("attributes wall-clock time to activity buckets and phases", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const economics = tokenEconomics(db);
+    // Total attributed time equals the session's active_seconds (both are the
+    // sum of the same capped inter-message gaps), within rounding.
+    const activeSeconds = (
+      db.query("SELECT active_seconds FROM session WHERE id = ?1").get(sessionId) as {
+        active_seconds: number;
+      }
+    ).active_seconds;
+    expect(activeSeconds).toBeGreaterThan(0);
+    expect(economics.totals.active_ms).toBeGreaterThan(0);
+    expect(economics.totals.active_ms).toBeCloseTo(activeSeconds * 1000, -2);
+
+    // Buckets' time sums to the total, and each bucket's phase split sums back
+    // to the bucket (rounding can drift the two rounded halves by <=1ms).
+    const bucketSum = economics.buckets.reduce((sum, row) => sum + row.active_ms, 0);
+    expect(bucketSum).toBe(economics.totals.active_ms);
+    for (const row of economics.buckets) {
+      const { orientation, implementation } = row.phases as NonNullable<typeof row.phases>;
+      expect(orientation.active_ms).toBeGreaterThanOrEqual(0);
+      expect(implementation.active_ms).toBeGreaterThanOrEqual(0);
+      expect(
+        Math.abs(orientation.active_ms + implementation.active_ms - row.active_ms),
+      ).toBeLessThanOrEqual(1);
+    }
+    const phases = economics.totals.phases as NonNullable<typeof economics.totals.phases>;
+    expect(phases.orientation.active_ms + phases.implementation.active_ms).toBe(
+      economics.totals.active_ms,
+    );
+    // The fixture edits only after orienting, so edit time lands in implementation.
+    expect(
+      economics.buckets.find((row) => row.bucket === "code")?.phases?.orientation.active_ms,
+    ).toBe(0);
+
+    // The fast per-session path has no phase ordering but still reports time,
+    // and its total matches the aggregate for the same session.
+    const scoped = tokenEconomicsForSession(db, sessionId);
+    expect(scoped?.totals.active_ms).toBe(economics.totals.active_ms);
+    expect(scoped?.buckets.every((row) => row.phases === undefined)).toBe(true);
+    db.close();
+  });
+
+  test("caps idle gaps so waiting on the human never inflates activity time", () => {
+    const db = freshDb();
+    // Two assistant turns an hour apart: the raw gap is 3600s but a single
+    // capped gap can contribute at most 300s of attributed time.
+    const content = [
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-05-06T09:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "start" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-05-06T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ type: "text", text: "done thinking after a long human pause" }],
+        },
+      }),
+    ].join("\n");
+    upsertSession(
+      db,
+      parseClaudeSession("sess-idle", `${content}\n`),
+      "/x/idle.jsonl",
+      1,
+      2,
+      "idle",
+    );
+
+    const economics = tokenEconomics(db);
+    expect(economics.totals.active_ms).toBe(300_000);
+    db.close();
+  });
+
   test("classifies Codex patch edits as code and read-only shell as context", () => {
     const db = freshDb();
     const sessionId = upsertSession(

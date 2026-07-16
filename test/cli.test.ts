@@ -101,7 +101,10 @@ describe("runCli", () => {
     const tokens = await runCli([...base, "tokens"]);
     expect(tokens.code).toBe(0);
     expect(JSON.parse(tokens.stdout)).toMatchObject({
-      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      buckets: expect.arrayContaining([
+        expect.objectContaining({ bucket: "context", active_ms: expect.any(Number) }),
+      ]),
+      totals: expect.objectContaining({ active_ms: expect.any(Number) }),
     });
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);

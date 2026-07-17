@@ -1,4 +1,10 @@
 import type { Database } from "bun:sqlite";
+import {
+  contextTokensFromUsage,
+  isCompactBoundary,
+  MESSAGE_RAW_META_SQL,
+  parseMessageRawMeta,
+} from "./context-window.ts";
 import { sessionDatePredicate } from "./date-filter.ts";
 import { preview } from "./tools.ts";
 
@@ -22,6 +28,9 @@ export interface SessionSummary {
   agent_id: string | null;
   agent_type: string | null;
   spawn_depth: number | null;
+  context_window_tokens: number | null;
+  peak_context_tokens: number | null;
+  compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
   subagents?: SessionSummary[];
@@ -51,6 +60,7 @@ const SESSION_SUMMARY_SELECT = `
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
          s.agent_id, s.agent_type, s.spawn_depth,
+         s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
          COALESCE(sa.subagent_count, 0) AS subagent_count,
          COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd
   FROM session s
@@ -133,9 +143,19 @@ export interface BlockView {
 }
 
 export interface MessageView {
+  seq: number;
   role: string;
   timestamp: string | null;
   model: string | null;
+  /** Window occupancy for this API call (input + cache_read + cache_creation);
+   * null on rows without usage (user/tool/system, deduped stream lines). */
+  context_tokens: number | null;
+  output_tokens: number | null;
+  is_sidechain: boolean;
+  is_compact_boundary: boolean;
+  compact_trigger: string | null;
+  compact_pre_tokens: number | null;
+  is_compact_summary: boolean;
   blocks: BlockView[];
 }
 
@@ -162,9 +182,15 @@ export interface SessionReadOptions {
 
 interface MessageBlockRow {
   message_id: number;
+  seq: number;
   role: string | null;
   timestamp: string | null;
   model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_creation_tokens: number | null;
+  raw_meta: string | null;
   block_ordinal: number | null;
   block_type: string | null;
   text: string | null;
@@ -186,6 +212,7 @@ export function getSession(
               s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
               s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
               s.agent_id, s.agent_type, s.spawn_depth,
+              s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
               COALESCE(sa.subagent_count, 0) AS subagent_count,
               COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd
        FROM session s
@@ -212,7 +239,9 @@ export function getSession(
     messageLimit == null
       ? (db
           .query(
-            `SELECT m.id AS message_id, m.role, m.timestamp, m.model,
+            `SELECT m.id AS message_id, m.seq, m.role, m.timestamp, m.model,
+                    m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
+                    ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
              FROM message m
@@ -230,7 +259,9 @@ export function getSession(
                ORDER BY seq
                LIMIT ?2 OFFSET ?3
              )
-             SELECT m.id AS message_id, m.role, m.timestamp, m.model,
+             SELECT m.id AS message_id, m.seq, m.role, m.timestamp, m.model,
+                    m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
+                    ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
              FROM page_message pm
@@ -244,10 +275,19 @@ export function getSession(
   for (const row of rows) {
     if (currentMessageId !== row.message_id) {
       currentMessageId = row.message_id;
+      const rawMeta = parseMessageRawMeta(row.raw_meta);
       messages.push({
+        seq: row.seq,
         role: row.role ?? "unknown",
         timestamp: row.timestamp,
         model: row.model,
+        context_tokens: contextTokensFromUsage(row),
+        output_tokens: row.output_tokens,
+        is_sidechain: rawMeta.isSidechain,
+        is_compact_boundary: isCompactBoundary(rawMeta),
+        compact_trigger: rawMeta.compactTrigger,
+        compact_pre_tokens: rawMeta.compactPreTokens,
+        is_compact_summary: rawMeta.isCompactSummary,
         blocks: [],
       });
     }

@@ -80,6 +80,9 @@ type SessionSummary = {
   agent_id: string | null;
   agent_type: string | null;
   spawn_depth: number | null;
+  context_window_tokens: number | null;
+  peak_context_tokens: number | null;
+  compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
   subagents?: SessionSummary[];
@@ -1324,7 +1327,10 @@ function SessionTableRow({
       </td>
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
-          <a href={`/sessions/${session.id}`}>{title}</a>
+          <span className="session-title-line">
+            <a href={`/sessions/${session.id}`}>{title}</a>
+            <ContextRollupBadges session={session} />
+          </span>
           {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
         </span>
       </td>
@@ -1338,6 +1344,39 @@ function SessionTableRow({
       <td className="numeric">{money(threadCost(session))}</td>
       <td className="numeric muted">{relativeTime(session.started_at)}</td>
     </tr>
+  );
+}
+
+function ContextRollupBadges({ session }: { session: SessionSummary }) {
+  const windowTokens = session.context_window_tokens;
+  const peak = session.peak_context_tokens;
+  const compactions = session.compaction_count;
+  const pct =
+    windowTokens != null && windowTokens > 0 && peak != null && peak > 0
+      ? Math.round((peak / windowTokens) * 100)
+      : null;
+  if ((pct == null || pct === 0) && compactions === 0) {
+    return null;
+  }
+  return (
+    <span className="ctx-rollup">
+      {pct != null && pct > 0 ? (
+        <span
+          className={`ctx-rollup-peak${pct >= 80 ? " is-hot" : pct >= 60 ? " is-warm" : ""}`}
+          title={`Peak context: ${compact(peak ?? 0)} of ${compact(windowTokens ?? 0)} window`}
+        >
+          {pct}%
+        </span>
+      ) : null}
+      {compactions > 0 ? (
+        <span
+          className="ctx-rollup-compactions"
+          title={`${formatInt(compactions)} ${compactions === 1 ? "compaction" : "compactions"}`}
+        >
+          ⇣{formatInt(compactions)}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -4037,6 +4076,7 @@ function SettingSelect({
 function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
+  const [contextWindow, setContextWindow] = useState<ContextWindowTimelineData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [economicsError, setEconomicsError] = useState<string | null>(null);
 
@@ -4044,6 +4084,7 @@ function SessionDetailView({ id }: { id: number }) {
     let cancelled = false;
     setDetail(null);
     setEconomics(null);
+    setContextWindow(null);
     setError(null);
     setEconomicsError(null);
     if (!Number.isFinite(id)) {
@@ -4074,6 +4115,15 @@ function SessionDetailView({ id }: { id: number }) {
           setEconomicsError(errorMessage(err));
         }
       });
+    void getJson<ContextWindowTimelineData>(`/api/sessions/${id}/context-window`)
+      .then((nextTimeline) => {
+        if (!cancelled) {
+          setContextWindow(nextTimeline);
+        }
+      })
+      .catch(() => {
+        // The context strip is progressive enhancement; the transcript stands alone.
+      });
     return () => {
       cancelled = true;
     };
@@ -4089,9 +4139,14 @@ function SessionDetailView({ id }: { id: number }) {
 
   const messages = renderableMessages(detail.messages);
   const toc = threadToc(messages);
-  const stats = threadStats(detail.summary, messages, toc);
+  const stats = threadStats(detail.summary, messages, toc, contextWindow?.turn_count);
   const subagentsByToolUse = subagentMap(detail.subagents);
   const subagentRuns = countSubagentRuns(detail.subagents);
+  const indexBySeq = new Map(messages.map((message, index) => [message.seq, index] as const));
+  const compactionBySeq = new Map(
+    (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
+  );
+  const windowTokens = contextWindow?.window_tokens ?? null;
 
   return (
     <div className="session-detail">
@@ -4147,6 +4202,8 @@ function SessionDetailView({ id }: { id: number }) {
         <SessionEconomicsSkeleton />
       )}
 
+      <ContextWindowPanel indexBySeq={indexBySeq} timeline={contextWindow} />
+
       <div className="transcript-layout">
         <aside className="toc">
           <div className="toc-inner">
@@ -4166,24 +4223,15 @@ function SessionDetailView({ id }: { id: number }) {
 
         <div className="transcript-column">
           {messages.map((message, index) => (
-            <article className="turn" id={`turn-${index}`} key={messageKey(message, index)}>
-              <Badge mono tone={roleTone(message.role)}>
-                {roleLabel(message.role, detail.summary.tool)}
-              </Badge>
-              <div className="turn-meta">
-                {message.model != null ? <ModelBadge model={message.model} /> : null}
-                {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
-              </div>
-              <div className="turn-body">
-                {message.blocks.map((block, blockIndex) => (
-                  <TranscriptBlock
-                    block={block}
-                    key={blockKey(block, blockIndex)}
-                    subagents={subagentsByToolUse.get(block.tool_use_id ?? "") ?? []}
-                  />
-                ))}
-              </div>
-            </article>
+            <TranscriptTurn
+              compaction={compactionBySeq.get(message.seq) ?? null}
+              index={index}
+              key={messageKey(message, index)}
+              message={message}
+              subagentsByToolUse={subagentsByToolUse}
+              tool={detail.summary.tool}
+              windowTokens={windowTokens}
+            />
           ))}
           {detail.has_more_messages === true ? (
             <div className="transcript-slice-note">
@@ -4200,15 +4248,54 @@ function SessionDetailView({ id }: { id: number }) {
 type SessionDetailData = {
   summary: SessionSummary;
   messages: {
+    seq: number;
     role: string;
     timestamp: string | null;
     model: string | null;
+    context_tokens: number | null;
+    output_tokens: number | null;
+    is_sidechain: boolean;
+    is_compact_boundary: boolean;
+    compact_trigger: string | null;
+    compact_pre_tokens: number | null;
+    is_compact_summary: boolean;
     blocks: TranscriptBlockData[];
   }[];
   subagents: SubagentDetailData[];
   message_offset?: number;
   message_limit?: number | null;
   has_more_messages?: boolean;
+};
+
+type ContextWindowPointData = {
+  seq: number;
+  timestamp: string | null;
+  turn: number;
+  context_tokens: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  output_tokens: number;
+};
+
+type ContextWindowCompactionData = {
+  seq: number;
+  timestamp: string | null;
+  trigger: string | null;
+  pre_tokens: number | null;
+  post_tokens: number | null;
+};
+
+type ContextWindowTimelineData = {
+  session_id: number;
+  tool: string;
+  window_tokens: number | null;
+  window_inferred: boolean;
+  peak_tokens: number;
+  peak_pct: number | null;
+  turn_count: number;
+  points: ContextWindowPointData[];
+  compactions: ContextWindowCompactionData[];
 };
 
 type SubagentDetailData = SessionDetailData & {
@@ -4227,6 +4314,587 @@ type TranscriptBlockData = {
   tool_input: string | null;
   tool_result: string | null;
 };
+
+function TranscriptTurn({
+  compaction,
+  index,
+  message,
+  subagentsByToolUse,
+  tool,
+  windowTokens,
+}: {
+  compaction: ContextWindowCompactionData | null;
+  index: number;
+  message: SessionDetailData["messages"][number];
+  subagentsByToolUse: Map<string, SubagentDetailData[]>;
+  tool: string;
+  windowTokens: number | null;
+}) {
+  if (message.is_compact_boundary) {
+    return <CompactionTurn compaction={compaction} index={index} message={message} />;
+  }
+  const contextTokens =
+    message.role === "assistant" && !message.is_sidechain ? message.context_tokens : null;
+  const blocks = message.blocks.map((block, blockIndex) => (
+    <TranscriptBlock
+      block={block}
+      key={blockKey(block, blockIndex)}
+      subagents={subagentsByToolUse.get(block.tool_use_id ?? "") ?? []}
+    />
+  ));
+  return (
+    <article
+      className={`turn${message.is_compact_summary ? " compact-summary-turn" : ""}`}
+      id={`turn-${index}`}
+    >
+      <Badge mono tone={message.is_compact_summary ? "accent" : roleTone(message.role)}>
+        {message.is_compact_summary ? "Summary" : roleLabel(message.role, tool)}
+      </Badge>
+      <div className="turn-meta">
+        {message.model != null ? <ModelBadge model={message.model} /> : null}
+        {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
+        {contextTokens != null ? (
+          <ContextChip tokens={contextTokens} windowTokens={windowTokens} />
+        ) : null}
+      </div>
+      <div className="turn-body">
+        {message.is_compact_summary ? (
+          <details className="compact-summary">
+            <summary>Compaction summary carried forward into the continued session</summary>
+            {blocks}
+          </details>
+        ) : (
+          blocks
+        )}
+      </div>
+    </article>
+  );
+}
+
+function CompactionTurn({
+  compaction,
+  index,
+  message,
+}: {
+  compaction: ContextWindowCompactionData | null;
+  index: number;
+  message: SessionDetailData["messages"][number];
+}) {
+  const trigger = compaction?.trigger ?? message.compact_trigger;
+  const pre = compaction?.pre_tokens ?? message.compact_pre_tokens;
+  const post = compaction?.post_tokens ?? null;
+  return (
+    <article className="turn compaction-turn" id={`turn-${index}`}>
+      <Badge mono tone="accent">
+        Compacted
+      </Badge>
+      <div className="turn-meta">
+        {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
+      </div>
+      <div className="turn-body">
+        <div className="compaction-card">
+          <div className="compaction-card-head">
+            <Icon name="refresh" />
+            <strong>Context compacted{trigger != null ? ` (${trigger})` : ""}</strong>
+            {pre != null ? (
+              <span className="compaction-card-tokens">
+                {compact(pre)}
+                {post != null ? ` → ${compact(post)}` : ""} tokens
+              </span>
+            ) : null}
+          </div>
+          <p>
+            Earlier messages were summarized and dropped from the live context window; the full
+            transcript below is unaffected.
+          </p>
+          {message.blocks.length > 0 ? (
+            <details className="compact-summary">
+              <summary>Summary carried forward into the continued session</summary>
+              {message.blocks.map((block, blockIndex) => (
+                <TranscriptBlock block={block} key={blockKey(block, blockIndex)} />
+              ))}
+            </details>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ContextChip({ tokens, windowTokens }: { tokens: number; windowTokens: number | null }) {
+  const pct = windowTokens != null && windowTokens > 0 ? tokens / windowTokens : null;
+  const level = pct == null ? "" : pct >= 0.8 ? " is-hot" : pct >= 0.6 ? " is-warm" : "";
+  const title =
+    pct == null
+      ? `Context window: ${formatInt(tokens)} tokens`
+      : `Context window: ${formatInt(tokens)} of ${compact(windowTokens ?? 0)} tokens`;
+  return (
+    <span className={`ctx-chip${level}`} title={title}>
+      {pct != null ? (
+        <span aria-hidden="true" className="ctx-chip-bar">
+          <i style={{ width: `${Math.min(100, Math.round(pct * 100))}%` }} />
+        </span>
+      ) : null}
+      {pct != null ? `${Math.round(pct * 100)}% · ` : ""}
+      {compact(tokens)}
+    </span>
+  );
+}
+
+const STRIP_HEIGHT = 168;
+const STRIP_PLOT_TOP = 18;
+const STRIP_RUG_HEIGHT = 30;
+const STRIP_PAD_LEFT = 46;
+const STRIP_PAD_RIGHT = 16;
+/** Auto-compact fires near the top of the window; the exact threshold varies
+ * by version, so the zone is a directional hint, not a promise. */
+const STRIP_AUTO_COMPACT_ZONE = 0.8;
+
+function ContextWindowPanel({
+  indexBySeq,
+  timeline,
+}: {
+  indexBySeq: Map<number, number>;
+  timeline: ContextWindowTimelineData | null;
+}) {
+  if (timeline == null || timeline.window_tokens == null || timeline.points.length < 2) {
+    return null;
+  }
+  return (
+    <ContextWindowStrip
+      indexBySeq={indexBySeq}
+      timeline={timeline}
+      windowTokens={timeline.window_tokens}
+    />
+  );
+}
+
+function ContextWindowStrip({
+  indexBySeq,
+  timeline,
+  windowTokens,
+}: {
+  indexBySeq: Map<number, number>;
+  timeline: ContextWindowTimelineData;
+  windowTokens: number;
+}) {
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const element = frameRef.current;
+    if (element == null) {
+      return;
+    }
+    const measure = () => setWidth(Math.floor(element.clientWidth));
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+
+  // Fallback keeps the strip drawable even when measurement is delayed (e.g. a
+  // hot-reloaded page whose effects did not re-run); the observer corrects it.
+  const stripWidth = width > 0 ? width : 960;
+
+  const points = timeline.points;
+  const compactions = [...timeline.compactions].sort((a, b) => a.seq - b.seq);
+  const peakLabel =
+    timeline.peak_pct == null
+      ? compact(timeline.peak_tokens)
+      : `${Math.round(timeline.peak_pct * 100)}%`;
+
+  const plotLeft = STRIP_PAD_LEFT;
+  const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
+  const plotWidth = plotRight - plotLeft;
+  const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
+  const yAt = (tokens: number) =>
+    STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
+
+  // Equal-width turn slots: every turn spans the same share of the axis and a
+  // turn's calls subdivide its slot, so the x-axis reads as a regular scale.
+  const turnOrder: number[] = [];
+  const callsPerTurn = new Map<number, number>();
+  for (const point of points) {
+    if (!callsPerTurn.has(point.turn)) {
+      turnOrder.push(point.turn);
+    }
+    callsPerTurn.set(point.turn, (callsPerTurn.get(point.turn) ?? 0) + 1);
+  }
+  const slotByTurn = new Map(turnOrder.map((turn, index) => [turn, index] as const));
+  const slotWidth = plotWidth / turnOrder.length;
+  const seenInTurn = new Map<number, number>();
+  const xs = points.map((point) => {
+    const position = seenInTurn.get(point.turn) ?? 0;
+    seenInTurn.set(point.turn, position + 1);
+    const slot = slotByTurn.get(point.turn) ?? 0;
+    const calls = callsPerTurn.get(point.turn) ?? 1;
+    return plotLeft + (slot + (position + 0.5) / calls) * slotWidth;
+  });
+  const xOf = (index: number) => xs[index] ?? plotLeft;
+
+  // Split the curve at compaction boundaries so each drop renders as a cliff.
+  const segments: [number, number][][] = [];
+  {
+    let current: [number, number][] = [];
+    let nextCompaction = 0;
+    points.forEach((point, index) => {
+      let cut = false;
+      while (
+        nextCompaction < compactions.length &&
+        (compactions[nextCompaction]?.seq ?? 0) < point.seq
+      ) {
+        nextCompaction += 1;
+        cut = true;
+      }
+      if (cut && current.length > 0) {
+        segments.push(current);
+        current = [];
+      }
+      current.push([xOf(index), yAt(point.context_tokens)]);
+    });
+    if (current.length > 0) {
+      segments.push(current);
+    }
+  }
+
+  const linePath = (coords: [number, number][]) =>
+    coords
+      .map(([px, py], index) => `${index === 0 ? "M" : "L"}${px.toFixed(1)} ${py.toFixed(1)}`)
+      .join(" ");
+  const areaPath = (coords: [number, number][]) => {
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    if (first == null || last == null) {
+      return "";
+    }
+    return `${linePath(coords)} L${last[0].toFixed(1)} ${baseY} L${first[0].toFixed(1)} ${baseY} Z`;
+  };
+  const markerX = (compaction: ContextWindowCompactionData) => {
+    const after = points.findIndex((point) => point.seq > compaction.seq);
+    if (after < 0) {
+      return xOf(points.length - 1);
+    }
+    if (after === 0) {
+      return xOf(0);
+    }
+    return (xOf(after - 1) + xOf(after)) / 2;
+  };
+
+  // Regular turn axis: a boundary tick at each slot edge, labels centered in
+  // their slot for every labelStep-th turn.
+  const labelStep = turnLabelStep(turnOrder.length);
+  const turnMarks = turnOrder.map((turn, index) => ({
+    turn,
+    boundaryX: plotLeft + index * slotWidth,
+    centerX: plotLeft + (index + 0.5) * slotWidth,
+    labeled: index === 0 || turn % labelStep === 0,
+  }));
+
+  const lastIndex = points.length - 1;
+  const lastPoint = points[lastIndex];
+  const peakIndex = points.reduce(
+    (best, point, index) =>
+      point.context_tokens > (points[best]?.context_tokens ?? 0) ? index : best,
+    0,
+  );
+  const peakPoint = points[peakIndex];
+  const endX = xOf(lastIndex);
+  const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
+  // The live readout sits inside the plot, above the line when there is room
+  // and below it when the session ended near the ceiling.
+  const endLabelAbove = endY > STRIP_PLOT_TOP + 30;
+
+  const handleMove = (event: { clientX: number; currentTarget: SVGSVGElement }) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    let nearest = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const [index, x] of xs.entries()) {
+      const distance = Math.abs(x - mouseX);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        nearest = index;
+      }
+    }
+    setHoverIndex(nearest);
+  };
+  const hovered = hoverIndex == null ? null : (points[hoverIndex] ?? null);
+  const tooltipFlips = hovered != null && hoverIndex != null && xOf(hoverIndex) > stripWidth - 210;
+  const handleJump = () => {
+    if (hovered == null) {
+      return;
+    }
+    const turnIndex = indexBySeq.get(hovered.seq);
+    if (turnIndex != null) {
+      window.location.hash = `#turn-${turnIndex}`;
+    }
+  };
+
+  let previousLabelX = Number.NEGATIVE_INFINITY;
+  let previousLabelY = STRIP_PLOT_TOP - 6;
+  let previousTickLabelX = Number.NEGATIVE_INFINITY;
+
+  return (
+    <section className="panel context-window-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Context window</h2>
+          <p>How full the model's context window was at each API call across the session.</p>
+        </div>
+        <div className="activity-summary">
+          <span>
+            <strong>{peakLabel}</strong>
+            peak
+          </span>
+          <span>
+            <strong>{formatInt(timeline.turn_count)}</strong>
+            {timeline.turn_count === 1 ? "turn" : "turns"}
+          </span>
+          <span>
+            <strong>{formatInt(points.length)}</strong>
+            calls
+          </span>
+          <span>
+            <strong>{formatInt(compactions.length)}</strong>
+            {compactions.length === 1 ? "compaction" : "compactions"}
+          </span>
+        </div>
+      </div>
+      <div className="ctx-strip-wrap">
+        <div className="ctx-strip-frame" ref={frameRef}>
+          {lastPoint != null ? (
+            <>
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: click-to-jump is a
+                  pointer-only shortcut; keyboard users reach the same turns via the
+                  thread TOC and the compaction markers, which are real anchors. */}
+              <svg
+                aria-label={`Context window usage across ${points.length} API calls and ${timeline.turn_count} turns; peak ${peakLabel} of ${compact(windowTokens)}`}
+                className="ctx-strip"
+                height={STRIP_HEIGHT}
+                onClick={handleJump}
+                onMouseLeave={() => setHoverIndex(null)}
+                onMouseMove={handleMove}
+                role="img"
+                width={stripWidth}
+              >
+                <rect
+                  className="ctx-strip-band"
+                  height={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - yAt(windowTokens)}
+                  width={plotRight - plotLeft}
+                  x={plotLeft}
+                  y={yAt(windowTokens)}
+                />
+                <text
+                  className="ctx-strip-band-label"
+                  x={plotLeft + 4}
+                  y={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - 4}
+                >
+                  auto-compact zone
+                </text>
+                {[0.25, 0.5, 0.75].map((fraction) => (
+                  <g className="ctx-strip-grid" key={`grid-${fraction}`}>
+                    <line
+                      x1={plotLeft}
+                      x2={plotRight}
+                      y1={yAt(windowTokens * fraction)}
+                      y2={yAt(windowTokens * fraction)}
+                    />
+                    <text textAnchor="end" x={plotLeft - 8} y={yAt(windowTokens * fraction) + 3.5}>
+                      {compact(windowTokens * fraction)}
+                    </text>
+                  </g>
+                ))}
+                <line
+                  className="ctx-strip-window"
+                  x1={plotLeft}
+                  x2={plotRight}
+                  y1={yAt(windowTokens)}
+                  y2={yAt(windowTokens)}
+                />
+                <text className="ctx-strip-label" x={plotLeft + 4} y={yAt(windowTokens) - 5}>
+                  window · {compact(windowTokens)}
+                  {timeline.window_inferred ? " (inferred)" : ""}
+                </text>
+                {segments.map((coords) => (
+                  <g key={`seg-${coords[0]?.[0] ?? 0}`}>
+                    <path className="ctx-strip-area" d={areaPath(coords)} />
+                    <path className="ctx-strip-line" d={linePath(coords)} />
+                  </g>
+                ))}
+                <g className="ctx-strip-rug">
+                  {turnMarks.slice(1).map((mark) => (
+                    <line
+                      key={`tick-${mark.turn}`}
+                      x1={mark.boundaryX}
+                      x2={mark.boundaryX}
+                      y1={baseY + 3}
+                      y2={baseY + 8}
+                    />
+                  ))}
+                  {turnMarks.map((mark) => {
+                    if (!mark.labeled || mark.centerX - previousTickLabelX < 44) {
+                      return null;
+                    }
+                    previousTickLabelX = mark.centerX;
+                    return (
+                      <text
+                        key={`tick-label-${mark.turn}`}
+                        textAnchor="middle"
+                        x={mark.centerX}
+                        y={baseY + 20}
+                      >
+                        turn {mark.turn}
+                      </text>
+                    );
+                  })}
+                </g>
+                {compactions.map((compaction) => {
+                  const x = markerX(compaction);
+                  const turnIndex = indexBySeq.get(compaction.seq);
+                  // The label sits to the right of the marker: after a
+                  // compaction the curve is always low, so that sky is free
+                  // (the peak crowds the left side). Near the right edge it
+                  // flips left and drops below the band, under the summit,
+                  // where the area fill is empty of strokes.
+                  const anchorStart = x < plotRight - 200;
+                  let labelY = anchorStart
+                    ? STRIP_PLOT_TOP + 11
+                    : yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) + 13;
+                  if (x - previousLabelX < 190) {
+                    labelY = previousLabelY + 13;
+                  }
+                  previousLabelX = x;
+                  previousLabelY = labelY;
+                  const marker = (
+                    <g className="ctx-strip-compaction" key={`marker-${compaction.seq}`}>
+                      <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
+                      <text
+                        textAnchor={anchorStart ? "start" : "end"}
+                        x={anchorStart ? x + 6 : x - 6}
+                        y={labelY}
+                      >
+                        {compactionMarkText(compaction)}
+                      </text>
+                      <rect
+                        fill="transparent"
+                        height={baseY - STRIP_PLOT_TOP}
+                        width={16}
+                        x={x - 8}
+                        y={STRIP_PLOT_TOP}
+                      >
+                        <title>{compactionLabel(compaction)}</title>
+                      </rect>
+                    </g>
+                  );
+                  return turnIndex != null ? (
+                    <a href={`#turn-${turnIndex}`} key={`compaction-${compaction.seq}`}>
+                      {marker}
+                    </a>
+                  ) : (
+                    <g key={`compaction-${compaction.seq}`}>{marker}</g>
+                  );
+                })}
+                {peakPoint != null && peakIndex !== lastIndex ? (
+                  <g className="ctx-strip-peak">
+                    <circle cx={xOf(peakIndex)} cy={yAt(peakPoint.context_tokens)} r={2.5} />
+                    <text
+                      textAnchor={xOf(peakIndex) > stripWidth * 0.8 ? "end" : "middle"}
+                      x={xOf(peakIndex)}
+                      y={Math.max(11, yAt(peakPoint.context_tokens) - 7)}
+                    >
+                      peak {peakLabel}
+                    </text>
+                  </g>
+                ) : null}
+                <g className="ctx-strip-end">
+                  <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
+                  <circle cx={endX} cy={endY} r={3} />
+                  <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
+                    {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
+                    {compact(lastPoint?.context_tokens ?? 0)}
+                  </text>
+                </g>
+                {hovered != null && hoverIndex != null ? (
+                  <g className="ctx-strip-hover">
+                    <line
+                      x1={xOf(hoverIndex)}
+                      x2={xOf(hoverIndex)}
+                      y1={STRIP_PLOT_TOP}
+                      y2={baseY}
+                    />
+                    <circle cx={xOf(hoverIndex)} cy={yAt(hovered.context_tokens)} r={3} />
+                  </g>
+                ) : null}
+              </svg>
+              {hovered != null && hoverIndex != null ? (
+                <div
+                  className="ctx-tooltip"
+                  style={{
+                    left: tooltipFlips ? xOf(hoverIndex) - 196 : xOf(hoverIndex) + 12,
+                    top: Math.max(
+                      2,
+                      Math.min(yAt(hovered.context_tokens) - 24, STRIP_HEIGHT - 118),
+                    ),
+                  }}
+                >
+                  <div className="ctx-tooltip-when">
+                    turn {hovered.turn} · call {hoverIndex + 1} of {points.length}
+                  </div>
+                  <strong>
+                    {Math.round((hovered.context_tokens / windowTokens) * 100)}% ·{" "}
+                    {formatInt(hovered.context_tokens)} tokens
+                  </strong>
+                  {/* The log's raw input_tokens is a streaming placeholder
+                      (usually 0-5, upstream anthropics/claude-code#25941);
+                      the accurate fresh-context number is cache_creation, so
+                      the two fold into one row and the rows sum to the
+                      headline total. */}
+                  <div className="ctx-tooltip-rows">
+                    <span>cache read</span>
+                    <span>{compact(hovered.cache_read_tokens)}</span>
+                    <span>fresh input</span>
+                    <span>{compact(hovered.cache_creation_tokens + hovered.input_tokens)}</span>
+                    <span>output</span>
+                    <span>{compact(hovered.output_tokens)}</span>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function turnLabelStep(turnCount: number): number {
+  for (const step of [1, 2, 5, 10, 20, 25, 50, 100, 200, 500]) {
+    if (turnCount / step <= 8) {
+      return step;
+    }
+  }
+  return 1000;
+}
+
+function compactionMarkText(compaction: ContextWindowCompactionData): string {
+  const trigger = compaction.trigger != null ? `${compaction.trigger}-compact` : "compacted";
+  if (compaction.pre_tokens == null) {
+    return `⇣ ${trigger}`;
+  }
+  const post = compaction.post_tokens != null ? ` → ${compact(compaction.post_tokens)}` : "";
+  return `⇣ ${trigger} · ${compact(compaction.pre_tokens)}${post}`;
+}
+
+function compactionLabel(compaction: ContextWindowCompactionData): string {
+  const trigger = compaction.trigger != null ? `${compaction.trigger} compaction` : "compaction";
+  if (compaction.pre_tokens == null) {
+    return trigger;
+  }
+  const post = compaction.post_tokens != null ? ` → ${compact(compaction.post_tokens)}` : "";
+  return `${trigger} · ${compact(compaction.pre_tokens)}${post} tokens`;
+}
 
 function TranscriptBlock({
   block,
@@ -4525,22 +5193,33 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         </div>
       ) : (
         <div className="subagent-transcript">
-          {messages.map((message, index) => (
-            <article className="turn is-subagent" key={messageKey(message, index)}>
-              <Badge mono tone={roleTone(message.role)}>
-                {roleLabel(message.role, subagent.summary.tool)}
-              </Badge>
-              <div className="turn-body">
-                {message.blocks.map((block, blockIndex) => (
-                  <TranscriptBlock
-                    block={block}
-                    key={blockKey(block, blockIndex)}
-                    subagents={nested.get(block.tool_use_id ?? "") ?? []}
-                  />
-                ))}
-              </div>
-            </article>
-          ))}
+          {messages.map((message, index) =>
+            message.is_compact_boundary ? (
+              <CompactionTurn
+                compaction={null}
+                index={index}
+                key={messageKey(message, index)}
+                message={message}
+              />
+            ) : (
+              <article className="turn is-subagent" key={messageKey(message, index)}>
+                <Badge mono tone={message.is_compact_summary ? "accent" : roleTone(message.role)}>
+                  {message.is_compact_summary
+                    ? "Summary"
+                    : roleLabel(message.role, subagent.summary.tool)}
+                </Badge>
+                <div className="turn-body">
+                  {message.blocks.map((block, blockIndex) => (
+                    <TranscriptBlock
+                      block={block}
+                      key={blockKey(block, blockIndex)}
+                      subagents={nested.get(block.tool_use_id ?? "") ?? []}
+                    />
+                  ))}
+                </div>
+              </article>
+            ),
+          )}
         </div>
       )}
     </details>
@@ -4573,19 +5252,23 @@ function countSubagentRuns(subagents: SubagentDetailData[]): number {
 function renderableMessages(
   messages: SessionDetailData["messages"],
 ): SessionDetailData["messages"] {
-  return messages.filter((message) =>
-    message.blocks.some((block) => {
-      if (block.block_type === "text" || block.block_type === "thinking") {
-        return isPresent(block.text);
-      }
-      return block.block_type === "tool_use" || block.block_type === "tool_result";
-    }),
+  return messages.filter(
+    (message) =>
+      // Compaction boundaries carry no blocks but render as inline cards.
+      message.is_compact_boundary ||
+      message.blocks.some((block) => {
+        if (block.block_type === "text" || block.block_type === "thinking") {
+          return isPresent(block.text);
+        }
+        return block.block_type === "tool_use" || block.block_type === "tool_result";
+      }),
   );
 }
 
 function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   return messages.flatMap((message, index) => {
-    if (message.role !== "user") {
+    // Compact summaries are machine-generated continuations, not prompts.
+    if (message.role !== "user" || message.is_compact_summary) {
       return [];
     }
     const label =
@@ -4623,9 +5306,10 @@ function threadStats(
   summary: SessionSummary,
   messages: SessionDetailData["messages"],
   toc: ThreadTocItem[],
+  fullTurnCount?: number | null,
 ) {
   return {
-    turns: toc.length,
+    turns: fullTurnCount ?? toc.length,
     replies: messages.filter((message) => message.role === "assistant").length,
     toolCalls: messages.reduce(
       (sum, message) =>

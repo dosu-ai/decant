@@ -159,7 +159,7 @@ export function facets(session: NormalizedSession): Facets {
     }
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
-      rawBoolean(message.raw, "isCompactSummary") === true
+      rawString(message.raw, "type") === "compacted"
     ) {
       got.compactionCount += 1;
     }

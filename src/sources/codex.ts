@@ -6,6 +6,7 @@ import {
   type NormalizedMessage,
   type ParsedSession,
   type Role,
+  type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
 
@@ -32,6 +33,7 @@ export function parseCodexSession(
   let spawnDepth: number | null = null;
   let totals = emptyUsage();
   let sawTokenCount = false;
+  let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
 
@@ -89,17 +91,22 @@ export function parseCodexSession(
       model = asString(get(payload, "model")) ?? model;
       cwd ??= asString(get(payload, "cwd"));
     } else if (typ === "event_msg" && asString(get(payload, "type")) === "token_count") {
-      const nested = get(get(payload, "info"), "total_token_usage");
+      const info = get(payload, "info");
+      const nested = get(info, "total_token_usage");
       const source = nested ?? payload;
       sawTokenCount = true;
-      const cached = getInteger(source, "cached_input_tokens");
-      totals = {
-        input: Math.max(0, getInteger(source, "input_tokens") - cached),
-        output: getInteger(source, "output_tokens"),
-        cacheRead: cached,
-        cacheCreation: 0,
-        reasoning: getInteger(source, "reasoning_output_tokens"),
-      };
+      totals = usageFrom(source);
+      contextWindow = asInteger(get(info, "model_context_window")) ?? contextWindow;
+      // last_token_usage is the most recent request's context reading; stamp
+      // it on the assistant message that request produced so per-call window
+      // occupancy is queryable, exactly like Claude's per-message usage.
+      const last = get(info, "last_token_usage");
+      if (isObject(last)) {
+        stampLatestAssistant(messages, usageFrom(last));
+      }
+    } else if (typ === "compacted") {
+      messages.push(compactedMessage(value, payload, seq, timestamp));
+      seq += 1;
     } else if (typ === "response_item") {
       const message = parseItem(value, payload, seq, title);
       if (message != null) {
@@ -113,6 +120,9 @@ export function parseCodexSession(
   }
 
   title = titles.get(sourceSessionId) ?? title;
+  if (contextWindow != null) {
+    rawMeta = { ...(isObject(rawMeta) ? rawMeta : {}), model_context_window: contextWindow };
+  }
 
   return {
     session: {
@@ -140,6 +150,70 @@ export function parseCodexSession(
       messages,
     },
     issues,
+  };
+}
+
+function usageFrom(source: Json | undefined): TokenUsage {
+  const cached = getInteger(source, "cached_input_tokens");
+  return {
+    input: Math.max(0, getInteger(source, "input_tokens") - cached),
+    output: getInteger(source, "output_tokens"),
+    cacheRead: cached,
+    cacheCreation: 0,
+    reasoning: getInteger(source, "reasoning_output_tokens"),
+  };
+}
+
+/** Applies a token_count reading to the assistant message its request produced.
+ * Readings land after the response items they describe, so walk back past tool
+ * rows to the nearest assistant message. User and system rows are hard
+ * boundaries: in particular, post-compaction zero readings must not overwrite
+ * the pre-compaction assistant peak. Later readings within one request win. */
+function stampLatestAssistant(messages: NormalizedMessage[], usage: TokenUsage): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message == null || message.role === "user" || message.role === "system") {
+      return;
+    }
+    if (message.role === "assistant") {
+      messages[index] = { ...message, usage };
+      return;
+    }
+  }
+}
+
+function compactedMessage(
+  line: Json,
+  payload: Json,
+  seq: number,
+  timestamp: string | null,
+): NormalizedMessage {
+  const summary = asString(get(payload, "message")) ?? "";
+  return {
+    seq,
+    sourceUuid: null,
+    parentSourceUuid: null,
+    role: "system",
+    model: null,
+    stopReason: null,
+    timestamp,
+    usage: null,
+    raw: line,
+    blocks:
+      summary === ""
+        ? []
+        : [
+            {
+              ordinal: 0,
+              blockType: "text",
+              text: summary,
+              toolName: null,
+              toolUseId: null,
+              toolInput: undefined,
+              toolResult: null,
+              isError: null,
+            },
+          ],
   };
 }
 

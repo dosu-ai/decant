@@ -41,6 +41,123 @@ describe("parseCodexSession", () => {
     expect(parsed.session.title).toBe("TODO audit");
   });
 
+  test("stamps last_token_usage onto the producing assistant without crossing compaction", () => {
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-06-01T09:00:00Z",
+        payload: { id: "sess-stamp", cwd: "/tmp/proj" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:01Z",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "go" }] },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:02Z",
+        payload: { type: "function_call", name: "exec_command", call_id: "c1", arguments: "{}" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:03Z",
+        payload: { type: "function_call_output", call_id: "c1", output: "ok" },
+      }),
+      // Walks back past the tool row; the later reading wins for the message.
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T09:00:04Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: { input_tokens: 900, cached_input_tokens: 700, output_tokens: 60 },
+            last_token_usage: {
+              input_tokens: 900,
+              cached_input_tokens: 700,
+              output_tokens: 60,
+              reasoning_output_tokens: 10,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "compacted",
+        timestamp: "2026-06-01T09:00:05Z",
+        payload: { message: "Carried summary.", replacement_history: [] },
+      }),
+      // Real rollouts emit zero readings immediately after compaction. They
+      // must not walk back across the system boundary and erase the peak.
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T09:00:06Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 900,
+              cached_input_tokens: 700,
+              output_tokens: 60,
+            },
+            last_token_usage: {
+              input_tokens: 0,
+              cached_input_tokens: 0,
+              output_tokens: 0,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      }),
+    ].join("\n");
+
+    const parsed = parseCodexSession("sess-stamp", content, new Map());
+    const messages = parsed.session.messages;
+    expect(messages).toHaveLength(4);
+    expect(messages[0]?.usage).toBeNull();
+    expect(messages[1]?.usage).toEqual({
+      input: 200,
+      output: 60,
+      cacheRead: 700,
+      cacheCreation: 0,
+      reasoning: 10,
+    });
+    expect(messages[2]?.usage).toBeNull();
+    expect(messages[3]?.role).toBe("system");
+    expect(messages[3]?.blocks[0]?.text).toBe("Carried summary.");
+    const rawMeta = parsed.session.rawMeta as { model_context_window?: number };
+    expect(rawMeta.model_context_window).toBe(258_400);
+  });
+
+  test("token_count before any assistant output is dropped", () => {
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-06-01T09:00:00Z",
+        payload: { id: "sess-early", cwd: "/tmp/proj" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:01Z",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "go" }] },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T09:00:02Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 1 },
+            last_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 1 },
+          },
+        },
+      }),
+    ].join("\n");
+
+    const parsed = parseCodexSession("sess-early", content, new Map());
+    expect(parsed.session.messages[0]?.usage).toBeNull();
+    expect(parsed.session.rawMeta).toEqual({ id: "sess-early", cwd: "/tmp/proj" });
+  });
+
   test("parses subagent session metadata", () => {
     const content = [
       JSON.stringify({

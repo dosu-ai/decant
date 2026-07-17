@@ -4228,6 +4228,7 @@ function SessionDetailView({ id }: { id: number }) {
               index={index}
               key={messageKey(message, index)}
               message={message}
+              sessionIsSubagent={detail.summary.is_subagent}
               subagentsByToolUse={subagentsByToolUse}
               tool={detail.summary.tool}
               windowTokens={windowTokens}
@@ -4319,6 +4320,7 @@ function TranscriptTurn({
   compaction,
   index,
   message,
+  sessionIsSubagent,
   subagentsByToolUse,
   tool,
   windowTokens,
@@ -4326,6 +4328,7 @@ function TranscriptTurn({
   compaction: ContextWindowCompactionData | null;
   index: number;
   message: SessionDetailData["messages"][number];
+  sessionIsSubagent: boolean;
   subagentsByToolUse: Map<string, SubagentDetailData[]>;
   tool: string;
   windowTokens: number | null;
@@ -4334,7 +4337,9 @@ function TranscriptTurn({
     return <CompactionTurn compaction={compaction} index={index} message={message} />;
   }
   const contextTokens =
-    message.role === "assistant" && !message.is_sidechain ? message.context_tokens : null;
+    message.role === "assistant" && (!message.is_sidechain || sessionIsSubagent)
+      ? message.context_tokens
+      : null;
   const blocks = message.blocks.map((block, blockIndex) => (
     <TranscriptBlock
       block={block}

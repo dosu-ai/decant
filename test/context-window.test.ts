@@ -309,6 +309,55 @@ describe("contextWindowForSession", () => {
     db.close();
   });
 
+  test("treats sidechain rows as the primary thread of a standalone subagent", () => {
+    const db = freshDb();
+    const content = [
+      record({
+        type: "user",
+        uuid: "su1",
+        parentUuid: null,
+        isSidechain: true,
+        timestamp: "2026-05-03T10:00:00.000Z",
+        message: { role: "user", content: "Inspect the parser" },
+      }),
+      record({
+        type: "assistant",
+        uuid: "sa1",
+        parentUuid: "su1",
+        isSidechain: true,
+        requestId: "subagent-req-1",
+        timestamp: "2026-05-03T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          stop_reason: "end_turn",
+          usage: usage(10, 40, 80_000, 10_000),
+          content: [{ type: "text", text: "The parser is sound." }],
+        },
+      }),
+    ].join("\n");
+    const parsed = parseClaudeSession("agent-context", content, {
+      sourcePath: "/tmp/project/session/subagents/agent-context.jsonl",
+    });
+    expect(parsed.session.isSubagent).toBe(true);
+    upsertSession(db, parsed, "/agent-context.jsonl", 1, 2, "h");
+    const sessionId = listSessions(db, { includeSubagents: true })[0]?.id ?? 0;
+
+    const timeline = contextWindowForSession(db, sessionId);
+    expect(timeline?.points.map((point) => point.context_tokens)).toEqual([90_010]);
+    expect(timeline?.points.map((point) => point.turn)).toEqual([1]);
+    expect(timeline?.turn_count).toBe(1);
+    expect(
+      db.query("SELECT turn_count, peak_context_tokens FROM session WHERE id = ?1").get(sessionId),
+    ).toEqual({ turn_count: 1, peak_context_tokens: 90_010 });
+    expect(getSession(db, sessionId)?.messages[1]).toMatchObject({
+      role: "assistant",
+      is_sidechain: true,
+      context_tokens: 90_010,
+    });
+    db.close();
+  });
+
   test("returns null for an unknown session", () => {
     const { db } = seeded();
     expect(contextWindowForSession(db, 999_999)).toBeNull();
@@ -578,17 +627,23 @@ describe("context-window rollups", () => {
       peak_context_tokens: 70_510,
       compaction_count: 1,
     });
+    expect(db.query("SELECT turn_count FROM session WHERE id = ?1").get(sessionId)).toEqual({
+      turn_count: 2,
+    });
     db.close();
   });
 
-  test("backfills sessions ingested before the rollup columns existed", () => {
+  test("backfills rollups and corrected turn counts for pre-v11 sessions", () => {
     const { db, sessionId } = seeded();
-    db.exec(`UPDATE session SET context_window_tokens = NULL, peak_context_tokens = NULL`);
+    db.exec(
+      `UPDATE session
+       SET context_window_tokens = NULL, peak_context_tokens = NULL, turn_count = 99`,
+    );
     expect(materializeMissingContextWindows(db)).toBe(1);
     const row = db
-      .query("SELECT peak_context_tokens FROM session WHERE id = ?1")
-      .get(sessionId) as { peak_context_tokens: number | null };
-    expect(row.peak_context_tokens).toBe(70_510);
+      .query("SELECT peak_context_tokens, turn_count FROM session WHERE id = ?1")
+      .get(sessionId);
+    expect(row).toEqual({ peak_context_tokens: 70_510, turn_count: 2 });
     db.close();
   });
 

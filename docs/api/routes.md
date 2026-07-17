@@ -59,8 +59,9 @@ those logs do not state them; Codex rollouts carry an explicit
 also carry materialized rollups (`context_window_tokens`,
 `peak_context_tokens`, plus the existing `compaction_count`) computed at ingest; the
 first sync after a schema upgrade backfills them, like the economics vectors.
-Sessions without per-message usage (Codex rollouts predating
-`last_token_usage`) return empty `points`.
+Codex sessions ingested by older decant builds, as well as source rollouts
+predating `last_token_usage`, return empty `points` until the source changes
+and is re-ingested or the archive is rebuilt.
 
 ## Events
 

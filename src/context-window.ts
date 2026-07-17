@@ -140,13 +140,14 @@ export function contextWindowForSession(
 ): ContextWindowTimeline | null {
   const session = db
     .query(
-      `SELECT id, tool,
+      `SELECT id, tool, is_subagent,
               json_extract(raw_meta, '$.model_context_window') AS explicit_window
        FROM session WHERE id = ?1`,
     )
     .get(sessionId) as {
     id: number;
     tool: string;
+    is_subagent: number;
     explicit_window: number | null;
   } | null;
   if (session == null) {
@@ -184,7 +185,11 @@ export function contextWindowForSession(
   let lastContextSinceCompaction: number | null = null;
   for (const row of rows) {
     const meta = parseMessageRawMeta(row.raw_meta);
-    if (meta.isSidechain) {
+    // Main Claude transcripts can contain copied sidechain rows that belong to
+    // a child agent, so exclude those from the parent's curve. In a standalone
+    // subagent archive those same isSidechain rows are the session's primary
+    // thread and must remain visible.
+    if (meta.isSidechain && session.is_subagent === 0) {
       continue;
     }
     if (row.role === "user") {
@@ -259,8 +264,10 @@ export function contextWindowForSession(
 }
 
 /** Persist the session's context-window rollups while its rows are hot in the
- * ingest transaction. peak_context_tokens doubles as the materialization
- * marker: non-null means computed (0 when the session has no usable usage). */
+ * ingest transaction. Turn count is written from the same main-thread rules so
+ * migrated archives also stop treating compact summaries as user prompts.
+ * peak_context_tokens doubles as the materialization marker: non-null means
+ * computed (0 when the session has no usable usage). */
 export function materializeContextWindow(db: Database, sessionId: number): boolean {
   const timeline = contextWindowForSession(db, sessionId);
   if (timeline == null) {
@@ -268,9 +275,16 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
   }
   db.query(
     `UPDATE session
-     SET context_window_tokens = ?2, peak_context_tokens = ?3, compaction_count = ?4
+     SET context_window_tokens = ?2, peak_context_tokens = ?3,
+         compaction_count = ?4, turn_count = ?5
      WHERE id = ?1`,
-  ).run(sessionId, timeline.window_tokens, timeline.peak_tokens, timeline.compactions.length);
+  ).run(
+    sessionId,
+    timeline.window_tokens,
+    timeline.peak_tokens,
+    timeline.compactions.length,
+    timeline.turn_count,
+  );
   return true;
 }
 

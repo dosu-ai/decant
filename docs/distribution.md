@@ -113,13 +113,19 @@ port on every host interface.
 (comma-separated IPs or IPv4 CIDRs) **unioned** with any `--trusted-peer
 <cidr>` flags (repeatable, or comma-separated) passed on the command line —
 the two sources add together and neither one silently drops the other. The
-image sets `DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from the
-default Docker bridge gateway pass the guard out of the box. Overriding the
-container command with extra `--trusted-peer` flags only *adds* peers; it
-cannot narrow the image's baked-in default. To narrow or clear the trusted set,
-override the environment variable itself at `docker run` time instead, for
-example `-e DECANT_TRUSTED_PEERS=10.0.0.0/24`, or `-e DECANT_TRUSTED_PEERS=` to
-trust no forwarded peers and rely on the `127.0.0.1` host publish alone.
+image trusts the three RFC1918 private ranges
+(`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) so requests forwarded from Docker
+Engine, Docker Desktop, or OrbStack bridge gateways pass the guard out of the
+box. The host-side `127.0.0.1` publish remains the exposure boundary; keep it
+unless you intentionally want LAN access.
+
+Overriding the container command with extra `--trusted-peer` flags only *adds*
+peers; it cannot narrow the image's baked-in default. To narrow the trusted
+set, override the environment variable itself at `docker run` time with the
+actual bridge gateway address or subnet, for example
+`-e DECANT_TRUSTED_PEERS=192.168.215.1`. Setting
+`-e DECANT_TRUSTED_PEERS=` trusts no forwarded peers and therefore blocks API
+access through a published Docker port entirely.
 
 ## Source
 

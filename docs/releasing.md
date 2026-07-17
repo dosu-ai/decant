@@ -38,10 +38,12 @@ Ordered — later steps assume earlier ones landed.
 5. **Create a bootstrap npm token.** Trusted publishers can only be configured
    on packages that already exist, so the very first publish for each of the
    five `@dosu/decant*` packages needs a classic-token-free bootstrap path: a
-   granular npm access token scoped to those packages, with "Bypass 2FA"
-   checked (CI can't answer an OTP) and the default 7-day expiry, stored as a
-   repo secret. This path still emits npm provenance — token auth on a
-   GitHub-hosted runner qualifies, provided the repo is already public.
+   granular npm access token with read/write package permission for the
+   `@dosu` scope, "Bypass 2FA" checked (CI can't answer an OTP), and the
+   shortest practical expiry, stored as the `NPM_TOKEN` repo secret. Granting
+   npm organization access alone does not grant package publishing access.
+   This path still emits npm provenance — token auth on a GitHub-hosted runner
+   qualifies, provided the repo is already public.
 6. **Tag `v0.1.0`.** The pipeline publishes all five npm packages (with
    provenance), signed and notarized darwin binaries, a GitHub Release with
    checksummed assets and attestations, and the GHCR image. Immediately after
@@ -91,16 +93,19 @@ Every release after the bootstrap:
 
    ```
    meta (guard) -> verify -> build (+sign/notarize +attest) -> smoke-darwin
-     -> npm (OIDC) -> github-release -> tap-update (optional)
+     -> npm (OIDC) -> npm-smoke -> github-release
+       -> homebrew-formula -> homebrew-smoke -> tap-update (stable latest only)
      -> docker (fans out in parallel, once smoke-darwin passes)
    ```
 
    `meta` derives and guards the version (rejects a `workflow_dispatch` whose
    ref isn't the tagged commit) and computes whether this is the newest
    stable release — the single source of truth every downstream job reads for
-   `:latest`, the npm dist-tag, and the tap update. `smoke-darwin` is a gate,
-   not an observer: nothing publishes until the signed darwin binary passes
-   it.
+   `:latest`, the npm dist-tag, and the tap update. `smoke-darwin` covers both
+   Apple architectures and is a gate, not an observer: nothing publishes until
+   both signed darwin binaries pass it. `npm-smoke` and `homebrew-smoke` each
+   exercise all four supported OS/architecture targets before the release page
+   and tap advance.
 4. Spot-check after the run finishes:
    - `npx @dosu/decant@$VERSION --version` (use `@latest` only when this
      release's `meta` reported it as the newest stable tag — a backport is

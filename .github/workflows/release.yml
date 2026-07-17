@@ -294,12 +294,20 @@ jobs:
 
   # Release GATE, not an observer: every publish job sits downstream of this one,
   # so a broken or non-notarized darwin binary blocks all publishing (plan §6a).
-  # This also guards the Bun signature-regression class (oven-sh/bun#29120) that
-  # no linux job can catch.
+  # Run both architectures: GitHub's standard macOS label is arm64, so an explicit
+  # Intel runner is required to exercise the darwin-x64 artifact too.
   smoke-darwin:
-    name: Smoke signed darwin binary
+    name: Smoke signed darwin binary (${{ matrix.target }})
     needs: build
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     permissions: {}
     steps:
@@ -313,7 +321,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p smoke
-          tar -xzf dist/release/decant-darwin-arm64.tar.gz -C smoke
+          tar -xzf "dist/release/decant-${{ matrix.target }}.tar.gz" -C smoke
           ./smoke/decant --version
           codesign --verify --strict --verbose=2 smoke/decant
           if ! assessment="$(spctl -a -t exec -vv smoke/decant 2>&1)"; then
@@ -501,11 +509,20 @@ jobs:
   # Post-publish smoke: the exact code path every real `npx @dosu/decant` user
   # hits, including real optionalDependencies resolution (plan §3 0.4).
   npm-smoke:
-    name: Post-publish npx smoke
+    name: Post-publish npx smoke (${{ matrix.target }})
     needs: [meta, npm]
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions: {}
@@ -643,18 +660,16 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-  # OPTIONAL brew channel (plan §7, D5). Stable AND is_latest only: a prerelease
-  # must not seed the formula and a backport must not downgrade it. The formula may
-  # not exist in the tap yet — this job creates-or-rewrites it from the in-repo
-  # template on every run.
-  tap-update:
-    name: Update Homebrew tap
-    needs: [meta, github-release]
+  # Render the exact formula that will be tested and pushed. Stable AND is_latest
+  # only: a prerelease must not seed the tap and a backport must not downgrade it.
+  homebrew-formula:
+    name: Render Homebrew formula
+    needs: [meta, build, github-release]
     if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read # decant checkout (template); the tap push authenticates via HOMEBREW_TOKEN
+      contents: read
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
@@ -666,14 +681,7 @@ jobs:
           name: release-tarballs
           path: dist/release
 
-      - name: Check out dosu-ai/homebrew-dosu
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: dosu-ai/homebrew-dosu
-          token: ${{ secrets.HOMEBREW_TOKEN }}
-          path: homebrew-dosu
-
-      - name: Render Formula/decant.rb from the in-repo template
+      - name: Render decant.rb from the in-repo template
         run: |
           set -euo pipefail
           sha_for() {
@@ -689,7 +697,7 @@ jobs:
               exit 1
             fi
           done
-          mkdir -p homebrew-dosu/Formula
+          mkdir -p dist/homebrew
           # '/^##/d' strips the template's own doc header from the rendered formula.
           sed -e '/^##/d' \
             -e "s/__VERSION__/${VERSION}/g" \
@@ -697,7 +705,90 @@ jobs:
             -e "s/__SHA256_DARWIN_X64__/${darwin_x64}/g" \
             -e "s/__SHA256_LINUX_ARM64__/${linux_arm64}/g" \
             -e "s/__SHA256_LINUX_X64__/${linux_x64}/g" \
-            packaging/homebrew/decant.rb.template > homebrew-dosu/Formula/decant.rb
+            packaging/homebrew/decant.rb.template > dist/homebrew/decant.rb
+
+      - name: Upload rendered formula
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-formula
+          path: dist/homebrew/decant.rb
+          if-no-files-found: error
+
+  # Test the rendered formula on every supported OS/architecture before the tap
+  # moves. This consumes live GitHub Release assets, so it validates the user path
+  # rather than only linting Ruby syntax.
+  homebrew-smoke:
+    name: Homebrew install smoke (${{ matrix.target }})
+    needs: [meta, homebrew-formula]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@df4b09108a1de9d6f995fe68f302b3f68bd6d2ef # main @ 2026-07-17
+
+      - name: Download rendered formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: homebrew-formula
+          path: Formula
+
+      - name: Audit, install, and test
+        run: |
+          set -euo pipefail
+          brew tap dosu-ai/dosu
+          tap_root="$(brew --repository dosu-ai/dosu)"
+          cp Formula/decant.rb "${tap_root}/Formula/decant.rb"
+          brew audit --strict --online --formula dosu-ai/dosu/decant
+          brew install --formula dosu-ai/dosu/decant
+          brew test dosu-ai/dosu/decant
+          out="$(decant --version)"
+          echo "Homebrew decant reports: $out"
+          [[ "$out" == *"$VERSION"* ]] \
+            || { echo "::error::Homebrew decant reported '$out', expected version $VERSION"; exit 1; }
+
+  # OPTIONAL brew channel (plan §7, D5). Push only the formula artifact that passed
+  # the four-platform Homebrew smoke matrix above.
+  tap-update:
+    name: Update Homebrew tap
+    needs: [meta, github-release, homebrew-formula, homebrew-smoke]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # the tap push authenticates via HOMEBREW_TOKEN
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Check out dosu-ai/homebrew-dosu
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Download tested formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: homebrew-formula
+          path: homebrew-dosu/Formula
 
       - name: Commit and push
         working-directory: homebrew-dosu

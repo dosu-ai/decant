@@ -7,12 +7,7 @@ import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import {
-  handleRequest,
-  publishServerEvent,
-  resolveTrustedPeers,
-  serve,
-} from "../src/server.ts";
+import { handleRequest, publishServerEvent, resolveTrustedPeers, serve } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 

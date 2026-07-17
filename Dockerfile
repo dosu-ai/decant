@@ -40,7 +40,10 @@ WORKDIR /var/lib/decant
 ENV DECANT_DB=/var/lib/decant/decant.db
 ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
-ENV DECANT_TRUSTED_PEERS=172.16.0.0/12
+# Docker Engine, Docker Desktop, and OrbStack may forward published-port
+# requests from different RFC1918 bridge ranges. The host-side 127.0.0.1
+# publish remains the exposure boundary documented for this image.
+ENV DECANT_TRUSTED_PEERS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 
 VOLUME ["/var/lib/decant"]
 EXPOSE 3000

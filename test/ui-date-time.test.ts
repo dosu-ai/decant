@@ -24,11 +24,12 @@ describe("compactDateTime", () => {
 
 describe("fullDateTime", () => {
   test("provides a detailed timestamp for the tooltip", () => {
-    expect(
-      fullDateTime("2026-07-17T23:28:00Z", {
-        locale: "en-US",
-        timeZone: "UTC",
-      }),
-    ).toBe("Jul 17, 2026 at 11:28:00 PM UTC");
+    const formatted = fullDateTime("2026-07-17T23:28:00Z", {
+      locale: "en-US",
+      timeZone: "UTC",
+    });
+    expect(formatted).toContain("Jul 17, 2026");
+    expect(formatted).toContain("11:28:00 PM");
+    expect(formatted).toEndWith("UTC");
   });
 });

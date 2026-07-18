@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bashBucket, blockBucket, toolBucket } from "../src/buckets.ts";
+import { bashBucket, blockBucket, isCodeEditTool, toolBucket } from "../src/buckets.ts";
 
 describe("activity bucket classifier", () => {
   test("classifies fixed tool families", () => {
@@ -39,5 +39,41 @@ describe("activity bucket classifier", () => {
     expect(blockBucket("text")).toBe("communicating");
     expect(blockBucket("tool_use", "Write")).toBe("code");
     expect(blockBucket("tool_result", "Read")).toBe("context");
+  });
+
+  test("isCodeEditTool: structured edit tools", () => {
+    for (const t of ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"]) {
+      expect(isCodeEditTool(t)).toBe(true);
+    }
+    expect(isCodeEditTool("Read")).toBe(false);
+    expect(isCodeEditTool("Bash")).toBe(false); // no command -> not an edit
+  });
+
+  test("isCodeEditTool: shell commands that mutate a file count as edits", () => {
+    const edits = [
+      "git apply /tmp/pr.diff",
+      "sed -i 's/a/b/' src/x.ts",
+      "patch -p1 < /tmp/x.patch",
+      'node -e \'require("fs").writeFileSync("a.ts", body)\'',
+      "python3 -c \"open('a.py','w').write(x)\"",
+    ];
+    for (const cmd of edits) {
+      expect(isCodeEditTool("Bash", { command: cmd })).toBe(true);
+      expect(isCodeEditTool("shell", JSON.stringify({ command: cmd }))).toBe(true);
+    }
+  });
+
+  test("isCodeEditTool: read-only / benign shell is NOT an edit", () => {
+    const benign = [
+      "git apply --check /tmp/pr.diff",
+      "grep -rn foo src",
+      "cat package.json",
+      "echo hi > /dev/null",
+      "yarn build > /tmp/build.log",
+      "git diff --stat",
+    ];
+    for (const cmd of benign) {
+      expect(isCodeEditTool("Bash", { command: cmd })).toBe(false);
+    }
   });
 });

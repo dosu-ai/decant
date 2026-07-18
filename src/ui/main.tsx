@@ -118,7 +118,7 @@ type NowView = {
   sync_in_progress: boolean;
 };
 
-type ActivityBucket = "planning" | "communicating" | "context" | "code";
+type ActivityBucket = "context" | "planning" | "code" | "communicating";
 
 type TokenEconomics = {
   buckets: {
@@ -129,6 +129,7 @@ type TokenEconomics = {
     tool_calls: number;
     sessions: number;
     cost_share: number;
+    active_ms: number;
   }[];
   totals: {
     generation_tokens: number;
@@ -136,6 +137,9 @@ type TokenEconomics = {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    active_ms: number;
+    waiting_on_user_ms: number;
+    attributed_ms: number;
   };
 };
 
@@ -1949,19 +1953,21 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
 
 function TokenEconomicsPanel({
   compact: isCompact = false,
-  description = "Estimated tokens and cost by planning, communicating, context, and code",
+  description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
+  subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
   description?: string;
   economics: TokenEconomics | null;
+  subagentRuns?: number;
   title?: string;
 }) {
-  const buckets = (economics?.buckets ?? [])
-    .slice()
-    .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd);
+  const buckets = economics?.buckets ?? [];
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
+  const totalActiveMs = economics?.totals.active_ms ?? 0;
+  const showAgentRuns = !isCompact;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
       <div className="panel-heading">
@@ -1979,6 +1985,20 @@ function TokenEconomicsPanel({
               <strong>{compact(economics.totals.context_window_tokens)}</strong>
               window
             </span>
+            <span>
+              <strong>{duration(economics.totals.active_ms)}</strong>
+              agent time
+            </span>
+            <span>
+              <strong>{duration(economics.totals.waiting_on_user_ms)}</strong>
+              waiting
+            </span>
+            {isCompact && subagentRuns > 0 ? (
+              <span>
+                <strong>1 root + {formatInt(subagentRuns)}</strong>
+                {subagentRuns === 1 ? "subagent" : "subagents"}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1997,9 +2017,11 @@ function TokenEconomicsPanel({
               <col className="col-activity" />
               <col className="col-share" />
               <col className="col-activity-number" />
+              <col className="col-share" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
+              {showAgentRuns ? <col className="col-activity-number" /> : null}
             </colgroup>
             <thead>
               <tr className="activity-table-head">
@@ -2008,21 +2030,30 @@ function TokenEconomicsPanel({
                 <th className="numeric activity-number" scope="col">
                   Cost
                 </th>
+                <th scope="col">Time spent</th>
+                <th className="numeric activity-number" scope="col">
+                  Time
+                </th>
                 <th className="numeric activity-number" scope="col">
                   Generated
                 </th>
                 <th className="numeric activity-number" scope="col">
                   Window
                 </th>
-                <th className="numeric activity-number" scope="col">
-                  Sessions
-                </th>
+                {showAgentRuns ? (
+                  <th className="numeric activity-number" scope="col">
+                    <span title="Root sessions and nested subagent runs contributing to this activity">
+                      Agent runs
+                    </span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
               {buckets.map((bucket) => {
                 const tone = activityTone(bucket.bucket);
                 const share = Math.max(0, Math.min(1, bucket.cost_share));
+                const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
                 return (
                   <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
                     {(tooltipProps) => (
@@ -2052,15 +2083,31 @@ function TokenEconomicsPanel({
                         <td className="numeric activity-number">
                           {money(bucket.estimated_cost_usd)}
                         </td>
+                        <td className="activity-share">
+                          <span className="activity-share-inner">
+                            <span className="activity-bar">
+                              <span
+                                className={`tone-${tone}`}
+                                style={{ width: `${timeShare * 100}%` }}
+                              />
+                            </span>
+                            <small>{Math.round(timeShare * 100)}%</small>
+                          </span>
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {duration(bucket.active_ms)}
+                        </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.generation_tokens)}
                         </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.context_window_tokens)}
                         </td>
-                        <td className="numeric muted activity-number">
-                          {formatInt(bucket.sessions)}
-                        </td>
+                        {showAgentRuns ? (
+                          <td className="numeric muted activity-number">
+                            {formatInt(bucket.sessions)}
+                          </td>
+                        ) : null}
                       </tr>
                     )}
                   </Tooltip>
@@ -3216,6 +3263,19 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+function duration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function relativeTime(value: string | null | undefined): string {
   if (value == null || value === "") {
     return "-";
@@ -3969,31 +4029,40 @@ function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [economicsError, setEconomicsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setEconomics(null);
     setError(null);
+    setEconomicsError(null);
     if (!Number.isFinite(id)) {
       setError("Invalid session id.");
       return;
     }
-    void Promise.all([
-      getJson<SessionDetailData>(
-        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
-      ),
-      getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`),
-    ])
-      .then(([nextDetail, nextEconomics]) => {
+    void getJson<SessionDetailData>(
+      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+    )
+      .then((nextDetail) => {
         if (!cancelled) {
           setDetail(nextDetail);
-          setEconomics(nextEconomics);
         }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(errorMessage(err));
+        }
+      });
+    void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
+      .then((nextEconomics) => {
+        if (!cancelled) {
+          setEconomics(nextEconomics);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEconomicsError(errorMessage(err));
         }
       });
     return () => {
@@ -4013,6 +4082,7 @@ function SessionDetailView({ id }: { id: number }) {
   const toc = threadToc(messages);
   const stats = threadStats(detail.summary, messages, toc);
   const subagentsByToolUse = subagentMap(detail.subagents);
+  const subagentRuns = countSubagentRuns(detail.subagents);
 
   return (
     <div className="session-detail">
@@ -4057,11 +4127,16 @@ function SessionDetailView({ id }: { id: number }) {
       {economics != null ? (
         <TokenEconomicsPanel
           compact
-          description="Estimated activity inside this session, including nested subagents."
+          description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
+          subagentRuns={subagentRuns}
           title="Activity breakdown"
         />
-      ) : null}
+      ) : economicsError != null ? (
+        <div className="notice inline-notice">Activity breakdown unavailable: {economicsError}</div>
+      ) : (
+        <SessionEconomicsSkeleton />
+      )}
 
       <div className="transcript-layout">
         <aside className="toc">
@@ -4218,22 +4293,7 @@ function SessionDetailSkeleton() {
         </div>
       </header>
       <span className="skeleton-line skeleton-back" />
-      <section className="panel token-economics-panel is-compact skeleton-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="skeleton-line skeleton-heading" />
-            <span className="skeleton-line skeleton-subheading" />
-          </div>
-          <span className="skeleton-line skeleton-summary" />
-        </div>
-        <div className="activity-table-wrap">
-          <div className="skeleton-table">
-            {["context", "planning", "communicating", "code"].map((key) => (
-              <span className="skeleton-line" key={key} />
-            ))}
-          </div>
-        </div>
-      </section>
+      <SessionEconomicsSkeleton />
       <div className="transcript-layout">
         <aside className="toc">
           <div className="toc-inner">
@@ -4254,6 +4314,31 @@ function SessionDetailSkeleton() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SessionEconomicsSkeleton() {
+  return (
+    <section
+      aria-label="Loading activity breakdown"
+      className="panel token-economics-panel is-compact skeleton-panel"
+      role="status"
+    >
+      <div className="panel-heading">
+        <div>
+          <span className="skeleton-line skeleton-heading" />
+          <span className="skeleton-line skeleton-subheading" />
+        </div>
+        <span className="skeleton-line skeleton-summary" />
+      </div>
+      <div className="activity-table-wrap">
+        <div className="skeleton-table">
+          {["context", "planning", "code", "communicating"].map((key) => (
+            <span className="skeleton-line" key={key} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4467,6 +4552,13 @@ function subagentMap(subagents: SubagentDetailData[]): Map<string, SubagentDetai
     }
   }
   return map;
+}
+
+function countSubagentRuns(subagents: SubagentDetailData[]): number {
+  return subagents.reduce(
+    (total, subagent) => total + 1 + countSubagentRuns(subagent.subagents),
+    0,
+  );
 }
 
 function renderableMessages(

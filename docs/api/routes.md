@@ -46,6 +46,10 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 - `POST /api/launch/agent`
 - `POST /api/launch/ide`
 
+Session and archive token-economics routes aggregate versioned per-session
+vectors persisted during ingest. The first sync after a schema upgrade
+backfills vectors for unchanged sessions.
+
 ## Events
 
 - `GET /api/events` returns an SSE stream.

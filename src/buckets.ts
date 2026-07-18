@@ -1,6 +1,6 @@
 import type { Json } from "./model.ts";
 
-export const ACTIVITY_BUCKETS = ["planning", "communicating", "context", "code"] as const;
+export const ACTIVITY_BUCKETS = ["context", "planning", "code", "communicating"] as const;
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
 const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "shell"]);
@@ -62,6 +62,40 @@ export function toolBucket(
     return "context";
   }
   return "context";
+}
+
+// High-precision markers that a shell command mutates a source file. Kept
+// deliberately narrow: a false positive moves the phase boundary earlier and
+// mislabels orientation as implementation, which is worse than missing one. So
+// no bare `>` redirect (too often /dev/null, /tmp, logs) -- only unambiguous
+// in-place edits, patch application, and explicit file writes.
+const SHELL_EDIT_PATTERNS: RegExp[] = [
+  /\bgit\s+apply\b(?![^\n]*--(?:check|stat|summary|numstat))/, // apply a patch for real
+  /\bsed\b[^\n|]*\s-i\b/, // in-place edit
+  /\bpatch\b[^\n|]*-p\d/, // patch -p1 < ...
+  /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/, // node fs writes (node -e ...)
+  /\bopen\([^)]*['"][wa]\+?['"]/, // python open(..., "w"/"a")
+  /\bapplypatch\b/,
+];
+
+/** True for tools that mutate a file on disk (the phase boundary marker): the
+ * first such tool_use flips a session from orientation to implementation. Covers
+ * the structured edit tools (edit/write/patch) AND shell commands that clearly
+ * write a file (git apply, sed -i, fs.writeFileSync, ...), since agents sometimes
+ * implement through the shell rather than the edit tool. */
+export function isCodeEditTool(
+  toolName: string | null | undefined,
+  input?: string | Json,
+): boolean {
+  const normalized = localToolName(toolName ?? "").toLowerCase();
+  if (CODE_TOOLS.has(normalized)) {
+    return true;
+  }
+  if (SHELL_TOOLS.has(normalized)) {
+    const command = commandFromInput(input);
+    return command != null && SHELL_EDIT_PATTERNS.some((re) => re.test(command));
+  }
+  return false;
 }
 
 export function blockBucket(

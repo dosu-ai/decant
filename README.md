@@ -101,9 +101,10 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
 `decant serve` binds `127.0.0.1:3000` by default. Override with
 `--host`/`--port`.
 
-Archives older than schema v8 are rebuild-only. v8 archives migrate to v9 on
-open; older archives should be deleted and rebuilt with `decant sync`. Source
-logs remain the source of truth.
+Archives older than schema v8 are rebuild-only. v8 and v9 archives migrate to
+v10 on open; the next `decant sync` backfills persisted economics vectors for
+unchanged sessions. Older archives should be deleted and rebuilt with
+`decant sync`. Source logs remain the source of truth.
 
 ## How It Works
 
@@ -112,7 +113,7 @@ logs remain the source of truth.
         |
         v
  Bun + TypeScript decant process
- parse -> enrich -> ingest -> SQLite WAL + FTS5
+ parse -> enrich -> ingest + economics vectors -> SQLite WAL + FTS5
         |
         +--> CLI reads / JSON
         +--> local React UI + JSON routes + SSE

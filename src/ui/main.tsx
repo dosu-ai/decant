@@ -50,6 +50,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import "./styles.css";
@@ -4459,11 +4460,13 @@ function ContextChip({ tokens, windowTokens }: { tokens: number; windowTokens: n
   );
 }
 
-const STRIP_HEIGHT = 168;
-const STRIP_PLOT_TOP = 18;
+const STRIP_HEIGHT = 198;
+const STRIP_PLOT_TOP = 48;
 const STRIP_RUG_HEIGHT = 30;
 const STRIP_PAD_LEFT = 46;
 const STRIP_PAD_RIGHT = 16;
+const STRIP_WINDOW_LABEL_Y = 13;
+const STRIP_ANNOTATION_LABEL_YS = [28, 41] as const;
 /** Auto-compact fires near the top of the window; the exact threshold varies
  * by version, so the zone is a directional hint, not a promise. */
 const STRIP_AUTO_COMPACT_ZONE = 0.8;
@@ -4599,6 +4602,16 @@ function ContextWindowStrip({
     }
     return (xOf(after - 1) + xOf(after)) / 2;
   };
+  const compactionMarks = compactions.map((compaction) => ({
+    compaction,
+    text: compactionMarkText(compaction),
+    x: markerX(compaction),
+  }));
+  const compactionLabels = layoutContextAnnotations(compactionMarks, {
+    labelYs: STRIP_ANNOTATION_LABEL_YS,
+    plotLeft,
+    plotRight,
+  });
 
   // Regular turn axis: a boundary tick at each slot edge, labels centered in
   // their slot for every labelStep-th turn.
@@ -4620,6 +4633,10 @@ function ContextWindowStrip({
   const peakPoint = points[peakIndex];
   const endX = xOf(lastIndex);
   const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
+  const peakX = xOf(peakIndex);
+  const peakY = peakPoint == null ? baseY : yAt(peakPoint.context_tokens);
+  const peakLabelOnLeft = peakX > plotLeft + 70;
+  const peakLabelY = Math.max(STRIP_PLOT_TOP + 10, peakY - 7);
   // The live readout sits inside the plot, above the line when there is room
   // and below it when the session ended near the ceiling.
   const endLabelAbove = endY > STRIP_PLOT_TOP + 30;
@@ -4650,8 +4667,6 @@ function ContextWindowStrip({
     }
   };
 
-  let previousLabelX = Number.NEGATIVE_INFINITY;
-  let previousLabelY = STRIP_PLOT_TOP - 6;
   let previousTickLabelX = Number.NEGATIVE_INFINITY;
 
   return (
@@ -4731,7 +4746,7 @@ function ContextWindowStrip({
                   y1={yAt(windowTokens)}
                   y2={yAt(windowTokens)}
                 />
-                <text className="ctx-strip-label" x={plotLeft + 4} y={yAt(windowTokens) - 5}>
+                <text className="ctx-strip-label" x={plotLeft + 4} y={STRIP_WINDOW_LABEL_Y}>
                   window · {compact(windowTokens)}
                   {timeline.window_inferred ? " (inferred)" : ""}
                 </text>
@@ -4768,30 +4783,16 @@ function ContextWindowStrip({
                     );
                   })}
                 </g>
-                {compactions.map((compaction) => {
-                  const x = markerX(compaction);
+                {compactionMarks.map(({ compaction, x }, compactionIndex) => {
                   const turnIndex = indexBySeq.get(compaction.seq);
-                  // The label sits to the right of the marker: after a
-                  // compaction the curve is always low, so that sky is free
-                  // (the peak crowds the left side). Near the right edge it
-                  // flips left and drops below the band, under the summit,
-                  // where the area fill is empty of strokes.
-                  const anchorStart = x < plotRight - 200;
-                  let labelY = anchorStart
-                    ? STRIP_PLOT_TOP + 11
-                    : yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) + 13;
-                  if (x - previousLabelX < 190) {
-                    labelY = previousLabelY + 13;
-                  }
-                  previousLabelX = x;
-                  previousLabelY = labelY;
+                  const label = compactionLabels[compactionIndex];
                   const marker = (
                     <g className="ctx-strip-compaction" key={`marker-${compaction.seq}`}>
                       <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
                       <text
-                        textAnchor={anchorStart ? "start" : "end"}
-                        x={anchorStart ? x + 6 : x - 6}
-                        y={labelY}
+                        textAnchor={label?.anchor ?? "start"}
+                        x={label?.textX ?? x + 6}
+                        y={label?.textY ?? STRIP_ANNOTATION_LABEL_YS[0]}
                       >
                         {compactionMarkText(compaction)}
                       </text>
@@ -4816,11 +4817,15 @@ function ContextWindowStrip({
                 })}
                 {peakPoint != null && peakIndex !== lastIndex ? (
                   <g className="ctx-strip-peak">
-                    <circle cx={xOf(peakIndex)} cy={yAt(peakPoint.context_tokens)} r={2.5} />
+                    <circle cx={peakX} cy={peakY} r={2.5}>
+                      <title>
+                        Peak {peakLabel} · {compact(peakPoint.context_tokens)} tokens
+                      </title>
+                    </circle>
                     <text
-                      textAnchor={xOf(peakIndex) > stripWidth * 0.8 ? "end" : "middle"}
-                      x={xOf(peakIndex)}
-                      y={Math.max(11, yAt(peakPoint.context_tokens) - 7)}
+                      textAnchor={peakLabelOnLeft ? "end" : "start"}
+                      x={peakX + (peakLabelOnLeft ? -6 : 6)}
+                      y={peakLabelY}
                     >
                       peak {peakLabel}
                     </text>

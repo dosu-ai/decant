@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,17 @@ import {
 } from "./distribution.ts";
 
 const version = process.env.DECANT_DISTCHECK_VERSION ?? "0.0.0-check";
+const isTemporaryRoot = process.env.DECANT_DISTCHECK_DIR == null;
 const outRoot = process.env.DECANT_DISTCHECK_DIR ?? mkdtempSync(join(tmpdir(), "decant-check-"));
+if (isTemporaryRoot) {
+  process.on("exit", () => {
+    try {
+      rmSync(outRoot, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup must not mask the distribution check result.
+    }
+  });
+}
 const binaryDir = join(outRoot, "bin");
 const npmDir = join(outRoot, "npm");
 const packDir = join(outRoot, "packs");

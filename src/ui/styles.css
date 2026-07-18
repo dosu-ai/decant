@@ -635,7 +635,7 @@ table {
 }
 
 .sessions-table .col-session-model {
-  width: 14%;
+  width: 12%;
 }
 
 .sessions-table .col-session-context,
@@ -656,7 +656,7 @@ table {
 }
 
 .sessions-table .col-session-started {
-  width: 7%;
+  width: 9%;
 }
 
 .col-wide {

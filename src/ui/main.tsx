@@ -50,6 +50,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import "./styles.css";
 
@@ -1353,8 +1354,22 @@ function SessionTableRow({
       </td>
       <td className="numeric muted">{formatInt(session.message_count)}</td>
       <td className="numeric">{money(threadCost(session))}</td>
-      <td className="numeric muted">{relativeTime(session.started_at)}</td>
+      <td className="numeric muted">
+        <SessionStartedAt value={session.started_at} />
+      </td>
     </tr>
+  );
+}
+
+function SessionStartedAt({ value }: { value: string | null }) {
+  const compact = compactDateTime(value);
+  if (compact == null || value == null) {
+    return <span>-</span>;
+  }
+  return (
+    <time dateTime={value} title={fullDateTime(value) ?? compact}>
+      {compact}
+    </time>
   );
 }
 

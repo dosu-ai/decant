@@ -453,12 +453,13 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   // separators that occur in practice.
   const firstCandidates = db
     .query(
-      `SELECT s.id AS session_id,
+      `SELECT s.id AS session_id, s.is_subagent,
               (SELECT b.text
                FROM message m
                CROSS JOIN block b INDEXED BY idx_block_message ON b.message_id = m.id
                WHERE m.session_id = s.id
                  AND m.role = 'user'
+                 AND ${HUMAN_TITLE_MESSAGE_SQL}
                  AND b.type = 'text'
                  AND b.text IS NOT NULL
                  AND TRIM(b.text) != ''
@@ -468,14 +469,14 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
        FROM session s
        WHERE s.id IN (${placeholders})`,
     )
-    .all(...ids) as { session_id: number; text: string | null }[];
+    .all(...ids) as { session_id: number; is_subagent: number; text: string | null }[];
   const titleBySession = new Map<number, string>();
   const needFullScan: number[] = [];
   for (const row of firstCandidates) {
     if (row.text == null) {
       continue;
     }
-    const title = readableUserTitle(row.text);
+    const title = readableUserTitle(row.text, row.is_subagent !== 0);
     if (title != null) {
       titleBySession.set(row.session_id, title);
     } else {
@@ -488,42 +489,39 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
     const scanPlaceholders = needFullScan.map(() => "?").join(", ");
     const rows = db
       .query(
-        `SELECT m.session_id AS session_id, b.text
+        `SELECT m.session_id AS session_id, s.is_subagent, b.text
          FROM message m
+         JOIN session s ON s.id = m.session_id
          CROSS JOIN block b INDEXED BY idx_block_message ON b.message_id = m.id
          WHERE m.session_id IN (${scanPlaceholders})
            AND m.role = 'user'
+           AND ${HUMAN_TITLE_MESSAGE_SQL}
            AND b.type = 'text'
            AND b.text IS NOT NULL
            AND TRIM(b.text) != ''
          ORDER BY m.session_id, m.seq, b.ordinal`,
       )
-      .all(...needFullScan) as { session_id: number; text: string }[];
+      .all(...needFullScan) as { session_id: number; is_subagent: number; text: string }[];
     for (const row of rows) {
       if (titleBySession.has(row.session_id)) {
         continue;
       }
-      const title = readableUserTitle(row.text);
+      const title = readableUserTitle(row.text, row.is_subagent !== 0);
       if (title != null) {
         titleBySession.set(row.session_id, title);
       }
     }
   }
   return sessions.map((session) => {
-    const title = titleBySession.get(session.id) ?? readableFallbackTitle(session.title);
-    return title == null ? session : { ...session, title };
+    const title =
+      titleBySession.get(session.id) ?? readableUserTitle(session.title, session.is_subagent);
+    // Always replace the parser fallback. In Codex logs the first normalized
+    // "user" row can be a developer prompt rather than something a human typed.
+    return { ...session, title };
   });
 }
 
-function readableUserTitle(text: string): string | null {
-  const trimmed = stripAnsi(text).trim();
-  if (trimmed === "" || isAgentContextText(trimmed)) {
-    return null;
-  }
-  return preview(trimmed.replace(/\s+/g, " "), 180);
-}
-
-function readableFallbackTitle(text: string | null | undefined): string | null {
+function readableUserTitle(text: string | null | undefined, isSubagent: boolean): string | null {
   if (text == null) {
     return null;
   }
@@ -531,38 +529,50 @@ function readableFallbackTitle(text: string | null | undefined): string | null {
   if (trimmed === "") {
     return null;
   }
-  if (
-    /^<permissions instructions>/i.test(trimmed) ||
-    trimmed.includes("Filesystem sandboxing defines")
-  ) {
-    return "Execution permissions";
+  if (isSubagent) {
+    const task = subagentTaskTitle(trimmed);
+    if (task != null) {
+      return task;
+    }
   }
-  if (/^<local-command-caveat>/i.test(trimmed) || /^<command-name>/i.test(trimmed)) {
-    return "Command context";
+  if (isAgentContextText(trimmed)) {
+    return null;
   }
-  if (
-    /^<local-command-std(?:out|err)>/i.test(trimmed) ||
-    /^<local-command-output>/i.test(trimmed)
-  ) {
-    return "Command output";
-  }
-  if (/^<environment_context>/i.test(trimmed)) {
-    return "Environment context";
-  }
-  if (/^<teammate-message\b/i.test(trimmed)) {
-    return tagAttribute(trimmed, "summary") ?? "Subagent request";
-  }
-  if (trimmed.startsWith("# AGENTS.md instructions") || trimmed.includes("<INSTRUCTIONS>")) {
-    return "Repository instructions";
-  }
-  if (/^The following is the Codex agent history/i.test(trimmed)) {
-    return "Agent history";
-  }
-  if (/^Use prior reviews as context/i.test(trimmed)) {
-    return "Review context";
-  }
-  return null;
+  return preview(trimmed.replace(/\s+/g, " "), 180);
 }
+
+function subagentTaskTitle(text: string): string | null {
+  if (/^<teammate-message\b/i.test(text)) {
+    const summary = tagAttribute(text, "summary");
+    return summary == null ? null : preview(summary.replace(/\s+/g, " ").trim(), 180);
+  }
+  if (!/^<fork-boilerplate>/i.test(text)) {
+    return null;
+  }
+  const marker = /Your directive:\s*/i.exec(text);
+  if (marker == null) {
+    return null;
+  }
+  const directive = text.slice(marker.index + marker[0].length).trim();
+  const firstSection = directive.split(/\n\s*\n(?=[A-Z][A-Z /-]{2,}:)/)[0] ?? directive;
+  const normalized = firstSection.replace(/\s+/g, " ").trim();
+  return normalized === "" ? null : preview(normalized, 180);
+}
+
+// Source-level constraints for a title candidate. Codex stores developer
+// messages as normalized user rows for transcript fidelity, so consult the raw
+// payload role here. Claude parent files can contain copied sidechain rows;
+// those belong to child agents unless the selected session is itself a
+// standalone subagent. Compact summaries are machine continuations, not human
+// prompts.
+const HUMAN_TITLE_MESSAGE_SQL = `
+  COALESCE(json_extract(m.raw, '$.payload.role'), 'user') = 'user'
+  AND COALESCE(json_extract(m.raw, '$.isCompactSummary'), 0) != 1
+  AND (
+    s.is_subagent = 1
+    OR COALESCE(json_extract(m.raw, '$.isSidechain'), 0) != 1
+  )
+`;
 
 // SQL twin of isAgentContextText, used to early-exit title candidate scans.
 // Keep the two in sync when adding rules, and keep this side conservative:
@@ -577,8 +587,6 @@ const AGENT_CONTEXT_SQL = `
   OR LTRIM(b.text) LIKE '<local-command-stderr>%'
   OR LTRIM(b.text) LIKE '<local-command-output>%'
   OR LTRIM(b.text) LIKE '<command-name>%'
-  OR LTRIM(b.text) LIKE '<teammate-message %'
-  OR LTRIM(b.text) LIKE '<teammate-message>%'
   OR b.text GLOB '*<environment_context>*'
   OR LTRIM(b.text) GLOB '# AGENTS.md instructions*'
   OR b.text GLOB '*<INSTRUCTIONS>*'
@@ -595,6 +603,11 @@ function isAgentContextText(text: string): boolean {
     /^<local-command-output>/i.test(trimmed) ||
     /^<command-name>/i.test(trimmed) ||
     /^<teammate-message\b/i.test(trimmed) ||
+    /^<fork-boilerplate>/i.test(trimmed) ||
+    /^You are\s+[`'"]?\/?root[`'"]?,\s+the primary agent\b/i.test(trimmed) ||
+    /^<(?:multi_agent_mode|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|recommended_plugins)>/i.test(
+      trimmed,
+    ) ||
     trimmed.includes("<environment_context>") ||
     trimmed.startsWith("# AGENTS.md instructions") ||
     trimmed.includes("<INSTRUCTIONS>") ||

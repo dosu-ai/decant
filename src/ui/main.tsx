@@ -975,6 +975,8 @@ function SessionsView({
               <col className="col-session-tool" />
               <col className="col-session-title" />
               <col className="col-session-model" />
+              <col className="col-session-context" />
+              <col className="col-session-compactions" />
               <col className="col-session-subagents" />
               <col className="col-session-count" />
               <col className="col-session-cost" />
@@ -985,6 +987,8 @@ function SessionsView({
                 <th>Tool</th>
                 <th>Title</th>
                 <th>Model</th>
+                <th className="numeric">Peak ctx</th>
+                <th className="numeric">Compactions</th>
                 <th className="numeric">Subagents</th>
                 <th className="numeric">Msgs</th>
                 <th className="numeric">Cost</th>
@@ -995,7 +999,7 @@ function SessionsView({
               {waitingForSessions ? <SessionTableSkeletonRows /> : null}
               {!waitingForSessions && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     {query.trim() === ""
                       ? "No sessions ingested yet."
                       : "No sessions match that filter."}
@@ -1028,6 +1032,12 @@ function SessionTableSkeletonRows() {
       </td>
       <td>
         <span className="skeleton-line table-skeleton-line model" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line number" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line number" />
       </td>
       <td className="numeric">
         <span className="skeleton-line table-skeleton-line number" />
@@ -1327,16 +1337,17 @@ function SessionTableRow({
       </td>
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
-          <span className="session-title-line">
-            <a href={`/sessions/${session.id}`}>{title}</a>
-            <ContextRollupBadges session={session} />
-          </span>
+          <a href={`/sessions/${session.id}`}>{title}</a>
           {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
         </span>
       </td>
       <td>
         <ModelBadge model={session.model} />
       </td>
+      <td className="numeric">
+        <SessionContextPeak session={session} />
+      </td>
+      <td className="numeric muted">{formatInt(session.compaction_count)}</td>
       <td className="numeric">
         <SubagentRollup session={session} />
       </td>
@@ -1347,35 +1358,22 @@ function SessionTableRow({
   );
 }
 
-function ContextRollupBadges({ session }: { session: SessionSummary }) {
+function SessionContextPeak({ session }: { session: SessionSummary }) {
   const windowTokens = session.context_window_tokens;
   const peak = session.peak_context_tokens;
-  const compactions = session.compaction_count;
   const pct =
     windowTokens != null && windowTokens > 0 && peak != null && peak > 0
       ? Math.round((peak / windowTokens) * 100)
       : null;
-  if ((pct == null || pct === 0) && compactions === 0) {
-    return null;
+  if (pct == null || pct === 0) {
+    return <span className="faint">-</span>;
   }
   return (
-    <span className="ctx-rollup">
-      {pct != null && pct > 0 ? (
-        <span
-          className={`ctx-rollup-peak${pct >= 80 ? " is-hot" : pct >= 60 ? " is-warm" : ""}`}
-          title={`Peak context: ${compact(peak ?? 0)} of ${compact(windowTokens ?? 0)} window`}
-        >
-          {pct}%
-        </span>
-      ) : null}
-      {compactions > 0 ? (
-        <span
-          className="ctx-rollup-compactions"
-          title={`${formatInt(compactions)} ${compactions === 1 ? "compaction" : "compactions"}`}
-        >
-          ⇣{formatInt(compactions)}
-        </span>
-      ) : null}
+    <span
+      className={`session-context-peak${pct >= 80 ? " is-hot" : pct >= 60 ? " is-warm" : ""}`}
+      title={`Peak context: ${compact(peak ?? 0)} of ${compact(windowTokens ?? 0)} window`}
+    >
+      {pct}%
     </span>
   );
 }

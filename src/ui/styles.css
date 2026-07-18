@@ -623,35 +623,40 @@ table {
 }
 
 .sessions-table {
-  min-width: 1180px;
+  min-width: 1360px;
 }
 
 .sessions-table .col-session-tool {
-  width: 10%;
+  width: 9%;
 }
 
 .sessions-table .col-session-title {
-  width: 36%;
+  width: 34%;
 }
 
 .sessions-table .col-session-model {
-  width: 18%;
+  width: 14%;
 }
 
-.sessions-table .col-session-subagents {
-  width: 12%;
-}
-
-.sessions-table .col-session-count {
-  width: 7%;
-}
-
-.sessions-table .col-session-cost {
+.sessions-table .col-session-context,
+.sessions-table .col-session-compactions {
   width: 8%;
 }
 
-.sessions-table .col-session-started {
+.sessions-table .col-session-subagents {
   width: 9%;
+}
+
+.sessions-table .col-session-count {
+  width: 5%;
+}
+
+.sessions-table .col-session-cost {
+  width: 6%;
+}
+
+.sessions-table .col-session-started {
+  width: 7%;
 }
 
 .col-wide {
@@ -2956,54 +2961,16 @@ pre {
   margin-bottom: 8px;
 }
 
-.session-title-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.session-title-line a {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ctx-rollup {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-}
-
-.ctx-rollup-peak {
-  border: 1px solid color-mix(in oklab, var(--info) 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--info) 10%, transparent);
-  padding: 0 7px;
+.session-context-peak {
   color: var(--info);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
 
-.ctx-rollup-peak.is-warm {
-  border-color: color-mix(in oklab, var(--warning) 40%, transparent);
-  background: color-mix(in oklab, var(--warning) 10%, transparent);
+.session-context-peak.is-warm {
   color: var(--warning);
 }
 
-.ctx-rollup-peak.is-hot {
-  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
-  background: color-mix(in oklab, var(--danger) 10%, transparent);
+.session-context-peak.is-hot {
   color: var(--danger);
-}
-
-.ctx-rollup-compactions {
-  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--accent) 10%, transparent);
-  padding: 0 7px;
-  color: var(--accent-hover);
-  font-weight: 600;
 }

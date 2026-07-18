@@ -120,6 +120,33 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("totals exclude generated local-command-only sessions", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES
+        (1, 'claude_code', 'command-only',
+         '<local-command-caveat>Generated command context</local-command-caveat>',
+         '2026-07-05T00:00:00Z'),
+        (2, 'claude_code', 'human-after-command',
+         '<local-command-caveat>Generated command context</local-command-caveat>',
+         '2026-07-05T00:00:01Z');
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 2, 0, 'user', '{}'),
+        (3, 2, 1, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES
+        (1, 1, 0, 'text', '<command-name>/exit</command-name>'),
+        (2, 2, 0, 'text', '<command-name>/model</command-name>'),
+        (3, 2, 0, 'text', 'Continue with my actual request');
+    `);
+
+    expect(totals(db)).toMatchObject({ sessions: 1, messages: 2 });
+    db.close();
+  });
+
   test("date filters scope analytics rollups", () => {
     const db = seededEnriched();
     const filter = { from: "2026-05-04", to: "2026-05-04" };

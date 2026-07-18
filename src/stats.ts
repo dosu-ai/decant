@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
+import { visibleSessionPredicate } from "./session-visibility.ts";
 
 export interface Totals {
   sessions: number;
@@ -17,10 +18,14 @@ export interface Totals {
 
 export function totals(db: Database, filter?: DateFilter | null): Totals {
   const date = sessionDatePredicate("s", filter);
+  const visible = {
+    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
+    params: date.params,
+  };
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(date)}
+         SELECT * FROM session s ${whereClause(visible)}
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
@@ -34,7 +39,7 @@ export function totals(db: Database, filter?: DateFilter | null): Totals {
          (SELECT COALESCE(SUM(est_reasoning_tokens), 0) FROM filtered_session) AS est_reasoning_tokens,
          (SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM filtered_session) AS estimated_cost_usd`,
     )
-    .get(...date.params) as Totals;
+    .get(...visible.params) as Totals;
 }
 
 export type Dimension = "tool" | "model" | "project" | "day";

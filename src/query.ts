@@ -6,6 +6,7 @@ import {
   parseMessageRawMeta,
 } from "./context-window.ts";
 import { sessionDatePredicate } from "./date-filter.ts";
+import { visibleSessionPredicate } from "./session-visibility.ts";
 import { preview } from "./tools.ts";
 
 export interface SessionSummary {
@@ -93,6 +94,7 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   if (filter.includeSubagents !== true) {
     clauses.push("s.is_subagent = 0");
   }
+  clauses.push(visibleSessionPredicate("s"));
   const date = sessionDatePredicate("s", filter);
   if (date.sql !== "") {
     clauses.push(date.sql);

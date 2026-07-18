@@ -178,7 +178,12 @@ function launchWarp(
 
 function warpConfigYaml(cmd: string, env: Record<string, string | undefined> | undefined): string {
   // Same working-dir chain as launchAgent; Warp requires an absolute cwd.
-  const cwd = env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir();
+  const cwd =
+    env?.DECANT_SKILLS_DIR ??
+    process.env.DECANT_SKILLS_DIR ??
+    env?.HOME ??
+    process.env.HOME ??
+    process.cwd();
   // JSON.stringify produces valid YAML double-quoted scalars, so the shell
   // command's quoting survives YAML parsing untouched.
   return `---

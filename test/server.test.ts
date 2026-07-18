@@ -7,7 +7,7 @@ import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import { handleRequest, publishServerEvent } from "../src/server.ts";
+import { handleRequest, publishServerEvent, serve } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -560,5 +560,52 @@ describe("server routes", () => {
       ingested_count: 1,
       last_error: null,
     });
+  });
+
+  test("stop() resolves promptly even while a request awaits an in-flight economics rebuild", async () => {
+    const config = freshConfig();
+    const gate = Promise.withResolvers<void>();
+    let sawAbort = false;
+    const server = serve({
+      config,
+      port: 0,
+      economicsComputeVectors: (_path, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            sawAbort = true;
+            reject(new Error("aborted"));
+          });
+          // Never resolves on its own; only the abort (from server.stop()'s
+          // dispose) or the test's gate settles this.
+          gate.promise.then(() => reject(new Error("test cleanup")));
+        }),
+    });
+
+    // Start a real request that will hang awaiting the gated rebuild — this
+    // reproduces the exact scenario where naive ordering (disposing the
+    // economics cache only *after* awaiting Bun's native stop()) deadlocks:
+    // native stop() waits for this in-flight handler, which waits for the
+    // rebuild, which is never told to abort until stop() already returned.
+    const pendingRequest = fetch(
+      `http://127.0.0.1:${server.port}/api/analytics/token-economics`,
+    ).catch((error: unknown) => error);
+    // Let the connection actually get accepted and the handler reach its
+    // await on the rebuild; racing stop() immediately after fetch() can
+    // force-close the connection before the server ever processes it, which
+    // would make this test pass regardless of the dispose ordering.
+    await Bun.sleep(50);
+
+    const t0 = performance.now();
+    await Promise.race([
+      server.stop(true),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error("server.stop() did not resolve within 2s")), 2000),
+      ),
+    ]);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(sawAbort).toBe(true);
+
+    gate.resolve();
+    await pendingRequest.catch(() => {});
   });
 });

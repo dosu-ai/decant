@@ -145,6 +145,76 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("getSession assembles nested subagent trees with display titles", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent,
+                          parent_session_id, spawn_tool_use_id, agent_id, agent_type,
+                          spawn_depth, estimated_cost_usd, message_count)
+      VALUES
+        (1, 'claude_code', 'root', NULL, '2026-07-01T00:00:00Z', 0, NULL, NULL, NULL, NULL, NULL, 1.0, 1),
+        (2, 'claude_code', 'kid-a', NULL, '2026-07-01T00:01:00Z', 1, 1, 'tu-a', 'agent-a', 'Explore', 1, 0.5, 1),
+        (3, 'claude_code', 'kid-b', NULL, '2026-07-01T00:02:00Z', 1, 1, 'tu-b', 'agent-b', 'Plan', 1, 0.25, 1),
+        (4, 'claude_code', 'grandkid', NULL, '2026-07-01T00:03:00Z', 1, 2, 'tu-c', 'agent-c', 'Explore', 2, 0.125, 1);
+      INSERT INTO message(id, session_id, seq, role, raw) VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 2, 0, 'user', '{}'),
+        (3, 3, 0, 'user', '{}'),
+        (4, 4, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text) VALUES
+        (1, 1, 0, 'text', 'Root prompt'),
+        (2, 2, 0, 'text', 'Child A prompt'),
+        (3, 3, 0, 'text', 'Child B prompt'),
+        (4, 4, 0, 'text', 'Grandchild prompt');
+    `);
+
+    const detail = getSession(db, 1);
+    expect(detail?.summary.title).toBe("Root prompt");
+    expect(detail?.summary.subagent_count).toBe(2);
+    expect(detail?.summary.subagent_estimated_cost_usd).toBeCloseTo(0.75);
+    expect(detail?.messages).toHaveLength(1);
+    expect(detail?.subagents.map((child) => child.summary.title)).toEqual([
+      "Child A prompt",
+      "Child B prompt",
+    ]);
+    expect(detail?.subagents[0]).toMatchObject({
+      spawn_tool_use_id: "tu-a",
+      agent_id: "agent-a",
+      agent_type: "Explore",
+      spawn_depth: 1,
+    });
+    expect(detail?.subagents[0]?.messages).toEqual([]);
+    expect(detail?.subagents[0]?.subagents.map((child) => child.summary.title)).toEqual([
+      "Grandchild prompt",
+    ]);
+    expect(detail?.subagents[1]?.subagents).toEqual([]);
+    db.close();
+  });
+
+  test("getSession caps subagent nesting at five levels below the root", () => {
+    const db = freshDb();
+    const rows: string[] = ["(1, 'claude_code', 'chain-0', '2026-07-01T00:00:00Z', 0, NULL)"];
+    for (let id = 2; id <= 8; id += 1) {
+      rows.push(
+        `(${id}, 'claude_code', 'chain-${id - 1}', '2026-07-01T00:0${id - 1}:00Z', 1, ${id - 1})`,
+      );
+    }
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, parent_session_id)
+      VALUES ${rows.join(", ")};
+    `);
+
+    const detail = getSession(db, 1);
+    let level = 0;
+    let cursor = detail?.subagents ?? [];
+    while (cursor.length > 0) {
+      level += 1;
+      cursor = cursor[0]?.subagents ?? [];
+    }
+    expect(level).toBe(5);
+    db.close();
+  });
+
   test("search with no match returns empty", () => {
     const db = seeded();
     expect(search(db, "zzznotpresentzzz", 10)).toEqual([]);

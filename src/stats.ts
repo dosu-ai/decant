@@ -108,16 +108,19 @@ export function toolUsage(
   const limit = normalizeLimit(limitValue, 50);
   const date = sessionDatePredicate("s", filter);
   const having = errorsOnly ? "HAVING errors > 0" : "";
+  // Every tool_call row references a session, so the session join exists only
+  // to apply the date filter; skip it (and its per-row lookup cost) otherwise.
+  const scope =
+    date.sql === ""
+      ? ""
+      : `JOIN (SELECT id FROM session s ${whereClause(date)}) fs ON fs.id = t.session_id`;
   const rows = db
     .query(
-      `WITH filtered_session AS (
-         SELECT id, started_at FROM session s ${whereClause(date)}
-       )
-       SELECT t.tool_name, t.tool_kind, t.mcp_server,
+      `SELECT t.tool_name, t.tool_kind, t.mcp_server,
               COUNT(*) AS calls,
               COALESCE(SUM(CASE WHEN t.is_error = 1 THEN 1 ELSE 0 END), 0) AS errors
        FROM tool_call t
-       JOIN filtered_session s ON s.id = t.session_id
+       ${scope}
        GROUP BY t.tool_name, t.tool_kind, t.mcp_server
        ${having}
        ORDER BY calls DESC

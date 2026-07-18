@@ -575,7 +575,10 @@ function timestampsAt(value: Json): string[] {
   }
   const ms = asEpochMs(get(value, "timestamp_ms"));
   if (ms != null) {
-    out.push(new Date(ms).toISOString());
+    const normalized = isoTimestamp(ms);
+    if (normalized != null) {
+      out.push(normalized);
+    }
   }
 
   const toolCall = get(value, "tool_call");

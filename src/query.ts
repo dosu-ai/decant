@@ -179,16 +179,6 @@ export function getSession(
   id: number,
   options: SessionReadOptions = {},
 ): SessionDetail | null {
-  return readSession(db, id, 0, true, options);
-}
-
-function readSession(
-  db: Database,
-  id: number,
-  depth: number,
-  includeMessages: boolean,
-  options: SessionReadOptions = {},
-): SessionDetail | null {
   const summaryRow = db
     .query(
       `SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
@@ -218,76 +208,134 @@ function readSession(
   const messageLimit =
     options.messageLimit != null && options.messageLimit > 0 ? options.messageLimit : null;
   const messageOffset = normalizeOffset(options.messageOffset);
-  if (includeMessages) {
-    const rows =
-      messageLimit == null
-        ? (db
-            .query(
-              `SELECT m.id AS message_id, m.role, m.timestamp, m.model,
-                      b.ordinal AS block_ordinal, b.type AS block_type, b.text,
-                      b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
-               FROM message m
-               LEFT JOIN block b ON b.message_id = m.id
-               WHERE m.session_id = ?1
-               ORDER BY m.seq, b.ordinal`,
-            )
-            .all(id) as MessageBlockRow[])
-        : (db
-            .query(
-              `WITH page_message AS (
-                 SELECT id
-                 FROM message
-                 WHERE session_id = ?1
-                 ORDER BY seq
-                 LIMIT ?2 OFFSET ?3
-               )
-               SELECT m.id AS message_id, m.role, m.timestamp, m.model,
-                      b.ordinal AS block_ordinal, b.type AS block_type, b.text,
-                      b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
-               FROM page_message pm
-               JOIN message m ON m.id = pm.id
-               LEFT JOIN block b ON b.message_id = m.id
-               ORDER BY m.seq, b.ordinal`,
-            )
-            .all(id, messageLimit, messageOffset) as MessageBlockRow[]);
+  const rows =
+    messageLimit == null
+      ? (db
+          .query(
+            `SELECT m.id AS message_id, m.role, m.timestamp, m.model,
+                    b.ordinal AS block_ordinal, b.type AS block_type, b.text,
+                    b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
+             FROM message m
+             LEFT JOIN block b ON b.message_id = m.id
+             WHERE m.session_id = ?1
+             ORDER BY m.seq, b.ordinal`,
+          )
+          .all(id) as MessageBlockRow[])
+      : (db
+          .query(
+            `WITH page_message AS (
+               SELECT id
+               FROM message
+               WHERE session_id = ?1
+               ORDER BY seq
+               LIMIT ?2 OFFSET ?3
+             )
+             SELECT m.id AS message_id, m.role, m.timestamp, m.model,
+                    b.ordinal AS block_ordinal, b.type AS block_type, b.text,
+                    b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
+             FROM page_message pm
+             JOIN message m ON m.id = pm.id
+             LEFT JOIN block b ON b.message_id = m.id
+             ORDER BY m.seq, b.ordinal`,
+          )
+          .all(id, messageLimit, messageOffset) as MessageBlockRow[]);
 
-    let currentMessageId: number | null = null;
-    for (const row of rows) {
-      if (currentMessageId !== row.message_id) {
-        currentMessageId = row.message_id;
-        messages.push({
-          role: row.role ?? "unknown",
-          timestamp: row.timestamp,
-          model: row.model,
-          blocks: [],
-        });
-      }
-      if (row.block_type != null) {
-        messages.at(-1)?.blocks.push({
-          ordinal: row.block_ordinal ?? 0,
-          block_type: row.block_type,
-          text: row.text,
-          tool_name: row.tool_name,
-          tool_use_id: row.tool_use_id,
-          tool_input: row.tool_input,
-          tool_result: row.tool_result,
-        });
-      }
+  let currentMessageId: number | null = null;
+  for (const row of rows) {
+    if (currentMessageId !== row.message_id) {
+      currentMessageId = row.message_id;
+      messages.push({
+        role: row.role ?? "unknown",
+        timestamp: row.timestamp,
+        model: row.model,
+        blocks: [],
+      });
+    }
+    if (row.block_type != null) {
+      messages.at(-1)?.blocks.push({
+        ordinal: row.block_ordinal ?? 0,
+        block_type: row.block_type,
+        text: row.text,
+        tool_name: row.tool_name,
+        tool_use_id: row.tool_use_id,
+        tool_input: row.tool_input,
+        tool_result: row.tool_result,
+      });
+    }
+  }
+
+  // Titles for the root and its whole descendant tree resolve in one batch so a
+  // session with many subagents costs two queries, not two per subagent.
+  const descendantRows = db
+    .query(
+      `${SESSION_SUMMARY_SELECT}
+       WHERE s.id IN (
+         WITH RECURSIVE subtree(id, depth) AS (
+           SELECT id, 1 FROM session WHERE parent_session_id = ?1
+           UNION ALL
+           SELECT child.id, subtree.depth + 1
+           FROM session child
+           JOIN subtree ON subtree.id = child.parent_session_id
+           WHERE subtree.depth < 5
+         )
+         SELECT id FROM subtree
+       )
+       ORDER BY COALESCE(s.spawn_depth, 0), s.started_at, s.id`,
+    )
+    .all(id) as SessionSummaryRow[];
+  const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
+  const rootSummary = titled[0] ?? mapSessionSummary(summaryRow);
+  const childrenByParent = new Map<number, SessionSummary[]>();
+  for (const child of titled.slice(1)) {
+    if (child.parent_session_id == null) {
+      continue;
+    }
+    const siblings = childrenByParent.get(child.parent_session_id);
+    if (siblings == null) {
+      childrenByParent.set(child.parent_session_id, [child]);
+    } else {
+      siblings.push(child);
     }
   }
 
   return {
-    summary:
-      withDisplayTitles(db, [mapSessionSummary(summaryRow)])[0] ?? mapSessionSummary(summaryRow),
+    summary: rootSummary,
     messages,
-    subagents: depth >= 5 ? [] : readSubagents(db, id, depth + 1),
-    message_offset: includeMessages && messageLimit != null ? messageOffset : undefined,
-    message_limit: includeMessages ? messageLimit : undefined,
+    subagents: buildSubagentDetails(childrenByParent, id, 0, new Set([id])),
+    message_offset: messageLimit != null ? messageOffset : undefined,
+    message_limit: messageLimit,
     has_more_messages:
-      includeMessages && messageLimit != null
-        ? messageOffset + messages.length < summaryRow.message_count
-        : undefined,
+      messageLimit != null ? messageOffset + messages.length < summaryRow.message_count : undefined,
   };
+}
+
+function buildSubagentDetails(
+  childrenByParent: Map<number, SessionSummary[]>,
+  parentId: number,
+  depth: number,
+  seen: Set<number>,
+): SubagentDetail[] {
+  if (depth >= 5) {
+    return [];
+  }
+  const details: SubagentDetail[] = [];
+  for (const summary of childrenByParent.get(parentId) ?? []) {
+    if (seen.has(summary.id)) {
+      continue;
+    }
+    const nextSeen = new Set(seen);
+    nextSeen.add(summary.id);
+    details.push({
+      summary,
+      messages: [],
+      subagents: buildSubagentDetails(childrenByParent, summary.id, depth + 1, nextSeen),
+      spawn_tool_use_id: summary.spawn_tool_use_id,
+      agent_id: summary.agent_id,
+      agent_type: summary.agent_type,
+      spawn_depth: summary.spawn_depth,
+    });
+  }
+  return details;
 }
 
 export interface ProjectSummary {
@@ -367,27 +415,73 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   }
 
   const placeholders = needsLookup.map(() => "?").join(", ");
-  const rows = db
+  const ids = needsLookup.map((session) => session.id);
+  // Pass 1: fetch only the first plausibly-usable candidate text per session.
+  // The correlated subquery stops at the first hit instead of walking every
+  // user message. CROSS JOIN pins the loop order to messages -> blocks while
+  // allowing SQLite to choose the available message_id index.
+  //
+  // AGENT_CONTEXT_SQL must skip a subset (never a superset) of what
+  // isAgentContextText skips: anything it wrongly lets through is re-checked in
+  // JS and handled by pass 2, but anything it wrongly skips would silently
+  // change which prompt becomes the title. That is why the case-sensitive JS
+  // rules use GLOB here and the \b in the teammate rule is narrowed to the two
+  // separators that occur in practice.
+  const firstCandidates = db
     .query(
-      `SELECT s.id AS session_id, b.text
+      `SELECT s.id AS session_id,
+              (SELECT b.text
+               FROM message m
+               CROSS JOIN block b ON b.message_id = m.id
+               WHERE m.session_id = s.id
+                 AND m.role = 'user'
+                 AND b.type = 'text'
+                 AND b.text IS NOT NULL
+                 AND TRIM(b.text) != ''
+                 AND NOT (${AGENT_CONTEXT_SQL})
+               ORDER BY m.seq, b.ordinal
+               LIMIT 1) AS text
        FROM session s
-       JOIN message m ON m.session_id = s.id
-       JOIN block b ON b.message_id = m.id
-       WHERE s.id IN (${placeholders})
-         AND m.role = 'user'
-         AND b.type = 'text'
-         AND b.text IS NOT NULL
-         AND TRIM(b.text) != ''
-       ORDER BY s.id, m.seq, b.ordinal`,
+       WHERE s.id IN (${placeholders})`,
     )
-    .all(...needsLookup.map((session) => session.id)) as { session_id: number; text: string }[];
-  for (const row of rows) {
-    if (titleBySession.has(row.session_id)) {
+    .all(...ids) as { session_id: number; text: string | null }[];
+  const needFullScan: number[] = [];
+  for (const row of firstCandidates) {
+    if (row.text == null) {
       continue;
     }
     const title = readableUserTitle(row.text);
     if (title != null) {
       titleBySession.set(row.session_id, title);
+    } else {
+      needFullScan.push(row.session_id);
+    }
+  }
+  // Pass 2, only for sessions whose first candidate was agent context: walk all
+  // their user text blocks in order, exactly like the single-pass version did.
+  if (needFullScan.length > 0) {
+    const scanPlaceholders = needFullScan.map(() => "?").join(", ");
+    const rows = db
+      .query(
+        `SELECT m.session_id AS session_id, b.text
+         FROM message m
+         CROSS JOIN block b ON b.message_id = m.id
+         WHERE m.session_id IN (${scanPlaceholders})
+           AND m.role = 'user'
+           AND b.type = 'text'
+           AND b.text IS NOT NULL
+           AND TRIM(b.text) != ''
+         ORDER BY m.session_id, m.seq, b.ordinal`,
+      )
+      .all(...needFullScan) as { session_id: number; text: string }[];
+    for (const row of rows) {
+      if (titleBySession.has(row.session_id)) {
+        continue;
+      }
+      const title = readableUserTitle(row.text);
+      if (title != null) {
+        titleBySession.set(row.session_id, title);
+      }
     }
   }
   return sessions.map((session) => {
@@ -498,6 +592,28 @@ function readableFallbackTitle(text: string | null | undefined): string | null {
   return null;
 }
 
+// SQL twin of isAgentContextText, used to early-exit title candidate scans.
+// Keep the two in sync when adding rules, and keep this side conservative:
+// LIKE mirrors the case-insensitive /^.../i prefixes, GLOB mirrors the
+// case-sensitive includes/startsWith rules, and JS stripAnsi/trimStart nuances
+// intentionally fall through to the JS check (pass 2) rather than being
+// approximated here.
+const AGENT_CONTEXT_SQL = `
+  LTRIM(b.text) LIKE '<permissions instructions>%'
+  OR LTRIM(b.text) LIKE '<local-command-caveat>%'
+  OR LTRIM(b.text) LIKE '<local-command-stdout>%'
+  OR LTRIM(b.text) LIKE '<local-command-stderr>%'
+  OR LTRIM(b.text) LIKE '<local-command-output>%'
+  OR LTRIM(b.text) LIKE '<command-name>%'
+  OR LTRIM(b.text) LIKE '<teammate-message %'
+  OR LTRIM(b.text) LIKE '<teammate-message>%'
+  OR b.text GLOB '*<environment_context>*'
+  OR LTRIM(b.text) GLOB '# AGENTS.md instructions*'
+  OR b.text GLOB '*<INSTRUCTIONS>*'
+  OR LTRIM(b.text) LIKE 'The following is the Codex agent history%'
+  OR LTRIM(b.text) LIKE 'Use prior reviews as context%'
+`;
+
 function isAgentContextText(text: string): boolean {
   const trimmed = text.trimStart();
   return (
@@ -580,31 +696,6 @@ function withNestedSubagents(db: Database, sessions: SessionSummary[]): SessionS
   };
 
   return sessions.map((session) => attach(session, 0, new Set()));
-}
-
-function readSubagents(db: Database, parentId: number, depth: number): SubagentDetail[] {
-  const rows = db
-    .query(
-      `SELECT id FROM session
-       WHERE parent_session_id = ?1
-       ORDER BY COALESCE(spawn_depth, 0), started_at, id`,
-    )
-    .all(parentId) as { id: number }[];
-  return rows.flatMap((row) => {
-    const detail = readSession(db, row.id, depth, false);
-    if (detail == null) {
-      return [];
-    }
-    return [
-      {
-        ...detail,
-        spawn_tool_use_id: detail.summary.spawn_tool_use_id,
-        agent_id: detail.summary.agent_id,
-        agent_type: detail.summary.agent_type,
-        spawn_depth: detail.summary.spawn_depth,
-      },
-    ];
-  });
 }
 
 function normalizeLimit(value: number | null | undefined, fallback: number): number {

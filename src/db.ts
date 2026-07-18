@@ -5,7 +5,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 9;
+export const LATEST_SCHEMA_VERSION = 10;
 
 /**
  * Open (or create) a decant archive and guarantee it is at
@@ -18,6 +18,9 @@ export function openDb(path: string): Database {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec("PRAGMA journal_mode = WAL;");
+  // Memory-map reads: archives grow to multiple GB and large scans (FTS, block
+  // aggregation) measure 2-7x faster via mmap than via pread on such files.
+  db.exec("PRAGMA mmap_size = 1073741824;");
   try {
     ensureSchema(db);
   } catch (error) {
@@ -87,6 +90,19 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (9, datetime('now'))",
+      ).run();
+    }
+    if (current < 10) {
+      db.exec(`
+        CREATE TABLE session_economics (
+          session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
+          format_version INTEGER NOT NULL,
+          vector_json TEXT NOT NULL,
+          computed_at TEXT NOT NULL
+        );
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (10, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

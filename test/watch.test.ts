@@ -135,35 +135,37 @@ describe("watch mode", () => {
     expect(events.at(-1)?.type).toBe("stopped");
   });
 
-  test("manual trigger can use an async sync runner", async () => {
+  test("startWatch delegates syncs to an injected runner", async () => {
     const config = freshConfig();
     const events: WatchEvent[] = [];
-    let yielded = false;
+    const runnerCalls: string[] = [];
     const handle = startWatch({
       config,
       enableWatch: false,
       intervalMs: 0,
       syncOnStart: false,
-      runSync: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(yielded).toBe(true);
-        return {
-          scanned: 1,
-          ingested: 0,
+      onEvent: (event) => events.push(event),
+      runner: (runnerConfig, status) => {
+        runnerCalls.push(runnerConfig.dbPath);
+        status.start();
+        const report = {
+          scanned: 3,
+          ingested: 2,
           skipped: 1,
           issues: 0,
           failed: 0,
           cancelled: false,
         };
+        status.finishOk(report);
+        return Promise.resolve(report);
       },
-      onEvent: (event) => events.push(event),
     });
 
     handle.trigger("manual");
-    yielded = true;
     const event = await onceSync(events);
-    expect(event.reason).toBe("manual");
-    expect(event.report).toMatchObject({ scanned: 1, skipped: 1 });
+    expect(runnerCalls).toEqual([config.dbPath]);
+    expect(event.report.ingested).toBe(2);
+    expect(event.status.last_report).toContain("ingested 2");
     await handle.stop();
   });
 

@@ -3,7 +3,8 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
-import { openDb } from "../src/db.ts";
+import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { DEFAULT_SYNC_INTERVAL_MS } from "../src/watch.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 const priorConfigDir = process.env.DECANT_CONFIG_DIR;
@@ -112,7 +113,7 @@ describe("runCli", () => {
     expect(dbInfo.code).toBe(0);
     expect(JSON.parse(dbInfo.stdout)).toMatchObject({
       path: dbPath,
-      schema_version: 9,
+      schema_version: LATEST_SCHEMA_VERSION,
       sessions: 7,
     });
 
@@ -134,8 +135,18 @@ describe("runCli", () => {
     const tokens = await runCli([...base, "tokens"]);
     expect(tokens.code).toBe(0);
     expect(JSON.parse(tokens.stdout)).toMatchObject({
-      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      buckets: expect.arrayContaining([
+        expect.objectContaining({ bucket: "context", active_ms: expect.any(Number) }),
+      ]),
+      totals: expect.objectContaining({
+        active_ms: expect.any(Number),
+        waiting_on_user_ms: expect.any(Number),
+        attributed_ms: expect.any(Number),
+      }),
     });
+    const humanTokens = await runCli(["--db", dbPath, "--no-sync", "tokens"]);
+    expect(humanTokens).toMatchObject({ code: 0, stderr: "" });
+    expect(humanTokens.stdout).toContain("waiting_on_user\t-\t-\t-");
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);
@@ -378,6 +389,6 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
     expect(serve.stdout).toContain("(default: 3000)");
-    expect(serve.stdout).toContain("(default: 0)");
+    expect(serve.stdout).toContain(`(default: ${DEFAULT_SYNC_INTERVAL_MS})`);
   });
 });

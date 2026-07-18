@@ -117,7 +117,7 @@ type NowView = {
   sync_in_progress: boolean;
 };
 
-type ActivityBucket = "planning" | "communicating" | "context" | "code";
+type ActivityBucket = "context" | "planning" | "code" | "communicating";
 
 type TokenEconomics = {
   buckets: {
@@ -128,6 +128,7 @@ type TokenEconomics = {
     tool_calls: number;
     sessions: number;
     cost_share: number;
+    active_ms: number;
   }[];
   totals: {
     generation_tokens: number;
@@ -135,6 +136,9 @@ type TokenEconomics = {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    active_ms: number;
+    waiting_on_user_ms: number;
+    attributed_ms: number;
   };
 };
 
@@ -246,7 +250,6 @@ type SettingsInfo = {
 type DashboardData = {
   summary: Summary | null;
   sessions: SessionSummary[];
-  byTool: DimensionRow[];
   byModel: DimensionRow[];
   byProject: DimensionRow[];
   byDay: DimensionRow[];
@@ -267,7 +270,6 @@ type DashboardData = {
 const emptyData: DashboardData = {
   summary: null,
   sessions: [],
-  byTool: [],
   byModel: [],
   byProject: [],
   byDay: [],
@@ -283,6 +285,124 @@ const emptyData: DashboardData = {
   tokenEconomics: null,
   now: null,
   dateBounds: null,
+};
+
+type DataSlice = Exclude<keyof DashboardData, "sessions">;
+
+// Each page fetches only the slices it renders; fetching everything for every
+// page made first paint wait on the slowest analytics endpoint. Slices are
+// cached per (date filter, reload generation), so navigating back is free and
+// SSE-triggered refreshes only refetch what the active page shows.
+const SLICE_LOADERS: Record<
+  DataSlice,
+  { dateScoped: boolean; load: (dateQuery: string) => Promise<Partial<DashboardData>> }
+> = {
+  summary: {
+    dateScoped: true,
+    load: async (q) => ({
+      summary: await getJson<Summary>(withDateQuery("/api/stats/summary", q)),
+    }),
+  },
+  byModel: {
+    dateScoped: true,
+    load: async (q) => ({
+      byModel: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", q)),
+    }),
+  },
+  byProject: {
+    dateScoped: true,
+    load: async (q) => ({
+      byProject: await getJson<DimensionRow[]>(
+        withDateQuery("/api/stats/by-dimension?dim=project", q),
+      ),
+    }),
+  },
+  byDay: {
+    dateScoped: true,
+    load: async (q) => ({
+      byDay: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", q)),
+    }),
+  },
+  projects: {
+    dateScoped: false,
+    load: async () => ({ projects: await getJson<ProjectSummary[]>("/api/projects") }),
+  },
+  tools: {
+    dateScoped: true,
+    load: async (q) => ({
+      tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", q)),
+    }),
+  },
+  mcp: {
+    dateScoped: true,
+    load: async (q) => ({
+      mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", q)),
+    }),
+  },
+  files: {
+    dateScoped: true,
+    load: async (q) => ({
+      files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", q)),
+    }),
+  },
+  recommendations: {
+    dateScoped: false,
+    load: async () => ({
+      recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),
+    }),
+  },
+  config: {
+    dateScoped: false,
+    load: async () => ({ config: await getJson<ConfigView>("/api/config") }),
+  },
+  settings: {
+    dateScoped: false,
+    load: async () => ({ settings: await getJson<SettingsInfo>("/api/settings") }),
+  },
+  activity: {
+    dateScoped: true,
+    load: async (q) => ({
+      activity: await getJson<Activity>(withDateQuery("/api/analytics/activity", q)),
+    }),
+  },
+  modelSparklines: {
+    dateScoped: true,
+    load: async (q) => ({
+      modelSparklines: await getJson<ModelSparklines>(
+        withDateQuery("/api/analytics/model-sparklines", q),
+      ),
+    }),
+  },
+  tokenEconomics: {
+    dateScoped: true,
+    load: async (q) => ({
+      tokenEconomics: await getJson<TokenEconomics>(
+        withDateQuery("/api/analytics/token-economics", q),
+      ),
+    }),
+  },
+  now: {
+    dateScoped: false,
+    load: async () => ({ now: await getJson<NowView>("/api/analytics/now") }),
+  },
+  dateBounds: {
+    dateScoped: false,
+    load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
+  },
+};
+
+// Slices the app shell itself renders (sidebar stats, sync button, pickers).
+const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds"];
+
+const ROUTE_SLICES: Record<string, DataSlice[]> = {
+  Sessions: [],
+  Projects: ["projects"],
+  Search: [],
+  Analytics: ["byDay", "byModel", "byProject", "activity", "modelSparklines", "tokenEconomics"],
+  Insights: ["recommendations", "settings"],
+  "Tools & MCP": ["tools", "mcp"],
+  Files: ["files"],
+  Settings: ["config", "settings"],
 };
 
 type NavItem = {
@@ -309,7 +429,7 @@ const OPENAI_ICON_PATH =
 const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
-const SESSION_PAGE_SIZE = 100;
+const SESSION_PAGE_SIZE = 50;
 const SESSION_DETAIL_MESSAGE_LIMIT = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
@@ -343,6 +463,9 @@ function App() {
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionLoadKey = `${dateQuery}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
+  const loadedSlicesRef = useRef(new Map<DataSlice, string>());
+  const activeView = activeRoute(path);
+  const showsSessions = activeView === "Sessions";
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -392,6 +515,42 @@ function App() {
   }, [dateQuery]);
 
   useEffect(() => {
+    const sliceKey = (slice: DataSlice): string =>
+      SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
+    const needed = [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+    const missing = needed.filter(
+      (slice) => loadedSlicesRef.current.get(slice) !== sliceKey(slice),
+    );
+    if (missing.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    setError(null);
+    Promise.all(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
+      .then((parts) => {
+        if (cancelled) {
+          return;
+        }
+        const merged = Object.assign({}, ...parts) as Partial<DashboardData>;
+        setData((current) => ({ ...current, ...merged }));
+        for (const slice of missing) {
+          loadedSlicesRef.current.set(slice, sliceKey(slice));
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(errorMessage(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, dateQuery, reloadKey]);
+
+  useEffect(() => {
+    if (!showsSessions) {
+      return;
+    }
     let cancelled = false;
     const plan = planSessionLoad({
       loadedRequestKey: loadedSessionKey,
@@ -403,6 +562,7 @@ function App() {
     if (plan == null) {
       return;
     }
+    setError(null);
     setSessionsLoading(true);
     void getJson<SessionSummary[]>(
       withDateQuery(`/api/sessions?limit=${plan.limit}&offset=${plan.offset}`, dateQuery),
@@ -416,7 +576,6 @@ function App() {
           sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
         }));
         setLoadedSessionKey(sessionLoadKey);
-        setError(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -431,87 +590,14 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [data.sessions.length, dateQuery, loadedSessionKey, sessionLimit, sessionLoadKey]);
-
-  useEffect(() => {
-    void reloadKey;
-    let cancelled = false;
-    setError(null);
-    const load = <T,>(promise: Promise<T>, apply: (value: T) => Partial<DashboardData>) => {
-      void promise
-        .then((value) => {
-          if (cancelled) {
-            return;
-          }
-          setData((current) => ({ ...current, ...apply(value) }));
-        })
-        .catch((err: unknown) => {
-          if (!cancelled) {
-            setError(errorMessage(err));
-          }
-        });
-    };
-    const dashboardDelay = activeRouteKey(path) === "sessions" ? 150 : 0;
-    const timer = window.setTimeout(() => {
-      load(getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)), (summary) => ({
-        summary,
-      }));
-      load(
-        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
-        (byTool) => ({ byTool }),
-      );
-      load(
-        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
-        (byModel) => ({ byModel }),
-      );
-      load(
-        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
-        (byProject) => ({ byProject }),
-      );
-      load(
-        getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
-        (byDay) => ({ byDay }),
-      );
-      load(getJson<ProjectSummary[]>("/api/projects"), (projects) => ({ projects }));
-      load(getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)), (tools) => ({
-        tools,
-      }));
-      load(
-        getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
-        (mcp) => ({
-          mcp,
-        }),
-      );
-      load(
-        getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
-        (files) => ({
-          files,
-        }),
-      );
-      load(getJson<Recommendation[]>("/api/recommendations?status=all"), (recommendations) => ({
-        recommendations,
-      }));
-      load(getJson<ConfigView>("/api/config"), (config) => ({ config }));
-      load(getJson<SettingsInfo>("/api/settings"), (settings) => ({ settings }));
-      load(getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)), (activity) => ({
-        activity,
-      }));
-      load(
-        getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
-        (modelSparklines) => ({ modelSparklines }),
-      );
-      load(
-        getJson<TokenEconomics>(withDateQuery("/api/analytics/token-economics", dateQuery)),
-        (tokenEconomics) => ({ tokenEconomics }),
-      );
-      load(getJson<NowView>("/api/analytics/now"), (now) => ({ now }));
-      load(getJson<DateBounds>("/api/date-bounds"), (dateBounds) => ({ dateBounds }));
-    }, dashboardDelay);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [dateQuery, path, reloadKey]);
+  }, [
+    data.sessions.length,
+    dateQuery,
+    loadedSessionKey,
+    sessionLimit,
+    sessionLoadKey,
+    showsSessions,
+  ]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -526,10 +612,13 @@ function App() {
     };
   }, [requestRefresh]);
 
-  const active = activeRoute(path);
+  const active = activeView;
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
-  const lastActivity = latestSessionDay(data.sessions);
+  // Prefer the loaded (date-filtered) session list, matching the sidebar's
+  // other stats; dateBounds is archive-wide and only a fallback for routes
+  // that never load session rows, so it must never win over an in-range value.
+  const lastActivity = latestSessionDay(data.sessions) ?? formatDay(data.dateBounds?.max ?? null);
   const syncInProgress = data.now?.sync_in_progress === true;
   const runSync = () => {
     if (syncInProgress) {
@@ -748,7 +837,7 @@ function renderView(
         />
       );
     case "Settings":
-      return <SettingsView settingsInfo={data.settings} />;
+      return <SettingsView config={data.config} settingsInfo={data.settings} />;
     default:
       return (
         <SessionsView
@@ -984,16 +1073,6 @@ function SessionsView({
         </div>
       </section>
     </div>
-  );
-}
-
-function SessionChildStatus({ text }: { text: string }) {
-  return (
-    <tr className="session-row is-subagent">
-      <td colSpan={7}>
-        <span className="subagent-loading-row">{text}</span>
-      </td>
-    </tr>
   );
 }
 
@@ -1238,6 +1317,16 @@ function sessionMatchesQuery(session: SessionSummary, needle: string): boolean {
       .filter((value): value is string => value != null)
       .some((value) => value.toLowerCase().includes(needle)) ||
     (session.subagents ?? []).some((subagent) => sessionMatchesQuery(subagent, needle))
+  );
+}
+
+function SessionChildStatus({ text }: { text: string }) {
+  return (
+    <tr className="session-row is-subagent">
+      <td colSpan={7}>
+        <span className="subagent-loading-row">{text}</span>
+      </td>
+    </tr>
   );
 }
 
@@ -1945,19 +2034,21 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
 
 function TokenEconomicsPanel({
   compact: isCompact = false,
-  description = "Estimated tokens and cost by planning, communicating, context, and code",
+  description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
+  subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
   description?: string;
   economics: TokenEconomics | null;
+  subagentRuns?: number;
   title?: string;
 }) {
-  const buckets = (economics?.buckets ?? [])
-    .slice()
-    .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd);
+  const buckets = economics?.buckets ?? [];
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
+  const totalActiveMs = economics?.totals.active_ms ?? 0;
+  const showAgentRuns = !isCompact;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
       <div className="panel-heading">
@@ -1975,6 +2066,20 @@ function TokenEconomicsPanel({
               <strong>{compact(economics.totals.context_window_tokens)}</strong>
               window
             </span>
+            <span>
+              <strong>{duration(economics.totals.active_ms)}</strong>
+              agent time
+            </span>
+            <span>
+              <strong>{duration(economics.totals.waiting_on_user_ms)}</strong>
+              waiting
+            </span>
+            {isCompact && subagentRuns > 0 ? (
+              <span>
+                <strong>1 root + {formatInt(subagentRuns)}</strong>
+                {subagentRuns === 1 ? "subagent" : "subagents"}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1993,9 +2098,11 @@ function TokenEconomicsPanel({
               <col className="col-activity" />
               <col className="col-share" />
               <col className="col-activity-number" />
+              <col className="col-share" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
               <col className="col-activity-number" />
+              {showAgentRuns ? <col className="col-activity-number" /> : null}
             </colgroup>
             <thead>
               <tr className="activity-table-head">
@@ -2004,21 +2111,30 @@ function TokenEconomicsPanel({
                 <th className="numeric activity-number" scope="col">
                   Cost
                 </th>
+                <th scope="col">Time spent</th>
+                <th className="numeric activity-number" scope="col">
+                  Time
+                </th>
                 <th className="numeric activity-number" scope="col">
                   Generated
                 </th>
                 <th className="numeric activity-number" scope="col">
                   Window
                 </th>
-                <th className="numeric activity-number" scope="col">
-                  Sessions
-                </th>
+                {showAgentRuns ? (
+                  <th className="numeric activity-number" scope="col">
+                    <span title="Root sessions and nested subagent runs contributing to this activity">
+                      Agent runs
+                    </span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
               {buckets.map((bucket) => {
                 const tone = activityTone(bucket.bucket);
                 const share = Math.max(0, Math.min(1, bucket.cost_share));
+                const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
                 return (
                   <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
                     {(tooltipProps) => (
@@ -2048,15 +2164,31 @@ function TokenEconomicsPanel({
                         <td className="numeric activity-number">
                           {money(bucket.estimated_cost_usd)}
                         </td>
+                        <td className="activity-share">
+                          <span className="activity-share-inner">
+                            <span className="activity-bar">
+                              <span
+                                className={`tone-${tone}`}
+                                style={{ width: `${timeShare * 100}%` }}
+                              />
+                            </span>
+                            <small>{Math.round(timeShare * 100)}%</small>
+                          </span>
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {duration(bucket.active_ms)}
+                        </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.generation_tokens)}
                         </td>
                         <td className="numeric muted activity-number">
                           {compact(bucket.context_window_tokens)}
                         </td>
-                        <td className="numeric muted activity-number">
-                          {formatInt(bucket.sessions)}
-                        </td>
+                        {showAgentRuns ? (
+                          <td className="numeric muted activity-number">
+                            {formatInt(bucket.sessions)}
+                          </td>
+                        ) : null}
                       </tr>
                     )}
                   </Tooltip>
@@ -3218,6 +3350,19 @@ function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+function duration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function relativeTime(value: string | null | undefined): string {
   if (value == null || value === "") {
     return "-";
@@ -3250,12 +3395,16 @@ function capitalize(value: string): string {
 
 function latestSessionDay(sessions: SessionSummary[]): string | null {
   const latest = sessions.find((session) => session.started_at != null)?.started_at;
-  if (latest == null) {
+  return latest == null ? null : formatDay(latest);
+}
+
+function formatDay(value: string | null): string | null {
+  if (value == null) {
     return null;
   }
-  const date = new Date(latest);
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return latest;
+    return value;
   }
   return date.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
 }
@@ -3846,32 +3995,16 @@ function FilesView({
   );
 }
 
-function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
+function SettingsView({
+  settingsInfo,
+}: {
+  config: ConfigView | null;
+  settingsInfo: SettingsInfo | null;
+}) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const loading = settingsInfo == null;
-  const agentOptions = settingsInfo?.options.agents ?? [
-    ["claude", "Claude"],
-    ["codex", "Codex"],
-    ["cursor", "Cursor"],
-  ];
-  const terminalOptions = settingsInfo?.options.terminals ?? [
-    ["terminal", "Terminal"],
-    ["iterm", "iTerm"],
-    ["warp", "Warp"],
-    ["ghostty", "Ghostty"],
-    ["wezterm", "WezTerm"],
-    ["kitty", "kitty"],
-    ["alacritty", "Alacritty"],
-  ];
-  const ideOptions = settingsInfo?.options.ides ?? [
-    ["vscode", "VS Code"],
-    ["cursor", "Cursor"],
-    ["zed", "Zed"],
-    ["sublime", "Sublime Text"],
-    ["intellij", "IntelliJ IDEA"],
-  ];
 
   useEffect(() => {
     setSettings(settingsInfo?.settings ?? null);
@@ -3914,16 +4047,13 @@ function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
         </p>
       </header>
 
-      <section className="settings-section settings-controls">
-        <div className="settings-section-heading">
-          <h2>Launch Defaults</h2>
-        </div>
+      <section className="panel">
         <div className="settings-form">
           <SettingSelect
             disabled={loading || saving}
             help="The agent the Run button opens first across Insights."
             label="Preferred agent"
-            options={agentOptions}
+            options={settingsInfo?.options.agents ?? []}
             value={settings?.agent ?? "claude"}
             onChange={(agent) => save({ agent })}
           />
@@ -3931,7 +4061,7 @@ function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
             disabled={loading || saving}
             help="Where a session opens when you run an agent."
             label="Terminal"
-            options={terminalOptions}
+            options={settingsInfo?.options.terminals ?? []}
             value={settings?.terminal ?? "terminal"}
             onChange={(terminal) => save({ terminal })}
           />
@@ -3939,7 +4069,7 @@ function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
             disabled={loading || saving}
             help="Which editor Open in editor uses for a session's project."
             label="Editor"
-            options={ideOptions}
+            options={settingsInfo?.options.ides ?? []}
             value={settings?.ide ?? "vscode"}
             onChange={(ide) => save({ ide })}
           />
@@ -3952,11 +4082,13 @@ function SettingsView({ settingsInfo }: { settingsInfo: SettingsInfo | null }) {
           />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
-        {loading || saving ? (
-          <p className="settings-note">
-            {loading ? "Loading preferences..." : "Saving preferences..."}
-          </p>
-        ) : null}
+        <p className="settings-note">
+          {saving
+            ? "Saving preferences..."
+            : settingsInfo?.can_launch === true
+              ? "Native launcher is available on this Mac."
+              : "Native launcher is unavailable on this platform."}
+        </p>
       </section>
     </div>
   );
@@ -4038,31 +4170,40 @@ function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [economicsError, setEconomicsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setEconomics(null);
     setError(null);
+    setEconomicsError(null);
     if (!Number.isFinite(id)) {
       setError("Invalid session id.");
       return;
     }
-    void Promise.all([
-      getJson<SessionDetailData>(
-        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
-      ),
-      getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`),
-    ])
-      .then(([nextDetail, nextEconomics]) => {
+    void getJson<SessionDetailData>(
+      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+    )
+      .then((nextDetail) => {
         if (!cancelled) {
           setDetail(nextDetail);
-          setEconomics(nextEconomics);
         }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(errorMessage(err));
+        }
+      });
+    void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
+      .then((nextEconomics) => {
+        if (!cancelled) {
+          setEconomics(nextEconomics);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEconomicsError(errorMessage(err));
         }
       });
     return () => {
@@ -4082,6 +4223,7 @@ function SessionDetailView({ id }: { id: number }) {
   const toc = threadToc(messages);
   const stats = threadStats(detail.summary, messages, toc);
   const subagentsByToolUse = subagentMap(detail.subagents);
+  const subagentRuns = countSubagentRuns(detail.subagents);
 
   return (
     <div className="session-detail">
@@ -4126,11 +4268,16 @@ function SessionDetailView({ id }: { id: number }) {
       {economics != null ? (
         <TokenEconomicsPanel
           compact
-          description="Estimated activity inside this session, including nested subagents."
+          description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
+          subagentRuns={subagentRuns}
           title="Activity breakdown"
         />
-      ) : null}
+      ) : economicsError != null ? (
+        <div className="notice inline-notice">Activity breakdown unavailable: {economicsError}</div>
+      ) : (
+        <SessionEconomicsSkeleton />
+      )}
 
       <div className="transcript-layout">
         <aside className="toc">
@@ -4292,22 +4439,7 @@ function SessionDetailSkeleton() {
         </div>
       </header>
       <span className="skeleton-line skeleton-back" />
-      <section className="panel token-economics-panel is-compact skeleton-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="skeleton-line skeleton-heading" />
-            <span className="skeleton-line skeleton-subheading" />
-          </div>
-          <span className="skeleton-line skeleton-summary" />
-        </div>
-        <div className="activity-table-wrap">
-          <div className="skeleton-table">
-            {["context", "planning", "communicating", "code"].map((key) => (
-              <span className="skeleton-line" key={key} />
-            ))}
-          </div>
-        </div>
-      </section>
+      <SessionEconomicsSkeleton />
       <div className="transcript-layout">
         <aside className="toc">
           <div className="toc-inner">
@@ -4328,6 +4460,31 @@ function SessionDetailSkeleton() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SessionEconomicsSkeleton() {
+  return (
+    <section
+      aria-label="Loading activity breakdown"
+      className="panel token-economics-panel is-compact skeleton-panel"
+      role="status"
+    >
+      <div className="panel-heading">
+        <div>
+          <span className="skeleton-line skeleton-heading" />
+          <span className="skeleton-line skeleton-subheading" />
+        </div>
+        <span className="skeleton-line skeleton-summary" />
+      </div>
+      <div className="activity-table-wrap">
+        <div className="skeleton-table">
+          {["context", "planning", "code", "communicating"].map((key) => (
+            <span className="skeleton-line" key={key} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4541,6 +4698,13 @@ function subagentMap(subagents: SubagentDetailData[]): Map<string, SubagentDetai
     }
   }
   return map;
+}
+
+function countSubagentRuns(subagents: SubagentDetailData[]): number {
+  return subagents.reduce(
+    (total, subagent) => total + 1 + countSubagentRuns(subagent.subagents),
+    0,
+  );
 }
 
 function renderableMessages(

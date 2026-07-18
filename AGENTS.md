@@ -21,24 +21,9 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 
 ## Layout
 
-| Path | Responsibility |
-|---|---|
-| `src/cli.ts` | Commander CLI entrypoint and all stdout/stderr/exit-code policy. |
-| `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v9 baseline schema. |
-| `src/sources/` | Per-tool parsers: `claude.ts`, `codex.ts`, `cursor.ts`. |
-| `src/ingest.ts` | Idempotent sync from source logs into the archive. |
-| `src/query.ts`, `src/stats.ts`, `src/export.ts` | Read/query/render surfaces. |
-| `src/distill.ts`, `src/recommendations.ts` | Deterministic artifact and recommendation generation. |
-| `src/watch.ts`, `src/server.ts` | Watch loop, local JSON routes, SSE, and UI serving. |
-| `src/ui/` | React UI bundled by Bun HTML imports. |
-| `src/settings.ts`, `src/launcher.ts` | Local settings and native launcher helpers. |
-| `fixtures/` | Tiny synthetic Claude/Codex/Cursor session files. |
-| `test/golden/` | Static golden snapshots frozen from the pre-TypeScript implementation. |
-| `npm/` | Publishable npm launcher package plus platform binary package manifests. |
-| `scripts/` | Distribution build/staging helpers. |
-| `docs/api/routes.md` | Local `decant serve` route reference. |
-| `docs/distribution.md` | npm, Docker, and source distribution notes. |
-| `docs/superpowers/` | Historical specs and implementation plans. |
+Start from `src/cli.ts`; parsers live in `src/sources/` (the extension
+point). Docs: `docs/api/routes.md` (serve routes) and `docs/distribution.md`
+(npm/Docker/source).
 
 ## Setup
 
@@ -50,37 +35,14 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 
 Run from the repo root.
 
-```sh
-# One-command local UI + filesystem watch
-bun run dev
+- `bun run dev` — one-command local UI + startup sync.
+- `just check` — the full local quality gate (see Definition of done).
+- `bun run src/cli.ts --help` — the `decant` CLI: `sync`, `ls`, `search`,
+  `stats`, `files`, `distill`, `recommendations`, `watch`, `serve`; add
+  `--db` to target an alternate archive. `just` lists wrapper recipes for
+  the common ones.
 
-# Quality gates
-bun test
-bunx tsc --noEmit
-bunx biome check .
-just check
-
-# CLI
-bun run src/cli.ts sync
-bun run src/cli.ts ls
-bun run src/cli.ts search "auth bug"
-bun run src/cli.ts stats --by model
-bun run src/cli.ts files --group ext
-bun run src/cli.ts distill script
-bun run src/cli.ts recommendations ls
-bun run src/cli.ts --db /tmp/decant.db ls
-
-# Long-running local modes
-bun run src/cli.ts watch
-bun run src/cli.ts serve
-
-# Distribution
-bun run scripts/build-binaries.ts --target native
-bun run scripts/build-npm.ts --target native --no-build
-docker build --platform linux/amd64 -t decant:local .
-```
-
-Config:
+## Config
 
 - Archive DB: `~/.decant/decant.db`, override with `DECANT_DB` or `--db`.
 - Source dirs: `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_CURSOR_DIR`,
@@ -96,6 +58,9 @@ A change is ready when:
 - `bun test` passes.
 - `bunx tsc --noEmit` passes.
 - `bunx biome check .` passes.
+- `just check` wraps all three plus the distribution staging smoke; CI
+  additionally builds the binary matrix, npm staging, and Docker images on
+  every push, not only for distribution changes.
 - New behavior has focused tests. Do not weaken or delete tests to make them pass.
 - Distribution changes also get a native binary smoke test and, when Docker is
   touched, a local `docker build`/`docker run --help` smoke if Docker is available.
@@ -115,10 +80,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v9.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v10.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow
-   v8-to-v9 migration preserves existing TypeScript-cutover archives.
+   v8-to-v10 migrations preserve existing TypeScript-cutover archives.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
    and golden updates. Cursor is the current third parser; keep its native

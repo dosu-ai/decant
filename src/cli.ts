@@ -30,7 +30,6 @@ import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
   parsePeerList,
-  publishServerEvent,
   serve as serveApp,
 } from "./server.ts";
 import { getSettings } from "./settings.ts";
@@ -43,14 +42,12 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
-import { runSyncWorker } from "./sync-runner.ts";
 import { tokenEconomics } from "./token-economics.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
   startWatch,
   type WatchEvent,
-  type WatchHandle,
 } from "./watch.ts";
 
 export interface CliResult {
@@ -264,8 +261,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       }) => run(() => runSync(commandOptions)),
     );
 
+  // Terminal rendering only. Under `serve`, server.ts's applyWatchEvent already
+  // publishes each event to SSE clients exactly once; publishing again here
+  // would double every /api/events frame. Under `watch`, there is no HTTP
+  // server or SSE client to publish to at all.
   const emitWatchEvent = (event: WatchEvent): void => {
-    publishServerEvent(event);
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(event)}\n`);
     } else if (!globals().quiet) {
@@ -289,12 +289,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       collectOption,
       [] as string[],
     )
-    .option(
-      "--interval-ms <ms>",
-      "fallback sweep interval (0 disables)",
-      parseInteger,
-      DEFAULT_SYNC_INTERVAL_MS,
-    )
+    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
       "filesystem event debounce window",
@@ -345,7 +340,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       "ingest staged Cursor stream-json transcripts from this directory",
     )
     .option("--cursor-chats-dir <dir>", "override the Cursor native transcript directory")
-    .option("--interval-ms <ms>", "fallback sweep interval (0 disables)", parseInteger, 0)
+    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
       "filesystem event debounce window",
@@ -353,6 +348,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       DEFAULT_DEBOUNCE_MS,
     )
     .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--trusted-peer <peer>",
+      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
+      collectOption,
+      [] as string[],
+    )
     .action(
       (commandOptions: {
         host?: string;
@@ -373,25 +374,23 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             cursorDir: commandOptions.cursorDir,
             cursorChatsDir: commandOptions.cursorChatsDir,
           });
-          let handle: WatchHandle | null = null;
           const server = serveApp({
             config,
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
             port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-            trustedPeers: trustedPeers(commandOptions.trustedPeer),
-            onConfigChanged: () => {
-              handle?.refresh();
-              handle?.trigger("manual");
+            // Omit entirely (rather than passing []) when no --trusted-peer was
+            // given, so serve()'s `options.trustedPeers ?? parsePeerList(env)`
+            // can still fall through to DECANT_TRUSTED_PEERS.
+            trustedPeers:
+              commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
+                ? trustedPeers(commandOptions.trustedPeer)
+                : undefined,
+            watch: {
+              intervalMs: commandOptions.intervalMs,
+              debounceMs: commandOptions.debounceMs,
+              enableWatch: commandOptions.fsWatch !== false,
+              onEvent: emitWatchEvent,
             },
-          });
-          handle = startWatch({
-            config,
-            intervalMs: commandOptions.intervalMs,
-            debounceMs: commandOptions.debounceMs,
-            enableWatch: commandOptions.fsWatch !== false,
-            syncOnStart: false,
-            runSync: runSyncWorker,
-            onEvent: emitWatchEvent,
           });
           if (!isJson(globals()) && !globals().quiet) {
             io.writeErr(
@@ -401,8 +400,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           try {
             await waitForProcessSignal();
           } finally {
-            server.stop();
-            await handle?.stop();
+            // Force-close: a graceful stop() never resolves while a browser
+            // tab's /api/events SSE connection is open (Bun waits for active
+            // connections to end on their own), which would hang shutdown
+            // indefinitely on Ctrl-C. This is a local dev server being
+            // intentionally torn down, so dropping open connections is fine.
+            await server.stop(true);
           }
         }),
     );
@@ -857,7 +860,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .command("tokens")
     .alias("economics")
-    .description("break token and cost usage into planning, communicating, context, and code")
+    .description(
+      "break tokens, cost, agent time, and user wait into context, planning, code, and communicating",
+    )
     .action(() =>
       run(() => {
         const archive = readArchive();
@@ -869,10 +874,14 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                 (bucket) =>
                   `${bucket.bucket}\t${formatNumber(bucket.generation_tokens)}\t` +
                   `${formatNumber(bucket.context_window_tokens)}\t` +
-                  `${bucket.estimated_cost_usd.toFixed(4)}`,
+                  `${bucket.estimated_cost_usd.toFixed(4)}\t` +
+                  `${formatDuration(bucket.active_ms)}`,
               )
               .join("\n")
-              .concat(row.buckets.length > 0 ? "\n" : ""),
+              .concat(row.buckets.length > 0 ? "\n" : "")
+              .concat(
+                `waiting_on_user\t-\t-\t-\t${formatDuration(row.totals.waiting_on_user_ms)}\n`,
+              ),
           );
         } finally {
           archive.db.close();
@@ -1095,6 +1104,19 @@ function trustedPeers(values: string[] | undefined): string[] {
 
 function formatNumber(value: number): string {
   return String(Math.round(value));
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function parseOperation(value: string): Operation | null {

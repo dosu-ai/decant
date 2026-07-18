@@ -47,6 +47,12 @@ export interface WatchStoppedEvent {
 
 export type WatchEvent = SyncEvent | SyncErrorEvent | WatchReadyEvent | WatchStoppedEvent;
 
+export type SyncRunner = (
+  config: Config,
+  status: SyncStatusStore,
+  cancel: { aborted: boolean },
+) => Promise<SyncReport>;
+
 export interface WatchOptions {
   config: Config;
   intervalMs?: number;
@@ -56,7 +62,7 @@ export interface WatchOptions {
   open?: (path: string) => Database;
   enableWatch?: boolean;
   syncOnStart?: boolean;
-  runSync?: (config: Config, cancel: { aborted: boolean }) => SyncReport | Promise<SyncReport>;
+  runner?: SyncRunner;
 }
 
 export interface WatchHandle {
@@ -165,33 +171,18 @@ function runSyncWithStatusSync(status: SyncStatusStore, run: () => SyncReport): 
   }
 }
 
-async function runSyncWithStatus(
-  status: SyncStatusStore,
-  run: () => SyncReport | Promise<SyncReport>,
-): Promise<SyncReport> {
-  status.start();
-  try {
-    const report = await run();
-    status.finishOk(report);
-    return report;
-  } catch (error) {
-    status.finishErr(error instanceof Error ? error.message : String(error));
-    throw error;
-  }
-}
-
 export function startWatch(options: WatchOptions): WatchHandle {
   const status = new SyncStatusStore();
   let dirs = watchDirs(options.config);
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const open = options.open ?? openDb;
+  const runner: SyncRunner =
+    options.runner ??
+    (async (config, syncStatus, cancelFlag) => runSyncOnce(config, syncStatus, cancelFlag, open));
   const enableWatch = options.enableWatch !== false;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
-  const runSync =
-    options.runSync ??
-    ((config: Config, state: { aborted: boolean }) => syncArchive(config, state, open));
   const watchers = new Map<string, FSWatcher>();
   let stopped = false;
   let debounceTimer: Timer | null = null;
@@ -294,7 +285,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = await runSyncWithStatus(status, () => runSync(options.config, cancel));
+          const report = await runner(options.config, status, cancel);
           emit({ type: "sync", reason: current, report, status: status.snapshot() });
         } catch (error) {
           emit({

@@ -4,7 +4,9 @@ import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
+import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
+import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
@@ -36,9 +38,17 @@ import {
 import { runSyncWorker } from "./sync-runner.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import uiBundle from "./ui/index.html";
+import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
+
+export interface ServeWatchOptions {
+  intervalMs?: number;
+  debounceMs?: number;
+  enableWatch?: boolean;
+  onEvent?: (event: WatchEvent) => void;
+}
 
 export interface ServeOptions {
   config: Config;
@@ -46,12 +56,15 @@ export interface ServeOptions {
   hostname?: string;
   trustedPeers?: string[];
   onConfigChanged?: (config: Config) => void;
+  watch?: ServeWatchOptions;
+  economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
 }
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
 interface RequestContext {
   db?: Db;
+  economics?: EconomicsCache;
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
@@ -179,7 +192,7 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      return await syncNow(config);
+      return await syncNow(config, context.economics);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
@@ -198,9 +211,7 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/projects") {
-      return withDb(config, context, (db) => json(listProjects(db)), {
-        hydrateMetadata: true,
-      });
+      return withDb(config, context, (db) => json(listProjects(db)));
     }
     const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
     if (request.method === "GET" && sessionEconomicsMatch != null) {
@@ -257,6 +268,9 @@ export async function handleRequest(
       return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
+      if (context.economics != null) {
+        return json(await context.economics.get(dateFilter));
+      }
       return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
@@ -347,7 +361,7 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
   };
 }
 
-async function syncNow(config: Config): Promise<Response> {
+async function syncNow(config: Config, economics?: EconomicsCache): Promise<Response> {
   syncStatus.in_progress = true;
   syncStatus.last_error = null;
   try {
@@ -360,6 +374,7 @@ async function syncNow(config: Config): Promise<Response> {
     syncStatus.ingested_count = report.ingested;
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0) {
+      economics?.invalidate();
       publishServerEvent({
         type: "archive_updated",
         ingested: report.ingested,
@@ -435,6 +450,34 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
+  ensureDerivedMetadata(db);
+  const economics = new EconomicsCache({
+    dbPath: options.config.dbPath,
+    db,
+    computeVectors: options.economicsComputeVectors,
+    onRebuilt: () =>
+      publishServerEvent({
+        type: "archive_updated",
+        reason: "stats",
+        last_sync_at: syncStatus.last_sync_at,
+      }),
+  });
+  economics.prewarm();
+  let watchHandle: WatchHandle | null = null;
+  if (options.watch != null) {
+    const onEvent = options.watch.onEvent;
+    watchHandle = startWatch({
+      config: options.config,
+      intervalMs: options.watch.intervalMs,
+      debounceMs: options.watch.debounceMs,
+      enableWatch: options.watch.enableWatch,
+      runner: workerSyncRunner,
+      onEvent: (event) => {
+        applyWatchEvent(event, economics);
+        onEvent?.(event);
+      },
+    });
+  }
   const server = Bun.serve({
     hostname,
     port,
@@ -454,45 +497,83 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     fetch: (request, bunServer) =>
       handleRequest(request, options.config, {
         db,
+        economics,
         boundHostname: hostname,
         remoteAddress: bunServer.requestIP(request)?.address ?? null,
         trustedPeers,
-        onConfigChanged: options.onConfigChanged,
+        onConfigChanged: (config) => {
+          watchHandle?.refresh();
+          watchHandle?.trigger("manual");
+          options.onConfigChanged?.(config);
+        },
       }),
   });
   const stop = server.stop.bind(server);
   let closed = false;
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
     try {
-      await stop(closeActiveConnections);
+      await watchHandle?.stop();
     } finally {
-      if (!closed) {
-        closed = true;
-        db.close();
+      economics.dispose();
+      try {
+        await stop(closeActiveConnections);
+      } finally {
+        if (!closed) {
+          closed = true;
+          db.close();
+        }
       }
     }
   };
   return server;
 }
 
-function withDb(
+/** Runs one watcher-triggered sync in a worker thread, keeping request
+ * handling responsive while multi-second ingests run. */
+async function workerSyncRunner(
   config: Config,
-  context: RequestContext,
-  callback: (db: Db) => Response,
-  options: { hydrateMetadata?: boolean } = {},
-): Response {
+  status: SyncStatusStore,
+  cancel: { aborted: boolean },
+): Promise<ReturnType<typeof ingestSync>> {
+  status.start();
+  try {
+    const report = await runSyncWorker(config, cancel);
+    status.finishOk(report);
+    return report;
+  } catch (error) {
+    status.finishErr(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
+  if ("status" in event && event.status != null) {
+    syncStatus.last_sync_at = event.status.last_sync_at;
+    syncStatus.in_progress = event.status.in_progress;
+    syncStatus.last_report = event.status.last_report;
+    syncStatus.last_error = event.status.last_error;
+    syncStatus.ingested_count = event.status.ingested_count;
+  }
+  publishServerEvent(event);
+  if (event.type === "sync" && event.report.ingested > 0) {
+    economics.invalidate();
+    publishServerEvent({
+      type: "archive_updated",
+      ingested: event.report.ingested,
+      last_sync_at: syncStatus.last_sync_at,
+    });
+  }
+}
+
+function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
   if (context.db != null) {
-    if (options.hydrateMetadata === true) {
-      ensureDerivedMetadata(context.db);
-    }
+    ensureDerivedMetadata(context.db);
     return callback(context.db);
   }
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const db = openDb(config.dbPath);
   try {
-    if (options.hydrateMetadata === true) {
-      ensureDerivedMetadata(db);
-    }
+    ensureDerivedMetadata(db);
     return callback(db);
   } finally {
     db.close();
@@ -519,7 +600,7 @@ function isSearchSyntaxError(error: unknown): boolean {
 }
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
+  return new Response(JSON.stringify(value, null, 2), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });

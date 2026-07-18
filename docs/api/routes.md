@@ -53,6 +53,10 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 `settings.experimental.cursorChats`, the feature-preview toggle for native
 Cursor `agent-transcripts` discovery.
 
+Session and archive token-economics routes aggregate versioned per-session
+vectors persisted during ingest. The first sync after a schema upgrade
+backfills vectors for unchanged sessions.
+
 ## Events
 
 - `GET /api/events` returns an SSE stream.

@@ -18,6 +18,10 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
 import { parseCursorSession } from "./sources/cursor.ts";
+import {
+  materializeMissingSessionEconomics,
+  materializeSessionEconomics,
+} from "./token-economics.ts";
 import { classifyTool, preview } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
 
@@ -170,9 +174,15 @@ export function sync(
   }
 
   resolveSubagentParents(db);
+  const materializedEconomics = materializeMissingSessionEconomics(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
     regenerateRecommendations(db);
+  }
+  if (report.ingested > 0 || materializedEconomics > 0) {
+    // Refresh planner statistics after write bursts; without ANALYZE data the
+    // query planner picks pathological join orders on multi-GB archives.
+    db.exec("PRAGMA optimize;");
   }
 
   return report;
@@ -681,6 +691,8 @@ function writeSession(
       ref.timestamp,
     );
   }
+
+  materializeSessionEconomics(db, sessionId);
 
   return sessionId;
 }

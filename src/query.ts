@@ -372,7 +372,7 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
       `SELECT s.id AS session_id, b.text
        FROM session s
        JOIN message m ON m.session_id = s.id
-       JOIN block b INDEXED BY idx_block_message ON b.message_id = m.id
+       JOIN block b ON b.message_id = m.id
        WHERE s.id IN (${placeholders})
          AND m.role = 'user'
          AND b.type = 'text'

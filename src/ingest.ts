@@ -1030,7 +1030,7 @@ function lineCount(content: string): number {
 }
 
 function mtimeMarker(stats: Stats): number {
-  return Math.trunc(stats.mtimeMs);
+  return Math.trunc(stats.mtimeMs / 1000);
 }
 
 function hashContent(content: string): string {

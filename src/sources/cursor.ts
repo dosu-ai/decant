@@ -595,7 +595,10 @@ function timestampMsAt(value: Json, ...keys: string[]): string | null {
   for (const key of keys) {
     const ms = asEpochMs(get(value, key));
     if (ms != null) {
-      return new Date(ms).toISOString();
+      const timestamp = isoTimestamp(ms);
+      if (timestamp != null) {
+        return timestamp;
+      }
     }
   }
   return null;
@@ -605,10 +608,18 @@ function pushEpochMs(out: string[], value: Json, ...keys: string[]): void {
   for (const key of keys) {
     const ms = asEpochMs(get(value, key));
     if (ms != null) {
-      out.push(new Date(ms).toISOString());
-      return;
+      const timestamp = isoTimestamp(ms);
+      if (timestamp != null) {
+        out.push(timestamp);
+        return;
+      }
     }
   }
+}
+
+function isoTimestamp(ms: number): string | null {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function compareTimestamp(left: string, right: string): number {

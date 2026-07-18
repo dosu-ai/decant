@@ -436,6 +436,7 @@ function App() {
   useEffect(() => {
     void reloadKey;
     let cancelled = false;
+    setError(null);
     const load = <T,>(promise: Promise<T>, apply: (value: T) => Partial<DashboardData>) => {
       void promise
         .then((value) => {
@@ -443,7 +444,6 @@ function App() {
             return;
           }
           setData((current) => ({ ...current, ...apply(value) }));
-          setError(null);
         })
         .catch((err: unknown) => {
           if (!cancelled) {
@@ -784,6 +784,8 @@ function SessionsView({
     () => new Map(),
   );
   const [subagentErrors, setSubagentErrors] = useState<Map<number, string>>(() => new Map());
+  const [loadingSubagents, setLoadingSubagents] = useState<Set<number>>(() => new Set());
+  const loadingSubagentsRef = useRef<Set<number>>(new Set());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
@@ -816,10 +818,13 @@ function SessionsView({
       session.subagent_count <= 0 ||
       session.subagents != null ||
       lazySubagents.has(session.id) ||
-      subagentErrors.has(session.id)
+      subagentErrors.has(session.id) ||
+      loadingSubagentsRef.current.has(session.id)
     ) {
       return;
     }
+    loadingSubagentsRef.current.add(session.id);
+    setLoadingSubagents((current) => new Set(current).add(session.id));
     void getJson<SessionDetailData>(`/api/sessions/${session.id}?message_limit=1`)
       .then((detail) => {
         setLazySubagents((current) => {
@@ -832,6 +837,14 @@ function SessionsView({
         setSubagentErrors((current) => {
           const next = new Map(current);
           next.set(session.id, errorMessage(err));
+          return next;
+        });
+      })
+      .finally(() => {
+        loadingSubagentsRef.current.delete(session.id);
+        setLoadingSubagents((current) => {
+          const next = new Set(current);
+          next.delete(session.id);
           return next;
         });
       });
@@ -869,7 +882,7 @@ function SessionsView({
       const error = subagentErrors.get(session.id);
       if (error != null) {
         rows.push(<SessionChildStatus key={`${session.id}-subagent-error`} text={error} />);
-      } else if (subagents == null && session.subagent_count > 0) {
+      } else if (loadingSubagents.has(session.id)) {
         rows.push(
           <SessionChildStatus key={`${session.id}-subagent-loading`} text="Loading subagents..." />,
         );

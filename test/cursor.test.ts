@@ -195,6 +195,29 @@ describe("parseCursorSession", () => {
     expect(parsed.session.messages[0]?.timestamp).toBe("2026-07-06T21:37:31.610Z");
   });
 
+  test("ignores out-of-range epoch timestamps instead of aborting the parse", () => {
+    const parsed = parseCursorSession(
+      "invalid-times",
+      JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "call-read",
+        tool_call: {
+          readToolCall: {
+            args: { path: "package.json" },
+            startedAtMs: "9000000000000000",
+            completedAtMs: "9000000000000000",
+            result: { success: { content: "{}" } },
+          },
+        },
+      }),
+    );
+
+    expect(parsed.session.startedAt).toBeNull();
+    expect(parsed.session.endedAt).toBeNull();
+    expect(parsed.session.messages[0]?.timestamp).toBeNull();
+  });
+
   test("uses reported reasoning provenance when result usage includes reasoning tokens", () => {
     const parsed = parseCursorSession(
       "reported",

@@ -1,4 +1,13 @@
 import { Database } from "bun:sqlite";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  type Stats,
+} from "node:fs";
 import schemaSql from "./schema.sql" with { type: "text" };
 
 /// Highest schema version this build understands. src/schema.sql is the
@@ -7,12 +16,118 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// and stamped with the full migration history.
 export const LATEST_SCHEMA_VERSION = 11;
 
+/// Owner-only mode for the archive and its SQLite sidecars. The transcripts
+/// decant ingests sit in 0600 files under 0700 directories; the aggregate of
+/// all of them must not be readable by anyone the sources were not.
+const ARCHIVE_FILE_MODE = 0o600;
+
+/// Owner-only mode for the directory holding the archive. Applied when
+/// decant creates the directory; an existing directory is left as the owner
+/// configured it.
+export const ARCHIVE_DIR_MODE = 0o700;
+
+/**
+ * Create a missing archive file owner-only, before SQLite gets the chance to
+ * create it at its default 0644.
+ *
+ * `O_CREAT | O_EXCL` never writes through an existing name — a symlink planted
+ * at the archive path fails it with EEXIST rather than being followed — and the
+ * descriptor refers to an inode this call has just made, so closing it cannot
+ * drop POSIX locks another SQLite connection in this process holds.
+ *
+ * Silent by design: the file usually exists already, and a directory decant
+ * cannot write to is SQLite's error to report, not this helper's.
+ */
+function createArchiveFile(path: string): void {
+  try {
+    closeSync(
+      openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, ARCHIVE_FILE_MODE),
+    );
+  } catch {
+    // Best effort; see the doc comment.
+  }
+}
+
+/**
+ * Best-effort narrow of an existing archive file — the database or one of its
+ * `-wal`/`-shm` sidecars — that an older decant left group- or world-readable.
+ *
+ * The `lstat` gate is not a security check; the two guarantees below are. It is
+ * there because closing a descriptor releases *every* POSIX lock this process
+ * holds on that file, which would silently strip the locks a live SQLite
+ * connection in this process depends on, so a file that is already owner-only
+ * is never opened at all.
+ *
+ * A mode change is only ever applied to a descriptor opened with `O_NOFOLLOW`,
+ * so a symlink planted at a name decant is about to touch (the sidecars do not
+ * exist yet on a fresh archive) fails the open with ELOOP instead of
+ * redirecting the change onto its target; and the file type and ownership are
+ * re-read from that same descriptor with `fstat`, so anything swapped in after
+ * the `lstat` is rejected rather than chmod-ed. `O_NONBLOCK` keeps a planted
+ * FIFO from parking the open.
+ *
+ * Silent by design: on a fresh archive the sidecars genuinely are absent, a
+ * filesystem may not carry POSIX mode bits at all, and a path that turns out to
+ * belong to someone else is not decant's to touch.
+ */
+export function restrictArchiveFile(path: string): void {
+  // Windows has neither POSIX mode bits nor O_NOFOLLOW; there is nothing safe
+  // (or meaningful) to do there.
+  if (typeof process.getuid !== "function" || typeof constants.O_NOFOLLOW !== "number") {
+    return;
+  }
+  const uid = process.getuid();
+  let current: Stats;
+  try {
+    current = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (!isOwnedRegularFile(current, uid) || (current.mode & 0o7777) === ARCHIVE_FILE_MODE) {
+    return;
+  }
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (isOwnedRegularFile(fstatSync(fd), uid)) {
+      fchmodSync(fd, ARCHIVE_FILE_MODE);
+    }
+  } catch {
+    // Best effort; see the doc comment.
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best effort, as above: a close that fails (EIO on a network or FUSE
+        // mount) must not escape a helper the archive open path calls three
+        // times before SQLite ever sees the file.
+      }
+    }
+  }
+}
+
+/// A directory, device, FIFO, or symlink at an archive name is a plant rather
+/// than an archive; extra hard links mean the same inode answers to a name
+/// decant knows nothing about; and another user's file is not decant's to
+/// change. None of those are things chmod should be pointed at.
+function isOwnedRegularFile(stats: Stats, uid: number): boolean {
+  return stats.isFile() && stats.uid === uid && stats.nlink === 1;
+}
+
 /**
  * Open (or create) a decant archive and guarantee it is at
  * LATEST_SCHEMA_VERSION. The connection comes back in WAL mode with foreign
  * keys enforced and a busy timeout set.
  */
 export function openDb(path: string): Database {
+  // Own the file modes before SQLite touches the path: it creates a database at
+  // 0644 and then copies the database file's mode onto every -wal/-shm sidecar
+  // it makes, so an archive that starts owner-only stays owner-only throughout.
+  createArchiveFile(path);
+  restrictArchiveFile(path);
+  restrictArchiveFile(`${path}-wal`);
+  restrictArchiveFile(`${path}-shm`);
   const db = new Database(path, { create: true, strict: true });
   db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");

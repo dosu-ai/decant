@@ -1,8 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { listSessions } from "../src/query.ts";
@@ -81,6 +81,16 @@ describe("watch mode", () => {
     const db = openDb(config.dbPath);
     expect(listSessions(db)).toHaveLength(1);
     db.close();
+  });
+
+  test("runSyncOnce creates the archive directory owner-only", () => {
+    const base = freshConfig();
+    const config = { ...base, dbPath: join(dirname(base.dbPath), "archive", "decant.db") };
+
+    runSyncOnce(config);
+
+    expect(statSync(dirname(config.dbPath)).mode & 0o7777).toBe(0o700);
+    expect(statSync(config.dbPath).mode & 0o7777).toBe(0o600);
   });
 
   test("runSyncOnce records open failures", () => {

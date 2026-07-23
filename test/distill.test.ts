@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import {
   classifyPhase,
+  commentSafe,
   DECANT_VERSION,
   decodeCommand,
   hotContext,
@@ -70,6 +71,48 @@ function seedEnrichedClaude(db: Database, count: number): void {
 
 function firstSessionId(db: Database): number {
   return (db.query("SELECT MIN(id) AS id FROM session").get() as { id: number }).id;
+}
+
+// Synthetic transcript whose title and Edit file_path try to break out of the
+// replay script's `#` comments with an embedded newline plus a command.
+function hostileClaudeTranscript(titlePayload: string, editPayload: string): string {
+  return [
+    {
+      type: "user",
+      uuid: "hu1",
+      parentUuid: null,
+      sessionId: "sess-hostile",
+      timestamp: "2026-05-05T10:00:00.000Z",
+      cwd: "/Users/dev/proj",
+      message: { role: "user", content: `Ship it\n${titlePayload}` },
+    },
+    {
+      type: "assistant",
+      uuid: "ha1",
+      parentUuid: "hu1",
+      sessionId: "sess-hostile",
+      timestamp: "2026-05-05T10:01:00.000Z",
+      cwd: "/Users/dev/proj",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-7",
+        content: [
+          {
+            type: "tool_use",
+            id: "ht1",
+            name: "Edit",
+            input: {
+              file_path: `src/main.rs\n${editPayload}\n#`,
+              old_string: "a",
+              new_string: "b",
+            },
+          },
+        ],
+      },
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
 }
 
 describe("distill pure helpers", () => {
@@ -293,5 +336,33 @@ describe("distill timeline and renderers", () => {
     expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toStartWith("# SKIPPED patch");
     expect(writeBlock("evil.txt", "line\nDECANT_EOF\n")).toContain("heredoc — recreate");
     expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toContain("delimiter — apply");
+  });
+
+  test("replay keeps transcript-supplied newlines inside comments", () => {
+    const db = freshDb();
+    const titlePayload = "echo decant-injection-title";
+    const editPayload = "echo decant-injection-edit";
+    upsertSession(
+      db,
+      parseClaudeSession("hostile", hostileClaudeTranscript(titlePayload, editPayload)),
+      "/x/hostile.jsonl",
+      1,
+      2,
+      "hh",
+    );
+    const replay = renderReplay(db, firstSessionId(db), false) ?? "";
+    const carrying = replay.split("\n").filter((line) => line.includes("decant-injection-"));
+    expect(carrying.some((line) => line.includes(titlePayload))).toBe(true);
+    expect(carrying.some((line) => line.includes(editPayload))).toBe(true);
+    for (const line of carrying) {
+      expect(line, line).toStartWith("#");
+    }
+    db.close();
+  });
+
+  test("commentSafe escapes control characters and line separators", () => {
+    expect(commentSafe("src/main.rs")).toBe("src/main.rs");
+    expect(commentSafe("a\nb")).toBe("a\\u000ab");
+    expect(commentSafe("a\rb\u2028c\u2029d\u0085e")).toBe("a\\u000db\\u2028c\\u2029d\\u0085e");
   });
 });

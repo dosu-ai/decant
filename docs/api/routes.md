@@ -4,6 +4,32 @@
 one Bun process. These routes are internal app routes, not a versioned public
 contract. By default, the server listens on `http://127.0.0.1:3000`.
 
+## Access control
+
+Every route is unauthenticated: anything that reaches the port and passes the
+guard reads or writes the whole archive.
+
+- Bound to loopback (the default), only local processes can connect.
+- Bound to a non-loopback host (`--host 0.0.0.0`, as the container image does),
+  the peer's source address is the boundary. Loopback peers pass, and so do the
+  trusted peers resolved at startup. Everything else gets `403 forbidden
+  remote`.
+- Trusted peers come from exactly one source, highest first, each replacing the
+  ones below rather than adding to them: `--trusted-peer`, then
+  `DECANT_TRUSTED_PEERS` whenever that variable is set at all, then
+  `DECANT_TRUST_DEFAULT_GATEWAY=1`. All are unset by default outside the
+  container image, so nothing beyond loopback is trusted until an operator opts
+  in.
+- `DECANT_TRUST_DEFAULT_GATEWAY=1` contributes a single address, the container's
+  own bridge gateway, and only when the default route is a container veth
+  pointing at an on-link gateway inside `172.16.0.0/12`; see
+  `docs/distribution.md`. Every other shape, including `--network host` and
+  macvlan, contributes nothing.
+- The `Host` check that returns `403 forbidden host` is not an access control
+  for non-browser clients: `curl -H 'Host: localhost'` satisfies it. Neither are
+  the `Origin`/`Sec-Fetch-Site` checks on mutating routes, which only stop a
+  browser on another site from driving this API.
+
 ## UI
 
 - `GET /`

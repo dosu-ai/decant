@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, type FSWatcher, mkdirSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
-import { openDb } from "./db.ts";
+import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
 import { sync as ingestSync, type SyncReport } from "./ingest.ts";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
@@ -143,7 +143,7 @@ export function runSyncOnce(
   status.start();
   let db: Database | null = null;
   try {
-    mkdirSync(dirname(config.dbPath), { recursive: true });
+    mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = open(config.dbPath);
     const report = ingestSync(db, config, cancel);
     status.finishOk(report);

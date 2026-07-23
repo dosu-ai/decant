@@ -58,6 +58,7 @@ import {
 } from "./chart-state.ts";
 import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
+import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import "./styles.css";
 
@@ -5631,8 +5632,21 @@ function navigate(
   }
 }
 
+/** Rendered instead of the app when decant is loaded inside a frame, so that no
+ * part of the UI - including the Insights "Run" button, which launches a coding
+ * agent on this machine - exists to be clicked through a hidden overlay. */
+function FramedNotice() {
+  return (
+    <EmptyState
+      icon="shield"
+      message="Open decant directly in its own browser tab or window to use it."
+      title="decant cannot be displayed in a frame"
+    />
+  );
+}
+
 const root = document.getElementById("root");
 if (root == null) {
   throw new Error("missing #root");
 }
-createRoot(root).render(<App />);
+createRoot(root).render(isFramed(window) ? <FramedNotice /> : <App />);

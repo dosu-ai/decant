@@ -19,7 +19,8 @@ describe("distribution helpers", () => {
       scripts?: Record<string, string>;
     };
 
-    expect(pkg.scripts?.dev).toBe("bun install --frozen-lockfile && bun run src/cli.ts serve");
+    expect(pkg.scripts?.predev).toBe("bun install --frozen-lockfile");
+    expect(pkg.scripts?.dev).toBe("bun run src/cli.ts serve");
     expect(pkg.scripts?.up).toBeUndefined();
     expect(existsSync(join(root, "scripts", "dev.ts"))).toBe(false);
   });

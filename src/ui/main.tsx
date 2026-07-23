@@ -50,6 +50,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import {
+  type AnalyticsChartMetric,
+  type AnalyticsChartState,
+  type AnalyticsChartVariant,
+  prepareAnalyticsChartState,
+} from "./chart-state.ts";
 import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
@@ -2389,9 +2395,6 @@ function DailyPanel({
   );
 }
 
-type AnalyticsChartMetric = "int" | "money";
-type AnalyticsChartVariant = "bar" | "line";
-
 function AnalyticsChart({
   labels,
   metric,
@@ -2404,10 +2407,11 @@ function AnalyticsChart({
   variant: AnalyticsChartVariant;
 }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
-  const cleanValues = useMemo(
-    () => labels.map((_, index) => Math.max(0, values[index] ?? 0)),
-    [labels, values],
-  );
+  const chartInstanceRef = useRef<echarts.ECharts | null>(null);
+  const lastDrawnKeyRef = useRef<string | null>(null);
+  const chartState = prepareAnalyticsChartState({ labels, metric, values, variant });
+  const chartStateRef = useRef<AnalyticsChartState>(chartState);
+  chartStateRef.current = chartState;
 
   useEffect(() => {
     const element = chartRef.current;
@@ -2415,26 +2419,46 @@ function AnalyticsChart({
       return;
     }
     const chart = echarts.init(element, null, { renderer: "canvas" });
+    chartInstanceRef.current = chart;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const draw = () => {
-      chart.setOption(buildChartOption({ labels, metric, values: cleanValues, variant }), true);
+    const draw = (force = false) => {
+      const current = chartStateRef.current;
+      if (!force && lastDrawnKeyRef.current === current.key) {
+        return;
+      }
+      chart.setOption(buildChartOption(current), true);
+      lastDrawnKeyRef.current = current.key;
       chart.resize();
     };
     const resize = () => chart.resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     window.addEventListener("resize", resize);
-    window.addEventListener("decant:set-theme", draw);
-    media.addEventListener("change", draw);
-    requestAnimationFrame(draw);
+    const redrawForTheme = () => draw(true);
+    window.addEventListener("decant:set-theme", redrawForTheme);
+    media.addEventListener("change", redrawForTheme);
+    draw();
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", resize);
-      window.removeEventListener("decant:set-theme", draw);
-      media.removeEventListener("change", draw);
+      window.removeEventListener("decant:set-theme", redrawForTheme);
+      media.removeEventListener("change", redrawForTheme);
       chart.dispose();
+      chartInstanceRef.current = null;
+      lastDrawnKeyRef.current = null;
     };
-  }, [cleanValues, labels, metric, variant]);
+  }, []);
+
+  useEffect(() => {
+    const chart = chartInstanceRef.current;
+    const current = chartStateRef.current;
+    if (chart == null || lastDrawnKeyRef.current === chartState.key) {
+      return;
+    }
+    chart.setOption(buildChartOption(current), true);
+    lastDrawnKeyRef.current = chartState.key;
+    chart.resize();
+  }, [chartState.key]);
 
   return <div aria-label="Analytics chart" className="analytics-chart" ref={chartRef} role="img" />;
 }

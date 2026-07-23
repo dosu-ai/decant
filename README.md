@@ -60,9 +60,23 @@ docker run --rm \
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
 `-p 3000:3000` exposes the archive port on every host interface. The container
 binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
-publish can reach it. The image trusts Docker bridge peers by default via
-`DECANT_TRUSTED_PEERS=172.16.0.0/12`; use a narrower value if your local Docker
-network is different.
+publish can reach it.
+
+The API is unauthenticated, so the peer's source address is the boundary. The
+image ships no peer allowlist. It sets `DECANT_TRUST_DEFAULT_GATEWAY=1`, which
+trusts exactly one address: the container's own bridge gateway, which is where
+Docker's port publisher forwards `-p` traffic from. It does that only when
+decant can prove the default route is a container veth to an on-link gateway
+inside `172.16.0.0/12`. A sibling container on the same bridge keeps its own
+source address and gets `403 forbidden remote`.
+
+Shapes that cannot be proven trust nobody beyond loopback and need one env var:
+`--network host`, macvlan/ipvlan, multi-homed hosts, and bridges outside
+`172.16.0.0/12` (Podman's `10.88.0.0/16`, a custom `--subnet`, Kubernetes). If
+the UI answers `403 forbidden remote`, set `DECANT_TRUSTED_PEERS` to the exact
+address requests arrive from, for example
+`-e DECANT_TRUSTED_PEERS=192.168.65.1`. That replaces the gateway default
+entirely; `DECANT_TRUST_DEFAULT_GATEWAY=0` turns it off without naming a peer.
 
 ## CLI
 
@@ -96,10 +110,27 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
 - `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
 - `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
-  the local API guard when `serve` is bound to a non-loopback host.
+  the local API guard when `serve` is bound to a non-loopback host. Unset by
+  default. Keep it as narrow as the deployment allows: every listed address, and
+  every address inside a listed CIDR, reads and writes the whole archive without
+  a credential.
+- `DECANT_TRUST_DEFAULT_GATEWAY`: set to `1` to trust this container's own
+  bridge gateway, resolved once at startup from `/proc/net/route` and
+  `/sys/class/net`. Off by default and off for any other value, including `0`.
+  The derived peer is a single address, and only when the default route is a
+  container veth pointing at an on-link gateway inside `172.16.0.0/12`; every
+  other shape resolves to no peers. The container image turns this on so the
+  documented `docker run` recipe works without a peer CIDR.
+
+Precedence is replace, not merge: `--trusted-peer` wins over
+`DECANT_TRUSTED_PEERS`, which wins over `DECANT_TRUST_DEFAULT_GATEWAY`. Setting
+either peer source, including `DECANT_TRUSTED_PEERS=` with an empty value,
+means no gateway is derived.
 
 `decant serve` binds `127.0.0.1:3000` by default. Override with
-`--host`/`--port`.
+`--host`/`--port`. There is no authentication, so bind loopback unless you
+deliberately want other hosts in: the `Host` header check is not an access
+control for non-browser clients, which can send `Host: localhost` freely.
 
 Archives older than schema v8 are rebuild-only. v8 and v9 archives migrate to
 v10 on open; the next `decant sync` backfills persisted economics vectors for

@@ -1,13 +1,19 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import { handleRequest, publishServerEvent, serve } from "../src/server.ts";
+import {
+  handleRequest,
+  publishServerEvent,
+  resolveTrustedPeers,
+  serve,
+  type TrustedPeerSources,
+} from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -540,5 +546,291 @@ describe("server routes", () => {
 
     gate.resolve();
     await pendingRequest.catch(() => {});
+  });
+});
+
+describe("trusted peer resolution", () => {
+  // Addresses appear the way `/proc/net/route` prints them: the little-endian
+  // reading of the network-byte-order word, so 172.17.0.1 is "010011AC".
+  const DEFAULT_ROUTE = "00000000";
+  const UP = "0001";
+  const UP_GATEWAY = "0003";
+  const MASK_16 = "0000FFFF";
+  const MASK_24 = "00FFFFFF";
+
+  function routeRow(
+    iface: string,
+    destination: string,
+    gateway: string,
+    flags: string,
+    mask: string,
+  ): string {
+    return [iface, destination, gateway, flags, "0", "0", "0", mask, "0", "0", "0"].join("\t");
+  }
+
+  interface FakeInterface {
+    ifindex: number;
+    /** Defaults to a peer index that exists in no other namespace entry, which
+     * is what a container-side veth looks like. */
+    iflink?: number;
+    devtype?: string;
+    /** A backing bus device, so a real NIC in the host's own namespace. */
+    physical?: boolean;
+    /** Stacked on this parent in the same namespace (vlan and friends). */
+    lowerOf?: string;
+  }
+
+  let netCounter = 0;
+  function namespace(
+    routes: string[],
+    interfaces: Record<string, FakeInterface>,
+  ): TrustedPeerSources {
+    netCounter += 1;
+    const root = join(workDir, `net-${netCounter}`);
+    const sysClassNetPath = join(root, "sys", "class", "net");
+    mkdirSync(sysClassNetPath, { recursive: true });
+    const routeTablePath = join(root, "route");
+    writeFileSync(
+      routeTablePath,
+      [
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT",
+        ...routes,
+        "",
+      ].join("\n"),
+    );
+    for (const [name, iface] of Object.entries(interfaces)) {
+      const dir = join(sysClassNetPath, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "ifindex"), `${iface.ifindex}\n`);
+      writeFileSync(join(dir, "iflink"), `${iface.iflink ?? 900 + iface.ifindex}\n`);
+      writeFileSync(
+        join(dir, "uevent"),
+        `${iface.devtype == null ? "" : `DEVTYPE=${iface.devtype}\n`}INTERFACE=${name}\n`,
+      );
+      if (iface.physical === true) {
+        writeFileSync(join(dir, "device"), "");
+      }
+      if (iface.lowerOf != null) {
+        writeFileSync(join(dir, `lower_${iface.lowerOf}`), "");
+      }
+    }
+    return { routeTablePath, sysClassNetPath };
+  }
+
+  const loopback: FakeInterface = { ifindex: 1, iflink: 1 };
+  const optIn = { DECANT_TRUST_DEFAULT_GATEWAY: "1" };
+
+  /** A container on the default Docker bridge: default route via 172.17.0.1
+   * over a veth, plus the on-link 172.17.0.0/16 route. */
+  function bridgedContainer(): TrustedPeerSources {
+    return namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16),
+      ],
+      { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
+    );
+  }
+
+  test("trusts the container's own bridge gateway once the image opts in", () => {
+    expect(resolveTrustedPeers(undefined, optIn, bridgedContainer())).toEqual(["172.17.0.1"]);
+  });
+
+  test("stays closed until an operator opts in", () => {
+    const container = bridgedContainer();
+    expect(resolveTrustedPeers(undefined, {}, container)).toEqual([]);
+    // The documented off switch, plus anything that is not exactly "1".
+    expect(
+      resolveTrustedPeers(undefined, { DECANT_TRUST_DEFAULT_GATEWAY: "0" }, container),
+    ).toEqual([]);
+    expect(
+      resolveTrustedPeers(undefined, { DECANT_TRUST_DEFAULT_GATEWAY: "true" }, container),
+    ).toEqual([]);
+  });
+
+  test("explicit peers replace the derived gateway instead of adding to it", () => {
+    const container = bridgedContainer();
+    // An operator narrowing the allowlist gets exactly what they asked for.
+    expect(
+      resolveTrustedPeers(undefined, { ...optIn, DECANT_TRUSTED_PEERS: "192.168.1.50" }, container),
+    ).toEqual(["192.168.1.50"]);
+    // Setting the variable at all counts, so an empty value trusts nobody.
+    expect(
+      resolveTrustedPeers(undefined, { ...optIn, DECANT_TRUSTED_PEERS: "" }, container),
+    ).toEqual([]);
+    // --trusted-peer outranks both environment variables.
+    expect(
+      resolveTrustedPeers(
+        ["10.9.9.9"],
+        { ...optIn, DECANT_TRUSTED_PEERS: "192.168.1.50" },
+        container,
+      ),
+    ).toEqual(["10.9.9.9"]);
+  });
+
+  test("refuses a gateway outside the derivation bound", () => {
+    // Podman's default bridge is a real container bridge, but 10.88.0.1 sits
+    // outside the range this derivation is bounded to, so it needs an explicit
+    // peer exactly as it did before.
+    const podman = namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "0100580A", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "0000580A", DEFAULT_ROUTE, UP, MASK_16),
+      ],
+      { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, podman)).toEqual([]);
+  });
+
+  test("refuses the host's own network namespace", () => {
+    // --network host on a laptop: the "default gateway" is the LAN router.
+    const lan = namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "0101A8C0", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "0001A8C0", DEFAULT_ROUTE, UP, MASK_24),
+      ],
+      { lo: loopback, eth0: { ifindex: 2, physical: true } },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, lan)).toEqual([]);
+    // Same shape on a network that happens to fall inside the bound: the
+    // physical NIC still gives it away.
+    const inRangeLan = namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+      ],
+      { lo: loopback, eth0: { ifindex: 2, physical: true } },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, inRangeLan)).toEqual([]);
+  });
+
+  test("refuses links that are not a veth into another namespace", () => {
+    const inRangeDefault = [
+      routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
+      routeRow("eth0", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+    ];
+    // A macvlan/ipvlan container sits directly on the LAN and publishes its kind.
+    const macvlan = namespace(inRangeDefault, {
+      lo: loopback,
+      eth0: { ifindex: 2, devtype: "macvlan" },
+    });
+    expect(resolveTrustedPeers(undefined, optIn, macvlan)).toEqual([]);
+    // A host bridge, tunnel or bond links to no peer at all.
+    const standalone = namespace(inRangeDefault, {
+      lo: loopback,
+      eth0: { ifindex: 2, iflink: 2 },
+    });
+    expect(resolveTrustedPeers(undefined, optIn, standalone)).toEqual([]);
+    // A device stacked on a parent in this same namespace.
+    const stacked = namespace(inRangeDefault, {
+      lo: loopback,
+      eth0: { ifindex: 2, lowerOf: "eth1" },
+      eth1: { ifindex: 3, physical: true },
+    });
+    expect(resolveTrustedPeers(undefined, optIn, stacked)).toEqual([]);
+    // A veth pair with both ends in this namespace is not a container boundary.
+    const localPair = namespace(inRangeDefault, {
+      lo: loopback,
+      eth0: { ifindex: 2, iflink: 3, devtype: "veth" },
+      veth1: { ifindex: 3, iflink: 2, devtype: "veth" },
+    });
+    expect(resolveTrustedPeers(undefined, optIn, localPair)).toEqual([]);
+    // An interface name that is not a plain device name never becomes a path.
+    const traversal = namespace(
+      [
+        routeRow("../../etc", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("../../etc", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+      ],
+      { lo: loopback },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, traversal)).toEqual([]);
+  });
+
+  test("refuses a multi-homed host", () => {
+    // Wi-Fi and Ethernet both up: no single gateway stands for "the host".
+    const multiHomed = namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16),
+        routeRow("eth1", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth1", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+      ],
+      {
+        lo: loopback,
+        eth0: { ifindex: 2, devtype: "veth" },
+        eth1: { ifindex: 3, devtype: "veth" },
+      },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, multiHomed)).toEqual([]);
+  });
+
+  test("refuses a gateway that is not on-link", () => {
+    const offLink = namespace(
+      [
+        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", "000014AC", DEFAULT_ROUTE, UP, MASK_16),
+      ],
+      { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
+    );
+    expect(resolveTrustedPeers(undefined, optIn, offLink)).toEqual([]);
+  });
+
+  test("refuses an unreadable, defaultless or malformed route table", () => {
+    expect(
+      resolveTrustedPeers(undefined, optIn, {
+        routeTablePath: join(workDir, "no-such-route-table"),
+        sysClassNetPath: join(workDir, "no-such-sys-class-net"),
+      }),
+    ).toEqual([]);
+    const onLinkOnly = namespace([routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16)], {
+      lo: loopback,
+      eth0: { ifindex: 2, devtype: "veth" },
+    });
+    expect(resolveTrustedPeers(undefined, optIn, onLinkOnly)).toEqual([]);
+    const malformedDefaults = [
+      // Not hex.
+      routeRow("eth0", DEFAULT_ROUTE, "ZZZZZZZZ", UP_GATEWAY, DEFAULT_ROUTE),
+      // Flagged as a gateway route with no gateway.
+      routeRow("eth0", DEFAULT_ROUTE, DEFAULT_ROUTE, UP_GATEWAY, DEFAULT_ROUTE),
+      // On-link default route: RTF_GATEWAY is not set.
+      routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP, DEFAULT_ROUTE),
+      // Down interface: RTF_UP is not set.
+      routeRow("eth0", DEFAULT_ROUTE, "010011AC", "0002", DEFAULT_ROUTE),
+      // Truncated row.
+      ["eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY].join("\t"),
+    ];
+    for (const malformed of malformedDefaults) {
+      const sources = namespace(
+        [malformed, routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16)],
+        {
+          lo: loopback,
+          eth0: { ifindex: 2, devtype: "veth" },
+        },
+      );
+      expect(resolveTrustedPeers(undefined, optIn, sources)).toEqual([]);
+    }
+  });
+
+  test("gateway trust admits the published host but not a bridge sibling", async () => {
+    const config = freshConfig();
+    const trustedPeers = resolveTrustedPeers(undefined, optIn, bridgedContainer());
+
+    // Forged Host header, source address of a co-located container.
+    const sibling = await handleRequest(new Request("http://localhost:3000/api/config"), config, {
+      boundHostname: "0.0.0.0",
+      remoteAddress: "172.17.0.5",
+      trustedPeers,
+    });
+    expect(sibling.status).toBe(403);
+    expect(await sibling.json()).toEqual({ error: "forbidden remote" });
+
+    // The browser on the host reaches the published port, and Docker forwards
+    // it from the container's gateway.
+    const published = await handleRequest(new Request("http://127.0.0.1:3000/api/config"), config, {
+      boundHostname: "0.0.0.0",
+      remoteAddress: "172.17.0.1",
+      trustedPeers,
+    });
+    expect(published.status).toBe(200);
   });
 });

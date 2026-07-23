@@ -340,8 +340,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
             port: commandOptions.port ?? DEFAULT_SERVE_PORT,
             // Omit entirely (rather than passing []) when no --trusted-peer was
-            // given, so serve()'s `options.trustedPeers ?? parsePeerList(env)`
-            // can still fall through to DECANT_TRUSTED_PEERS.
+            // given, so serve()'s resolveTrustedPeers() can still fall through
+            // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
+            // passed here replaces both.
             trustedPeers:
               commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
                 ? trustedPeers(commandOptions.trustedPeer)

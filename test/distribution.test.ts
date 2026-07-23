@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -115,5 +115,17 @@ describe("distribution helpers", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("docker image", () => {
+  test("bakes in no trusted peer allowlist", () => {
+    const dockerfile = readFileSync(join(import.meta.dir, "..", "Dockerfile"), "utf8");
+    // The archive is served without credentials, so a pre-set peer address or
+    // CIDR hands it to every host that matches. Both `ENV KEY=value` and the
+    // legacy `ENV KEY value` form count.
+    expect(dockerfile).not.toMatch(/^\s*ENV\s+DECANT_TRUSTED_PEERS[\s=]/m);
+    // The image opts into deriving one address instead, never a range.
+    expect(dockerfile).toMatch(/^ENV DECANT_TRUST_DEFAULT_GATEWAY=1$/m);
   });
 });

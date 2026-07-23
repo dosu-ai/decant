@@ -1,5 +1,5 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
@@ -53,6 +53,9 @@ export interface ServeOptions {
   config: Config;
   port?: number;
   hostname?: string;
+  /** Peers allowed through the local API guard when bound to a non-loopback
+   * host. When set, it replaces every default; omit it to let
+   * `resolveTrustedPeers` consult the environment. */
   trustedPeers?: string[];
   /** When set, serve() runs the source watcher itself with a worker-backed
    * sync runner so ingests never block the request event loop, and republishes
@@ -474,7 +477,7 @@ function formatSse(event: ServerEvent): string {
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
   const port = options.port ?? DEFAULT_SERVE_PORT;
-  const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
+  const trustedPeers = resolveTrustedPeers(options.trustedPeers);
   mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(options.config.dbPath);
   ensureDerivedMetadata(db);
@@ -727,6 +730,283 @@ export function parsePeerList(value: string | null | undefined): string[] {
     .split(",")
     .map((peer) => peer.trim())
     .filter((peer) => peer !== "");
+}
+
+const DEFAULT_ROUTE_TABLE_PATH = "/proc/net/route";
+const DEFAULT_SYS_CLASS_NET_PATH = "/sys/class/net";
+/** `/proc/net/route` flag bits: the route is usable, and it hops through a
+ * gateway instead of being on-link. */
+const RTF_UP = 0x1;
+const RTF_GATEWAY = 0x2;
+/** Bound on gateway auto-trust, not an allowlist: no address in this range is
+ * trusted unless it is *this* container's own bridge gateway. Container
+ * runtimes carve their default bridge networks out of it (Docker's default
+ * address pool starts at 172.17.0.0/16), while LAN and VPC routers -- the
+ * addresses a `--network host`, macvlan or ipvlan container would otherwise
+ * resolve -- practically never sit in it. Bounding the derived address this way
+ * also keeps the image's default trust set a strict subset of the
+ * `172.16.0.0/12` allowlist it used to ship, so no deployment shape gains trust
+ * it did not already have. */
+const GATEWAY_AUTO_TRUST_RANGE = "172.16.0.0/12";
+
+/** Test seam: where the Linux network facts are read from. */
+export interface TrustedPeerSources {
+  routeTablePath?: string;
+  sysClassNetPath?: string;
+}
+
+/** Peers the local API guard admits when `serve` is bound to a non-loopback
+ * host, resolved once at startup.
+ *
+ * Precedence, highest first. The first source that is present wins outright and
+ * the rest are not consulted, so explicit configuration always *replaces* the
+ * gateway default rather than adding to it:
+ *
+ * 1. `--trusted-peer` (`configured`), when the CLI collected any.
+ * 2. `DECANT_TRUSTED_PEERS`, whenever the variable is set at all -- setting it
+ *    to an empty string means "trust nobody", not "fall through".
+ * 3. `DECANT_TRUST_DEFAULT_GATEWAY=1`, which trusts exactly one address: this
+ *    container's own bridge gateway, and only when `containerBridgeGateway`
+ *    can prove that is what the default route points at. Every other value,
+ *    including `0` and an unset variable, trusts nobody.
+ *
+ * Nothing re-resolves afterwards: a host whose default route changes keeps the
+ * address resolved at startup until `serve` restarts. */
+export function resolveTrustedPeers(
+  configured?: string[],
+  env: Record<string, string | undefined> = process.env,
+  sources: TrustedPeerSources = {},
+): string[] {
+  if (configured != null) {
+    return configured;
+  }
+  if (env.DECANT_TRUSTED_PEERS != null) {
+    return parsePeerList(env.DECANT_TRUSTED_PEERS);
+  }
+  if (!isEnvEnabled(env.DECANT_TRUST_DEFAULT_GATEWAY)) {
+    return [];
+  }
+  const gateway = containerBridgeGateway(
+    sources.routeTablePath ?? DEFAULT_ROUTE_TABLE_PATH,
+    sources.sysClassNetPath ?? DEFAULT_SYS_CLASS_NET_PATH,
+  );
+  return gateway == null ? [] : [gateway];
+}
+
+/** This container's own bridge gateway, or `null` when that cannot be proven.
+ *
+ * That single address is worth trusting only because container runtimes rewrite
+ * the source address of `-p`-published host traffic to it: it stands in for the
+ * host that started the container, while a sibling container on the same bridge
+ * keeps its own source address and stays denied. The reasoning holds only for a
+ * bridge-networked container, so all of the following must hold and anything
+ * unexpected -- including a non-Linux host, where `/proc/net/route` is absent --
+ * fails closed:
+ *
+ * - exactly one usable IPv4 default route, so a multi-homed host cannot
+ *   contribute a gateway from some other network;
+ * - the gateway is on-link on that route's interface;
+ * - the gateway is inside `GATEWAY_AUTO_TRUST_RANGE`;
+ * - the interface is a veth into another network namespace: it publishes no
+ *   device kind other than `veth`, has no backing bus device, is not stacked on
+ *   a local parent, and its link peer does not resolve here. That rules out
+ *   sharing the host's namespace (`--network host`, where the default route
+ *   runs over a physical NIC, bridge, bond or tunnel) and a container attached
+ *   straight to the LAN (macvlan, ipvlan). In those shapes the "default
+ *   gateway" is the LAN or VPC router, which must never be trusted
+ *   implicitly. */
+function containerBridgeGateway(routeTablePath: string, sysClassNetPath: string): string | null {
+  const routes = readRouteTable(routeTablePath);
+  if (routes == null) {
+    return null;
+  }
+  const defaults = routes.filter(
+    (route) =>
+      route.destination === 0 &&
+      route.gateway !== 0 &&
+      (route.flags & RTF_UP) !== 0 &&
+      (route.flags & RTF_GATEWAY) !== 0,
+  );
+  const route = defaults.length === 1 ? defaults[0] : undefined;
+  if (route == null) {
+    return null;
+  }
+  const gateway = formatIpv4(route.gateway);
+  if (!ipv4CidrContains(GATEWAY_AUTO_TRUST_RANGE, gateway)) {
+    return null;
+  }
+  if (!hasOnLinkRoute(routes, route.iface, route.gateway)) {
+    return null;
+  }
+  return isContainerVeth(route.iface, sysClassNetPath) ? gateway : null;
+}
+
+interface RouteRow {
+  iface: string;
+  destination: number;
+  gateway: number;
+  flags: number;
+  mask: number;
+}
+
+/** Rows of the Linux IPv4 route table, or `null` when it cannot be read (any
+ * non-Linux host), which leaves the guard closed rather than guessing. */
+function readRouteTable(routeTablePath: string): RouteRow[] | null {
+  let table: string;
+  try {
+    table = readFileSync(routeTablePath, "utf8");
+  } catch {
+    return null;
+  }
+  const rows: RouteRow[] = [];
+  for (const line of table.split("\n").slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    const iface = fields[0] ?? "";
+    const destination = routeHexToIpv4(fields[1]);
+    const gateway = routeHexToIpv4(fields[2]);
+    const flags = Number.parseInt(fields[3] ?? "", 16);
+    const mask = routeHexToIpv4(fields[7]);
+    if (
+      iface === "" ||
+      destination == null ||
+      gateway == null ||
+      mask == null ||
+      !Number.isFinite(flags)
+    ) {
+      continue;
+    }
+    rows.push({ iface, destination, gateway, flags, mask });
+  }
+  return rows;
+}
+
+/** A gateway reachable without another hop on the same interface, which is how
+ * a container's bridge gateway always appears. */
+function hasOnLinkRoute(routes: RouteRow[], iface: string, gateway: number): boolean {
+  return routes.some(
+    (route) =>
+      route.iface === iface &&
+      route.mask !== 0 &&
+      (route.flags & RTF_UP) !== 0 &&
+      (route.flags & RTF_GATEWAY) === 0 &&
+      (route.destination & route.mask) >>> 0 === (gateway & route.mask) >>> 0,
+  );
+}
+
+/** Whether `iface` is this container's veth: a virtual device, not stacked on a
+ * parent in this namespace, whose link peer lives in another namespace. The
+ * host's own namespace never satisfies all three for its default route. */
+function isContainerVeth(iface: string, sysClassNetPath: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.@-]*$/.test(iface)) {
+    return false;
+  }
+  const dir = join(sysClassNetPath, iface);
+  // vlan, macvlan, ipvlan, bridge and bond devices all publish their kind here,
+  // so a container sitting directly on the LAN is refused. Kernels that publish
+  // no DEVTYPE for veth leave the structural checks below to decide.
+  const devType = readDevType(join(dir, "uevent"));
+  if (devType != null && devType !== "veth") {
+    return false;
+  }
+  // A physical NIC -- so, the host's namespace -- has a backing bus device.
+  if (existsSync(join(dir, "device"))) {
+    return false;
+  }
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  // Devices stacked on a parent in this namespace publish lower_* links.
+  if (entries.some((entry) => entry.startsWith("lower_"))) {
+    return false;
+  }
+  const ifIndex = readIfIndex(join(dir, "ifindex"));
+  const ifLink = readIfIndex(join(dir, "iflink"));
+  // A container veth names a peer that lives in another namespace, so the index
+  // it links to must not resolve here. A bridge, bond or tunnel links to itself
+  // (the degenerate case of the same rule), and a veth pair with both ends in
+  // this namespace is not a container boundary.
+  if (ifIndex == null || ifLink == null || ifIndex === ifLink) {
+    return false;
+  }
+  const localIndexes = collectIfIndexes(sysClassNetPath);
+  return localIndexes != null && !localIndexes.has(ifLink);
+}
+
+function readDevType(ueventPath: string): string | null {
+  let uevent: string;
+  try {
+    uevent = readFileSync(ueventPath, "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of uevent.split("\n")) {
+    const [key, value] = line.split("=", 2);
+    if (key?.trim() === "DEVTYPE") {
+      return value?.trim().toLowerCase() ?? null;
+    }
+  }
+  return null;
+}
+
+function readIfIndex(path: string): number | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const value = Number.parseInt(raw.trim(), 10);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+/** Every interface index visible in this network namespace, or `null` when the
+ * directory cannot be listed. */
+function collectIfIndexes(sysClassNetPath: string): Set<number> | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(sysClassNetPath);
+  } catch {
+    return null;
+  }
+  const indexes = new Set<number>();
+  for (const entry of entries) {
+    const value = readIfIndex(join(sysClassNetPath, entry, "ifindex"));
+    if (value != null) {
+      indexes.add(value);
+    }
+  }
+  return indexes;
+}
+
+/** `/proc/net/route` prints each address as the little-endian reading of its
+ * network-byte-order word, so the low byte is the first octet. The image ships
+ * for amd64 and arm64 only; on a big-endian host this misreads into an address
+ * outside `GATEWAY_AUTO_TRUST_RANGE`, which fails closed. */
+function routeHexToIpv4(value: string | undefined): number | null {
+  if (value == null || !/^[0-9a-fA-F]{8}$/.test(value)) {
+    return null;
+  }
+  const raw = Number.parseInt(value, 16) >>> 0;
+  return (
+    (((raw & 0xff) << 24) |
+      (((raw >>> 8) & 0xff) << 16) |
+      (((raw >>> 16) & 0xff) << 8) |
+      ((raw >>> 24) & 0xff)) >>>
+    0
+  );
+}
+
+function formatIpv4(value: number): string {
+  return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff].join(
+    ".",
+  );
+}
+
+function isEnvEnabled(value: string | undefined): boolean {
+  return value?.trim() === "1";
 }
 
 function ipv4CidrContains(cidr: string, address: string): boolean {

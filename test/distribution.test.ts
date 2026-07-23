@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +13,17 @@ import {
 } from "../scripts/distribution.ts";
 
 describe("distribution helpers", () => {
+  test("keeps source development startup direct and dependency installation explicit", () => {
+    const root = join(import.meta.dir, "..");
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(pkg.scripts?.dev).toBe("bun run src/cli.ts serve");
+    expect(pkg.scripts?.up).toBeUndefined();
+    expect(existsSync(join(root, "scripts", "dev.ts"))).toBe(false);
+  });
+
   test("loads the npm binary target matrix", () => {
     const targets = readTargets();
     expect(targets.map((target) => target.key)).toEqual([

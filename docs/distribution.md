@@ -123,9 +123,10 @@ every address inside a CIDR, reads the entire archive with no credential.
 Source remains the contributor path and the fastest dev loop:
 
 ```sh
+bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, performs
-the startup sync, and keeps the archive current. Source installs require Bun.
+Install dependencies explicitly. `bun run dev` starts `decant serve`, performs
+the startup sync, and keeps the archive current. Source installs require Bun;
 npm and Docker installs do not.

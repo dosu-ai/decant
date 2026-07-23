@@ -24,7 +24,7 @@ point). Docs: `docs/api/routes.md` (serve routes) and `docs/distribution.md`
 
 ## Setup
 
-- Bun 1.3+ (`bun run dev` performs a frozen install before serving).
+- Bun 1.3+; install dependencies explicitly with `bun install --frozen-lockfile`.
 - Docker only if you are validating the container image.
 - No Rust, Elixir, Erlang, or Swift toolchain is required for mainline work.
 
@@ -45,6 +45,9 @@ Run from the repo root.
 - Source dirs: `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, or command flags.
 - Settings dir: `DECANT_CONFIG_DIR`; settings default to
   `~/.config/decant/settings.json`.
+- Operational logs: JSON Lines on stderr at `info` by default; override with
+  `DECANT_LOG_LEVEL` (`trace` through `fatal`, or `off`). See
+  `docs/logging.md`.
 - `serve` binds `127.0.0.1:3000` by default; override with `--host`/`--port`.
 
 ## Definition of done

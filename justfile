@@ -4,11 +4,6 @@
 default:
     @just --list --unsorted
 
-# Local dev convenience wrappers
-[group('dev')]
-up *ARGS:
-    bun run dev -- {{ARGS}}
-
 # Quality gates
 [group('gates')]
 check: ts-check dist-check

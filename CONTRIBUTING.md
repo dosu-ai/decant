@@ -16,11 +16,12 @@ on-ramp.
 ```bash
 git clone https://github.com/dosu-ai/decant
 cd decant
+bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run dev` installs dependencies with `bun install --frozen-lockfile`, starts the
-local UI, and runs the startup sync. Open `http://127.0.0.1:3000`.
+Dependency installation is explicit. `bun run dev` starts the local UI and runs
+the startup sync. Open `http://127.0.0.1:3000`.
 
 Install optional hooks after setup if you use pre-commit locally:
 

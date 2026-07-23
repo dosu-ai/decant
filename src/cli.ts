@@ -20,6 +20,7 @@ import {
 import type { Operation } from "./enrich.ts";
 import { toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
+import { configureLogging, getDecantLogger, logWatchEvent } from "./logging.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
@@ -103,6 +104,8 @@ interface DbInfo {
 }
 
 export async function runCli(argv: string[], options: CliRunOptions = {}): Promise<CliResult> {
+  const watchLogger = getDecantLogger("watch");
+  const serverLogger = getDecantLogger("server");
   const streamOutput = options.liveOutput === true;
   const io: Io = {
     stdout: "",
@@ -245,10 +248,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   // would double every /api/events frame. Under `watch`, there is no HTTP
   // server or SSE client to publish to at all.
   const emitWatchEvent = (event: WatchEvent): void => {
+    if (!globals().quiet) {
+      logWatchEvent(watchLogger, event);
+    }
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(event)}\n`);
-    } else if (!globals().quiet) {
-      io.writeErr(renderWatchEvent(event));
     }
   };
 
@@ -347,6 +351,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
                 ? trustedPeers(commandOptions.trustedPeer)
                 : undefined,
+            logger: globals().quiet ? undefined : serverLogger,
             watch: {
               intervalMs: commandOptions.intervalMs,
               debounceMs: commandOptions.debounceMs,
@@ -354,10 +359,13 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               onEvent: emitWatchEvent,
             },
           });
-          if (!isJson(globals()) && !globals().quiet) {
-            io.writeErr(
-              `serving http://${commandOptions.host ?? DEFAULT_SERVE_HOST}:${server.port}\n`,
-            );
+          if (!globals().quiet) {
+            serverLogger.info("Server started.", {
+              "event.name": "decant.server.started",
+              "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+              "server.port": server.port,
+              "watch.enabled": true,
+            });
           }
           try {
             await waitForProcessSignal();
@@ -368,6 +376,13 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             // indefinitely on Ctrl-C. This is a local dev server being
             // intentionally torn down, so dropping open connections is fine.
             await server.stop(true);
+            if (!globals().quiet) {
+              serverLogger.info("Server stopped.", {
+                "event.name": "decant.server.stopped",
+                "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+                "server.port": server.port,
+              });
+            }
           }
         }),
     );
@@ -1108,19 +1123,6 @@ function emitArtifact(
   return 0;
 }
 
-function renderWatchEvent(event: WatchEvent): string {
-  switch (event.type) {
-    case "ready":
-      return `watching ${event.dirs.length} source dirs\n`;
-    case "sync":
-      return `sync (${event.reason}): ${event.report.scanned} scanned, ${event.report.ingested} ingested, ${event.report.skipped} skipped, ${event.report.issues} issues, ${event.report.failed} failed\n`;
-    case "error":
-      return `error (${event.reason}): ${event.error}\n`;
-    case "stopped":
-      return "stopped\n";
-  }
-}
-
 function waitForProcessSignal(): Promise<void> {
   return new Promise((resolve) => {
     const done = (): void => {
@@ -1220,6 +1222,7 @@ _arguments '1:command:(${words})' '*::arg:->args'
 }
 
 if (import.meta.main) {
+  configureLogging({ level: process.env.DECANT_LOG_LEVEL });
   const result = await runCli(process.argv.slice(2), { liveOutput: true });
-  process.exit(result.code);
+  process.exitCode = result.code;
 }

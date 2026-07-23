@@ -29,12 +29,13 @@ transcripts never leave your machine.
 Use source during the pre-release TypeScript migration:
 
 ```bash
+bun install --frozen-lockfile
 bun run dev
 ```
 
-Requires Bun 1.3+. `bun run dev` installs dependencies with the lockfile
-frozen, starts `decant serve`, runs the startup sync, and keeps watching your
-source logs. The UI runs at `http://127.0.0.1:3000`.
+Requires Bun 1.3+. Install dependencies explicitly, then `bun run dev` starts
+`decant serve`, runs the startup sync, and keeps watching your source logs. The
+UI runs at `http://127.0.0.1:3000`.
 
 After the first Release workflow publishes packages, install from npm without
 installing Bun:
@@ -109,6 +110,9 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
   `~/.claude/projects`.
 - `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
 - `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
+- `DECANT_LOG_LEVEL`: minimum structured operational log level written as JSON
+  Lines to stderr. Defaults to `info`; accepts `trace`, `debug`, `info`, `warn`
+  (or `warning`), `error`, `fatal`, and `off` (or `silent`).
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
   the local API guard when `serve` is bound to a non-loopback host. Unset by
   default. Keep it as narrow as the deployment allows: every listed address, and
@@ -155,6 +159,7 @@ Rust/Phoenix/Swift implementation is preserved in the signed `pre-typescript`
 tag.
 
 Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
+Operational log fields and privacy rules live in [docs/logging.md](docs/logging.md).
 Distribution notes live in [docs/distribution.md](docs/distribution.md).
 Release automation is configured to publish npm packages and the GHCR image from
 the `Release` workflow once a version is dispatched.

@@ -8,6 +8,7 @@ import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
+import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
@@ -61,6 +62,8 @@ export interface ServeOptions {
    * sync runner so ingests never block the request event loop, and republishes
    * watcher events to SSE clients. */
   watch?: ServeWatchOptions;
+  /** Structured operational logger supplied by the CLI entry point. */
+  logger?: StructuredLogger;
   /** Test seam: override how the economics cache computes vectors, e.g. to
    * simulate a rebuild that is still in flight when the server is stopped. */
   economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
@@ -74,6 +77,7 @@ interface RequestContext {
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
+  logger?: StructuredLogger;
 }
 
 const syncStatus = {
@@ -330,6 +334,12 @@ export async function handleRequest(
     }
     return json({ error: "not found" }, 404);
   } catch (error) {
+    context.logger?.error("HTTP request failed.", {
+      "event.name": "http.server.request.exception",
+      "http.request.method": request.method,
+      "url.path": url.pathname,
+      ...exceptionAttributes(error),
+    });
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
   }
 }
@@ -523,14 +533,32 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/files": uiBundle,
       "/settings": uiBundle,
     },
-    fetch: (request, bunServer) =>
-      handleRequest(request, options.config, {
-        db,
-        economics,
-        boundHostname: hostname,
-        remoteAddress: bunServer.requestIP(request)?.address ?? null,
-        trustedPeers,
-      }),
+    fetch: async (request, bunServer) => {
+      const startedAt = performance.now();
+      const requestLogger = options.logger?.with({ "request.id": crypto.randomUUID() });
+      try {
+        const response = await handleRequest(request, options.config, {
+          db,
+          economics,
+          boundHostname: hostname,
+          remoteAddress: bunServer.requestIP(request)?.address ?? null,
+          trustedPeers,
+          logger: requestLogger,
+        });
+        if (requestLogger != null) {
+          logHttpRequest(requestLogger, request, response, performance.now() - startedAt);
+        }
+        return response;
+      } catch (error) {
+        requestLogger?.error("Unhandled HTTP request failure.", {
+          "event.name": "http.server.request.exception",
+          "http.request.method": request.method,
+          "url.path": new URL(request.url).pathname,
+          ...exceptionAttributes(error),
+        });
+        throw error;
+      }
+    },
   });
   const stop = server.stop.bind(server);
   let closed = false;

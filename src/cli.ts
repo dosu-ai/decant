@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
-import { openDb } from "./db.ts";
+import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import {
   DECANT_VERSION,
@@ -1011,7 +1011,7 @@ function commanderExitCode(error: { exitCode: number; code?: string }): number {
 }
 
 function openArchive(config: Config): Archive {
-  mkdirSync(dirname(config.dbPath), { recursive: true });
+  mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
   refreshDerivedMetadata(db, { ignoreReadonly: true });
   return { db, config };

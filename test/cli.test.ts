@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
 import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 
@@ -225,6 +225,17 @@ describe("runCli", () => {
         (session) => session.source_session_id,
       ),
     ).toEqual(["sess-codex-1", "claude-one"]);
+  });
+
+  test("creates a missing archive directory owner-only", async () => {
+    const fixtureCase = freshCase();
+    const dbPath = join(dirname(fixtureCase.dbPath), "archive", "decant.db");
+
+    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+    expect(list).toMatchObject({ code: 0, stderr: "" });
+
+    expect(statSync(dirname(dbPath)).mode & 0o7777).toBe(0o700);
+    expect(statSync(dbPath).mode & 0o7777).toBe(0o600);
   });
 
   test("invalid options return code 2 with an error", async () => {

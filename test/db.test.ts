@@ -1,9 +1,18 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { LATEST_SCHEMA_VERSION, openDb, restrictArchiveFile } from "../src/db.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-db-test-"));
@@ -211,5 +220,74 @@ describe("openDb", () => {
     db.exec("DELETE FROM schema_migrations WHERE version >= 8");
     db.close();
     expect(() => openDb(path)).toThrow(/rebuild/i);
+  });
+});
+
+/// The archive aggregates transcripts that Claude Code and Codex keep in 0600
+/// files, so it must not come out of SQLite at the default 0644.
+describe("archive permissions", () => {
+  function permissions(path: string): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [key, suffix] of [
+      ["db", ""],
+      ["wal", "-wal"],
+      ["shm", "-shm"],
+    ] as const) {
+      const file = `${path}${suffix}`;
+      if (existsSync(file)) {
+        out[key] = statSync(file).mode & 0o7777;
+      }
+    }
+    return out;
+  }
+
+  test("creates the archive and its WAL sidecars owner-only", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    // SQLite copies the database file's mode onto the -wal/-shm files it
+    // creates for the schema write, so all three land at 0600.
+    expect(permissions(path)).toEqual({ db: 0o600, wal: 0o600, shm: 0o600 });
+    db.close();
+  });
+
+  test("tightens an archive left group- and world-readable by an earlier build", () => {
+    const path = freshPath();
+    openDb(path).close();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      if (existsSync(`${path}${suffix}`)) {
+        chmodSync(`${path}${suffix}`, 0o644);
+      }
+    }
+
+    const db = openDb(path);
+    expect(permissions(path)).toEqual({ db: 0o600, wal: 0o600, shm: 0o600 });
+    db.close();
+  });
+
+  test("never changes the mode through a symlink planted at an archive name", () => {
+    // The -wal/-shm names do not exist yet on a fresh archive, so anyone who
+    // can write to the archive's directory could otherwise point them at a
+    // file of their choosing and have decant chmod that instead.
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const path = freshPath();
+      const victim = `${path}.victim`;
+      writeFileSync(victim, "not the archive");
+      chmodSync(victim, 0o644);
+      symlinkSync(victim, `${path}${suffix}`);
+
+      restrictArchiveFile(`${path}${suffix}`);
+
+      expect(statSync(victim).mode & 0o7777).toBe(0o644);
+      expect(lstatSync(`${path}${suffix}`).isSymbolicLink()).toBe(true);
+    }
+  });
+
+  test("stays best-effort on an absent sidecar and a non-regular path", () => {
+    const path = freshPath();
+    expect(() => restrictArchiveFile(`${path}-wal`)).not.toThrow();
+    expect(existsSync(`${path}-wal`)).toBe(false);
+
+    expect(() => restrictArchiveFile(workDir)).not.toThrow();
+    expect(statSync(workDir).mode & 0o7777).toBe(0o700);
   });
 });

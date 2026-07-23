@@ -1,8 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
@@ -475,6 +475,24 @@ describe("server routes", () => {
       ingested_count: 0,
       last_error: null,
     });
+  });
+
+  test("creates the archive directory owner-only from both entry points", async () => {
+    const base = freshConfig();
+    const routed = { ...base, dbPath: join(dirname(base.dbPath), "routed", "decant.db") };
+
+    expect((await route(routed, "/api/sessions")).status).toBe(200);
+    expect(statSync(dirname(routed.dbPath)).mode & 0o7777).toBe(0o700);
+    expect(statSync(routed.dbPath).mode & 0o7777).toBe(0o600);
+
+    const served = { ...base, dbPath: join(dirname(base.dbPath), "served", "decant.db") };
+    const server = serve({ config: served, port: 0 });
+    try {
+      expect(statSync(dirname(served.dbPath)).mode & 0o7777).toBe(0o700);
+      expect(statSync(served.dbPath).mode & 0o7777).toBe(0o600);
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("stop() resolves promptly even while a request awaits an in-flight economics rebuild", async () => {

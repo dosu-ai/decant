@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
-import { openDb } from "./db.ts";
+import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
@@ -475,7 +475,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
   const port = options.port ?? DEFAULT_SERVE_PORT;
   const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
-  mkdirSync(dirname(options.config.dbPath), { recursive: true });
+  mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(options.config.dbPath);
   ensureDerivedMetadata(db);
   const economics = new EconomicsCache({
@@ -596,7 +596,7 @@ function withDb(config: Config, context: RequestContext, callback: (db: Db) => R
     ensureDerivedMetadata(context.db);
     return callback(context.db);
   }
-  mkdirSync(dirname(config.dbPath), { recursive: true });
+  mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
   try {
     ensureDerivedMetadata(db);

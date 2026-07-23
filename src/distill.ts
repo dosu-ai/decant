@@ -400,7 +400,7 @@ export function renderReplay(
   }
   const ops = replayOps(db, sessionId);
   let out = "#!/usr/bin/env bash\n";
-  out += `# Replay of ${meta.tool} session ${sessionId}: ${meta.title ?? "(untitled)"}\n`;
+  out += `# Replay of ${commentSafe(meta.tool)} session ${sessionId}: ${commentSafe(meta.title ?? "(untitled)")}\n`;
   out += `# Distilled by decant ${DECANT_VERSION}. Best-effort, REVIEW before running.\n`;
   out += "# Assumes the same starting file state; secrets are best-effort redacted.\n";
   out += "set -euo pipefail\n";
@@ -413,9 +413,9 @@ export function renderReplay(
         }
         const destructive = isDestructive(op.normalized);
         if (op.is_error) {
-          out += `# (errored in original run)\n# ${op.normalized}\n`;
+          out += `# (errored in original run)\n# ${commentSafe(op.normalized)}\n`;
         } else if (destructive != null) {
-          out += `# REVIEW: destructive (${destructive})\n# ${op.normalized}\n`;
+          out += `# REVIEW: destructive (${destructive})\n# ${commentSafe(op.normalized)}\n`;
         } else {
           out += `${op.normalized}\n`;
         }
@@ -425,10 +425,10 @@ export function renderReplay(
         out += writeBlock(op.raw, op.payload ?? "");
         break;
       case "file_edit":
-        out += `# EDIT ${op.raw}: ${op.payload ?? ""} (apply manually — v1 does not auto-apply edits)\n`;
+        out += `# EDIT ${commentSafe(op.raw)}: ${commentSafe(op.payload ?? "")} (apply manually — v1 does not auto-apply edits)\n`;
         break;
       case "file_delete":
-        out += `# DELETE ${op.raw} (review)\n# rm ${shellQuote(op.raw)}\n`;
+        out += `# DELETE ${commentSafe(op.raw)} (review)\n# rm ${commentSafe(shellQuote(op.raw))}\n`;
         break;
       case "patch":
         out += patchBlock(op.payload ?? "");
@@ -819,6 +819,19 @@ function relToRoot(path: string, cwd: string | null): string {
 }
 
 const REPLAY_EOF = "DECANT_EOF";
+const COMMENT_UNSAFE = /[\p{Cc}\u2028\u2029]/gu;
+
+/**
+ * Escapes anything that could end a `#` comment line — transcript-supplied text
+ * (paths, titles, commands) is interpolated into comments of a generated bash
+ * script, so a raw newline there would emit an executable line.
+ */
+export function commentSafe(value: string): string {
+  return value.replace(
+    COMMENT_UNSAFE,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -827,7 +840,7 @@ export function shellQuote(value: string): string {
 export function writeBlock(path: string, content: string): string {
   const trimmed = content.replace(/\n+$/, "");
   if (trimmed.includes(REPLAY_EOF) || path.includes("\n") || path.includes(REPLAY_EOF)) {
-    return `# SKIPPED write to ${JSON.stringify(path)}: content or path unsafe for a heredoc — recreate it manually.\n`;
+    return `# SKIPPED write to ${commentSafe(JSON.stringify(path))}: content or path unsafe for a heredoc — recreate it manually.\n`;
   }
   const quoted = shellQuote(path);
   return `mkdir -p "$(dirname ${quoted})"\ncat > ${quoted} <<'${REPLAY_EOF}'\n${trimmed}\n${REPLAY_EOF}\n`;

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
+import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
@@ -208,6 +209,13 @@ export async function handleRequest(
       return withDb(config, context, (db) => {
         const economics = tokenEconomicsForSession(db, Number(sessionEconomicsMatch[1]));
         return economics == null ? json({ error: "session not found" }, 404) : json(economics);
+      });
+    }
+    const contextWindowMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/context-window$/);
+    if (request.method === "GET" && contextWindowMatch != null) {
+      return withDb(config, context, (db) => {
+        const timeline = contextWindowForSession(db, Number(contextWindowMatch[1]));
+        return timeline == null ? json({ error: "session not found" }, 404) : json(timeline);
       });
     }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);

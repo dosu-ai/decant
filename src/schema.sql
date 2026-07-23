@@ -1,5 +1,5 @@
--- decant:schema_version=10
--- Effective decant schema (migrations 1..10 applied), frozen as the current
+-- decant:schema_version=11
+-- Effective decant schema (migrations 1..11 applied), frozen as the current
 -- baseline. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -64,6 +64,10 @@ CREATE TABLE session (
   active_seconds INTEGER NOT NULL DEFAULT 0,
   outcome TEXT,
   work_type TEXT,
+  -- Context-window rollups materialized from per-message usage at ingest;
+  -- peak_context_tokens IS NULL marks a session that still needs the backfill.
+  context_window_tokens INTEGER,
+  peak_context_tokens INTEGER,
   UNIQUE(tool, source_session_id)
 );
 CREATE TABLE message (

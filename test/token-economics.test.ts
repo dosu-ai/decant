@@ -530,6 +530,13 @@ describe("token economics", () => {
               reasoning_output_tokens: 20,
               total_tokens: 880,
             },
+            last_token_usage: {
+              input_tokens: 800,
+              cached_input_tokens: 100,
+              output_tokens: 80,
+              reasoning_output_tokens: 20,
+              total_tokens: 880,
+            },
           },
         },
       }),
@@ -555,6 +562,11 @@ describe("token economics", () => {
     const aggregateCode = tokenEconomics(db).buckets.find((row) => row.bucket === "code");
     expect(aggregateCode).toMatchObject({ tool_calls: 1, sessions: 1 });
     expect(aggregateCode?.generation_tokens).toBeGreaterThan(0);
+    // Persisting Codex's last_token_usage powers context-window tooltips, but
+    // must not move its reported reasoning output out of planning economics.
+    expect(
+      tokenEconomics(db).buckets.find((row) => row.bucket === "planning")?.generation_tokens,
+    ).toBe(20);
     // One second generated the call and one second executed it. The latter is
     // resolved through tool_call.result_block_id rather than defaulting to context.
     expect(aggregateCode?.active_ms).toBe(2_000);

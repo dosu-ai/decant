@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 10;
+export const LATEST_SCHEMA_VERSION = 11;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -218,6 +218,15 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (10, datetime('now'))",
+      ).run();
+    }
+    if (current < 11) {
+      db.exec(`
+        ALTER TABLE session ADD COLUMN context_window_tokens INTEGER;
+        ALTER TABLE session ADD COLUMN peak_context_tokens INTEGER;
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (11, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

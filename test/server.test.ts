@@ -326,6 +326,36 @@ describe("server routes", () => {
     expect(malformed.body).toEqual({ error: "invalid search query" });
   });
 
+  test("serves per-session context-window timelines", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    const sessions = await route(config, "/api/sessions?tool=claude_code&limit=10");
+    const id =
+      (sessions.body as { id: number; source_session_id: string }[]).find(
+        (session) => session.source_session_id === "sess-claude-enriched",
+      )?.id ?? 0;
+
+    const timeline = await route(config, `/api/sessions/${id}/context-window`);
+    expect(timeline.status).toBe(200);
+    expect(timeline.body).toMatchObject({
+      session_id: id,
+      tool: "claude_code",
+      window_tokens: 200_000,
+      window_inferred: true,
+      peak_tokens: 1200,
+      points: [
+        expect.objectContaining({ seq: 1, context_tokens: 1000 }),
+        expect.objectContaining({ seq: 3, context_tokens: 1200 }),
+      ],
+      compactions: [
+        expect.objectContaining({ seq: 7, trigger: null, pre_tokens: 1200, post_tokens: null }),
+      ],
+    });
+
+    expect((await route(config, "/api/sessions/999999/context-window")).status).toBe(404);
+  });
+
   test("returns stats, files, tools, and recommendations", async () => {
     const config = freshConfig();
     seed(config);

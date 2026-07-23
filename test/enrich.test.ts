@@ -140,6 +140,29 @@ describe("facets", () => {
     expect(got.activeSeconds).toBe(490);
   });
 
+  test("standalone subagents count their sidechain prompts as turns", () => {
+    const content = [
+      '{"type":"user","uuid":"u1","isSidechain":true,"timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"inspect it"}}',
+      '{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":true,"timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("agent-a1", content, {
+      sourcePath: "/tmp/project/session/subagents/agent-a1.jsonl",
+    }).session;
+
+    expect(session.isSubagent).toBe(true);
+    expect(facets(session)).toMatchObject({ turnCount: 1, sidechainMessageCount: 2 });
+  });
+
+  test("compact summaries do not count as user turns", () => {
+    const content = [
+      '{"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"start"}}',
+      '{"type":"user","uuid":"u2","parentUuid":"u1","isCompactSummary":true,"timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"user","content":"carried summary"}}',
+    ].join("\n");
+    const session = parseClaudeSession("summary-turn", content).session;
+
+    expect(facets(session).turnCount).toBe(1);
+  });
+
   test("thinking chars count UTF-8 bytes", () => {
     const session = oneBlockSession("claude_code", {
       ordinal: 0,

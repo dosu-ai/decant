@@ -74,6 +74,7 @@ export interface TokenEconomics {
 
 interface SessionRow {
   id: number;
+  tool: string;
   started_at: string | null;
   model: string | null;
   total_input_tokens: number;
@@ -481,7 +482,7 @@ function vectorsForScope(
   const sessions = db
     .query(
       `${scopeCte}
-       SELECT s.id, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
+       SELECT s.id, s.tool, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
               s.total_cache_read_tokens, s.total_cache_creation_tokens,
               s.total_reasoning_tokens, s.est_reasoning_tokens
        FROM session s
@@ -646,7 +647,11 @@ function allocateGeneration(
         messageOutput.set(block.message_id, block.output_tokens);
       }
     }
-    if (messageOutput.size > 0) {
+    // Codex per-message output is persisted for context-window tooltips, but
+    // token economics intentionally keeps its established aggregate allocation:
+    // one token_count reading may stamp a tool-call row and would otherwise
+    // collapse reported reasoning/planning into that tool bucket.
+    if (messageOutput.size > 0 && session.tool !== "codex") {
       for (const [messageId, outputTokens] of messageOutput) {
         const rows = messageBlocks.get(messageId) ?? [];
         const phase = phaseOf(boundaries, session.id, rows[0]?.seq);

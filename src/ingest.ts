@@ -4,6 +4,7 @@ import type { Stats } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, basename as pathBasename } from "node:path";
 import { outcome, workType } from "./classify.ts";
+import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing, estimateCost } from "./cost.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
@@ -148,11 +149,12 @@ export function sync(
 
   resolveSubagentParents(db);
   const materializedEconomics = materializeMissingSessionEconomics(db);
+  const materializedWindows = materializeMissingContextWindows(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
     regenerateRecommendations(db);
   }
-  if (report.ingested > 0 || materializedEconomics > 0) {
+  if (report.ingested > 0 || materializedEconomics > 0 || materializedWindows > 0) {
     // Refresh planner statistics after write bursts; without ANALYZE data the
     // query planner picks pathological join orders on multi-GB archives.
     db.exec("PRAGMA optimize;");
@@ -666,6 +668,7 @@ function writeSession(
   }
 
   materializeSessionEconomics(db, sessionId);
+  materializeContextWindow(db, sessionId);
 
   return sessionId;
 }

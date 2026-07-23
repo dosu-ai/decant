@@ -623,31 +623,36 @@ table {
 }
 
 .sessions-table {
-  min-width: 1180px;
+  min-width: 1360px;
 }
 
 .sessions-table .col-session-tool {
-  width: 10%;
+  width: 9%;
 }
 
 .sessions-table .col-session-title {
-  width: 36%;
+  width: 34%;
 }
 
 .sessions-table .col-session-model {
-  width: 18%;
-}
-
-.sessions-table .col-session-subagents {
   width: 12%;
 }
 
+.sessions-table .col-session-context,
+.sessions-table .col-session-compactions {
+  width: 8%;
+}
+
+.sessions-table .col-session-subagents {
+  width: 9%;
+}
+
 .sessions-table .col-session-count {
-  width: 7%;
+  width: 5%;
 }
 
 .sessions-table .col-session-cost {
-  width: 8%;
+  width: 6%;
 }
 
 .sessions-table .col-session-started {
@@ -2716,4 +2721,256 @@ pre {
     animation-duration: 0.001ms;
     transition-duration: 0.001ms;
   }
+}
+
+.context-window-panel .ctx-strip-wrap {
+  padding: 6px 16px 10px;
+}
+
+.ctx-strip-frame {
+  position: relative;
+}
+
+.ctx-strip {
+  display: block;
+  /* The base stylesheet sizes every svg at 1em for icons; auto restores this
+   * chart's own width/height attributes. */
+  width: auto;
+  height: auto;
+  cursor: crosshair;
+}
+
+.ctx-strip text {
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  fill: var(--faint);
+}
+
+.ctx-strip-area {
+  fill: var(--info);
+  opacity: 0.07;
+}
+
+.ctx-strip-line {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.ctx-strip-window {
+  stroke: var(--line-strong);
+  stroke-dasharray: 3 4;
+}
+
+.ctx-strip-band {
+  fill: var(--warning);
+  opacity: 0.06;
+}
+
+.ctx-strip-band-label {
+  fill: var(--warning);
+  opacity: 0.85;
+}
+
+.ctx-strip-grid line {
+  stroke: var(--line);
+  opacity: 0.55;
+  stroke-dasharray: 2 5;
+}
+
+.ctx-strip-grid text {
+  fill: var(--faint);
+  opacity: 0.85;
+  font-size: 10px;
+}
+
+.ctx-strip-rug line {
+  stroke: var(--line-strong);
+}
+
+.ctx-strip-compaction line {
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 4;
+}
+
+.ctx-strip-compaction text {
+  fill: var(--accent-hover);
+  font-weight: 600;
+}
+
+.ctx-strip-compaction:hover line {
+  stroke: var(--accent-hover);
+  stroke-width: 2;
+}
+
+.ctx-strip-peak circle {
+  fill: var(--warning);
+}
+
+.ctx-strip-peak text {
+  fill: var(--muted);
+}
+
+.ctx-strip-end circle {
+  fill: var(--info);
+}
+
+.ctx-strip-end .ctx-strip-end-halo {
+  fill: none;
+  stroke: var(--info);
+  opacity: 0.4;
+}
+
+.ctx-strip-end text {
+  fill: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ctx-strip-hover line {
+  stroke: var(--line-strong);
+}
+
+.ctx-strip-hover circle {
+  fill: var(--info);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+
+.ctx-tooltip {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--overlay);
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--canvas) 60%, transparent);
+  padding: 8px 11px;
+  width: 184px;
+  pointer-events: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.ctx-tooltip-when {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.ctx-tooltip strong {
+  display: block;
+  margin: 1px 0 5px;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.ctx-tooltip-rows {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 12px;
+}
+
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.ctx-chip-bar {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--elevated);
+  width: 46px;
+  height: 7px;
+  overflow: hidden;
+}
+
+.ctx-chip-bar i {
+  display: block;
+  border-radius: 2px;
+  background: var(--info);
+  height: 100%;
+}
+
+.ctx-chip.is-warm .ctx-chip-bar i {
+  background: var(--warning);
+}
+
+.ctx-chip.is-hot {
+  color: var(--warning);
+}
+
+.ctx-chip.is-hot .ctx-chip-bar i {
+  background: var(--danger);
+}
+
+.compaction-turn .compaction-card {
+  border: 1px dashed color-mix(in oklab, var(--accent) 45%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--accent) 7%, transparent);
+  padding: 10px 14px;
+}
+
+.compaction-turn .turn-body {
+  border-left-color: color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+.compaction-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.compaction-card-head svg {
+  color: var(--accent-hover);
+}
+
+.compaction-card-tokens {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+
+.compaction-card p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.compact-summary > summary {
+  cursor: pointer;
+  color: var(--accent-hover);
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.compact-summary[open] > summary {
+  margin-bottom: 8px;
+}
+
+.session-context-peak {
+  color: var(--info);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.session-context-peak.is-warm {
+  color: var(--warning);
+}
+
+.session-context-peak.is-hot {
+  color: var(--danger);
 }

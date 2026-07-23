@@ -154,12 +154,13 @@ export function facets(session: NormalizedSession): Facets {
 
   for (const message of session.messages) {
     const sidechain = rawBoolean(message.raw, "isSidechain") === true;
+    const compactSummary = rawBoolean(message.raw, "isCompactSummary") === true;
     if (sidechain) {
       got.sidechainMessageCount += 1;
     }
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
-      rawBoolean(message.raw, "isCompactSummary") === true
+      rawString(message.raw, "type") === "compacted"
     ) {
       got.compactionCount += 1;
     }
@@ -189,7 +190,16 @@ export function facets(session: NormalizedSession): Facets {
       }
     }
 
-    if (message.role === "user" && hasRealText && !sidechain) {
+    // Sidechain rows embedded in a parent belong to a child agent, but a
+    // standalone subagent file uses those rows as its primary conversation.
+    // Machine-generated compaction summaries continue a turn rather than
+    // starting a new one.
+    if (
+      message.role === "user" &&
+      hasRealText &&
+      (!sidechain || session.isSubagent) &&
+      !compactSummary
+    ) {
       got.turnCount += 1;
     }
 

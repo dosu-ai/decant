@@ -130,6 +130,15 @@ describe("server routes", () => {
     });
   });
 
+  test("the HTML shell built by handleRequest denies framing", async () => {
+    const config = freshConfig();
+
+    const response = await handleRequest(new Request("http://127.0.0.1:3000/insights"), config);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
+  });
+
   test("events route streams hello and published updates", async () => {
     const config = freshConfig();
     const response = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);

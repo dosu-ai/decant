@@ -1067,9 +1067,17 @@ function requireJsonRequest(request: Request): Response | null {
     : json({ error: "content-type must be application/json" }, 415);
 }
 
+/** Shells returned from here deny framing. Note this covers only the fallback
+ * shell built by this handler: `serve()` answers the UI paths from Bun's
+ * HTMLBundle routes, which emit their own fixed headers and cannot carry these,
+ * so the SPA itself refuses to render when framed (src/ui/frame-guard.ts). */
 function html(value: string): Response {
   return new Response(value, {
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: {
+      "content-security-policy": "frame-ancestors 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "x-frame-options": "DENY",
+    },
   });
 }
 

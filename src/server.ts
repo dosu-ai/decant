@@ -564,7 +564,14 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           "url.path": new URL(request.url).pathname,
           ...exceptionAttributes(error),
         });
-        throw error;
+        const response = json(
+          { error: error instanceof Error ? error.message : String(error) },
+          500,
+        );
+        if (requestLogger != null) {
+          logHttpRequest(requestLogger, request, response, performance.now() - startedAt);
+        }
+        return response;
       }
     },
   });

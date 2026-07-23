@@ -67,6 +67,22 @@ describe("structured logging", () => {
     });
   });
 
+  test("supports LogTape's trace level without degrading it to debug", () => {
+    const lines: string[] = [];
+    configureLogging({
+      level: "trace",
+      write: (line) => lines.push(line),
+    });
+
+    getDecantLogger("test").trace("Detailed flow.");
+
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      level: "TRACE",
+      message: "Detailed flow.",
+    });
+  });
+
   test("maps watcher events to stable operational fields without source paths", () => {
     const lines: string[] = [];
     configureLogging({
@@ -121,5 +137,20 @@ describe("structured logging", () => {
     });
     expect(record?.["event.duration_ms"]).toBeNumber();
     expect(lines.join("")).not.toContain("do-not-log");
+  });
+
+  test("records standard ports when an HTTP URL omits an explicit port", () => {
+    const lines: string[] = [];
+    configureLogging({
+      level: "info",
+      write: (line) => lines.push(line),
+    });
+    const logger = getDecantLogger("server");
+
+    logHttpRequest(logger, new Request("http://localhost/"), new Response(), 1);
+    logHttpRequest(logger, new Request("https://localhost/"), new Response(), 1);
+
+    const records = lines.map((line) => JSON.parse(line) as StructuredLogRecord);
+    expect(records.map((record) => record["server.port"])).toEqual([80, 443]);
   });
 });

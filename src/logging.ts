@@ -115,7 +115,7 @@ export function logHttpRequest(
     "http.response.status_code": response.status,
     "http.route": httpRoute(url.pathname),
     "server.address": url.hostname,
-    "server.port": Number(url.port),
+    "server.port": url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
   };
   if (response.status >= 500) {
     logger.error("HTTP request completed.", {

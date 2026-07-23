@@ -96,7 +96,13 @@ export function restrictArchiveFile(path: string): void {
     // Best effort; see the doc comment.
   } finally {
     if (fd !== null) {
-      closeSync(fd);
+      try {
+        closeSync(fd);
+      } catch {
+        // Best effort, as above: a close that fails (EIO on a network or FUSE
+        // mount) must not escape a helper the archive open path calls three
+        // times before SQLite ever sees the file.
+      }
     }
   }
 }

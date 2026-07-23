@@ -29,11 +29,10 @@ transcripts never leave your machine.
 Use source during the pre-release TypeScript migration:
 
 ```bash
-bun install --frozen-lockfile
 bun run dev
 ```
 
-Requires Bun 1.3+. Install dependencies explicitly, then `bun run dev` starts
+Requires Bun 1.3+. `bun run dev` performs a frozen dependency install, starts
 `decant serve`, runs the startup sync, and keeps watching your source logs. The
 UI runs at `http://127.0.0.1:3000`.
 

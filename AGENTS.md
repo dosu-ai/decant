@@ -24,7 +24,7 @@ point). Docs: `docs/api/routes.md` (serve routes) and `docs/distribution.md`
 
 ## Setup
 
-- Bun 1.3+; install dependencies explicitly with `bun install --frozen-lockfile`.
+- Bun 1.3+ (`bun run dev` performs a frozen install before serving).
 - Docker only if you are validating the container image.
 - No Rust, Elixir, Erlang, or Swift toolchain is required for mainline work.
 

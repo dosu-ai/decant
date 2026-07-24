@@ -53,6 +53,7 @@ guard reads or writes the whole archive.
 - `POST /api/sync`
 - `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/sessions/:id`
+- `GET /api/sessions/:id/outline`
 - `GET /api/sessions/:id/token-economics`
 - `GET /api/sessions/:id/context-window`
 - `GET /api/projects`
@@ -76,6 +77,12 @@ guard reads or writes the whole archive.
 Session and archive token-economics routes aggregate versioned per-session
 vectors persisted during ingest. The first sync after a schema upgrade
 backfills vectors for unchanged sessions.
+
+Session detail accepts `message_limit` and `message_offset` for transcript
+pagination. The outline route returns only the sequence number and a short
+excerpt from the first text block for each human/prompt turn, so the sticky
+thread navigation can cover the whole session without loading every rich
+transcript block up front.
 
 The context-window route derives per-API-call window occupancy and compaction
 events at read time from persisted per-message token columns and raw records.

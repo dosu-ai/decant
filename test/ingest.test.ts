@@ -197,8 +197,8 @@ describe("upsertSession", () => {
     const db = openFreshDb(dir);
     const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
 
-    upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
-    upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b");
+    const firstId = upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+    const replacedId = upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b");
 
     const counts = db
       .query(
@@ -223,6 +223,7 @@ describe("upsertSession", () => {
       economics: 1,
       source_path: "/x/sample-again.jsonl",
     });
+    expect(replacedId).toBe(firstId);
     db.close();
   });
 

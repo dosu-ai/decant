@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
-import { getSession, type ListFilter, listProjects, listSessions, search } from "../src/query.ts";
+import {
+  getSession,
+  getSessionOutline,
+  type ListFilter,
+  listProjects,
+  listSessions,
+  search,
+} from "../src/query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { preview } from "../src/tools.ts";
 
@@ -44,6 +51,27 @@ describe("query reads", () => {
     const hits = search(db, "auth", 10);
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]?.tool).toBe("claude_code");
+    db.close();
+  });
+
+  test("pages session messages and returns a lightweight complete prompt outline", () => {
+    const db = seeded();
+    const id = listSessions(db)[0]?.id ?? 0;
+
+    expect(getSession(db, id, { messageLimit: 2, messageOffset: 0 })).toMatchObject({
+      messages: [{ seq: 0 }, { seq: 1 }],
+      message_offset: 0,
+      message_limit: 2,
+      has_more_messages: true,
+    });
+    expect(getSession(db, id, { messageLimit: 2, messageOffset: 2 })).toMatchObject({
+      messages: [{ seq: 2 }, { seq: 3 }],
+      message_offset: 2,
+      message_limit: 2,
+      has_more_messages: false,
+    });
+    expect(getSessionOutline(db, id)).toEqual([{ seq: 0, text: "Fix the failing auth test" }]);
+    expect(getSessionOutline(db, 999_999)).toBeNull();
     db.close();
   });
 

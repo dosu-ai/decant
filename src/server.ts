@@ -10,7 +10,7 @@ import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
-import { getSession, listProjects, listSessions, search } from "./query.ts";
+import { getSession, getSessionOutline, listProjects, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
   markImplemented,
@@ -216,6 +216,13 @@ export async function handleRequest(
       return withDb(config, context, (db) => {
         const timeline = contextWindowForSession(db, Number(contextWindowMatch[1]));
         return timeline == null ? json({ error: "session not found" }, 404) : json(timeline);
+      });
+    }
+    const sessionOutlineMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/outline$/);
+    if (request.method === "GET" && sessionOutlineMatch != null) {
+      return withDb(config, context, (db) => {
+        const outline = getSessionOutline(db, Number(sessionOutlineMatch[1]));
+        return outline == null ? json({ error: "session not found" }, 404) : json(outline);
       });
     }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);

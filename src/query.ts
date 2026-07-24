@@ -182,6 +182,15 @@ export interface SessionReadOptions {
   messageOffset?: number | null;
 }
 
+export interface SessionOutlineItem {
+  seq: number;
+  text: string;
+}
+
+interface SessionOutlineRow extends SessionOutlineItem {
+  raw_meta: string | null;
+}
+
 interface MessageBlockRow {
   message_id: number;
   seq: number;
@@ -349,6 +358,44 @@ export function getSession(
     has_more_messages:
       messageLimit != null ? messageOffset + messages.length < summaryRow.message_count : undefined,
   };
+}
+
+/**
+ * Return the lightweight prompt outline independently from paged transcript
+ * bodies. This keeps every turn reachable from the sticky navigation without
+ * loading every rich block, tool result, and code sample up front.
+ */
+export function getSessionOutline(db: Database, id: number): SessionOutlineItem[] | null {
+  const session = db.query("SELECT 1 AS present FROM session WHERE id = ?1").get(id);
+  if (session == null) {
+    return null;
+  }
+  const rows = db
+    .query(
+      `SELECT m.seq,
+              (
+                SELECT SUBSTR(b.text, 1, 240)
+                FROM block b
+                WHERE b.message_id = m.id AND b.type = 'text'
+                  AND TRIM(COALESCE(b.text, '')) != ''
+                ORDER BY b.ordinal
+                LIMIT 1
+              ) AS text,
+              ${MESSAGE_RAW_META_SQL} AS raw_meta
+       FROM message m
+       WHERE m.session_id = ?1 AND m.role = 'user'
+         AND EXISTS (
+           SELECT 1
+           FROM block b
+           WHERE b.message_id = m.id AND b.type = 'text'
+             AND TRIM(COALESCE(b.text, '')) != ''
+         )
+       ORDER BY m.seq`,
+    )
+    .all(id) as SessionOutlineRow[];
+  return rows
+    .filter((row) => !parseMessageRawMeta(row.raw_meta).isCompactSummary)
+    .map(({ seq, text }) => ({ seq, text }));
 }
 
 function buildSubagentDetails(

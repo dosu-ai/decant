@@ -57,9 +57,22 @@ import {
   prepareAnalyticsChartState,
 } from "./chart-state.ts";
 import { layoutContextAnnotations } from "./context-window-layout.ts";
+import { contextWindowDisplayMode } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
+import {
+  nextTranscriptSeq,
+  type TranscriptNavigationDirection,
+  transcriptNavigationDirection,
+  transcriptSeqFromHash,
+} from "./transcript-navigation.ts";
+import { appendTranscriptPage, transcriptWindowOffset } from "./transcript-pagination.ts";
+import {
+  type StructuredTranscriptKind,
+  type StructuredTranscriptLine,
+  structuredTranscriptBlock,
+} from "./transcript-presentation.ts";
 import "./styles.css";
 
 type Summary = {
@@ -436,7 +449,7 @@ const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
 const SESSION_PAGE_SIZE = 50;
-const SESSION_DETAIL_MESSAGE_LIMIT = 160;
+const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
   (_, index) => `session-row-skeleton-${index}`,
@@ -4114,27 +4127,50 @@ function SettingSelect({
 
 function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
+  const [outline, setOutline] = useState<SessionOutlineItemData[] | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [contextWindow, setContextWindow] = useState<ContextWindowTimelineData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [economicsError, setEconomicsError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
+  const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
+  const detailRef = useRef<SessionDetailData | null>(null);
+  const activeMessageSeqRef = useRef<number | null>(null);
+  const handledMessageHashRef = useRef<string | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadMorePromiseRef = useRef<Promise<boolean> | null>(null);
+  const sessionVersionRef = useRef(0);
 
   useEffect(() => {
+    const sessionVersion = sessionVersionRef.current + 1;
+    sessionVersionRef.current = sessionVersion;
     let cancelled = false;
     setDetail(null);
+    detailRef.current = null;
+    loadMorePromiseRef.current = null;
+    setOutline(null);
     setEconomics(null);
     setContextWindow(null);
     setError(null);
     setEconomicsError(null);
+    setLoadingMore(false);
+    setLoadMoreError(null);
+    setJumpingToSeq(null);
+    activeMessageSeqRef.current = null;
+    handledMessageHashRef.current = null;
+    setActiveMessageSeq(null);
     if (!Number.isFinite(id)) {
       setError("Invalid session id.");
       return;
     }
     void getJson<SessionDetailData>(
-      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}`,
     )
       .then((nextDetail) => {
-        if (!cancelled) {
+        if (!cancelled && sessionVersionRef.current === sessionVersion) {
+          detailRef.current = nextDetail;
           setDetail(nextDetail);
         }
       })
@@ -4142,6 +4178,15 @@ function SessionDetailView({ id }: { id: number }) {
         if (!cancelled) {
           setError(errorMessage(err));
         }
+      });
+    void getJson<SessionOutlineItemData[]>(`/api/sessions/${id}/outline`)
+      .then((nextOutline) => {
+        if (!cancelled && sessionVersionRef.current === sessionVersion) {
+          setOutline(nextOutline);
+        }
+      })
+      .catch(() => {
+        // The loaded transcript still supplies a progressive outline.
       });
     void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
       .then((nextEconomics) => {
@@ -4168,6 +4213,228 @@ function SessionDetailView({ id }: { id: number }) {
     };
   }, [id]);
 
+  const loadMoreMessages = useCallback((): Promise<boolean> => {
+    if (loadMorePromiseRef.current != null) {
+      return loadMorePromiseRef.current;
+    }
+    const current = detailRef.current;
+    if (current == null || current.has_more_messages !== true) {
+      return Promise.resolve(false);
+    }
+    const sessionVersion = sessionVersionRef.current;
+    const offset = (current.message_offset ?? 0) + current.messages.length;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    const request = getJson<SessionDetailData>(
+      `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}&message_offset=${offset}`,
+    )
+      .then((page) => {
+        if (sessionVersionRef.current !== sessionVersion) {
+          return false;
+        }
+        const latest = detailRef.current;
+        if (latest == null || latest.summary.id !== id) {
+          return false;
+        }
+        const messages = appendTranscriptPage(latest.messages, page.messages);
+        const nextDetail = {
+          ...latest,
+          messages,
+          message_offset: latest.message_offset ?? 0,
+          message_limit: SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+          has_more_messages: page.has_more_messages === true,
+        };
+        detailRef.current = nextDetail;
+        setDetail(nextDetail);
+        return page.has_more_messages === true;
+      })
+      .catch((err: unknown) => {
+        if (sessionVersionRef.current === sessionVersion) {
+          setLoadMoreError(errorMessage(err));
+        }
+        return false;
+      })
+      .finally(() => {
+        if (loadMorePromiseRef.current === request) {
+          loadMorePromiseRef.current = null;
+        }
+        if (sessionVersionRef.current === sessionVersion) {
+          setLoadingMore(false);
+        }
+      });
+    loadMorePromiseRef.current = request;
+    return request;
+  }, [id]);
+
+  const loadMessageWindow = useCallback(
+    async (seq: number): Promise<boolean> => {
+      const activeRequest = loadMorePromiseRef.current;
+      if (activeRequest != null) {
+        await activeRequest;
+      }
+      const current = detailRef.current;
+      if (current?.messages.some((message) => message.seq === seq) === true) {
+        return true;
+      }
+      const sessionVersion = sessionVersionRef.current;
+      const offset = transcriptWindowOffset(seq);
+      setLoadingMore(true);
+      setLoadMoreError(null);
+      const request = getJson<SessionDetailData>(
+        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}&message_offset=${offset}`,
+      )
+        .then((page) => {
+          if (sessionVersionRef.current !== sessionVersion) {
+            return false;
+          }
+          const nextDetail = {
+            ...page,
+            message_offset: page.message_offset ?? offset,
+            message_limit: SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+          };
+          detailRef.current = nextDetail;
+          setDetail(nextDetail);
+          return nextDetail.messages.some((message) => message.seq === seq);
+        })
+        .catch((err: unknown) => {
+          if (sessionVersionRef.current === sessionVersion) {
+            setLoadMoreError(errorMessage(err));
+          }
+          return false;
+        })
+        .finally(() => {
+          if (loadMorePromiseRef.current === request) {
+            loadMorePromiseRef.current = null;
+          }
+          if (sessionVersionRef.current === sessionVersion) {
+            setLoadingMore(false);
+          }
+        });
+      loadMorePromiseRef.current = request;
+      return request;
+    },
+    [id],
+  );
+
+  const jumpToMessage = useCallback(
+    async (seq: number) => {
+      const hash = `#message-${seq}`;
+      handledMessageHashRef.current = `${id}:${seq}`;
+      window.history.replaceState(null, "", hash);
+      setJumpingToSeq(seq);
+      try {
+        await loadMessageWindow(seq);
+        activeMessageSeqRef.current = seq;
+        setActiveMessageSeq(seq);
+        requestAnimationFrame(() => {
+          scrollTranscriptMessage(seq);
+        });
+      } finally {
+        setJumpingToSeq((current) => (current === seq ? null : current));
+      }
+    },
+    [id, loadMessageWindow],
+  );
+
+  const loadedMessageCount = detail?.messages.length ?? 0;
+  useEffect(() => {
+    if (detail == null) {
+      return;
+    }
+    const followMessageHash = () => {
+      const seq = transcriptSeqFromHash(window.location.hash);
+      if (seq == null) {
+        return;
+      }
+      const key = `${id}:${seq}`;
+      if (handledMessageHashRef.current === key) {
+        return;
+      }
+      handledMessageHashRef.current = key;
+      void jumpToMessage(seq);
+    };
+    followMessageHash();
+    window.addEventListener("hashchange", followMessageHash);
+    return () => window.removeEventListener("hashchange", followMessageHash);
+  }, [detail, id, jumpToMessage]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (
+      sentinel == null ||
+      loadedMessageCount === 0 ||
+      detail?.has_more_messages !== true ||
+      loadMoreError != null ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMoreMessages();
+        }
+      },
+      { rootMargin: "700px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [detail?.has_more_messages, loadedMessageCount, loadMoreError, loadMoreMessages]);
+
+  const navigateTranscript = useCallback(
+    async (direction: TranscriptNavigationDirection) => {
+      let current = detailRef.current;
+      if (current == null) {
+        return;
+      }
+      let sequences = renderableMessages(current.messages).map((message) => message.seq);
+      let activeSeq = activeMessageSeqRef.current;
+      if (activeSeq == null || !sequences.includes(activeSeq)) {
+        activeSeq = nearestTranscriptSeq(sequences);
+      }
+      let targetSeq = nextTranscriptSeq(sequences, activeSeq, direction);
+      if (targetSeq == null && direction === 1 && current.has_more_messages === true) {
+        await loadMoreMessages();
+        current = detailRef.current;
+        sequences =
+          current == null
+            ? sequences
+            : renderableMessages(current.messages).map((message) => message.seq);
+        targetSeq = nextTranscriptSeq(sequences, activeSeq, direction);
+      }
+      if (targetSeq == null) {
+        return;
+      }
+      activeMessageSeqRef.current = targetSeq;
+      setActiveMessageSeq(targetSeq);
+      handledMessageHashRef.current = `${id}:${targetSeq}`;
+      window.history.replaceState(null, "", `#message-${targetSeq}`);
+      requestAnimationFrame(() => {
+        scrollTranscriptMessage(targetSeq);
+      });
+    },
+    [id, loadMoreMessages],
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const direction = transcriptNavigationDirection(event);
+      if (
+        direction == null ||
+        event.repeat ||
+        isEditableTarget(event.target) ||
+        isEditableTarget(document.activeElement) ||
+        document.querySelector("[role='dialog']") != null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void navigateTranscript(direction);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigateTranscript]);
+
   if (error != null) {
     return <div className="notice danger">Unable to load session: {error}</div>;
   }
@@ -4177,11 +4444,10 @@ function SessionDetailView({ id }: { id: number }) {
   }
 
   const messages = renderableMessages(detail.messages);
-  const toc = threadToc(messages);
+  const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
   const stats = threadStats(detail.summary, messages, toc, contextWindow?.turn_count);
   const subagentsByToolUse = subagentMap(detail.subagents);
   const subagentRuns = countSubagentRuns(detail.subagents);
-  const indexBySeq = new Map(messages.map((message, index) => [message.seq, index] as const));
   const compactionBySeq = new Map(
     (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
   );
@@ -4241,19 +4507,40 @@ function SessionDetailView({ id }: { id: number }) {
         <SessionEconomicsSkeleton />
       )}
 
-      <ContextWindowPanel indexBySeq={indexBySeq} timeline={contextWindow} />
+      <ContextWindowPanel onJump={jumpToMessage} timeline={contextWindow} />
 
       <div className="transcript-layout">
         <aside className="toc">
           <div className="toc-inner">
             <div className="toc-title">In this thread</div>
+            <div className="toc-hotkeys">
+              <span>
+                <kbd>↑</kbd>
+                <kbd>↓</kbd>
+              </span>
+              Move through messages
+            </div>
             {toc.length === 0 ? <p>No prompts to list</p> : null}
             {toc.map((item) => (
-              <a href={`#turn-${item.index}`} key={item.index}>
+              <a
+                className={[
+                  jumpingToSeq === item.seq ? "is-loading" : null,
+                  activeMessageSeq === item.seq ? "is-current" : null,
+                ]
+                  .filter(isPresent)
+                  .join(" ")}
+                href={`#message-${item.seq}`}
+                key={item.seq}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void jumpToMessage(item.seq);
+                }}
+              >
                 <span className="toc-icon">
                   <Icon name={item.icon} />
                 </span>
                 <span>{item.label}</span>
+                {jumpingToSeq === item.seq ? <b>loading</b> : null}
                 {item.tools > 0 ? <b>{item.tools}</b> : null}
               </a>
             ))}
@@ -4261,11 +4548,26 @@ function SessionDetailView({ id }: { id: number }) {
         </aside>
 
         <div className="transcript-column">
-          {messages.map((message, index) => (
+          {(detail.message_offset ?? 0) > 0 ? (
+            <div className="transcript-window-start">
+              <span>
+                Viewing from message {formatInt((detail.message_offset ?? 0) + 1)} of{" "}
+                {formatInt(detail.summary.message_count)}
+              </span>
+              <button
+                className="button small secondary"
+                onClick={() => void jumpToMessage(0)}
+                type="button"
+              >
+                Start at the beginning
+              </button>
+            </div>
+          ) : null}
+          {messages.map((message) => (
             <TranscriptTurn
+              active={activeMessageSeq === message.seq}
               compaction={compactionBySeq.get(message.seq) ?? null}
-              index={index}
-              key={messageKey(message, index)}
+              key={messageKey(message)}
               message={message}
               sessionIsSubagent={detail.summary.is_subagent}
               subagentsByToolUse={subagentsByToolUse}
@@ -4274,11 +4576,39 @@ function SessionDetailView({ id }: { id: number }) {
             />
           ))}
           {detail.has_more_messages === true ? (
-            <div className="transcript-slice-note">
-              Showing the first {formatInt(detail.messages.length)} of{" "}
-              {formatInt(detail.summary.message_count)} messages for fast loading.
+            <div
+              aria-live="polite"
+              className="transcript-load-more"
+              ref={loadMoreSentinelRef}
+              role="status"
+            >
+              {loadMoreError != null ? (
+                <>
+                  <span>Couldn’t load the next messages: {loadMoreError}</span>
+                  <button
+                    className="button small secondary"
+                    onClick={() => void loadMoreMessages()}
+                    type="button"
+                  >
+                    Try again
+                  </button>
+                </>
+              ) : (
+                <span>
+                  {loadingMore ? "Loading more messages…" : "Keep scrolling to load more"}
+                  <small>
+                    {formatInt(detail.messages.length)} of {formatInt(detail.summary.message_count)}
+                  </small>
+                </span>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div className="transcript-end">
+              {(detail.message_offset ?? 0) === 0
+                ? `All ${formatInt(detail.summary.message_count)} messages loaded`
+                : "Reached the end of this session"}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -4305,6 +4635,11 @@ type SessionDetailData = {
   message_offset?: number;
   message_limit?: number | null;
   has_more_messages?: boolean;
+};
+
+type SessionOutlineItemData = {
+  seq: number;
+  text: string;
 };
 
 type ContextWindowPointData = {
@@ -4356,16 +4691,16 @@ type TranscriptBlockData = {
 };
 
 function TranscriptTurn({
+  active,
   compaction,
-  index,
   message,
   sessionIsSubagent,
   subagentsByToolUse,
   tool,
   windowTokens,
 }: {
+  active: boolean;
   compaction: ContextWindowCompactionData | null;
-  index: number;
   message: SessionDetailData["messages"][number];
   sessionIsSubagent: boolean;
   subagentsByToolUse: Map<string, SubagentDetailData[]>;
@@ -4373,7 +4708,14 @@ function TranscriptTurn({
   windowTokens: number | null;
 }) {
   if (message.is_compact_boundary) {
-    return <CompactionTurn compaction={compaction} index={index} message={message} />;
+    return (
+      <CompactionTurn
+        active={active}
+        anchorId={`message-${message.seq}`}
+        compaction={compaction}
+        message={message}
+      />
+    );
   }
   const contextTokens =
     message.role === "assistant" && (!message.is_sidechain || sessionIsSubagent)
@@ -4384,16 +4726,20 @@ function TranscriptTurn({
       block={block}
       key={blockKey(block, blockIndex)}
       subagents={subagentsByToolUse.get(block.tool_use_id ?? "") ?? []}
+      tool={tool}
     />
   ));
+  const providerClass =
+    message.role === "assistant" ? ` provider-${providerIdentity(tool).key}` : "";
   return (
     <article
-      className={`turn${message.is_compact_summary ? " compact-summary-turn" : ""}`}
-      id={`turn-${index}`}
+      aria-current={active ? "true" : undefined}
+      className={`turn${message.is_compact_summary ? " compact-summary-turn" : ""}${
+        active ? " is-keyboard-active" : ""
+      }${providerClass}`}
+      id={`message-${message.seq}`}
     >
-      <Badge mono tone={message.is_compact_summary ? "accent" : roleTone(message.role)}>
-        {message.is_compact_summary ? "Summary" : roleLabel(message.role, tool)}
-      </Badge>
+      <TranscriptIdentityBadge message={message} tool={tool} />
       <div className="turn-meta">
         {message.model != null ? <ModelBadge model={message.model} /> : null}
         {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
@@ -4416,19 +4762,25 @@ function TranscriptTurn({
 }
 
 function CompactionTurn({
+  active = false,
+  anchorId,
   compaction,
-  index,
   message,
 }: {
+  active?: boolean;
+  anchorId?: string;
   compaction: ContextWindowCompactionData | null;
-  index: number;
   message: SessionDetailData["messages"][number];
 }) {
   const trigger = compaction?.trigger ?? message.compact_trigger;
   const pre = compaction?.pre_tokens ?? message.compact_pre_tokens;
   const post = compaction?.post_tokens ?? null;
   return (
-    <article className="turn compaction-turn" id={`turn-${index}`}>
+    <article
+      aria-current={active ? "true" : undefined}
+      className={`turn compaction-turn${active ? " is-keyboard-active" : ""}`}
+      id={anchorId}
+    >
       <Badge mono tone="accent">
         Compacted
       </Badge>
@@ -4497,30 +4849,71 @@ const STRIP_ANNOTATION_LABEL_YS = [28, 41] as const;
 const STRIP_AUTO_COMPACT_ZONE = 0.8;
 
 function ContextWindowPanel({
-  indexBySeq,
+  onJump,
   timeline,
 }: {
-  indexBySeq: Map<number, number>;
+  onJump: (seq: number) => void | Promise<void>;
   timeline: ContextWindowTimelineData | null;
 }) {
-  if (timeline == null || timeline.window_tokens == null || timeline.points.length < 2) {
+  const mode = contextWindowDisplayMode(timeline);
+  if (mode === "hidden" || timeline == null) {
     return null;
   }
+  if (mode === "unavailable" || timeline.window_tokens == null) {
+    return <ContextWindowUnavailable timeline={timeline} />;
+  }
   return (
-    <ContextWindowStrip
-      indexBySeq={indexBySeq}
-      timeline={timeline}
-      windowTokens={timeline.window_tokens}
-    />
+    <ContextWindowStrip onJump={onJump} timeline={timeline} windowTokens={timeline.window_tokens} />
+  );
+}
+
+function ContextWindowUnavailable({ timeline }: { timeline: ContextWindowTimelineData }) {
+  const hasUsage = timeline.points.length > 0;
+  return (
+    <section className="panel context-window-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Context window</h2>
+          <p>How full the model's context window was at each API call across the session.</p>
+        </div>
+        <div className="activity-summary">
+          {timeline.window_tokens != null ? (
+            <span>
+              <strong>{compact(timeline.window_tokens)}</strong>
+              capacity
+            </span>
+          ) : null}
+          {hasUsage ? (
+            <span>
+              <strong>{compact(timeline.peak_tokens)}</strong>
+              peak tokens
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div className="ctx-unavailable">
+        <Icon name="info" />
+        <div>
+          <strong>
+            {hasUsage ? "Window capacity wasn’t recorded" : "Per-call usage wasn’t recorded"}
+          </strong>
+          <p>
+            {hasUsage
+              ? "The transcript includes token usage, but this source did not record the model’s total context capacity, so a trustworthy percentage is unavailable."
+              : "This source session does not include the per-call token readings needed to reconstruct context usage."}
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
 function ContextWindowStrip({
-  indexBySeq,
+  onJump,
   timeline,
   windowTokens,
 }: {
-  indexBySeq: Map<number, number>;
+  onJump: (seq: number) => void | Promise<void>;
   timeline: ContextWindowTimelineData;
   windowTokens: number;
 }) {
@@ -4686,10 +5079,7 @@ function ContextWindowStrip({
     if (hovered == null) {
       return;
     }
-    const turnIndex = indexBySeq.get(hovered.seq);
-    if (turnIndex != null) {
-      window.location.hash = `#turn-${turnIndex}`;
-    }
+    void onJump(hovered.seq);
   };
 
   let previousTickLabelX = Number.NEGATIVE_INFINITY;
@@ -4809,7 +5199,6 @@ function ContextWindowStrip({
                   })}
                 </g>
                 {compactionMarks.map(({ compaction, x }, compactionIndex) => {
-                  const turnIndex = indexBySeq.get(compaction.seq);
                   const label = compactionLabels[compactionIndex];
                   const marker = (
                     <g className="ctx-strip-compaction" key={`marker-${compaction.seq}`}>
@@ -4832,12 +5221,17 @@ function ContextWindowStrip({
                       </rect>
                     </g>
                   );
-                  return turnIndex != null ? (
-                    <a href={`#turn-${turnIndex}`} key={`compaction-${compaction.seq}`}>
+                  return (
+                    <a
+                      href={`#message-${compaction.seq}`}
+                      key={`compaction-${compaction.seq}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void onJump(compaction.seq);
+                      }}
+                    >
                       {marker}
                     </a>
-                  ) : (
-                    <g key={`compaction-${compaction.seq}`}>{marker}</g>
                   );
                 })}
                 {peakPoint != null && peakIndex !== lastIndex ? (
@@ -4947,9 +5341,11 @@ function compactionLabel(compaction: ContextWindowCompactionData): string {
 function TranscriptBlock({
   block,
   subagents = [],
+  tool = "",
 }: {
   block: TranscriptBlockData;
   subagents?: SubagentDetailData[];
+  tool?: string;
 }) {
   if (block.block_type === "tool_use") {
     return (
@@ -4998,7 +5394,7 @@ function TranscriptBlock({
   }
   const special = specialTranscriptBlock(block.text);
   if (special != null) {
-    return <SpecialTranscriptBlock block={special} />;
+    return <SpecialTranscriptBlock block={special} tool={tool} />;
   }
   return <p className="text-block">{block.text}</p>;
 }
@@ -5073,10 +5469,20 @@ type SpecialTranscriptBlockData = {
   tooltip: string;
   icon: IconName;
   chips: string[];
+  kind?: StructuredTranscriptKind;
+  dialogue?: StructuredTranscriptLine[];
 };
 
 function specialTranscriptBlock(text: string): SpecialTranscriptBlockData | null {
   const trimmed = text.trimStart();
+  const structured = structuredTranscriptBlock(text);
+  if (structured != null) {
+    return {
+      ...structured,
+      icon: structuredTranscriptIcon(structured.kind),
+      tooltip: structuredTranscriptTooltip(structured.kind),
+    };
+  }
   if (isPermissionsText(text)) {
     const sandbox = matchText(text, /`sandbox_mode`\s+is\s+`([^`]+)`/);
     const approval = matchText(text, /Approval policy is currently ([^.]+)\./);
@@ -5173,11 +5579,20 @@ function specialTranscriptBlock(text: string): SpecialTranscriptBlockData | null
   return null;
 }
 
-function SpecialTranscriptBlock({ block }: { block: SpecialTranscriptBlockData }) {
+function SpecialTranscriptBlock({
+  block,
+  tool,
+}: {
+  block: SpecialTranscriptBlockData;
+  tool: string;
+}) {
   return (
     <Tooltip content={block.tooltip}>
       {(tooltipProps) => (
-        <div className="special-block" {...tooltipProps}>
+        <div
+          className={`special-block${block.kind != null ? ` is-${block.kind}` : ""}`}
+          {...tooltipProps}
+        >
           <span className="special-icon">
             <Icon name={block.icon} />
           </span>
@@ -5196,11 +5611,53 @@ function SpecialTranscriptBlock({ block }: { block: SpecialTranscriptBlockData }
                 ))}
               </div>
             ) : null}
+            {block.dialogue != null && block.dialogue.length > 0 ? (
+              <div className="realtime-dialogue">
+                {keyedTranscriptLines(block.dialogue).map(({ key, line }) => (
+                  <div className={`realtime-line is-${line.speaker}`} key={key}>
+                    <TranscriptSpeakerBadge speaker={line.speaker} tool={tool} />
+                    <p>{line.text}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       )}
     </Tooltip>
   );
+}
+
+function structuredTranscriptIcon(kind: StructuredTranscriptKind): IconName {
+  if (kind === "realtime-ended") {
+    return "clock";
+  }
+  if (kind === "realtime-handoff") {
+    return "messages";
+  }
+  return "cpu";
+}
+
+function keyedTranscriptLines(
+  lines: readonly StructuredTranscriptLine[],
+): { key: string; line: StructuredTranscriptLine }[] {
+  const occurrences = new Map<string, number>();
+  return lines.map((line) => {
+    const base = `${line.speaker}:${line.text}`;
+    const occurrence = (occurrences.get(base) ?? 0) + 1;
+    occurrences.set(base, occurrence);
+    return { key: `${base}:${occurrence}`, line };
+  });
+}
+
+function structuredTranscriptTooltip(kind: StructuredTranscriptKind): string {
+  if (kind === "realtime-ended") {
+    return "Marks the point where a realtime voice conversation returned to normal typed chat.";
+  }
+  if (kind === "realtime-handoff") {
+    return "A structured voice-mode envelope rendered as readable dialogue instead of raw runtime markup.";
+  }
+  return "Agent coordination instructions supplied by the runtime, summarized without the raw internal boilerplate.";
 }
 
 function matchText(value: string, pattern: RegExp): string | null {
@@ -5241,27 +5698,26 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         </div>
       ) : (
         <div className="subagent-transcript">
-          {messages.map((message, index) =>
+          {messages.map((message) =>
             message.is_compact_boundary ? (
-              <CompactionTurn
-                compaction={null}
-                index={index}
-                key={messageKey(message, index)}
-                message={message}
-              />
+              <CompactionTurn compaction={null} key={messageKey(message)} message={message} />
             ) : (
-              <article className="turn is-subagent" key={messageKey(message, index)}>
-                <Badge mono tone={message.is_compact_summary ? "accent" : roleTone(message.role)}>
-                  {message.is_compact_summary
-                    ? "Summary"
-                    : roleLabel(message.role, subagent.summary.tool)}
-                </Badge>
+              <article
+                className={`turn is-subagent${
+                  message.role === "assistant"
+                    ? ` provider-${providerIdentity(subagent.summary.tool).key}`
+                    : ""
+                }`}
+                key={messageKey(message)}
+              >
+                <TranscriptIdentityBadge message={message} tool={subagent.summary.tool} />
                 <div className="turn-body">
                   {message.blocks.map((block, blockIndex) => (
                     <TranscriptBlock
                       block={block}
                       key={blockKey(block, blockIndex)}
                       subagents={nested.get(block.tool_use_id ?? "") ?? []}
+                      tool={subagent.summary.tool}
                     />
                   ))}
                 </div>
@@ -5314,7 +5770,7 @@ function renderableMessages(
 }
 
 function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
-  return messages.flatMap((message, index) => {
+  return messages.flatMap((message) => {
     // Compact summaries are machine-generated continuations, not prompts.
     if (message.role !== "user" || message.is_compact_summary) {
       return [];
@@ -5327,7 +5783,7 @@ function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
     }
     return [
       {
-        index,
+        seq: message.seq,
         ...tocPresentation(label),
         tools: message.blocks.filter((block) => block.block_type === "tool_use").length,
       },
@@ -5335,8 +5791,16 @@ function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   });
 }
 
+function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[] {
+  return outline.map((item) => ({
+    seq: item.seq,
+    ...tocPresentation(item.text),
+    tools: 0,
+  }));
+}
+
 type ThreadTocItem = {
-  index: number;
+  seq: number;
   label: string;
   tools: number;
   icon: IconName;
@@ -5357,7 +5821,7 @@ function threadStats(
   fullTurnCount?: number | null,
 ) {
   return {
-    turns: fullTurnCount ?? toc.length,
+    turns: fullTurnCount != null && fullTurnCount > 0 ? fullTurnCount : toc.length,
     replies: messages.filter((message) => message.role === "assistant").length,
     toolCalls: messages.reduce(
       (sum, message) =>
@@ -5368,14 +5832,8 @@ function threadStats(
   };
 }
 
-function messageKey(message: SessionDetailData["messages"][number], index: number): string {
-  return [
-    index,
-    message.role,
-    message.timestamp ?? "no-time",
-    message.model ?? "no-model",
-    message.blocks.map((block) => `${block.ordinal}:${block.block_type}`).join(","),
-  ].join("|");
+function messageKey(message: SessionDetailData["messages"][number]): string {
+  return `${message.seq}:${message.role}`;
 }
 
 function blockKey(block: TranscriptBlockData, index: number): string {
@@ -5388,24 +5846,151 @@ function blockKey(block: TranscriptBlockData, index: number): string {
   ].join("|");
 }
 
-function roleTone(role: string): BadgeTone {
-  return role === "assistant" ? "accent" : role === "tool" ? "info" : "neutral";
+function TranscriptIdentityBadge({
+  message,
+  tool,
+}: {
+  message: SessionDetailData["messages"][number];
+  tool: string;
+}) {
+  if (message.is_compact_summary) {
+    return (
+      <Badge mono tone="accent">
+        <Icon name="refresh" />
+        Summary
+      </Badge>
+    );
+  }
+  const specialKind = messageSpecialKind(message);
+  if (specialKind != null) {
+    const realtime = specialKind === "realtime-ended" || specialKind === "realtime-handoff";
+    return (
+      <Badge tone={realtime ? "info" : "neutral"}>
+        <Icon name={realtime ? "messages" : "shield"} />
+        {realtime ? "Realtime" : "Runtime"}
+      </Badge>
+    );
+  }
+  if (message.role === "assistant") {
+    const provider = providerIdentity(tool);
+    return (
+      <Badge tone={provider.tone}>
+        {provider.icon == null ? <Icon name="cpu" /> : <BrandMark name={provider.icon} />}
+        {provider.label}
+      </Badge>
+    );
+  }
+  if (message.role === "tool") {
+    return (
+      <Badge tone="info">
+        <Icon name="tools" />
+        Tool
+      </Badge>
+    );
+  }
+  if (message.role === "system") {
+    return (
+      <Badge>
+        <Icon name="shield" />
+        System
+      </Badge>
+    );
+  }
+  return <Badge>You</Badge>;
 }
 
-function roleLabel(role: string, tool: string): string {
-  if (role === "user") {
-    return "You";
+function TranscriptSpeakerBadge({
+  speaker,
+  tool,
+}: {
+  speaker: StructuredTranscriptLine["speaker"];
+  tool: string;
+}) {
+  if (speaker === "user") {
+    return <span className="realtime-speaker">You</span>;
   }
-  if (role === "assistant") {
-    return tool === "codex" ? "Codex" : "Claude";
+  const provider = providerIdentity(tool);
+  return (
+    <span className={`realtime-speaker tone-${provider.tone}`}>
+      {provider.icon == null ? <Icon name="cpu" /> : <BrandMark name={provider.icon} />}
+      {provider.label}
+    </span>
+  );
+}
+
+function messageSpecialKind(
+  message: SessionDetailData["messages"][number],
+): StructuredTranscriptKind | "runtime" | null {
+  const blocks = message.blocks.filter(
+    (block) => block.block_type === "text" && isPresent(block.text),
+  );
+  if (blocks.length === 0 || blocks.length !== message.blocks.length) {
+    return null;
   }
-  if (role === "tool") {
-    return "Tool";
+  let kind: StructuredTranscriptKind | "runtime" | null = null;
+  for (const block of blocks) {
+    const special = specialTranscriptBlock(block.text ?? "");
+    if (special == null) {
+      return null;
+    }
+    kind ??= special.kind ?? "runtime";
   }
-  if (role === "system") {
-    return "System";
+  return kind;
+}
+
+function providerIdentity(tool: string): {
+  key: "assistant" | "claude" | "openai";
+  label: string;
+  tone: BadgeTone;
+  icon: BrandIconName | null;
+} {
+  if (tool === "claude_code") {
+    return { key: "claude", label: "Claude", tone: "claude", icon: "claude" };
   }
-  return role;
+  if (tool === "codex") {
+    return { key: "openai", label: "Codex", tone: "openai", icon: "openai" };
+  }
+  return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
+}
+
+function nearestTranscriptSeq(sequences: readonly number[]): number | null {
+  let nearest: { distance: number; seq: number } | null = null;
+  const readingLine = 184;
+  for (const seq of sequences) {
+    const element = document.getElementById(`message-${seq}`);
+    if (element == null) {
+      continue;
+    }
+    const bounds = element.getBoundingClientRect();
+    if (bounds.bottom < readingLine) {
+      continue;
+    }
+    const distance = Math.abs(bounds.top - readingLine);
+    if (nearest == null || distance < nearest.distance) {
+      nearest = { distance, seq };
+    }
+  }
+  return nearest?.seq ?? sequences[0] ?? null;
+}
+
+function scrollTranscriptMessage(seq: number) {
+  document.getElementById(`message-${seq}`)?.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    block: "start",
+  });
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.isContentEditable ||
+    target.matches("input, textarea, select") ||
+    target.closest(
+      "a, button, summary, input, textarea, select, [contenteditable='true'], [role='button'], [role='link'], [role='slider'], [role='tab']",
+    ) != null
+  );
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {

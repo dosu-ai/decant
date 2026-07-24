@@ -308,6 +308,34 @@ describe("server routes", () => {
       summary: { id },
       messages: expect.any(Array),
     });
+    const firstMessagePage = await route(
+      config,
+      `/api/sessions/${id}?message_limit=2&message_offset=0`,
+    );
+    expect(firstMessagePage.body).toMatchObject({
+      messages: [{ seq: 0 }, { seq: 1 }],
+      message_offset: 0,
+      message_limit: 2,
+      has_more_messages: true,
+    });
+    const messageCount = (detail.body as { summary: { message_count: number } }).summary
+      .message_count;
+    const lastMessagePage = await route(
+      config,
+      `/api/sessions/${id}?message_limit=2&message_offset=${Math.max(0, messageCount - 1)}`,
+    );
+    expect(lastMessagePage.body).toMatchObject({
+      messages: expect.any(Array),
+      message_offset: Math.max(0, messageCount - 1),
+      message_limit: 2,
+      has_more_messages: false,
+    });
+    const outline = await route(config, `/api/sessions/${id}/outline`);
+    expect(outline.status).toBe(200);
+    expect(outline.body).toEqual([
+      expect.objectContaining({ seq: expect.any(Number), text: expect.any(String) }),
+    ]);
+    expect((await route(config, "/api/sessions/999999/outline")).status).toBe(404);
 
     const search = await route(config, "/api/search", {
       method: "POST",

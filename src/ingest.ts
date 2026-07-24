@@ -493,11 +493,12 @@ function writeSession(
        turn_count, error_count, interruption_count, compaction_count, sidechain_message_count,
        agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
        active_seconds, outcome, work_type,
-       est_reasoning_tokens, reasoning_source
+       est_reasoning_tokens, reasoning_source,
+       id
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
-             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44)`,
+             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45)`,
   ).run(
     s.tool,
     s.sourceSessionId,
@@ -543,6 +544,7 @@ function writeSession(
     gotWorkType,
     s.estReasoningTokens,
     s.reasoningSource,
+    existing?.id ?? null,
   );
   const sessionId = lastInsertRowid(db);
 

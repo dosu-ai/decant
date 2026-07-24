@@ -154,8 +154,8 @@ means no gateway is derived.
 deliberately want other hosts in: the `Host` header check is not an access
 control for non-browser clients, which can send `Host: localhost` freely.
 
-Archives older than schema v8 are rebuild-only. v8 through v12 archives migrate
-forward to v13 on open; the next `decant sync` backfills persisted economics
+Archives older than schema v8 are rebuild-only. v8 through v13 archives migrate
+forward to v14 on open; the next `decant sync` backfills persisted economics
 vectors and context-window rollups for unchanged sessions. Older archives should
 be deleted and rebuilt with `decant sync`. Source logs remain the source of
 truth, so nothing is lost by rebuilding.

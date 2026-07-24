@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
+const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 function rule(selector: string): string {
   const start = styles.indexOf(`${selector} {`);

@@ -58,7 +58,7 @@ interface SessionSummaryRow
   > {
   is_archived: number;
   is_subagent: number;
-  reasoning_effort_levels_json: string;
+  reasoning_effort_levels_json: string | null;
 }
 
 const SESSION_SUMMARY_SELECT = `
@@ -498,7 +498,10 @@ function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
   };
 }
 
-function parseReasoningEffortLevels(value: string): string[] {
+function parseReasoningEffortLevels(value: string | null | undefined): string[] {
+  if (value == null || value.trim() === "") {
+    return [];
+  }
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed)

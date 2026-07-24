@@ -74,6 +74,10 @@ describe("query reads", () => {
       reasoning_effort: "mixed",
       reasoning_effort_levels: ["high", "ultra"],
     });
+
+    db.query("UPDATE session SET reasoning_effort_levels = '' WHERE id = ?").run(id);
+    expect(listSessions(db)[0]?.reasoning_effort_levels).toEqual([]);
+    expect(getSession(db, id)?.summary.reasoning_effort_levels).toEqual([]);
     db.close();
   });
 

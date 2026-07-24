@@ -10,6 +10,8 @@ describe("effort tooltip", () => {
 
   test("stays absent when there is nothing useful to explain", () => {
     expect(effortTooltip("mixed", [])).toBeUndefined();
+    expect(effortTooltip("mixed", null)).toBeUndefined();
+    expect(effortTooltip("mixed", undefined)).toBeUndefined();
     expect(effortTooltip("ultra", ["ultra"])).toBeUndefined();
     expect(effortTooltip(null, ["high", "ultra"])).toBeUndefined();
   });

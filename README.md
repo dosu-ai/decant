@@ -12,6 +12,8 @@ decant reads the JSONL logs those tools already write
 the formats into one WAL + FTS5 SQLite archive, and keeps everything local. Your
 transcripts never leave your machine.
 
+![decant serve UI showing the session archive with synthetic demo data](docs/assets/decant-serve.png)
+
 ## Features
 
 - One archive for Claude Code and Codex sessions.
@@ -26,7 +28,7 @@ transcripts never leave your machine.
 
 ## Quick Start
 
-Use source during the pre-release TypeScript migration:
+Run from source. This works today, before any package or image is published:
 
 ```bash
 bun run dev
@@ -36,17 +38,34 @@ Requires Bun 1.3+. `bun run dev` performs a frozen dependency install, starts
 `decant serve`, runs the startup sync, and keeps watching your source logs. The
 UI runs at `http://127.0.0.1:3000`.
 
-After the first Release workflow publishes packages, install from npm without
-installing Bun:
+Everything below is **available from v0.1.0**, once the Release workflow has
+published a version. See [Install Matrix](#install-matrix) for the full set of
+options and when to pick which.
+
+Run it with npm, no Bun install needed:
 
 ```bash
-npx @dosu/decant sync
-npx @dosu/decant ls
-npx @dosu/decant search "auth bug"
-npx @dosu/decant serve
+npx decant sync
+npx decant ls
+npx decant search "auth bug"
+npx decant serve
 ```
 
-After the first Release workflow publishes an image, run the GHCR image:
+Install it with Homebrew:
+
+```bash
+brew tap dosu-ai/dosu && brew install decant
+decant serve
+```
+
+Install it without Node, straight from the release assets:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+decant serve
+```
+
+Run the GHCR image:
 
 ```bash
 docker run --rm \
@@ -135,10 +154,11 @@ means no gateway is derived.
 deliberately want other hosts in: the `Host` header check is not an access
 control for non-browser clients, which can send `Host: localhost` freely.
 
-Archives older than schema v8 are rebuild-only. v8 and v9 archives migrate to
-v10 on open; the next `decant sync` backfills persisted economics vectors for
-unchanged sessions. Older archives should be deleted and rebuilt with
-`decant sync`. Source logs remain the source of truth.
+Archives older than schema v8 are rebuild-only. v8 through v12 archives migrate
+forward to v13 on open; the next `decant sync` backfills persisted economics
+vectors and context-window rollups for unchanged sessions. Older archives should
+be deleted and rebuilt with `decant sync`. Source logs remain the source of
+truth, so nothing is lost by rebuilding.
 
 ## How It Works
 
@@ -159,9 +179,72 @@ tag.
 
 Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
 Operational log fields and privacy rules live in [docs/logging.md](docs/logging.md).
-Distribution notes live in [docs/distribution.md](docs/distribution.md).
-Release automation is configured to publish npm packages and the GHCR image from
-the `Release` workflow once a version is dispatched.
+Distribution notes live in [docs/distribution.md](docs/distribution.md), and the
+tag-driven release pipeline is documented in
+[docs/releasing.md](docs/releasing.md).
+
+## Install Matrix
+
+Ordered from the most streamlined to the most manual. Everything except "build
+from source" is **available from v0.1.0**, once the Release workflow has
+published a version. See [docs/distribution.md](docs/distribution.md) for build
+details and per-artifact verification.
+
+1. **npx / npm** — zero persistent install, or a global one:
+
+   ```bash
+   npx decant sync
+   npm i -g decant   # persistent install
+   ```
+
+   `@dosu/decant` is a scoped alias for the same launcher if you prefer a
+   scoped name.
+
+2. **Homebrew** — via the `dosu-ai/dosu` tap:
+
+   ```bash
+   brew tap dosu-ai/dosu && brew install decant
+   brew install dosu-ai/dosu/decant   # equivalent one-liner
+   ```
+
+3. **Install script** — for machines without Node:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+   ```
+
+   Detects your platform, downloads the matching release tarball, verifies it
+   against `SHA256SUMS`, and installs to `${DECANT_INSTALL_DIR:-~/.local/bin}`.
+   Pin a version with `DECANT_VERSION`, skip the `PATH` edit with
+   `DECANT_NO_MODIFY_PATH=1`, or point `DECANT_BASE_URL` at a mirror — see
+   [docs/distribution.md](docs/distribution.md) for the full knob list.
+
+4. **Docker** — the `ghcr.io/dosu-ai/decant` image, per the `docker run` recipe
+   in [Quick Start](#quick-start). Keep the `127.0.0.1:` host prefix on the port
+   publish.
+
+5. **Build from source** — the contributor path, and the only one that works
+   before v0.1.0:
+
+   ```bash
+   bun run dev
+   ```
+
+**macOS, tarball downloads only.** v0.1.0 binaries are ad-hoc signed but not
+notarized, so a tarball downloaded through a browser carries
+`com.apple.quarantine` and Gatekeeper blocks the first run. Clear it with
+`xattr -d com.apple.quarantine ./decant`. `brew install`, `npx decant`, and the
+install script are unaffected, because none of them set the quarantine
+attribute. Integrity comes from SLSA build provenance, `SHA256SUMS`, and the
+`gh attestation verify` check `install.sh` runs.
+
+**Upgrading.** `npx decant@latest` always resolves the newest published
+version. For a persistent install, run `npm i -g decant@latest`,
+`brew upgrade decant`, re-run the install script, or
+`docker pull ghcr.io/dosu-ai/decant:latest`. A build that reports
+`0.0.0-dev` from `decant --version` is an unstamped one — anything built from
+source, or by CI without an explicit version; released artifacts carry a real
+version.
 
 ## Development
 

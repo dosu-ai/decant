@@ -1,4 +1,4 @@
-## Template for Formula/decant.rb in the optional dosu-ai/homebrew-dosu tap.
+## Template for Formula/decant.rb in the dosu-ai/homebrew-dosu tap.
 ##
 ## Rendered and smoke-tested by .github/workflows/release.yml, then pushed by
 ## tap-update on every stable is_latest release. The placeholder scheme is

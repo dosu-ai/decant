@@ -1,7 +1,7 @@
 # Distribution
 
-Decant's TypeScript migration ships as one Bun-authored app through three
-paths: npm, Docker, and source.
+Decant ships as one Bun-authored app through five paths: npm, the shell
+installer, Homebrew, Docker, and source.
 
 ## npm
 
@@ -13,14 +13,17 @@ The package is a release target, not a currently published install path until
 the first Release workflow run succeeds.
 
 ```sh
-npx @dosu/decant --help
-npx @dosu/decant sync
-npx @dosu/decant serve
+npx decant --help
+npx decant sync
+npx decant serve
 ```
 
 Package layout:
 
-- `@dosu/decant`: thin CommonJS launcher at `npm/decant/bin/decant.cjs`.
+- `decant`: thin CommonJS launcher at `npm/decant/bin/decant.cjs`.
+- `@dosu/decant`: the same launcher, republished under the `@dosu` scope as an
+  alias. Both are staged from `npm/decant` with only the package name rewritten,
+  so their contents are identical; `npx decant` is the documented entry point.
 - `@dosu/decant-darwin-arm64`
 - `@dosu/decant-darwin-x64`
 - `@dosu/decant-linux-arm64`
@@ -45,12 +48,58 @@ bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
 
 Release builds stamp the same version into package metadata and the compiled
-binary. The release workflow publishes all platform packages first, then the
-launcher, so `optionalDependencies` always point at packages that already exist.
+binary. The release workflow publishes all platform packages first, then both
+launcher packages, so `optionalDependencies` always point at packages that
+already exist.
 
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
 deferred.
+
+## Shell installer
+
+For machines without Node, `install.sh` fetches the prebuilt release tarball
+for the current platform, verifies its SHA256 against the release's
+`SHA256SUMS` (aborting on any mismatch), runs a best-effort
+`gh attestation verify` when `gh` is available, and installs the binary
+without sudo. Inspect it before running if you like
+(`curl -fsSL <url> | less`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+```
+
+Knobs, all optional:
+
+- A positional argument or `DECANT_VERSION` pins a version (with or without
+  the leading `v`); the default is the latest stable release.
+- `DECANT_INSTALL_DIR` overrides the install directory
+  (default `~/.local/bin`).
+- `DECANT_NO_MODIFY_PATH=1` prints the `PATH` export line instead of appending
+  it to your shell rc file.
+- `DECANT_BASE_URL` points downloads at a mirror that lays assets out like
+  GitHub Releases (default `https://github.com/dosu-ai/decant/releases`).
+
+The script uses `curl` when present and falls back to `wget`; it errors
+clearly when neither exists. `curl` and `tar` never set
+`com.apple.quarantine`, so this path needs no Gatekeeper workaround on macOS
+even though v0.1.0 binaries are not notarized (see "Verify a release").
+
+## Homebrew
+
+The `dosu-ai/dosu` tap carries a formula that installs the same prebuilt
+release tarball as every other channel — there is no source build:
+
+```sh
+brew tap dosu-ai/dosu && brew install decant
+brew install dosu-ai/dosu/decant   # equivalent one-liner, taps on the fly
+```
+
+The formula is rendered from `packaging/homebrew/decant.rb.template` during the
+release run, smoke-tested on all four supported OS/architecture targets, and
+pushed to `dosu-ai/homebrew-dosu` only for stable releases that are the newest
+stable tag. A backport never moves the tap. Because Homebrew downloads and
+extracts the tarball itself, this path is also free of the quarantine flag.
 
 ## Docker
 
@@ -129,3 +178,67 @@ bun run dev
 `bun run dev` performs a frozen dependency install, starts `decant serve`,
 performs the startup sync, and keeps the archive current. Source installs
 require Bun; npm and Docker installs do not.
+
+## Verify a release
+
+Every release artifact is independently verifiable; none of the checks below
+require trusting the registry or a maintainer's word alone. See
+[docs/releasing.md](releasing.md) for who runs a release; this section is for
+anyone verifying one after the fact.
+
+**Checksums.** Download `SHA256SUMS` from the same GitHub Release as the
+tarball and verify before extracting:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing      # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+```
+
+**Build provenance.** Tarballs, raw binaries, and the GHCR image each carry a
+GitHub SLSA build-provenance attestation:
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
+gh attestation verify oci://ghcr.io/dosu-ai/decant:0.1.0 -R dosu-ai/decant
+```
+
+The `oci://` form needs a registry login first (`docker login ghcr.io`).
+
+**npm provenance.** Confirm the published packages carry Sigstore-signed
+provenance. `npm audit signatures` checks the packages installed in the
+current project, so install the release into a scratch project first:
+
+```sh
+mkdir -p /tmp/decant-verify && cd /tmp/decant-verify
+npm init -y >/dev/null
+npm install decant@0.1.0
+npm audit signatures
+```
+
+**LICENSE and NOTICE.** Every published package — both launchers and all four
+platform packages — ships both files. `npm pack <pkg>@<version>` downloads the
+registry tarball so you can inspect exactly what users receive:
+
+```sh
+npm pack decant@0.1.0    # repeat for @dosu/decant and @dosu/decant-<os>-<arch>
+tar -tzf decant-0.1.0.tgz | grep -E 'LICENSE|NOTICE'
+```
+
+**macOS signing.** v0.1.0 darwin binaries are ad-hoc signed and **not
+notarized** — the Apple Developer Program enrollment that Developer ID signing
+requires is not in place yet. The practical consequence is narrow: a tarball
+downloaded through a browser carries `com.apple.quarantine`, which the
+extracted binary inherits, so Gatekeeper blocks the first run until you clear
+it:
+
+```sh
+xattr -d com.apple.quarantine ./decant
+```
+
+`brew install`, `npx decant`, and `install.sh` are all unaffected — Homebrew,
+npm, and `curl`/`tar` never set the quarantine attribute. Integrity for this
+release rests on SLSA build provenance, `SHA256SUMS`, and the attestation
+check `install.sh` runs, not on an Apple signature. Configuring the five Apple
+secrets flips the same pipeline to Developer ID signing plus notarization with
+no workflow change; see
+[docs/releasing.md](releasing.md#macos-signing-and-notarization).

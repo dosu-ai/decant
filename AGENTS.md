@@ -19,8 +19,8 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 ## Layout
 
 Start from `src/cli.ts`; parsers live in `src/sources/` (the extension
-point). Docs: `docs/api/routes.md` (serve routes) and `docs/distribution.md`
-(npm/Docker/source).
+point). Docs: `docs/api/routes.md` (serve routes), `docs/distribution.md`
+(npm/installer/Docker/source), and `docs/releasing.md` (release operations).
 
 ## Setup
 
@@ -49,6 +49,20 @@ Run from the repo root.
   `DECANT_LOG_LEVEL` (`trace` through `fatal`, or `off`). See
   `docs/logging.md`.
 - `serve` binds `127.0.0.1:3000` by default; override with `--host`/`--port`.
+- Trusted peers for a non-loopback `serve` resolve by precedence, not union:
+  `serve --trusted-peer <ip|cidr>` (repeatable or comma-separated), then
+  `DECANT_TRUSTED_PEERS` (comma-separated), then
+  `DECANT_TRUST_DEFAULT_GATEWAY=1`. The first source that is present wins
+  outright and replaces the ones below it, so `DECANT_TRUSTED_PEERS=` means
+  "trust nobody", not "fall through". See `resolveTrustedPeers` in
+  `src/server.ts`.
+- `DECANT_SKILLS_DIR`: working directory the UI's "open in agent" launcher
+  `cd`s into (macOS only, the only platform `canLaunch` accepts); defaults to
+  `$HOME`.
+- `DECANT_NO_SYNC` (any value) or `--no-sync`: skip the sync-on-read that read
+  commands otherwise perform.
+- Global flags on every command: `--db`, `--json`, `--format table|json|md`,
+  `-q/--quiet`, `--no-color`, `--no-sync`.
 
 ## Definition of done
 

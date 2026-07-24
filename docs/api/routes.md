@@ -34,6 +34,7 @@ guard reads or writes the whole archive.
 
 - `GET /`
 - `GET /projects`
+- `GET /sessions`
 - `GET /sessions/:id`
 - `GET /search`
 - `GET /analytics`
@@ -114,6 +115,7 @@ and is re-ingested or the archive is rebuilt.
 Current event names:
 
 - `hello`
+- `ping` (heartbeat, emitted every 5 seconds)
 - `ready`
 - `sync`
 - `archive_updated`

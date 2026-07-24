@@ -3,7 +3,7 @@
 # Publishes, for every v* tag: six npm packages (OIDC trusted publishing with
 # Sigstore provenance), a GitHub Release carrying deterministic tarballs +
 # SHA256SUMS + install.sh, a multi-arch GHCR image with SBOM + provenance, and
-# — for stable is_latest releases only — the optional Homebrew tap formula.
+# — for stable is_latest releases only — the Homebrew tap formula.
 # When the Apple secrets below are configured, the two darwin binaries are
 # Developer ID-signed and notarized (rcodesign, Linux-native) inside `build`,
 # before anything publishes; without them the build ad-hoc signs instead
@@ -261,9 +261,9 @@ jobs:
               -e entitlements.plist \
               "dist/bin/${target}/decant"
 
-            # Notarize a temporary .zip: the Notary API rejects .tar.gz, and bare
-            # Mach-O binaries cannot be stapled — Gatekeeper does an online ticket
-            # lookup on first run instead
+            # Notarize a temporary .zip: the Notary API rejects .tar.gz, and a
+            # bare Mach-O binary cannot be stapled, so the ticket stays with
+            # Apple rather than in the file
             # (docs/releasing.md#macos-signing-and-notarization). Retry transient
             # notary failures; a real rejection fails the release here, before
             # anything publishes.
@@ -530,27 +530,35 @@ jobs:
 
       # Prove the real optionalDependencies resolution path — the code path every
       # npx user hits — against the STAGED packages, before anything is
-      # irrevocably published. No DECANT_BINARY_PATH override. Both launchers are
-      # staged from identical content, so smoking the unscoped one covers both.
+      # irrevocably published. No DECANT_BINARY_PATH override.
+      #
+      # BOTH launchers run here. They ship identical content under different
+      # names, but npm-smoke only exercises the unscoped one post-publish, so this
+      # is the only place `@dosu/decant` is ever executed — and a launcher that
+      # cannot resolve its platform package is unrecoverable once published. Each
+      # gets its own scratch project, which is how a real user installs them.
       - name: Pack-and-install smoke on staged packages (pre-publish)
         run: |
           set -euo pipefail
-          smoke_dir="$(mktemp -d)"
-          # Read the name from the staged manifest so the installed path can never
-          # drift from what the launcher directory actually declares.
-          launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/decant/package.json','utf8')).name")"
-          launcher_tgz="$(cd dist/npm/decant && npm pack --silent | tail -n1)"
           platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
-          ( cd "$smoke_dir"
-            npm init -y >/dev/null
-            npm install --ignore-scripts --no-audit --no-fund \
-              "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
-              "$GITHUB_WORKSPACE/dist/npm/decant/$launcher_tgz"
-            out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
-            echo "staged launcher (${launcher_pkg}) reports: $out"
-            [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher reported '$out', expected version $VERSION"; exit 1; }
-          )
-          rm -rf "$smoke_dir" dist/npm/decant/"$launcher_tgz" dist/npm/decant-linux-x64/"$platform_tgz"
+          for launcher_dir in decant dosu-decant; do
+            # Read the name from the staged manifest so the installed path can never
+            # drift from what the launcher directory actually declares.
+            launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${launcher_dir}/package.json','utf8')).name")"
+            launcher_tgz="$(cd "dist/npm/${launcher_dir}" && npm pack --silent | tail -n1)"
+            smoke_dir="$(mktemp -d)"
+            ( cd "$smoke_dir"
+              npm init -y >/dev/null
+              npm install --ignore-scripts --no-audit --no-fund \
+                "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
+                "$GITHUB_WORKSPACE/dist/npm/${launcher_dir}/$launcher_tgz"
+              out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
+              echo "staged launcher ${launcher_pkg} reports: $out"
+              [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher ${launcher_pkg} reported '$out', expected version $VERSION"; exit 1; }
+            )
+            rm -rf "$smoke_dir" "dist/npm/${launcher_dir}/${launcher_tgz}"
+          done
+          rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
 
       # Dist-tag chosen at publish time: `npm dist-tag add` is not OIDC-capable, so
       # tagging after the fact would silently keep the bootstrap token alive past
@@ -864,9 +872,9 @@ jobs:
           [[ "$out" == *"$VERSION"* ]] \
             || { echo "::error::Homebrew decant reported '$out', expected version $VERSION"; exit 1; }
 
-  # OPTIONAL brew channel: the tap is a convenience, never the primary install
-  # path. Push only the formula artifact that passed the four-platform Homebrew
-  # smoke matrix above.
+  # The tap is a first-class install channel, so a stale formula is a
+  # user-visible regression. Push only the formula artifact that passed the
+  # four-platform Homebrew smoke matrix above.
   tap-update:
     name: Update Homebrew tap
     needs: [meta, github-release, homebrew-formula, homebrew-smoke]

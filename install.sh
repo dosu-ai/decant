@@ -135,10 +135,15 @@ done < "$sums_path"
 
 [ -n "$expected_hash" ] || err "no SHA256SUMS entry found for $tarball_name"
 
+# `${var%% *}` keeps everything before the first space, which is the digest in
+# both tools' "<hash>  <filename>" output. Shell builtin rather than awk: one
+# less command this installer needs to exist on a stranger's machine.
 if need_cmd sha256sum; then
-  actual_hash=$(sha256sum "$tarball_path" | awk '{print $1}')
+  actual_hash=$(sha256sum "$tarball_path")
+  actual_hash=${actual_hash%% *}
 elif need_cmd shasum; then
-  actual_hash=$(shasum -a 256 "$tarball_path" | awk '{print $1}')
+  actual_hash=$(shasum -a 256 "$tarball_path")
+  actual_hash=${actual_hash%% *}
 else
   err "neither sha256sum nor shasum was found on PATH; cannot verify the download checksum"
 fi

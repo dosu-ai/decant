@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,6 +110,7 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
   } finally {
     proc.kill();
     await proc.exited;
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

@@ -300,7 +300,7 @@ function parseItem(
       ordinal: 0,
       blockType: "tool_use",
       text: null,
-      toolName: asString(get(payload, "name")),
+      toolName: qualifiedToolName(payload),
       toolUseId: asString(get(payload, "call_id")),
       toolInput: callInput(payload),
       toolResult: null,
@@ -348,6 +348,15 @@ function parseItem(
     toolResult: null,
     isError: null,
   });
+}
+
+function qualifiedToolName(payload: Json): string | null {
+  const name = asString(get(payload, "name"));
+  const namespace = asString(get(payload, "namespace"));
+  if (name == null || namespace == null || namespace === "") {
+    return name;
+  }
+  return name.startsWith(`${namespace}__`) ? name : `${namespace}__${name}`;
 }
 
 function messageRole(role: string | null): Role {

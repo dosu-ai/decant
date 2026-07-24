@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendTranscriptPage,
+  clampTranscriptWindowOffset,
   runWithTranscriptRequestSlot,
   transcriptWindowOffset,
 } from "../src/ui/transcript-pagination.ts";
@@ -96,5 +97,29 @@ describe("transcript pagination", () => {
     sessionVersion = 2;
     active.resolve();
     expect(await waiting).toBe("stale");
+  });
+});
+
+describe("transcript window clamping", () => {
+  test("keeps an out-of-range deep link on the last real page", () => {
+    // A link shared from a longer archive -- /sessions/12#message-1400 where
+    // this archive's session 12 holds 200 messages -- used to request offset
+    // 1380, get an empty page back, and blank the transcript.
+    expect(clampTranscriptWindowOffset(transcriptWindowOffset(1400), 200, 160)).toBe(40);
+  });
+
+  test("leaves in-range offsets alone", () => {
+    expect(clampTranscriptWindowOffset(880, 2000, 160)).toBe(880);
+    expect(clampTranscriptWindowOffset(0, 2000, 160)).toBe(0);
+  });
+
+  test("collapses to the first page when the session is shorter than one page", () => {
+    expect(clampTranscriptWindowOffset(120, 40, 160)).toBe(0);
+  });
+
+  test("survives absent or nonsensical counts", () => {
+    expect(clampTranscriptWindowOffset(500, 0, 160)).toBe(0);
+    expect(clampTranscriptWindowOffset(500, Number.NaN, 160)).toBe(0);
+    expect(clampTranscriptWindowOffset(-5, 2000, 160)).toBe(0);
   });
 });

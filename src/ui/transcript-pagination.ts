@@ -52,7 +52,33 @@ export function appendTranscriptPage<T extends SequencedTranscriptMessage>(
   return [...current, ...incoming.filter((message) => !seen.has(message.seq))];
 }
 
-/** Keep a little preceding context when opening an unloaded outline target. */
+/**
+ * Keep a little preceding context when opening an unloaded outline target.
+ *
+ * Treats `seq` as a dense, zero-based row index, because the server pages with
+ * `LIMIT/OFFSET` over `ORDER BY seq`. Both parsers currently guarantee that:
+ * every branch that increments `seq` also emits exactly one message. Nothing in
+ * the schema enforces it. A parser that ever skipped a `seq` would send outline
+ * clicks and compaction jumps to a window that does not contain the target.
+ */
 export function transcriptWindowOffset(seq: number, contextBefore = 20): number {
   return Math.max(0, Math.trunc(seq) - Math.max(0, Math.trunc(contextBefore)));
+}
+
+/**
+ * Hold a window offset inside the session so it always addresses a page with
+ * rows in it. Deep links travel between archives: `#message-1400` pasted from a
+ * longer copy of the same session would otherwise request an offset past the
+ * end, get an empty page back, and blank the transcript.
+ */
+export function clampTranscriptWindowOffset(
+  offset: number,
+  messageCount: number,
+  pageSize: number,
+): number {
+  if (!Number.isFinite(messageCount) || messageCount <= 0) {
+    return 0;
+  }
+  const lastPageOffset = Math.max(0, Math.trunc(messageCount) - Math.max(1, Math.trunc(pageSize)));
+  return Math.min(Math.max(0, Math.trunc(offset)), lastPageOffset);
 }

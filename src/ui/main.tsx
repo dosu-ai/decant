@@ -62,6 +62,7 @@ import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
+  isInteractiveTarget,
   nextTranscriptSeq,
   type TranscriptNavigationDirection,
   transcriptNavigationDirection,
@@ -69,6 +70,7 @@ import {
 } from "./transcript-navigation.ts";
 import {
   appendTranscriptPage,
+  clampTranscriptWindowOffset,
   runWithTranscriptRequestSlot,
   transcriptWindowOffset,
 } from "./transcript-pagination.ts";
@@ -4313,7 +4315,11 @@ function SessionDetailView({ id }: { id: number }) {
           if (current.messages.some((message) => message.seq === seq)) {
             return true;
           }
-          const offset = transcriptWindowOffset(seq);
+          const offset = clampTranscriptWindowOffset(
+            transcriptWindowOffset(seq),
+            current.summary.message_count,
+            SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+          );
           setLoadingMore(true);
           setLoadMoreError(null);
           return getJson<SessionDetailData>(
@@ -4321,6 +4327,12 @@ function SessionDetailView({ id }: { id: number }) {
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {
+                return false;
+              }
+              // Never trade a populated transcript for an empty one. The clamp
+              // above keeps the offset in range against the count we hold, but
+              // that count can lag the archive after a re-sync.
+              if (page.messages.length === 0) {
                 return false;
               }
               const nextDetail = {
@@ -4469,8 +4481,8 @@ function SessionDetailView({ id }: { id: number }) {
       if (
         direction == null ||
         event.repeat ||
-        isEditableTarget(event.target) ||
-        isEditableTarget(document.activeElement) ||
+        isInteractiveTarget(event.target) ||
+        isInteractiveTarget(document.activeElement) ||
         document.querySelector("[role='dialog']") != null
       ) {
         return;
@@ -6026,19 +6038,6 @@ function scrollTranscriptMessage(seq: number) {
     behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
     block: "start",
   });
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  return (
-    target.isContentEditable ||
-    target.matches("input, textarea, select") ||
-    target.closest(
-      "a, button, summary, input, textarea, select, [contenteditable='true'], [role='button'], [role='link'], [role='slider'], [role='tab']",
-    ) != null
-  );
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {

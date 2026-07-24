@@ -121,39 +121,42 @@ describe("upsertSession", () => {
   test("classifies namespaced Codex MCP tool calls", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);
-    const content = [
-      JSON.stringify({
-        type: "session_meta",
-        payload: { id: "codex-mcp", cwd: "/tmp/proj" },
-      }),
-      JSON.stringify({
-        type: "response_item",
-        payload: {
-          type: "mcp_tool_call",
-          namespace: "mcp__dosu",
-          name: "read_knowledge",
-          call_id: "call-1",
-          arguments: "{}",
-        },
-      }),
-    ].join("\n");
-    const parsed = parseCodexSession("fallback", content, new Map());
-    const sessionId = upsertSession(db, parsed, "/x/codex-mcp.jsonl", 1, 2, "hash");
+    try {
+      const content = [
+        JSON.stringify({
+          type: "session_meta",
+          payload: { id: "codex-mcp", cwd: "/tmp/proj" },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "mcp_tool_call",
+            namespace: "mcp__dosu",
+            name: "read_knowledge",
+            call_id: "call-1",
+            arguments: "{}",
+          },
+        }),
+      ].join("\n");
+      const parsed = parseCodexSession("fallback", content, new Map());
+      const sessionId = upsertSession(db, parsed, "/x/codex-mcp.jsonl", 1, 2, "hash");
 
-    expect(
-      db
-        .query(
-          `SELECT tool_kind, tool_name, mcp_server, tool_base_name
-           FROM tool_call WHERE session_id = ?1`,
-        )
-        .get(sessionId),
-    ).toEqual({
-      tool_kind: "mcp",
-      tool_name: "mcp__dosu__read_knowledge",
-      mcp_server: "dosu",
-      tool_base_name: "read_knowledge",
-    });
-    db.close();
+      expect(
+        db
+          .query(
+            `SELECT tool_kind, tool_name, mcp_server, tool_base_name
+             FROM tool_call WHERE session_id = ?1`,
+          )
+          .get(sessionId),
+      ).toEqual({
+        tool_kind: "mcp",
+        tool_name: "mcp__dosu__read_knowledge",
+        mcp_server: "dosu",
+        tool_base_name: "read_knowledge",
+      });
+    } finally {
+      db.close();
+    }
   });
 
   test("writes sessions, messages, blocks, tool calls, file refs, facets, and FTS rows", () => {

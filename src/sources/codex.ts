@@ -353,7 +353,7 @@ function parseItem(
 function qualifiedToolName(payload: Json): string | null {
   const name = asString(get(payload, "name"));
   const namespace = asString(get(payload, "namespace"));
-  if (name == null || namespace == null || namespace === "") {
+  if (name == null || name === "" || namespace == null || namespace === "") {
     return name;
   }
   return name.startsWith(`${namespace}__`) ? name : `${namespace}__${name}`;

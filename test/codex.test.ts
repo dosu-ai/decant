@@ -252,4 +252,15 @@ describe("parseCodexSession", () => {
     expect(messages[8]?.blocks[0]?.toolName).toBe("do_thing");
     expect(messages[8]?.blocks[0]?.toolInput).toEqual({ a: 1 });
   });
+
+  test("qualifies namespaced tool names but leaves empty names unchanged", () => {
+    const content = [
+      '{"type":"response_item","payload":{"type":"mcp_tool_call","namespace":"mcp__dosu","name":"read_knowledge","call_id":"c1"}}',
+      '{"type":"response_item","payload":{"type":"mcp_tool_call","namespace":"mcp__dosu","name":"","call_id":"c2"}}',
+    ].join("\n");
+    const messages = parseCodexSession("fallback", content, new Map()).session.messages;
+
+    expect(messages[0]?.blocks[0]?.toolName).toBe("mcp__dosu__read_knowledge");
+    expect(messages[1]?.blocks[0]?.toolName).toBe("");
+  });
 });

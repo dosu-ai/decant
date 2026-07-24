@@ -85,8 +85,12 @@ thread navigation can cover the whole session without loading every rich
 transcript block up front.
 
 Session summaries returned by the list and detail routes include
-`reasoning_effort`. It is the provider-reported effort label, `mixed` when the
-setting changes between turns, or `null` when the source did not record one.
+`reasoning_effort` and `reasoning_effort_levels`. The first is the normalized
+provider effort label, `mixed` when the setting changes between turns, or
+`null` when the source did not record one. The levels array preserves the
+unique labels represented by `mixed`. Claude Code's `max` wire value is exposed
+as its user-facing `ultra` setting; Codex's distinct `max` and `ultra` values
+remain unchanged.
 
 The context-window route derives per-API-call window occupancy and compaction
 events at read time from persisted per-message token columns and raw records.

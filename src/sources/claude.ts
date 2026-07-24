@@ -7,6 +7,7 @@ import {
   type NormalizedMessage,
   type ParsedSession,
   type Role,
+  reasoningEffortLevels,
   summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
@@ -186,6 +187,7 @@ export function parseClaudeSession(
     spawnToolUseId,
     spawnDepth,
   };
+  const effortLevels = reasoningEffortLevels("claude_code", reasoningEfforts);
 
   return {
     session: {
@@ -196,7 +198,8 @@ export function parseClaudeSession(
       cwd,
       gitBranch,
       model,
-      reasoningEffort: summarizeReasoningEfforts(reasoningEfforts),
+      reasoningEffort: summarizeReasoningEfforts(effortLevels),
+      reasoningEffortLevels: effortLevels,
       cliVersion,
       startedAt,
       endedAt,

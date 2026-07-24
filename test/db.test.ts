@@ -24,7 +24,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v13 baseline. Shadow tables
+// Inventory of the frozen v14 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -201,6 +201,7 @@ describe("openDb", () => {
       expect.arrayContaining([
         "total_cache_creation_1h_tokens",
         "reasoning_effort",
+        "reasoning_effort_levels",
         "reasoning_effort_checked",
       ]),
     );
@@ -294,6 +295,64 @@ describe("openDb", () => {
     ).toEqual([
       { tool: "claude_code", context_window_tokens: null, peak_context_tokens: null },
       { tool: "codex", context_window_tokens: 258400, peak_context_tokens: 120000 },
+    ]);
+    migrated.close();
+  });
+
+  test("migrates v13 effort values without conflating Codex max and ultra", () => {
+    const path = freshPath();
+    const db = new Database(path, { create: true, strict: true });
+    db.exec(`
+      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE session(
+        id INTEGER PRIMARY KEY,
+        tool TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        reasoning_effort TEXT,
+        reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO session(
+        id, tool, source_session_id, reasoning_effort, reasoning_effort_checked
+      ) VALUES
+        (1, 'claude_code', 'claude-ultra', 'max', 1),
+        (2, 'codex', 'codex-max', 'max', 1),
+        (3, 'codex', 'codex-mixed', 'mixed', 1);
+    `);
+    const insert = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
+    );
+    for (let version = 1; version <= 13; version += 1) {
+      insert.run(version);
+    }
+    db.close();
+
+    const migrated = openDb(path);
+    expect(
+      migrated
+        .query(
+          `SELECT tool, reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
+           FROM session ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        tool: "claude_code",
+        reasoning_effort: "ultra",
+        reasoning_effort_levels: '["ultra"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "codex",
+        reasoning_effort: "max",
+        reasoning_effort_levels: '["max"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "codex",
+        reasoning_effort: "mixed",
+        reasoning_effort_levels: "[]",
+        reasoning_effort_checked: 0,
+      },
     ]);
     migrated.close();
   });

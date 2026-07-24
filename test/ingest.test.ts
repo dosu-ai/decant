@@ -319,18 +319,22 @@ describe("upsertSession", () => {
     expect(
       db
         .query(
-          `SELECT reasoning_effort, reasoning_effort_checked,
+          `SELECT reasoning_effort, reasoning_effort_levels, reasoning_effort_checked,
                   total_cache_creation_tokens, total_cache_creation_1h_tokens
            FROM session WHERE id = ?1`,
         )
         .get(sessionId),
     ).toEqual({
-      reasoning_effort: "max",
+      reasoning_effort: "ultra",
+      reasoning_effort_levels: '["ultra"]',
       reasoning_effort_checked: 1,
       total_cache_creation_tokens: 100,
       total_cache_creation_1h_tokens: 60,
     });
-    expect(getSession(db, sessionId)?.summary.reasoning_effort).toBe("max");
+    expect(getSession(db, sessionId)?.summary).toMatchObject({
+      reasoning_effort: "ultra",
+      reasoning_effort_levels: ["ultra"],
+    });
     db.close();
   });
 });
@@ -483,11 +487,15 @@ describe("sync", () => {
     expect(
       db
         .query(
-          `SELECT reasoning_effort, reasoning_effort_checked
+          `SELECT reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
            FROM session WHERE source_session_id = 'effort-session'`,
         )
         .get(),
-    ).toEqual({ reasoning_effort: "xhigh", reasoning_effort_checked: 1 });
+    ).toEqual({
+      reasoning_effort: "xhigh",
+      reasoning_effort_levels: '["xhigh"]',
+      reasoning_effort_checked: 1,
+    });
     db.close();
   });
 
@@ -523,11 +531,15 @@ describe("sync", () => {
     expect(
       db
         .query(
-          `SELECT reasoning_effort, reasoning_effort_checked
+          `SELECT reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
            FROM session WHERE source_session_id = 'large-effort-session'`,
         )
         .get(),
-    ).toEqual({ reasoning_effort: "max", reasoning_effort_checked: 1 });
+    ).toEqual({
+      reasoning_effort: "max",
+      reasoning_effort_levels: '["max"]',
+      reasoning_effort_checked: 1,
+    });
     db.close();
   });
 

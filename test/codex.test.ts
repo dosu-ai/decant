@@ -16,6 +16,7 @@ describe("parseCodexSession", () => {
     expect(session.cwd).toBe("/Users/dev/proj");
     expect(session.model).toBe("gpt-5.4");
     expect(session.reasoningEffort).toBe("high");
+    expect(session.reasoningEffortLevels).toEqual(["high"]);
     expect(session.messages).toHaveLength(4);
     expect(session.messages[0]?.role).toBe("user");
     expect(session.messages[1]?.blocks[0]?.blockType).toBe("tool_use");
@@ -47,7 +48,9 @@ describe("parseCodexSession", () => {
       '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}',
       '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}',
     ].join("\n");
-    expect(parseCodexSession("mixed", content, new Map()).session.reasoningEffort).toBe("mixed");
+    const session = parseCodexSession("mixed", content, new Map()).session;
+    expect(session.reasoningEffort).toBe("mixed");
+    expect(session.reasoningEffortLevels).toEqual(["high", "xhigh"]);
   });
 
   test("stamps last_token_usage onto the producing assistant without crossing compaction", () => {

@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   BLOCK_TYPES,
   emptyUsage,
+  normalizeReasoningEffort,
   REASONING_SOURCES,
   ROLES,
+  reasoningEffortLevels,
   summarizeReasoningEfforts,
   TOOL_KINDS,
   TOOLS,
@@ -43,5 +45,9 @@ describe("model wire strings", () => {
     expect(summarizeReasoningEfforts([])).toBeNull();
     expect(summarizeReasoningEfforts([" XHIGH ", "xhigh"])).toBe("xhigh");
     expect(summarizeReasoningEfforts(["high", "max"])).toBe("mixed");
+    expect(normalizeReasoningEffort("claude_code", " MAX ")).toBe("ultra");
+    expect(normalizeReasoningEffort("codex", " MAX ")).toBe("max");
+    expect(reasoningEffortLevels("claude_code", ["low", "max", "MAX"])).toEqual(["low", "ultra"]);
+    expect(reasoningEffortLevels("codex", ["max", "ultra"])).toEqual(["max", "ultra"]);
   });
 });

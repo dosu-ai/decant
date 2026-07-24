@@ -17,6 +17,7 @@ export interface SessionSummary {
   project_path: string | null;
   model: string | null;
   reasoning_effort: string | null;
+  reasoning_effort_levels: string[];
   started_at: string | null;
   ended_at: string | null;
   message_count: number;
@@ -51,14 +52,20 @@ export interface ListFilter {
 }
 
 interface SessionSummaryRow
-  extends Omit<SessionSummary, "is_archived" | "is_subagent" | "subagents"> {
+  extends Omit<
+    SessionSummary,
+    "is_archived" | "is_subagent" | "reasoning_effort_levels" | "subagents"
+  > {
   is_archived: number;
   is_subagent: number;
+  reasoning_effort_levels_json: string;
 }
 
 const SESSION_SUMMARY_SELECT = `
   SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
-         s.model, s.reasoning_effort, s.started_at, s.ended_at, s.message_count,
+         s.model, s.reasoning_effort,
+         s.reasoning_effort_levels AS reasoning_effort_levels_json,
+         s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
          s.agent_id, s.agent_type, s.spawn_depth,
@@ -220,7 +227,9 @@ export function getSession(
   const summaryRow = db
     .query(
       `SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
-              s.model, s.reasoning_effort, s.started_at, s.ended_at, s.message_count,
+              s.model, s.reasoning_effort,
+              s.reasoning_effort_levels AS reasoning_effort_levels_json,
+              s.started_at, s.ended_at, s.message_count,
               s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
               s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
               s.agent_id, s.agent_type, s.spawn_depth,
@@ -480,7 +489,24 @@ export function listProjects(db: Database): ProjectSummary[] {
 }
 
 function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
-  return { ...row, is_archived: row.is_archived !== 0, is_subagent: row.is_subagent !== 0 };
+  const { reasoning_effort_levels_json: levelsJson, ...summary } = row;
+  return {
+    ...summary,
+    reasoning_effort_levels: parseReasoningEffortLevels(levelsJson),
+    is_archived: row.is_archived !== 0,
+    is_subagent: row.is_subagent !== 0,
+  };
+}
+
+function parseReasoningEffortLevels(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((level): level is string => typeof level === "string" && level !== "")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSummary[] {

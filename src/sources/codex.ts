@@ -6,6 +6,7 @@ import {
   type NormalizedMessage,
   type ParsedSession,
   type Role,
+  reasoningEffortLevels,
   summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
@@ -129,6 +130,7 @@ export function parseCodexSession(
   if (contextWindow != null) {
     rawMeta = { ...(isObject(rawMeta) ? rawMeta : {}), model_context_window: contextWindow };
   }
+  const effortLevels = reasoningEffortLevels("codex", reasoningEfforts);
 
   return {
     session: {
@@ -139,7 +141,8 @@ export function parseCodexSession(
       cwd,
       gitBranch: null,
       model,
-      reasoningEffort: summarizeReasoningEfforts(reasoningEfforts),
+      reasoningEffort: summarizeReasoningEfforts(effortLevels),
+      reasoningEffortLevels: effortLevels,
       cliVersion,
       startedAt,
       endedAt,

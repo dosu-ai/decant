@@ -1,5 +1,5 @@
--- decant:schema_version=13
--- Effective decant schema (migrations 1..13 applied), frozen as the current
+-- decant:schema_version=14
+-- Effective decant schema (migrations 1..14 applied), frozen as the current
 -- baseline. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -27,6 +27,7 @@ CREATE TABLE session (
   git_branch TEXT,
   model TEXT,
   reasoning_effort TEXT,
+  reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
   reasoning_effort_checked INTEGER NOT NULL DEFAULT 0,
   cli_version TEXT,
   started_at TEXT,

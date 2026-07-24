@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 13;
+export const LATEST_SCHEMA_VERSION = 14;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -258,6 +258,34 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (13, datetime('now'))",
+      ).run();
+    }
+    if (current < 14) {
+      if (!hasColumn(db, "session", "reasoning_effort_levels")) {
+        db.exec(
+          "ALTER TABLE session ADD COLUMN reasoning_effort_levels TEXT NOT NULL DEFAULT '[]'",
+        );
+      }
+      db.exec(`
+        UPDATE session
+        SET reasoning_effort = 'ultra'
+        WHERE tool = 'claude_code' AND LOWER(TRIM(reasoning_effort)) = 'max';
+
+        UPDATE session
+        SET reasoning_effort_levels = CASE
+          WHEN reasoning_effort IS NULL
+            OR TRIM(reasoning_effort) = ''
+            OR LOWER(TRIM(reasoning_effort)) = 'mixed'
+          THEN '[]'
+          ELSE json_array(LOWER(TRIM(reasoning_effort)))
+        END;
+
+        UPDATE session
+        SET reasoning_effort_checked = 0
+        WHERE LOWER(TRIM(reasoning_effort)) = 'mixed';
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (14, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

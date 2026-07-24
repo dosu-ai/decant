@@ -54,6 +54,29 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("returns the normalized levels behind a mixed effort summary", () => {
+    const db = freshDb();
+    const parsed = parseClaudeSession(
+      "mixed-effort",
+      [
+        '{"type":"assistant","effort":"high","message":{"role":"assistant","content":[]}}',
+        '{"type":"assistant","effort":"max","message":{"role":"assistant","content":[]}}',
+      ].join("\n"),
+    );
+    const id = upsertSession(db, parsed, "/mixed.jsonl", 1, 2, "mixed");
+
+    expect(listSessions(db)[0]).toMatchObject({
+      id,
+      reasoning_effort: "mixed",
+      reasoning_effort_levels: ["high", "ultra"],
+    });
+    expect(getSession(db, id)?.summary).toMatchObject({
+      reasoning_effort: "mixed",
+      reasoning_effort_levels: ["high", "ultra"],
+    });
+    db.close();
+  });
+
   test("pages session messages and returns a lightweight complete prompt outline", () => {
     const db = seeded();
     const id = listSessions(db)[0]?.id ?? 0;

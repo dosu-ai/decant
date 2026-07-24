@@ -21,6 +21,7 @@ import {
   type Json,
   type NormalizedBlock,
   type ParsedSession,
+  reasoningEffortLevels,
   summarizeReasoningEfforts,
   type Tool,
 } from "./model.ts";
@@ -375,7 +376,7 @@ export function materializeMissingReasoningEfforts(db: Database): number {
   }
 
   const efforts = rows.map((row) => {
-    let effort: string | null = null;
+    let effort: ReasoningEffortSummary = { summary: null, levels: [] };
     if (row.source_path != null) {
       try {
         effort = reasoningEffortFromSource(row.tool, row.source_path);
@@ -383,17 +384,17 @@ export function materializeMissingReasoningEfforts(db: Database): number {
         // Missing/unreadable source files are a stable unavailable state.
       }
     }
-    return { id: row.id, effort };
+    return { id: row.id, ...effort };
   });
 
   const update = db.prepare(
     `UPDATE session
-     SET reasoning_effort = ?2, reasoning_effort_checked = 1
+     SET reasoning_effort = ?2, reasoning_effort_levels = ?3, reasoning_effort_checked = 1
      WHERE id = ?1`,
   );
   const apply = db.transaction((items: typeof efforts) => {
     for (const row of items) {
-      update.run(row.id, row.effort);
+      update.run(row.id, row.summary, canonicalJson(row.levels));
     }
   });
   apply(efforts);
@@ -403,7 +404,12 @@ export function materializeMissingReasoningEfforts(db: Database): number {
 /** Narrow source scan for the one-time effort backfill. It avoids rebuilding
  * every message/block/tool object from a potentially multi-GB archive and
  * leaves the database write transaction for the small update batch only. */
-function reasoningEffortFromSource(tool: Tool, path: string): string | null {
+interface ReasoningEffortSummary {
+  summary: string | null;
+  levels: string[];
+}
+
+function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
   const efforts = new Set<string>();
   const buffer = Buffer.allocUnsafe(64 * 1024);
   const decoder = new StringDecoder("utf8");
@@ -431,7 +437,8 @@ function reasoningEffortFromSource(tool: Tool, path: string): string | null {
       // Best-effort cleanup: preserve the scan result or original read error.
     }
   }
-  return summarizeReasoningEfforts(efforts);
+  const levels = reasoningEffortLevels(tool, efforts);
+  return { summary: summarizeReasoningEfforts(levels), levels };
 }
 
 function collectReasoningEffort(tool: Tool, line: string, efforts: Set<string>): void {
@@ -621,11 +628,11 @@ function writeSession(
        est_reasoning_tokens, reasoning_source,
        id,
        total_cache_creation_1h_tokens,
-       reasoning_effort, reasoning_effort_checked
+       reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
-             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, 1)`,
+             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, 1)`,
   ).run(
     s.tool,
     s.sourceSessionId,
@@ -674,6 +681,7 @@ function writeSession(
     existing?.id ?? null,
     s.totals.cacheCreation1h,
     s.reasoningEffort,
+    canonicalJson(s.reasoningEffortLevels),
   );
   const sessionId = lastInsertRowid(db);
 

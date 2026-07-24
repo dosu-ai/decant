@@ -59,6 +59,7 @@ import {
 import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { contextWindowDisplayMode } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
+import { effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
@@ -98,6 +99,7 @@ type SessionSummary = {
   project_path: string | null;
   model: string | null;
   reasoning_effort: string | null;
+  reasoning_effort_levels: string[];
   started_at: string | null;
   message_count: number;
   total_input_tokens: number;
@@ -1295,6 +1297,7 @@ function sessionMatchesQuery(session: SessionSummary, needle: string): boolean {
       sessionDisplayTitle(session),
       displayModelLabel(session.model),
       session.reasoning_effort,
+      ...(session.reasoning_effort_levels ?? []),
       session.tool,
       session.project_path,
       session.agent_type,
@@ -1380,7 +1383,7 @@ function SessionTableRow({
         <ModelBadge model={session.model} />
       </td>
       <td>
-        <EffortBadge effort={session.reasoning_effort} />
+        <EffortBadge effort={session.reasoning_effort} levels={session.reasoning_effort_levels} />
       </td>
       <td className="numeric">
         <SessionContextPeak session={session} />
@@ -2774,16 +2777,19 @@ function Badge({
   children,
   className,
   mono = false,
+  title,
   tone = "neutral",
 }: {
   children: ReactNode;
   className?: string;
   mono?: boolean;
+  title?: string;
   tone?: BadgeTone;
 }) {
   return (
     <span
       className={`badge tone-${tone}${mono ? " is-mono" : ""}${className ? ` ${className}` : ""}`}
+      title={title}
     >
       {children}
     </span>
@@ -2828,16 +2834,18 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
 function EffortBadge({
   effort,
   labeled = false,
+  levels = [],
 }: {
   effort: string | null | undefined;
   labeled?: boolean;
+  levels?: string[];
 }) {
   const label = effort?.trim().toLowerCase();
   if (label == null || label === "") {
     return <span className="faint">-</span>;
   }
   return (
-    <Badge mono tone={label === "mixed" ? "warning" : "info"}>
+    <Badge mono title={effortTooltip(label, levels)} tone={label === "mixed" ? "warning" : "info"}>
       {labeled ? `effort ${label}` : label}
     </Badge>
   );
@@ -4520,7 +4528,11 @@ function SessionDetailView({ id }: { id: number }) {
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
-            <EffortBadge effort={detail.summary.reasoning_effort} labeled />
+            <EffortBadge
+              effort={detail.summary.reasoning_effort}
+              labeled
+              levels={detail.summary.reasoning_effort_levels}
+            />
             {detail.summary.project_path != null ? (
               <span className="project-chip" title={detail.summary.project_path}>
                 <Icon name="folder" />

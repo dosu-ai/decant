@@ -63,6 +63,30 @@ export function summarizeReasoningEfforts(values: Iterable<string>): string | nu
   return "mixed";
 }
 
+/** Normalize provider wire labels to the effort names users selected. Claude
+ * Code writes its highest `ultra` setting as `max`; Codex uses `max` and
+ * `ultra` as distinct labels, so that alias is intentionally provider-scoped. */
+export function normalizeReasoningEffort(tool: Tool, value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") {
+    return null;
+  }
+  return tool === "claude_code" && normalized === "max" ? "ultra" : normalized;
+}
+
+/** Unique normalized effort labels in first-seen order. This detail is kept
+ * alongside the collapsed session value so `mixed` remains explainable. */
+export function reasoningEffortLevels(tool: Tool, values: Iterable<string>): string[] {
+  const levels = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeReasoningEffort(tool, value);
+    if (normalized != null) {
+      levels.add(normalized);
+    }
+  }
+  return Array.from(levels);
+}
+
 export interface NormalizedBlock {
   ordinal: number;
   blockType: BlockType;
@@ -99,6 +123,9 @@ export interface NormalizedSession {
   model: string | null;
   /** Provider-supplied reasoning effort, or `mixed` when turns differ. */
   reasoningEffort: string | null;
+  /** Unique normalized labels behind `reasoningEffort`, including every value
+   * represented when the session summary is `mixed`. */
+  reasoningEffortLevels: string[];
   cliVersion: string | null;
   startedAt: string | null;
   endedAt: string | null;

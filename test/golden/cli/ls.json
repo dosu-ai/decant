@@ -6,6 +6,9 @@
     "project_path": "/Users/dev/proj",
     "model": "gpt-5.4",
     "reasoning_effort": "high",
+    "reasoning_effort_levels": [
+      "high"
+    ],
     "started_at": "2026-05-06T09:00:00.000Z",
     "ended_at": "2026-05-06T09:00:10.000Z",
     "message_count": 8,
@@ -32,6 +35,7 @@
     "project_path": "/Users/dev/proj",
     "model": "claude-opus-4-7",
     "reasoning_effort": null,
+    "reasoning_effort_levels": [],
     "started_at": "2026-05-05T10:00:00.000Z",
     "ended_at": "2026-05-05T10:04:00.000Z",
     "message_count": 8,
@@ -58,6 +62,7 @@
     "project_path": "/Users/dev/proj",
     "model": "claude-opus-4-7",
     "reasoning_effort": null,
+    "reasoning_effort_levels": [],
     "started_at": "2026-05-05T10:00:00.000Z",
     "ended_at": "2026-05-05T10:00:10.000Z",
     "message_count": 4,
@@ -84,6 +89,9 @@
     "project_path": "/Users/dev/proj",
     "model": "gpt-5.4",
     "reasoning_effort": "high",
+    "reasoning_effort_levels": [
+      "high"
+    ],
     "started_at": "2026-05-04T09:00:00.000Z",
     "ended_at": "2026-05-04T09:00:10.000Z",
     "message_count": 7,
@@ -110,6 +118,7 @@
     "project_path": "/Users/dev/proj",
     "model": "claude-opus-4-7",
     "reasoning_effort": null,
+    "reasoning_effort_levels": [],
     "started_at": "2026-05-03T10:00:00.000Z",
     "ended_at": "2026-05-03T10:13:10.000Z",
     "message_count": 10,
@@ -136,6 +145,9 @@
     "project_path": "/Users/dev/proj",
     "model": "gpt-5.4",
     "reasoning_effort": "high",
+    "reasoning_effort_levels": [
+      "high"
+    ],
     "started_at": "2026-05-02T09:00:00.000Z",
     "ended_at": "2026-05-02T09:00:08.000Z",
     "message_count": 4,
@@ -162,6 +174,7 @@
     "project_path": "/Users/dev/proj",
     "model": "claude-opus-4-7",
     "reasoning_effort": null,
+    "reasoning_effort_levels": [],
     "started_at": "2026-05-01T10:00:00.000Z",
     "ended_at": "2026-05-01T10:00:10.000Z",
     "message_count": 4,

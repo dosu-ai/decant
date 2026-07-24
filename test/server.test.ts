@@ -300,7 +300,11 @@ describe("server routes", () => {
     expect(sessions.body).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ tool: "claude_code" }),
-        expect.objectContaining({ tool: "codex", reasoning_effort: "high" }),
+        expect.objectContaining({
+          tool: "codex",
+          reasoning_effort: "high",
+          reasoning_effort_levels: ["high"],
+        }),
       ]),
     );
     const id = (sessions.body as { id: number }[])[0]?.id ?? 0;
@@ -308,7 +312,11 @@ describe("server routes", () => {
     const detail = await route(config, `/api/sessions/${id}`);
     expect(detail.status).toBe(200);
     expect(detail.body).toMatchObject({
-      summary: { id, reasoning_effort: expect.any(String) },
+      summary: {
+        id,
+        reasoning_effort: expect.any(String),
+        reasoning_effort_levels: expect.any(Array),
+      },
       messages: expect.any(Array),
     });
     const firstMessagePage = await route(

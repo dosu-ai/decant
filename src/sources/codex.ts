@@ -6,6 +6,7 @@ import {
   type NormalizedMessage,
   type ParsedSession,
   type Role,
+  summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
@@ -23,6 +24,7 @@ export function parseCodexSession(
   let cwd: string | null = null;
   let cliVersion: string | null = null;
   let model: string | null = null;
+  const reasoningEfforts = new Set<string>();
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let title: string | null = null;
@@ -89,6 +91,10 @@ export function parseCodexSession(
       rawMeta = payload;
     } else if (typ === "turn_context") {
       model = asString(get(payload, "model")) ?? model;
+      const effort = asString(get(payload, "effort"));
+      if (effort != null) {
+        reasoningEfforts.add(effort);
+      }
       cwd ??= asString(get(payload, "cwd"));
     } else if (typ === "event_msg" && asString(get(payload, "type")) === "token_count") {
       const info = get(payload, "info");
@@ -133,6 +139,7 @@ export function parseCodexSession(
       cwd,
       gitBranch: null,
       model,
+      reasoningEffort: summarizeReasoningEfforts(reasoningEfforts),
       cliVersion,
       startedAt,
       endedAt,
@@ -160,6 +167,7 @@ function usageFrom(source: Json | undefined): TokenUsage {
     output: getInteger(source, "output_tokens"),
     cacheRead: cached,
     cacheCreation: 0,
+    cacheCreation1h: 0,
     reasoning: getInteger(source, "reasoning_output_tokens"),
   };
 }

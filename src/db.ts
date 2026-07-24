@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 11;
+export const LATEST_SCHEMA_VERSION = 13;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -229,9 +229,47 @@ function migrate(db: Database, current: number): void {
         "INSERT INTO schema_migrations (version, applied_at) VALUES (11, datetime('now'))",
       ).run();
     }
+    if (current < 12) {
+      if (!hasColumn(db, "session", "total_cache_creation_1h_tokens")) {
+        db.exec(
+          "ALTER TABLE session ADD COLUMN total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (12, datetime('now'))",
+      ).run();
+    }
+    if (current < 13) {
+      if (!hasColumn(db, "session", "reasoning_effort")) {
+        db.exec("ALTER TABLE session ADD COLUMN reasoning_effort TEXT");
+      }
+      if (!hasColumn(db, "session", "reasoning_effort_checked")) {
+        db.exec(
+          "ALTER TABLE session ADD COLUMN reasoning_effort_checked INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      if (!hasColumn(db, "model_pricing", "cache_write_1h_per_mtok")) {
+        db.exec("ALTER TABLE model_pricing ADD COLUMN cache_write_1h_per_mtok REAL");
+      }
+      db.exec(`
+        UPDATE session
+        SET context_window_tokens = NULL, peak_context_tokens = NULL
+        WHERE tool = 'claude_code'
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (13, datetime('now'))",
+      ).run();
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
     throw error;
   }
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return (
+    db.query("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1").get(table, column) !=
+    null
+  );
 }

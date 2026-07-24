@@ -7,6 +7,7 @@ import {
   type NormalizedMessage,
   type ParsedSession,
   type Role,
+  summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
@@ -57,6 +58,7 @@ export function parseClaudeSession(
   let gitBranch: string | null = null;
   let cliVersion: string | null = null;
   let sessionModel: string | null = null;
+  const reasoningEfforts = new Set<string>();
   let resultTotals: TokenUsage | null = null;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
@@ -97,6 +99,10 @@ export function parseClaudeSession(
     gitBranch ??= stringAt(value, "gitBranch", "git_branch");
     cliVersion ??= stringAt(value, "version", "cli_version");
     sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
+    const effort = stringAt(value, "effort");
+    if (effort != null) {
+      reasoningEfforts.add(effort);
+    }
 
     if (typ === "user") {
       const message = parseUser(value, seq);
@@ -147,6 +153,7 @@ export function parseClaudeSession(
     messageTotals.output += message.usage.output;
     messageTotals.cacheRead += message.usage.cacheRead;
     messageTotals.cacheCreation += message.usage.cacheCreation;
+    messageTotals.cacheCreation1h += message.usage.cacheCreation1h;
     messageTotals.reasoning += message.usage.reasoning;
   }
   const totals = resultTotals ?? messageTotals;
@@ -189,6 +196,7 @@ export function parseClaudeSession(
       cwd,
       gitBranch,
       model,
+      reasoningEffort: summarizeReasoningEfforts(reasoningEfforts),
       cliVersion,
       startedAt,
       endedAt,
@@ -389,6 +397,9 @@ function parseUsage(value: Json | undefined): TokenUsage | null {
     output: asInteger(value.output_tokens) ?? 0,
     cacheRead: asInteger(value.cache_read_input_tokens) ?? 0,
     cacheCreation: asInteger(value.cache_creation_input_tokens) ?? 0,
+    cacheCreation1h: isObject(value.cache_creation)
+      ? (asInteger(value.cache_creation.ephemeral_1h_input_tokens) ?? 0)
+      : 0,
     reasoning: 0,
   };
 }

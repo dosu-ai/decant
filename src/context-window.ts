@@ -1,9 +1,33 @@
 import type { Database } from "bun:sqlite";
 
-/** Baseline Claude context window; logs never state the size explicitly. */
+/** Baseline for Claude models whose published limit is still 200k. */
 const DEFAULT_WINDOW_TOKENS = 200_000;
-/** Extended-context sessions (e.g. 1M beta) are inferred once usage exceeds the baseline. */
+/** Current long-context Claude models use 1M as both the default and maximum. */
 const EXTENDED_WINDOW_TOKENS = 1_000_000;
+
+/**
+ * Claude Code logs do not record the model's context-window size. Infer it
+ * from Anthropic's published model limits, while preserving historical 1M
+ * beta sessions when their observed usage already proves a larger window.
+ */
+export function inferClaudeContextWindowTokens(model: string | null, maxSeen: number): number {
+  if (maxSeen > DEFAULT_WINDOW_TOKENS) {
+    return EXTENDED_WINDOW_TOKENS;
+  }
+  if (model == null) {
+    return DEFAULT_WINDOW_TOKENS;
+  }
+  const normalized = model.toLowerCase().replace(/[._/:]/g, "-");
+  const oneMillionFamilies = [
+    /(?:^|-)opus-(?:5|4-(?:6|7|8))(?:-|$)/,
+    /(?:^|-)sonnet-(?:5|4-6)(?:-|$)/,
+    /(?:^|-)fable-5(?:-|$)/,
+    /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
+  ];
+  return oneMillionFamilies.some((pattern) => pattern.test(normalized))
+    ? EXTENDED_WINDOW_TOKENS
+    : DEFAULT_WINDOW_TOKENS;
+}
 
 export interface ContextWindowPoint {
   seq: number;
@@ -34,7 +58,7 @@ export interface ContextWindowTimeline {
   tool: string;
   /** Null when the session has no usable usage data (e.g. Codex until Phase 2). */
   window_tokens: number | null;
-  /** True whenever window_tokens comes from the 200k/1M heuristic rather than the log. */
+  /** True whenever window_tokens comes from Claude's model limit rather than the log. */
   window_inferred: boolean;
   peak_tokens: number;
   peak_pct: number | null;
@@ -141,6 +165,7 @@ export function contextWindowForSession(
   const session = db
     .query(
       `SELECT id, tool, is_subagent,
+              model,
               json_extract(raw_meta, '$.model_context_window') AS explicit_window
        FROM session WHERE id = ?1`,
     )
@@ -148,6 +173,7 @@ export function contextWindowForSession(
     id: number;
     tool: string;
     is_subagent: number;
+    model: string | null;
     explicit_window: number | null;
   } | null;
   if (session == null) {
@@ -244,9 +270,7 @@ export function contextWindowForSession(
   const inferredWindow =
     session.tool !== "claude_code" || maxSeen <= 0
       ? null
-      : maxSeen > DEFAULT_WINDOW_TOKENS
-        ? EXTENDED_WINDOW_TOKENS
-        : DEFAULT_WINDOW_TOKENS;
+      : inferClaudeContextWindowTokens(session.model, maxSeen);
   const window = explicitWindow ?? inferredWindow;
   const displayTurnCount = Math.max(turn, points.length > 0 ? 1 : 0);
 

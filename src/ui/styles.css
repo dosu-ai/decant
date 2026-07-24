@@ -623,7 +623,7 @@ table {
 }
 
 .sessions-table {
-  min-width: 1360px;
+  min-width: 1440px;
 }
 
 .sessions-table .col-session-tool {
@@ -631,20 +631,24 @@ table {
 }
 
 .sessions-table .col-session-title {
-  width: 34%;
+  width: 29%;
 }
 
 .sessions-table .col-session-model {
   width: 12%;
 }
 
+.sessions-table .col-session-effort {
+  width: 7%;
+}
+
 .sessions-table .col-session-context,
 .sessions-table .col-session-compactions {
-  width: 8%;
+  width: 7%;
 }
 
 .sessions-table .col-session-subagents {
-  width: 9%;
+  width: 8%;
 }
 
 .sessions-table .col-session-count {
@@ -656,7 +660,7 @@ table {
 }
 
 .sessions-table .col-session-started {
-  width: 9%;
+  width: 10%;
 }
 
 .col-wide {
@@ -852,6 +856,10 @@ td a:hover {
 
 .table-skeleton-line.model {
   width: 148px;
+}
+
+.table-skeleton-line.effort {
+  width: 56px;
 }
 
 .table-skeleton-line.number {

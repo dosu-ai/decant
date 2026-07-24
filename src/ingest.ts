@@ -8,7 +8,13 @@ import { materializeContextWindow, materializeMissingContextWindows } from "./co
 import { defaultPricing, estimateCost } from "./cost.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
-import type { Json, NormalizedBlock, ParsedSession, Tool } from "./model.ts";
+import {
+  type Json,
+  type NormalizedBlock,
+  type ParsedSession,
+  summarizeReasoningEfforts,
+  type Tool,
+} from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
@@ -150,11 +156,17 @@ export function sync(
   resolveSubagentParents(db);
   const materializedEconomics = materializeMissingSessionEconomics(db);
   const materializedWindows = materializeMissingContextWindows(db);
+  const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
     regenerateRecommendations(db);
   }
-  if (report.ingested > 0 || materializedEconomics > 0 || materializedWindows > 0) {
+  if (
+    report.ingested > 0 ||
+    materializedEconomics > 0 ||
+    materializedWindows > 0 ||
+    materializedEfforts > 0
+  ) {
     // Refresh planner statistics after write bursts; without ANALYZE data the
     // query planner picks pathological join orders on multi-GB archives.
     db.exec("PRAGMA optimize;");
@@ -179,14 +191,15 @@ export function seedModelPricing(db: Database): void {
   const insert = db.prepare(
     `INSERT INTO model_pricing(
        model, input_per_mtok, output_per_mtok, cache_read_per_mtok,
-       cache_write_per_mtok, source, updated_at
+       cache_write_per_mtok, cache_write_1h_per_mtok, source, updated_at
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, 'seed', datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'seed', datetime('now'))
      ON CONFLICT(model) DO UPDATE SET
        input_per_mtok = excluded.input_per_mtok,
        output_per_mtok = excluded.output_per_mtok,
        cache_read_per_mtok = excluded.cache_read_per_mtok,
        cache_write_per_mtok = excluded.cache_write_per_mtok,
+       cache_write_1h_per_mtok = excluded.cache_write_1h_per_mtok,
        updated_at = excluded.updated_at
      WHERE model_pricing.source = 'seed'`,
   );
@@ -198,6 +211,7 @@ export function seedModelPricing(db: Database): void {
         price.outputPerMtok,
         price.cacheReadPerMtok,
         price.cacheWritePerMtok,
+        price.cacheWrite1hPerMtok,
       );
     }
   });
@@ -328,6 +342,81 @@ export function resolveSubagentParents(db: Database): void {
     }
   });
   apply();
+}
+
+/** One-time schema-upgrade backfill. Effort lives only in source records, so
+ * unchanged sessions cannot recover it from the archive itself. The checked
+ * marker prevents source files that genuinely omit effort from being reparsed
+ * on every sync, while normal re-ingest refreshes the value when a file grows. */
+export function materializeMissingReasoningEfforts(db: Database): number {
+  const rows = db
+    .query(
+      `SELECT id, tool, source_session_id, source_path
+       FROM session
+       WHERE reasoning_effort_checked = 0`,
+    )
+    .all() as {
+    id: number;
+    tool: Tool;
+    source_session_id: string;
+    source_path: string | null;
+  }[];
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  const efforts = rows.map((row) => {
+    let effort: string | null = null;
+    if (row.source_path != null) {
+      try {
+        effort = reasoningEffortFromSource(row.tool, readFileSync(row.source_path, "utf8"));
+      } catch {
+        // Missing/unreadable source files are a stable unavailable state.
+      }
+    }
+    return { id: row.id, effort };
+  });
+
+  const update = db.prepare(
+    `UPDATE session
+     SET reasoning_effort = ?2, reasoning_effort_checked = 1
+     WHERE id = ?1`,
+  );
+  const apply = db.transaction((items: typeof efforts) => {
+    for (const row of items) {
+      update.run(row.id, row.effort);
+    }
+  });
+  apply(efforts);
+  return rows.length;
+}
+
+/** Narrow source scan for the one-time effort backfill. It avoids rebuilding
+ * every message/block/tool object from a potentially multi-GB archive and
+ * leaves the database write transaction for the small update batch only. */
+function reasoningEffortFromSource(tool: Tool, content: string): string | null {
+  const efforts = new Set<string>();
+  for (const line of content.split(/\n/)) {
+    if (line.trim() === "") {
+      continue;
+    }
+    try {
+      const value = JSON.parse(line) as Json;
+      const effort =
+        tool === "claude_code"
+          ? asString(get(value, "effort"))
+          : asString(get(get(value, "payload"), "effort"));
+      if (
+        effort != null &&
+        (tool === "claude_code" || asString(get(value, "type")) === "turn_context")
+      ) {
+        efforts.add(effort);
+      }
+    } catch {
+      // Parser parity: malformed source rows do not hide valid effort labels.
+    }
+  }
+  return summarizeReasoningEfforts(efforts);
 }
 
 function sourceKey(tool: Tool, sourceSessionId: string): string {
@@ -494,11 +583,13 @@ function writeSession(
        agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
        active_seconds, outcome, work_type,
        est_reasoning_tokens, reasoning_source,
-       id
+       id,
+       total_cache_creation_1h_tokens,
+       reasoning_effort, reasoning_effort_checked
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
-             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45)`,
+             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, 1)`,
   ).run(
     s.tool,
     s.sourceSessionId,
@@ -545,6 +636,8 @@ function writeSession(
     s.estReasoningTokens,
     s.reasoningSource,
     existing?.id ?? null,
+    s.totals.cacheCreation1h,
+    s.reasoningEffort,
   );
   const sessionId = lastInsertRowid(db);
 

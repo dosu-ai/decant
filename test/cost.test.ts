@@ -5,13 +5,58 @@ import { emptyUsage, type TokenUsage } from "../src/model.ts";
 // Ports cost.rs tests verbatim — these are the spec for model normalization
 // (Bedrock ARNs, date/[1m] suffixes, aliases) and estimate-at-ingest.
 function usage1m(): TokenUsage {
-  return { input: 1_000_000, output: 1_000_000, cacheRead: 0, cacheCreation: 0, reasoning: 0 };
+  return {
+    input: 1_000_000,
+    output: 1_000_000,
+    cacheRead: 0,
+    cacheCreation: 0,
+    cacheCreation1h: 0,
+    reasoning: 0,
+  };
 }
 
 describe("estimateCost", () => {
   test("opus input+output costs add up", () => {
     const cost = estimateCost("claude-opus-4-7", usage1m(), defaultPricing());
     expect(cost).toBeCloseTo(30.0, 6); // 1M @ $5 + 1M @ $25
+  });
+
+  test("cache writes bill 1.25x input at 5m TTL and 2x at 1h TTL", () => {
+    const pricing = defaultPricing();
+    const base = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
+    // Opus input is $5/Mtok, so 5m writes are $6.25/Mtok and 1h writes $10/Mtok.
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 0 },
+        pricing,
+      ),
+    ).toBeCloseTo(6.25, 6);
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 1_000_000 },
+        pricing,
+      ),
+    ).toBeCloseTo(10.0, 6);
+  });
+
+  test("invalid one-hour cache splits are clamped to the reported total", () => {
+    const base = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 2_000_000 },
+        defaultPricing(),
+      ),
+    ).toBeCloseTo(10.0, 6);
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: -1 },
+        defaultPricing(),
+      ),
+    ).toBeCloseTo(6.25, 6);
   });
 
   test("reasoning tokens do not change cost", () => {
@@ -68,6 +113,9 @@ describe("estimateCost", () => {
   test("gpt family is priced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
+    expect(estimateCost("gpt-5.6-sol", u, pricing)).toBeCloseTo(35.0, 6);
+    expect(estimateCost("gpt-5.6-terra", u, pricing)).toBeCloseTo(17.5, 6);
+    expect(estimateCost("gpt-5.6-luna", u, pricing)).toBeCloseTo(7.0, 6);
     expect(estimateCost("gpt-5", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gpt-5.1", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gpt-5-mini", u, pricing)).toBeCloseTo(2.25, 6);
@@ -79,6 +127,11 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.4-pro", u, pricing)).toBeCloseTo(210.0, 6);
     expect(estimateCost("gpt-5.5", u, pricing)).toBeCloseTo(35.0, 6);
     expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
+  });
+
+  test("gpt-5.6 cache writes use the published 1.25x input rate", () => {
+    const usage = { ...emptyUsage(), cacheCreation: 1_000_000 };
+    expect(estimateCost("gpt-5.6-sol", usage, defaultPricing())).toBeCloseTo(6.25, 6);
   });
 
   test("published openai legacy and reasoning models are priced", () => {
@@ -154,7 +207,13 @@ describe("estimateCost", () => {
     const pricing = new Map<string, Price>([
       [
         "claude-opus",
-        { inputPerMtok: 5.0, outputPerMtok: 25.0, cacheReadPerMtok: 0.5, cacheWritePerMtok: 6.25 },
+        {
+          inputPerMtok: 5.0,
+          outputPerMtok: 25.0,
+          cacheReadPerMtok: 0.5,
+          cacheWritePerMtok: 6.25,
+          cacheWrite1hPerMtok: 10.0,
+        },
       ],
     ]);
     expect(estimateCost("claude-haiku-4-5", usage1m(), pricing)).toBe(0.0);

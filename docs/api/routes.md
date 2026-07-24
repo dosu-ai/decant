@@ -84,14 +84,21 @@ excerpt from the first text block for each human/prompt turn, so the sticky
 thread navigation can cover the whole session without loading every rich
 transcript block up front.
 
+Session summaries returned by the list and detail routes include
+`reasoning_effort`. It is the provider-reported effort label, `mixed` when the
+setting changes between turns, or `null` when the source did not record one.
+
 The context-window route derives per-API-call window occupancy and compaction
 events at read time from persisted per-message token columns and raw records.
-Claude window sizes are inferred (200k, or 1M once usage exceeds 200k) because
-those logs do not state them; Codex rollouts carry an explicit
-`model_context_window`, persisted on the session's `raw_meta`. Session rows
-also carry materialized rollups (`context_window_tokens`,
-`peak_context_tokens`, plus the existing `compaction_count`) computed at ingest; the
-first sync after a schema upgrade backfills them, like the economics vectors.
+Claude logs do not state the size, so it is inferred from the recorded model:
+Opus 5, Opus 4.6-4.8, Sonnet 5, Sonnet 4.6, Fable 5, and Mythos 5/Preview use
+1M; other Claude models use 200k unless observed usage proves a historical 1M
+session. Codex rollouts carry an explicit `model_context_window`, persisted on
+the session's `raw_meta`, and that runtime value takes precedence over a
+model's general API limit. Session rows also carry materialized rollups
+(`context_window_tokens`, `peak_context_tokens`, plus the existing
+`compaction_count`) computed at ingest; the first sync after a schema upgrade
+backfills them, like the economics vectors.
 Codex sessions ingested by older decant builds, as well as source rollouts
 predating `last_token_usage`, return empty `points` until the source changes
 and is re-ingested or the archive is rebuilt.

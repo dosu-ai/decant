@@ -35,13 +35,32 @@ export interface TokenUsage {
   output: number;
   cacheRead: number;
   cacheCreation: number;
+  /** Portion of `cacheCreation` written with a 1-hour TTL. Billed at 2x the base
+   * input rate, where a 5-minute write bills at 1.25x. */
+  cacheCreation1h: number;
   /** Output tokens spent on internal reasoning — a sub-component of `output`,
    * never priced separately. Codex reports it exactly; Claude reports none. */
   reasoning: number;
 }
 
 export function emptyUsage(): TokenUsage {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, reasoning: 0 };
+  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheCreation1h: 0, reasoning: 0 };
+}
+
+/** Collapse provider effort labels to one session-level value. Sessions almost
+ * always use one value, but settings can change between turns; preserve that
+ * distinction instead of presenting the last turn as representative. */
+export function summarizeReasoningEfforts(values: Iterable<string>): string | null {
+  const efforts = new Set(
+    Array.from(values, (value) => value.trim().toLowerCase()).filter((value) => value !== ""),
+  );
+  if (efforts.size === 0) {
+    return null;
+  }
+  if (efforts.size === 1) {
+    return efforts.values().next().value ?? null;
+  }
+  return "mixed";
 }
 
 export interface NormalizedBlock {
@@ -78,6 +97,8 @@ export interface NormalizedSession {
   cwd: string | null;
   gitBranch: string | null;
   model: string | null;
+  /** Provider-supplied reasoning effort, or `mixed` when turns differ. */
+  reasoningEffort: string | null;
   cliVersion: string | null;
   startedAt: string | null;
   endedAt: string | null;

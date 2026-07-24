@@ -95,6 +95,7 @@ type SessionSummary = {
   title: string | null;
   project_path: string | null;
   model: string | null;
+  reasoning_effort: string | null;
   started_at: string | null;
   message_count: number;
   total_input_tokens: number;
@@ -1001,6 +1002,7 @@ function SessionsView({
               <col className="col-session-tool" />
               <col className="col-session-title" />
               <col className="col-session-model" />
+              <col className="col-session-effort" />
               <col className="col-session-context" />
               <col className="col-session-compactions" />
               <col className="col-session-subagents" />
@@ -1013,6 +1015,7 @@ function SessionsView({
                 <th>Tool</th>
                 <th>Title</th>
                 <th>Model</th>
+                <th>Effort</th>
                 <th className="numeric">Peak ctx</th>
                 <th className="numeric">Compactions</th>
                 <th className="numeric">Subagents</th>
@@ -1025,7 +1028,7 @@ function SessionsView({
               {waitingForSessions ? <SessionTableSkeletonRows /> : null}
               {!waitingForSessions && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     {query.trim() === ""
                       ? "No sessions ingested yet."
                       : "No sessions match that filter."}
@@ -1058,6 +1061,9 @@ function SessionTableSkeletonRows() {
       </td>
       <td>
         <span className="skeleton-line table-skeleton-line model" />
+      </td>
+      <td>
+        <span className="skeleton-line table-skeleton-line effort" />
       </td>
       <td className="numeric">
         <span className="skeleton-line table-skeleton-line number" />
@@ -1286,6 +1292,7 @@ function sessionMatchesQuery(session: SessionSummary, needle: string): boolean {
     [
       sessionDisplayTitle(session),
       displayModelLabel(session.model),
+      session.reasoning_effort,
       session.tool,
       session.project_path,
       session.agent_type,
@@ -1369,6 +1376,9 @@ function SessionTableRow({
       </td>
       <td>
         <ModelBadge model={session.model} />
+      </td>
+      <td>
+        <EffortBadge effort={session.reasoning_effort} />
       </td>
       <td className="numeric">
         <SessionContextPeak session={session} />
@@ -2809,6 +2819,24 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
     <Badge mono tone={tone}>
       {icon == null ? null : <BrandMark name={icon} />}
       {label}
+    </Badge>
+  );
+}
+
+function EffortBadge({
+  effort,
+  labeled = false,
+}: {
+  effort: string | null | undefined;
+  labeled?: boolean;
+}) {
+  const label = effort?.trim().toLowerCase();
+  if (label == null || label === "") {
+    return <span className="faint">-</span>;
+  }
+  return (
+    <Badge mono tone={label === "mixed" ? "warning" : "info"}>
+      {labeled ? `effort ${label}` : label}
     </Badge>
   );
 }
@@ -4480,6 +4508,7 @@ function SessionDetailView({ id }: { id: number }) {
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
+            <EffortBadge effort={detail.summary.reasoning_effort} labeled />
             {detail.summary.project_path != null ? (
               <span className="project-chip" title={detail.summary.project_path}>
                 <Icon name="folder" />

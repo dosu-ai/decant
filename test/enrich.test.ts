@@ -46,6 +46,7 @@ function oneBlockSession(tool: Tool, block: NormalizedBlock): NormalizedSession 
     cwd: null,
     gitBranch: null,
     model: null,
+    reasoningEffort: null,
     cliVersion: null,
     startedAt: null,
     endedAt: null,

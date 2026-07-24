@@ -307,6 +307,32 @@ describe("upsertSession", () => {
     });
     db.close();
   });
+
+  test("persists provider effort and one-hour cache creation totals", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    const content =
+      '{"type":"assistant","effort":"max","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":60}},"content":[{"type":"text","text":"done"}]}}\n';
+    const parsed = parseClaudeSession("effort-cache", content);
+    const sessionId = upsertSession(db, parsed, "/x/effort-cache.jsonl", 1, 2, "hash");
+
+    expect(
+      db
+        .query(
+          `SELECT reasoning_effort, reasoning_effort_checked,
+                  total_cache_creation_tokens, total_cache_creation_1h_tokens
+           FROM session WHERE id = ?1`,
+        )
+        .get(sessionId),
+    ).toEqual({
+      reasoning_effort: "max",
+      reasoning_effort_checked: 1,
+      total_cache_creation_tokens: 100,
+      total_cache_creation_1h_tokens: 60,
+    });
+    expect(getSession(db, sessionId)?.summary.reasoning_effort).toBe("max");
+    db.close();
+  });
 });
 
 describe("sync", () => {
@@ -381,6 +407,16 @@ describe("sync", () => {
     expect(
       (db.query("SELECT COUNT(*) AS n FROM model_pricing").get() as { n: number }).n,
     ).toBeGreaterThan(0);
+    expect(
+      (
+        db
+          .query(
+            `SELECT cache_write_per_mtok, cache_write_1h_per_mtok
+             FROM model_pricing WHERE model = 'gpt-5.6-sol'`,
+          )
+          .get() as { cache_write_per_mtok: number; cache_write_1h_per_mtok: number }
+      ).cache_write_1h_per_mtok,
+    ).toBe(6.25);
 
     // Simulate opening a migrated v9 archive whose transcripts are unchanged.
     db.exec("DELETE FROM session_economics");
@@ -413,6 +449,45 @@ describe("sync", () => {
         }
       ).score,
     ).toBe(0);
+    db.close();
+  });
+
+  test("backfills effort for an unchanged source once after the schema upgrade", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "07",
+      "24",
+      "rollout-effort.jsonl",
+    );
+    write(
+      sourcePath,
+      [
+        '{"type":"session_meta","payload":{"id":"effort-session","cwd":"/repo"}}',
+        '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    db.exec(
+      "UPDATE session SET reasoning_effort = NULL, reasoning_effort_checked = 0 WHERE source_session_id = 'effort-session'",
+    );
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(
+      db
+        .query(
+          `SELECT reasoning_effort, reasoning_effort_checked
+           FROM session WHERE source_session_id = 'effort-session'`,
+        )
+        .get(),
+    ).toEqual({ reasoning_effort: "xhigh", reasoning_effort_checked: 1 });
     db.close();
   });
 

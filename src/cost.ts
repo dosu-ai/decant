@@ -5,6 +5,8 @@ export interface Price {
   outputPerMtok: number;
   cacheReadPerMtok: number;
   cacheWritePerMtok: number;
+  /** Rate for cache writes made with a 1-hour TTL. */
+  cacheWrite1hPerMtok: number;
 }
 
 function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
@@ -13,6 +15,7 @@ function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
     outputPerMtok,
     cacheReadPerMtok: inputPerMtok * 0.1,
     cacheWritePerMtok: inputPerMtok * 1.25,
+    cacheWrite1hPerMtok: inputPerMtok * 2.0,
   };
 }
 
@@ -20,18 +23,21 @@ function openAiPrice(
   inputPerMtok: number,
   cacheReadPerMtok: number | null,
   outputPerMtok: number,
+  cacheWriteMultiplier = 1,
 ): Price {
   return {
     inputPerMtok,
     outputPerMtok,
     cacheReadPerMtok: cacheReadPerMtok ?? inputPerMtok,
-    cacheWritePerMtok: inputPerMtok,
+    cacheWritePerMtok: inputPerMtok * cacheWriteMultiplier,
+    cacheWrite1hPerMtok: inputPerMtok * cacheWriteMultiplier,
   };
 }
 
 export function defaultPricing(): Map<string, Price> {
-  // Standard first-party API text-token rates per 1M tokens. Claude cache writes use
-  // the 5-minute cache-write rate because session logs do not distinguish 1h writes.
+  // Standard first-party API text-token rates per 1M tokens. Claude cache writes
+  // carry both a 5-minute (1.25x input) and a 1-hour (2x input) rate; the split
+  // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens.
   return new Map<string, Price>([
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus", claudePrice(5.0, 25.0)],
@@ -41,6 +47,9 @@ export function defaultPricing(): Map<string, Price> {
     ["claude-sonnet", claudePrice(3.0, 15.0)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
+    ["gpt-5.6-sol", openAiPrice(5.0, 0.5, 30.0, 1.25)],
+    ["gpt-5.6-terra", openAiPrice(2.5, 0.25, 15.0, 1.25)],
+    ["gpt-5.6-luna", openAiPrice(1.0, 0.1, 6.0, 1.25)],
     ["gpt-5.5", openAiPrice(5.0, 0.5, 30.0)],
     ["gpt-5.5-pro", openAiPrice(30.0, null, 180.0)],
     ["gpt-5.4", openAiPrice(2.5, 0.25, 15.0)],
@@ -140,6 +149,9 @@ function canonicalModel(raw: string): string | null {
   }
 
   for (const key of [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5-pro",
     "gpt-5.5",
     "gpt-5.4-nano",
@@ -229,11 +241,17 @@ export function estimateCostParts(
   }
 
   const per = (tokens: number, rate: number): number => (tokens * rate) / 1_000_000.0;
+  // Clamped: a source that reports a 1h figure larger than the total must not
+  // produce a negative 5-minute remainder.
+  const creationTotal = Math.max(0, usage.cacheCreation);
+  const creation1h = Math.min(Math.max(0, usage.cacheCreation1h), creationTotal);
+  const creation5m = creationTotal - creation1h;
   return {
     input: per(usage.input, price.inputPerMtok),
     output: per(usage.output, price.outputPerMtok),
     cacheRead: per(usage.cacheRead, price.cacheReadPerMtok),
-    cacheCreation: per(usage.cacheCreation, price.cacheWritePerMtok),
+    cacheCreation:
+      per(creation5m, price.cacheWritePerMtok) + per(creation1h, price.cacheWrite1hPerMtok),
   };
 }
 

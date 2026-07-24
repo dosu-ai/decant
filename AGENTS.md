@@ -79,10 +79,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v11.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v13.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow
-   v8-to-v11 migrations preserve existing TypeScript-cutover archives.
+   v8-to-v13 migrations preserve existing TypeScript-cutover archives.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
    and golden updates.

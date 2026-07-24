@@ -1,5 +1,5 @@
--- decant:schema_version=11
--- Effective decant schema (migrations 1..11 applied), frozen as the current
+-- decant:schema_version=13
+-- Effective decant schema (migrations 1..13 applied), frozen as the current
 -- baseline. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -26,6 +26,8 @@ CREATE TABLE session (
   cwd TEXT,
   git_branch TEXT,
   model TEXT,
+  reasoning_effort TEXT,
+  reasoning_effort_checked INTEGER NOT NULL DEFAULT 0,
   cli_version TEXT,
   started_at TEXT,
   ended_at TEXT,
@@ -34,6 +36,7 @@ CREATE TABLE session (
   total_output_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
   total_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   est_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_source TEXT,
@@ -154,6 +157,7 @@ CREATE TABLE model_pricing (
   output_per_mtok REAL,
   cache_read_per_mtok REAL,
   cache_write_per_mtok REAL,
+  cache_write_1h_per_mtok REAL,
   source TEXT,
   updated_at TEXT
 );

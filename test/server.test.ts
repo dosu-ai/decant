@@ -298,14 +298,17 @@ describe("server routes", () => {
     expect(sessions.status).toBe(200);
     expect(sessions.body).toBeArrayOfSize(2);
     expect(sessions.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ tool: "claude_code" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ tool: "claude_code" }),
+        expect.objectContaining({ tool: "codex", reasoning_effort: "high" }),
+      ]),
     );
     const id = (sessions.body as { id: number }[])[0]?.id ?? 0;
 
     const detail = await route(config, `/api/sessions/${id}`);
     expect(detail.status).toBe(200);
     expect(detail.body).toMatchObject({
-      summary: { id },
+      summary: { id, reasoning_effort: expect.any(String) },
       messages: expect.any(Array),
     });
     const firstMessagePage = await route(
@@ -369,7 +372,7 @@ describe("server routes", () => {
     expect(timeline.body).toMatchObject({
       session_id: id,
       tool: "claude_code",
-      window_tokens: 200_000,
+      window_tokens: 1_000_000,
       window_inferred: true,
       peak_tokens: 1200,
       points: [

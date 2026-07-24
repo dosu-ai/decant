@@ -4,6 +4,7 @@ import {
   emptyUsage,
   REASONING_SOURCES,
   ROLES,
+  summarizeReasoningEfforts,
   TOOL_KINDS,
   TOOLS,
 } from "../src/model.ts";
@@ -33,7 +34,14 @@ describe("model wire strings", () => {
       output: 0,
       cacheRead: 0,
       cacheCreation: 0,
+      cacheCreation1h: 0,
       reasoning: 0,
     });
+  });
+
+  test("reasoning effort is normalized and marks mixed sessions", () => {
+    expect(summarizeReasoningEfforts([])).toBeNull();
+    expect(summarizeReasoningEfforts([" XHIGH ", "xhigh"])).toBe("xhigh");
+    expect(summarizeReasoningEfforts(["high", "max"])).toBe("mixed");
   });
 });

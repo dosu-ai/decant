@@ -16,6 +16,7 @@ export interface SessionSummary {
   title: string | null;
   project_path: string | null;
   model: string | null;
+  reasoning_effort: string | null;
   started_at: string | null;
   ended_at: string | null;
   message_count: number;
@@ -57,7 +58,7 @@ interface SessionSummaryRow
 
 const SESSION_SUMMARY_SELECT = `
   SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
-         s.model, s.started_at, s.ended_at, s.message_count,
+         s.model, s.reasoning_effort, s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
          s.agent_id, s.agent_type, s.spawn_depth,
@@ -219,7 +220,7 @@ export function getSession(
   const summaryRow = db
     .query(
       `SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
-              s.model, s.started_at, s.ended_at, s.message_count,
+              s.model, s.reasoning_effort, s.started_at, s.ended_at, s.message_count,
               s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
               s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
               s.agent_id, s.agent_type, s.spawn_depth,

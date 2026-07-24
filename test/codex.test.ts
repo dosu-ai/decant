@@ -15,6 +15,7 @@ describe("parseCodexSession", () => {
     expect(session.sourceSessionId).toBe("sess-codex-1");
     expect(session.cwd).toBe("/Users/dev/proj");
     expect(session.model).toBe("gpt-5.4");
+    expect(session.reasoningEffort).toBe("high");
     expect(session.messages).toHaveLength(4);
     expect(session.messages[0]?.role).toBe("user");
     expect(session.messages[1]?.blocks[0]?.blockType).toBe("tool_use");
@@ -39,6 +40,14 @@ describe("parseCodexSession", () => {
       new Map([["sess-codex-1", "TODO audit"]]),
     );
     expect(parsed.session.title).toBe("TODO audit");
+  });
+
+  test("marks sessions whose effort changes between turns", () => {
+    const content = [
+      '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"high"}}',
+      '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}',
+    ].join("\n");
+    expect(parseCodexSession("mixed", content, new Map()).session.reasoningEffort).toBe("mixed");
   });
 
   test("stamps last_token_usage onto the producing assistant without crossing compaction", () => {
@@ -119,6 +128,7 @@ describe("parseCodexSession", () => {
       output: 60,
       cacheRead: 700,
       cacheCreation: 0,
+      cacheCreation1h: 0,
       reasoning: 10,
     });
     expect(messages[2]?.usage).toBeNull();

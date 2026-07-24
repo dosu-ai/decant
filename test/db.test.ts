@@ -24,7 +24,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v11 baseline. Shadow tables
+// Inventory of the frozen v13 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -165,6 +165,15 @@ describe("openDb", () => {
     db.exec(`
       CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
       CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL);
+      CREATE TABLE model_pricing(
+        model TEXT PRIMARY KEY,
+        input_per_mtok REAL,
+        output_per_mtok REAL,
+        cache_read_per_mtok REAL,
+        cache_write_per_mtok REAL,
+        source TEXT,
+        updated_at TEXT
+      );
     `);
     const insert = db.prepare(
       "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
@@ -188,6 +197,17 @@ describe("openDb", () => {
       .query("SELECT name FROM pragma_table_info('session')")
       .all() as { name: string }[];
     expect(sessionColumns.map((column) => column.name)).toContain("peak_context_tokens");
+    expect(sessionColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "total_cache_creation_1h_tokens",
+        "reasoning_effort",
+        "reasoning_effort_checked",
+      ]),
+    );
+    const pricingColumns = migrated
+      .query("SELECT name FROM pragma_table_info('model_pricing')")
+      .all() as { name: string }[];
+    expect(pricingColumns.map((column) => column.name)).toContain("cache_write_1h_per_mtok");
     migrated.close();
   });
 
@@ -197,6 +217,15 @@ describe("openDb", () => {
     db.exec(`
       CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
       CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL);
+      CREATE TABLE model_pricing(
+        model TEXT PRIMARY KEY,
+        input_per_mtok REAL,
+        output_per_mtok REAL,
+        cache_read_per_mtok REAL,
+        cache_write_per_mtok REAL,
+        source TEXT,
+        updated_at TEXT
+      );
     `);
     const insert = db.prepare(
       "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
@@ -215,6 +244,57 @@ describe("openDb", () => {
         }
       ).version,
     ).toBe(LATEST_SCHEMA_VERSION);
+    migrated.close();
+  });
+
+  test("migrates v12 archives and invalidates stale Claude context-window rollups", () => {
+    const path = freshPath();
+    const db = new Database(path, { create: true, strict: true });
+    db.exec(`
+      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE session(
+        id INTEGER PRIMARY KEY,
+        tool TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        context_window_tokens INTEGER,
+        peak_context_tokens INTEGER,
+        total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE model_pricing(
+        model TEXT PRIMARY KEY,
+        input_per_mtok REAL,
+        output_per_mtok REAL,
+        cache_read_per_mtok REAL,
+        cache_write_per_mtok REAL,
+        source TEXT,
+        updated_at TEXT
+      );
+      INSERT INTO session(
+        id, tool, source_session_id, context_window_tokens, peak_context_tokens
+      ) VALUES
+        (1, 'claude_code', 'claude-old-rollup', 200000, 120000),
+        (2, 'codex', 'codex-explicit-rollup', 258400, 120000);
+    `);
+    const insert = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
+    );
+    for (let version = 1; version <= 12; version += 1) {
+      insert.run(version);
+    }
+    db.close();
+
+    const migrated = openDb(path);
+    expect(
+      migrated
+        .query(
+          `SELECT tool, context_window_tokens, peak_context_tokens
+           FROM session ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      { tool: "claude_code", context_window_tokens: null, peak_context_tokens: null },
+      { tool: "codex", context_window_tokens: 258400, peak_context_tokens: 120000 },
+    ]);
     migrated.close();
   });
 

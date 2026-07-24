@@ -92,6 +92,24 @@ describe("parseClaudeSession", () => {
     expect(session.messages[2]?.usage).toBeNull();
   });
 
+  test("captures effort and the one-hour cache creation breakdown", () => {
+    const content = [
+      '{"type":"assistant","effort":"max","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":60}},"content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("effort-cache", `${content}\n`).session;
+    expect(session.reasoningEffort).toBe("max");
+    expect(session.totals.cacheCreation).toBe(100);
+    expect(session.totals.cacheCreation1h).toBe(60);
+  });
+
+  test("marks sessions whose effort changes between assistant turns", () => {
+    const content = [
+      '{"type":"assistant","effort":"high","message":{"role":"assistant","content":[]}}',
+      '{"type":"assistant","effort":"max","message":{"role":"assistant","content":[]}}',
+    ].join("\n");
+    expect(parseClaudeSession("mixed", content).session.reasoningEffort).toBe("mixed");
+  });
+
   test("snake case streaming request ids de-dupe cumulative assistant usage", () => {
     const content = [
       '{"type":"assistant","request_id":"req-1","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"content":[{"type":"thinking","thinking":"","signature":"sig"}]}}',

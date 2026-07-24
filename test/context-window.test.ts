@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   contextWindowForSession,
+  inferClaudeContextWindowTokens,
   materializeMissingContextWindows,
 } from "../src/context-window.ts";
 import { openDb } from "../src/db.ts";
@@ -195,6 +196,33 @@ function seeded(): { db: Database; sessionId: number } {
 }
 
 describe("contextWindowForSession", () => {
+  test("uses published model limits for Claude sessions whose logs omit the window", () => {
+    for (const model of [
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+      "claude-fable-5",
+      "claude-mythos-5",
+      "claude-mythos-preview",
+      "us.anthropic.claude-opus-4-8-v1:0",
+    ]) {
+      expect(inferClaudeContextWindowTokens(model, 50_000)).toBe(1_000_000);
+    }
+    for (const model of [
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5-20251001",
+      "claude-opus-4-5",
+      "claude-opus-4-60",
+      null,
+    ]) {
+      expect(inferClaudeContextWindowTokens(model, 50_000)).toBe(200_000);
+    }
+    expect(inferClaudeContextWindowTokens("claude-sonnet-4-5", 250_000)).toBe(1_000_000);
+  });
+
   test("builds the per-call series with dedupe, compaction, and sidechain exclusion", () => {
     const { db, sessionId } = seeded();
     const timeline = contextWindowForSession(db, sessionId);
@@ -228,10 +256,10 @@ describe("contextWindowForSession", () => {
     ]);
     expect(timeline?.points[2]?.seq).toBe(8);
 
-    expect(timeline?.window_tokens).toBe(200_000);
+    expect(timeline?.window_tokens).toBe(1_000_000);
     expect(timeline?.window_inferred).toBe(true);
     expect(timeline?.peak_tokens).toBe(70_510);
-    expect(timeline?.peak_pct).toBeCloseTo(70_510 / 200_000, 6);
+    expect(timeline?.peak_pct).toBeCloseTo(70_510 / 1_000_000, 6);
     db.close();
   });
 
@@ -263,7 +291,7 @@ describe("contextWindowForSession", () => {
         post_tokens: null,
       },
     ]);
-    expect(timeline?.window_tokens).toBe(200_000);
+    expect(timeline?.window_tokens).toBe(1_000_000);
     db.close();
   });
 
@@ -623,7 +651,7 @@ describe("context-window rollups", () => {
       )
       .get(sessionId);
     expect(row).toEqual({
-      context_window_tokens: 200_000,
+      context_window_tokens: 1_000_000,
       peak_context_tokens: 70_510,
       compaction_count: 1,
     });
@@ -651,7 +679,7 @@ describe("context-window rollups", () => {
     const { db } = seeded();
     const summary = listSessions(db)[0];
     expect(summary).toMatchObject({
-      context_window_tokens: 200_000,
+      context_window_tokens: 1_000_000,
       peak_context_tokens: 70_510,
       compaction_count: 1,
     });

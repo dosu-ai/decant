@@ -73,7 +73,9 @@ A change is ready when:
 - `bunx biome check .` passes.
 - `just check` wraps all three plus the distribution staging smoke; CI
   additionally builds the binary matrix, npm staging, and Docker images on
-  every push, not only for distribution changes.
+  every push, not only for distribution changes. The staging smoke packs and
+  installs both launcher packages with `npm`, so `just check` needs network
+  access even though the app itself never makes one.
 - New behavior has focused tests. Do not weaken or delete tests to make them pass.
 - Distribution changes also get a native binary smoke test and, when Docker is
   touched, a local `docker build`/`docker run --help` smoke if Docker is available.

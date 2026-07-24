@@ -4,12 +4,12 @@ import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 
-// End-to-end coverage for the CLI→serve() trusted-peer wiring (plan §3 0.1):
-// spawn the real CLI, bind 0.0.0.0, and connect via a non-loopback interface
-// so the request's source address actually exercises the peer guard — the
-// exact shape of the documented Docker deployment (loopback Host header,
-// non-loopback remote address). The pure union logic is unit-tested in
-// server.test.ts; this file proves argv/env reach serve() unmangled.
+// End-to-end coverage for the CLI→serve() trusted-peer wiring: spawn the real
+// CLI, bind 0.0.0.0, and connect via a non-loopback interface so the request's
+// source address actually exercises the peer guard — the exact shape of the
+// documented Docker deployment (loopback Host header, non-loopback remote
+// address). The precedence logic itself is unit-tested in server.test.ts; this
+// file proves argv/env reach serve() unmangled.
 
 const repoRoot = join(import.meta.dir, "..");
 

@@ -833,10 +833,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Homebrew supports Linux on x86_64 only, so there is no linux-arm64
+          # leg. The formula still declares that URL for anyone whose brew works
+          # there, but tap-update needs this job — gating the tap push on a
+          # platform Homebrew does not support would block it on the very
+          # release that introduces the tap. linux-arm64 is covered by
+          # install.sh, npm, and the Docker image.
           - os: ubuntu-latest
             target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
           - os: macos-15
             target: darwin-arm64
           - os: macos-15-intel

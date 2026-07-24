@@ -51,8 +51,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # .bun-version is the single source of truth for the Bun toolchain (plan §3
-      # 0.5). Dependabot bumps the Dockerfile's builder tag weekly, so drift is
+      # .bun-version is the single source of truth for the Bun toolchain.
+      # Dependabot bumps the Dockerfile's builder tag weekly, so drift is
       # otherwise guaranteed — this guard turns silent drift into a red check so
       # the pin is only ever moved deliberately (via .bun-version).
       - name: Assert Dockerfile builder matches .bun-version

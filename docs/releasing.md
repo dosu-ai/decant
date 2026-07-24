@@ -38,9 +38,10 @@ Ordered — later steps assume earlier ones landed.
    forcing it through — decant's history predates the TypeScript cutover and
    nothing on mainline depends on that tag being public.
 4. **Land the release-blocking work on `main`.** The tag-driven pipeline, the
-   npm package READMEs, and the UI loading-architecture cleanup are all
-   release-blocking for v0.1.0 — none of them can land after the first tag as a
-   follow-up. Apple signing is the deliberate exception (step 1).
+   installer, and the npm package metadata are release-blocking for v0.1.0 —
+   none of them can land after the first tag as a follow-up, because the first
+   tag is what publishes them. Apple signing is the deliberate exception
+   (step 1).
 5. **Create a bootstrap npm token.** Trusted publishers can only be configured
    on packages that already exist, so the very first publish for each of the
    six packages needs a classic-token-free bootstrap path: a granular npm
@@ -51,19 +52,25 @@ Ordered — later steps assume earlier ones landed.
    publishing access. This path still emits npm provenance — token auth on a
    GitHub-hosted runner qualifies, provided the repo is already public. See
    [npm bootstrap and trusted publishing](#npm-bootstrap-and-trusted-publishing).
-6. **Tag `v0.1.0`.** The pipeline publishes all six npm packages (with
+6. **Create `HOMEBREW_TOKEN`.** A fine-grained personal access token with
+   Contents: read/write on `dosu-ai/homebrew-dosu`, stored as the
+   `HOMEBREW_TOKEN` repo secret. `tap-update` checks out the tap with it and
+   pushes `Formula/decant.rb`. Without it that job fails *after* the GitHub
+   Release has already published, leaving `brew install decant` broken on a
+   release the README advertises as installable that way.
+7. **Tag `v0.1.0`.** The pipeline publishes all six npm packages (with
    provenance), ad-hoc signed darwin binaries, a GitHub Release with
    checksummed assets and attestations, the GHCR image, and the Homebrew tap
    formula. Immediately after the first image push, flip the new
    `ghcr.io/dosu-ai/decant` package to public and link it to the repo — a
    first-push GHCR package defaults to private even under a public repo, so an
    anonymous `docker pull` fails until this happens.
-7. **Configure trusted publishers** on all six now-existing packages (org
+8. **Configure trusted publishers** on all six now-existing packages (org
    `dosu-ai`, repo `decant`, workflow `release.yml`, allowed action
    *Publish*). Then require 2FA and disallow tokens on publishing access for
    all six, revoke the bootstrap token, and delete the `NPM_TOKEN` secret.
    Deleting the secret is what hands the next release to the OIDC path.
-8. **Verify like a user.** Before calling v0.1.0 done:
+9. **Verify like a user.** Before calling v0.1.0 done:
    - `npx decant@0.1.0 --version` on macOS and Linux, and once more against
      the `@dosu/decant@0.1.0` alias.
    - `brew install dosu-ai/dosu/decant` on a Mac that does not already have
@@ -82,7 +89,7 @@ Ordered — later steps assume earlier ones landed.
      documented workaround actually works rather than confirming its absence.
    See [docs/distribution.md](distribution.md#verify-a-release) for the exact
    commands behind each of these checks.
-9. **Tag `v0.1.1`** once you're ready, and confirm the OIDC trusted-publishing
+10. **Tag `v0.1.1`** once you're ready, and confirm the OIDC trusted-publishing
    path publishes end to end with auto-generated provenance (keep
    `--provenance` explicit regardless — auto-generation doesn't always kick
    in in practice). v0.1.0 proved provenance works at all; v0.1.1 proves the
@@ -115,9 +122,9 @@ Every release after the bootstrap:
    stable release — the single source of truth every downstream job reads for
    `:latest`, the npm dist-tag, and the tap update. `smoke-darwin` covers both
    Apple architectures and is a gate, not an observer: nothing publishes until
-   both signed darwin binaries pass it. `npm-smoke` and `homebrew-smoke` each
-   exercise all four supported OS/architecture targets before the release page
-   and tap advance. `determinism` hangs off `build` as the one non-blocking
+   both signed darwin binaries pass it. `npm-smoke` exercises all four supported
+   OS/architecture targets before the release page advances; `homebrew-smoke`
+   covers three, since Homebrew supports Linux on x86_64 only. `determinism` hangs off `build` as the one non-blocking
    job in the graph.
 4. Spot-check after the run finishes:
    - `npx decant@$VERSION --version` (use `@latest` only when this release's

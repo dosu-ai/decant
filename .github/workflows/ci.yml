@@ -77,29 +77,49 @@ jobs:
       - name: Smoke CLI
         run: docker run --rm decant:ci --help
 
-      # Curl an /api/* route from the host through a published port: the request
-      # reaches the container from the Docker bridge gateway, exercising the
-      # image's DECANT_TRUSTED_PEERS default end-to-end exactly like the
-      # documented `docker run` deployment (plan §3 0.1).
-      - name: Smoke /api/* through the bridge (DECANT_TRUSTED_PEERS)
+      # Curl an /api/* route from the host through a published port: the
+      # request arrives at the container from the Docker bridge gateway,
+      # exercising the image's DECANT_TRUST_DEFAULT_GATEWAY derivation
+      # end-to-end exactly like the documented `docker run` deployment. This
+      # proves the derivation only on a runner whose default bridge gateway
+      # is on-link, inside 172.16.0.0/12, and reached via a veth peered into
+      # another netns -- true for stock Docker Engine's default `docker0`
+      # bridge, which is what GitHub-hosted runners use. It is NOT true for
+      # Docker Desktop/OrbStack-style setups, which forward through a
+      # different bridge range by design (see README.md's
+      # DECANT_TRUST_DEFAULT_GATEWAY / DECANT_TRUSTED_PEERS docs).
+      - name: Smoke /api/* through the bridge (DECANT_TRUST_DEFAULT_GATEWAY)
         run: |
           set -euo pipefail
           docker run -d --name decant-smoke -p 127.0.0.1:3000:3000 decant:ci
-          reachable=""
+          http_status=""
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
-              reachable=1
+            http_status="$(curl -sS -o /tmp/decant-health-body.json -w '%{http_code}' http://127.0.0.1:3000/api/health || true)"
+            if [ "$http_status" = "200" ]; then
               break
+            fi
+            # 403 means the server is up but denied the request: the gateway
+            # derivation didn't resolve to a trusted peer on this runner.
+            # That's deterministic, not a boot race, so fail fast instead of
+            # burning the retry budget on a result that will not change.
+            if [ "$http_status" = "403" ]; then
+              echo "::error::/api/health answered 403 through the published port — the bridge-gateway derivation (DECANT_TRUST_DEFAULT_GATEWAY) did not resolve to a trusted peer on this runner"
+              docker network inspect bridge --format '{{range .IPAM.Config}}gateway={{.Gateway}}{{end}}' || true
+              cat /tmp/decant-health-body.json || true
+              echo
+              docker logs decant-smoke || true
+              docker rm -f decant-smoke
+              exit 1
             fi
             sleep 1
           done
-          if [ -z "$reachable" ]; then
-            echo "::error::/api/health never answered 200 through the published port — DECANT_TRUSTED_PEERS wiring is broken"
+          if [ "$http_status" != "200" ]; then
+            echo "::error::/api/health never answered 200 through the published port"
             docker logs decant-smoke || true
             docker rm -f decant-smoke
             exit 1
           fi
-          curl -fsS http://127.0.0.1:3000/api/health
+          cat /tmp/decant-health-body.json
           echo
           docker rm -f decant-smoke
 

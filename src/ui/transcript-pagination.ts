@@ -76,7 +76,12 @@ export function clampTranscriptWindowOffset(
   messageCount: number,
   pageSize: number,
 ): number {
-  if (!Number.isFinite(messageCount) || messageCount <= 0) {
+  if (
+    !Number.isFinite(offset) ||
+    !Number.isFinite(pageSize) ||
+    !Number.isFinite(messageCount) ||
+    messageCount <= 0
+  ) {
     return 0;
   }
   const lastPageOffset = Math.max(0, Math.trunc(messageCount) - Math.max(1, Math.trunc(pageSize)));

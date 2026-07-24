@@ -122,4 +122,16 @@ describe("transcript window clamping", () => {
     expect(clampTranscriptWindowOffset(500, Number.NaN, 160)).toBe(0);
     expect(clampTranscriptWindowOffset(-5, 2000, 160)).toBe(0);
   });
+
+  test("never returns a non-finite offset", () => {
+    // NaN survives Math.trunc/max/min untouched, so an unguarded input reaches
+    // the request as `message_offset=NaN`. Every degenerate input starts the
+    // window at the beginning, which is the same place the "Start at the
+    // beginning" recovery button goes.
+    for (const offset of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(clampTranscriptWindowOffset(offset, 2000, 160)).toBe(0);
+    }
+    expect(clampTranscriptWindowOffset(500, 2000, Number.NaN)).toBe(0);
+    expect(clampTranscriptWindowOffset(500, 2000, Number.POSITIVE_INFINITY)).toBe(0);
+  });
 });

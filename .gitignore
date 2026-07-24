@@ -12,5 +12,8 @@
 .playwright-mcp/
 
 # TypeScript app
-node_modules/
+# No trailing slash: a bare name also matches a symlink, which a directory
+# pattern does not. A node_modules symlink created inside a scratch worktree
+# has been committed here before.
+node_modules
 /dist/

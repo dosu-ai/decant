@@ -2,6 +2,41 @@ export interface SequencedTranscriptMessage {
   seq: number;
 }
 
+export interface TranscriptRequestRef<T> {
+  current: Promise<T> | null;
+}
+
+/**
+ * Wait for the shared transcript request slot, then claim it before yielding.
+ * Re-checking the ref after every await serializes callers that resume from the
+ * same request.
+ */
+export async function runWithTranscriptRequestSlot<T>(
+  requestRef: TranscriptRequestRef<T>,
+  isCurrent: () => boolean,
+  staleValue: T,
+  startRequest: () => Promise<T>,
+): Promise<T> {
+  while (requestRef.current != null) {
+    await requestRef.current;
+    if (!isCurrent()) {
+      return staleValue;
+    }
+  }
+  if (!isCurrent()) {
+    return staleValue;
+  }
+  const request = startRequest();
+  requestRef.current = request;
+  try {
+    return await request;
+  } finally {
+    if (requestRef.current === request) {
+      requestRef.current = null;
+    }
+  }
+}
+
 /**
  * Append a transcript page without duplicating rows if a retry overlaps the
  * previous page. Message sequence numbers are unique within a session.

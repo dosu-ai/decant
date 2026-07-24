@@ -67,7 +67,11 @@ import {
   transcriptNavigationDirection,
   transcriptSeqFromHash,
 } from "./transcript-navigation.ts";
-import { appendTranscriptPage, transcriptWindowOffset } from "./transcript-pagination.ts";
+import {
+  appendTranscriptPage,
+  runWithTranscriptRequestSlot,
+  transcriptWindowOffset,
+} from "./transcript-pagination.ts";
 import {
   type StructuredTranscriptKind,
   type StructuredTranscriptLine,
@@ -4268,69 +4272,78 @@ function SessionDetailView({ id }: { id: number }) {
 
   const loadMessageWindow = useCallback(
     async (seq: number): Promise<boolean> => {
-      const activeRequest = loadMorePromiseRef.current;
-      if (activeRequest != null) {
-        await activeRequest;
-      }
-      const current = detailRef.current;
-      if (current?.messages.some((message) => message.seq === seq) === true) {
-        return true;
-      }
       const sessionVersion = sessionVersionRef.current;
-      const offset = transcriptWindowOffset(seq);
-      setLoadingMore(true);
-      setLoadMoreError(null);
-      const request = getJson<SessionDetailData>(
-        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}&message_offset=${offset}`,
-      )
-        .then((page) => {
-          if (sessionVersionRef.current !== sessionVersion) {
+      return runWithTranscriptRequestSlot(
+        loadMorePromiseRef,
+        () => sessionVersionRef.current === sessionVersion,
+        false,
+        async () => {
+          const current = detailRef.current;
+          if (current == null || current.summary.id !== id) {
             return false;
           }
-          const nextDetail = {
-            ...page,
-            message_offset: page.message_offset ?? offset,
-            message_limit: SESSION_DETAIL_MESSAGE_PAGE_SIZE,
-          };
-          detailRef.current = nextDetail;
-          setDetail(nextDetail);
-          return nextDetail.messages.some((message) => message.seq === seq);
-        })
-        .catch((err: unknown) => {
-          if (sessionVersionRef.current === sessionVersion) {
-            setLoadMoreError(errorMessage(err));
+          if (current.messages.some((message) => message.seq === seq)) {
+            return true;
           }
-          return false;
-        })
-        .finally(() => {
-          if (loadMorePromiseRef.current === request) {
-            loadMorePromiseRef.current = null;
-          }
-          if (sessionVersionRef.current === sessionVersion) {
-            setLoadingMore(false);
-          }
-        });
-      loadMorePromiseRef.current = request;
-      return request;
+          const offset = transcriptWindowOffset(seq);
+          setLoadingMore(true);
+          setLoadMoreError(null);
+          return getJson<SessionDetailData>(
+            `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}&message_offset=${offset}`,
+          )
+            .then((page) => {
+              if (sessionVersionRef.current !== sessionVersion) {
+                return false;
+              }
+              const nextDetail = {
+                ...page,
+                message_offset: page.message_offset ?? offset,
+                message_limit: SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+              };
+              detailRef.current = nextDetail;
+              setDetail(nextDetail);
+              return nextDetail.messages.some((message) => message.seq === seq);
+            })
+            .catch((err: unknown) => {
+              if (sessionVersionRef.current === sessionVersion) {
+                setLoadMoreError(errorMessage(err));
+              }
+              return false;
+            })
+            .finally(() => {
+              if (sessionVersionRef.current === sessionVersion) {
+                setLoadingMore(false);
+              }
+            });
+        },
+      );
     },
     [id],
   );
 
   const jumpToMessage = useCallback(
     async (seq: number) => {
+      const sessionVersion = sessionVersionRef.current;
       const hash = `#message-${seq}`;
       handledMessageHashRef.current = `${id}:${seq}`;
       window.history.replaceState(null, "", hash);
       setJumpingToSeq(seq);
       try {
-        await loadMessageWindow(seq);
+        const loaded = await loadMessageWindow(seq);
+        if (!loaded || sessionVersionRef.current !== sessionVersion) {
+          return;
+        }
         activeMessageSeqRef.current = seq;
         setActiveMessageSeq(seq);
         requestAnimationFrame(() => {
-          scrollTranscriptMessage(seq);
+          if (sessionVersionRef.current === sessionVersion) {
+            scrollTranscriptMessage(seq);
+          }
         });
       } finally {
-        setJumpingToSeq((current) => (current === seq ? null : current));
+        if (sessionVersionRef.current === sessionVersion) {
+          setJumpingToSeq((current) => (current === seq ? null : current));
+        }
       }
     },
     [id, loadMessageWindow],
@@ -4383,6 +4396,7 @@ function SessionDetailView({ id }: { id: number }) {
 
   const navigateTranscript = useCallback(
     async (direction: TranscriptNavigationDirection) => {
+      const sessionVersion = sessionVersionRef.current;
       let current = detailRef.current;
       if (current == null) {
         return;
@@ -4395,6 +4409,9 @@ function SessionDetailView({ id }: { id: number }) {
       let targetSeq = nextTranscriptSeq(sequences, activeSeq, direction);
       if (targetSeq == null && direction === 1 && current.has_more_messages === true) {
         await loadMoreMessages();
+        if (sessionVersionRef.current !== sessionVersion) {
+          return;
+        }
         current = detailRef.current;
         sequences =
           current == null
@@ -4410,7 +4427,9 @@ function SessionDetailView({ id }: { id: number }) {
       handledMessageHashRef.current = `${id}:${targetSeq}`;
       window.history.replaceState(null, "", `#message-${targetSeq}`);
       requestAnimationFrame(() => {
-        scrollTranscriptMessage(targetSeq);
+        if (sessionVersionRef.current === sessionVersion) {
+          scrollTranscriptMessage(targetSeq);
+        }
       });
     },
     [id, loadMoreMessages],

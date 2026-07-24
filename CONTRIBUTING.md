@@ -51,7 +51,9 @@ bunx biome check .
 3. decant is local-first and offline: no outbound runtime network calls and no
    LLM calls.
 4. Never commit secrets, private transcripts, or a personal archive DB.
-5. The v8 schema is the baseline. Pre-v8 archives are rebuild-only.
+5. Pre-v8 archives are rebuild-only; v8 and newer migrate forward on open. See
+   `LATEST_SCHEMA_VERSION` in `src/db.ts` for the current baseline rather than
+   trusting a number written down here.
 
 Adding model pricing? Update `src/cost.ts`, include string normalization, and add
 tests.
@@ -59,11 +61,32 @@ tests.
 Adding a source tool? Add `src/sources/<tool>.ts`, synthetic fixtures, parser
 tests, ingest/query coverage, and golden updates.
 
+## How we work
+
+decant is trunk-based. There is one long-lived branch, `main`, and it is always
+releasable.
+
+- **Branch off `main`, keep it short-lived.** Days, not weeks. A branch that
+  lives long enough to drift is a branch that will conflict, and conflicts get
+  resolved by whoever has the least context.
+- **One PR, one concern.** A PR that mixes a feature with unrelated cleanup is
+  harder to review and much harder to revert.
+- **Squash-merge.** `main`'s history is one commit per PR. Your branch is
+  deleted on merge.
+- **`main` stays green.** Every PR needs CI passing and one approving review.
+- **Tags are the only thing that publishes.** Merging to `main` ships nothing.
+  Pushing a `v*` tag builds, signs, and publishes to npm, Homebrew, GHCR, and
+  the GitHub Release. Nothing else does. See
+  [docs/releasing.md](docs/releasing.md).
+
 ## Commits and pull requests
 
 - Use Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`,
   `refactor:`, `style:`, `ci:` with optional scope.
-- Signing commits (`git commit -S`) is appreciated if your environment supports it.
+- **Commits must be signed.** `main` rejects unsigned commits. Either GPG or SSH
+  signing works — see
+  [GitHub's guide](https://docs.github.com/authentication/managing-commit-signature-verification)
+  — and `git config commit.gpgsign true` makes it automatic.
 - Branch off `main`, open a PR, and make sure CI is green.
 
 ## Reporting bugs and proposing features

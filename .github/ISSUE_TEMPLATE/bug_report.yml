@@ -1,0 +1,114 @@
+name: Bug report
+description: decant behaves differently from what it documents.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        # Do not paste real session transcripts
+
+        **This issue is public.** Your Claude Code and Codex sessions contain your own
+        source code, file paths, prompts, and everything else you typed into those
+        tools. decant keeps them on your machine — pasting one here would not.
+
+        Reproduce the bug with a **synthetic** session file instead. Hand-write a small
+        JSONL file that triggers the same failure and ingest it into a scratch archive:
+
+        ```
+        decant sync --db /tmp/decant-repro.db --path ./repro.jsonl
+        decant ls --db /tmp/decant-repro.db
+        ```
+
+        The `fixtures/` directory in this repository shows the shape of both source
+        formats. If you cannot reproduce it synthetically, describe the *structure* of
+        the input that breaks — message kinds, field names, sizes, encodings — without
+        the content. Redact paths, code, and prompts from any output you paste,
+        including error messages and logs.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Transcript privacy
+      options:
+        - label: This report contains no real transcript content — no source code, file paths, or prompts from my own sessions.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behavior, including the exact command you ran and any error output.
+      placeholder: |
+        $ decant search "auth bug"
+        error: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead, and where that behavior is documented if it is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps starting from a clean archive. Inline the synthetic session file if the bug depends on input shape.
+      placeholder: |
+        1. Write ./repro.jsonl containing ...
+        2. decant sync --db /tmp/decant-repro.db --path ./repro.jsonl
+        3. decant ls --db /tmp/decant-repro.db
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: decant version
+      description: Output of `decant --version`. For archive or migration bugs, add the `schema:` line from `decant db info`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - npx / npm
+        - Homebrew
+        - install.sh
+        - Docker
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      description: For example `macOS 15.5 arm64`, `Ubuntu 24.04 x86_64`, or `Windows 11 x86_64 (WSL2)`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source-tool
+    attributes:
+      label: Source tool
+      description: Which CLI wrote the sessions involved.
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Relevant `DECANT_*` environment variables, non-default settings, or operational logs from `DECANT_LOG_LEVEL=debug`. Redact before pasting.

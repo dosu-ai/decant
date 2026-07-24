@@ -491,6 +491,46 @@ describe("sync", () => {
     db.close();
   });
 
+  test("backfills effort across bounded UTF-8 source chunks", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "07",
+      "24",
+      "rollout-large-effort.jsonl",
+    );
+    const padding = "😀".repeat(20_000);
+    write(
+      sourcePath,
+      [
+        `{"type":"session_meta","payload":{"id":"large-effort-session","cwd":"/repo","padding":"${padding}"}}`,
+        '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"max"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    db.exec(
+      "UPDATE session SET reasoning_effort = NULL, reasoning_effort_checked = 0 WHERE source_session_id = 'large-effort-session'",
+    );
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(
+      db
+        .query(
+          `SELECT reasoning_effort, reasoning_effort_checked
+           FROM session WHERE source_session_id = 'large-effort-session'`,
+        )
+        .get(),
+    ).toEqual({ reasoning_effort: "max", reasoning_effort_checked: 1 });
+    db.close();
+  });
+
   test("can cancel between files without ingesting the remaining sources", () => {
     const dir = freshCase();
     const config: IngestConfig = {

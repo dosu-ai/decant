@@ -4,6 +4,12 @@ import type { Database } from "bun:sqlite";
 const DEFAULT_WINDOW_TOKENS = 200_000;
 /** Current long-context Claude models use 1M as both the default and maximum. */
 const EXTENDED_WINDOW_TOKENS = 1_000_000;
+const ONE_MILLION_CLAUDE_FAMILIES = [
+  /(?:^|-)opus-(?:5|4-(?:6|7|8))(?:-|$)/,
+  /(?:^|-)sonnet-(?:5|4-6)(?:-|$)/,
+  /(?:^|-)fable-5(?:-|$)/,
+  /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
+];
 
 /**
  * Claude Code logs do not record the model's context-window size. Infer it
@@ -18,13 +24,7 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
     return DEFAULT_WINDOW_TOKENS;
   }
   const normalized = model.toLowerCase().replace(/[._/:]/g, "-");
-  const oneMillionFamilies = [
-    /(?:^|-)opus-(?:5|4-(?:6|7|8))(?:-|$)/,
-    /(?:^|-)sonnet-(?:5|4-6)(?:-|$)/,
-    /(?:^|-)fable-5(?:-|$)/,
-    /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
-  ];
-  return oneMillionFamilies.some((pattern) => pattern.test(normalized))
+  return ONE_MILLION_CLAUDE_FAMILIES.some((pattern) => pattern.test(normalized))
     ? EXTENDED_WINDOW_TOKENS
     : DEFAULT_WINDOW_TOKENS;
 }

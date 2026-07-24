@@ -1,8 +1,17 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { extname, join, basename as pathBasename } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing, estimateCost } from "./cost.ts";
@@ -369,7 +378,7 @@ export function materializeMissingReasoningEfforts(db: Database): number {
     let effort: string | null = null;
     if (row.source_path != null) {
       try {
-        effort = reasoningEffortFromSource(row.tool, readFileSync(row.source_path, "utf8"));
+        effort = reasoningEffortFromSource(row.tool, row.source_path);
       } catch {
         // Missing/unreadable source files are a stable unavailable state.
       }
@@ -394,29 +403,56 @@ export function materializeMissingReasoningEfforts(db: Database): number {
 /** Narrow source scan for the one-time effort backfill. It avoids rebuilding
  * every message/block/tool object from a potentially multi-GB archive and
  * leaves the database write transaction for the small update batch only. */
-function reasoningEffortFromSource(tool: Tool, content: string): string | null {
+function reasoningEffortFromSource(tool: Tool, path: string): string | null {
   const efforts = new Set<string>();
-  for (const line of content.split(/\n/)) {
-    if (line.trim() === "") {
-      continue;
-    }
-    try {
-      const value = JSON.parse(line) as Json;
-      const effort =
-        tool === "claude_code"
-          ? asString(get(value, "effort"))
-          : asString(get(get(value, "payload"), "effort"));
-      if (
-        effort != null &&
-        (tool === "claude_code" || asString(get(value, "type")) === "turn_context")
-      ) {
-        efforts.add(effort);
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const fd = openSync(path, "r");
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
       }
+      pending += decoder.write(buffer.subarray(0, bytesRead));
+      let newline = pending.indexOf("\n");
+      while (newline >= 0) {
+        collectReasoningEffort(tool, pending.slice(0, newline), efforts);
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf("\n");
+      }
+    }
+    collectReasoningEffort(tool, pending + decoder.end(), efforts);
+  } finally {
+    try {
+      closeSync(fd);
     } catch {
-      // Parser parity: malformed source rows do not hide valid effort labels.
+      // Best-effort cleanup: preserve the scan result or original read error.
     }
   }
   return summarizeReasoningEfforts(efforts);
+}
+
+function collectReasoningEffort(tool: Tool, line: string, efforts: Set<string>): void {
+  if (line.trim() === "") {
+    return;
+  }
+  try {
+    const value = JSON.parse(line) as Json;
+    const effort =
+      tool === "claude_code"
+        ? asString(get(value, "effort"))
+        : asString(get(get(value, "payload"), "effort"));
+    if (
+      effort != null &&
+      (tool === "claude_code" || asString(get(value, "type")) === "turn_context")
+    ) {
+      efforts.add(effort);
+    }
+  } catch {
+    // Parser parity: malformed source rows do not hide valid effort labels.
+  }
 }
 
 function sourceKey(tool: Tool, sourceSessionId: string): string {

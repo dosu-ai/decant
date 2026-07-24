@@ -18,7 +18,7 @@ you decided to accept. Screenshots or a short clip for UI changes.
 
 ## Archive schema
 
-The current baseline is **v14** (`LATEST_SCHEMA_VERSION` in `src/db.ts`). Check one:
+The baseline is `LATEST_SCHEMA_VERSION` in `src/db.ts`. Check one:
 
 - [ ] This change does not touch the archive schema.
 - [ ] This change bumps the schema. It ships the migration, and the summary above says what happens to archives created before it.

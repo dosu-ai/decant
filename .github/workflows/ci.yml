@@ -10,16 +10,23 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+# Default-deny, then grant per job. A job that needs more than `contents: read`
+# has to say so at its own level, so widening this file later cannot silently
+# widen a job that never asked for it.
+permissions: {}
 
 jobs:
   typescript:
     name: TypeScript (biome, tsc, test)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing here pushes; don't leave the token in .git/config.
+          persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -48,8 +55,13 @@ jobs:
     name: Docker (multi-arch)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing here pushes; don't leave the token in .git/config.
+          persist-credentials: false
 
       # .bun-version is the single source of truth for the Bun toolchain.
       # Dependabot bumps the Dockerfile's builder tag weekly, so drift is

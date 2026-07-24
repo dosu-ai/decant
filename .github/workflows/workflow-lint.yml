@@ -1,0 +1,69 @@
+name: Workflow lint
+
+# These files sign and publish every release artifact, and install.sh runs on
+# users' machines from a `curl | sh`. Both are easy to break in ways that only
+# surface at tag time or on someone else's laptop, so they get their own gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  lint:
+    name: actionlint, zizmor, shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Pinned release + checksum rather than piping the upstream installer
+      # script: a linter that guards the release pipeline should not itself be
+      # fetched from a moving target.
+      - name: Install actionlint (pinned)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 actionlint "$RUNNER_TEMP/bin/actionlint"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # shellcheck is preinstalled on ubuntu-latest; actionlint shells out to it
+      # to lint every `run:` block in addition to the workflow syntax itself.
+      - name: actionlint
+        run: actionlint -color -shellcheck=shellcheck
+
+      - name: shellcheck install.sh
+        run: shellcheck -s sh install.sh
+
+      # zizmor checks for Actions-specific security problems actionlint does not
+      # model: template-injection sinks, credential persistence, overbroad
+      # permissions, cache poisoning.
+      # `regular` persona at medium severity: fails the build on real problems
+      # (cache poisoning, credential persistence, template injection) without
+      # blocking on style-level findings. Deliberate exceptions carry an inline
+      # `# zizmor: ignore[audit]` with the reason next to it.
+      # --no-online-audits keeps this from depending on network reachability of
+      # third-party services for a required check.
+      - name: zizmor
+        run: |
+          set -euo pipefail
+          pipx install zizmor
+          zizmor --persona=regular --min-severity=medium --no-online-audits .github/workflows/

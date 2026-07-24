@@ -288,7 +288,7 @@ describe("runCli", () => {
   test("version and live output mode", async () => {
     const version = await runCli(["--version"]);
     expect(version).toMatchObject({ code: 0, stderr: "" });
-    expect(version.stdout).toContain("0.1.0");
+    expect(version.stdout).toContain("0.0.0-dev");
 
     let streamed = "";
     const live = await runCli(["--version"], {
@@ -299,7 +299,7 @@ describe("runCli", () => {
       writeStderr: () => {},
     });
     expect(live).toMatchObject({ code: 0, stdout: "", stderr: "" });
-    expect(streamed).toContain("0.1.0");
+    expect(streamed).toContain("0.0.0-dev");
   });
 
   test("completion emits shell scripts and rejects unknown shells", async () => {
@@ -323,12 +323,14 @@ describe("runCli", () => {
     expect(watch.stdout).toContain("keep the archive current");
     expect(watch.stdout).toContain("--interval-ms");
     expect(watch.stdout).toContain("--no-fs-watch");
+    expect(watch.stdout).not.toContain("--trusted-peer");
 
     const serve = await runCli(["serve", "--help"]);
     expect(serve).toMatchObject({ code: 0, stderr: "" });
     expect(serve.stdout).toContain("in-process web UI");
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
+    expect(serve.stdout).toContain("--trusted-peer");
     expect(serve.stdout).toContain("(default: 3000)");
   });
 });

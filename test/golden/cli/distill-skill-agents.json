@@ -1,5 +1,5 @@
 {
-  "artifact": "## /Users/dev/proj — distilled workflow\n\n_decant 0.1.0, from 7 session(s). Review before committing._\n\n### Commands\n\n```bash\ncargo build --workspace\ncargo test --workspace\n```\n\n### Where things live\n\n- `src/main.rs` — read in 2 session(s)\n- `auth_test.py` — read in 1 session(s), rarely edited\n",
+  "artifact": "## /Users/dev/proj — distilled workflow\n\n_decant 0.0.0-dev, from 7 session(s). Review before committing._\n\n### Commands\n\n```bash\ncargo build --workspace\ncargo test --workspace\n```\n\n### Where things live\n\n- `src/main.rs` — read in 2 session(s)\n- `auth_test.py` — read in 1 session(s), rarely edited\n",
   "hot_context": [
     {
       "edits": 2,

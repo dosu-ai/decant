@@ -19,7 +19,8 @@
     "bin/decant.cjs",
     "targets.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=18"

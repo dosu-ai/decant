@@ -158,6 +158,7 @@ function stageLauncherPackage(
   }
   copyFileSync(join(source, "bin", "decant.cjs"), join(dest, "bin", "decant.cjs"));
   copyFileSync(join(root, "LICENSE"), join(dest, "LICENSE"));
+  copyFileSync(join(root, "NOTICE"), join(dest, "NOTICE"));
   rewritePackageJson(join(dest, "package.json"), (pkg) => {
     pkg.version = version;
     pkg.optionalDependencies = Object.fromEntries(
@@ -192,7 +193,12 @@ function stagePlatformPackage(
   }
 
   mkdirSync(join(dest, dirname(target.binary)), { recursive: true });
-  copyFileSync(join(source, "package.json"), join(dest, "package.json"));
+  for (const file of ["package.json", "README.md"]) {
+    copyFileSync(join(source, file), join(dest, file));
+  }
+  for (const file of ["LICENSE", "NOTICE"]) {
+    copyFileSync(join(options.root, file), join(dest, file));
+  }
   rewritePackageJson(join(dest, "package.json"), (pkg) => {
     pkg.version = options.version;
     return pkg;

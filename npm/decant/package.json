@@ -1,5 +1,5 @@
 {
-  "name": "@dosu/decant",
+  "name": "decant",
   "version": "0.0.0",
   "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
   "license": "Apache-2.0",

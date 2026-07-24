@@ -128,6 +128,55 @@ describe("distribution helpers", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("stages the unscoped launcher and its scoped alias from identical content", async () => {
+    const root = mkdtempSync(join(tmpdir(), "decant-npm-alias-test-"));
+    try {
+      const target = selectTargets("linux-x64")[0];
+      if (target == null) {
+        throw new Error("missing linux-x64 target");
+      }
+      const binaryDir = join(root, "bin");
+      mkdirSync(join(binaryDir, target.key), { recursive: true });
+      writeFileSync(join(binaryDir, target.key, "decant"), "#!/bin/sh\n");
+
+      const outDir = stageNpmPackages({
+        outDir: join(root, "npm"),
+        binaryDir,
+        targets: [target],
+        buildMissing: false,
+        clean: true,
+        version: "1.2.3",
+      });
+
+      // `npx decant` is the documented entry point; `@dosu/decant` publishes the
+      // same bytes under the scope. Anything but the name drifting between them
+      // means one of the two resolves a different binary than users expect.
+      const unscoped = await Bun.file(join(outDir, "decant", "package.json")).json();
+      const scoped = await Bun.file(join(outDir, "dosu-decant", "package.json")).json();
+      expect(unscoped.name).toBe("decant");
+      expect(scoped.name).toBe("@dosu/decant");
+      expect(unscoped.version).toBe("1.2.3");
+      expect(scoped.version).toBe("1.2.3");
+      expect(unscoped.bin).toEqual({ decant: "./bin/decant.cjs" });
+      expect(scoped.bin).toEqual(unscoped.bin);
+      expect(unscoped.optionalDependencies).toEqual({ "@dosu/decant-linux-x64": "1.2.3" });
+      expect(scoped.optionalDependencies).toEqual(unscoped.optionalDependencies);
+      expect({ ...scoped, name: unscoped.name }).toEqual(unscoped);
+
+      const unscopedLauncher = readFileSync(join(outDir, "decant", "bin", "decant.cjs"));
+      const scopedLauncher = readFileSync(join(outDir, "dosu-decant", "bin", "decant.cjs"));
+      expect(scopedLauncher.equals(unscopedLauncher)).toBe(true);
+
+      for (const dir of ["decant", "dosu-decant"]) {
+        for (const file of ["README.md", "targets.json", "LICENSE", "NOTICE"]) {
+          expect(existsSync(join(outDir, dir, file))).toBe(true);
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("docker image", () => {

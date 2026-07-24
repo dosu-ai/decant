@@ -1,23 +1,26 @@
-# @dosu/decant
+# decant
 
 Local Claude Code and Codex session search, analytics, and workflow distillation.
 
-`@dosu/decant` is the Node-compatible launcher for the compiled `decant` CLI. It
+`decant` is the Node-compatible launcher for the compiled `decant` CLI. It
 selects the matching optional platform package, then runs the embedded
 Bun-compiled binary.
 
 ```sh
-npx @dosu/decant sync
-npx @dosu/decant ls
-npx @dosu/decant serve
+npx decant sync
+npx decant ls
+npx decant serve
 ```
 
 For a persistent install:
 
 ```sh
-npm i -g @dosu/decant
+npm i -g decant
 decant serve
 ```
+
+`@dosu/decant` is a scoped alias published from identical content at the same
+version, so `npx @dosu/decant` behaves the same. Prefer the unscoped `decant`.
 
 Supported platforms are macOS and Linux on x64 and arm64. On unsupported
 platforms, the launcher exits with a clear message:

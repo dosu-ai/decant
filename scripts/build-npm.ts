@@ -25,7 +25,7 @@ try {
     version: args.version,
   });
   process.stdout.write(
-    `staged launcher plus ${targets.length} platform package${targets.length === 1 ? "" : "s"} in ${outDir}\n`,
+    `staged 2 launcher packages plus ${targets.length} platform package${targets.length === 1 ? "" : "s"} in ${outDir}\n`,
   );
 } catch (error) {
   process.stderr.write(

@@ -1,7 +1,7 @@
 {
   "name": "decant",
   "version": "0.0.0",
-  "description": "Local-first observability for Claude Code and Codex sessions — full-text search, token economics, context-window analysis, and phase breakdowns.",
+  "description": "Insight into your Claude Code and Codex sessions: token spend, context window, files touched, and cost. Local-first observability from logs already on disk.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

@@ -16,6 +16,15 @@ export interface NavDestination {
 export const HOME_LABEL = "Analytics";
 export const HOME_KEY = "analytics";
 
+/**
+ * `/` is the canonical URL for the landing view, so that is what the sidebar
+ * links to -- clicking the entry you are already on should not rewrite the URL.
+ * `/analytics` stays a working alias so older links and bookmarks still land in
+ * the right place, and is listed here rather than left to the unknown-route
+ * fallback, which would resolve it correctly only by coincidence.
+ */
+const ALIASES: Record<string, string> = { "/analytics": HOME_KEY };
+
 export function pathOnly(path: string): string {
   // `split` always yields at least one element, so the empty case needs an
   // explicit check rather than a `??` fallback that can never fire.
@@ -36,8 +45,10 @@ function resolve(path: string, items: readonly NavDestination[]): NavDestination
   if (pathname === "/settings") {
     return { key: "settings", href: "/settings", label: "Settings" };
   }
-  if (pathname === "/") {
-    return items.find((item) => item.key === HOME_KEY) ?? null;
+  const aliased = ALIASES[pathname];
+  if (pathname === "/" || aliased != null) {
+    const key = aliased ?? HOME_KEY;
+    return items.find((item) => item.key === key) ?? null;
   }
   return items.find((item) => item.href === pathname) ?? null;
 }

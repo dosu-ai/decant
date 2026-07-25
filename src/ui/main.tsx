@@ -460,7 +460,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: "Overview",
     items: [
-      { key: "analytics", href: "/analytics", label: "Analytics", icon: "chart" },
+      { key: "analytics", href: "/", label: "Analytics", icon: "chart" },
       { key: "insights", href: "/insights", label: "Insights", icon: "lightbulb" },
     ],
   },
@@ -1851,7 +1851,7 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
           machine.
         </p>
         <code>decant sync</code>
-        <button className="button" disabled={syncing} onClick={onSync} type="button">
+        <button className="secondary-button" disabled={syncing} onClick={onSync} type="button">
           {syncing ? "Syncing…" : "Sync now"}
         </button>
       </div>

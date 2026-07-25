@@ -9,7 +9,7 @@ import {
 
 // Mirrors the sidebar's own order: Overview first, then Browse.
 const ITEMS: NavDestination[] = [
-  { key: "analytics", href: "/analytics", label: "Analytics" },
+  { key: "analytics", href: "/", label: "Analytics" },
   { key: "insights", href: "/insights", label: "Insights" },
   { key: "sessions", href: "/sessions", label: "Sessions" },
   { key: "search", href: "/search", label: "Search" },
@@ -24,8 +24,21 @@ describe("route resolution", () => {
     expect(activeRouteKey("/", ITEMS)).toBe("analytics");
   });
 
-  test("/analytics and / resolve to the same destination", () => {
+  test("/analytics stays a working alias for the canonical /", () => {
+    // The sidebar links to "/", so nothing generates "/analytics" any more.
+    // Older links and bookmarks still have to land somewhere sensible.
+    expect(activeRouteKey("/analytics", ITEMS)).toBe("analytics");
+    expect(activeRoute("/analytics", ITEMS)).toBe("Analytics");
     expect(activeRouteKey("/analytics", ITEMS)).toBe(activeRouteKey("/", ITEMS));
+  });
+
+  test("the alias resolves by name, not by falling through", () => {
+    // An unknown route also lands on Analytics, so the assertion above would
+    // pass even if the alias were dropped. Removing Analytics from the list
+    // separates the two: a real lookup finds nothing, a fallback still answers.
+    const withoutAnalytics = ITEMS.filter((item) => item.key !== "analytics");
+    expect(activeRouteKey("/analytics", withoutAnalytics)).toBe("analytics");
+    expect(activeRoute("/analytics", withoutAnalytics)).toBe("Analytics");
   });
 
   test("the session list keeps its own entry", () => {

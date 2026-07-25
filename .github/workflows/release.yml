@@ -643,7 +643,7 @@ jobs:
             npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
           done
 
-  # Post-publish smoke: the exact code path every real `npx decant` user hits —
+  # Post-publish smoke: the exact code path every real `npx @dosu/decant` user hits —
   # the unscoped launcher is the invocation the docs tell people to type —
   # including real optionalDependencies resolution off the live registry.
   npm-smoke:

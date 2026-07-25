@@ -144,10 +144,10 @@ export function stageNpmPackages(options: StageOptions = {}): string {
   return outDir;
 }
 
-// `npx decant` is the documented entry point, so the launcher publishes
-// unscoped. `@dosu/decant` publishes the same bytes under the scope for anyone
-// already installing it. Both are staged from `npm/decant`, so the only thing
-// that can differ between them is the name.
+// One launcher, published scoped. npm refuses the unscoped `decant` as too
+// similar to existing packages, and that check runs only at publish time --
+// see the npm package naming section in docs/distribution.md before changing
+// this.
 function stageLauncherPackage(
   root: string,
   outDir: string,

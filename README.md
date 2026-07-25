@@ -238,7 +238,7 @@ attribute. Integrity comes from SLSA build provenance, `SHA256SUMS`, and the
 `gh attestation verify` check `install.sh` runs.
 
 **Upgrading.** `npx @dosu/decant@latest` always resolves the newest published
-version. For a persistent install, run `npm i -g decant@latest`,
+version. For a persistent install, run `npm i -g @dosu/decant@latest`,
 `brew upgrade decant`, re-run the install script, or
 `docker pull ghcr.io/dosu-ai/decant:latest`. A build that reports
 `0.0.0-dev` from `decant --version` is an unstamped one — anything built from

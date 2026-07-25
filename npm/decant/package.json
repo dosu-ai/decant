@@ -1,7 +1,7 @@
 {
   "name": "decant",
   "version": "0.0.0",
-  "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
+  "description": "Local-first observability for Claude Code and Codex sessions — full-text search, token economics, context-window analysis, and phase breakdowns.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

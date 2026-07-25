@@ -1,6 +1,7 @@
 # decant
 
-Local Claude Code and Codex session search, analytics, and workflow distillation.
+Local-first observability for Claude Code and Codex sessions — full-text search,
+token economics, context-window analysis, and phase breakdowns.
 
 `decant` is the Node-compatible launcher for the compiled `decant` CLI. It
 selects the matching optional platform package, then runs the embedded

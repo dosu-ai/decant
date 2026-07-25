@@ -13,7 +13,7 @@
 ##   __SHA256_LINUX_ARM64__  sha256 of decant-linux-arm64.tar.gz  (from SHA256SUMS)
 ##   __SHA256_LINUX_X64__    sha256 of decant-linux-x64.tar.gz    (from SHA256SUMS)
 class Decant < Formula
-  desc "Extract Claude Code and Codex CLI sessions into a searchable SQLite archive"
+  desc "Local-first observability for Claude Code and Codex CLI sessions"
   homepage "https://github.com/dosu-ai/decant"
   version "__VERSION__"
   license "Apache-2.0"

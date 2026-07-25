@@ -49,6 +49,40 @@ function httpStatus(ip: string, port: number, path: string): Promise<number> {
   });
 }
 
+/**
+ * Read serve's JSON Lines startup log until it reports its port.
+ *
+ * The kill timer matters: without it a `read()` that never resolves -- a child
+ * that hangs before writing anything -- blocks until the per-test timeout
+ * instead of failing here with the output collected so far. Killing the process
+ * makes the stream end, so the loop exits and reports what it saw.
+ */
+async function readServePort(
+  proc: Bun.Subprocess<"ignore", "ignore", "pipe">,
+): Promise<{ port: number; log: string }> {
+  const kill = setTimeout(() => proc.kill(), 15_000);
+  try {
+    const reader = proc.stderr.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // serve reports startup as JSON Lines on stderr (PR #41). The older
+      // "serving http://host:port" line no longer exists, and scraping for it
+      // drains the deadline and fails as if the server never started.
+      const match = buffer.match(/"server\.port":\s*(\d+)/);
+      if (match) {
+        return { port: Number(match[1]), log: buffer };
+      }
+    }
+    throw new Error(`serve never reported its port; stderr so far: ${buffer.slice(0, 300)}`);
+  } finally {
+    clearTimeout(kill);
+  }
+}
+
 interface ServeCase {
   env?: Record<string, string>;
   flags?: string[];
@@ -85,27 +119,7 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
   );
 
   try {
-    const reader = proc.stderr.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const deadline = Date.now() + 15_000;
-    let port: number | null = null;
-    while (Date.now() < deadline) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      // serve reports startup as JSON Lines on stderr (PR #41). The older
-      // "serving http://host:port" line no longer exists, and scraping for it
-      // drains the deadline and fails as if the server never started.
-      const match = buffer.match(/"server\.port":\s*(\d+)/);
-      if (match) {
-        port = Number(match[1]);
-        break;
-      }
-    }
-    if (port == null) {
-      throw new Error(`serve never reported its port; stderr so far: ${buffer.slice(0, 300)}`);
-    }
+    const { port } = await readServePort(proc);
     return await run(port);
   } finally {
     proc.kill();
@@ -212,25 +226,8 @@ async function withSeededServe<T>(
   );
 
   try {
-    const reader = proc.stderr.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const deadline = Date.now() + 15_000;
-    let port: number | null = null;
-    while (Date.now() < deadline) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const match = buffer.match(/"server\.port":\s*(\d+)/);
-      if (match) {
-        port = Number(match[1]);
-        break;
-      }
-    }
-    if (port == null) {
-      throw new Error(`serve never reported its port; stderr so far: ${buffer.slice(0, 300)}`);
-    }
-    return await run(port, buffer);
+    const { port, log } = await readServePort(proc);
+    return await run(port, log);
   } finally {
     proc.kill();
     await proc.exited;
@@ -244,9 +241,34 @@ async function sessionCount(port: number): Promise<number> {
   return body.sessions ?? 0;
 }
 
-/** Give a watcher that IS running long enough to have ingested. */
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+/** Poll until the startup sync lands, rather than sleeping a fixed guess. */
+async function waitForIngest(port: number): Promise<number> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const count = await sessionCount(port);
+    if (count > 0) {
+      return count;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("watcher never ingested the fixture");
+}
+
+/**
+ * How long to give a watcher that should NOT be running.
+ *
+ * Proving a negative needs a real wait; there is no event to poll for when the
+ * intended behaviour is that nothing happens. This cannot be shortened to a
+ * token delay: against the unfixed CLI the ingest lands around the 2.5s mark,
+ * so a 100ms wait would let these tests pass on the very bug they exist to
+ * catch. It is deliberately longer than `waitForIngest` needs when the watcher
+ * IS running, which the baseline test measures.
+ */
+const NO_INGEST_GRACE_MS = 4000;
+
+async function expectNoIngest(port: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, NO_INGEST_GRACE_MS));
+  expect(await sessionCount(port)).toBe(0);
 }
 
 describe("serve sync opt-out (real CLI process)", () => {
@@ -255,24 +277,24 @@ describe("serve sync opt-out (real CLI process)", () => {
   test("baseline: the watcher ingests the source tree by default", async () => {
     await withSeededServe({}, async (port, startupLog) => {
       expect(startupLog).toContain('"watch.enabled":true');
-      await settle();
-      expect(await sessionCount(port)).toBeGreaterThan(0);
+      // Also establishes that the grace period below outlasts a real ingest.
+      const started = Date.now();
+      expect(await waitForIngest(port)).toBeGreaterThan(0);
+      expect(Date.now() - started).toBeLessThan(NO_INGEST_GRACE_MS);
     });
   }, 40_000);
 
   test("--no-sync leaves the archive untouched", async () => {
     await withSeededServe({ flags: ["--no-sync"] }, async (port, startupLog) => {
       expect(startupLog).toContain('"watch.enabled":false');
-      await settle();
-      expect(await sessionCount(port)).toBe(0);
+      await expectNoIngest(port);
     });
   }, 40_000);
 
   test("DECANT_NO_SYNC does the same, matching read commands", async () => {
     await withSeededServe({ env: { DECANT_NO_SYNC: "1" } }, async (port, startupLog) => {
       expect(startupLog).toContain('"watch.enabled":false');
-      await settle();
-      expect(await sessionCount(port)).toBe(0);
+      await expectNoIngest(port);
     });
   }, 40_000);
 

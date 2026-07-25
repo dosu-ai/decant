@@ -13,9 +13,9 @@ describe("effort tooltip", () => {
     expect(effortDisplayLabel("16384")).toBe("16384 tokens");
     expect(effortDisplayLabel(" XHIGH ", true)).toBe("effort xhigh");
     expect(effortDisplayLabel("Effort Future-Level", true)).toBe("effort Effort Future-Level");
-    expect(effortDisplayLabel("")).toBe("not recorded");
-    expect(effortDisplayLabel(null)).toBe("not recorded");
-    expect(effortDisplayLabel(null, true)).toBe("effort not recorded");
+    expect(effortDisplayLabel("")).toBe("-");
+    expect(effortDisplayLabel(null)).toBe("-");
+    expect(effortDisplayLabel(null, true)).toBe("-");
   });
 
   test("explains the unique normalized levels behind a mixed session", () => {

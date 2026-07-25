@@ -6,7 +6,7 @@ export const UNRECORDED_EFFORT_TOOLTIP =
 export function effortDisplayLabel(effort: string | null | undefined, labeled = false): string {
   const label = effort == null ? null : normalizeReasoningEffort(effort);
   if (label == null) {
-    return labeled ? "effort not recorded" : "not recorded";
+    return "-";
   }
   const display = displayEffortLevel(label);
   return labeled && !display.startsWith("effort ") ? `effort ${display}` : display;

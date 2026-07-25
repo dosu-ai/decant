@@ -2772,6 +2772,11 @@ mark {
   text-align: left;
 }
 
+.transcript-window-start-error {
+  color: var(--danger);
+  min-width: 0;
+}
+
 .transcript-window-start-actions {
   display: flex;
   align-items: center;

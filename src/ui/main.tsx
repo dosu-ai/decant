@@ -49,7 +49,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   type AnalyticsChartMetric,
@@ -4186,6 +4186,10 @@ function SessionDetailView({ id }: { id: number }) {
   const [economicsError, setEconomicsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  // Separate from loadMoreError: the two loads fail in different places and
+  // retry in opposite directions, so one shared message would report a failed
+  // backward load at the foot of the transcript under the wrong wording.
+  const [loadEarlierError, setLoadEarlierError] = useState<string | null>(null);
   const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
   const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
   const detailRef = useRef<SessionDetailData | null>(null);
@@ -4209,6 +4213,7 @@ function SessionDetailView({ id }: { id: number }) {
     setEconomicsError(null);
     setLoadingMore(false);
     setLoadMoreError(null);
+    setLoadEarlierError(null);
     setJumpingToSeq(null);
     activeMessageSeqRef.current = null;
     handledMessageHashRef.current = null;
@@ -4345,7 +4350,7 @@ function SessionDetailView({ id }: { id: number }) {
           return false;
         }
         setLoadingMore(true);
-        setLoadMoreError(null);
+        setLoadEarlierError(null);
         return getJson<SessionDetailData>(
           `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
         )
@@ -4387,27 +4392,27 @@ function SessionDetailView({ id }: { id: number }) {
               message_offset: request.offset,
             };
             detailRef.current = nextDetail;
-            setDetail(nextDetail);
+            // flushSync commits the prepend before it returns, so the
+            // measurement below is guaranteed to see the new DOM. Deferring to
+            // requestAnimationFrame would be both less certain -- React commits
+            // on its own schedule -- and a frame late, long enough for the
+            // browser to paint the shifted position before it was corrected.
+            flushSync(() => {
+              setDetail(nextDetail);
+            });
             if (anchorSeq != null && anchorTop != null) {
-              const seq = anchorSeq;
-              const before = anchorTop;
-              requestAnimationFrame(() => {
-                if (sessionVersionRef.current !== sessionVersion) {
-                  return;
-                }
-                const after = document
-                  .getElementById(`message-${seq}`)
-                  ?.getBoundingClientRect().top;
-                if (after != null && after !== before) {
-                  window.scrollBy({ behavior: "auto", top: after - before });
-                }
-              });
+              const after = document
+                .getElementById(`message-${anchorSeq}`)
+                ?.getBoundingClientRect().top;
+              if (after != null && after !== anchorTop) {
+                window.scrollBy({ behavior: "auto", top: after - anchorTop });
+              }
             }
             return true;
           })
           .catch((err: unknown) => {
             if (sessionVersionRef.current === sessionVersion) {
-              setLoadMoreError(errorMessage(err));
+              setLoadEarlierError(errorMessage(err));
             }
             return false;
           })
@@ -4754,6 +4759,11 @@ function SessionDetailView({ id }: { id: number }) {
                 {formatInt(detail.message_offset ?? 0)} earlier{" "}
                 {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
               </span>
+              {loadEarlierError != null ? (
+                <span className="transcript-window-start-error" role="status">
+                  Couldn’t load the earlier messages: {loadEarlierError}
+                </span>
+              ) : null}
               <span className="transcript-window-start-actions">
                 <button
                   className="button small secondary"
@@ -4761,7 +4771,11 @@ function SessionDetailView({ id }: { id: number }) {
                   onClick={() => void loadPreviousMessages()}
                   type="button"
                 >
-                  {loadingMore ? "Loading…" : "Load earlier"}
+                  {loadEarlierError != null
+                    ? "Try again"
+                    : loadingMore
+                      ? "Loading…"
+                      : "Load earlier"}
                 </button>
                 <button
                   className="button small secondary"

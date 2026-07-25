@@ -151,7 +151,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const program = new Command();
   program
     .name("decant")
-    .description("extract, browse, and search Claude Code and Codex sessions")
+    .description("analyze Claude Code and Codex sessions: tokens, context windows, and cost")
     .version(DECANT_VERSION)
     .exitOverride()
     .configureOutput({

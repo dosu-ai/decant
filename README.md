@@ -137,6 +137,11 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
 - `DECANT_LOG_LEVEL`: minimum structured operational log level written as JSON
   Lines to stderr. Defaults to `info`; accepts `trace`, `debug`, `info`, `warn`
   (or `warning`), `error`, `fatal`, and `off` (or `silent`).
+- `DECANT_NO_SYNC`: set to any value to skip the sync-on-read that read commands
+  perform, and to run `decant serve` without its source watcher so it serves the
+  archive as-is and ingests nothing. The `--no-sync` flag does the same. The
+  "Sync now" button and `POST /api/sync` still work; this only suppresses the
+  syncing decant starts on its own.
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
   the local API guard when `serve` is bound to a non-loopback host. Unset by
   default. Keep it as narrow as the deployment allows: every listed address, and

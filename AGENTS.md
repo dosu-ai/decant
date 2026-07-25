@@ -60,7 +60,11 @@ Run from the repo root.
   `cd`s into (macOS only, the only platform `canLaunch` accepts); defaults to
   `$HOME`.
 - `DECANT_NO_SYNC` (any value) or `--no-sync`: skip the sync-on-read that read
-  commands otherwise perform.
+  commands otherwise perform, and run `serve` without its source watcher, so it
+  serves the archive as-is and ingests nothing. `POST /api/sync` still works:
+  this suppresses syncs decant starts on its own, not one an operator asks for.
+  Use it whenever pointing a command at a scratch archive, or the watcher will
+  fill that archive from the real `~/.claude` and `~/.codex`.
 - Global flags on every command: `--db`, `--json`, `--format table|json|md`,
   `-q/--quiet`, `--no-color`, `--no-sync`.
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,4 +156,132 @@ describe.skipIf(lanIP == null)("serve trusted-peer wiring (real CLI process)", (
       },
     );
   }, 30_000);
+});
+
+/**
+ * `--no-sync` is a global flag, and `serve` used to accept it while its watcher
+ * kept ingesting anyway. That is worse than rejecting it: pointing `serve` at a
+ * scratch archive to inspect it, or to take a screenshot, silently filled that
+ * archive with whatever the real `~/.claude` and `~/.codex` held.
+ *
+ * These spawn the real CLI against a synthetic source tree, because the bug was
+ * entirely in the argv-to-serve() wiring -- every layer below it was correct.
+ */
+interface SyncCase {
+  env?: Record<string, string>;
+  flags?: string[];
+}
+
+async function withSeededServe<T>(
+  c: SyncCase,
+  run: (port: number, startupLog: string) => Promise<T>,
+): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "decant-serve-sync-"));
+  const claudeDir = join(dir, "claude");
+  const codexDir = join(dir, "codex");
+  const projectDir = join(claudeDir, "-Users-dev-proj");
+  mkdirSync(projectDir, { recursive: true });
+  mkdirSync(codexDir, { recursive: true });
+  // A real, ingestible session. If the watcher runs, this lands in the archive.
+  copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), join(projectDir, "s1.jsonl"));
+
+  const env = { ...process.env, ...(c.env ?? {}) };
+  delete env.DECANT_TRUSTED_PEERS;
+  if (!(c.env && "DECANT_NO_SYNC" in c.env)) {
+    delete env.DECANT_NO_SYNC;
+  }
+
+  const proc = Bun.spawn(
+    [
+      "bun",
+      "src/cli.ts",
+      "--db",
+      join(dir, "archive.db"),
+      ...(c.flags ?? []),
+      "serve",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--claude-dir",
+      claudeDir,
+      "--codex-dir",
+      codexDir,
+    ],
+    { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
+  );
+
+  try {
+    const reader = proc.stderr.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const deadline = Date.now() + 15_000;
+    let port: number | null = null;
+    while (Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const match = buffer.match(/"server\.port":\s*(\d+)/);
+      if (match) {
+        port = Number(match[1]);
+        break;
+      }
+    }
+    if (port == null) {
+      throw new Error(`serve never reported its port; stderr so far: ${buffer.slice(0, 300)}`);
+    }
+    return await run(port, buffer);
+  } finally {
+    proc.kill();
+    await proc.exited;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function sessionCount(port: number): Promise<number> {
+  const response = await fetch(`http://127.0.0.1:${port}/api/stats/summary`);
+  const body = (await response.json()) as { sessions?: number };
+  return body.sessions ?? 0;
+}
+
+/** Give a watcher that IS running long enough to have ingested. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+}
+
+describe("serve sync opt-out (real CLI process)", () => {
+  // Without this the suite would pass vacuously: an unloadable fixture, or a
+  // watcher that never starts, makes every "stayed empty" assertion trivial.
+  test("baseline: the watcher ingests the source tree by default", async () => {
+    await withSeededServe({}, async (port, startupLog) => {
+      expect(startupLog).toContain('"watch.enabled":true');
+      await settle();
+      expect(await sessionCount(port)).toBeGreaterThan(0);
+    });
+  }, 40_000);
+
+  test("--no-sync leaves the archive untouched", async () => {
+    await withSeededServe({ flags: ["--no-sync"] }, async (port, startupLog) => {
+      expect(startupLog).toContain('"watch.enabled":false');
+      await settle();
+      expect(await sessionCount(port)).toBe(0);
+    });
+  }, 40_000);
+
+  test("DECANT_NO_SYNC does the same, matching read commands", async () => {
+    await withSeededServe({ env: { DECANT_NO_SYNC: "1" } }, async (port, startupLog) => {
+      expect(startupLog).toContain('"watch.enabled":false');
+      await settle();
+      expect(await sessionCount(port)).toBe(0);
+    });
+  }, 40_000);
+
+  test("the UI still serves the archive it was pointed at", async () => {
+    // Opting out of ingestion must not degrade reads; that is the whole point
+    // of the mode.
+    await withSeededServe({ flags: ["--no-sync"] }, async (port) => {
+      expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/api/sessions`)).status).toBe(200);
+    });
+  }, 40_000);
 });

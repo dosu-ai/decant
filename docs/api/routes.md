@@ -51,7 +51,7 @@ guard reads or writes the whole archive.
 - `POST /api/settings`
 - `GET /api/sync-status`
 - `GET /api/metadata/sync-status`
-- `POST /api/sync`
+- `POST /api/sync` (works even under `--no-sync`, which only stops the watcher)
 - `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/sessions/:id`
 - `GET /api/sessions/:id/outline`

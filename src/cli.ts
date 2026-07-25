@@ -163,7 +163,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
     .option("-q, --quiet", "suppress non-essential output")
     .option("--no-color", "disable ANSI color")
-    .option("--no-sync", "skip sync-on-read for read commands");
+    .option("--no-sync", "skip sync-on-read, and serve without the source watcher");
 
   const globals = (): GlobalOptions => program.opts<GlobalOptions>();
   const resolve = (overrides: Partial<ConfigOverrides> = {}): Config =>
@@ -332,6 +332,14 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
           });
+          // Without this, --no-sync (and DECANT_NO_SYNC) were accepted here and
+          // silently ignored: serve's watcher kept ingesting the source
+          // directories, so pointing serve at a scratch archive filled it with
+          // whatever was in the real ~/.claude and ~/.codex. Omitting `watch`
+          // entirely is what serve() checks to decide whether to run a watcher
+          // at all. POST /api/sync is deliberately untouched -- this turns off
+          // syncing decant starts on its own, not a sync the operator asks for.
+          const syncEnabled = shouldSync(globals(), options.env);
           const server = serveApp({
             config,
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
@@ -345,19 +353,21 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                 ? trustedPeers(commandOptions.trustedPeer)
                 : undefined,
             logger: globals().quiet ? undefined : serverLogger,
-            watch: {
-              intervalMs: commandOptions.intervalMs,
-              debounceMs: commandOptions.debounceMs,
-              enableWatch: commandOptions.fsWatch !== false,
-              onEvent: emitWatchEvent,
-            },
+            watch: syncEnabled
+              ? {
+                  intervalMs: commandOptions.intervalMs,
+                  debounceMs: commandOptions.debounceMs,
+                  enableWatch: commandOptions.fsWatch !== false,
+                  onEvent: emitWatchEvent,
+                }
+              : undefined,
           });
           if (!globals().quiet) {
             serverLogger.info("Server started.", {
               "event.name": "decant.server.started",
               "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
               "server.port": server.port,
-              "watch.enabled": true,
+              "watch.enabled": syncEnabled,
             });
           }
           try {

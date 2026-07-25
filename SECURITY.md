@@ -10,8 +10,9 @@ latest `main`. Until a stable release line exists, verify issues against current
 
 Do not open a public issue for security vulnerabilities.
 
-Report privately through GitHub's private vulnerability reporting flow from the
-repository's **Security** tab. Include:
+Report privately through
+[GitHub's private vulnerability reporting flow](https://github.com/dosu-ai/decant/security/advisories/new),
+reachable from the repository's **Security** tab. Include:
 
 - a description of the issue and impact,
 - steps to reproduce or a proof of concept,

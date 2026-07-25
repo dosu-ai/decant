@@ -1,12 +1,12 @@
 import { normalizeReasoningEffort } from "../model.ts";
 
-export function effortDisplayLabel(
-  effort: string | null | undefined,
-  labeled = false,
-): string | null {
+export const UNRECORDED_EFFORT_TOOLTIP =
+  "The source transcript did not record an effort level, so Decant cannot recover it reliably.";
+
+export function effortDisplayLabel(effort: string | null | undefined, labeled = false): string {
   const label = effort == null ? null : normalizeReasoningEffort(effort);
   if (label == null) {
-    return null;
+    return labeled ? "effort not recorded" : "not recorded";
   }
   const display = displayEffortLevel(label);
   return labeled && !display.startsWith("effort ") ? `effort ${display}` : display;
@@ -16,7 +16,11 @@ export function effortTooltip(
   effort: string | null | undefined,
   levels: readonly string[] | null | undefined,
 ): string | undefined {
-  if (effort == null || normalizeReasoningEffort(effort) !== "mixed") {
+  const normalized = effort == null ? null : normalizeReasoningEffort(effort);
+  if (normalized == null) {
+    return UNRECORDED_EFFORT_TOOLTIP;
+  }
+  if (normalized !== "mixed") {
     return undefined;
   }
   const mixedLevels = Array.from(

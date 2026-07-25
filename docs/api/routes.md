@@ -105,6 +105,11 @@ remain unchanged. The current known values are:
 
 Availability remains model-dependent for both providers.
 
+Claude Code began recording the active effort on every assistant transcript
+message in v2.1.219. Earlier transcripts do not contain enough information to
+distinguish the model default from a session override, so the UI displays
+`not recorded` instead of guessing a historical effort level.
+
 The context-window route derives per-API-call window occupancy and compaction
 events at read time from persisted per-message token columns and raw records.
 Claude logs do not state the size, so it is inferred from the recorded model:

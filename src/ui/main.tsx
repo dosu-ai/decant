@@ -2841,10 +2841,14 @@ function EffortBadge({
   levels?: string[];
 }) {
   const label = effort?.trim().toLowerCase();
-  if (label == null || label === "") {
-    return <span className="faint">-</span>;
-  }
   const displayLabel = effortDisplayLabel(effort, labeled);
+  if (label == null || label === "") {
+    return (
+      <span className="faint" title={effortTooltip(effort, levels)}>
+        {displayLabel}
+      </span>
+    );
+  }
   return (
     <Badge mono title={effortTooltip(effort, levels)} tone={label === "mixed" ? "warning" : "info"}>
       {displayLabel}

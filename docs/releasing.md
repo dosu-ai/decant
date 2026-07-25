@@ -15,84 +15,32 @@ determinism canary, and the npm bootstrap.
 
 ## One-time bootstrap
 
-Ordered — later steps assume earlier ones landed.
+The first release needs credentials configured before the first tag. **The
+specifics — which credential, what scope, in what order, and when each is
+revoked — are deliberately not in this repository.** Publishing that alongside
+the workflow that consumes it would hand an attacker both the target list and
+the timing.
 
-1. **Start Apple Developer Program enrollment first.** It has the longest lead
-   time (a D-U-N-S number plus Apple review can take days to weeks), and it is
-   the one bootstrap step that does *not* block v0.1.0: darwin binaries ship
-   ad-hoc signed and unnotarized until it lands. Once approved, create a
-   Developer ID Application certificate and an App Store Connect API key, then
-   add the five secrets — the pipeline starts Developer ID-signing and
-   notarizing with no workflow change. See
-   [macOS signing and notarization](#macos-signing-and-notarization).
-2. **Get npm access sorted.** Confirm the `@dosu` org has more than one admin;
-   a single personal-account owner is a bus-factor risk for every package decant
-   publishes.
-3. **Make the repo public — after a full scrub.** npm provenance hard-fails a
-   publish from a private repo, and Homebrew/attestation verification need
-   public assets. Flipping visibility publishes every reachable ref and tag,
-   including `pre-typescript`, so run a secrets scan (gitleaks/trufflehog)
-   across the full ref set first. If `pre-typescript` can't pass the scrub,
-   delete it from the public repo and keep it in a private mirror instead of
-   forcing it through — decant's history predates the TypeScript cutover and
-   nothing on mainline depends on that tag being public.
-4. **Land the release-blocking work on `main`.** The tag-driven pipeline, the
-   installer, and the npm package metadata are release-blocking for v0.1.0 —
-   none of them can land after the first tag as a follow-up, because the first
-   tag is what publishes them. Apple signing is the deliberate exception
-   (step 1).
-5. **Create a bootstrap npm token.** Trusted publishers can only be configured
-   on packages that already exist, so the very first publish for each of the
-   five packages needs a classic-token-free bootstrap path: a granular npm
-   access token with read/write package permission covering the `@dosu` scope,
-   "Bypass 2FA" checked (CI can't answer
-   an OTP), and the shortest practical expiry, stored as the `NPM_TOKEN` repo
-   secret. Granting npm organization access alone does not grant package
-   publishing access. This path still emits npm provenance — token auth on a
-   GitHub-hosted runner qualifies, provided the repo is already public. See
-   [npm bootstrap and trusted publishing](#npm-bootstrap-and-trusted-publishing).
-6. **Create `HOMEBREW_TOKEN`.** A fine-grained personal access token with
-   Contents: read/write on `dosu-ai/homebrew-dosu`, stored as the
-   `HOMEBREW_TOKEN` repo secret. `tap-update` checks out the tap with it and
-   pushes `Formula/decant.rb`. Without it that job fails *after* the GitHub
-   Release has already published, leaving `brew install decant` broken on a
-   release the README advertises as installable that way.
-7. **Tag `v0.1.0`.** The pipeline publishes all five npm packages (with
-   provenance), ad-hoc signed darwin binaries, a GitHub Release with
-   checksummed assets and attestations, the GHCR image, and the Homebrew tap
-   formula. Immediately after the first image push, flip the new
-   `ghcr.io/dosu-ai/decant` package to public and link it to the repo — a
-   first-push GHCR package defaults to private even under a public repo, so an
-   anonymous `docker pull` fails until this happens.
-8. **Configure trusted publishers** on all five now-existing packages (org
-   `dosu-ai`, repo `decant`, workflow `release.yml`, allowed action
-   *Publish*). Then require 2FA and disallow tokens on publishing access for
-   all five, revoke the bootstrap token, and delete the `NPM_TOKEN` secret.
-   Deleting the secret is what hands the next release to the OIDC path.
-9. **Verify like a user.** Before calling v0.1.0 done:
-   - `npx @dosu/decant@0.1.0 --version` on macOS and Linux, and once more against
-     the `@dosu/decant@0.1.0` alias.
-   - `brew install dosu-ai/dosu/decant` on a Mac that does not already have
-     the tap.
-   - The `install.sh` path end to end on both OSes.
-   - `gh attestation verify` on a downloaded asset; `npm audit signatures`
-     (from a scratch project with the release installed — see
-     "Verify a release" in distribution.md).
-   - `docker logout ghcr.io && docker pull ghcr.io/dosu-ai/decant:0.1.0`
-     (anonymous — this is what catches a still-private GHCR package that an
-     authenticated pull would silently mask), then a `docker run` smoke test
-     against an `/api/*` route.
-   - On a Mac: download a tarball in a browser, extract it, and run it. Until
-     Apple enrollment lands, expect Gatekeeper to block that first run —
-     `xattr -d com.apple.quarantine ./decant` clears it. Confirm the
-     documented workaround actually works rather than confirming its absence.
-   See [docs/distribution.md](distribution.md#verify-a-release) for the exact
-   commands behind each of these checks.
-10. **Tag `v0.1.1`** once you're ready, and confirm the OIDC trusted-publishing
-   path publishes end to end with auto-generated provenance (keep
-   `--provenance` explicit regardless — auto-generation doesn't always kick
-   in in practice). v0.1.0 proved provenance works at all; v0.1.1 proves the
-   token-to-OIDC handoff works.
+Maintainers: the bootstrap runbook lives with the org's other operational
+credentials documentation. Ask a repository admin.
+
+What is safe to state here, because `release.yml` already shows it:
+
+- The pipeline reads `NPM_TOKEN` and `HOMEBREW_TOKEN`, plus five Apple signing
+  secrets. Each is optional in the sense that its absence changes behavior
+  rather than breaking the run: no Apple secrets means ad-hoc signing instead
+  of Developer ID, and no `NPM_TOKEN` routes npm publishing to OIDC.
+- npm publishing moves to OIDC trusted publishing after the first release.
+  Token-based publishing exists only because trusted publishers cannot be
+  configured on packages that do not yet exist.
+- The repository must be public before the first publish; npm provenance
+  hard-fails from a private repository.
+
+Before the first tag, also confirm:
+
+- A full-ref secret scan (gitleaks or similar) across every ref and tag.
+- `main` is green and carries the release-blocking work — the tag is what
+  publishes it, so nothing lands as a follow-up.
 
 ## Steady-state release
 
@@ -277,30 +225,34 @@ once it has been green across several releases.
 
 npm trusted publishing (OIDC, no long-lived credential) can only be configured
 on a package that already exists, which leaves the very first publish with
-nothing to authenticate as. The bootstrap resolves that once, then gets torn
-down:
+nothing to authenticate as. The bootstrap resolves that once and is then torn
+down; **the credential specifics live in the private runbook, not here.**
 
-1. **First publish, short-lived token.** A granular npm access token with
-   read/write package permission covering the `@dosu` scope, "Bypass 2FA"
-   checked because CI cannot answer an OTP, and
-   the shortest practical expiry, stored as the `NPM_TOKEN` secret. Token auth
-   on a GitHub-hosted runner still emits Sigstore provenance, so v0.1.0 is not
-   a provenance-free release — but npm provenance hard-fails from a private
-   repo, so **the repo must already be public** before this step.
-2. **Then trusted publishing.** With the packages in existence, configure a
-   trusted publisher on each of the six (org `dosu-ai`, repo `decant`, workflow
-   `release.yml`), then require 2FA and disallow tokens for publishing.
-3. **Then revoke.** Revoke the bootstrap token and delete the `NPM_TOKEN`
-   secret. The workflow selects its publish path from whether that secret is
-   present, so deleting it is what hands the next release to OIDC — there is no
-   second edit to remember.
+The shape, which `release.yml` already makes visible:
 
-The five packages are `decant` (the documented entry point), `@dosu/decant` (the
-same launcher under the scope), and the four platform packages
-`@dosu/decant-darwin-arm64`, `@dosu/decant-darwin-x64`,
-`@dosu/decant-linux-arm64`, and `@dosu/decant-linux-x64`. The four platform
-packages publish first and the launchers last, so `optionalDependencies` always
-resolve against versions that already exist. The dist-tag (`latest`, `next`, or
-`previous`) is chosen at publish time from `meta`'s outputs rather than fixed
-afterwards, because `npm dist-tag add` is not OIDC-capable and would reintroduce
-the very token this bootstrap exists to remove.
+1. The first publish uses a short-lived token supplied as `NPM_TOKEN`. Token
+   auth on a GitHub-hosted runner still emits Sigstore provenance, so the first
+   release is not provenance-free — but npm provenance hard-fails from a
+   private repository, so the repo must already be public.
+2. With the packages in existence, a trusted publisher is configured on each
+   (org `dosu-ai`, repo `decant`, workflow `release.yml`).
+3. The bootstrap credential is then removed. The workflow selects its publish
+   path from whether `NPM_TOKEN` is present, so removing the secret is what
+   hands the next release to OIDC — there is no second edit to remember.
+
+npm is independently deprecating this path: 2FA-bypassing tokens lose account
+and package management in August 2026 and direct publishing around January
+2027. OIDC is the destination regardless.
+
+### The five packages
+
+`@dosu/decant` is the launcher; `@dosu/decant-darwin-arm64`,
+`@dosu/decant-darwin-x64`, `@dosu/decant-linux-arm64`, and
+`@dosu/decant-linux-x64` carry the compiled binaries. The four platform
+packages publish first and the launcher last, so `optionalDependencies` always
+resolve against versions that already exist.
+
+The dist-tag (`latest`, `next`, or `previous`) is chosen at publish time from
+`meta`'s outputs rather than fixed afterwards, because `npm dist-tag add` is not
+OIDC-capable and would reintroduce the very credential this bootstrap exists to
+remove.

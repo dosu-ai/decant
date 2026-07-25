@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   isInteractiveTarget,
   nextTranscriptSeq,
+  revealTranscriptMessage,
+  type TranscriptScrollTarget,
   transcriptNavigationDirection,
   transcriptSeqFromHash,
 } from "../src/ui/transcript-navigation.ts";
@@ -64,5 +66,36 @@ describe("interactive target guard", () => {
     expect(isInteractiveTarget("article")).toBe(false);
     expect(isInteractiveTarget({})).toBe(false);
     expect(isInteractiveTarget({ matches: () => false })).toBe(false);
+  });
+});
+
+describe("revealTranscriptMessage", () => {
+  function recordingTarget() {
+    const calls: { scrolled: string[]; focused: boolean[] } = { scrolled: [], focused: [] };
+    const target: TranscriptScrollTarget = {
+      scrollIntoView: (options) => calls.scrolled.push(options.behavior),
+      focus: (options) => calls.focused.push(options.preventScroll),
+    };
+    return { calls, target };
+  }
+
+  test("moves focus to the turn it scrolls to", () => {
+    const { calls, target } = recordingTarget();
+    expect(revealTranscriptMessage(target, false)).toBe(true);
+    expect(calls.scrolled).toEqual(["smooth"]);
+    // Focus is what makes arrow-key navigation perceivable to a screen reader.
+    expect(calls.focused).toEqual([true]);
+  });
+
+  test("honors reduced motion without giving up focus", () => {
+    const { calls, target } = recordingTarget();
+    revealTranscriptMessage(target, true);
+    expect(calls.scrolled).toEqual(["auto"]);
+    expect(calls.focused).toEqual([true]);
+  });
+
+  test("reports a miss when the seq is outside the loaded window", () => {
+    expect(revealTranscriptMessage(null, false)).toBe(false);
+    expect(revealTranscriptMessage(undefined, false)).toBe(false);
   });
 });

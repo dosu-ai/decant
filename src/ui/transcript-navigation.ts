@@ -77,6 +77,36 @@ export function isInteractiveTarget(target: unknown): boolean {
   );
 }
 
+/**
+ * The part of a turn element `revealTranscriptMessage` drives. Structural for
+ * the same reason as `TranscriptEventTarget`, and so tests need no real DOM.
+ */
+export interface TranscriptScrollTarget {
+  scrollIntoView(options: { behavior: "auto" | "smooth"; block: "start" }): void;
+  focus(options: { preventScroll: boolean }): void;
+}
+
+/**
+ * Bring a turn into view and move focus to it. Focus is the point: without it
+ * arrow-key navigation is a purely visual highlight that assistive tech never
+ * announces. `preventScroll` keeps the browser from running a second, competing
+ * scroll to an element we just animated to.
+ *
+ * Returns false when there is nothing to reveal, which happens whenever the
+ * target seq sits outside the currently loaded message window.
+ */
+export function revealTranscriptMessage(
+  target: TranscriptScrollTarget | null | undefined,
+  prefersReducedMotion: boolean,
+): boolean {
+  if (target == null) {
+    return false;
+  }
+  target.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+  target.focus({ preventScroll: true });
+  return true;
+}
+
 export function transcriptSeqFromHash(hash: string): number | null {
   const match = hash.match(/^#message-(\d+)$/);
   if (match == null) {

@@ -38,6 +38,7 @@ import {
 import {
   type CSSProperties,
   type MouseEvent,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
@@ -65,6 +66,7 @@ import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
   isInteractiveTarget,
   nextTranscriptSeq,
+  revealTranscriptMessage,
   type TranscriptNavigationDirection,
   transcriptNavigationDirection,
   transcriptSeqFromHash,
@@ -4507,6 +4509,12 @@ function SessionDetailView({ id }: { id: number }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigateTranscript]);
 
+  // Hoisted above the early returns because hooks cannot run conditionally.
+  // TranscriptTurn is memoized, and a Map rebuilt every render would defeat
+  // that for every turn on the screen.
+  const subagents = detail?.subagents;
+  const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
+
   if (error != null) {
     return <div className="notice danger">Unable to load session: {error}</div>;
   }
@@ -4518,7 +4526,6 @@ function SessionDetailView({ id }: { id: number }) {
   const messages = renderableMessages(detail.messages);
   const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
   const stats = threadStats(detail.summary, messages, toc, contextWindow?.turn_count);
-  const subagentsByToolUse = subagentMap(detail.subagents);
   const subagentRuns = countSubagentRuns(detail.subagents);
   const compactionBySeq = new Map(
     (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
@@ -4618,7 +4625,6 @@ function SessionDetailView({ id }: { id: number }) {
                 </span>
                 <span>{item.label}</span>
                 {jumpingToSeq === item.seq ? <b>loading</b> : null}
-                {item.tools > 0 ? <b>{item.tools}</b> : null}
               </a>
             ))}
           </div>
@@ -4767,7 +4773,14 @@ type TranscriptBlockData = {
   tool_result: string | null;
 };
 
-function TranscriptTurn({
+// tabIndex={-1} makes each turn programmatically focusable without adding it to
+// the tab order, so arrow-key navigation can move focus and a screen reader
+// announces the turn it scrolled to. Without it the highlight is visual only.
+//
+// Memoized: a transcript loads an unbounded number of turns, and every arrow
+// keypress changes `active` on exactly two of them. Without this, each keypress
+// re-renders every loaded turn.
+const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
   message,
@@ -4815,6 +4828,7 @@ function TranscriptTurn({
         active ? " is-keyboard-active" : ""
       }${providerClass}`}
       id={`message-${message.seq}`}
+      tabIndex={-1}
     >
       <TranscriptIdentityBadge message={message} tool={tool} />
       <div className="turn-meta">
@@ -4836,7 +4850,7 @@ function TranscriptTurn({
       </div>
     </article>
   );
-}
+});
 
 function CompactionTurn({
   active = false,
@@ -5862,7 +5876,6 @@ function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
       {
         seq: message.seq,
         ...tocPresentation(label),
-        tools: message.blocks.filter((block) => block.block_type === "tool_use").length,
       },
     ];
   });
@@ -5872,14 +5885,12 @@ function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[
   return outline.map((item) => ({
     seq: item.seq,
     ...tocPresentation(item.text),
-    tools: 0,
   }));
 }
 
 type ThreadTocItem = {
   seq: number;
   label: string;
-  tools: number;
   icon: IconName;
 };
 
@@ -6051,10 +6062,10 @@ function nearestTranscriptSeq(sequences: readonly number[]): number | null {
 }
 
 function scrollTranscriptMessage(seq: number) {
-  document.getElementById(`message-${seq}`)?.scrollIntoView({
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    block: "start",
-  });
+  revealTranscriptMessage(
+    document.getElementById(`message-${seq}`),
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {

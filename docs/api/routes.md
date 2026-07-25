@@ -85,6 +85,13 @@ excerpt from the first text block for each human/prompt turn, so the sticky
 thread navigation can cover the whole session without loading every rich
 transcript block up front.
 
+Session detail also returns `totals`, holding `reply_count` and
+`tool_call_count` aggregated across the whole session rather than the requested
+page, so a client can report them without loading every message. A reply is an
+assistant message carrying at least one renderable block, matching what the UI
+draws. The nested `subagents` entries carry structure and a summary but no
+messages, so they omit `totals` along with the paging fields.
+
 Session summaries returned by the list and detail routes include
 `reasoning_effort` and `reasoning_effort_levels`. The first is the normalized
 provider effort label, `mixed` when the setting changes between turns, or

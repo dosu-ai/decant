@@ -169,10 +169,28 @@ export interface MessageView {
   blocks: BlockView[];
 }
 
+/**
+ * Whole-session counts that stay correct when `messages` holds only one page.
+ * A reader counting the returned messages would undercount every paged
+ * transcript, so these are aggregated across the session regardless of window.
+ */
+export interface SessionTotals {
+  /** Assistant messages that have something to render. */
+  reply_count: number;
+  /** `tool_use` blocks across the session. */
+  tool_call_count: number;
+}
+
 export interface SessionDetail {
   summary: SessionSummary;
   messages: MessageView[];
   subagents: SubagentDetail[];
+  /**
+   * Present on a real session read. Absent on the `subagents` stubs, which
+   * carry structure and a summary but no messages, exactly like the paging
+   * fields below.
+   */
+  totals?: SessionTotals;
   message_offset?: number;
   message_limit?: number | null;
   has_more_messages?: boolean;
@@ -363,10 +381,43 @@ export function getSession(
     summary: rootSummary,
     messages,
     subagents: buildSubagentDetails(childrenByParent, id, 0, new Set([id])),
+    totals: getSessionTotals(db, id),
     message_offset: messageLimit != null ? messageOffset : undefined,
     message_limit: messageLimit,
     has_more_messages:
       messageLimit != null ? messageOffset + messages.length < summaryRow.message_count : undefined,
+  };
+}
+
+/**
+ * Session-wide reply and tool-call counts.
+ *
+ * The renderable-block predicate mirrors the reader's own rule: a text or
+ * thinking block counts only when it carries non-whitespace text, and tool
+ * blocks always count. Keeping the two in step matters because these totals are
+ * displayed next to a transcript the reader can also count by hand.
+ */
+function getSessionTotals(db: Database, id: number): SessionTotals {
+  const row = db
+    .query(
+      `SELECT
+         (SELECT COUNT(*) FROM message m
+           WHERE m.session_id = ?1 AND m.role = 'assistant'
+             AND EXISTS (
+               SELECT 1 FROM block b
+               WHERE b.message_id = m.id
+                 AND (b.type IN ('tool_use', 'tool_result')
+                      OR (b.type IN ('text', 'thinking') AND TRIM(COALESCE(b.text, '')) <> ''))
+             )
+         ) AS reply_count,
+         (SELECT COUNT(*) FROM block b
+           WHERE b.session_id = ?1 AND b.type = 'tool_use'
+         ) AS tool_call_count`,
+    )
+    .get(id) as { reply_count: number; tool_call_count: number } | null;
+  return {
+    reply_count: row?.reply_count ?? 0,
+    tool_call_count: row?.tool_call_count ?? 0,
   };
 }
 

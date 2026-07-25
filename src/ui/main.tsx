@@ -64,6 +64,7 @@ import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
+  hasOpenModal,
   isInteractiveTarget,
   nextTranscriptSeq,
   revealTranscriptMessage,
@@ -4498,7 +4499,7 @@ function SessionDetailView({ id }: { id: number }) {
         event.repeat ||
         isInteractiveTarget(event.target) ||
         isInteractiveTarget(document.activeElement) ||
-        document.querySelector("[role='dialog']") != null
+        hasOpenModal(document)
       ) {
         return;
       }
@@ -4525,7 +4526,13 @@ function SessionDetailView({ id }: { id: number }) {
 
   const messages = renderableMessages(detail.messages);
   const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
-  const stats = threadStats(detail.summary, messages, toc, contextWindow?.turn_count);
+  const stats = threadStats(
+    detail.summary,
+    messages,
+    toc,
+    contextWindow?.turn_count,
+    detail.totals,
+  );
   const subagentRuns = countSubagentRuns(detail.subagents);
   const compactionBySeq = new Map(
     (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
@@ -4715,6 +4722,7 @@ type SessionDetailData = {
     blocks: TranscriptBlockData[];
   }[];
   subagents: SubagentDetailData[];
+  totals?: { reply_count: number; tool_call_count: number };
   message_offset?: number;
   message_limit?: number | null;
   has_more_messages?: boolean;
@@ -5902,20 +5910,31 @@ function tocPresentation(text: string): { label: string; icon: IconName } {
   return { label: firstLine(cleanSessionTitle(text) ?? text, 70), icon: "messages" };
 }
 
+/**
+ * Header stats are all whole-session figures. Counting `messages` here would
+ * mix scopes: turns and tokens cover the session, so replies and tool calls
+ * counted from the loaded window would silently shrink the moment a transcript
+ * paginates. `totals` comes from the server aggregated over the session; the
+ * window fallback only applies to a payload that predates it.
+ */
 function threadStats(
   summary: SessionSummary,
   messages: SessionDetailData["messages"],
   toc: ThreadTocItem[],
   fullTurnCount?: number | null,
+  totals?: SessionDetailData["totals"],
 ) {
   return {
     turns: fullTurnCount != null && fullTurnCount > 0 ? fullTurnCount : toc.length,
-    replies: messages.filter((message) => message.role === "assistant").length,
-    toolCalls: messages.reduce(
-      (sum, message) =>
-        sum + message.blocks.filter((block) => block.block_type === "tool_use").length,
-      0,
-    ),
+    replies:
+      totals?.reply_count ?? messages.filter((message) => message.role === "assistant").length,
+    toolCalls:
+      totals?.tool_call_count ??
+      messages.reduce(
+        (sum, message) =>
+          sum + message.blocks.filter((block) => block.block_type === "tool_use").length,
+        0,
+      ),
     tokens: summary.total_input_tokens + summary.total_output_tokens,
   };
 }

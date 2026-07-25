@@ -102,6 +102,62 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("session totals cover the whole session, not the requested page", () => {
+    const db = seeded();
+    const id = listSessions(db)[0]?.id ?? 0;
+
+    const whole = getSession(db, id);
+    const totals = whole?.totals;
+    if (totals == null) {
+      throw new Error("a real session read must carry totals");
+    }
+    // Guard against a vacuous assertion: a session with nothing to count would
+    // let a page-scoped implementation pass this test unchanged.
+    expect(totals.reply_count).toBeGreaterThan(0);
+    expect(totals.tool_call_count).toBeGreaterThan(0);
+
+    // The first page deliberately excludes later replies and tool calls, so a
+    // count taken over `messages` would come back smaller here.
+    const firstPage = getSession(db, id, { messageLimit: 1, messageOffset: 0 });
+    expect(firstPage?.has_more_messages).toBe(true);
+    expect(firstPage?.totals).toEqual(totals);
+
+    const repliesOnPage = (firstPage?.messages ?? []).filter(
+      (message) => message.role === "assistant",
+    ).length;
+    expect(repliesOnPage).toBeLessThan(totals.reply_count ?? 0);
+
+    // The aggregate must agree with the reader's own rule, or the header would
+    // contradict a transcript the reader can count by hand. Recomputed here the
+    // way the UI does it, over a fully loaded session.
+    const renderable = (whole?.messages ?? []).filter(
+      (message) =>
+        message.is_compact_boundary ||
+        message.blocks.some((block) =>
+          block.block_type === "text" || block.block_type === "thinking"
+            ? (block.text ?? "").trim() !== ""
+            : block.block_type === "tool_use" || block.block_type === "tool_result",
+        ),
+    );
+    expect(renderable.filter((message) => message.role === "assistant").length).toBe(
+      totals.reply_count,
+    );
+    expect(
+      renderable.reduce(
+        (sum, message) =>
+          sum + message.blocks.filter((block) => block.block_type === "tool_use").length,
+        0,
+      ),
+    ).toBe(totals.tool_call_count);
+
+    // Stubs carry structure and a summary but no messages, so they carry no
+    // totals either rather than reporting a misleading zero.
+    for (const subagent of whole?.subagents ?? []) {
+      expect(subagent.totals).toBeUndefined();
+    }
+    db.close();
+  });
+
   test("listSessions filters by tool, offset, and uses the default limit", () => {
     const db = seeded();
     upsertSession(

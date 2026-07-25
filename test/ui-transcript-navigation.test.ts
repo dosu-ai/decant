@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  hasOpenModal,
   isInteractiveTarget,
   nextTranscriptSeq,
   revealTranscriptMessage,
@@ -97,5 +98,36 @@ describe("revealTranscriptMessage", () => {
   test("reports a miss when the seq is outside the loaded window", () => {
     expect(revealTranscriptMessage(null, false)).toBe(false);
     expect(revealTranscriptMessage(undefined, false)).toBe(false);
+  });
+});
+
+describe("hasOpenModal", () => {
+  function root(matcher: (selectors: string) => boolean) {
+    return { querySelector: (selectors: string) => (matcher(selectors) ? {} : null) };
+  }
+
+  test("covers every way the UI could express a modal", () => {
+    for (const marker of [
+      "dialog[open]",
+      "[role='dialog']",
+      "[role='alertdialog']",
+      "[aria-modal='true']",
+    ]) {
+      expect(hasOpenModal(root((selectors) => selectors.includes(marker)))).toBe(true);
+    }
+  });
+
+  test("requires a native dialog to be open", () => {
+    // A closed <dialog> stays in the DOM, so matching bare "dialog" would wedge
+    // navigation permanently once one is added. Asserted by checking that a
+    // root matching only the bare tag is not considered modal.
+    expect(hasOpenModal(root((selectors) => /(^|[\s,])dialog([\s,]|$)/.test(selectors)))).toBe(
+      false,
+    );
+  });
+
+  test("lets navigation through when nothing is modal", () => {
+    expect(hasOpenModal(root(() => false))).toBe(false);
+    expect(hasOpenModal(null)).toBe(false);
   });
 });

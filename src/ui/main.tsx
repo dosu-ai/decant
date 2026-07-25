@@ -2844,9 +2844,9 @@ function EffortBadge({
   if (label == null || label === "") {
     return <span className="faint">-</span>;
   }
-  const displayLabel = effortDisplayLabel(label, labeled);
+  const displayLabel = effortDisplayLabel(effort, labeled);
   return (
-    <Badge mono title={effortTooltip(label, levels)} tone={label === "mixed" ? "warning" : "info"}>
+    <Badge mono title={effortTooltip(effort, levels)} tone={label === "mixed" ? "warning" : "info"}>
       {displayLabel}
     </Badge>
   );

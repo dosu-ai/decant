@@ -4,8 +4,7 @@ export function effortDisplayLabel(
   effort: string | null | undefined,
   labeled = false,
 ): string | null {
-  const rawLabel = effort?.trim().replace(/^effort\s+/i, "");
-  const label = rawLabel == null ? null : normalizeReasoningEffort(rawLabel);
+  const label = effort == null ? null : normalizeReasoningEffort(effort);
   if (label == null) {
     return null;
   }

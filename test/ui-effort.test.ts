@@ -11,7 +11,8 @@ describe("effort tooltip", () => {
     expect(effortDisplayLabel("Future-Level")).toBe("Future-Level");
     expect(effortDisplayLabel("16384", true)).toBe("effort 16384 tokens");
     expect(effortDisplayLabel("16384")).toBe("16384 tokens");
-    expect(effortDisplayLabel(" Effort XHIGH ", true)).toBe("effort xhigh");
+    expect(effortDisplayLabel(" XHIGH ", true)).toBe("effort xhigh");
+    expect(effortDisplayLabel("Effort Future-Level", true)).toBe("effort Effort Future-Level");
     expect(effortDisplayLabel("")).toBeNull();
     expect(effortDisplayLabel(null)).toBeNull();
   });

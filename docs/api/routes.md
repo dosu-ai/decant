@@ -32,7 +32,7 @@ guard reads or writes the whole archive.
 
 ## UI
 
-- `GET /`
+- `GET /` (Analytics; the sidebar groups this under Overview)
 - `GET /projects`
 - `GET /sessions`
 - `GET /sessions/:id`

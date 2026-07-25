@@ -97,8 +97,8 @@ describe("parseClaudeSession", () => {
       '{"type":"assistant","effort":"max","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":60}},"content":[{"type":"text","text":"done"}]}}',
     ].join("\n");
     const session = parseClaudeSession("effort-cache", `${content}\n`).session;
-    expect(session.reasoningEffort).toBe("ultra");
-    expect(session.reasoningEffortLevels).toEqual(["ultra"]);
+    expect(session.reasoningEffort).toBe("max");
+    expect(session.reasoningEffortLevels).toEqual(["max"]);
     expect(session.totals.cacheCreation).toBe(100);
     expect(session.totals.cacheCreation1h).toBe(60);
   });
@@ -110,7 +110,27 @@ describe("parseClaudeSession", () => {
     ].join("\n");
     const session = parseClaudeSession("mixed", content).session;
     expect(session.reasoningEffort).toBe("mixed");
-    expect(session.reasoningEffortLevels).toEqual(["high", "ultra"]);
+    expect(session.reasoningEffortLevels).toEqual(["high", "max"]);
+  });
+
+  test("preserves every current Claude Code effort label", () => {
+    const content = ["low", "medium", "high", "xhigh", "max"]
+      .map(
+        (effort) =>
+          `{"type":"assistant","effort":"${effort}","message":{"role":"assistant","content":[]}}`,
+      )
+      .join("\n");
+    const session = parseClaudeSession("all-efforts", content).session;
+    expect(session.reasoningEffort).toBe("mixed");
+    expect(session.reasoningEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("preserves numeric Agent SDK effort budgets", () => {
+    const content =
+      '{"type":"assistant","effort":16384,"message":{"role":"assistant","content":[]}}';
+    const session = parseClaudeSession("numeric-effort", content).session;
+    expect(session.reasoningEffort).toBe("16384");
+    expect(session.reasoningEffortLevels).toEqual(["16384"]);
   });
 
   test("snake case streaming request ids de-dupe cumulative assistant usage", () => {

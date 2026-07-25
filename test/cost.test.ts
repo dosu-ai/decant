@@ -158,6 +158,7 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-3.5-turbo", u, pricing)).toBeCloseTo(2.0, 6);
     expect(estimateCost("gpt-3.5-turbo-1106", u, pricing)).toBeCloseTo(3.0, 6);
     expect(estimateCost("gpt-3.5-turbo-16k-0613", u, pricing)).toBeCloseTo(7.0, 6);
+    expect(estimateCost("gpt-3.5-turbo-0301", u, pricing)).toBeCloseTo(35.0, 6);
     expect(estimateCost("davinci-002", u, pricing)).toBeCloseTo(4.0, 6);
     expect(estimateCost("babbage-002", u, pricing)).toBeCloseTo(0.8, 6);
   });
@@ -165,9 +166,32 @@ describe("estimateCost", () => {
   test("codex models are priced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
+    const cached = { ...emptyUsage(), cacheRead: 1_000_000 };
     expect(estimateCost("gpt-5.3-codex", u, pricing)).toBeCloseTo(15.75, 6);
+    expect(estimateCost("gpt-5.3-codex", cached, pricing)).toBeCloseTo(0.175, 6);
+    expect(estimateCost("gpt-5.2-codex", u, pricing)).toBeCloseTo(15.75, 6);
     expect(estimateCost("gpt-5.2", u, pricing)).toBeCloseTo(15.75, 6);
-    expect(estimateCost("codex-auto-review", u, pricing)).toBeCloseTo(15.75, 6);
+    expect(estimateCost("gpt-5.1-codex", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gpt-5.1-codex-max", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gpt-5.1-codex-mini", u, pricing)).toBeCloseTo(2.25, 6);
+    expect(estimateCost("gpt-5.1-codex-mini", cached, pricing)).toBeCloseTo(0.025, 6);
+    expect(estimateCost("gpt-5-codex", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("codex-mini-latest", u, pricing)).toBeCloseTo(7.5, 6);
+    expect(estimateCost("codex-mini-latest", cached, pricing)).toBeCloseTo(0.375, 6);
+  });
+
+  test("unpublished Codex aliases are not assigned guessed API prices", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    for (const model of [
+      "codex-auto-review",
+      "gpt-5.3-codex-spark",
+      "gpt-5-codex-mini",
+      "gpt-5.4-cyber",
+    ]) {
+      expect(estimateCost(model, u, pricing)).toBe(0);
+      expect(isPriceable(model)).toBe(false);
+    }
   });
 
   test("openai models without a cached-input discount do not make cache reads free", () => {

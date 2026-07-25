@@ -6,6 +6,7 @@ import {
   REASONING_SOURCES,
   ROLES,
   reasoningEffortLevels,
+  recordedReasoningEffort,
   summarizeReasoningEfforts,
   TOOL_KINDS,
   TOOLS,
@@ -41,13 +42,26 @@ describe("model wire strings", () => {
     });
   });
 
+  test("provider effort accepts named levels and numeric token budgets", () => {
+    expect(recordedReasoningEffort("xhigh")).toBe("xhigh");
+    expect(recordedReasoningEffort(16_384)).toBe("16384");
+    expect(recordedReasoningEffort(null)).toBeNull();
+    expect(recordedReasoningEffort(false)).toBeNull();
+    expect(recordedReasoningEffort(Number.NaN)).toBeNull();
+  });
+
   test("reasoning effort is normalized and marks mixed sessions", () => {
     expect(summarizeReasoningEfforts([])).toBeNull();
     expect(summarizeReasoningEfforts([" XHIGH ", "xhigh"])).toBe("xhigh");
     expect(summarizeReasoningEfforts(["high", "max"])).toBe("mixed");
-    expect(normalizeReasoningEffort("claude_code", " MAX ")).toBe("ultra");
-    expect(normalizeReasoningEffort("codex", " MAX ")).toBe("max");
-    expect(reasoningEffortLevels("claude_code", ["low", "max", "MAX"])).toEqual(["low", "ultra"]);
-    expect(reasoningEffortLevels("codex", ["max", "ultra"])).toEqual(["max", "ultra"]);
+    expect(normalizeReasoningEffort(" MAX ")).toBe("max");
+    expect(normalizeReasoningEffort(" Future-Level ")).toBe("Future-Level");
+    expect(normalizeReasoningEffort("")).toBeNull();
+    expect(reasoningEffortLevels(["low", "max", "MAX"])).toEqual(["low", "max"]);
+    expect(reasoningEffortLevels(["max", "ultra", "Future-Level"])).toEqual([
+      "max",
+      "ultra",
+      "Future-Level",
+    ]);
   });
 });

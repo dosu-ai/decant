@@ -1,5 +1,5 @@
--- decant:schema_version=14
--- Effective decant schema (migrations 1..14 applied), frozen as the current
+-- decant:schema_version=15
+-- Effective decant schema (migrations 1..15 applied), frozen as the current
 -- baseline. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,

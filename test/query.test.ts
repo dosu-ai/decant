@@ -68,11 +68,11 @@ describe("query reads", () => {
     expect(listSessions(db)[0]).toMatchObject({
       id,
       reasoning_effort: "mixed",
-      reasoning_effort_levels: ["high", "ultra"],
+      reasoning_effort_levels: ["high", "max"],
     });
     expect(getSession(db, id)?.summary).toMatchObject({
       reasoning_effort: "mixed",
-      reasoning_effort_levels: ["high", "ultra"],
+      reasoning_effort_levels: ["high", "max"],
     });
 
     db.query("UPDATE session SET reasoning_effort_levels = '' WHERE id = ?").run(id);

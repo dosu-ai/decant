@@ -8,6 +8,7 @@ import {
   type ParsedSession,
   type Role,
   reasoningEffortLevels,
+  recordedReasoningEffort,
   summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
@@ -100,7 +101,7 @@ export function parseClaudeSession(
     gitBranch ??= stringAt(value, "gitBranch", "git_branch");
     cliVersion ??= stringAt(value, "version", "cli_version");
     sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
-    const effort = stringAt(value, "effort");
+    const effort = recordedReasoningEffort(get(value, "effort"));
     if (effort != null) {
       reasoningEfforts.add(effort);
     }
@@ -187,7 +188,7 @@ export function parseClaudeSession(
     spawnToolUseId,
     spawnDepth,
   };
-  const effortLevels = reasoningEffortLevels("claude_code", reasoningEfforts);
+  const effortLevels = reasoningEffortLevels(reasoningEfforts);
 
   return {
     session: {

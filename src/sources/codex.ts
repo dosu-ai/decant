@@ -7,6 +7,7 @@ import {
   type ParsedSession,
   type Role,
   reasoningEffortLevels,
+  recordedReasoningEffort,
   summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
@@ -92,7 +93,7 @@ export function parseCodexSession(
       rawMeta = payload;
     } else if (typ === "turn_context") {
       model = asString(get(payload, "model")) ?? model;
-      const effort = asString(get(payload, "effort"));
+      const effort = recordedReasoningEffort(get(payload, "effort"));
       if (effort != null) {
         reasoningEfforts.add(effort);
       }
@@ -130,7 +131,7 @@ export function parseCodexSession(
   if (contextWindow != null) {
     rawMeta = { ...(isObject(rawMeta) ? rawMeta : {}), model_context_window: contextWindow };
   }
-  const effortLevels = reasoningEffortLevels("codex", reasoningEfforts);
+  const effortLevels = reasoningEffortLevels(reasoningEfforts);
 
   return {
     session: {

@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 14;
+export const LATEST_SCHEMA_VERSION = 15;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -268,10 +268,6 @@ function migrate(db: Database, current: number): void {
       }
       db.exec(`
         UPDATE session
-        SET reasoning_effort = 'ultra'
-        WHERE tool = 'claude_code' AND LOWER(TRIM(reasoning_effort)) = 'max';
-
-        UPDATE session
         SET reasoning_effort_levels = CASE
           WHEN reasoning_effort IS NULL
             OR TRIM(reasoning_effort) = ''
@@ -286,6 +282,31 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (14, datetime('now'))",
+      ).run();
+    }
+    if (current < 15) {
+      // Schema v14 incorrectly relabeled Claude Code's provider-supplied `max`
+      // effort as `ultra`. Only archives that were already opened by a v14
+      // build need repair; older archives retain their original labels while
+      // migrating directly through the corrected v14 step above.
+      if (current === 14) {
+        db.exec(`
+          UPDATE session
+          SET reasoning_effort = CASE
+                WHEN LOWER(TRIM(reasoning_effort)) = 'ultra' THEN 'max'
+                ELSE reasoning_effort
+              END,
+              reasoning_effort_levels =
+                REPLACE(reasoning_effort_levels, '"ultra"', '"max"')
+          WHERE tool = 'claude_code'
+            AND (
+              LOWER(TRIM(reasoning_effort)) = 'ultra'
+              OR reasoning_effort_levels LIKE '%"ultra"%'
+            );
+        `);
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (15, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

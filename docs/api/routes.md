@@ -89,9 +89,21 @@ Session summaries returned by the list and detail routes include
 `reasoning_effort` and `reasoning_effort_levels`. The first is the normalized
 provider effort label, `mixed` when the setting changes between turns, or
 `null` when the source did not record one. The levels array preserves the
-unique labels represented by `mixed`. Claude Code's `max` wire value is exposed
-as its user-facing `ultra` setting; Codex's distinct `max` and `ultra` values
-remain unchanged.
+unique labels represented by `mixed`. Provider labels retain their meaning
+after whitespace trimming and canonicalization of known labels: Claude Code's
+`max` remains `max`, while Codex's distinct `max` and `ultra` values also
+remain unchanged. The current known values are:
+
+- Claude Code: `low`, `medium`, `high`, `xhigh`, and `max`. Its `auto`
+  selector resolves to the model default, while `ultracode` reports `xhigh`
+  because it is workflow orchestration layered on that effort level. Numeric
+  Agent SDK per-agent token budgets are preserved and displayed as token
+  budgets.
+- Codex: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and
+  `ultra`. Unknown future custom values preserve their original spelling
+  rather than being discarded or rewritten.
+
+Availability remains model-dependent for both providers.
 
 The context-window route derives per-API-call window occupancy and compaction
 events at read time from persisted per-message token columns and raw records.

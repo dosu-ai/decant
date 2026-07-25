@@ -22,6 +22,7 @@ import {
   type NormalizedBlock,
   type ParsedSession,
   reasoningEffortLevels,
+  recordedReasoningEffort,
   summarizeReasoningEfforts,
   type Tool,
 } from "./model.ts";
@@ -437,7 +438,7 @@ function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSum
       // Best-effort cleanup: preserve the scan result or original read error.
     }
   }
-  const levels = reasoningEffortLevels(tool, efforts);
+  const levels = reasoningEffortLevels(efforts);
   return { summary: summarizeReasoningEfforts(levels), levels };
 }
 
@@ -449,8 +450,8 @@ function collectReasoningEffort(tool: Tool, line: string, efforts: Set<string>):
     const value = JSON.parse(line) as Json;
     const effort =
       tool === "claude_code"
-        ? asString(get(value, "effort"))
-        : asString(get(get(value, "payload"), "effort"));
+        ? recordedReasoningEffort(get(value, "effort"))
+        : recordedReasoningEffort(get(get(value, "payload"), "effort"));
     if (
       effort != null &&
       (tool === "claude_code" || asString(get(value, "type")) === "turn_context")

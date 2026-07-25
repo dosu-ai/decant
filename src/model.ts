@@ -47,12 +47,36 @@ export function emptyUsage(): TokenUsage {
   return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheCreation1h: 0, reasoning: 0 };
 }
 
+/** Provider-defined labels whose spelling is part of the current wire format.
+ * `mixed` is Decant's own session summary value. */
+const KNOWN_REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+  "mixed",
+]);
+
+/** Read a provider-recorded effort value. Named levels are strings; Claude's
+ * Agent SDK also permits numeric per-agent token budgets. Keep both losslessly
+ * representable in the archive's string-valued effort columns. */
+export function recordedReasoningEffort(value: Json | undefined): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : null;
+}
+
 /** Collapse provider effort labels to one session-level value. Sessions almost
  * always use one value, but settings can change between turns; preserve that
  * distinction instead of presenting the last turn as representative. */
 export function summarizeReasoningEfforts(values: Iterable<string>): string | null {
   const efforts = new Set(
-    Array.from(values, (value) => value.trim().toLowerCase()).filter((value) => value !== ""),
+    Array.from(values, normalizeReasoningEffort).filter((value): value is string => value != null),
   );
   if (efforts.size === 0) {
     return null;
@@ -63,23 +87,23 @@ export function summarizeReasoningEfforts(values: Iterable<string>): string | nu
   return "mixed";
 }
 
-/** Normalize provider wire labels to the effort names users selected. Claude
- * Code writes its highest `ultra` setting as `max`; Codex uses `max` and
- * `ultra` as distinct labels, so that alias is intentionally provider-scoped. */
-export function normalizeReasoningEffort(tool: Tool, value: string): string | null {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "") {
+/** Normalize known provider effort labels without changing their meaning.
+ * Future custom values may be case-sensitive, so preserve their spelling. */
+export function normalizeReasoningEffort(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed === "") {
     return null;
   }
-  return tool === "claude_code" && normalized === "max" ? "ultra" : normalized;
+  const canonical = trimmed.toLowerCase();
+  return KNOWN_REASONING_EFFORTS.has(canonical) ? canonical : trimmed;
 }
 
 /** Unique normalized effort labels in first-seen order. This detail is kept
  * alongside the collapsed session value so `mixed` remains explainable. */
-export function reasoningEffortLevels(tool: Tool, values: Iterable<string>): string[] {
+export function reasoningEffortLevels(values: Iterable<string>): string[] {
   const levels = new Set<string>();
   for (const value of values) {
-    const normalized = normalizeReasoningEffort(tool, value);
+    const normalized = normalizeReasoningEffort(value);
     if (normalized != null) {
       levels.add(normalized);
     }

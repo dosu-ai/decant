@@ -37,7 +37,8 @@ function openAiPrice(
 export function defaultPricing(): Map<string, Price> {
   // Standard first-party API text-token rates per 1M tokens. Claude cache writes
   // carry both a 5-minute (1.25x input) and a 1-hour (2x input) rate; the split
-  // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens.
+  // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens. Rates and
+  // exclusions were checked against the official sources in docs/pricing.md.
   return new Map<string, Price>([
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus", claudePrice(5.0, 25.0)],
@@ -56,13 +57,20 @@ export function defaultPricing(): Map<string, Price> {
     ["gpt-5.4-mini", openAiPrice(0.75, 0.075, 4.5)],
     ["gpt-5.4-nano", openAiPrice(0.2, 0.02, 1.25)],
     ["gpt-5.4-pro", openAiPrice(30.0, null, 180.0)],
+    ["gpt-5.3-codex", openAiPrice(1.75, 0.175, 14.0)],
+    ["gpt-5.2-codex", openAiPrice(1.75, 0.175, 14.0)],
     ["gpt-5.2", openAiPrice(1.75, 0.175, 14.0)],
     ["gpt-5.2-pro", openAiPrice(21.0, null, 168.0)],
+    ["gpt-5.1-codex-max", openAiPrice(1.25, 0.125, 10.0)],
+    ["gpt-5.1-codex-mini", openAiPrice(0.25, 0.025, 2.0)],
+    ["gpt-5.1-codex", openAiPrice(1.25, 0.125, 10.0)],
     ["gpt-5.1", openAiPrice(1.25, 0.125, 10.0)],
+    ["gpt-5-codex", openAiPrice(1.25, 0.125, 10.0)],
     ["gpt-5", openAiPrice(1.25, 0.125, 10.0)],
     ["gpt-5-mini", openAiPrice(0.25, 0.025, 2.0)],
     ["gpt-5-nano", openAiPrice(0.05, 0.005, 0.4)],
     ["gpt-5-pro", openAiPrice(15.0, null, 120.0)],
+    ["codex-mini-latest", openAiPrice(1.5, 0.375, 6.0)],
     ["gpt-4.1", openAiPrice(2.0, 0.5, 8.0)],
     ["gpt-4.1-mini", openAiPrice(0.4, 0.1, 1.6)],
     ["gpt-4.1-nano", openAiPrice(0.1, 0.025, 0.4)],
@@ -87,7 +95,7 @@ export function defaultPricing(): Map<string, Price> {
     ["gpt-3.5-turbo-0125", openAiPrice(0.5, null, 1.5)],
     ["gpt-3.5-turbo-1106", openAiPrice(1.0, null, 2.0)],
     ["gpt-3.5-turbo-0613", openAiPrice(1.5, null, 2.0)],
-    ["gpt-3.5-0301", openAiPrice(1.5, null, 2.0)],
+    ["gpt-3.5-turbo-0301", openAiPrice(15.0, null, 20.0)],
     ["gpt-3.5-turbo-instruct", openAiPrice(1.5, null, 2.0)],
     ["gpt-3.5-turbo-16k-0613", openAiPrice(3.0, null, 4.0)],
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
@@ -144,8 +152,16 @@ function canonicalModel(raw: string): string | null {
     return null;
   }
 
-  if (model.startsWith("codex-auto-review") || model.startsWith("gpt-5.3-codex")) {
-    return "gpt-5.2";
+  // These internal, subscription-only, or preview slugs have no published
+  // first-party API token price. Returning no price is safer than assigning a
+  // neighboring public model's rate.
+  if (
+    model.startsWith("codex-auto-review") ||
+    model.startsWith("gpt-5.3-codex-spark") ||
+    model.startsWith("gpt-5-codex-mini") ||
+    model.startsWith("gpt-5.4-cyber")
+  ) {
+    return null;
   }
 
   for (const key of [
@@ -158,9 +174,15 @@ function canonicalModel(raw: string): string | null {
     "gpt-5.4-mini",
     "gpt-5.4-pro",
     "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
     "gpt-5.2-pro",
     "gpt-5.2",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex",
     "gpt-5.1",
+    "gpt-5-codex",
     "gpt-5-mini",
     "gpt-5-nano",
     "gpt-5-pro",
@@ -190,8 +212,9 @@ function canonicalModel(raw: string): string | null {
     "gpt-3.5-turbo-0125",
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-0613",
-    "gpt-3.5-0301",
+    "gpt-3.5-turbo-0301",
     "gpt-3.5-turbo",
+    "codex-mini-latest",
     "davinci-002",
     "babbage-002",
   ]) {

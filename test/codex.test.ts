@@ -53,6 +53,26 @@ describe("parseCodexSession", () => {
     expect(session.reasoningEffortLevels).toEqual(["high", "xhigh"]);
   });
 
+  test("preserves every current Codex effort label", () => {
+    const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+    const content = efforts
+      .map(
+        (effort) => `{"type":"turn_context","payload":{"model":"gpt-test","effort":"${effort}"}}`,
+      )
+      .join("\n");
+    const session = parseCodexSession("all-efforts", content, new Map()).session;
+    expect(session.reasoningEffort).toBe("mixed");
+    expect(session.reasoningEffortLevels).toEqual(efforts);
+  });
+
+  test("preserves future custom Codex effort labels", () => {
+    const content =
+      '{"type":"turn_context","payload":{"model":"gpt-future","effort":"Future-Level"}}';
+    const session = parseCodexSession("future-effort", content, new Map()).session;
+    expect(session.reasoningEffort).toBe("Future-Level");
+    expect(session.reasoningEffortLevels).toEqual(["Future-Level"]);
+  });
+
   test("stamps last_token_usage onto the producing assistant without crossing compaction", () => {
     const content = [
       JSON.stringify({

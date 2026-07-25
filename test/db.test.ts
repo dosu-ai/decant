@@ -24,7 +24,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v14 baseline. Shadow tables
+// Inventory of the frozen v15 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -299,7 +299,7 @@ describe("openDb", () => {
     migrated.close();
   });
 
-  test("migrates v13 effort values without conflating Codex max and ultra", () => {
+  test("migrates v13 effort values without changing provider labels", () => {
     const path = freshPath();
     const db = new Database(path, { create: true, strict: true });
     db.exec(`
@@ -314,9 +314,10 @@ describe("openDb", () => {
       INSERT INTO session(
         id, tool, source_session_id, reasoning_effort, reasoning_effort_checked
       ) VALUES
-        (1, 'claude_code', 'claude-ultra', 'max', 1),
+        (1, 'claude_code', 'claude-max', 'max', 1),
         (2, 'codex', 'codex-max', 'max', 1),
-        (3, 'codex', 'codex-mixed', 'mixed', 1);
+        (3, 'codex', 'codex-ultra', 'ultra', 1),
+        (4, 'codex', 'codex-mixed', 'mixed', 1);
     `);
     const insert = db.prepare(
       "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
@@ -337,8 +338,8 @@ describe("openDb", () => {
     ).toEqual([
       {
         tool: "claude_code",
-        reasoning_effort: "ultra",
-        reasoning_effort_levels: '["ultra"]',
+        reasoning_effort: "max",
+        reasoning_effort_levels: '["max"]',
         reasoning_effort_checked: 1,
       },
       {
@@ -349,9 +350,82 @@ describe("openDb", () => {
       },
       {
         tool: "codex",
+        reasoning_effort: "ultra",
+        reasoning_effort_levels: '["ultra"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "codex",
         reasoning_effort: "mixed",
         reasoning_effort_levels: "[]",
         reasoning_effort_checked: 0,
+      },
+    ]);
+    migrated.close();
+  });
+
+  test("repairs the v14 Claude max-to-ultra alias without changing Codex", () => {
+    const path = freshPath();
+    const db = new Database(path, { create: true, strict: true });
+    db.exec(`
+      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE session(
+        id INTEGER PRIMARY KEY,
+        tool TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        reasoning_effort TEXT,
+        reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
+        reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO session(
+        id, tool, source_session_id, reasoning_effort,
+        reasoning_effort_levels, reasoning_effort_checked
+      ) VALUES
+        (1, 'claude_code', 'claude-max', 'ultra', '["ultra"]', 1),
+        (2, 'claude_code', 'claude-mixed', 'mixed', '["high","ultra"]', 1),
+        (3, 'codex', 'codex-max', 'max', '["max"]', 1),
+        (4, 'codex', 'codex-ultra', 'ultra', '["ultra"]', 1);
+    `);
+    const insert = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
+    );
+    for (let version = 1; version <= 14; version += 1) {
+      insert.run(version);
+    }
+    db.close();
+
+    const migrated = openDb(path);
+    expect(
+      migrated
+        .query(
+          `SELECT tool, reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
+           FROM session ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        tool: "claude_code",
+        reasoning_effort: "max",
+        reasoning_effort_levels: '["max"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "claude_code",
+        reasoning_effort: "mixed",
+        reasoning_effort_levels: '["high","max"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "codex",
+        reasoning_effort: "max",
+        reasoning_effort_levels: '["max"]',
+        reasoning_effort_checked: 1,
+      },
+      {
+        tool: "codex",
+        reasoning_effort: "ultra",
+        reasoning_effort_levels: '["ultra"]',
+        reasoning_effort_checked: 1,
       },
     ]);
     migrated.close();

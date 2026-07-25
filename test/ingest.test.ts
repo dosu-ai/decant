@@ -367,15 +367,15 @@ describe("upsertSession", () => {
         )
         .get(sessionId),
     ).toEqual({
-      reasoning_effort: "ultra",
-      reasoning_effort_levels: '["ultra"]',
+      reasoning_effort: "max",
+      reasoning_effort_levels: '["max"]',
       reasoning_effort_checked: 1,
       total_cache_creation_tokens: 100,
       total_cache_creation_1h_tokens: 60,
     });
     expect(getSession(db, sessionId)?.summary).toMatchObject({
-      reasoning_effort: "ultra",
-      reasoning_effort_levels: ["ultra"],
+      reasoning_effort: "max",
+      reasoning_effort_levels: ["max"],
     });
     db.close();
   });
@@ -536,6 +536,39 @@ describe("sync", () => {
     ).toEqual({
       reasoning_effort: "xhigh",
       reasoning_effort_levels: '["xhigh"]',
+      reasoning_effort_checked: 1,
+    });
+    db.close();
+  });
+
+  test("backfills numeric Claude Agent SDK effort budgets", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.claudeDir, "project", "numeric-effort.jsonl");
+    write(
+      sourcePath,
+      '{"type":"assistant","effort":16384,"message":{"role":"assistant","content":[]}}\n',
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    db.exec(
+      "UPDATE session SET reasoning_effort = NULL, reasoning_effort_levels = '[]', reasoning_effort_checked = 0",
+    );
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(
+      db
+        .query(
+          `SELECT reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
+           FROM session`,
+        )
+        .get(),
+    ).toEqual({
+      reasoning_effort: "16384",
+      reasoning_effort_levels: '["16384"]',
       reasoning_effort_checked: 1,
     });
     db.close();

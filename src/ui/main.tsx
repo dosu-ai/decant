@@ -59,7 +59,7 @@ import {
 import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { contextWindowDisplayMode } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
-import { effortTooltip } from "./effort.ts";
+import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
@@ -2844,9 +2844,10 @@ function EffortBadge({
   if (label == null || label === "") {
     return <span className="faint">-</span>;
   }
+  const displayLabel = effortDisplayLabel(label, labeled);
   return (
     <Badge mono title={effortTooltip(label, levels)} tone={label === "mixed" ? "warning" : "info"}>
-      {labeled ? `effort ${label}` : label}
+      {displayLabel}
     </Badge>
   );
 }

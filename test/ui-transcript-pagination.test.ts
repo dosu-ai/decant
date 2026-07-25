@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   appendTranscriptPage,
   clampTranscriptWindowOffset,
+  prependTranscriptPage,
+  previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
   transcriptWindowOffset,
 } from "../src/ui/transcript-pagination.ts";
@@ -133,5 +135,53 @@ describe("transcript window clamping", () => {
     }
     expect(clampTranscriptWindowOffset(500, 2000, Number.NaN)).toBe(0);
     expect(clampTranscriptWindowOffset(500, 2000, Number.POSITIVE_INFINITY)).toBe(0);
+  });
+});
+
+describe("prependTranscriptPage", () => {
+  test("puts the earlier page in front, in seq order", () => {
+    expect(prependTranscriptPage([{ seq: 4 }, { seq: 5 }], [{ seq: 2 }, { seq: 3 }])).toEqual([
+      { seq: 2 },
+      { seq: 3 },
+      { seq: 4 },
+      { seq: 5 },
+    ]);
+  });
+
+  test("drops rows already held so a retry cannot duplicate them", () => {
+    expect(prependTranscriptPage([{ seq: 3 }, { seq: 4 }], [{ seq: 2 }, { seq: 3 }])).toEqual([
+      { seq: 2 },
+      { seq: 3 },
+      { seq: 4 },
+    ]);
+  });
+
+  test("copies the window when there is nothing to add", () => {
+    const current = [{ seq: 1 }];
+    const result = prependTranscriptPage(current, []);
+    expect(result).toEqual(current);
+    expect(result).not.toBe(current);
+  });
+});
+
+describe("previousTranscriptPageRequest", () => {
+  test("asks only for the gap in front of the window", () => {
+    // A window starting at 160 with a page size of 160 has a full page missing.
+    expect(previousTranscriptPageRequest(160, 160)).toEqual({ offset: 0, limit: 160 });
+  });
+
+  test("does not re-fetch rows already held when the gap is short", () => {
+    // 40 rows missing, so ask for 40 -- not a full page that would overlap.
+    expect(previousTranscriptPageRequest(40, 160)).toEqual({ offset: 0, limit: 40 });
+  });
+
+  test("stops at the start of the session", () => {
+    expect(previousTranscriptPageRequest(0, 160)).toBeNull();
+    expect(previousTranscriptPageRequest(-5, 160)).toBeNull();
+  });
+
+  test("refuses to build a request from non-finite input", () => {
+    expect(previousTranscriptPageRequest(Number.NaN, 160)).toBeNull();
+    expect(previousTranscriptPageRequest(160, Number.POSITIVE_INFINITY)).toBeNull();
   });
 });

@@ -53,6 +53,46 @@ export function appendTranscriptPage<T extends SequencedTranscriptMessage>(
 }
 
 /**
+ * Prepend an earlier transcript page, deduplicating for the same reason
+ * `appendTranscriptPage` does. Order matters: the transcript renders in `seq`
+ * order, so the earlier page goes in front.
+ */
+export function prependTranscriptPage<T extends SequencedTranscriptMessage>(
+  current: readonly T[],
+  incoming: readonly T[],
+): T[] {
+  if (incoming.length === 0) {
+    return [...current];
+  }
+  const seen = new Set(current.map((message) => message.seq));
+  return [...incoming.filter((message) => !seen.has(message.seq)), ...current];
+}
+
+/**
+ * The request that fills the gap in front of a window, or null when the window
+ * already reaches the start of the session.
+ *
+ * The limit is the size of the gap rather than a full page, so the fetch stops
+ * exactly where the loaded window begins. Asking for a full page here would
+ * re-fetch rows already held whenever the window starts less than a page in.
+ */
+export function previousTranscriptPageRequest(
+  offset: number,
+  pageSize: number,
+): { offset: number; limit: number } | null {
+  if (!Number.isFinite(offset) || !Number.isFinite(pageSize)) {
+    return null;
+  }
+  const start = Math.trunc(offset);
+  const size = Math.max(1, Math.trunc(pageSize));
+  if (start <= 0) {
+    return null;
+  }
+  const previousOffset = Math.max(0, start - size);
+  return { offset: previousOffset, limit: start - previousOffset };
+}
+
+/**
  * Keep a little preceding context when opening an unloaded outline target.
  *
  * Treats `seq` as a dense, zero-based row index, because the server pages with

@@ -75,6 +75,8 @@ import {
 import {
   appendTranscriptPage,
   clampTranscriptWindowOffset,
+  prependTranscriptPage,
+  previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
   transcriptWindowOffset,
 } from "./transcript-pagination.ts";
@@ -4316,6 +4318,108 @@ function SessionDetailView({ id }: { id: number }) {
     return request;
   }, [id]);
 
+  /**
+   * Fill in the gap in front of the loaded window.
+   *
+   * A window only starts partway into a session when the reader arrived by deep
+   * link, outline click, or compaction jump. Without this, everything before
+   * that landing point is unreachable by keyboard: ArrowUp hits the top of the
+   * window and stops, even though earlier messages exist.
+   */
+  const loadPreviousMessages = useCallback((): Promise<boolean> => {
+    const sessionVersion = sessionVersionRef.current;
+    return runWithTranscriptRequestSlot(
+      loadMorePromiseRef,
+      () => sessionVersionRef.current === sessionVersion,
+      false,
+      async () => {
+        const current = detailRef.current;
+        if (current == null || current.summary.id !== id) {
+          return false;
+        }
+        const request = previousTranscriptPageRequest(
+          current.message_offset ?? 0,
+          SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+        );
+        if (request == null) {
+          return false;
+        }
+        setLoadingMore(true);
+        setLoadMoreError(null);
+        return getJson<SessionDetailData>(
+          `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
+        )
+          .then((page) => {
+            if (sessionVersionRef.current !== sessionVersion) {
+              return false;
+            }
+            const latest = detailRef.current;
+            if (latest == null || latest.summary.id !== id) {
+              return false;
+            }
+            if (page.messages.length === 0) {
+              return false;
+            }
+            // Inserting above the viewport shifts everything below it down by
+            // the height of the new content. Browser scroll anchoring does not
+            // rescue this: measured in Chromium, a page's worth of prepended
+            // turns moved the anchor by its full height, so the correction below
+            // is doing the work rather than duplicating the browser's.
+            //
+            // Anchor on how far a surviving turn moved rather than on
+            // scrollHeight, which would misread the content-visibility
+            // placeholders: their height stays an estimate until they render.
+            let anchorSeq: number | null = null;
+            let anchorTop: number | null = null;
+            for (const message of latest.messages) {
+              const top = document
+                .getElementById(`message-${message.seq}`)
+                ?.getBoundingClientRect().top;
+              if (top != null) {
+                anchorSeq = message.seq;
+                anchorTop = top;
+                break;
+              }
+            }
+            const nextDetail = {
+              ...latest,
+              messages: prependTranscriptPage(latest.messages, page.messages),
+              message_offset: request.offset,
+            };
+            detailRef.current = nextDetail;
+            setDetail(nextDetail);
+            if (anchorSeq != null && anchorTop != null) {
+              const seq = anchorSeq;
+              const before = anchorTop;
+              requestAnimationFrame(() => {
+                if (sessionVersionRef.current !== sessionVersion) {
+                  return;
+                }
+                const after = document
+                  .getElementById(`message-${seq}`)
+                  ?.getBoundingClientRect().top;
+                if (after != null && after !== before) {
+                  window.scrollBy({ behavior: "auto", top: after - before });
+                }
+              });
+            }
+            return true;
+          })
+          .catch((err: unknown) => {
+            if (sessionVersionRef.current === sessionVersion) {
+              setLoadMoreError(errorMessage(err));
+            }
+            return false;
+          })
+          .finally(() => {
+            if (sessionVersionRef.current === sessionVersion) {
+              setLoadingMore(false);
+            }
+          });
+      },
+    );
+  }, [id]);
+
   const loadMessageWindow = useCallback(
     async (seq: number): Promise<boolean> => {
       const sessionVersion = sessionVersionRef.current;
@@ -4463,8 +4567,10 @@ function SessionDetailView({ id }: { id: number }) {
         activeSeq = nearestTranscriptSeq(sequences);
       }
       let targetSeq = nextTranscriptSeq(sequences, activeSeq, direction);
-      if (targetSeq == null && direction === 1 && current.has_more_messages === true) {
-        await loadMoreMessages();
+      const canLoadForward = direction === 1 && current.has_more_messages === true;
+      const canLoadBackward = direction === -1 && (current.message_offset ?? 0) > 0;
+      if (targetSeq == null && (canLoadForward || canLoadBackward)) {
+        await (canLoadForward ? loadMoreMessages() : loadPreviousMessages());
         if (sessionVersionRef.current !== sessionVersion) {
           return;
         }
@@ -4488,7 +4594,7 @@ function SessionDetailView({ id }: { id: number }) {
         }
       });
     },
-    [id, loadMoreMessages],
+    [id, loadMoreMessages, loadPreviousMessages],
   );
 
   useEffect(() => {
@@ -4640,17 +4746,31 @@ function SessionDetailView({ id }: { id: number }) {
         <div className="transcript-column">
           {(detail.message_offset ?? 0) > 0 ? (
             <div className="transcript-window-start">
+              {/* Counts what is missing rather than naming the first loaded
+                  message. The offset is a zero-based row index, so printing it
+                  as a 1-based ordinal contradicted the #message-<seq> anchor
+                  for that very message. */}
               <span>
-                Viewing from message {formatInt((detail.message_offset ?? 0) + 1)} of{" "}
-                {formatInt(detail.summary.message_count)}
+                {formatInt(detail.message_offset ?? 0)} earlier{" "}
+                {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
               </span>
-              <button
-                className="button small secondary"
-                onClick={() => void jumpToMessage(0)}
-                type="button"
-              >
-                Start at the beginning
-              </button>
+              <span className="transcript-window-start-actions">
+                <button
+                  className="button small secondary"
+                  disabled={loadingMore}
+                  onClick={() => void loadPreviousMessages()}
+                  type="button"
+                >
+                  {loadingMore ? "Loading…" : "Load earlier"}
+                </button>
+                <button
+                  className="button small secondary"
+                  onClick={() => void jumpToMessage(0)}
+                  type="button"
+                >
+                  Start at the beginning
+                </button>
+              </span>
             </div>
           ) : null}
           {messages.map((message) => (

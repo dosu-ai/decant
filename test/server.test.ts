@@ -341,6 +341,20 @@ describe("server routes", () => {
       message_limit: 2,
       has_more_messages: false,
     });
+    // Backward paging: the client holds a window starting at offset 2 and asks
+    // for the gap in front of it. The two pages must abut exactly -- an overlap
+    // would duplicate rows, a hole would make messages unreachable by keyboard.
+    const laterWindow = await route(config, `/api/sessions/${id}?message_limit=2&message_offset=2`);
+    const earlierGap = await route(config, `/api/sessions/${id}?message_limit=2&message_offset=0`);
+    const seqOf = (result: { body: unknown }) =>
+      (result.body as { messages: { seq: number }[] }).messages.map((message) => message.seq);
+    expect(seqOf(laterWindow).length).toBeGreaterThan(0);
+    expect(seqOf(earlierGap).length).toBeGreaterThan(0);
+    const stitched = [...seqOf(earlierGap), ...seqOf(laterWindow)];
+    expect(new Set(stitched).size).toBe(stitched.length);
+    expect(stitched).toEqual([...stitched].sort((a, b) => a - b));
+    expect(stitched).toEqual([0, 1, 2, 3]);
+
     const outline = await route(config, `/api/sessions/${id}/outline`);
     expect(outline.status).toBe(200);
     expect(outline.body).toEqual([

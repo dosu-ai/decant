@@ -2772,6 +2772,13 @@ mark {
   text-align: left;
 }
 
+.transcript-window-start-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .transcript-load-more {
   gap: 12px;
 }

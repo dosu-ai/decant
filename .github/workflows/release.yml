@@ -673,17 +673,23 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
+      # A package's FIRST publish takes materially longer to become resolvable
+      # than a subsequent version of an existing package: v0.1.0-rc.2 exhausted a
+      # 10x30s budget and was resolvable minutes later, with the same command
+      # succeeding by hand. 20 attempts covers that without turning a genuine
+      # publish failure into a 20-minute wait, because a real failure fails the
+      # `npm` job upstream and this job never runs.
       - name: Run the launcher like an npx user (retry for registry propagation)
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 20); do
             if npm exec --yes --prefer-online "@dosu/decant@${VERSION}" -- --version; then
               exit 0
             fi
-            echo "attempt ${attempt}: decant@${VERSION} not resolvable yet — waiting for registry propagation"
+            echo "attempt ${attempt}/20: @dosu/decant@${VERSION} not resolvable yet — waiting for registry propagation"
             sleep 30
           done
-          echo "::error::@dosu/decant@${VERSION} never became runnable via npm exec"
+          echo "::error::@dosu/decant@${VERSION} never became runnable via npm exec after 10 minutes"
           exit 1
 
   github-release:
@@ -804,6 +810,28 @@ jobs:
           subject-name: ghcr.io/dosu-ai/decant # fully-qualified, no tag
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      # A GHCR package created under an org is PRIVATE on first push, even when
+      # the repository is public — the push succeeds and an anonymous
+      # `docker pull` then 401s. Confirmed on v0.1.0-rc.2. Flipping it here
+      # rather than in a runbook means nobody has to remember it on the release
+      # that first creates the package. Idempotent, and non-blocking: the image
+      # is already pushed by this point, so a failure here should not fail the
+      # release.
+      - name: Ensure the GHCR package is public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current="$(gh api orgs/dosu-ai/packages/container/decant --jq .visibility 2>/dev/null || echo unknown)"
+          if [ "$current" = "public" ]; then
+            echo "GHCR package already public"
+            exit 0
+          fi
+          echo "GHCR package visibility is '${current}' — setting public"
+          gh api -X PATCH orgs/dosu-ai/packages/container/decant -f visibility=public
+          gh api orgs/dosu-ai/packages/container/decant --jq '"now: " + .visibility'
 
   # Render the exact formula that will be tested and pushed. Stable AND is_latest
   # only: a prerelease must not seed the tap and a backport must not downgrade it.

@@ -1,7 +1,7 @@
 # decant
 
-Insight into your Claude Code and Codex sessions: token spend, context window,
-files touched, and cost. Local-first, from logs already on disk.
+Local-first analysis of Claude Code and Codex sessions: token spend, context
+windows, files touched, and cost.
 
 `decant` is the Node-compatible launcher for the compiled `decant` CLI. It
 selects the matching optional platform package, then runs the embedded

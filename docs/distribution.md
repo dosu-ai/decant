@@ -13,17 +13,17 @@ The package is a release target, not a currently published install path until
 the first Release workflow run succeeds.
 
 ```sh
-npx decant --help
-npx decant sync
-npx decant serve
+npx @dosu/decant --help
+npx @dosu/decant sync
+npx @dosu/decant serve
 ```
 
 Package layout:
 
-- `decant`: thin CommonJS launcher at `npm/decant/bin/decant.cjs`.
-- `@dosu/decant`: the same launcher, republished under the `@dosu` scope as an
-  alias. Both are staged from `npm/decant` with only the package name rewritten,
-  so their contents are identical; `npx decant` is the documented entry point.
+- `@dosu/decant`: thin CommonJS launcher at `npm/decant/bin/decant.cjs`. It
+  installs a `decant` binary, so after a global install the command is just
+  `decant`. The launcher publishes scoped because npm refuses the unscoped
+  `decant` as too similar to existing packages; see "npm package naming" below.
 - `@dosu/decant-darwin-arm64`
 - `@dosu/decant-darwin-x64`
 - `@dosu/decant-linux-arm64`
@@ -55,6 +55,33 @@ already exist.
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
 deferred.
+
+### npm package naming
+
+The launcher publishes as `@dosu/decant`, not as an unscoped `decant`. That is
+not a style preference — npm refuses the unscoped name outright:
+
+```
+403 Forbidden - PUT https://registry.npmjs.org/decant
+Package name too similar to existing packages dedent,recast
+```
+
+npm's typosquat similarity check rejects new unscoped names that are close to
+existing ones. Two things make this easy to trip over a second time:
+
+- **The check runs only at publish time.** `npm view decant` returns 404 and
+  `npm publish --dry-run` succeeds, so every pre-flight signal says the name is
+  available (npm/cli#9188).
+- **There is no appeal.** npm's disputes policy does not resolve name claims on
+  request, and the error's own suggested remedy is to publish under a scope.
+
+Scoped names are exempt from the check, so `@dosu/decant` is safe permanently.
+A global install still puts a `decant` binary on PATH, and Homebrew, the shell
+installer, and the Docker image are all unaffected — only the one-off `npx`
+invocation carries the scope.
+
+`test/distribution.test.ts` asserts the staged launcher is scoped, so reverting
+this fails locally rather than at tag time.
 
 ## Shell installer
 
@@ -235,7 +262,7 @@ it:
 xattr -d com.apple.quarantine ./decant
 ```
 
-`brew install`, `npx decant`, and `install.sh` are all unaffected — Homebrew,
+`brew install`, `npx @dosu/decant`, and `install.sh` are all unaffected — Homebrew,
 npm, and `curl`/`tar` never set the quarantine attribute. Integrity for this
 release rests on SLSA build provenance, `SHA256SUMS`, and the attestation
 check `install.sh` runs, not on an Apple signature. Configuring the five Apple

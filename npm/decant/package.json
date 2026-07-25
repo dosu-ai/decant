@@ -1,5 +1,5 @@
 {
-  "name": "decant",
+  "name": "@dosu/decant",
   "version": "0.0.0",
   "description": "Local-first analysis of Claude Code and Codex sessions: token spend, context windows, files touched, and cost.",
   "license": "Apache-2.0",

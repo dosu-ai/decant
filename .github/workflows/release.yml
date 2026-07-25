@@ -1,6 +1,6 @@
 # Tag-driven release pipeline (runbook: docs/releasing.md).
 #
-# Publishes, for every v* tag: six npm packages (OIDC trusted publishing with
+# Publishes, for every v* tag: five npm packages (OIDC trusted publishing with
 # Sigstore provenance), a GitHub Release carrying deterministic tarballs +
 # SHA256SUMS + install.sh, a multi-arch GHCR image with SBOM + provenance, and
 # — for stable is_latest releases only — the Homebrew tap formula.
@@ -533,7 +533,7 @@ jobs:
 
       # Every published package must carry the license texts (Apache-2.0 §4(d)) —
       # the four platform packages plus both launchers.
-      - name: Assert LICENSE and NOTICE staged in all six packages
+      - name: Assert LICENSE and NOTICE staged in all five packages
         run: |
           set -euo pipefail
           for dir in dist/npm/*/; do
@@ -572,7 +572,7 @@ jobs:
         run: |
           set -euo pipefail
           platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
-          for launcher_dir in decant dosu-decant; do
+          for launcher_dir in decant; do
             # Read the name from the staged manifest so the installed path can never
             # drift from what the launcher directory actually declares.
             launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${launcher_dir}/package.json','utf8')).name")"
@@ -609,12 +609,12 @@ jobs:
       # then `@dosu/decant`. Package names come from each staged manifest — the
       # directory name is not the package name for the two launchers, and a
       # hard-coded guess would make the `npm view` idempotency check test a
-      # different package than the one `npm publish` ships. Same channel on all six.
+      # different package than the one `npm publish` ships. Same channel on all five.
       - name: Publish packages (OIDC trusted publishing)
         if: env.HAS_NPM_TOKEN != 'true'
         run: |
           set -euo pipefail
-          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant dosu-decant; do
+          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant; do
             pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
             if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
@@ -626,7 +626,7 @@ jobs:
       # Bootstrap token path — v0.1.0 only
       # (docs/releasing.md#npm-bootstrap-and-trusted-publishing). Token auth on a
       # GitHub-hosted runner emits the same Sigstore provenance as OIDC. Delete
-      # this step together with the NPM_TOKEN secret after v0.1.0. Same six
+      # this step together with the NPM_TOKEN secret after v0.1.0. Same five
       # packages, same order, same reasons as the OIDC step above.
       - name: Publish packages (bootstrap token, v0.1.0 only)
         if: env.HAS_NPM_TOKEN == 'true'
@@ -634,7 +634,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant dosu-decant; do
+          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant; do
             pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
             if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
@@ -677,13 +677,13 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 10); do
-            if npm exec --yes --prefer-online "decant@${VERSION}" -- --version; then
+            if npm exec --yes --prefer-online "@dosu/decant@${VERSION}" -- --version; then
               exit 0
             fi
             echo "attempt ${attempt}: decant@${VERSION} not resolvable yet — waiting for registry propagation"
             sleep 30
           done
-          echo "::error::decant@${VERSION} never became runnable via npm exec"
+          echo "::error::@dosu/decant@${VERSION} never became runnable via npm exec"
           exit 1
 
   github-release:

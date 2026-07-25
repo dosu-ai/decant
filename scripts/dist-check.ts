@@ -55,26 +55,22 @@ assertVersion(
 
 mkdirSync(packDir, { recursive: true });
 mkdirSync(installDir, { recursive: true });
-// Both launchers ship from identical content: `decant` is what users invoke,
-// `@dosu/decant` is the scoped alias. Exercise both through a real pack and
-// install, so a divergence surfaces here rather than at publish time.
 const launcherPack = npmPack(join(npmDir, "decant"), packDir);
-const aliasPack = npmPack(join(npmDir, "dosu-decant"), packDir);
 const platformPack = npmPack(join(npmDir, packageDirName(target)), packDir);
 runCommand(
   "npm",
-  ["install", "--ignore-scripts", "--no-audit", "--no-fund", launcherPack, aliasPack, platformPack],
+  ["install", "--ignore-scripts", "--no-audit", "--no-fund", launcherPack, platformPack],
   {
     cwd: installDir,
     env: npmEnv,
   },
 );
-for (const launcherPath of [
-  join(installDir, "node_modules", "decant", "bin", "decant.cjs"),
-  join(installDir, "node_modules", "@dosu", "decant", "bin", "decant.cjs"),
-]) {
-  assertVersion("node", [launcherPath, "--version"], { DECANT_BINARY_PATH: undefined }, version);
-}
+assertVersion(
+  "node",
+  [join(installDir, "node_modules", "@dosu", "decant", "bin", "decant.cjs"), "--version"],
+  { DECANT_BINARY_PATH: undefined },
+  version,
+);
 
 process.stdout.write(`dist check ok for ${target.key} (${version})\n`);
 

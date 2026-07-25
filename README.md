@@ -47,10 +47,10 @@ options and when to pick which.
 Run it with npm, no Bun install needed:
 
 ```bash
-npx decant sync
-npx decant ls
-npx decant search "auth bug"
-npx decant serve
+npx @dosu/decant sync
+npx @dosu/decant ls
+npx @dosu/decant search "auth bug"
+npx @dosu/decant serve
 ```
 
 Install it with Homebrew:
@@ -195,12 +195,9 @@ details and per-artifact verification.
 1. **npx / npm** — zero persistent install, or a global one:
 
    ```bash
-   npx decant sync
-   npm i -g decant   # persistent install
+   npx @dosu/decant sync
+   npm i -g @dosu/decant   # persistent install, then just `decant`
    ```
-
-   `@dosu/decant` is a scoped alias for the same launcher if you prefer a
-   scoped name.
 
 2. **Homebrew** — via the `dosu-ai/dosu` tap:
 
@@ -235,12 +232,12 @@ details and per-artifact verification.
 **macOS, tarball downloads only.** v0.1.0 binaries are ad-hoc signed but not
 notarized, so a tarball downloaded through a browser carries
 `com.apple.quarantine` and Gatekeeper blocks the first run. Clear it with
-`xattr -d com.apple.quarantine ./decant`. `brew install`, `npx decant`, and the
+`xattr -d com.apple.quarantine ./decant`. `brew install`, `npx @dosu/decant`, and the
 install script are unaffected, because none of them set the quarantine
 attribute. Integrity comes from SLSA build provenance, `SHA256SUMS`, and the
 `gh attestation verify` check `install.sh` runs.
 
-**Upgrading.** `npx decant@latest` always resolves the newest published
+**Upgrading.** `npx @dosu/decant@latest` always resolves the newest published
 version. For a persistent install, run `npm i -g decant@latest`,
 `brew upgrade decant`, re-run the install script, or
 `docker pull ghcr.io/dosu-ai/decant:latest`. A build that reports

@@ -25,9 +25,8 @@ Ordered — later steps assume earlier ones landed.
    add the five secrets — the pipeline starts Developer ID-signing and
    notarizing with no workflow change. See
    [macOS signing and notarization](#macos-signing-and-notarization).
-2. **Get npm access sorted.** Add a second maintainer to the `@dosu` scope (or
-   convert it to an npm org) and to the unscoped `decant` package; a single
-   personal-account owner is a bus-factor risk for every package decant
+2. **Get npm access sorted.** Confirm the `@dosu` org has more than one admin;
+   a single personal-account owner is a bus-factor risk for every package decant
    publishes.
 3. **Make the repo public — after a full scrub.** npm provenance hard-fails a
    publish from a private repo, and Homebrew/attestation verification need
@@ -44,9 +43,9 @@ Ordered — later steps assume earlier ones landed.
    (step 1).
 5. **Create a bootstrap npm token.** Trusted publishers can only be configured
    on packages that already exist, so the very first publish for each of the
-   six packages needs a classic-token-free bootstrap path: a granular npm
-   access token with read/write package permission covering the `@dosu` scope
-   *and* the unscoped `decant` package, "Bypass 2FA" checked (CI can't answer
+   five packages needs a classic-token-free bootstrap path: a granular npm
+   access token with read/write package permission covering the `@dosu` scope,
+   "Bypass 2FA" checked (CI can't answer
    an OTP), and the shortest practical expiry, stored as the `NPM_TOKEN` repo
    secret. Granting npm organization access alone does not grant package
    publishing access. This path still emits npm provenance — token auth on a
@@ -58,20 +57,20 @@ Ordered — later steps assume earlier ones landed.
    pushes `Formula/decant.rb`. Without it that job fails *after* the GitHub
    Release has already published, leaving `brew install decant` broken on a
    release the README advertises as installable that way.
-7. **Tag `v0.1.0`.** The pipeline publishes all six npm packages (with
+7. **Tag `v0.1.0`.** The pipeline publishes all five npm packages (with
    provenance), ad-hoc signed darwin binaries, a GitHub Release with
    checksummed assets and attestations, the GHCR image, and the Homebrew tap
    formula. Immediately after the first image push, flip the new
    `ghcr.io/dosu-ai/decant` package to public and link it to the repo — a
    first-push GHCR package defaults to private even under a public repo, so an
    anonymous `docker pull` fails until this happens.
-8. **Configure trusted publishers** on all six now-existing packages (org
+8. **Configure trusted publishers** on all five now-existing packages (org
    `dosu-ai`, repo `decant`, workflow `release.yml`, allowed action
    *Publish*). Then require 2FA and disallow tokens on publishing access for
-   all six, revoke the bootstrap token, and delete the `NPM_TOKEN` secret.
+   all five, revoke the bootstrap token, and delete the `NPM_TOKEN` secret.
    Deleting the secret is what hands the next release to the OIDC path.
 9. **Verify like a user.** Before calling v0.1.0 done:
-   - `npx decant@0.1.0 --version` on macOS and Linux, and once more against
+   - `npx @dosu/decant@0.1.0 --version` on macOS and Linux, and once more against
      the `@dosu/decant@0.1.0` alias.
    - `brew install dosu-ai/dosu/decant` on a Mac that does not already have
      the tap.
@@ -127,7 +126,7 @@ Every release after the bootstrap:
    covers three, since Homebrew supports Linux on x86_64 only. `determinism` hangs off `build` as the one non-blocking
    job in the graph.
 4. Spot-check after the run finishes:
-   - `npx decant@$VERSION --version` (use `@latest` only when this release's
+   - `npx @dosu/decant@$VERSION --version` (use `@latest` only when this release's
      `meta` reported it as the newest stable tag — a backport is never
      `latest` by design).
    - `curl -fsSL .../install.sh | sh` on one machine.
@@ -282,8 +281,8 @@ nothing to authenticate as. The bootstrap resolves that once, then gets torn
 down:
 
 1. **First publish, short-lived token.** A granular npm access token with
-   read/write package permission covering the `@dosu` scope and the unscoped
-   `decant` package, "Bypass 2FA" checked because CI cannot answer an OTP, and
+   read/write package permission covering the `@dosu` scope, "Bypass 2FA"
+   checked because CI cannot answer an OTP, and
    the shortest practical expiry, stored as the `NPM_TOKEN` secret. Token auth
    on a GitHub-hosted runner still emits Sigstore provenance, so v0.1.0 is not
    a provenance-free release — but npm provenance hard-fails from a private
@@ -296,7 +295,7 @@ down:
    present, so deleting it is what hands the next release to OIDC — there is no
    second edit to remember.
 
-The six packages are `decant` (the documented entry point), `@dosu/decant` (the
+The five packages are `decant` (the documented entry point), `@dosu/decant` (the
 same launcher under the scope), and the four platform packages
 `@dosu/decant-darwin-arm64`, `@dosu/decant-darwin-x64`,
 `@dosu/decant-linux-arm64`, and `@dosu/decant-linux-x64`. The four platform

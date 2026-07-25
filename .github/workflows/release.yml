@@ -812,26 +812,24 @@ jobs:
           push-to-registry: true
 
       # A GHCR package created under an org is PRIVATE on first push, even when
-      # the repository is public — the push succeeds and an anonymous
-      # `docker pull` then 401s. Confirmed on v0.1.0-rc.2. Flipping it here
-      # rather than in a runbook means nobody has to remember it on the release
-      # that first creates the package. Idempotent, and non-blocking: the image
-      # is already pushed by this point, so a failure here should not fail the
-      # release.
-      - name: Ensure the GHCR package is public
+      # the repository is public: the push succeeds and an anonymous
+      # `docker pull` then 401s. There is NO API to change package visibility --
+      # it is web UI only (cli/cli#6820, open since 2023). So this step cannot
+      # fix it; it detects it and says so loudly, rather than leaving a release
+      # that looks green while `docker pull` fails for everyone.
+      - name: Check the image is anonymously pullable
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
-          current="$(gh api orgs/dosu-ai/packages/container/decant --jq .visibility 2>/dev/null || echo unknown)"
-          if [ "$current" = "public" ]; then
-            echo "GHCR package already public"
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://ghcr.io/v2/dosu-ai/decant/manifests/${VERSION}")"
+          if [ "$code" = "200" ]; then
+            echo "anonymous pull works (HTTP 200) — package is public"
             exit 0
           fi
-          echo "GHCR package visibility is '${current}' — setting public"
-          gh api -X PATCH orgs/dosu-ai/packages/container/decant -f visibility=public
-          gh api orgs/dosu-ai/packages/container/decant --jq '"now: " + .visibility'
+          echo "::warning::ghcr.io/dosu-ai/decant:${VERSION} is not anonymously pullable (HTTP ${code}). A GHCR package is private on first push and there is no API to change it. Set it to public once, by hand: https://github.com/orgs/dosu-ai/packages/container/decant/settings -> Danger Zone -> Change visibility. This is a one-time action; later releases inherit it."
 
   # Render the exact formula that will be tested and pushed. Stable AND is_latest
   # only: a prerelease must not seed the tap and a backport must not downgrade it.

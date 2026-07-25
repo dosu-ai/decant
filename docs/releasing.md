@@ -36,6 +36,18 @@ What is safe to state here, because `release.yml` already shows it:
 - The repository must be public before the first publish; npm provenance
   hard-fails from a private repository.
 
+One manual step has no automated equivalent: a GHCR package created under an
+organization is **private on first push**, even from a public repository. The
+push succeeds and an anonymous `docker pull` then fails with 401. There is no
+API to change package visibility — it is web UI only, and has been since 2023
+(cli/cli#6820). Set it once at
+`https://github.com/orgs/dosu-ai/packages/container/decant/settings` under
+"Change visibility"; later releases inherit it. Note that public is one-way.
+
+The `docker` job checks anonymous pullability after pushing and warns if it
+fails, so a release never looks green while `docker pull` is broken for
+everyone else.
+
 Before the first tag, also confirm:
 
 - A full-ref secret scan (gitleaks or similar) across every ref and tag.

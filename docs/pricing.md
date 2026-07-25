@@ -8,6 +8,8 @@ The seed table was last verified on July 25, 2026 against:
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
 - [OpenAI Codex pricing](https://developers.openai.com/codex/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
+- [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
+- [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
 
 All dollar amounts below are USD per million tokens. A dash means that the
 provider does not publish a first-party API token price for that model slug.
@@ -43,6 +45,11 @@ cache writes at 1.25 times the uncached-input rate.
 OpenAI does not document which underlying model or rate applies. Decant leaves
 it and other unpublished Codex slugs unpriceable instead of guessing a nearby
 model's price.
+
+For `gpt-3.5-turbo-0301`, Decant uses the final published GPT-3.5 Turbo rate
+of $1.50 input and $2.00 output. OpenAI's current deprecations table displays
+$15.00 and $20.00, but those figures conflict with the contemporaneous launch
+and June 2023 pricing announcements linked above.
 
 ## Scope and historical behavior
 

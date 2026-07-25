@@ -95,7 +95,7 @@ export function defaultPricing(): Map<string, Price> {
     ["gpt-3.5-turbo-0125", openAiPrice(0.5, null, 1.5)],
     ["gpt-3.5-turbo-1106", openAiPrice(1.0, null, 2.0)],
     ["gpt-3.5-turbo-0613", openAiPrice(1.5, null, 2.0)],
-    ["gpt-3.5-turbo-0301", openAiPrice(15.0, null, 20.0)],
+    ["gpt-3.5-turbo-0301", openAiPrice(1.5, null, 2.0)],
     ["gpt-3.5-turbo-instruct", openAiPrice(1.5, null, 2.0)],
     ["gpt-3.5-turbo-16k-0613", openAiPrice(3.0, null, 4.0)],
     ["davinci-002", openAiPrice(2.0, null, 2.0)],

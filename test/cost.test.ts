@@ -158,7 +158,7 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-3.5-turbo", u, pricing)).toBeCloseTo(2.0, 6);
     expect(estimateCost("gpt-3.5-turbo-1106", u, pricing)).toBeCloseTo(3.0, 6);
     expect(estimateCost("gpt-3.5-turbo-16k-0613", u, pricing)).toBeCloseTo(7.0, 6);
-    expect(estimateCost("gpt-3.5-turbo-0301", u, pricing)).toBeCloseTo(35.0, 6);
+    expect(estimateCost("gpt-3.5-turbo-0301", u, pricing)).toBeCloseTo(3.5, 6);
     expect(estimateCost("davinci-002", u, pricing)).toBeCloseTo(4.0, 6);
     expect(estimateCost("babbage-002", u, pricing)).toBeCloseTo(0.8, 6);
   });

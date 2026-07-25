@@ -35,7 +35,7 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex, GPT-5.1-Codex-Max, GPT-5-Codex | $1.25 | $0.125 | no additional fee | $10.00 |
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
-| codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini | — | — | — | — |
+| codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
 cache writes before GPT-5.6 have no additional fee; GPT-5.6 reports and bills

@@ -1,6 +1,7 @@
 # decant
 
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Your coding agent sessions contain a lot of useful information. What tokens got
@@ -13,7 +14,10 @@ both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,
 token economics, context-window occupancy, and phase breakdowns from a CLI or a
 local web UI. Your transcripts never leave your machine.
 
-![decant serve UI showing the session archive with synthetic demo data](docs/assets/decant-serve.png)
+![decant serve showing the analytics view: session, message, tool-call, token,
+and cost totals; an activity breakdown splitting cost and time across context,
+planning, code, and communicating; and sessions-per-day and cost-per-day charts.
+Rendered from synthetic demo data.](docs/assets/decant-serve.png)
 
 ## Features
 

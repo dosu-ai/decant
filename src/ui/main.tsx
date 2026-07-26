@@ -4993,11 +4993,15 @@ function IngestIssuesPanel({
           <p className="faint">No issues recorded for this session.</p>
         ) : (
           <div className="signal-list">
-            {issues.map((issue) => (
+            {issues.map((issue, index) => (
               // No stable id in the wire shape; composite of the fields shown
-              // is stable enough since this list is fetched once and never
-              // reorders.
-              <div className="signal-row" key={`${issue.code}-${issue.line_no}-${issue.error}`}>
+              // plus the map index, since byte-identical rows (e.g. repeated
+              // duplicate_tool_result issues) would otherwise collide.
+              <div
+                className="signal-row"
+                // biome-ignore lint/suspicious/noArrayIndexKey: fetched once and never reorders; index only disambiguates byte-identical rows.
+                key={`${issue.code}-${issue.line_no}-${issue.error}-${index}`}
+              >
                 <span className="signal-rail tone-warning" />
                 <div>
                   <div>
@@ -5046,7 +5050,8 @@ type SessionOutlineItemData = {
 };
 
 /** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
- * this panel never renders the raw transcript line (see docs/api/routes.md). */
+ * this panel never renders the raw transcript line (see docs/logging.md and
+ * the sessionIngestIssues docstring in src/query.ts). */
 type SessionIngestIssue = {
   code: string;
   line_no: number | null;

@@ -999,10 +999,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                 if (!globals().quiet) {
                   const repairs = Object.entries(out.report)
                     .filter(([key, value]) => key !== "dropped_blocks" && (value as number) > 0)
-                    .map(([key, value]) => `${key}=${value}`)
+                    .map(([key, value]) => `${key}=${value}`);
+                  const dropped = Object.entries(out.report.dropped_blocks)
+                    .map(([kind, count]) => `${kind}=${count}`)
                     .join(" ");
-                  if (repairs !== "") {
-                    io.writeErr(`session ${sessionId}: ${repairs}\n`);
+                  if (dropped !== "") {
+                    repairs.push(`dropped[${dropped}]`);
+                  }
+                  const line = repairs.join(" ");
+                  if (line !== "") {
+                    io.writeErr(`session ${sessionId}: ${line}\n`);
                   }
                 }
                 return { content: JSON.stringify(out.records, null, 2) };

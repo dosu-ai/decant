@@ -281,6 +281,93 @@ describe("exportTrajectory", () => {
     db.close();
   });
 
+  test("probes past a source id that already looks like one of our renames", () => {
+    const db = openDb(join(workDir, "collide.db"));
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "t1", name: "Bash", input: { n: 1 } },
+            { type: "tool_use", id: "t1", name: "Bash", input: { n: 2 } },
+            // Renaming the line above to t1__dup2 would collide with this id.
+            { type: "tool_use", id: "t1__dup2", name: "Bash", input: { n: 3 } },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:02.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "first" }],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:03.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "second" }],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:04.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1__dup2", content: "third" }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:05.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("traj-7", lines),
+      "/t7.jsonl",
+      1,
+      2,
+      "h",
+    );
+    const out = exportTrajectory(db, sessionId);
+    if (!out.ok) throw new Error(`export failed: ${out.reason}`);
+    assertBothLayers(out.records);
+
+    const callIds = out.records
+      .filter((r): r is { tool_calls: { id: string }[] } => {
+        return typeof r === "object" && r != null && "tool_calls" in r;
+      })
+      .map((r) => r.tool_calls[0]?.id);
+    expect(callIds).toEqual(["t1", "t1__dup2", "t1__dup2__dup2"]);
+    expect(new Set(callIds).size).toBe(callIds.length);
+    expect(out.report.tool_call_ids_renamed).toBe(2);
+
+    // Results stay keyed to the call that produced them: the third result names
+    // source id t1__dup2, whose own call was renamed to t1__dup2__dup2.
+    const results = out.records.filter(
+      (r): r is { tool_call_id: string; content: string } =>
+        typeof r === "object" && r != null && (r as { role?: string }).role === "tool",
+    );
+    expect(results.map((r) => [r.tool_call_id, r.content])).toEqual([
+      ["t1", "first"],
+      ["t1__dup2", "second"],
+      ["t1__dup2__dup2", "third"],
+    ]);
+    expect(out.report.duplicate_tool_results_dropped).toBe(0);
+    db.close();
+  });
+
   test("refuses sessions without user or assistant records", () => {
     const db = openDb(join(workDir, "empty.db"));
     const lines = JSON.stringify({

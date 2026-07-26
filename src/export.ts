@@ -190,11 +190,14 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     report.dropped_blocks[kind] = (report.dropped_blocks[kind] ?? 0) + 1;
   };
 
-  // Pass 1: assign globally unique call ids in appearance order; queue renames
-  // so results pair with their call temporally (first result -> original id,
-  // second result for a duplicated id -> the renamed second call).
-  const idUses = new Map<string, number>();
-  const callIdBySite = new Map<string, string[]>(); // original id -> assigned ids in order
+  // Pass 1: assign globally unique call ids in appearance order. A name already
+  // taken is renamed by probing `__dup<n>` upward until the candidate is unused
+  // (their core.ts move): a fixed `__dup2` would collide when the source itself
+  // contains an id that already looks like one of our renames. Each original id
+  // keeps a queue of the names it was assigned, so pass 2 reads the strings back
+  // instead of recomputing a suffix it can no longer predict.
+  const assignedByOriginal = new Map<string, string[]>();
+  const usedIds = new Set<string>();
   let callSites = 0;
   for (const message of detail.messages) {
     if (!isTrajectoryWireRole(message.role)) {
@@ -209,20 +212,25 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       if (block.tool_use_id == null) {
         report.tool_call_ids_synthesized += 1;
       }
-      const seen = idUses.get(original) ?? 0;
-      idUses.set(original, seen + 1);
-      const assigned = seen === 0 ? original : `${original}__dup${seen + 1}`;
-      if (seen > 0) {
+      let assigned = original;
+      if (usedIds.has(assigned)) {
+        let suffix = 2;
+        while (usedIds.has(`${original}__dup${suffix}`)) {
+          suffix += 1;
+        }
+        assigned = `${original}__dup${suffix}`;
         report.tool_call_ids_renamed += 1;
       }
-      const queue = callIdBySite.get(original) ?? [];
+      usedIds.add(assigned);
+      const queue = assignedByOriginal.get(original) ?? [];
       queue.push(assigned);
-      callIdBySite.set(original, queue);
+      assignedByOriginal.set(original, queue);
     }
   }
 
   // Pass 2: emit records.
   const records: unknown[] = [];
+  const callTaken = new Map<string, number>(); // original id -> calls emitted
   const resultTaken = new Map<string, number>(); // original id -> results consumed
   const answered = new Set<string>(); // assigned ids with a result already
   let lastTimestamp: string | null = null;
@@ -296,7 +304,9 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_use") {
         callEmit += 1;
         const original = block.tool_use_id ?? `decant-${sessionId}-${callEmit}`;
-        const assigned = callIdBySite.get(original)?.shift() ?? original;
+        const emitted = callTaken.get(original) ?? 0;
+        callTaken.set(original, emitted + 1);
+        const assigned = assignedByOriginal.get(original)?.[emitted] ?? original;
         const name =
           block.tool_name != null && block.tool_name !== "" ? block.tool_name : "unknown_tool";
         records.push({
@@ -308,15 +318,16 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         assistantCount += 1;
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
-        const totalCalls = original == null ? undefined : idUses.get(original);
-        if (original == null || totalCalls == null) {
+        const queue = original == null ? undefined : assignedByOriginal.get(original);
+        if (original == null || queue == null) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
         const taken = resultTaken.get(original) ?? 0;
-        const targetIndex = Math.min(taken, totalCalls - 1);
-        const assigned = targetIndex === 0 ? original : `${original}__dup${targetIndex + 1}`;
-        if (answered.has(assigned) && taken >= totalCalls) {
+        // Pair with the call this result answers by position, reading back the
+        // name pass 1 assigned it. Queues are never empty, so the index holds.
+        const assigned = queue[Math.min(taken, queue.length - 1)] ?? original;
+        if (answered.has(assigned) && taken >= queue.length) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }

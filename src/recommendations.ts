@@ -52,6 +52,8 @@ const SEARCH_HEAVY_RATIO = 5.0;
 const SEARCH_HEAVY_MIN_SESSIONS = 20;
 const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
+const INGEST_HEALTH_MIN_SESSIONS = 15;
+const INGEST_HEALTH_MIN_SHARE = 0.1;
 const WINDOW = "s.started_at >= date('now','-30 days')";
 
 export function parseStatusFilter(value: string): StatusFilter | null {
@@ -73,6 +75,7 @@ export function signals(db: Database): Recommendation[] {
     ...churnFiles(db),
     ...searchHeavy(db),
     ...abandonedRate(db),
+    ...ingestHealth(db),
   ];
   out.sort((left, right) => right.score - left.score);
   return out.slice(0, 12);
@@ -594,6 +597,44 @@ function abandonedRate(db: Database): Recommendation[] {
       icon: "hero-hand-raised",
       tone: "danger",
       score: pct / 3,
+    },
+  ];
+}
+
+function ingestHealth(db: Database): Recommendation[] {
+  const counts = db
+    .query(
+      `SELECT COUNT(DISTINCT s.id) AS affected
+       FROM session s JOIN ingest_issue ii ON ii.source_path = s.source_path
+       WHERE ${WINDOW} AND ii.code != 'unparsed_line'`,
+    )
+    .get() as { affected: number };
+  const inWindow = (
+    db.query(`SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`).get() as { n: number }
+  ).n;
+  if (inWindow < INGEST_HEALTH_MIN_SESSIONS || counts.affected === 0) {
+    return [];
+  }
+  const share = counts.affected / inWindow;
+  if (share < INGEST_HEALTH_MIN_SHARE) {
+    return [];
+  }
+  const pct = Math.round(share * 100);
+  return [
+    {
+      key: "signal:ingest-health",
+      kind: "signal",
+      category: null,
+      title: `${counts.affected} recent sessions ingested with diagnostics`,
+      detail: `${pct}% of the last 30 days' sessions carry ingest diagnostics (unknown record types or tool-linkage anomalies) — a source CLI likely changed its transcript format.`,
+      suggestion:
+        "Update decant to the latest release; if the diagnostics persist, file an issue with the output of `decant sync --json` (it includes per-code counts, no transcript content).",
+      prompt: null,
+      url: "https://github.com/dosu-ai/decant/issues",
+      link_label: "Report a format change",
+      icon: "hero-exclamation-triangle",
+      tone: "warning",
+      score: counts.affected * 2,
     },
   ];
 }

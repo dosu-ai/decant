@@ -309,6 +309,26 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("ingest-health signal fires when recent sessions carry drift diagnostics", () => {
+    const db = freshDb();
+    // 20 recent sessions, 5 with unknown_record_type issues on their source
+    for (let i = 0; i < 20; i += 1) {
+      db.query(
+        `INSERT INTO session (tool, source_session_id, source_path, started_at)
+         VALUES ('claude_code', ?1, ?2, datetime('now','-1 day'))`,
+      ).run(`s${i}`, `/src/s${i}.jsonl`);
+    }
+    for (let i = 0; i < 5; i += 1) {
+      db.query(
+        `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+         VALUES (?1, NULL, 'unknown record type "fallback" on 3 line(s)', NULL, 'unknown_record_type', datetime('now'))`,
+      ).run(`/src/s${i}.jsonl`);
+    }
+    const out = signals(db).filter((rec) => rec.key === "signal:ingest-health");
+    expect(out).toHaveLength(1);
+    expect(out[0]?.title).toContain("5");
+  });
+
   test("regenerate is idempotent and preserves implemented state", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);

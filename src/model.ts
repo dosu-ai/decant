@@ -170,10 +170,26 @@ export interface NormalizedSession {
   messages: NormalizedMessage[];
 }
 
+/** Wire strings stored in ingest_issue.code — never reworded (same contract
+ * as the const tuples above). `unparsed_line` is the only data-loss code;
+ * the rest are informational sensors. */
+export const INGEST_ISSUE_CODES = [
+  "unparsed_line",
+  "unknown_record_type",
+  "orphan_tool_result",
+  "duplicate_tool_use_id",
+  "duplicate_tool_result",
+] as const;
+export type IngestIssueCode = (typeof INGEST_ISSUE_CODES)[number];
+
 export interface Issue {
-  lineNo: number;
+  code: IngestIssueCode;
+  /** 1-based source line, when the issue is tied to a specific line. */
+  lineNo: number | null;
   error: string;
-  rawLine: string;
+  /** Verbatim source line for unparsed_line only. May contain transcript
+   * content: display-local, never logged (docs/logging.md). */
+  rawLine: string | null;
 }
 
 export interface ParsedSession {

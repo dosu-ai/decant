@@ -233,8 +233,12 @@ describe("parseCodexSession", () => {
       '{"type":"unknown-top","timestamp":"2026-05-01T10:00:02Z"}',
     ].join("\n");
     const parsed = parseCodexSession("fallback", `${content}\n`, new Map());
-    expect(parsed.issues).toHaveLength(1);
+    // the malformed line and the trailing unknown-top record each land an issue
+    expect(parsed.issues).toHaveLength(2);
+    expect(parsed.issues[0]?.code).toBe("unparsed_line");
     expect(parsed.issues[0]?.lineNo).toBe(2);
+    expect(parsed.issues[1]?.code).toBe("unknown_record_type");
+    expect(parsed.issues[1]?.error).toContain('"unknown-top"');
     const session = parsed.session;
     expect(session.sourceSessionId).toBe("sx");
     expect(session.cwd).toBe("/tmp/proj");
@@ -242,6 +246,26 @@ describe("parseCodexSession", () => {
     expect(session.cliVersion).toBe("1.2");
     expect(session.startedAt).toBe("2026-05-01T10:00:00Z");
     expect(session.endedAt).toBe("2026-05-01T10:00:02Z");
+  });
+
+  test("flags unknown top-level record types, ignoring event_msg subtypes", () => {
+    const lines = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-07-01T00:00:00Z",
+        payload: { id: "c1" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-07-01T00:00:01Z",
+        payload: { type: "agent_message" },
+      }),
+      JSON.stringify({ type: "wormhole", timestamp: "2026-07-01T00:00:02Z", payload: {} }),
+    ].join("\n");
+    const parsed = parseCodexSession("c1", lines, new Map());
+    const unknown = parsed.issues.filter((issue) => issue.code === "unknown_record_type");
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]?.error).toContain('"wormhole"');
   });
 
   test("response item variants cover every block kind", () => {

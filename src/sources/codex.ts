@@ -40,6 +40,7 @@ export function parseCodexSession(
   let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
+  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
   for (const [index, line] of content.split(/\n/).entries()) {
     if (line.trim() === "") {
@@ -51,6 +52,7 @@ export function parseCodexSession(
       value = JSON.parse(line) as Json;
     } catch (error) {
       issues.push({
+        code: "unparsed_line",
         lineNo: index + 1,
         error: error instanceof Error ? error.message : String(error),
         rawLine: line,
@@ -124,7 +126,23 @@ export function parseCodexSession(
         messages.push(message.message);
         seq += 1;
       }
+    } else if (typ !== "event_msg") {
+      // event_msg subtypes other than token_count are known stream noise
+      // (response_item carries the durable copy). Anything else is a
+      // top-level record type this parser has never seen — the drift sensor.
+      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
+      seen.count += 1;
+      unknownTypes.set(typ, seen);
     }
+  }
+
+  for (const [typ, seen] of unknownTypes) {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo: seen.firstLine,
+      error: `unknown record type "${typ}" on ${seen.count} line(s); ignored`,
+      rawLine: null,
+    });
   }
 
   title = titles.get(sourceSessionId) ?? title;

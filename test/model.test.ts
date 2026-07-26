@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   BLOCK_TYPES,
   emptyUsage,
+  INGEST_ISSUE_CODES,
   normalizeReasoningEffort,
   REASONING_SOURCES,
   ROLES,
@@ -29,6 +30,13 @@ describe("model wire strings", () => {
     ]);
     expect(TOOL_KINDS).toEqual(["builtin", "mcp", "custom", "web_search", "tool_search"]);
     expect(REASONING_SOURCES).toEqual(["reported", "inferred", "none"]);
+    expect(INGEST_ISSUE_CODES).toEqual([
+      "unparsed_line",
+      "unknown_record_type",
+      "orphan_tool_result",
+      "duplicate_tool_use_id",
+      "duplicate_tool_result",
+    ]);
   });
 
   test("emptyUsage is all zeros (TokenUsage::default)", () => {

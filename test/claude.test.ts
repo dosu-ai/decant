@@ -178,6 +178,32 @@ describe("parseClaudeSession", () => {
     expect(parsed.session.title).toBe("hello");
   });
 
+  test("flags unparsed lines with the unparsed_line code", () => {
+    const parsed = parseClaudeSession("s1", "not json\n");
+    expect(parsed.issues).toHaveLength(1);
+    expect(parsed.issues[0]?.code).toBe("unparsed_line");
+    expect(parsed.issues[0]?.lineNo).toBe(1);
+  });
+
+  test("flags unknown record types once per type with a count", () => {
+    const lines = [
+      JSON.stringify({ type: "wormhole", timestamp: "2026-07-01T00:00:00Z" }),
+      JSON.stringify({ type: "wormhole", timestamp: "2026-07-01T00:00:01Z" }),
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      }),
+    ].join("\n");
+    const parsed = parseClaudeSession("s1", lines);
+    const unknown = parsed.issues.filter((issue) => issue.code === "unknown_record_type");
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]?.error).toContain('"wormhole"');
+    expect(unknown[0]?.error).toContain("2 line");
+    expect(unknown[0]?.rawLine).toBeNull();
+    // the records themselves still land as role-"other" messages — behavior unchanged
+    expect(parsed.session.messages.filter((m) => m.role === "other")).toHaveLength(2);
+  });
+
   test("meta summary sets title and system and unknown types become messages", () => {
     const content = [
       '{"type":"summary","summary":"Synthesized Title"}',

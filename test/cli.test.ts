@@ -213,7 +213,7 @@ describe("runCli", () => {
     );
   });
 
-  test("export --format trajectory writes a validating JSON array", async () => {
+  test("export --as trajectory writes a validating JSON array", async () => {
     const { dbPath } = await syncedCase();
     const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
     const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
@@ -222,21 +222,33 @@ describe("runCli", () => {
       throw new Error('expected the claude sample fixture session (source_session_id "sample")');
     }
 
+    // Globals after the subcommand: a regression guard for the exact shape
+    // AGENTS.md's "global flags on every command" contract, the justfile
+    // wrappers (`just ls {{ARGS}}`), and the bug-report template's repro
+    // commands all rely on — decant sync/ls --db ... --no-sync, not
+    // --db/--no-sync first.
     const result = await runCli([
+      "export",
+      String(sessionId),
+      "--as",
+      "trajectory",
       "--db",
       dbPath,
       "--no-sync",
-      "export",
-      String(sessionId),
-      "--format",
-      "trajectory",
     ]);
     expect(result).toMatchObject({ code: 0, stderr: "" });
     const records = JSON.parse(result.stdout) as { role: string; source?: string }[];
     expect(records[0]).toMatchObject({ role: "meta", source: "claude-code" });
   });
 
-  test("export --all --format trajectory names files <id>.trajectory.json", async () => {
+  test("global flags after the subcommand still parse (ls --db X --no-sync)", async () => {
+    const { dbPath } = await syncedCase();
+    const result = await runCli(["ls", "--json", "--db", dbPath, "--no-sync"]);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  test("export --all --as trajectory names files <id>.trajectory.json", async () => {
     const { dbPath } = await syncedCase();
     const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
     const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
@@ -252,7 +264,7 @@ describe("runCli", () => {
       "--no-sync",
       "export",
       "--all",
-      "--format",
+      "--as",
       "trajectory",
       "--out",
       outDir,
@@ -267,7 +279,7 @@ describe("runCli", () => {
     expect(result.stderr).not.toContain("skipped");
   });
 
-  test("export --format trajectory reports exit 1 for non-exportable or missing sessions, and tallies skips under --all", async () => {
+  test("export --as trajectory reports exit 1 for non-exportable or missing sessions, and tallies skips under --all", async () => {
     const dir = mkdtempSync(join(workDir, "traj-exit1-"));
     const dbPath = join(dir, "archive.db");
     const db = openDb(dbPath);
@@ -319,7 +331,7 @@ describe("runCli", () => {
       ...base,
       "export",
       String(assistantOnlyId),
-      "--format",
+      "--as",
       "trajectory",
     ]);
     expect(missingAssistant).toMatchObject({
@@ -327,31 +339,17 @@ describe("runCli", () => {
       stderr: `error: session ${assistantOnlyId} has no user records; not exportable as a trajectory\n`,
     });
 
-    const missingUser = await runCli([
-      ...base,
-      "export",
-      String(userOnlyId),
-      "--format",
-      "trajectory",
-    ]);
+    const missingUser = await runCli([...base, "export", String(userOnlyId), "--as", "trajectory"]);
     expect(missingUser).toMatchObject({
       code: 1,
       stderr: `error: session ${userOnlyId} has no assistant records; not exportable as a trajectory\n`,
     });
 
-    const notFound = await runCli([...base, "export", "999999", "--format", "trajectory"]);
+    const notFound = await runCli([...base, "export", "999999", "--as", "trajectory"]);
     expect(notFound).toMatchObject({ code: 1, stderr: "error: no session with id 999999\n" });
 
     const outDir = join(dir, "out");
-    const all = await runCli([
-      ...base,
-      "export",
-      "--all",
-      "--format",
-      "trajectory",
-      "--out",
-      outDir,
-    ]);
+    const all = await runCli([...base, "export", "--all", "--as", "trajectory", "--out", outDir]);
     expect(all.code).toBe(0);
     expect(existsSync(join(outDir, `${goodId}.trajectory.json`))).toBe(true);
     expect(existsSync(join(outDir, `${assistantOnlyId}.trajectory.json`))).toBe(false);
@@ -359,7 +357,7 @@ describe("runCli", () => {
     expect(all.stderr).toContain("(2 skipped)");
   });
 
-  test("export --all --format trajectory only visits subagents with --include-subagents, and --quiet suppresses the repairs line", async () => {
+  test("export --all --as trajectory only visits subagents with --include-subagents, and --quiet suppresses the repairs line", async () => {
     const dir = mkdtempSync(join(workDir, "traj-subagents-"));
     const dbPath = join(dir, "archive.db");
     const db = openDb(dbPath);
@@ -388,7 +386,7 @@ describe("runCli", () => {
       ...base,
       "export",
       "--all",
-      "--format",
+      "--as",
       "trajectory",
       "--out",
       withoutDir,
@@ -407,7 +405,7 @@ describe("runCli", () => {
       "export",
       "--all",
       "--include-subagents",
-      "--format",
+      "--as",
       "trajectory",
       "--out",
       withDir,
@@ -427,7 +425,7 @@ describe("runCli", () => {
       "export",
       "--all",
       "--include-subagents",
-      "--format",
+      "--as",
       "trajectory",
       "--out",
       quietDir,
@@ -439,7 +437,7 @@ describe("runCli", () => {
     expect(quiet.stderr).toBe(`exported 2 sessions to ${quietDir}\n`);
   });
 
-  test("export rejects unknown --format values and follows --json for the default", async () => {
+  test("export rejects unknown --as values and follows --json for the default", async () => {
     const { dbPath } = await syncedCase();
     const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
     const sessions = JSON.parse(list.stdout) as { id: number }[];
@@ -454,7 +452,7 @@ describe("runCli", () => {
       "--no-sync",
       "export",
       String(sessionId),
-      "--format",
+      "--as",
       "bogus",
     ]);
     expect(badFormat.code).toBe(2);

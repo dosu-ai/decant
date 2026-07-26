@@ -163,13 +163,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
     .option("-q, --quiet", "suppress non-essential output")
     .option("--no-color", "disable ANSI color")
-    .option("--no-sync", "skip sync-on-read, and serve without the source watcher")
-    // export's own --format (md | json | trajectory) reuses this flag name for a
-    // command-specific purpose. Without positional options, Commander resolves
-    // --format anywhere in argv against this global first, regardless of where
-    // it appears — this scopes it to "before the subcommand name" so a
-    // subcommand's own same-named option governs anything typed after it.
-    .enablePositionalOptions();
+    .option("--no-sync", "skip sync-on-read, and serve without the source watcher");
 
   const globals = (): GlobalOptions => program.opts<GlobalOptions>();
   const resolve = (overrides: Partial<ConfigOverrides> = {}): Config =>
@@ -964,7 +958,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .argument("[id]", "session id", optionalInteger)
     .option("--all", "export every session")
     .option("--include-subagents", "with --all, also export subagent sessions")
-    .option("--format <format>", "md | json | trajectory (default: md, or json with --json)")
+    // Named --as, not --format, to match `distill script --as` rather than
+    // collide with the global --format table|json|md: Commander resolves a
+    // global option's flag anywhere in argv (before or after a subcommand),
+    // so a same-named local option on export would be shadowed by the root's.
+    .option("--as <format>", "md | json | trajectory (default: md, or json with --json)")
     .option("--out <dir>", "output directory")
     .action(
       (
@@ -972,12 +970,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         commandOptions: {
           all?: boolean;
           includeSubagents?: boolean;
-          format?: string;
+          as?: string;
           out?: string;
         },
       ) =>
         run(() => {
-          const format = commandOptions.format ?? (isJson(globals()) ? "json" : "md");
+          const format = commandOptions.as ?? (isJson(globals()) ? "json" : "md");
           if (format !== "md" && format !== "json" && format !== "trajectory") {
             io.writeErr(`error: unknown export format: ${format}\n`);
             return 2;

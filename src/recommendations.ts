@@ -801,7 +801,7 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
       "Format, lint, and tests run earlier with fewer end-of-task surprises.",
     ],
     "catalog:trajectory-export": [
-      "Connect and automate",
+      "Cold",
       "Export integration",
       "When building memory or evaluation pipelines with session data.",
       "Sessions flow into external memory and evaluation tools without manual export overhead.",

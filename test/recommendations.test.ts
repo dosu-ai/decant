@@ -173,6 +173,7 @@ describe("recommendations", () => {
       ["catalog:subagents", "catalog", "Governance", "Subagent workflow"],
       ["catalog:mcp", "catalog", "Cold", "MCP integration"],
       ["catalog:hooks", "catalog", "Governance", "Hook or preflight gate"],
+      ["catalog:trajectory-export", "catalog", "Cold", "Export integration"],
       ["signal:unknown", "signal", "Cold", "Runbook"],
     ];
     for (const [key, kind] of cases) {

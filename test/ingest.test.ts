@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { openDb } from "../src/db.ts";
 import {
   discover,
+  discoverSourcePaths,
   type IngestConfig,
   resolveSubagentParents,
   sync,
@@ -433,6 +434,35 @@ describe("sync", () => {
       { tool: "codex", name: "rollout-old.jsonl", archived: true },
       { tool: "codex", name: "rollout-one.jsonl", archived: false },
     ]);
+  });
+
+  test("discover skips workflow journal files", () => {
+    const dir = freshCase();
+    const claudeDir = join(dir, "claude");
+    const wfDir = join(
+      claudeDir,
+      "proj-a",
+      "1111aaaa-1111-aaaa-1111-aaaa1111aaaa",
+      "subagents",
+      "workflows",
+      "wf_test1",
+    );
+    const journalLine = '{"type":"agent_result","key":"a1","agentId":"agent-abc123"}\n';
+    write(join(claudeDir, "proj-a", "1111aaaa-1111-aaaa-1111-aaaa1111aaaa.jsonl"), "");
+    write(join(wfDir, "agent-abc123.jsonl"), "");
+    write(join(wfDir, "journal.jsonl"), journalLine);
+    const files = discover({ claudeDir, codexDir: join(dir, "codex") });
+    const names = files.map((file) => basename(file.path)).sort();
+    expect(names).toEqual(["1111aaaa-1111-aaaa-1111-aaaa1111aaaa.jsonl", "agent-abc123.jsonl"]);
+  });
+
+  test("discoverSourcePaths skips workflow journal files", () => {
+    const dir = freshCase();
+    const journal = join(dir, "journal.jsonl");
+    const journalLine = '{"type":"agent_result","key":"a1","agentId":"agent-abc123"}\n';
+    write(journal, journalLine);
+    expect(discoverSourcePaths([journal])).toEqual([]);
+    expect(discoverSourcePaths([dir])).toEqual([]);
   });
 
   test("is idempotent, records parse issues, and refreshes issues on reingest", () => {

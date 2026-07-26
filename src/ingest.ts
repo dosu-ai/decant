@@ -79,7 +79,7 @@ export function discover(config: IngestConfig): SourceFile[] {
   }
 
   const out: SourceFile[] = [];
-  collect(config.claudeDir, "claude_code", false, (name) => name.endsWith(".jsonl"), out);
+  collect(config.claudeDir, "claude_code", false, isClaudeSessionFile, out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
   return out;
@@ -861,7 +861,7 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
 
 function sourceFileForPath(path: string): SourceFile | null {
   const name = pathBasename(path);
-  if (!name.endsWith(".jsonl") || name === "session_index.jsonl") {
+  if (!name.endsWith(".jsonl") || name === "session_index.jsonl" || name === "journal.jsonl") {
     return null;
   }
   if (isCodexRollout(name)) {
@@ -881,6 +881,14 @@ function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
     unique.push(file);
   }
   return unique;
+}
+
+/** Claude Code also writes non-session JSONL into the projects tree; the only
+ * one today is the dynamic-workflow orchestration journal
+ * (subagents/workflows/<runId>/journal.jsonl). Session transcripts are
+ * <uuid>.jsonl mains and agent-*.jsonl subagents, which must keep flowing. */
+function isClaudeSessionFile(name: string): boolean {
+  return name.endsWith(".jsonl") && name !== "journal.jsonl";
 }
 
 function isCodexRollout(name: string): boolean {

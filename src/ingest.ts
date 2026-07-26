@@ -34,7 +34,7 @@ import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
 } from "./token-economics.ts";
-import { classifyTool, preview } from "./tools.ts";
+import { classifyTool, previewHeadTail } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
 
 export interface IngestConfig {
@@ -784,7 +784,7 @@ function writeSession(
       call.block.toolUseId,
       call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput),
       isError == null ? null : Number(isError),
-      output == null ? null : preview(output, 500),
+      output == null ? null : previewHeadTail(output, 500),
       output == null ? null : byteLength(output),
       call.block.ordinal,
       call.timestamp,

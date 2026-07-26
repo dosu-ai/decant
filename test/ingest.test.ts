@@ -380,6 +380,99 @@ describe("upsertSession", () => {
     });
     db.close();
   });
+
+  test("stores head-tail preview for long tool output", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+
+    // Create a synthetic session with a tool call that has >500 char output
+    const headText = "Starting output";
+    const middleText = "x".repeat(2000);
+    const tailText = "Error: something failed";
+    const longOutput = headText + middleText + tailText;
+
+    const content = [
+      JSON.stringify({
+        type: "user",
+        uuid: "u1",
+        parentUuid: null,
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:00.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "user",
+          content: "Test",
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:05.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "Bash",
+              input: { command: "test" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        parentUuid: "a1",
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:06.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              is_error: false,
+              content: longOutput,
+            },
+          ],
+        },
+      }),
+    ].join("\n");
+
+    const parsed = parseClaudeSession("preview-test", content);
+    const sessionId = upsertSession(db, parsed, "/x/preview-test.jsonl", 1, 2, "hash");
+
+    const toolCall = db
+      .query("SELECT output_preview FROM tool_call WHERE session_id = ?1")
+      .get(sessionId) as { output_preview: string };
+
+    expect(toolCall.output_preview).toContain("Starting output");
+    expect(toolCall.output_preview).toContain("Error: something failed");
+    expect(toolCall.output_preview).toContain("chars omitted");
+    expect(toolCall.output_preview.startsWith("Starting output")).toBe(true);
+    expect(toolCall.output_preview.includes("\n[… ")).toBe(true);
+
+    db.close();
+  });
 });
 
 describe("sync", () => {

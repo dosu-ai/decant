@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyTool, preview } from "../src/tools.ts";
+import { classifyTool, preview, previewHeadTail } from "../src/tools.ts";
 
 // Ports tools.rs tests verbatim.
 describe("classifyTool", () => {
@@ -43,5 +43,28 @@ describe("preview", () => {
     // and truncation at 2 must not split a surrogate pair.
     expect(preview("🎉🎉🎉", 3)).toBe("🎉🎉🎉");
     expect(preview("🎉🎉🎉", 2)).toBe("🎉🎉…");
+  });
+});
+
+describe("previewHeadTail", () => {
+  test("returns short strings unchanged", () => {
+    expect(previewHeadTail("all good", 500)).toBe("all good");
+  });
+
+  test("keeps head and tail with an elision marker", () => {
+    const s = `HEAD${"x".repeat(2000)}Error: assertion failed at foo.ts:42`;
+    const out = previewHeadTail(s, 100);
+    expect(out.startsWith("HEAD")).toBe(true);
+    expect(out.endsWith("Error: assertion failed at foo.ts:42".slice(-40))).toBe(true);
+    expect(out).toContain("chars omitted");
+  });
+
+  test("counts Unicode scalars without splitting surrogate pairs", () => {
+    const s = "🎉".repeat(300);
+    const out = previewHeadTail(s, 100);
+    expect(out).not.toContain("�");
+    for (const part of out.split(/\n\[… \d+ chars omitted …\]\n/)) {
+      expect([...part].every((c) => c === "🎉")).toBe(true);
+    }
   });
 });

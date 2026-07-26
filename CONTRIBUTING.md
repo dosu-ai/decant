@@ -59,7 +59,9 @@ Adding model pricing? Update `src/cost.ts`, include string normalization, and ad
 tests.
 
 Adding a source tool? Add `src/sources/<tool>.ts`, synthetic fixtures, parser
-tests, ingest/query coverage, and golden updates. Adding support for a new agent CLI? Follow the agent-executable prompt in docs/prompts/add-source.md.
+tests, ingest/query coverage, and golden updates.
+
+Adding support for a new agent CLI? Follow the agent-executable prompt in docs/prompts/add-source.md.
 
 ## How we work
 

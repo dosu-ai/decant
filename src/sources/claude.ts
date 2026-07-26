@@ -1,10 +1,12 @@
 import { isPriceable } from "../cost.ts";
+import { linkageIssues } from "../diagnostics.ts";
 import { canonicalJson } from "../json.ts";
 import {
   emptyUsage,
   type Json,
   type NormalizedBlock,
   type NormalizedMessage,
+  type NormalizedSession,
   type ParsedSession,
   type Role,
   reasoningEffortLevels,
@@ -204,35 +206,35 @@ export function parseClaudeSession(
   };
   const effortLevels = reasoningEffortLevels(reasoningEfforts);
 
-  return {
-    session: {
-      tool: "claude_code",
-      sourceSessionId,
-      projectPath: cwd,
-      title,
-      cwd,
-      gitBranch,
-      model,
-      reasoningEffort: summarizeReasoningEfforts(effortLevels),
-      reasoningEffortLevels: effortLevels,
-      cliVersion,
-      startedAt,
-      endedAt,
-      isArchived: false,
-      isSubagent,
-      rootSourceSessionId,
-      spawnToolUseId,
-      agentId,
-      agentType,
-      spawnDepth,
-      rawMeta,
-      totals,
-      estReasoningTokens,
-      reasoningSource: anyThinking ? "inferred" : "none",
-      messages,
-    },
-    issues,
+  const normalized: NormalizedSession = {
+    tool: "claude_code",
+    sourceSessionId,
+    projectPath: cwd,
+    title,
+    cwd,
+    gitBranch,
+    model,
+    reasoningEffort: summarizeReasoningEfforts(effortLevels),
+    reasoningEffortLevels: effortLevels,
+    cliVersion,
+    startedAt,
+    endedAt,
+    isArchived: false,
+    isSubagent,
+    rootSourceSessionId,
+    spawnToolUseId,
+    agentId,
+    agentType,
+    spawnDepth,
+    rawMeta,
+    totals,
+    estReasoningTokens,
+    reasoningSource: anyThinking ? "inferred" : "none",
+    messages,
   };
+  issues.push(...linkageIssues(normalized));
+
+  return { session: normalized, issues };
 }
 
 function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {

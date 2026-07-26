@@ -119,6 +119,7 @@ decant distill replay 1
 decant distill skill --kind agents
 decant recommendations ls
 decant export 1 > session.md
+decant export 1 --format trajectory > session.trajectory.json
 decant completion zsh
 ```
 

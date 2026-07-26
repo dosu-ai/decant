@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
 import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { upsertSession } from "../src/ingest.ts";
+import { parseClaudeSession } from "../src/sources/claude.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -208,6 +211,266 @@ describe("runCli", () => {
     expect((JSON.parse(implemented.stdout) as { key: string }[]).map((rec) => rec.key)).toContain(
       "catalog:agents-md",
     );
+  });
+
+  test("export --format trajectory writes a validating JSON array", async () => {
+    const { dbPath } = await syncedCase();
+    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+    const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
+    const sessionId = sessions.find((session) => session.source_session_id === "sample")?.id;
+    if (sessionId == null) {
+      throw new Error('expected the claude sample fixture session (source_session_id "sample")');
+    }
+
+    const result = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "export",
+      String(sessionId),
+      "--format",
+      "trajectory",
+    ]);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const records = JSON.parse(result.stdout) as { role: string; source?: string }[];
+    expect(records[0]).toMatchObject({ role: "meta", source: "claude-code" });
+  });
+
+  test("export --all --format trajectory names files <id>.trajectory.json", async () => {
+    const { dbPath } = await syncedCase();
+    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+    const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
+    const sessionId = sessions.find((session) => session.source_session_id === "sample")?.id;
+    if (sessionId == null) {
+      throw new Error('expected the claude sample fixture session (source_session_id "sample")');
+    }
+
+    const outDir = join(workDir, `traj-out-${caseCounter}`);
+    const result = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "export",
+      "--all",
+      "--format",
+      "trajectory",
+      "--out",
+      outDir,
+    ]);
+    expect(result.code).toBe(0);
+    expect(existsSync(join(outDir, `${sessionId}.trajectory.json`))).toBe(true);
+    // All 7 fixture sessions carry both roles, so none should be skipped here;
+    // the skip-tally path itself is covered separately below. Several fixtures
+    // do legitimately trigger repairs (wrapped args, dropped noise), so this
+    // only pins the final tally line, not the whole of stderr.
+    expect(result.stderr).toContain(`exported 7 sessions to ${outDir}\n`);
+    expect(result.stderr).not.toContain("skipped");
+  });
+
+  test("export --format trajectory reports exit 1 for non-exportable or missing sessions, and tallies skips under --all", async () => {
+    const dir = mkdtempSync(join(workDir, "traj-exit1-"));
+    const dbPath = join(dir, "archive.db");
+    const db = openDb(dbPath);
+    const goodId = upsertSession(
+      db,
+      parseClaudeSession(
+        "traj-good",
+        readFileSync(join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"), "utf8"),
+      ),
+      "/good.jsonl",
+      1,
+      2,
+      "hash-good",
+    );
+    const assistantOnlyId = upsertSession(
+      db,
+      parseClaudeSession(
+        "traj-assistant-only",
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-07-01T00:00:00.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "hello" }] },
+        }),
+      ),
+      "/assistant-only.jsonl",
+      1,
+      2,
+      "hash-assistant-only",
+    );
+    const userOnlyId = upsertSession(
+      db,
+      parseClaudeSession(
+        "traj-user-only",
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-07-01T00:00:00.000Z",
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        }),
+      ),
+      "/user-only.jsonl",
+      1,
+      2,
+      "hash-user-only",
+    );
+    db.close();
+
+    const base = ["--db", dbPath, "--no-sync"];
+    const missingAssistant = await runCli([
+      ...base,
+      "export",
+      String(assistantOnlyId),
+      "--format",
+      "trajectory",
+    ]);
+    expect(missingAssistant).toMatchObject({
+      code: 1,
+      stderr: `error: session ${assistantOnlyId} has no user records; not exportable as a trajectory\n`,
+    });
+
+    const missingUser = await runCli([
+      ...base,
+      "export",
+      String(userOnlyId),
+      "--format",
+      "trajectory",
+    ]);
+    expect(missingUser).toMatchObject({
+      code: 1,
+      stderr: `error: session ${userOnlyId} has no assistant records; not exportable as a trajectory\n`,
+    });
+
+    const notFound = await runCli([...base, "export", "999999", "--format", "trajectory"]);
+    expect(notFound).toMatchObject({ code: 1, stderr: "error: no session with id 999999\n" });
+
+    const outDir = join(dir, "out");
+    const all = await runCli([
+      ...base,
+      "export",
+      "--all",
+      "--format",
+      "trajectory",
+      "--out",
+      outDir,
+    ]);
+    expect(all.code).toBe(0);
+    expect(existsSync(join(outDir, `${goodId}.trajectory.json`))).toBe(true);
+    expect(existsSync(join(outDir, `${assistantOnlyId}.trajectory.json`))).toBe(false);
+    expect(existsSync(join(outDir, `${userOnlyId}.trajectory.json`))).toBe(false);
+    expect(all.stderr).toContain("(2 skipped)");
+  });
+
+  test("export --all --format trajectory only visits subagents with --include-subagents, and --quiet suppresses the repairs line", async () => {
+    const dir = mkdtempSync(join(workDir, "traj-subagents-"));
+    const dbPath = join(dir, "archive.db");
+    const db = openDb(dbPath);
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, parent_session_id)
+      VALUES
+        (1, 'claude_code', 'root', '2026-07-01T00:00:00Z', 0, NULL),
+        (2, 'claude_code', 'kid', '2026-07-01T00:01:00Z', 1, 1);
+      INSERT INTO message(id, session_id, seq, role, raw) VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 1, 1, 'assistant', '{}'),
+        (3, 2, 0, 'user', '{}'),
+        (4, 2, 1, 'assistant', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text) VALUES
+        (1, 1, 0, 'text', 'Root prompt'),
+        (2, 1, 0, 'text', 'Root reply'),
+        (3, 2, 0, 'text', 'Kid prompt'),
+        (4, 2, 0, 'text', 'Kid reply');
+    `);
+    db.close();
+
+    const base = ["--db", dbPath, "--no-sync"];
+
+    const withoutDir = join(dir, "without");
+    const without = await runCli([
+      ...base,
+      "export",
+      "--all",
+      "--format",
+      "trajectory",
+      "--out",
+      withoutDir,
+    ]);
+    expect(without.code).toBe(0);
+    expect(existsSync(join(withoutDir, "1.trajectory.json"))).toBe(true);
+    expect(existsSync(join(withoutDir, "2.trajectory.json"))).toBe(false);
+    // Every block above is missing a timestamp, so each visited session fills
+    // two of them — a deterministic, non-empty repairs line to assert against.
+    expect(without.stderr).toContain("session 1: timestamps_filled=2");
+    expect(without.stderr).not.toContain("session 2:");
+
+    const withDir = join(dir, "with");
+    const withSubagents = await runCli([
+      ...base,
+      "export",
+      "--all",
+      "--include-subagents",
+      "--format",
+      "trajectory",
+      "--out",
+      withDir,
+    ]);
+    expect(withSubagents.code).toBe(0);
+    expect(existsSync(join(withDir, "1.trajectory.json"))).toBe(true);
+    expect(existsSync(join(withDir, "2.trajectory.json"))).toBe(true);
+    expect(withSubagents.stderr).toContain("session 1: timestamps_filled=2");
+    expect(withSubagents.stderr).toContain("session 2: timestamps_filled=2");
+
+    const quietDir = join(dir, "quiet");
+    const quiet = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "--quiet",
+      "export",
+      "--all",
+      "--include-subagents",
+      "--format",
+      "trajectory",
+      "--out",
+      quietDir,
+    ]);
+    expect(quiet.code).toBe(0);
+    expect(existsSync(join(quietDir, "1.trajectory.json"))).toBe(true);
+    expect(existsSync(join(quietDir, "2.trajectory.json"))).toBe(true);
+    expect(quiet.stderr).not.toContain("timestamps_filled");
+    expect(quiet.stderr).toBe(`exported 2 sessions to ${quietDir}\n`);
+  });
+
+  test("export rejects unknown --format values and follows --json for the default", async () => {
+    const { dbPath } = await syncedCase();
+    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+    const sessions = JSON.parse(list.stdout) as { id: number }[];
+    const sessionId = sessions[0]?.id;
+    if (sessionId == null) {
+      throw new Error("expected at least one synced session");
+    }
+
+    const badFormat = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "export",
+      String(sessionId),
+      "--format",
+      "bogus",
+    ]);
+    expect(badFormat.code).toBe(2);
+    expect(badFormat.stderr).toContain("error: unknown export format: bogus");
+
+    const jsonDefault = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "export",
+      String(sessionId),
+    ]);
+    expect(jsonDefault.code).toBe(0);
+    expect(() => JSON.parse(jsonDefault.stdout)).not.toThrow();
+    expect(jsonDefault.stdout.startsWith("#")).toBe(false);
   });
 
   test("sync exits 3 only for data loss and reports every issue code", async () => {

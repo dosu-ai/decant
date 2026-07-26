@@ -1238,6 +1238,19 @@ select {
   flex: 0 0 auto;
 }
 
+.badge-button {
+  display: inline-flex;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.badge-button:hover .badge {
+  opacity: 0.85;
+}
+
 .brand-mark {
   fill: currentColor;
 }

@@ -62,6 +62,7 @@ import { contextWindowDisplayMode } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
+import { formatIssueBadge } from "./ingest-issues.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
   pathOnly,
@@ -127,6 +128,8 @@ type SessionSummary = {
   compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
+  /** Ingest diagnostics recorded against this session's source file. */
+  ingest_issue_count: number;
   subagents?: SessionSummary[];
 };
 
@@ -4272,6 +4275,9 @@ function SessionDetailView({ id }: { id: number }) {
   // retry in opposite directions, so one shared message would report a failed
   // backward load at the foot of the transcript under the wrong wording.
   const [loadEarlierError, setLoadEarlierError] = useState<string | null>(null);
+  const [showIssues, setShowIssues] = useState(false);
+  const [issues, setIssues] = useState<SessionIngestIssue[] | null>(null);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
   const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
   const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
   const detailRef = useRef<SessionDetailData | null>(null);
@@ -4296,6 +4302,9 @@ function SessionDetailView({ id }: { id: number }) {
     setLoadingMore(false);
     setLoadMoreError(null);
     setLoadEarlierError(null);
+    setShowIssues(false);
+    setIssues(null);
+    setIssuesError(null);
     setJumpingToSeq(null);
     activeMessageSeqRef.current = null;
     handledMessageHashRef.current = null;
@@ -4351,6 +4360,32 @@ function SessionDetailView({ id }: { id: number }) {
       cancelled = true;
     };
   }, [id]);
+
+  // Ingest issues are fetched lazily, on first expand, rather than eagerly
+  // alongside outline/economics/context-window above: most sessions have
+  // none, and the raw_line the row can join against is display-local by
+  // design (never logged), so there is no reason to pull it over the wire
+  // before the user asks to see it.
+  useEffect(() => {
+    if (!showIssues || issues != null || issuesError != null) {
+      return;
+    }
+    let cancelled = false;
+    void getJson<SessionIngestIssue[]>(`/api/sessions/${id}/issues`)
+      .then((nextIssues) => {
+        if (!cancelled) {
+          setIssues(nextIssues);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setIssuesError(errorMessage(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, showIssues, issues, issuesError]);
 
   const loadMoreMessages = useCallback((): Promise<boolean> => {
     if (loadMorePromiseRef.current != null) {
@@ -4745,6 +4780,17 @@ function SessionDetailView({ id }: { id: number }) {
               labeled
               levels={detail.summary.reasoning_effort_levels}
             />
+            {detail.summary.ingest_issue_count > 0 ? (
+              <button
+                aria-expanded={showIssues}
+                aria-label={`${showIssues ? "Hide" : "Show"} ingest issues`}
+                className="badge-button"
+                onClick={() => setShowIssues((value) => !value)}
+                type="button"
+              >
+                <Badge tone="warning">{formatIssueBadge(detail.summary.ingest_issue_count)}</Badge>
+              </button>
+            ) : null}
             {detail.summary.project_path != null ? (
               <span className="project-chip" title={detail.summary.project_path}>
                 <Icon name="folder" />
@@ -4771,6 +4817,8 @@ function SessionDetailView({ id }: { id: number }) {
           </div>
         </div>
       </header>
+
+      {showIssues ? <IngestIssuesPanel error={issuesError} issues={issues} /> : null}
 
       <a className="back-link" href="/sessions" onClick={(event) => navigate(event, "/sessions")}>
         <Icon name="arrowLeft" />
@@ -4921,6 +4969,54 @@ function SessionDetailView({ id }: { id: number }) {
   );
 }
 
+function IngestIssuesPanel({
+  error,
+  issues,
+}: {
+  error: string | null;
+  issues: SessionIngestIssue[] | null;
+}) {
+  return (
+    <section className="panel ingest-issues-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Ingest issues</h2>
+          <p>Diagnostics recorded when this session's source file was last ingested.</p>
+        </div>
+      </div>
+      <div className="panel-body">
+        {error != null ? (
+          <div className="notice inline-notice">Unable to load ingest issues: {error}</div>
+        ) : issues == null ? (
+          <p className="faint">Loading issues…</p>
+        ) : issues.length === 0 ? (
+          <p className="faint">No issues recorded for this session.</p>
+        ) : (
+          <div className="signal-list">
+            {issues.map((issue) => (
+              // No stable id in the wire shape; composite of the fields shown
+              // is stable enough since this list is fetched once and never
+              // reorders.
+              <div className="signal-row" key={`${issue.code}-${issue.line_no}-${issue.error}`}>
+                <span className="signal-rail tone-warning" />
+                <div>
+                  <div>
+                    <code className="mono">{issue.code}</code>
+                    {issue.line_no != null ? (
+                      <span className="faint"> · line {issue.line_no}</span>
+                    ) : null}
+                  </div>
+                  <div className="muted">{issue.error}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 type SessionDetailData = {
   summary: SessionSummary;
   messages: {
@@ -4947,6 +5043,14 @@ type SessionDetailData = {
 type SessionOutlineItemData = {
   seq: number;
   text: string;
+};
+
+/** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
+ * this panel never renders the raw transcript line (see docs/api/routes.md). */
+type SessionIngestIssue = {
+  code: string;
+  line_no: number | null;
+  error: string;
 };
 
 type ContextWindowPointData = {

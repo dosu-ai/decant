@@ -164,7 +164,7 @@ describe("openDb", () => {
     const db = new Database(path, { create: true, strict: true });
     db.exec(`
       CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL);
+      CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL, source_path TEXT);
       CREATE TABLE model_pricing(
         model TEXT PRIMARY KEY,
         input_per_mtok REAL,
@@ -173,6 +173,26 @@ describe("openDb", () => {
         cache_write_per_mtok REAL,
         source TEXT,
         updated_at TEXT
+      );
+      CREATE TABLE ingest_source (
+        path TEXT PRIMARY KEY,
+        tool TEXT,
+        size INTEGER,
+        mtime INTEGER,
+        hash TEXT,
+        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        line_count INTEGER,
+        status TEXT,
+        error TEXT,
+        last_ingested_at TEXT
+      );
+      CREATE TABLE ingest_issue (
+        id INTEGER PRIMARY KEY,
+        source_path TEXT,
+        line_no INTEGER,
+        error TEXT,
+        raw_line TEXT,
+        created_at TEXT
       );
     `);
     const insert = db.prepare(
@@ -217,7 +237,13 @@ describe("openDb", () => {
     const db = new Database(path, { create: true, strict: true });
     db.exec(`
       CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL);
+      CREATE TABLE session(
+        id INTEGER PRIMARY KEY,
+        tool TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        source_path TEXT,
+        parent_session_id INTEGER REFERENCES session(id)
+      );
       CREATE TABLE model_pricing(
         model TEXT PRIMARY KEY,
         input_per_mtok REAL,
@@ -226,6 +252,26 @@ describe("openDb", () => {
         cache_write_per_mtok REAL,
         source TEXT,
         updated_at TEXT
+      );
+      CREATE TABLE ingest_source (
+        path TEXT PRIMARY KEY,
+        tool TEXT,
+        size INTEGER,
+        mtime INTEGER,
+        hash TEXT,
+        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        line_count INTEGER,
+        status TEXT,
+        error TEXT,
+        last_ingested_at TEXT
+      );
+      CREATE TABLE ingest_issue (
+        id INTEGER PRIMARY KEY,
+        source_path TEXT,
+        line_no INTEGER,
+        error TEXT,
+        raw_line TEXT,
+        created_at TEXT
       );
     `);
     const insert = db.prepare(
@@ -257,6 +303,8 @@ describe("openDb", () => {
         id INTEGER PRIMARY KEY,
         tool TEXT NOT NULL,
         source_session_id TEXT NOT NULL,
+        source_path TEXT,
+        parent_session_id INTEGER REFERENCES session(id),
         context_window_tokens INTEGER,
         peak_context_tokens INTEGER,
         total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0
@@ -269,6 +317,26 @@ describe("openDb", () => {
         cache_write_per_mtok REAL,
         source TEXT,
         updated_at TEXT
+      );
+      CREATE TABLE ingest_source (
+        path TEXT PRIMARY KEY,
+        tool TEXT,
+        size INTEGER,
+        mtime INTEGER,
+        hash TEXT,
+        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        line_count INTEGER,
+        status TEXT,
+        error TEXT,
+        last_ingested_at TEXT
+      );
+      CREATE TABLE ingest_issue (
+        id INTEGER PRIMARY KEY,
+        source_path TEXT,
+        line_no INTEGER,
+        error TEXT,
+        raw_line TEXT,
+        created_at TEXT
       );
       INSERT INTO session(
         id, tool, source_session_id, context_window_tokens, peak_context_tokens
@@ -308,8 +376,30 @@ describe("openDb", () => {
         id INTEGER PRIMARY KEY,
         tool TEXT NOT NULL,
         source_session_id TEXT NOT NULL,
+        source_path TEXT,
+        parent_session_id INTEGER REFERENCES session(id),
         reasoning_effort TEXT,
         reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE ingest_source (
+        path TEXT PRIMARY KEY,
+        tool TEXT,
+        size INTEGER,
+        mtime INTEGER,
+        hash TEXT,
+        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        line_count INTEGER,
+        status TEXT,
+        error TEXT,
+        last_ingested_at TEXT
+      );
+      CREATE TABLE ingest_issue (
+        id INTEGER PRIMARY KEY,
+        source_path TEXT,
+        line_no INTEGER,
+        error TEXT,
+        raw_line TEXT,
+        created_at TEXT
       );
       INSERT INTO session(
         id, tool, source_session_id, reasoning_effort, reasoning_effort_checked
@@ -373,9 +463,31 @@ describe("openDb", () => {
         id INTEGER PRIMARY KEY,
         tool TEXT NOT NULL,
         source_session_id TEXT NOT NULL,
+        source_path TEXT,
+        parent_session_id INTEGER REFERENCES session(id),
         reasoning_effort TEXT,
         reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
         reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE ingest_source (
+        path TEXT PRIMARY KEY,
+        tool TEXT,
+        size INTEGER,
+        mtime INTEGER,
+        hash TEXT,
+        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        line_count INTEGER,
+        status TEXT,
+        error TEXT,
+        last_ingested_at TEXT
+      );
+      CREATE TABLE ingest_issue (
+        id INTEGER PRIMARY KEY,
+        source_path TEXT,
+        line_no INTEGER,
+        error TEXT,
+        raw_line TEXT,
+        created_at TEXT
       );
       INSERT INTO session(
         id, tool, source_session_id, reasoning_effort,
@@ -429,6 +541,43 @@ describe("openDb", () => {
       },
     ]);
     migrated.close();
+  });
+
+  test("v16 purges journal-sourced phantom sessions", () => {
+    const path = join(workDir, "v16-journal.db");
+    let db = openDb(path);
+    db.exec(`
+      INSERT INTO session (tool, source_session_id, source_path)
+      VALUES ('claude_code', 'wf-journal', '/home/u/.claude/projects/p/s/subagents/workflows/wf_1/journal.jsonl');
+      INSERT INTO session (tool, source_session_id, source_path, parent_session_id)
+      VALUES ('claude_code', 'child-of-phantom', '/home/u/.claude/projects/p/s/subagents/agent-aa.jsonl',
+              (SELECT id FROM session WHERE source_session_id = 'wf-journal'));
+      INSERT INTO session (tool, source_session_id, source_path)
+      VALUES ('claude_code', 'real-session', '/home/u/.claude/projects/p/s.jsonl');
+      INSERT INTO message (session_id, seq, raw)
+      VALUES ((SELECT id FROM session WHERE source_session_id = 'wf-journal'), 0, '{}');
+      INSERT INTO ingest_source (path, tool) VALUES ('/home/u/.claude/projects/p/s/subagents/workflows/wf_1/journal.jsonl', 'claude_code');
+      INSERT INTO ingest_issue (source_path, line_no, error, raw_line, created_at)
+      VALUES ('/home/u/.claude/projects/p/s/subagents/workflows/wf_1/journal.jsonl', 1, 'x', '{}', datetime('now'));
+      DELETE FROM schema_migrations WHERE version >= 16;
+    `);
+    db.close();
+
+    db = openDb(path); // reopen: migrate() runs v16 again over the seeded rows
+    const ids = (
+      db.query("SELECT source_session_id FROM session ORDER BY source_session_id").all() as {
+        source_session_id: string;
+      }[]
+    ).map((row) => row.source_session_id);
+    expect(ids).toEqual(["child-of-phantom", "real-session"]);
+    const orphanParent = db
+      .query("SELECT parent_session_id FROM session WHERE source_session_id = 'child-of-phantom'")
+      .get() as { parent_session_id: number | null };
+    expect(orphanParent.parent_session_id).toBeNull();
+    expect((db.query("SELECT COUNT(*) AS n FROM message").get() as { n: number }).n).toBe(0);
+    expect((db.query("SELECT COUNT(*) AS n FROM ingest_source").get() as { n: number }).n).toBe(0);
+    expect((db.query("SELECT COUNT(*) AS n FROM ingest_issue").get() as { n: number }).n).toBe(0);
+    db.close();
   });
 
   test("rejects a pre-baseline archive and points at rebuilding it", () => {

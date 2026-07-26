@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 15;
+export const LATEST_SCHEMA_VERSION = 16;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -307,6 +307,29 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (15, datetime('now'))",
+      ).run();
+    }
+    if (current < 16) {
+      // Claude Code's dynamic-workflow runs write orchestration journals
+      // (subagents/workflows/<runId>/journal.jsonl). Builds before v16 swept
+      // them up as sessions with role-"other" messages; discovery now skips
+      // them, and this drops the rows those builds created. Detach children
+      // first: session.parent_session_id has no ON DELETE clause.
+      db.exec(`
+        UPDATE session SET parent_session_id = NULL
+        WHERE parent_session_id IN (
+          SELECT id FROM session
+          WHERE source_path LIKE '%/journal.jsonl' OR source_path LIKE '%\\journal.jsonl'
+        );
+        DELETE FROM session
+        WHERE source_path LIKE '%/journal.jsonl' OR source_path LIKE '%\\journal.jsonl';
+        DELETE FROM ingest_issue
+        WHERE source_path LIKE '%/journal.jsonl' OR source_path LIKE '%\\journal.jsonl';
+        DELETE FROM ingest_source
+        WHERE path LIKE '%/journal.jsonl' OR path LIKE '%\\journal.jsonl';
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (16, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

@@ -1,7 +1,7 @@
--- decant:schema_version=16
--- Effective decant schema (migrations 1..15 applied), frozen as the current
--- baseline. v16 is data-only (no DDL changes). Do not edit without updating
--- schema tests.
+-- decant:schema_version=17
+-- Effective decant schema (migrations 1..17 applied), frozen as the current
+-- baseline. v16 is data-only (no DDL changes); v17 adds ingest_issue.code and
+-- idx_ingest_issue_source. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -150,6 +150,7 @@ CREATE TABLE ingest_issue (
   source_path TEXT,
   line_no INTEGER,
   error TEXT,
+  code TEXT NOT NULL DEFAULT 'unparsed_line',
   raw_line TEXT,
   created_at TEXT
 );
@@ -213,6 +214,7 @@ CREATE INDEX idx_toolcall_call_block ON tool_call(call_block_id);
 CREATE INDEX idx_toolcall_result_block ON tool_call(result_block_id);
 CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
+CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id'

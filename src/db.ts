@@ -14,7 +14,7 @@ import schemaSql from "./schema.sql" with { type: "text" };
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 16;
+export const LATEST_SCHEMA_VERSION = 17;
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -330,6 +330,17 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (16, datetime('now'))",
+      ).run();
+    }
+    if (current < 17) {
+      if (!hasColumn(db, "ingest_issue", "code")) {
+        // Every pre-v17 issue row was a parse failure by construction —
+        // parsers emitted issues only from JSON.parse catch blocks.
+        db.exec("ALTER TABLE ingest_issue ADD COLUMN code TEXT NOT NULL DEFAULT 'unparsed_line'");
+      }
+      db.exec("CREATE INDEX IF NOT EXISTS idx_ingest_issue_source ON ingest_issue(source_path)");
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (17, datetime('now'))",
       ).run();
     }
     db.exec("COMMIT;");

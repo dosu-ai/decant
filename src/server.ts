@@ -10,7 +10,14 @@ import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
-import { getSession, getSessionOutline, listProjects, listSessions, search } from "./query.ts";
+import {
+  getSession,
+  getSessionOutline,
+  listProjects,
+  listSessions,
+  search,
+  sessionIngestIssues,
+} from "./query.ts";
 import {
   list as listRecommendations,
   markImplemented,
@@ -225,6 +232,13 @@ export async function handleRequest(
         return outline == null ? json({ error: "session not found" }, 404) : json(outline);
       });
     }
+    const sessionIssuesMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/issues$/);
+    if (request.method === "GET" && sessionIssuesMatch != null) {
+      return withDb(config, context, (db) => {
+        const issues = sessionIngestIssues(db, Number(sessionIssuesMatch[1]));
+        return issues == null ? json({ error: "session not found" }, 404) : json(issues);
+      });
+    }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);
     if (request.method === "GET" && sessionMatch != null) {
       return withDb(config, context, (db) => {
@@ -437,7 +451,15 @@ function runSyncWorker(
       cancelPoll = setInterval(() => {
         if (cancel.aborted) {
           settle();
-          resolve({ scanned: 0, ingested: 0, skipped: 0, issues: 0, failed: 0, cancelled: true });
+          resolve({
+            scanned: 0,
+            ingested: 0,
+            skipped: 0,
+            issues: 0,
+            issuesByCode: {},
+            failed: 0,
+            cancelled: true,
+          });
         }
       }, 150);
     }

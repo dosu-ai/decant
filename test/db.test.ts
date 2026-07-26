@@ -24,7 +24,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v15 baseline. Shadow tables
+// Inventory of the frozen v17 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -42,7 +42,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 24;
+const BASELINE_INDEX_COUNT = 25;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -577,6 +577,31 @@ describe("openDb", () => {
     expect((db.query("SELECT COUNT(*) AS n FROM message").get() as { n: number }).n).toBe(0);
     expect((db.query("SELECT COUNT(*) AS n FROM ingest_source").get() as { n: number }).n).toBe(0);
     expect((db.query("SELECT COUNT(*) AS n FROM ingest_issue").get() as { n: number }).n).toBe(0);
+    db.close();
+  });
+
+  test("v17 adds ingest_issue.code defaulting existing rows to unparsed_line", () => {
+    const path = join(workDir, "v17-code.db");
+    let db = openDb(path);
+    db.exec(`
+      INSERT INTO ingest_issue (source_path, line_no, error, raw_line, created_at)
+      VALUES ('/a.jsonl', 1, 'bad', '{', datetime('now'));
+      DELETE FROM schema_migrations WHERE version >= 17;
+    `);
+    // Simulate a pre-v17 table: drop the column the baseline now carries, and
+    // the index the migration creates alongside it.
+    db.exec("ALTER TABLE ingest_issue DROP COLUMN code;");
+    db.exec("DROP INDEX idx_ingest_issue_source;");
+    db.close();
+
+    db = openDb(path); // reopen: migrate() runs v17 over the pre-v17 table
+    const row = db.query("SELECT code FROM ingest_issue").get() as { code: string };
+    expect(row.code).toBe("unparsed_line");
+    expect(
+      db
+        .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1")
+        .get("idx_ingest_issue_source"),
+    ).not.toBeNull();
     db.close();
   });
 

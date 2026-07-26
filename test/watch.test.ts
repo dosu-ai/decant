@@ -146,6 +146,7 @@ describe("watch mode", () => {
           ingested: 2,
           skipped: 1,
           issues: 0,
+          issuesByCode: {},
           failed: 0,
           cancelled: false,
         };

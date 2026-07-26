@@ -36,6 +36,8 @@ export interface SessionSummary {
   compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
+  /** Ingest diagnostics recorded against this session's source file. */
+  ingest_issue_count: number;
   subagents?: SessionSummary[];
 }
 
@@ -71,7 +73,9 @@ const SESSION_SUMMARY_SELECT = `
          s.agent_id, s.agent_type, s.spawn_depth,
          s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
          COALESCE(sa.subagent_count, 0) AS subagent_count,
-         COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd
+         COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd,
+         (SELECT COUNT(*) FROM ingest_issue ii WHERE ii.source_path = s.source_path)
+           AS ingest_issue_count
   FROM session s
   LEFT JOIN project p ON p.id = s.project_id
   LEFT JOIN (
@@ -253,7 +257,9 @@ export function getSession(
               s.agent_id, s.agent_type, s.spawn_depth,
               s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
               COALESCE(sa.subagent_count, 0) AS subagent_count,
-              COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd
+              COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd,
+              (SELECT COUNT(*) FROM ingest_issue ii WHERE ii.source_path = s.source_path)
+                AS ingest_issue_count
        FROM session s
        LEFT JOIN project p ON p.id = s.project_id
        LEFT JOIN (
@@ -457,6 +463,38 @@ export function getSessionOutline(db: Database, id: number): SessionOutlineItem[
   return rows
     .filter((row) => !parseMessageRawMeta(row.raw_meta).isCompactSummary)
     .map(({ seq, text }) => ({ seq, text }));
+}
+
+export interface SessionIngestIssue {
+  code: string;
+  line_no: number | null;
+  error: string;
+  raw_line: string | null;
+  created_at: string | null;
+}
+
+/**
+ * Issues recorded when this session's source file was last ingested. Null means
+ * no such session; an empty array means the file ingested cleanly.
+ *
+ * raw_line can contain transcript content: display-local, never logged.
+ */
+export function sessionIngestIssues(db: Database, sessionId: number): SessionIngestIssue[] | null {
+  const session = db.query("SELECT source_path FROM session WHERE id = ?1").get(sessionId) as {
+    source_path: string | null;
+  } | null;
+  if (session == null) {
+    return null;
+  }
+  if (session.source_path == null) {
+    return [];
+  }
+  return db
+    .query(
+      `SELECT code, line_no, error, raw_line, created_at
+       FROM ingest_issue WHERE source_path = ?1 ORDER BY id`,
+    )
+    .all(session.source_path) as SessionIngestIssue[];
 }
 
 function buildSubagentDetails(

@@ -212,6 +212,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ingested: report.ingested,
         skipped: report.skipped,
         issues: report.issues,
+        issues_by_code: report.issuesByCode,
         failed: report.failed,
       };
       if (isJson(globals())) {
@@ -222,7 +223,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             `${report.skipped} skipped, ${report.issues} issues, ${report.failed} failed\n`,
         );
       }
-      return report.issues > 0 ? 3 : 0;
+      // Exit 3 means decant dropped source content, which is what an unparsed
+      // line is. The other codes are sensors over content that did land, so
+      // they are reported without failing the command.
+      return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
     } finally {
       archive.db.close();
     }

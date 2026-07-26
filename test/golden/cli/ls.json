@@ -26,7 +26,8 @@
     "peak_context_tokens": 0,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "claude_code",
@@ -53,7 +54,8 @@
     "peak_context_tokens": 1400,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "claude_code",
@@ -80,7 +82,8 @@
     "peak_context_tokens": 120,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "codex",
@@ -109,7 +112,8 @@
     "peak_context_tokens": 0,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "claude_code",
@@ -136,7 +140,8 @@
     "peak_context_tokens": 1200,
     "compaction_count": 1,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "codex",
@@ -165,7 +170,8 @@
     "peak_context_tokens": 0,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   },
   {
     "tool": "claude_code",
@@ -192,6 +198,7 @@
     "peak_context_tokens": 7500,
     "compaction_count": 0,
     "subagent_count": 0,
-    "subagent_estimated_cost_usd": 0
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0
   }
 ]

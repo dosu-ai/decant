@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
@@ -200,6 +208,45 @@ describe("runCli", () => {
     expect((JSON.parse(implemented.stdout) as { key: string }[]).map((rec) => rec.key)).toContain(
       "catalog:agents-md",
     );
+  });
+
+  test("sync exits 3 only for data loss and reports every issue code", async () => {
+    const fixtureCase = freshCase();
+    const targetDir = join(workDir, `case-${caseCounter}-codes`);
+    mkdirSync(targetDir, { recursive: true });
+    const sample = readFileSync(
+      join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"),
+      "utf8",
+    ).trimEnd();
+
+    // Informational only: an unknown record type keeps the line as role "other",
+    // so nothing is lost and the exit code must stay 0.
+    const informational = join(targetDir, "informational.jsonl");
+    writeFileSync(
+      informational,
+      `${sample}\n{"type":"mystery","uuid":"m1","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
+    );
+    const soft = await runCli(
+      ["--db", fixtureCase.dbPath, "--json", "sync", "--path", informational],
+      { homeDir: targetDir },
+    );
+    expect(soft.code).toBe(0);
+    expect(JSON.parse(soft.stdout)).toMatchObject({
+      issues: 1,
+      issues_by_code: { unknown_record_type: 1 },
+    });
+
+    // A line that cannot be parsed is content decant dropped: exit 3.
+    const lossy = join(targetDir, "lossy.jsonl");
+    writeFileSync(lossy, `${sample}\n{not json\n`);
+    const hard = await runCli(["--db", fixtureCase.dbPath, "--json", "sync", "--path", lossy], {
+      homeDir: targetDir,
+    });
+    expect(hard.code).toBe(3);
+    expect(JSON.parse(hard.stdout)).toMatchObject({
+      issues: 1,
+      issues_by_code: { unparsed_line: 1 },
+    });
   });
 
   test("sync --path ingests only the requested source files", async () => {

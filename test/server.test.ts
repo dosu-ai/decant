@@ -409,6 +409,30 @@ describe("server routes", () => {
     expect((await route(config, "/api/sessions/999999/context-window")).status).toBe(404);
   });
 
+  test("serves per-session ingest issues", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    db.query(
+      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+       VALUES ('/x/claude-sample.jsonl', 99, 'not json', 'not json', 'unparsed_line', datetime('now'))`,
+    ).run();
+    db.close();
+
+    const sessions = await route(config, "/api/sessions?tool=claude_code&limit=10");
+    const id =
+      (sessions.body as { id: number; source_session_id: string }[]).find(
+        (session) => session.source_session_id === "sess-claude-sample",
+      )?.id ?? 0;
+
+    const issues = await route(config, `/api/sessions/${id}/issues`);
+    expect(issues.status).toBe(200);
+    expect(issues.body).toEqual([
+      expect.objectContaining({ code: "unparsed_line", line_no: 99, error: "not json" }),
+    ]);
+    expect((await route(config, "/api/sessions/999999/issues")).status).toBe(404);
+  });
+
   test("returns stats, files, tools, and recommendations", async () => {
     const config = freshConfig();
     seed(config);

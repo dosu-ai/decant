@@ -620,6 +620,45 @@ describe("sync", () => {
     db.close();
   });
 
+  test("tallies issues by code and stores the code on every issue row", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.claudeDir, "proj", "mixed.jsonl");
+    write(
+      sourcePath,
+      [
+        fixture("claude", "sample.jsonl").trimEnd(),
+        '{"type":"mystery","uuid":"m1","timestamp":"2026-05-01T10:01:00.000Z"}',
+        '{"type":"mystery","uuid":"m2","timestamp":"2026-05-01T10:02:00.000Z"}',
+        "{not json",
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 1, ingested: 1, issues: 2, failed: 0 });
+    // Two mystery lines collapse into one unknown_record_type issue.
+    expect(report.issuesByCode).toEqual({ unparsed_line: 1, unknown_record_type: 1 });
+    expect(
+      db
+        .query("SELECT code, COUNT(*) AS n FROM ingest_issue GROUP BY code ORDER BY code")
+        .all() as { code: string; n: number }[],
+    ).toEqual([
+      { code: "unknown_record_type", n: 1 },
+      { code: "unparsed_line", n: 1 },
+    ]);
+
+    // A clean source reports no codes at all.
+    write(sourcePath, fixture("claude", "sample.jsonl"));
+    const clean = sync(db, config);
+    expect(clean).toMatchObject({ ingested: 1, issues: 0 });
+    expect(clean.issuesByCode).toEqual({});
+    db.close();
+  });
+
   test("backfills effort for an unchanged source once after the schema upgrade", () => {
     const dir = freshCase();
     const config: IngestConfig = {

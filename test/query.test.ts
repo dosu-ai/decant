@@ -12,6 +12,7 @@ import {
   listProjects,
   listSessions,
   search,
+  sessionIngestIssues,
 } from "../src/query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { preview } from "../src/tools.ts";
@@ -415,6 +416,52 @@ describe("query reads", () => {
       cursor = cursor[0]?.subagents ?? [];
     }
     expect(level).toBe(5);
+    db.close();
+  });
+
+  test("sessionIngestIssues returns typed rows joined by source path", () => {
+    const db = freshDb();
+    const content = readFileSync(
+      join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"),
+      "utf8",
+    );
+    const withBadLine = `${content}not json\n`;
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-issues", withBadLine),
+      "/issues.jsonl",
+      1,
+      2,
+      "h",
+    );
+    // upsertSession does not write ingest_issue (writeIngestedFile does); simulate the sync path:
+    db.query(
+      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+       VALUES ('/issues.jsonl', 99, 'x', 'not json', 'unparsed_line', datetime('now'))`,
+    ).run();
+    const issues = sessionIngestIssues(db, sessionId);
+    expect(issues).toEqual([
+      {
+        code: "unparsed_line",
+        line_no: 99,
+        error: "x",
+        raw_line: "not json",
+        created_at: expect.any(String),
+      },
+    ]);
+    expect(sessionIngestIssues(db, 999_999)).toBeNull();
+    const detail = getSession(db, sessionId);
+    expect(detail?.summary.ingest_issue_count).toBe(1);
+    expect(listSessions(db)[0]?.ingest_issue_count).toBe(1);
+
+    // A session with no source file cannot match issue rows by path, and must
+    // not fall through to every row whose source_path is also NULL.
+    db.exec("INSERT INTO session(tool, source_session_id) VALUES ('claude_code', 'no-source')");
+    db.query("INSERT INTO ingest_issue (source_path, error, code) VALUES (NULL, 'y', 'x')").run();
+    const pathless = db
+      .query("SELECT id FROM session WHERE source_session_id = 'no-source'")
+      .get() as { id: number };
+    expect(sessionIngestIssues(db, pathless.id)).toEqual([]);
     db.close();
   });
 

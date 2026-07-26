@@ -55,6 +55,8 @@ guard reads or writes the whole archive.
 - `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/sessions/:id`
 - `GET /api/sessions/:id/outline`
+- `GET /api/sessions/:id/issues` — ingest diagnostics recorded for the session's
+  source file
 - `GET /api/sessions/:id/token-economics`
 - `GET /api/sessions/:id/context-window`
 - `GET /api/projects`

@@ -48,6 +48,9 @@ export interface SyncReport {
   ingested: number;
   skipped: number;
   issues: number;
+  /** `issues` split by IngestIssueCode; only codes actually seen appear. Lets
+   * callers separate data loss (`unparsed_line`) from informational sensors. */
+  issuesByCode: Record<string, number>;
   failed: number;
   cancelled: boolean;
 }
@@ -106,6 +109,7 @@ export function sync(
     ingested: 0,
     skipped: 0,
     issues: 0,
+    issuesByCode: {},
     failed: 0,
     cancelled: false,
   };
@@ -162,6 +166,9 @@ export function sync(
     writeIngestedFile(db, prepared, parsed);
     report.ingested += 1;
     report.issues += parsed.issues.length;
+    for (const issue of parsed.issues) {
+      report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+    }
   }
 
   resolveSubagentParents(db);
@@ -544,11 +551,11 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
     );
     db.query("DELETE FROM ingest_issue WHERE source_path = ?1").run(prepared.file.path);
     const insertIssue = db.prepare(
-      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
-       VALUES (?1, ?2, ?3, ?4, datetime('now'))`,
+      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
     );
     for (const issue of parsed.issues) {
-      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine);
+      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
     }
     const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
     db.query(

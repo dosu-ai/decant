@@ -177,6 +177,16 @@ export function catalog(): Recommendation[] {
       "Hooks guide",
       "Set up Claude Code hooks for this repo to run format, lint, and tests automatically (for example on file edits and pre-commit), following the hooks guide.",
     ),
+    cat(
+      "trajectory-export",
+      "Connect and automate",
+      "hero-arrow-up-tray",
+      "Feed your sessions to memory tooling",
+      "Export archived sessions as trajectory-v1 records — the token-lean transcript format memory and evaluation pipelines consume. Your archive keeps sessions the CLIs have already pruned.",
+      "https://github.com/letta-ai/trajectory",
+      "trajectory format",
+      "Using `decant export --all --as trajectory --out <dir>` (add --project or date filters via ls to curate), export the sessions I care about and wire them into my memory/evaluation tooling of choice.",
+    ),
   ];
 }
 
@@ -789,6 +799,12 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
       "Hook or preflight gate",
       "Before changes drift away from the repo's validation contract.",
       "Format, lint, and tests run earlier with fewer end-of-task surprises.",
+    ],
+    "catalog:trajectory-export": [
+      "Connect and automate",
+      "Export integration",
+      "When building memory or evaluation pipelines with session data.",
+      "Sessions flow into external memory and evaluation tools without manual export overhead.",
     ],
   };
   const found = catalogCards[rec.key];

@@ -87,6 +87,7 @@ describe("recommendations", () => {
       "catalog:subagents",
       "catalog:mcp",
       "catalog:hooks",
+      "catalog:trajectory-export",
     ]);
     expect(rows[0]).toMatchObject({
       kind: "catalog",
@@ -335,7 +336,9 @@ describe("recommendations", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);
     regenerate(db);
-    expect((db.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(9);
+    expect((db.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(
+      10,
+    );
     const firstSeen = (
       db
         .query("SELECT first_seen_at FROM recommendation WHERE key = 'catalog:agents-md'")

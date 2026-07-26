@@ -119,6 +119,23 @@
     "note": null
   },
   {
+    "key": "catalog:trajectory-export",
+    "kind": "catalog",
+    "category": "Connect and automate",
+    "title": "Feed your sessions to memory tooling",
+    "detail": "Export archived sessions as trajectory-v1 records — the token-lean transcript format memory and evaluation pipelines consume. Your archive keeps sessions the CLIs have already pruned.",
+    "suggestion": null,
+    "prompt": "Using `decant export --all --as trajectory --out <dir>` (add --project or date filters via ls to curate), export the sessions I care about and wire them into my memory/evaluation tooling of choice.",
+    "url": "https://github.com/letta-ai/trajectory",
+    "link_label": "trajectory format",
+    "icon": "hero-arrow-up-tray",
+    "tone": null,
+    "score": 0,
+    "status": "open",
+    "status_source": null,
+    "note": null
+  },
+  {
     "key": "signal:cost-concentration",
     "kind": "signal",
     "category": null,

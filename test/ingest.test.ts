@@ -465,10 +465,9 @@ describe("upsertSession", () => {
       .query("SELECT output_preview FROM tool_call WHERE session_id = ?1")
       .get(sessionId) as { output_preview: string };
 
-    expect(toolCall.output_preview).toContain("Starting output");
-    expect(toolCall.output_preview).toContain("Error: something failed");
-    expect(toolCall.output_preview).toContain("chars omitted");
     expect(toolCall.output_preview.startsWith("Starting output")).toBe(true);
+    expect(toolCall.output_preview.endsWith("Error: something failed")).toBe(true);
+    expect(toolCall.output_preview).toContain("chars omitted");
     expect(toolCall.output_preview.includes("\n[… ")).toBe(true);
 
     db.close();

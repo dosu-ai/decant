@@ -164,6 +164,7 @@ describe("recommendations", () => {
       ["signal:churn:src/main.ts", "signal", "Cold", "Runbook or regression test"],
       ["signal:search-heavy", "signal", "Hot", "AGENTS.md code map"],
       ["signal:abandoned-rate", "signal", "Governance", "Planning checklist or Skill"],
+      ["signal:ingest-health", "signal", "Governance", "Release notes or upstream issue"],
       ["catalog:agents-md", "catalog", "Hot", "AGENTS.md"],
       ["catalog:claude-md", "catalog", "Hot", "Project memory"],
       ["catalog:skills", "catalog", "Procedural", "SKILL.md"],
@@ -327,6 +328,7 @@ describe("recommendations", () => {
     const out = signals(db).filter((rec) => rec.key === "signal:ingest-health");
     expect(out).toHaveLength(1);
     expect(out[0]?.title).toContain("5");
+    db.close();
   });
 
   test("regenerate is idempotent and preserves implemented state", () => {

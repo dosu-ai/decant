@@ -736,6 +736,16 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
       "Abandoned-session share drops below 25 percent.",
     );
   }
+  if (rec.key === "signal:ingest-health") {
+    return card(
+      "Governance",
+      "Release notes or upstream issue",
+      "When a source CLI's transcript format changes.",
+      evidence,
+      action,
+      "Diagnostic codes fall below the signal threshold.",
+    );
+  }
 
   const catalogCards: Record<string, [string, string, string, string]> = {
     "catalog:agents-md": [

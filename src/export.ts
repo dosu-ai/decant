@@ -116,9 +116,116 @@ function trajectoryTruncate(text: string, max: number): { text: string; truncate
   return { text: `${head}${marker}${tail}`, truncated: true };
 }
 
+interface TrajectoryLeaf {
+  original: string;
+  current: string;
+  set: (value: string) => void;
+}
+
+/** Every string leaf reachable in the args object, arrays included, each with a
+ * setter that writes back into its own container. */
+function trajectoryCollectLeaves(value: unknown, leaves: TrajectoryLeaf[]): void {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const child = value[index];
+      if (typeof child === "string") {
+        leaves.push({
+          original: child,
+          current: child,
+          set: (next) => {
+            value[index] = next;
+          },
+        });
+      } else if (child !== null && typeof child === "object") {
+        trajectoryCollectLeaves(child, leaves);
+      }
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (typeof child === "string") {
+      leaves.push({
+        original: child,
+        current: child,
+        set: (next) => {
+          record[key] = next;
+        },
+      });
+    } else if (child !== null && typeof child === "object") {
+      trajectoryCollectLeaves(child, leaves);
+    }
+  }
+}
+
+/** Shrink an over-cap args object into the cap while keeping its field
+ * structure, by truncating string leaves largest-first in place. Returns the
+ * serialization once it fits, or null when the overage does not live in the
+ * string leaves (many small fields, or bulk in the keys) and only a `_raw` wrap
+ * can help. `parsed` is mutated either way.
+ *
+ * Their core.ts has two of these; this follows the strictly decreasing one
+ * (`shrinkObjectArgsSafely`), not the legacy loop whose hard 2 000-character
+ * per-leaf floor can spin forever or return an over-cap object — the bug their
+ * PARITY.md records as a 21,560-character object escaping a 20,000 cap. Two
+ * things make termination unconditional here: a leaf no longer than the marker
+ * cannot shrink usefully, so shrinking stops rather than retrying it, and an
+ * iteration that shortens nothing gives up instead of looping. */
+function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
+  const leaves: TrajectoryLeaf[] = [];
+  trajectoryCollectLeaves(parsed, leaves);
+  const markerFloor = [...trajectoryMarker(0)].length;
+  let serialized = JSON.stringify(parsed);
+  while ([...serialized].length > limit) {
+    let largest: TrajectoryLeaf | undefined;
+    let largestLen = 0;
+    for (const leaf of leaves) {
+      const length = [...leaf.current].length;
+      if (length > largestLen) {
+        largest = leaf;
+        largestLen = length;
+      }
+    }
+    if (largest == null || largestLen <= markerFloor) {
+      return null;
+    }
+    // Cut only as much of the biggest leaf as the overage needs, so an object
+    // barely over the cap keeps nearly all of its content. The overage is
+    // measured on the serialized form and the leaf in code points, and escaping
+    // makes those differ, so a gentle cut can fail to shrink the serialization
+    // at all; halving always shrinks it for a leaf longer than the marker, and
+    // is the fallback whenever the gentle cut does not land. Truncating from the
+    // leaf's original text keeps the marker's dropped-count honest across
+    // repeated passes over the same leaf.
+    const before = [...serialized].length;
+    const halved = Math.floor(largestLen / 2);
+    const gentle = Math.max(halved, Math.min(largestLen - 1, largestLen - (before - limit) - 1));
+    let shrank = false;
+    for (const target of gentle > halved ? [gentle, halved] : [halved]) {
+      const { text } = trajectoryTruncate(largest.original, target);
+      largest.set(text);
+      largest.current = text;
+      serialized = JSON.stringify(parsed);
+      if ([...serialized].length < before) {
+        shrank = true;
+        break;
+      }
+    }
+    if (!shrank) {
+      return null;
+    }
+  }
+  return serialized;
+}
+
 /** Serialize tool args as a JSON object string within the cap. Non-object args
- * are reshaped to {"_raw": <string>} (their tool_arguments_reshaped move); an
- * over-cap object degrades to a truncated {"_raw": ...} wrap. */
+ * are reshaped to {"_raw": <string>} (their tool_arguments_reshaped move). An
+ * over-cap object keeps its field structure by shrinking its string leaves, and
+ * degrades to a truncated {"_raw": ...} wrap only if that cannot reach the
+ * cap. */
 function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): string {
   let parsed: unknown;
   try {
@@ -131,7 +238,15 @@ function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): str
   if (serialized != null && [...serialized].length <= TRAJECTORY_ARGS_MAX) {
     return serialized;
   }
+  if (serialized != null) {
+    const shrunk = trajectoryShrinkLeaves(parsed as object, TRAJECTORY_ARGS_MAX);
+    if (shrunk != null) {
+      report.tool_args_wrapped += 1;
+      return shrunk;
+    }
+  }
   report.tool_args_wrapped += 1;
+  // `serialized` predates any leaf shrinking, so the wrap carries the original.
   const raw = serialized ?? toolInput ?? "";
   // Budget for {"_raw":""} scaffolding + escaping: truncate the payload, then
   // shrink until the serialized wrapper fits (escaping can expand length).

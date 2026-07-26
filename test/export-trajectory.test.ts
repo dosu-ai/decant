@@ -368,6 +368,124 @@ describe("exportTrajectory", () => {
     db.close();
   });
 
+  test("keeps field structure when shrinking over-cap object args", () => {
+    const db = openDb(join(workDir, "bigargs.db"));
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "Write",
+              input: { big: "z".repeat(40000), keep: "me" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:02.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:03.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("traj-8", lines),
+      "/t8.jsonl",
+      1,
+      2,
+      "h",
+    );
+    const out = exportTrajectory(db, sessionId);
+    if (!out.ok) throw new Error(`export failed: ${out.reason}`);
+    assertBothLayers(out.records);
+
+    const args = (
+      out.records.find((r) => typeof r === "object" && r != null && "tool_calls" in r) as {
+        tool_calls: { args: string }[];
+      }
+    ).tool_calls[0]?.args;
+    expect(args).toBeDefined();
+    expect([...(args ?? "")].length).toBeLessThanOrEqual(20000);
+    const decoded = JSON.parse(args ?? "{}") as Record<string, string>;
+    expect(Object.keys(decoded)).toEqual(["big", "keep"]);
+    // The small field survives untouched; only the oversized leaf is truncated.
+    expect(decoded.keep).toBe("me");
+    expect(decoded).not.toHaveProperty("_raw");
+    expect(decoded.big?.startsWith("z")).toBe(true);
+    expect(decoded.big).toContain("… [truncated, ");
+    expect(out.report.tool_args_wrapped).toBe(1);
+    db.close();
+  });
+
+  test("falls back to a _raw wrap when the overage is structural", () => {
+    const db = openDb(join(workDir, "manykeys.db"));
+    // 1200 fields whose values are all shorter than the truncation marker, so no
+    // leaf can shrink usefully and the cap is only reachable by wrapping.
+    const input: Record<string, string> = {};
+    for (let index = 0; index < 1200; index += 1) {
+      input[`key${String(index).padStart(4, "0")}`] = "v".repeat(20);
+    }
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "Write", input }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:02.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("traj-9", lines),
+      "/t9.jsonl",
+      1,
+      2,
+      "h",
+    );
+    const out = exportTrajectory(db, sessionId);
+    if (!out.ok) throw new Error(`export failed: ${out.reason}`);
+    assertBothLayers(out.records);
+
+    const args = (
+      out.records.find((r) => typeof r === "object" && r != null && "tool_calls" in r) as {
+        tool_calls: { args: string }[];
+      }
+    ).tool_calls[0]?.args;
+    expect([...(args ?? "")].length).toBeLessThanOrEqual(20000);
+    expect(JSON.parse(args ?? "{}")).toHaveProperty("_raw");
+    expect(out.report.tool_args_wrapped).toBe(1);
+    db.close();
+  });
+
   test("refuses sessions without user or assistant records", () => {
     const db = openDb(join(workDir, "empty.db"));
     const lines = JSON.stringify({

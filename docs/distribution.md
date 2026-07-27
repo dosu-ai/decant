@@ -48,9 +48,9 @@ bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
 
 Release builds stamp the same version into package metadata and the compiled
-binary. The release workflow publishes all platform packages first, then both
-launcher packages, so `optionalDependencies` always point at packages that
-already exist.
+binary. The release workflow publishes all platform packages first, then the
+launcher, so `optionalDependencies` always point at packages that already
+exist.
 
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are

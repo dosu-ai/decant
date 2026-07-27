@@ -251,9 +251,14 @@ The shape, which `release.yml` already makes visible:
    private repository, so the repo must already be public.
 2. With the packages in existence, a trusted publisher is configured on each
    (org `dosu-ai`, repo `decant`, workflow `release.yml`).
-3. The bootstrap credential is then removed. The workflow selects its publish
-   path from whether `NPM_TOKEN` is present, so removing the secret is what
-   hands the next release to OIDC — there is no second edit to remember.
+3. The bootstrap credential is then removed and the token-path step deleted
+   from `release.yml`, leaving OIDC as the only publish path.
+
+**Status: completed 2026-07-27.** v0.1.0 published via the bootstrap token;
+trusted publishers were then configured on all five packages (org `dosu-ai`,
+repo `decant`, workflow `release.yml`, no environment, `npm publish` only),
+`NPM_TOKEN` was deleted, and the bootstrap step was removed. Every release
+from here publishes via OIDC.
 
 npm is independently deprecating this path: 2FA-bypassing tokens lose account
 and package management in August 2026 and direct publishing around January

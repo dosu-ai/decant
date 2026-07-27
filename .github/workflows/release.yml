@@ -514,15 +514,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      id-token: write # OIDC trusted publishing; also required for --provenance on the bootstrap token path
+      id-token: write # OIDC trusted publishing
     env:
       VERSION: ${{ needs.meta.outputs.version }}
-      # Secrets cannot be referenced in `if:` conditionals — hence the env
-      # indirection (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
-      # NPM_TOKEN exists only for the v0.1.0 bootstrap publish; once the trusted
-      # publishers are configured and the secret is deleted, the OIDC step below
-      # takes over automatically.
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -630,7 +624,10 @@ jobs:
           echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
 
       # OIDC trusted publishing: NO NODE_AUTH_TOKEN anywhere in this step — its
-      # presence silently flips npm onto the legacy token path.
+      # presence silently flips npm onto the legacy token path. The v0.1.0
+      # bootstrap-token step that used to sit beside this one is gone: trusted
+      # publishers now exist on all five packages
+      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
       #
       # Publish ORDER MATTERS: the four platform packages first, because the
       # launcher declares optionalDependencies on them, then `@dosu/decant`.
@@ -639,27 +636,6 @@ jobs:
       # would make the `npm view` idempotency check test a different package
       # than the one `npm publish` ships. Same channel on all five.
       - name: Publish packages (OIDC trusted publishing)
-        if: env.HAS_NPM_TOKEN != 'true'
-        run: |
-          set -euo pipefail
-          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant; do
-            pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
-            if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-              echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
-              continue
-            fi
-            npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
-          done
-
-      # Bootstrap token path — v0.1.0 only
-      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing). Token auth on a
-      # GitHub-hosted runner emits the same Sigstore provenance as OIDC. Delete
-      # this step together with the NPM_TOKEN secret after v0.1.0. Same five
-      # packages, same order, same reasons as the OIDC step above.
-      - name: Publish packages (bootstrap token, v0.1.0 only)
-        if: env.HAS_NPM_TOKEN == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant; do

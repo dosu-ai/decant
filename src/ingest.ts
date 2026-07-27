@@ -4,6 +4,7 @@ import type { Stats } from "node:fs";
 import {
   closeSync,
   existsSync,
+  fstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -138,8 +139,17 @@ export function sync(
 
     let content: string;
     try {
-      content = readFileSync(file.path, "utf8");
-      stats = statSync(file.path);
+      // One descriptor for both: fstat and read cannot disagree about which
+      // file they saw. Stat first so a write landing mid-window records a
+      // smaller size than the content read — the next sync then re-ingests
+      // instead of silently skipping the tail.
+      const fd = openSync(file.path, "r");
+      try {
+        stats = fstatSync(fd);
+        content = readFileSync(fd, "utf8");
+      } finally {
+        closeSync(fd);
+      }
     } catch {
       report.failed += 1;
       continue;

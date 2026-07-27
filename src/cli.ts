@@ -1177,11 +1177,19 @@ function emitArtifact(
   artifactOptions: ArtifactOptions,
 ): number {
   if (artifactOptions.out != null) {
-    if (existsSync(artifactOptions.out) && artifactOptions.force !== true) {
-      io.writeErr(`error: ${artifactOptions.out} exists (use --force to overwrite)\n`);
-      return 2;
+    // "wx" makes the no-clobber check and the write one atomic open(O_EXCL)
+    // instead of exists-then-write.
+    try {
+      writeFileSync(artifactOptions.out, artifact, {
+        flag: artifactOptions.force === true ? "w" : "wx",
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "EEXIST") {
+        io.writeErr(`error: ${artifactOptions.out} exists (use --force to overwrite)\n`);
+        return 2;
+      }
+      throw error;
     }
-    writeFileSync(artifactOptions.out, artifact);
     if (!options.quiet) {
       io.writeErr(`wrote ${artifactOptions.out}\n`);
     }

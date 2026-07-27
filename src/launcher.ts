@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
@@ -63,12 +63,17 @@ export function launchAgent(
     };
   }
 
-  const promptFile = join(tmpdir(), options.tempName?.() ?? `decant-prompt-${Date.now()}.txt`);
-  writeFileSync(promptFile, fullPrompt);
+  // mkdtemp gives a fresh 0700 directory, so no other local user can
+  // pre-plant a symlink at a predictable /tmp name or read the prompt; the
+  // file itself is 0600 and the launched shell removes the whole directory
+  // after consuming it.
+  const promptDir = mkdtempSync(join(tmpdir(), "decant-launch-"));
+  const promptFile = join(promptDir, options.tempName?.() ?? "prompt.txt");
+  writeFileSync(promptFile, fullPrompt, { mode: 0o600 });
   const dir = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir();
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
-    `rm -f ${shellQuote(promptFile)})"`;
+    `rm -rf ${shellQuote(promptDir)})"`;
   return launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env);
 }
 

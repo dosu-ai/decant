@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { compareCodePoints } from "./order.ts";
 
@@ -190,10 +190,17 @@ function stripCodename(tool: string, leaf: string): string {
 
 export function resolveGitRoot(dir: string): Resolution | null {
   const dotgit = `${dir}/.git`;
-  if (!existsSync(dotgit) || !statSync(dotgit).isFile()) {
+  // Read unconditionally instead of stat-then-read: a regular repo's `.git`
+  // directory throws EISDIR and an absent one ENOENT, both meaning "not a
+  // worktree leaf", with no window for the path to change between check and
+  // use.
+  let raw: string;
+  try {
+    raw = readFileSync(dotgit, "utf8");
+  } catch {
     return null;
   }
-  const target = readFileSync(dotgit, "utf8")
+  const target = raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.startsWith("gitdir:"))

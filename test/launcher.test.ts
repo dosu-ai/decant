@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { canLaunch, command, launchAgent, openIde } from "../src/launcher.ts";
 import type { UserSettings } from "../src/settings.ts";
 
@@ -39,7 +39,12 @@ describe("launcher", () => {
         return { ok: true };
       },
     });
-    rmSync(join(tmpdir(), "decant-launcher-test-prompt.txt"), { force: true });
+    // The prompt now lives in a fresh mkdtemp dir embedded in the recorded
+    // command; recover it from there to clean up.
+    const promptPath = calls[0]?.args.join(" ").match(/cat '([^']+)'/)?.[1];
+    if (promptPath != null) {
+      rmSync(dirname(promptPath), { recursive: true, force: true });
+    }
 
     expect(result).toEqual({ ok: true });
     expect(calls[0]?.bin).toBe("open");

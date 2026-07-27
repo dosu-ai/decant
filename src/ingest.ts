@@ -121,38 +121,41 @@ export function sync(
       break;
     }
 
-    let stats: Stats;
+    // One descriptor for everything: the skip decision, the recorded stat,
+    // and the content read all describe the same inode, so a path swapped
+    // mid-loop can neither skip wrongly nor record metadata for content that
+    // was never read. A file that vanished before open is a silent skip,
+    // matching the old stat-failure path; any other open error counts as
+    // failed, matching the old read-failure path.
+    let fd: number;
     try {
-      stats = statSync(file.path);
-    } catch {
+      fd = openSync(file.path, "r");
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ENOENT") {
+        report.failed += 1;
+      }
       continue;
     }
-    const size = stats.size;
-    const mtime = mtimeSecs(stats);
-    const prior = db
-      .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
-      .get(file.path) as { size: number; mtime: number } | null;
-    if (prior != null && prior.size === size && prior.mtime === mtime) {
-      report.skipped += 1;
-      continue;
-    }
-
+    let stats: Stats;
     let content: string;
     try {
-      // One descriptor for both: fstat and read cannot disagree about which
-      // file they saw. Stat first so a write landing mid-window records a
-      // smaller size than the content read — the next sync then re-ingests
-      // instead of silently skipping the tail.
-      const fd = openSync(file.path, "r");
-      try {
-        stats = fstatSync(fd);
-        content = readFileSync(fd, "utf8");
-      } finally {
-        closeSync(fd);
+      stats = fstatSync(fd);
+      const prior = db
+        .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
+        .get(file.path) as { size: number; mtime: number } | null;
+      if (prior != null && prior.size === stats.size && prior.mtime === mtimeSecs(stats)) {
+        report.skipped += 1;
+        continue;
       }
+      // fstat before read: a write landing mid-window records a smaller size
+      // than the content read, so the next sync re-ingests instead of
+      // silently skipping the tail.
+      content = readFileSync(fd, "utf8");
     } catch {
       report.failed += 1;
       continue;
+    } finally {
+      closeSync(fd);
     }
 
     const stem = fileStem(file.path);

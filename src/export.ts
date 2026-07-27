@@ -357,7 +357,10 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     if (raw == null) {
       return null;
     }
-    const withZone = /(Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : `${raw}Z`;
+    // Bare ±hh is a valid ISO-8601 offset: recognize it so we never corrupt
+    // it with an appended Z. (Bun's Date cannot parse bare ±hh either way, so
+    // such stamps still fall through to the fill ladder — but as themselves.)
+    const withZone = /(Z|[+-]\d{2}(?::?\d{2})?)$/.test(raw) ? raw : `${raw}Z`;
     const date = new Date(withZone);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };

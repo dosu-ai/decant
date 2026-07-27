@@ -506,4 +506,33 @@ describe("exportTrajectory", () => {
     expect(exportTrajectory(db, 999999)).toEqual({ ok: false, reason: "not_found" });
     db.close();
   });
+
+  test("normalizes offset timestamps and never corrupts bare ±hh offsets", () => {
+    const db = openDb(join(workDir, "offsets.db"));
+    const lines = [
+      // No-colon four-digit offset: parseable, must normalize to the UTC instant.
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-01T00:00:00+0530",
+        message: { role: "user", content: [{ type: "text", text: "offset question" }] },
+      }),
+      // Bare two-digit offset: Bun's Date cannot parse it, so it must fall
+      // through to the fill ladder as-is — not get a Z appended onto the
+      // offset. Either way it forward-fills from the previous record.
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-01T00:00:00+05",
+        message: { role: "assistant", content: [{ type: "text", text: "offset answer" }] },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(db, parseClaudeSession("traj-tz", lines), "/tz.jsonl", 1, 2, "h");
+    const out = exportTrajectory(db, sessionId);
+    if (!out.ok) throw new Error(`export failed: ${out.reason}`);
+    assertBothLayers(out.records);
+    const [, user, assistant] = out.records as { timestamp?: string }[];
+    expect(user?.timestamp).toBe("2026-06-30T18:30:00.000Z");
+    expect(assistant?.timestamp).toBe("2026-06-30T18:30:00.000Z");
+    expect(out.report.timestamps_filled).toBe(1);
+    db.close();
+  });
 });

@@ -67,4 +67,7 @@ describe("previewHeadTail", () => {
       expect([...part].every((c) => c === "🎉")).toBe(true);
     }
   });
+  test("keeps no tail when max is too small for one, without leaking the whole string", () => {
+    expect(previewHeadTail("abcdef", 2)).toBe("ab\n[… 4 chars omitted …]\n");
+  });
 });

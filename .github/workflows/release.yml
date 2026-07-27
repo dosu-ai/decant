@@ -333,14 +333,35 @@ jobs:
           done
           (cd dist/release && sha256sum decant-*.tar.gz | tee SHA256SUMS)
 
-      # Default mode = SLSA build provenance. Raw binaries are attested too, so a
-      # user can verify the extracted `decant` after unpacking a tarball.
-      - name: Attest build provenance (tarballs + raw binaries)
+      # Default mode = SLSA build provenance. Raw binaries are attested too, so
+      # a user can verify the extracted `decant` after unpacking a tarball, and
+      # SHA256SUMS so the checksum file everything else verifies against is
+      # itself provenance-covered.
+      - name: Attest build provenance (tarballs, raw binaries, SHA256SUMS)
+        id: attest
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: |
             dist/release/decant-*.tar.gz
             dist/bin/*/decant
+            dist/release/SHA256SUMS
+
+      # Ship the Sigstore bundle actions/attest just wrote as a release asset:
+      # anyone can then verify provenance offline (gh attestation verify
+      # --bundle) without the GitHub API, and OpenSSF Scorecard's
+      # Signed-Releases probe recognizes the .sigstore.json suffix.
+      # Deliberately NOT listed in SHA256SUMS — SHA256SUMS is one of the
+      # bundle's attested subjects, so covering the bundle there would be
+      # circular; the Sigstore signature is its integrity. Staged into
+      # dist/release so it rides the release-tarballs artifact into the
+      # github-release job.
+      - name: Stage attestation bundle as a release asset
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          [ -s "$BUNDLE_PATH" ] || { echo "::error::actions/attest reported no bundle at '${BUNDLE_PATH}'"; exit 1; }
+          cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
 
       - name: Upload pre-signing hashes
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -730,15 +751,20 @@ jobs:
           IS_LATEST: ${{ needs.meta.outputs.is_latest }}
         run: |
           set -euo pipefail
+          # The attestation bundle is a named asset on every release; a missing
+          # bundle means the build job's staging step silently changed — fail
+          # closed rather than publish a release without it.
+          bundle="decant-${TAG#v}.sigstore.json"
+          [ -f "$bundle" ] || { echo "::error::attestation bundle ${bundle} missing from the release-tarballs artifact"; exit 1; }
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::notice::$TAG already has a release — refreshing assets only (gh release create would 422)"
-            gh release upload "$TAG" ./*.tar.gz SHA256SUMS install.sh --clobber
+            gh release upload "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh --clobber
           else
             flags=(--verify-tag --generate-notes)
             [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
             [ "$IS_LATEST" = "true" ] || flags+=(--latest=false)  # GitHub marks the newest-created
               # release "Latest" by default — a backport would hijack releases/latest/download/
-            gh release create "$TAG" ./*.tar.gz SHA256SUMS install.sh "${flags[@]}"
+            gh release create "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh "${flags[@]}"
           fi
 
   docker:

@@ -244,8 +244,9 @@ notarized, so a tarball downloaded through a browser carries
 `com.apple.quarantine` and Gatekeeper blocks the first run. Clear it with
 `xattr -d com.apple.quarantine ./decant`. `brew install`, `npx @dosu/decant`, and the
 install script are unaffected, because none of them set the quarantine
-attribute. Integrity comes from SLSA build provenance, `SHA256SUMS`, and the
-`gh attestation verify` check `install.sh` runs.
+attribute. Integrity comes from SLSA build provenance (published with each
+release as an offline-verifiable `decant-<version>.sigstore.json` bundle),
+`SHA256SUMS`, and the `gh attestation verify` check `install.sh` runs.
 
 **Upgrading.** `npx @dosu/decant@latest` always resolves the newest published
 version. For a persistent install, run `npm i -g @dosu/decant@latest`,

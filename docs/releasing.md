@@ -92,8 +92,11 @@ Every release after the bootstrap:
    - `curl -fsSL .../install.sh | sh` on one machine.
    - On a Mac, run the darwin tarball binary once — this catches signature
      regressions no Linux job can.
-   - Confirm the release page has all four tarballs plus `SHA256SUMS`, and run
-     `gh attestation verify` on one asset.
+   - Confirm the release page has all four tarballs, `SHA256SUMS`, and the
+     `decant-<version>.sigstore.json` attestation bundle, and run
+     `gh attestation verify` on one asset (append
+     `--bundle decant-<version>.sigstore.json` to verify offline from the
+     bundle the release ships).
    - `brew upgrade decant` — the tap is a published channel, so a stale
      formula is a user-visible regression, not a cosmetic one.
 5. **Failure recovery.** Fix the problem, don't delete anything, and re-run.

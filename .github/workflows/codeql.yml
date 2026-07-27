@@ -1,0 +1,67 @@
+name: CodeQL
+
+# Static analysis (SAST) for the two CodeQL-supported languages in this repo:
+# the TypeScript app and the GitHub Actions workflows that release it.
+# Advanced setup on purpose — default setup must stay unconfigured (GitHub
+# rejects advanced-workflow SARIF otherwise) and this way the configuration is
+# reviewable, SHA-pinned, and linted like every other workflow here. Findings
+# land in the Security tab under code scanning.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly refresh so updated query packs re-scan main even when it is
+    # quiet. Deliberately offset from scorecard.yml's Monday 05:27 slot.
+    - cron: "43 6 * * 2"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default-deny, then grant per job. A job that needs more than `contents: read`
+# has to say so at its own level, so widening this file later cannot silently
+# widen a job that never asked for it.
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write # upload CodeQL results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Neither language compiles; `none` skips the autobuild step.
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing here pushes; don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e58424170fb0262c8d7ed60a2e84b9bffe205c67 # codeql-bundle-v2.26.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended: this codebase parses untrusted JSONL from disk
+          # and serves a loopback web API, exactly the territory of the
+          # extended suite's lower-severity security queries (prototype
+          # pollution, ReDoS, path traversal). Not security-and-quality —
+          # Biome owns code quality, and mixing the two buries security
+          # findings in style noise.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@e58424170fb0262c8d7ed60a2e84b9bffe205c67 # codeql-bundle-v2.26.1
+        with:
+          category: "/language:${{ matrix.language }}"

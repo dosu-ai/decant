@@ -155,7 +155,13 @@ export function sync(
       report.failed += 1;
       continue;
     } finally {
-      closeSync(fd);
+      try {
+        closeSync(fd);
+      } catch {
+        // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+        // read that already succeeded, and a throw here would mask the real
+        // error on the failure path.
+      }
     }
 
     const stem = fileStem(file.path);

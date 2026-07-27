@@ -525,7 +525,14 @@ describe("exportTrajectory", () => {
         message: { role: "assistant", content: [{ type: "text", text: "offset answer" }] },
       }),
     ].join("\n");
-    const sessionId = upsertSession(db, parseClaudeSession("traj-tz", lines), "/tz.jsonl", 1, 2, "h");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("traj-tz", lines),
+      "/tz.jsonl",
+      1,
+      2,
+      "h",
+    );
     const out = exportTrajectory(db, sessionId);
     if (!out.ok) throw new Error(`export failed: ${out.reason}`);
     assertBothLayers(out.records);

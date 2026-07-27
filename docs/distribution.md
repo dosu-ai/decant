@@ -247,11 +247,11 @@ current project, so install the release into a scratch project first:
 ```sh
 mkdir -p /tmp/decant-verify && cd /tmp/decant-verify
 npm init -y >/dev/null
-npm install decant@0.1.0
+npm install @dosu/decant@0.1.0
 npm audit signatures
 ```
 
-**LICENSE and NOTICE.** Every published package — both launchers and all four
+**LICENSE and NOTICE.** Every published package — the launcher and all four
 platform packages — ships both files. `npm pack <pkg>@<version>` downloads the
 registry tarball so you can inspect exactly what users receive:
 

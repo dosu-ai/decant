@@ -553,7 +553,7 @@ jobs:
         run: bun run scripts/build-npm.ts --target all --binary-dir dist/bin --out-dir dist/npm --no-build --clean --version "$VERSION"
 
       # Every published package must carry the license texts (Apache-2.0 §4(d)) —
-      # the four platform packages plus both launchers.
+      # the four platform packages plus the launcher.
       - name: Assert LICENSE and NOTICE staged in all five packages
         run: |
           set -euo pipefail
@@ -584,11 +584,13 @@ jobs:
       # npx user hits — against the STAGED packages, before anything is
       # irrevocably published. No DECANT_BINARY_PATH override.
       #
-      # BOTH launchers run here. They ship identical content under different
-      # names, but npm-smoke only exercises the unscoped one post-publish, so this
-      # is the only place `@dosu/decant` is ever executed — and a launcher that
-      # cannot resolve its platform package is unrecoverable once published. Each
-      # gets its own scratch project, which is how a real user installs them.
+      # The launcher (`@dosu/decant`, staged under dist/npm/decant — npm refuses
+      # the unscoped name, see scripts/distribution.ts) runs here in its own
+      # scratch project, which is how a real user installs it. This is its only
+      # pre-publish execution — npm-smoke exercises it again after publishing,
+      # but a launcher that cannot resolve its platform package is
+      # unrecoverable once published, so it must prove itself before anything
+      # ships.
       - name: Pack-and-install smoke on staged packages (pre-publish)
         run: |
           set -euo pipefail
@@ -601,6 +603,11 @@ jobs:
             smoke_dir="$(mktemp -d)"
             ( cd "$smoke_dir"
               npm init -y >/dev/null
+              # Scorecard's Pinned-Dependencies check flags every `npm install`
+              # that is not `npm ci`, but these are the two tarballs this run
+              # just built and packed — there is no registry fetch to hash-pin,
+              # and `npm ci` cannot install local tarballs. The corresponding
+              # code-scanning alert is dismissed as won't-fix.
               npm install --ignore-scripts --no-audit --no-fund \
                 "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
                 "$GITHUB_WORKSPACE/dist/npm/${launcher_dir}/$launcher_tgz"
@@ -625,12 +632,12 @@ jobs:
       # OIDC trusted publishing: NO NODE_AUTH_TOKEN anywhere in this step — its
       # presence silently flips npm onto the legacy token path.
       #
-      # Publish ORDER MATTERS: the four platform packages first, because both
-      # launchers declare optionalDependencies on them, then `decant` (unscoped),
-      # then `@dosu/decant`. Package names come from each staged manifest — the
-      # directory name is not the package name for the two launchers, and a
-      # hard-coded guess would make the `npm view` idempotency check test a
-      # different package than the one `npm publish` ships. Same channel on all five.
+      # Publish ORDER MATTERS: the four platform packages first, because the
+      # launcher declares optionalDependencies on them, then `@dosu/decant`.
+      # Package names come from each staged manifest — the launcher's directory
+      # name (dist/npm/decant) is not its package name, and a hard-coded guess
+      # would make the `npm view` idempotency check test a different package
+      # than the one `npm publish` ships. Same channel on all five.
       - name: Publish packages (OIDC trusted publishing)
         if: env.HAS_NPM_TOKEN != 'true'
         run: |
@@ -665,7 +672,7 @@ jobs:
           done
 
   # Post-publish smoke: the exact code path every real `npx @dosu/decant` user hits —
-  # the unscoped launcher is the invocation the docs tell people to type —
+  # the scoped launcher is the invocation the docs tell people to type —
   # including real optionalDependencies resolution off the live registry.
   npm-smoke:
     name: Post-publish npx smoke (${{ matrix.target }})

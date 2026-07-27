@@ -20,12 +20,10 @@
 #     Signing runs only on tag pushes and the guarded dispatch fallback — this
 #     workflow has no PR trigger. See
 #     docs/releasing.md#macos-signing-and-notarization.
-#   NPM_TOKEN            bootstrap-only granular token for the v0.1.0 first publish
-#                        (trusted publishers can only be configured on packages that
-#                        already exist). Revoke the token and delete this secret after
-#                        v0.1.0 — the OIDC path takes over automatically
-#                        (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
 #   HOMEBREW_TOKEN       PAT with push access to dosu-ai/homebrew-dosu (tap-update).
+#
+# npm needs no secret: publishing is OIDC trusted publishing, configured on all
+# five packages (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
 #
 # Re-run safety: every publish job is idempotent — npm skips versions
 # that already exist, github-release refreshes assets instead of 422ing, Docker

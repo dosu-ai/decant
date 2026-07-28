@@ -1,6 +1,6 @@
 # Add a source: parser for a new coding-agent CLI
 
-You are adding support for a new session-transcript source to decant. Work
+You are adding support for a new session-transcript source to Decant. Work
 through this document top to bottom. The privacy rules are hard requirements,
 not suggestions.
 
@@ -16,7 +16,7 @@ not suggestions.
 - Parity checks against your own real store report **counts and shape
   mismatches only** (see step 6), never content.
 
-## What decant needs from a source
+## What Decant needs from a source
 
 1. **Discovery** — where session files live and which filenames are sessions
    (`src/ingest.ts: discover()`); non-session sidecars are excluded by name,
@@ -52,7 +52,7 @@ PR so the maintainers wire the presentation tier deliberately.
   onto issues and continue. Never fail the file.
 - Record types you do not recognize → count them and emit one
   `unknown_record_type` issue per distinct type (see
-  `src/sources/claude.ts` for the pattern). This is decant's format-drift
+  `src/sources/claude.ts` for the pattern). This is Decant's format-drift
   sensor; do not silently swallow unknowns.
 - Call `linkageIssues(session)` from `src/diagnostics.ts` before returning.
 - Normalize into `NormalizedSession` (`src/model.ts`): roles map onto

@@ -103,10 +103,16 @@ describe("parseCodexSession", () => {
         payload: {
           type: "token_count",
           info: {
-            total_token_usage: { input_tokens: 900, cached_input_tokens: 700, output_tokens: 60 },
+            total_token_usage: {
+              input_tokens: 900,
+              cached_input_tokens: 700,
+              cache_write_input_tokens: 50,
+              output_tokens: 60,
+            },
             last_token_usage: {
               input_tokens: 900,
               cached_input_tokens: 700,
+              cache_write_input_tokens: 50,
               output_tokens: 60,
               reasoning_output_tokens: 10,
             },
@@ -148,10 +154,10 @@ describe("parseCodexSession", () => {
     expect(messages).toHaveLength(4);
     expect(messages[0]?.usage).toBeNull();
     expect(messages[1]?.usage).toEqual({
-      input: 200,
+      input: 150,
       output: 60,
       cacheRead: 700,
-      cacheCreation: 0,
+      cacheCreation: 50,
       cacheCreation1h: 0,
       reasoning: 10,
     });

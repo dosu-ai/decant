@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LATEST_SCHEMA_VERSION, openDb, restrictArchiveFile } from "../src/db.ts";
+import { closeDb, LATEST_SCHEMA_VERSION, openDb, restrictArchiveFile } from "../src/db.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-db-test-"));
@@ -24,7 +24,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v17 baseline. Shadow tables
+// Inventory of the frozen v18 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -82,6 +82,16 @@ describe("openDb", () => {
     expect(inventory(db, "table")).toEqual(BASELINE_TABLES);
     expect(inventory(db, "trigger")).toEqual(BASELINE_TRIGGERS);
     expect(inventory(db, "index")).toHaveLength(BASELINE_INDEX_COUNT);
+    const toolCallColumns = (
+      db.query("SELECT name FROM pragma_table_info('tool_call')").all() as { name: string }[]
+    ).map((column) => column.name);
+    expect(toolCallColumns).toEqual(expect.arrayContaining(["input_bytes", "has_result"]));
+    const ftsSql = (
+      db
+        .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'block_fts'")
+        .get() as { sql: string }
+    ).sql;
+    expect(ftsSql).toContain("prefix='2 3'");
     db.close();
   });
 
@@ -109,6 +119,16 @@ describe("openDb", () => {
     const count = db.query("SELECT COUNT(*) AS n FROM schema_migrations").get() as { n: number };
     expect(count.n).toBe(LATEST_SCHEMA_VERSION);
     db.close();
+  });
+
+  test("finalizes cached query statements before closing a worker-style connection", () => {
+    const db = openDb(freshPath());
+    const cached = db.query("SELECT 1 AS value");
+    expect(cached.get()).toEqual({ value: 1 });
+
+    closeDb(db);
+
+    expect(() => cached.get()).toThrow(/finalized/i);
   });
 
   test("keeps block_fts in sync through insert, update, and delete triggers", () => {
@@ -157,6 +177,9 @@ describe("openDb", () => {
     );
     db.close();
     expect(() => openDb(path)).toThrow(/newer/i);
+    const reopened = new Database(path, { strict: true });
+    expect(() => reopened.exec("BEGIN IMMEDIATE; ROLLBACK;")).not.toThrow();
+    reopened.close();
   });
 
   test("migrates a v8 archive through the latest version", () => {
@@ -602,6 +625,101 @@ describe("openDb", () => {
         .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1")
         .get("idx_ingest_issue_source"),
     ).not.toBeNull();
+    db.close();
+  });
+
+  test("v18 rebuilds FTS and backfills tool-call metadata", () => {
+    const path = join(workDir, "v18-search-tools.db");
+    let db = openDb(path);
+    db.exec(`
+      INSERT INTO session (id, tool, source_session_id)
+      VALUES (1, 'claude_code', 'v17-session');
+      INSERT INTO message (id, session_id, seq, timestamp, raw)
+      VALUES
+        (10, 1, 0, '2026-07-28T10:00:00.000Z', '{}'),
+        (11, 1, 1, '2026-07-28T10:00:01.250Z', '{}');
+      INSERT INTO block (
+        id, message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_result
+      )
+      VALUES
+        (100, 10, 1, 0, 'tool_use', 'porting decant', 'Read', 'toolu_1', NULL),
+        (101, 11, 1, 0, 'tool_result', NULL, NULL, 'toolu_1', 'done');
+      INSERT INTO tool_call (
+        session_id, message_id, call_block_id, result_block_id, tool_name, tool_use_id,
+        input, output_preview, output_bytes, duration_ms, ordinal, timestamp
+      )
+      VALUES (
+        1, 10, 100, 101, 'Read', 'toolu_1',
+        '{"file_path":"README.md"}', 'done', 4, NULL, 0, '2026-07-28T10:00:00.000Z'
+      );
+
+      DROP TRIGGER block_ai;
+      DROP TRIGGER block_ad;
+      DROP TRIGGER block_au;
+      DROP TABLE block_fts;
+      CREATE VIRTUAL TABLE block_fts USING fts5(
+        text, tool_name, tool_input,
+        content='block', content_rowid='id'
+      );
+      CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
+        INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+        VALUES (new.id, new.text, new.tool_name, new.tool_input);
+      END;
+      CREATE TRIGGER block_ad AFTER DELETE ON block BEGIN
+        INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+        VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+      END;
+      CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+        INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+        VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+        INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+        VALUES (new.id, new.text, new.tool_name, new.tool_input);
+      END;
+      INSERT INTO block_fts(block_fts) VALUES('rebuild');
+
+      ALTER TABLE tool_call DROP COLUMN input_bytes;
+      ALTER TABLE tool_call DROP COLUMN has_result;
+      DELETE FROM schema_migrations WHERE version >= 18;
+    `);
+    db.close();
+
+    db = openDb(path);
+    const toolCall = db
+      .query(
+        `SELECT input_bytes, has_result, duration_ms
+         FROM tool_call WHERE tool_use_id = 'toolu_1'`,
+      )
+      .get() as {
+      input_bytes: number | null;
+      has_result: number | null;
+      duration_ms: number;
+    };
+    expect(toolCall).toEqual({
+      input_bytes: 25,
+      has_result: 1,
+      duration_ms: 1_250,
+    });
+    const ftsSql = (
+      db
+        .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'block_fts'")
+        .get() as { sql: string }
+    ).sql;
+    expect(ftsSql).toContain("prefix='2 3'");
+    expect(
+      (
+        db.query("SELECT COUNT(*) AS n FROM block_fts WHERE block_fts MATCH 'por*'").get() as {
+          n: number;
+        }
+      ).n,
+    ).toBe(1);
+    db.exec("UPDATE block SET text = 'prefix migration complete' WHERE id = 100");
+    expect(
+      (
+        db.query("SELECT COUNT(*) AS n FROM block_fts WHERE block_fts MATCH 'mig*'").get() as {
+          n: number;
+        }
+      ).n,
+    ).toBe(1);
     db.close();
   });
 

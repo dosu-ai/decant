@@ -1,4 +1,4 @@
-# decant
+# Decant
 
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
@@ -6,7 +6,7 @@
 
 Your coding agent sessions contain a lot of useful information. What tokens got
 spent on, how full the context window got, which files an agent worked with, and
-what a run cost. decant gives you insight into what's on disk, right now.
+what a run cost. Decant gives you insight into what's on disk, right now.
 
 Built by [Dosu](https://dosu.dev) for developers who want their agents to learn
 from real work.
@@ -17,7 +17,7 @@ both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,
 token economics, context-window occupancy, and phase breakdowns from a CLI or a
 local web UI. Your transcripts never leave your machine.
 
-![decant serve showing the analytics view: session, message, tool-call, token,
+![Decant serve showing the analytics view: session, message, tool-call, token,
 and cost totals; an activity breakdown splitting cost and time across context,
 planning, code, and communicating; and sessions-per-day and cost-per-day charts.
 Rendered from synthetic demo data.](docs/assets/decant-serve.png)
@@ -94,7 +94,7 @@ The API is unauthenticated, so the peer's source address is the boundary. The
 image ships no peer allowlist. It sets `DECANT_TRUST_DEFAULT_GATEWAY=1`, which
 trusts exactly one address: the container's own bridge gateway, which is where
 Docker's port publisher forwards `-p` traffic from. It does that only when
-decant can prove the default route is a container veth to an on-link gateway
+Decant can prove the default route is a container veth to an on-link gateway
 inside `172.16.0.0/12`. A sibling container on the same bridge keeps its own
 source address and gets `403 forbidden remote`.
 
@@ -145,7 +145,7 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
   perform, and to run `decant serve` without its source watcher so it serves the
   archive as-is and ingests nothing. The `--no-sync` flag does the same. The
   "Sync now" button and `POST /api/sync` still work; this only suppresses the
-  syncing decant starts on its own.
+  syncing Decant starts on its own.
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
   the local API guard when `serve` is bound to a non-loopback host. Unset by
   default. Keep it as narrow as the deployment allows: every listed address, and
@@ -181,7 +181,7 @@ truth, so nothing is lost by rebuilding.
 ~/.claude + ~/.codex
         |
         v
- Bun + TypeScript decant process
+ Bun + TypeScript Decant process
  parse -> enrich -> ingest + economics vectors -> SQLite WAL + FTS5
         |
         +--> CLI reads / JSON
@@ -254,10 +254,10 @@ release as an offline-verifiable `decant-<version>.sigstore.json` bundle),
 **Upgrading.** `npx @dosu/decant@latest` always resolves the newest published
 version. For a persistent install, run `npm i -g @dosu/decant@latest`,
 `brew upgrade decant`, re-run the install script, or
-`docker pull ghcr.io/dosu-ai/decant:latest`. A build that reports
-`0.0.0-dev` from `decant --version` is an unstamped one — anything built from
-source, or by CI without an explicit version; released artifacts carry a real
-version.
+`docker pull ghcr.io/dosu-ai/decant:latest`. A source checkout reports
+`git describe --tags --always --dirty` from `decant --version` (for example,
+`v0.1.0-8-ge9a0c00-dirty`); a non-Git unstamped build falls back to `dev`.
+Released artifacts carry their injected release version.
 
 ## Development
 
@@ -289,7 +289,7 @@ invariants.
 
 ## Security and Privacy
 
-decant is local-first and offline at runtime. It reads files already on disk and
+Decant is local-first and offline at runtime. It reads files already on disk and
 makes no outbound runtime network calls. Do not commit real session data,
 personal archives, tokens, keys, or `.env` files. To report a vulnerability, see
 [SECURITY.md](SECURITY.md).

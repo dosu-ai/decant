@@ -8,6 +8,7 @@ import {
 } from "./buckets.ts";
 import { defaultPricing, estimateCostParts } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
+import { withImmediateTransaction } from "./db.ts";
 
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
@@ -132,6 +133,33 @@ interface MutableLatency {
 
 type QueryParam = string | number;
 
+function economicsRows<T>(db: Database, sql: string, params: QueryParam[] = []): T[] {
+  const statement = db.prepare<T, QueryParam[]>(sql);
+  try {
+    return statement.all(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function economicsRow<T>(db: Database, sql: string, params: QueryParam[] = []): T | null {
+  const statement = db.prepare<T, QueryParam[]>(sql);
+  try {
+    return statement.get(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function runEconomicsStatement(db: Database, sql: string, params: QueryParam[] = []): void {
+  const statement = db.prepare<unknown, QueryParam[]>(sql);
+  try {
+    statement.run(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
 export interface SessionEconomicsVector {
   id: number;
   started_at: string | null;
@@ -175,8 +203,16 @@ export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenE
 /** Load persisted per-session activity vectors for the in-memory server cache.
  * This intentionally never falls back to transcript scans: startup sync
  * backfills missing rows and then invalidates the cache. */
-export function computeSessionEconomicsVectors(db: Database): SessionEconomicsVector[] {
-  return cachedVectorsForScope(db, "WITH scoped_session AS (SELECT id FROM session)", []);
+export function computeSessionEconomicsVectors(
+  db: Database,
+  options: { cancelled?: () => boolean } = {},
+): SessionEconomicsVector[] {
+  return cachedVectorsForScope(
+    db,
+    "WITH scoped_session AS (SELECT id FROM session)",
+    [],
+    options.cancelled,
+  );
 }
 
 /** Mirrors sessionDatePredicate: string-compare on the YYYY-MM-DD prefix. */
@@ -339,12 +375,11 @@ export function materializeMissingSessionEconomics(db: Database): number {
   if (vectors.length === 0) {
     return 0;
   }
-  const persist = db.transaction((items: SessionEconomicsVector[]) => {
-    for (const vector of items) {
+  withImmediateTransaction(db, () => {
+    for (const vector of vectors) {
       storeEconomicsVector(db, vector);
     }
   });
-  persist(vectors);
   return vectors.length;
 }
 
@@ -363,35 +398,41 @@ function vectorsForScopeWithCache(
 
 function scopeCount(db: Database, scopeCte: string, params: QueryParam[]): number {
   return (
-    db.query(`${scopeCte} SELECT COUNT(*) AS count FROM scoped_session`).get(...params) as {
-      count: number;
-    }
-  ).count;
+    economicsRow<{ count: number }>(
+      db,
+      `${scopeCte} SELECT COUNT(*) AS count FROM scoped_session`,
+      params,
+    )?.count ?? 0
+  );
 }
 
 function cachedVectorsForScope(
   db: Database,
   scopeCte: string,
   params: QueryParam[],
+  cancelled?: () => boolean,
 ): SessionEconomicsVector[] {
+  throwIfEconomicsCancelled(cancelled);
   const versionParam = `?${params.length + 1}`;
-  const rows = db
-    .query(
-      `${scopeCte}
+  const rows = economicsRows<{
+    session_id: number;
+    vector_json: string;
+    started_at: string | null;
+  }>(
+    db,
+    `${scopeCte}
        SELECT e.session_id, e.vector_json, s.started_at
        FROM scoped_session fs
        JOIN session s ON s.id = fs.id
        JOIN session_economics e ON e.session_id = fs.id
        WHERE e.format_version = ${versionParam}
        ORDER BY e.session_id`,
-    )
-    .all(...params, SESSION_ECONOMICS_FORMAT_VERSION) as {
-    session_id: number;
-    vector_json: string;
-    started_at: string | null;
-  }[];
+    [...params, SESSION_ECONOMICS_FORMAT_VERSION],
+  );
+  throwIfEconomicsCancelled(cancelled);
   const vectors: SessionEconomicsVector[] = [];
   for (const row of rows) {
+    throwIfEconomicsCancelled(cancelled);
     const vector = parseEconomicsVector(row.vector_json);
     if (vector != null && vector.id === row.session_id) {
       vector.started_at = row.started_at;
@@ -399,6 +440,12 @@ function cachedVectorsForScope(
     }
   }
   return vectors;
+}
+
+function throwIfEconomicsCancelled(cancelled?: () => boolean): void {
+  if (cancelled?.() === true) {
+    throw new Error("aborted");
+  }
 }
 
 function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
@@ -438,14 +485,16 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
 }
 
 function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
-  db.query(
+  runEconomicsStatement(
+    db,
     `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)
      VALUES (?1, ?2, ?3, datetime('now'))
      ON CONFLICT(session_id) DO UPDATE SET
        format_version = excluded.format_version,
        vector_json = excluded.vector_json,
        computed_at = excluded.computed_at`,
-  ).run(vector.id, SESSION_ECONOMICS_FORMAT_VERSION, JSON.stringify(vector));
+    [vector.id, SESSION_ECONOMICS_FORMAT_VERSION, JSON.stringify(vector)],
+  );
 }
 
 /** Load ordered block rows for generation and latency allocation. Tool-result
@@ -453,9 +502,9 @@ function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): voi
  * the ingest-time tool_call linkage. The scope-first join is intentional: it
  * prevents SQLite from scanning the whole block table for a single session. */
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
-  return db
-    .query(
-      `${scopeCte}
+  return economicsRows<BlockRow>(
+    db,
+    `${scopeCte}
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
               COALESCE(b.tool_name, tc.tool_name) AS tool_name,
               m.timestamp AS timestamp,
@@ -471,8 +520,8 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
        LEFT JOIN tool_call tc ON tc.result_block_id = b.id
        WHERE b.session_id = fs.id
        ORDER BY b.session_id, m.seq, b.ordinal`,
-    )
-    .all(...params) as BlockRow[];
+    params,
+  );
 }
 
 function vectorsForScope(
@@ -480,17 +529,17 @@ function vectorsForScope(
   scopeCte: string,
   params: QueryParam[],
 ): SessionEconomicsVector[] {
-  const sessions = db
-    .query(
-      `${scopeCte}
+  const sessions = economicsRows<SessionRow>(
+    db,
+    `${scopeCte}
        SELECT s.id, s.tool, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
               s.total_cache_read_tokens, s.total_cache_creation_tokens,
               s.total_cache_creation_1h_tokens,
               s.total_reasoning_tokens, s.est_reasoning_tokens
        FROM session s
        JOIN scoped_session fs ON fs.id = s.id`,
-    )
-    .all(...params) as SessionRow[];
+    params,
+  );
   if (sessions.length === 0) {
     return [];
   }
@@ -527,9 +576,9 @@ function vectorsForScope(
     }
   }
 
-  const results = db
-    .query(
-      `${scopeCte}
+  const results = economicsRows<ResultRow>(
+    db,
+    `${scopeCte}
        SELECT t.session_id, t.tool_name, t.input,
               COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
               cm.seq AS call_seq
@@ -539,8 +588,8 @@ function vectorsForScope(
        LEFT JOIN block cb ON cb.id = t.call_block_id
        LEFT JOIN message cm ON cm.id = cb.message_id
        WHERE t.session_id = fs.id`,
-    )
-    .all(...params) as ResultRow[];
+    params,
+  );
   for (const row of results) {
     const vector = vectorBySession.get(row.session_id);
     const entry = vector?.buckets.get(toolBucket(row.tool_name, row.input));

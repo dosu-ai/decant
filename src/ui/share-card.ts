@@ -48,10 +48,10 @@ const TITLES: Record<ShareCardKind, string> = {
 };
 
 const QUALIFIERS: Record<ShareCardKind, string> = {
-  busiest_days: "Aggregate only · local archive",
+  busiest_days: "Aggregate only · local session logs",
   busiest_hours: "Timezone included · aggregate only",
   estimated_cost_per_day: "Estimate · model pricing at ingest",
-  sessions_per_day: "Aggregate only · local archive",
+  sessions_per_day: "Aggregate only · local session logs",
 };
 
 export function shareCardTitle(kind: ShareCardKind): string {
@@ -105,8 +105,8 @@ export function shareCardCaption(input: ShareCardCopyInput): string {
   const takeaway = shareCardTakeaway(input);
   const link = shareCardUrl(input.kind);
   return input.kind === "sessions_per_day"
-    ? `${takeaway}. The archive shows the pattern. Dosu can help the next agent use it. ${link}`
-    : `${takeaway}. ${link}`;
+    ? `${takeaway}. Decant shows the pattern. Dosu can help the next agent use it. ${link}`
+    : `${takeaway}. Shared from Decant. ${link}`;
 }
 
 export function shareCardAltText(input: ShareCardCopyInput): string {
@@ -117,13 +117,13 @@ export function shareCardAltText(input: ShareCardCopyInput): string {
   const peakValue = peak == null ? 0 : (values[peak] ?? 0);
   switch (kind) {
     case "sessions_per_day":
-      return `Bar chart of daily sessions from ${start} to ${end}, peaking at ${formatInteger(peakValue)} on ${peakLabel}.`;
+      return `Decant analytics bar chart of daily sessions from ${start} to ${end}, peaking at ${formatInteger(peakValue)} on ${peakLabel}.`;
     case "estimated_cost_per_day":
-      return `Line chart of estimated daily model cost from ${start} to ${end}; selected-range total is ${formatMoney(values.reduce((sum, value) => sum + value, 0))}.`;
+      return `Decant analytics line chart of estimated daily model cost from ${start} to ${end}; selected-range total is ${formatMoney(values.reduce((sum, value) => sum + value, 0))}.`;
     case "busiest_hours":
-      return `Hourly activity chart in ${timezone}, with the highest activity at ${peakLabel}.`;
+      return `Decant analytics hourly activity chart in ${timezone}, with the highest activity at ${peakLabel}.`;
     case "busiest_days":
-      return `Weekday activity chart, highest on ${peakLabel} and lowest on ${low == null ? "no day" : (labels[low] ?? "an unknown day")}.`;
+      return `Decant analytics weekday activity chart, highest on ${peakLabel} and lowest on ${low == null ? "no day" : (labels[low] ?? "an unknown day")}.`;
   }
 }
 

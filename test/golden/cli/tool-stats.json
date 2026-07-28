@@ -4,69 +4,99 @@
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 5,
-    "errors": 1
+    "errors": 1,
+    "p50_ms": 30000,
+    "p95_ms": 30000,
+    "last_used_at": "2026-05-05T10:02:00.000Z"
   },
   {
     "tool_name": "exec_command",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 4,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 1000,
+    "p95_ms": 1000,
+    "last_used_at": "2026-05-06T09:00:05.000Z"
   },
   {
     "tool_name": "Edit",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 2,
-    "errors": 1
+    "errors": 1,
+    "p50_ms": 30000,
+    "p95_ms": 30000,
+    "last_used_at": "2026-05-05T10:03:00.000Z"
   },
   {
     "tool_name": "Read",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 2,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 1000,
+    "p95_ms": 30000,
+    "last_used_at": "2026-05-03T10:01:00.000Z"
   },
   {
     "tool_name": "Write",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 2,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 30000,
+    "p95_ms": 30000,
+    "last_used_at": "2026-05-05T10:03:00.000Z"
   },
   {
     "tool_name": "apply_patch",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 2,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 1000,
+    "p95_ms": 1000,
+    "last_used_at": "2026-05-06T09:00:07.000Z"
   },
   {
     "tool_name": "Agent",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 1,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "last_used_at": "2026-05-03T10:01:00.000Z"
   },
   {
     "tool_name": "NotebookEdit",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 1,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "last_used_at": "2026-05-03T10:02:00.000Z"
   },
   {
     "tool_name": "Skill",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 1,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "last_used_at": "2026-05-03T10:01:00.000Z"
   },
   {
     "tool_name": "dosu__unqualified_tool",
     "tool_kind": "builtin",
     "mcp_server": null,
     "calls": 1,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "last_used_at": "2026-05-06T09:00:05.000Z"
   }
 ]

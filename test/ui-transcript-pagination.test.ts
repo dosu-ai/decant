@@ -5,6 +5,7 @@ import {
   prependTranscriptPage,
   previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
+  transcriptPrefixRequest,
   transcriptWindowOffset,
 } from "../src/ui/transcript-pagination.ts";
 
@@ -48,6 +49,14 @@ describe("transcript pagination", () => {
   test("opens unloaded outline targets with bounded preceding context", () => {
     expect(transcriptWindowOffset(1_574)).toBe(1_554);
     expect(transcriptWindowOffset(8)).toBe(0);
+  });
+
+  test("loads every earlier row when jumping to a specific transcript event", () => {
+    expect(transcriptPrefixRequest(1_258, 2_000)).toEqual({ offset: 0, limit: 1_259 });
+    expect(transcriptPrefixRequest(1_258, 2_000, 160)).toEqual({ offset: 0, limit: 1_419 });
+    expect(transcriptPrefixRequest(2_500, 2_000)).toEqual({ offset: 0, limit: 2_000 });
+    expect(transcriptPrefixRequest(Number.NaN, Number.NaN)).toEqual({ offset: 0, limit: 1 });
+    expect(transcriptPrefixRequest(20, 100, Number.NaN)).toEqual({ offset: 0, limit: 21 });
   });
 
   test("serializes callers that were waiting on the same active request", async () => {

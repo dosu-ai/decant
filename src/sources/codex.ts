@@ -186,11 +186,15 @@ export function parseCodexSession(
 
 function usageFrom(source: Json | undefined): TokenUsage {
   const cached = getInteger(source, "cached_input_tokens");
+  const cacheWrite = getInteger(source, "cache_write_input_tokens");
   return {
-    input: Math.max(0, getInteger(source, "input_tokens") - cached),
+    // Codex reports input_tokens as the inclusive prompt total. Cached and
+    // cache-write tokens are component breakdowns, so normalize them into
+    // disjoint buckets before the rest of Decant adds the buckets together.
+    input: Math.max(0, getInteger(source, "input_tokens") - cached - cacheWrite),
     output: getInteger(source, "output_tokens"),
     cacheRead: cached,
-    cacheCreation: 0,
+    cacheCreation: cacheWrite,
     cacheCreation1h: 0,
     reasoning: getInteger(source, "reasoning_output_tokens"),
   };

@@ -1,0 +1,263 @@
+import * as echarts from "echarts";
+import type { ContextWindowTimeline } from "../context-window.ts";
+import type { DimRow } from "../stats.ts";
+import { layoutContextCurve } from "../ui/context-window-layout.ts";
+
+export interface ReportChartSize {
+  width?: number;
+  height?: number;
+}
+
+const DEFAULT_WIDTH = 760;
+const DEFAULT_HEIGHT = 250;
+const INK = "#24302a";
+const MUTED = "#6d766f";
+const RULE = "#dce1da";
+const SAGE = "#778561";
+const SAGE_LIGHT = "#b4bb91";
+const REPORT_SANS_STACK =
+  '"IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const CONTEXT_GRID_HORIZONTAL_PADDING = 80;
+const CONTEXT_MARKER_GAP_PX = 3;
+
+export interface ReportContextWindowGeometry {
+  compactionXs: number[];
+  pointXs: number[];
+  segments: [number, number][][];
+  slotWidth: number;
+  turnOrder: number[];
+}
+
+/**
+ * Render an ECharts option as a standalone SVG string. ECharts' SSR mode does
+ * not create a DOM and animation is forced off so exported reports contain no
+ * script or animation CSS.
+ */
+export function renderChartSvg(option: echarts.EChartsOption, size: ReportChartSize = {}): string {
+  const width = size.width ?? DEFAULT_WIDTH;
+  const height = size.height ?? DEFAULT_HEIGHT;
+  const chart = echarts.init(null, null, {
+    renderer: "svg",
+    ssr: true,
+    width,
+    height,
+  });
+  try {
+    chart.setOption({
+      ...option,
+      animation: false,
+      backgroundColor: "transparent",
+      textStyle: {
+        color: INK,
+        fontFamily: REPORT_SANS_STACK,
+        ...(option.textStyle ?? {}),
+      },
+    });
+    return chart.renderToSVGString();
+  } finally {
+    chart.dispose();
+  }
+}
+
+export function renderSessionsByDayChart(rows: readonly DimRow[], size?: ReportChartSize): string {
+  const ordered = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+  return renderChartSvg(
+    {
+      grid: { top: 18, right: 16, bottom: 44, left: 48 },
+      xAxis: {
+        type: "category",
+        data: ordered.map((row) => row.key),
+        axisLine: { lineStyle: { color: RULE } },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED, hideOverlap: true },
+      },
+      yAxis: {
+        type: "value",
+        minInterval: 1,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED },
+        splitLine: { lineStyle: { color: RULE } },
+      },
+      series: [
+        {
+          type: "line",
+          data: ordered.map((row) => row.sessions),
+          symbol: "circle",
+          symbolSize: 6,
+          lineStyle: { color: SAGE, width: 2.5 },
+          itemStyle: { color: SAGE },
+          areaStyle: { color: "rgba(180, 187, 145, 0.24)" },
+        },
+      ],
+    },
+    size,
+  );
+}
+
+export function renderCostByDayChart(rows: readonly DimRow[], size?: ReportChartSize): string {
+  const ordered = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+  return renderChartSvg(
+    {
+      grid: { top: 18, right: 16, bottom: 44, left: 58 },
+      xAxis: {
+        type: "category",
+        data: ordered.map((row) => row.key),
+        axisLine: { lineStyle: { color: RULE } },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED, hideOverlap: true },
+      },
+      yAxis: {
+        type: "value",
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: MUTED,
+          formatter: (value: number) => `$${value.toFixed(value < 1 ? 2 : 0)}`,
+        },
+        splitLine: { lineStyle: { color: RULE } },
+      },
+      series: [
+        {
+          type: "bar",
+          data: ordered.map((row) => row.estimated_cost_usd),
+          itemStyle: { color: SAGE_LIGHT, borderRadius: [3, 3, 0, 0] },
+          barMaxWidth: 30,
+        },
+      ],
+    },
+    size,
+  );
+}
+
+export function renderContextWindowChart(
+  timeline: ContextWindowTimeline,
+  size: ReportChartSize = {},
+): string {
+  const width = size.width ?? DEFAULT_WIDTH;
+  const geometry = reportContextWindowGeometry(timeline, width);
+  const windowTokens = timeline.window_tokens;
+  const compactionMarkLine =
+    geometry.compactionXs.length === 0
+      ? undefined
+      : {
+          silent: true,
+          symbol: "none" as const,
+          label: {
+            color: MUTED,
+            fontSize: 10,
+            formatter: "compaction",
+          },
+          lineStyle: { color: MUTED, type: "dashed" as const, width: 1 },
+          data: geometry.compactionXs.map((x) => ({ xAxis: x })),
+        };
+  const lineSeries = geometry.segments.map(
+    (segment, index): echarts.LineSeriesOption => ({
+      type: "line",
+      data: segment,
+      showSymbol: false,
+      connectNulls: false,
+      lineStyle: { color: SAGE, width: 2.5 },
+      itemStyle: { color: SAGE },
+      areaStyle: { color: "rgba(180, 187, 145, 0.20)" },
+      ...(index === 0 && compactionMarkLine != null ? { markLine: compactionMarkLine } : {}),
+    }),
+  );
+  const pointSeries: echarts.ScatterSeriesOption[] =
+    timeline.points.length <= 18
+      ? [
+          {
+            type: "scatter",
+            data: timeline.points.map((point, index) => [
+              geometry.pointXs[index] ?? 0,
+              point.context_tokens,
+            ]),
+            symbol: "circle",
+            symbolSize: 5,
+            itemStyle: { color: SAGE },
+            z: 3,
+          },
+        ]
+      : [];
+  return renderChartSvg(
+    {
+      grid: { top: 24, right: 18, bottom: 44, left: 62 },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: 1,
+        interval: geometry.slotWidth,
+        axisLine: { lineStyle: { color: RULE } },
+        axisTick: { show: false },
+        axisLabel: {
+          color: MUTED,
+          hideOverlap: true,
+          formatter: (value: number) => reportTurnLabel(value, geometry),
+        },
+      },
+      yAxis: {
+        type: "value",
+        min: 0,
+        max: windowTokens ?? undefined,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: MUTED,
+          formatter: (value: number) => compactNumber(value),
+        },
+        splitLine: { lineStyle: { color: RULE } },
+      },
+      series: [...lineSeries, ...pointSeries],
+    },
+    { width, height: size.height ?? 280 },
+  );
+}
+
+/**
+ * Map the shared live-strip geometry into ECharts' normalized value-axis
+ * coordinates. Keeping ECharts as the report renderer preserves its static SVG
+ * typography and styling while sharing call slots, curve breaks, and exact
+ * compaction positions with the interactive app.
+ */
+export function reportContextWindowGeometry(
+  timeline: ContextWindowTimeline,
+  width = DEFAULT_WIDTH,
+): ReportContextWindowGeometry {
+  const compactions = [...timeline.compactions].sort((left, right) => left.seq - right.seq);
+  const plotWidth = Math.max(1, width - CONTEXT_GRID_HORIZONTAL_PADDING);
+  const layout = layoutContextCurve(timeline.points, compactions, {
+    markerGap: CONTEXT_MARKER_GAP_PX / plotWidth,
+    plotLeft: 0,
+    plotRight: 1,
+    yAt: (tokens) => tokens,
+  });
+  return {
+    compactionXs: layout.markerXs,
+    pointXs: layout.xs,
+    segments: layout.segments,
+    slotWidth: layout.slotWidth,
+    turnOrder: layout.turnOrder,
+  };
+}
+
+function reportTurnLabel(value: number, geometry: ReportContextWindowGeometry): string {
+  if (geometry.turnOrder.length === 0 || value >= 1) {
+    return "";
+  }
+  const index = Math.min(
+    geometry.turnOrder.length - 1,
+    Math.max(0, Math.floor(value / Math.max(Number.EPSILON, geometry.slotWidth))),
+  );
+  const turn = geometry.turnOrder[index];
+  return turn == null ? "" : `T${turn}`;
+}
+
+function compactNumber(value: number): string {
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(value) >= 1_000) {
+    return `${(value / 1_000).toFixed(0)}K`;
+  }
+  return String(Math.round(value));
+}

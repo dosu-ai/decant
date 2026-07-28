@@ -106,6 +106,28 @@ export function transcriptWindowOffset(seq: number, contextBefore = 20): number 
 }
 
 /**
+ * Load every transcript row through a deep-link target.
+ *
+ * A focused jump is an introspection action, not a reason to replace the
+ * transcript with a partial window. Starting at offset zero means the reader
+ * can scroll upward from the target without first encountering an "earlier
+ * messages not loaded" gap.
+ */
+export function transcriptPrefixRequest(
+  seq: number,
+  messageCount: number,
+  contextAfter = 0,
+): { offset: 0; limit: number } {
+  const target = Number.isFinite(seq) ? Math.max(0, Math.trunc(seq)) : 0;
+  const available = Number.isFinite(messageCount) ? Math.max(0, Math.trunc(messageCount)) : 0;
+  const following = Number.isFinite(contextAfter) ? Math.max(0, Math.trunc(contextAfter)) : 0;
+  return {
+    offset: 0,
+    limit: available > 0 ? Math.min(target + 1 + following, available) : target + 1 + following,
+  };
+}
+
+/**
  * Hold a window offset inside the session so it always addresses a page with
  * rows in it. Deep links travel between archives: `#message-1400` pasted from a
  * longer copy of the same session would otherwise request an offset past the

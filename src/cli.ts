@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
-import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
-import { refreshDerivedMetadata } from "./derived.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
   DECANT_VERSION,
   defaultScriptOpts,
@@ -158,7 +157,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       writeOut: (value) => io.writeOut(value),
       writeErr: (value) => io.writeErr(value),
     })
-    .option("--db <path>", "path to the decant SQLite database")
+    .option("--db <path>", "path to the Decant SQLite database")
     .option("--json", "emit machine-readable JSON")
     .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
     .option("-q, --quiet", "suppress non-essential output")
@@ -228,7 +227,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       // they are reported without failing the command.
       return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
     } finally {
-      archive.db.close();
+      closeDb(archive.db);
     }
   };
 
@@ -262,7 +261,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("watch")
-    .description("watch session directories and keep the archive current")
+    .description("watch session directories and keep the session log index current")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
@@ -301,7 +300,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("serve")
-    .description("serve the in-process web UI and keep the archive current")
+    .description("serve the in-process web UI and keep the session log index current")
     .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
@@ -426,7 +425,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                   : `${rows.map((row) => `${row.id}\t${row.tool}\t${row.title ?? ""}`).join("\n")}\n`,
               );
             } finally {
-              archive.db.close();
+              closeDb(archive.db);
             }
           }),
       );
@@ -447,7 +446,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             output(detail, () => toMarkdown(detail));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
       );
@@ -480,12 +479,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               .concat(rows.length > 0 ? "\n" : ""),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
 
-  const dbCommand = program.command("db").description("inspect and maintain the archive");
+  const dbCommand = program.command("db").description("inspect and maintain the session log index");
   dbCommand
     .command("info")
     .description("show DB path, size, schema version, and row counts")
@@ -505,7 +504,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               `tool_calls: ${row.tool_calls}\n`,
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -518,7 +517,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         try {
           io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -532,7 +531,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           archive.db.exec("VACUUM;");
           io.writeErr(`vacuumed ${archive.config.dbPath}\n`);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -611,7 +610,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             return emitArtifact(io, globals(), artifact, commandOptions);
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
     );
@@ -641,7 +640,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           }
           return emitArtifact(io, globals(), artifact, commandOptions);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -703,7 +702,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             return emitArtifact(io, globals(), artifact, commandOptions);
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
     );
@@ -735,7 +734,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               (rows.length > 0 ? "\n" : ""),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -772,7 +771,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           }
           return ok ? 0 : 1;
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -807,7 +806,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const rows = search(archive.db, query, commandOptions.limit ?? 30);
           output(rows, () => rows.map((row) => `${row.session_id}\t${row.snippet}`).join("\n"));
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -836,7 +835,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             output(row, () => `sessions:   ${row.sessions}\nmessages:   ${row.messages}\n`);
           }
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -868,7 +867,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               ),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -902,7 +901,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const rows = fileHotspots(archive.db, group, op, commandOptions.limit ?? 25);
           output(rows, () => rows.map((row) => `${row.key}\t${row.sessions}`).join("\n"));
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -923,7 +922,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             );
             output(rows, () => rows.map((row) => `${row.tool_name}\t${row.calls}`).join("\n"));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
       );
@@ -943,7 +942,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             const rows = mcpUsage(archive.db, commandOptions.limit ?? 50);
             output(rows, () => rows.map((row) => `${row.mcp_server}\t${row.calls}`).join("\n"));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
       );
@@ -1069,7 +1068,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             return 0;
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
     );
@@ -1097,7 +1096,10 @@ function commanderExitCode(error: { exitCode: number; code?: string }): number {
 function openArchive(config: Config): Archive {
   mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
-  refreshDerivedMetadata(db, { ignoreReadonly: true });
+  // Keep archive opens read-only once the schema is current. Sync/watch repair
+  // derived metadata on their write paths, and serve hydrates it once for its
+  // long-lived connection; a --no-sync CLI read must not acquire SQLite's
+  // single writer lock merely to list or search existing rows.
   return { db, config };
 }
 

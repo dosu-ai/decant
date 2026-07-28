@@ -1,7 +1,7 @@
--- decant:schema_version=17
--- Effective decant schema (migrations 1..17 applied), frozen as the current
--- baseline. v16 is data-only (no DDL changes); v17 adds ingest_issue.code and
--- idx_ingest_issue_source. Do not edit without updating schema tests.
+-- decant:schema_version=18
+-- Effective decant schema (migrations 1..18 applied), frozen as the current
+-- baseline. v18 adds tool-call result metadata and FTS prefix indexes.
+-- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -116,7 +116,9 @@ CREATE TABLE tool_call (
   tool_base_name TEXT,
   tool_use_id TEXT,
   input TEXT,
+  input_bytes INTEGER,
   is_error INTEGER,
+  has_result INTEGER,
   output_preview TEXT,
   output_bytes INTEGER,
   duration_ms INTEGER,
@@ -217,7 +219,8 @@ CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
 CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
-  content='block', content_rowid='id'
+  content='block', content_rowid='id',
+  prefix='2 3'
 );
 CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

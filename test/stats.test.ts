@@ -120,17 +120,23 @@ describe("stats rollups", () => {
     db.close();
   });
 
-  test("totals exclude generated local-command-only sessions", () => {
+  test("totals and every dimension exclude generated local-command-only sessions", () => {
     const db = freshDb();
     db.exec(`
-      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      INSERT INTO project(id, path)
       VALUES
-        (1, 'claude_code', 'command-only',
+        (1, '/hidden-command'),
+        (2, '/visible-session');
+      INSERT INTO session(id, tool, source_session_id, project_id, title, model, started_at)
+      VALUES
+        (1, 'claude_code', 'command-only', 1,
          '<local-command-caveat>Generated command context</local-command-caveat>',
+         NULL,
          '2026-07-05T00:00:00Z'),
-        (2, 'claude_code', 'human-after-command',
+        (2, 'claude_code', 'human-after-command', 2,
          '<local-command-caveat>Generated command context</local-command-caveat>',
-         '2026-07-05T00:00:01Z');
+         'claude-sonnet-4-5',
+         '2026-07-06T00:00:01Z');
       INSERT INTO message(id, session_id, seq, role, raw)
       VALUES
         (1, 1, 0, 'user', '{}'),
@@ -141,9 +147,20 @@ describe("stats rollups", () => {
         (1, 1, 0, 'text', '<command-name>/exit</command-name>'),
         (2, 2, 0, 'text', '<command-name>/model</command-name>'),
         (3, 2, 0, 'text', 'Continue with my actual request');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, ordinal
+      ) VALUES
+        (1, 'mcp', 'HiddenCommandTool', 'hidden', 1, 500, 0),
+        (2, 'builtin', 'VisibleTool', NULL, 0, 100, 0);
     `);
 
-    expect(totals(db)).toMatchObject({ sessions: 1, messages: 2 });
+    expect(totals(db)).toMatchObject({ sessions: 1, messages: 2, tool_calls: 1 });
+    expect(byDimension(db, "tool")).toMatchObject([{ key: "claude_code", sessions: 1 }]);
+    expect(byDimension(db, "day")).toMatchObject([{ key: "2026-07-06", sessions: 1 }]);
+    expect(byDimension(db, "project")).toMatchObject([{ key: "/visible-session", sessions: 1 }]);
+    expect(byDimension(db, "model")).toMatchObject([{ key: "claude-sonnet-4-5", sessions: 1 }]);
+    expect(toolUsage(db, false, 50)).toMatchObject([{ tool_name: "VisibleTool", calls: 1 }]);
+    expect(mcpUsage(db, 50)).toEqual([]);
     db.close();
   });
 
@@ -196,9 +213,67 @@ describe("stats rollups", () => {
     const db = seeded();
     const tools = toolUsage(db, false, 50);
     const read = tools.find((tool) => tool.tool_name === "Read");
-    expect(read).toMatchObject({ tool_kind: "builtin", calls: 1, errors: 0 });
+    expect(read).toMatchObject({
+      tool_kind: "builtin",
+      calls: 1,
+      errors: 0,
+      p50_ms: 1000,
+      p95_ms: 1000,
+      last_used_at: "2026-05-01T10:00:05.000Z",
+    });
     expect(toolUsage(db, true, 50)).toEqual([]);
     expect(mcpUsage(db, 50)).toEqual([]);
+
+    const sessionId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'sess-claude-1'").get() as {
+        id: number;
+      }
+    ).id;
+    const insert = db.prepare(
+      `INSERT INTO tool_call(
+         session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, timestamp, ordinal
+       ) VALUES (?, 'mcp', ?, 'demo', ?, ?, ?, ?)`,
+    );
+    for (const [index, duration] of [10, 20, 30, 40].entries()) {
+      insert.run(
+        sessionId,
+        index % 2 === 0 ? "mcp__demo__read" : "mcp__demo__write",
+        index === 3 ? 1 : 0,
+        duration,
+        `2026-05-01T10:00:${String(20 + index).padStart(2, "0")}.000Z`,
+        index,
+      );
+    }
+    db.query(
+      `INSERT INTO tool_call(
+         session_id, tool_kind, tool_name, is_error, duration_ms, timestamp, ordinal
+       ) VALUES (?, 'builtin', 'NoMetadata', NULL, NULL, NULL, 10)`,
+    ).run(sessionId);
+
+    expect(mcpUsage(db, 50)).toEqual([
+      {
+        mcp_server: "demo",
+        tools: 2,
+        calls: 4,
+        errors: 1,
+        p50_ms: 20,
+        p95_ms: 40,
+        last_used_at: "2026-05-01T10:00:23.000Z",
+      },
+    ]);
+    expect(toolUsage(db, true, 50)).toEqual([
+      expect.objectContaining({
+        tool_name: "mcp__demo__write",
+        errors: 1,
+        p50_ms: 20,
+        p95_ms: 40,
+      }),
+    ]);
+    expect(toolUsage(db, false, 50).find((row) => row.tool_name === "NoMetadata")).toMatchObject({
+      p50_ms: null,
+      p95_ms: null,
+      last_used_at: null,
+    });
     db.close();
   });
 

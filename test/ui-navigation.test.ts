@@ -3,8 +3,11 @@ import {
   activeRoute,
   activeRouteKey,
   documentTitleFor,
+  isKnownRoute,
   type NavDestination,
   pathOnly,
+  projectSessionsHref,
+  sessionProjectFilter,
   titleFor,
 } from "../src/ui/navigation.ts";
 
@@ -33,13 +36,9 @@ describe("route resolution", () => {
     expect(activeRouteKey("/analytics", ITEMS)).toBe(activeRouteKey("/", ITEMS));
   });
 
-  test("the alias resolves by name, not by falling through", () => {
-    // An unknown route also lands on Analytics, so the assertion above would
-    // pass even if the alias were dropped. Removing Analytics from the list
-    // separates the two: a real lookup finds nothing, a fallback still answers.
-    const withoutAnalytics = ITEMS.filter((item) => item.key !== "analytics");
-    expect(activeRouteKey("/analytics", withoutAnalytics)).toBe("analytics");
-    expect(activeRoute("/analytics", withoutAnalytics)).toBe("Analytics");
+  test("the alias is a known route rather than a not-found fallback", () => {
+    expect(isKnownRoute("/analytics", ITEMS)).toBe(true);
+    expect(isKnownRoute("/nope", ITEMS)).toBe(false);
   });
 
   test("the session list keeps its own entry", () => {
@@ -54,6 +53,22 @@ describe("route resolution", () => {
     expect(activeRouteKey("/sessions/42", ITEMS)).toBe("sessions");
   });
 
+  test("malformed and overlong session paths are not session routes", () => {
+    expect(isKnownRoute("/sessions/abc", ITEMS)).toBe(false);
+    expect(isKnownRoute("/sessions/42/extra", ITEMS)).toBe(false);
+    expect(activeRouteKey("/sessions/abc", ITEMS)).toBe("not-found");
+    expect(activeRouteKey("/sessions/42/extra", ITEMS)).toBe("not-found");
+  });
+
+  test("report previews are known routes without occupying sidebar slots", () => {
+    expect(activeRoute("/reports/analytics", ITEMS)).toBe("Analytics report");
+    expect(activeRouteKey("/reports/analytics", ITEMS)).toBe("analytics-report");
+    expect(activeRoute("/reports/session/42", ITEMS)).toBe("Session report");
+    expect(activeRouteKey("/reports/session/42", ITEMS)).toBe("session-report");
+    expect(isKnownRoute("/reports/session/abc", ITEMS)).toBe(false);
+    expect(isKnownRoute("/reports/session/42/extra", ITEMS)).toBe(false);
+  });
+
   test("every sidebar destination resolves to itself", () => {
     for (const item of ITEMS) {
       expect(activeRouteKey(item.href, ITEMS)).toBe(item.key);
@@ -66,9 +81,9 @@ describe("route resolution", () => {
     expect(activeRouteKey("/settings", ITEMS)).toBe("settings");
   });
 
-  test("an unknown route falls back home", () => {
-    expect(activeRoute("/nope", ITEMS)).toBe("Analytics");
-    expect(activeRouteKey("/nope", ITEMS)).toBe("analytics");
+  test("an unknown route resolves to the not-found view", () => {
+    expect(activeRoute("/nope", ITEMS)).toBe("Not found");
+    expect(activeRouteKey("/nope", ITEMS)).toBe("not-found");
   });
 
   test("a query string does not change the destination", () => {
@@ -85,9 +100,20 @@ describe("pathOnly", () => {
   });
 });
 
+describe("project session filters", () => {
+  test("round-trips absolute project paths through the sessions URL", () => {
+    const project = "/Users/dev/My Project";
+    const href = projectSessionsHref(project);
+    expect(href).toStartWith("/sessions?project=");
+    expect(sessionProjectFilter(href)).toBe(project);
+    expect(sessionProjectFilter("/sessions")).toBeNull();
+    expect(sessionProjectFilter(`/projects?project=${encodeURIComponent(project)}`)).toBeNull();
+  });
+});
+
 describe("titleFor", () => {
   test("expands Sessions and passes everything else through", () => {
-    expect(titleFor("Sessions")).toBe("Session Archive");
+    expect(titleFor("Sessions")).toBe("Session Logs");
     expect(titleFor("Analytics")).toBe("Analytics");
     expect(titleFor("Tools & MCP")).toBe("Tools & MCP");
   });
@@ -95,23 +121,29 @@ describe("titleFor", () => {
 
 describe("documentTitleFor", () => {
   test.each([
-    ["/", "Analytics · decant"],
-    ["/analytics", "Analytics · decant"],
-    ["/sessions", "Sessions · decant"],
-    ["/sessions/42", "Session detail · decant"],
-    ["/projects", "Projects · decant"],
-    ["/search", "Search · decant"],
-    ["/insights", "Insights · decant"],
-    ["/tools", "Tools & MCP · decant"],
-    ["/files", "File hotspots · decant"],
-    ["/settings", "Settings · decant"],
+    ["/", "Analytics · Decant"],
+    ["/analytics", "Analytics · Decant"],
+    ["/sessions", "Sessions · Decant"],
+    ["/sessions/42", "Session detail · Decant"],
+    ["/sessions/abc", "Not found · Decant"],
+    ["/sessions/42/extra", "Not found · Decant"],
+    ["/reports/analytics", "Analytics report · Decant"],
+    ["/reports/session/42", "Session report · Decant"],
+    ["/reports/session/abc", "Not found · Decant"],
+    ["/projects", "Projects · Decant"],
+    ["/search", "Search · Decant"],
+    ["/insights", "Insights · Decant"],
+    ["/tools", "Tools & MCP · Decant"],
+    ["/files", "File hotspots · Decant"],
+    ["/settings", "Settings · Decant"],
+    ["/nope", "Not found · Decant"],
   ])("maps %s to a privacy-safe browser title", (path, expected) => {
     expect(documentTitleFor(path, ITEMS)).toBe(expected);
   });
 
   test("never places a session title or query string in browser history", () => {
     expect(documentTitleFor("/sessions/42?title=private-repository", ITEMS)).toBe(
-      "Session detail · decant",
+      "Session detail · Decant",
     );
   });
 });

@@ -11,9 +11,11 @@
     "tool_use_id": "t_build",
     "input": "{\"command\":\"cargo build --workspace\",\"description\":\"build\"}",
     "is_error": 0,
+    "input_bytes": 59,
+    "has_result": 1,
     "output_preview": "Finished",
     "output_bytes": 8,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:01:00.000Z"
   },
   {
@@ -28,9 +30,11 @@
     "tool_use_id": "t_test",
     "input": "{\"command\":\"cargo test --workspace\",\"description\":\"test\"}",
     "is_error": 0,
+    "input_bytes": 57,
+    "has_result": 1,
     "output_preview": "ok",
     "output_bytes": 2,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:01:00.000Z"
   },
   {
@@ -45,9 +49,11 @@
     "tool_use_id": "t_secret",
     "input": "{\"command\":\"gh auth login --with-token=ghp_AAAAitsasecrettoken0000000000000000\",\"description\":\"login\"}",
     "is_error": 0,
+    "input_bytes": 102,
+    "has_result": 1,
     "output_preview": "ok",
     "output_bytes": 2,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:02:00.000Z"
   },
   {
@@ -62,9 +68,11 @@
     "tool_use_id": "t_rm",
     "input": "{\"command\":\"rm -rf target\",\"description\":\"clean\"}",
     "is_error": 0,
+    "input_bytes": 49,
+    "has_result": 1,
     "output_preview": "ok",
     "output_bytes": 2,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:02:00.000Z"
   },
   {
@@ -79,9 +87,11 @@
     "tool_use_id": "t_fail",
     "input": "{\"command\":\"cargo build --bad-flag\",\"description\":\"oops\"}",
     "is_error": 1,
+    "input_bytes": 57,
+    "has_result": 1,
     "output_preview": "error: Found argument '--bad-flag'",
     "output_bytes": 34,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:02:00.000Z"
   },
   {
@@ -96,9 +106,11 @@
     "tool_use_id": "t_write",
     "input": "{\"content\":\"# Notes\\nfirst line\\n\",\"file_path\":\"/Users/dev/proj/NOTES.md\"}",
     "is_error": 0,
+    "input_bytes": 74,
+    "has_result": 1,
     "output_preview": "written",
     "output_bytes": 7,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:03:00.000Z"
   },
   {
@@ -113,9 +125,11 @@
     "tool_use_id": "t_edit",
     "input": "{\"file_path\":\"/Users/dev/proj/src/main.rs\",\"new_string\":\"fn main() { run(); }\",\"old_string\":\"fn main() {}\"}",
     "is_error": 0,
+    "input_bytes": 107,
+    "has_result": 1,
     "output_preview": "edited",
     "output_bytes": 6,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-05T10:03:00.000Z"
   },
   {
@@ -130,9 +144,11 @@
     "tool_use_id": "toolu_read",
     "input": "{\"file_path\":\"/Users/dev/proj/src/main.rs\"}",
     "is_error": 0,
+    "input_bytes": 43,
+    "has_result": 1,
     "output_preview": "fn auth() {}",
     "output_bytes": 12,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-03T10:01:00.000Z"
   },
   {
@@ -147,6 +163,8 @@
     "tool_use_id": "toolu_agent",
     "input": "{\"prompt\":\"explore the auth flows\"}",
     "is_error": null,
+    "input_bytes": 35,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,
@@ -164,6 +182,8 @@
     "tool_use_id": "toolu_skill",
     "input": "{\"skill\":\"commit\"}",
     "is_error": null,
+    "input_bytes": 18,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,
@@ -181,9 +201,11 @@
     "tool_use_id": "toolu_edit",
     "input": "{\"file_path\":\"/Users/dev/proj/src/main.rs\",\"new_string\":\"fn auth() -> bool { true }\",\"old_string\":\"fn auth() {}\"}",
     "is_error": 1,
+    "input_bytes": 113,
+    "has_result": 1,
     "output_preview": "String to replace not found in file",
     "output_bytes": 35,
-    "duration_ms": null,
+    "duration_ms": 30000,
     "timestamp": "2026-05-03T10:02:00.000Z"
   },
   {
@@ -198,6 +220,8 @@
     "tool_use_id": "toolu_write",
     "input": "{\"content\":\"# Auth\",\"file_path\":\"/Users/dev/proj/README.md\"}",
     "is_error": null,
+    "input_bytes": 60,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,
@@ -215,6 +239,8 @@
     "tool_use_id": "toolu_nb",
     "input": "{\"new_source\":\"x=1\",\"notebook_path\":\"/Users/dev/proj/nb.ipynb\"}",
     "is_error": null,
+    "input_bytes": 63,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,
@@ -232,9 +258,11 @@
     "tool_use_id": "toolu_mcp",
     "input": "{\"title\":\"bug\"}",
     "is_error": 0,
+    "input_bytes": 15,
+    "has_result": 1,
     "output_preview": "issue #42 created",
     "output_bytes": 17,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-05T10:00:05.000Z"
   },
   {
@@ -249,9 +277,11 @@
     "tool_use_id": "toolu_1",
     "input": "{\"file_path\":\"/Users/dev/proj/auth_test.py\"}",
     "is_error": 0,
+    "input_bytes": 44,
+    "has_result": 1,
     "output_preview": "def test_auth(): assert login()",
     "output_bytes": 31,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-01T10:00:05.000Z"
   },
   {
@@ -266,9 +296,11 @@
     "tool_use_id": "call_1",
     "input": "\"{\\\"command\\\":\\\"rg TODO\\\"}\"",
     "is_error": null,
+    "input_bytes": 27,
+    "has_result": 1,
     "output_preview": "src/a.rs: // TODO refactor",
     "output_bytes": 26,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-02T09:00:05.000Z"
   },
   {
@@ -283,9 +315,11 @@
     "tool_use_id": "call_b1",
     "input": "\"{\\\"cmd\\\":\\\"cargo build --workspace\\\",\\\"workdir\\\":\\\"/Users/dev/proj\\\",\\\"max_output_tokens\\\":1024}\"",
     "is_error": null,
+    "input_bytes": 98,
+    "has_result": 1,
     "output_preview": "Finished",
     "output_bytes": 8,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-06T09:00:03.000Z"
   },
   {
@@ -300,9 +334,11 @@
     "tool_use_id": "call_t1",
     "input": "\"{\\\"cmd\\\":\\\"cargo test --workspace\\\",\\\"workdir\\\":\\\"/Users/dev/proj\\\",\\\"max_output_tokens\\\":1024}\"",
     "is_error": null,
+    "input_bytes": 97,
+    "has_result": 1,
     "output_preview": "ok",
     "output_bytes": 2,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-06T09:00:05.000Z"
   },
   {
@@ -317,9 +353,11 @@
     "tool_use_id": "call_p1",
     "input": "\"*** Begin Patch\\n*** Add File: docs/new.md\\n+# New doc\\n*** End Patch\"",
     "is_error": null,
+    "input_bytes": 71,
+    "has_result": 1,
     "output_preview": "Done.",
     "output_bytes": 5,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-06T09:00:07.000Z"
   },
   {
@@ -334,9 +372,11 @@
     "tool_use_id": "call_p1",
     "input": "\"*** Begin Patch\\n*** Add File: docs/new.md\\n+# New doc\\n*** Update File: src/lib.rs\\n@@\\n-old line\\n+new line\\n*** Delete File: old.txt\\n*** End Patch\"",
     "is_error": null,
+    "input_bytes": 152,
+    "has_result": 1,
     "output_preview": "Done. 3 files changed.",
     "output_bytes": 22,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-04T09:00:05.000Z"
   },
   {
@@ -351,9 +391,11 @@
     "tool_use_id": "call_e1",
     "input": "\"{\\\"cmd\\\":\\\"cat docs/new.md\\\",\\\"workdir\\\":\\\"/Users/dev/proj\\\",\\\"max_output_tokens\\\":1024}\"",
     "is_error": null,
+    "input_bytes": 90,
+    "has_result": 1,
     "output_preview": "# New doc",
     "output_bytes": 9,
-    "duration_ms": null,
+    "duration_ms": 1000,
     "timestamp": "2026-05-04T09:00:07.000Z"
   },
   {
@@ -368,9 +410,11 @@
     "tool_use_id": "call_dosu",
     "input": "{\"query\":\"synthetic context\"}",
     "is_error": null,
+    "input_bytes": 29,
+    "has_result": 1,
     "output_preview": "synthetic result",
     "output_bytes": 16,
-    "duration_ms": null,
+    "duration_ms": 3000,
     "timestamp": "2026-05-06T09:00:03.000Z"
   },
   {
@@ -385,6 +429,8 @@
     "tool_use_id": "call_github",
     "input": "{\"query\":\"synthetic\"}",
     "is_error": null,
+    "input_bytes": 21,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,
@@ -402,6 +448,8 @@
     "tool_use_id": "call_unqualified",
     "input": "{\"query\":\"synthetic\"}",
     "is_error": null,
+    "input_bytes": 21,
+    "has_result": 0,
     "output_preview": null,
     "output_bytes": null,
     "duration_ms": null,

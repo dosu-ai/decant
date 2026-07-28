@@ -16,6 +16,7 @@ import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing, estimateCost } from "./cost.ts";
+import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
 import {
@@ -56,6 +57,18 @@ export interface SyncReport {
   cancelled: boolean;
 }
 
+/** A snapshot of a running sync. `scanned` is the number of discovered source
+ * files inspected so far; `total` is the number discovered at startup. */
+export interface SyncProgress {
+  scanned: number;
+  ingested: number;
+  skipped: number;
+  failed: number;
+  total: number;
+}
+
+export type SyncProgressListener = (progress: SyncProgress) => void;
+
 export interface SourceFile {
   tool: Tool;
   path: string;
@@ -75,6 +88,35 @@ interface ToolUseBlock {
   callBlockId: number;
   timestamp: string | null;
   block: NormalizedBlock;
+}
+
+type IngestQueryParam = string | number | bigint | boolean | null;
+
+function ingestRows<T>(db: Database, sql: string, params: IngestQueryParam[] = []): T[] {
+  const statement = db.prepare<T, IngestQueryParam[]>(sql);
+  try {
+    return statement.all(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function ingestRow<T>(db: Database, sql: string, params: IngestQueryParam[] = []): T | null {
+  const statement = db.prepare<T, IngestQueryParam[]>(sql);
+  try {
+    return statement.get(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function runIngestStatement(db: Database, sql: string, params: IngestQueryParam[] = []): void {
+  const statement = db.prepare<unknown, IngestQueryParam[]>(sql);
+  try {
+    statement.run(...params);
+  } finally {
+    statement.finalize();
+  }
 }
 
 export function discover(config: IngestConfig): SourceFile[] {
@@ -101,6 +143,7 @@ export function sync(
   db: Database,
   config: IngestConfig,
   cancel?: { aborted: boolean },
+  onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
   const files = discover(config);
@@ -114,6 +157,17 @@ export function sync(
     failed: 0,
     cancelled: false,
   };
+  let inspected = 0;
+  const emitProgress = (): void =>
+    onProgress?.({
+      scanned: inspected,
+      ingested: report.ingested,
+      skipped: report.skipped,
+      failed: report.failed,
+      total: files.length,
+    });
+
+  emitProgress();
 
   for (const file of files) {
     if (cancel?.aborted === true) {
@@ -121,72 +175,79 @@ export function sync(
       break;
     }
 
-    // One descriptor for everything: the skip decision, the recorded stat,
-    // and the content read all describe the same inode, so a path swapped
-    // mid-loop can neither skip wrongly nor record metadata for content that
-    // was never read. A file that vanished before open is a silent skip,
-    // matching the old stat-failure path; any other open error counts as
-    // failed, matching the old read-failure path.
-    let fd: number;
     try {
-      fd = openSync(file.path, "r");
-    } catch (error) {
-      if ((error as { code?: string }).code !== "ENOENT") {
-        report.failed += 1;
-      }
-      continue;
-    }
-    let stats: Stats;
-    let content: string;
-    try {
-      stats = fstatSync(fd);
-      const prior = db
-        .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
-        .get(file.path) as { size: number; mtime: number } | null;
-      if (prior != null && prior.size === stats.size && prior.mtime === mtimeSecs(stats)) {
-        report.skipped += 1;
+      // One descriptor for everything: the skip decision, the recorded stat,
+      // and the content read all describe the same inode, so a path swapped
+      // mid-loop can neither skip wrongly nor record metadata for content that
+      // was never read. A file that vanished before open is a silent skip,
+      // matching the old stat-failure path; any other open error counts as
+      // failed, matching the old read-failure path.
+      let fd: number;
+      try {
+        fd = openSync(file.path, "r");
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") {
+          report.failed += 1;
+        }
         continue;
       }
-      // fstat before read: a write landing mid-window records a smaller size
-      // than the content read, so the next sync re-ingests instead of
-      // silently skipping the tail.
-      content = readFileSync(fd, "utf8");
-    } catch {
-      report.failed += 1;
-      continue;
-    } finally {
+      let stats: Stats;
+      let content: string;
       try {
-        closeSync(fd);
+        stats = fstatSync(fd);
+        const prior = ingestRow<{ size: number; mtime: number }>(
+          db,
+          "SELECT size, mtime FROM ingest_source WHERE path = ?1",
+          [file.path],
+        );
+        if (prior != null && prior.size === stats.size && prior.mtime === mtimeSecs(stats)) {
+          report.skipped += 1;
+          continue;
+        }
+        // fstat before read: a write landing mid-window records a smaller size
+        // than the content read, so the next sync re-ingests instead of
+        // silently skipping the tail.
+        content = readFileSync(fd, "utf8");
       } catch {
-        // A close failure (EIO on network/FUSE mounts) cannot invalidate a
-        // read that already succeeded, and a throw here would mask the real
-        // error on the failure path.
+        report.failed += 1;
+        continue;
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {
+          // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+          // read that already succeeded, and a throw here would mask the real
+          // error on the failure path.
+        }
       }
-    }
 
-    const stem = fileStem(file.path);
-    const parsed =
-      file.tool === "claude_code"
-        ? parseClaudeSession(stem, content, {
-            sourcePath: file.path,
-            sidecarMeta: readClaudeSidecarMeta(file.path),
-          })
-        : parseCodexSession(stem, content, titles);
-    parsed.session.isArchived = file.archived;
+      const stem = fileStem(file.path);
+      const parsed =
+        file.tool === "claude_code"
+          ? parseClaudeSession(stem, content, {
+              sourcePath: file.path,
+              sidecarMeta: readClaudeSidecarMeta(file.path),
+            })
+          : parseCodexSession(stem, content, titles);
+      parsed.session.isArchived = file.archived;
 
-    const prepared: Prepared = {
-      file,
-      lineCount: lineCount(content),
-      mtime: mtimeSecs(stats),
-      size: stats.size,
-      hash: hashContent(content),
-    };
+      const prepared: Prepared = {
+        file,
+        lineCount: lineCount(content),
+        mtime: mtimeSecs(stats),
+        size: stats.size,
+        hash: hashContent(content),
+      };
 
-    writeIngestedFile(db, prepared, parsed);
-    report.ingested += 1;
-    report.issues += parsed.issues.length;
-    for (const issue of parsed.issues) {
-      report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+      writeIngestedFile(db, prepared, parsed);
+      report.ingested += 1;
+      report.issues += parsed.issues.length;
+      for (const issue of parsed.issues) {
+        report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+      }
+    } finally {
+      inspected += 1;
+      emitProgress();
     }
   }
 
@@ -220,8 +281,9 @@ export function upsertSession(
   size: number,
   hash: string,
 ): number {
-  const write = db.transaction(() => writeSession(db, parsed, sourcePath, mtime, size, hash));
-  return write();
+  return withImmediateTransaction(db, () =>
+    writeSession(db, parsed, sourcePath, mtime, size, hash),
+  );
 }
 
 export function seedModelPricing(db: Database): void {
@@ -240,36 +302,26 @@ export function seedModelPricing(db: Database): void {
        updated_at = excluded.updated_at
      WHERE model_pricing.source = 'seed'`,
   );
-  const apply = db.transaction((entries: ReturnType<typeof defaultPricing>) => {
-    for (const [model, price] of entries) {
-      insert.run(
-        model,
-        price.inputPerMtok,
-        price.outputPerMtok,
-        price.cacheReadPerMtok,
-        price.cacheWritePerMtok,
-        price.cacheWrite1hPerMtok,
-      );
-    }
-  });
-  apply(defaultPricing());
+  try {
+    withImmediateTransaction(db, () => {
+      for (const [model, price] of defaultPricing()) {
+        insert.run(
+          model,
+          price.inputPerMtok,
+          price.outputPerMtok,
+          price.cacheReadPerMtok,
+          price.cacheWritePerMtok,
+          price.cacheWrite1hPerMtok,
+        );
+      }
+    });
+  } finally {
+    insert.finalize();
+  }
 }
 
 export function resolveSubagentParents(db: Database): void {
-  const rows = db
-    .query(
-      `SELECT s.id, s.source_session_id, s.raw_meta, s.source_path, s.spawn_tool_use_id,
-              s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent,
-              s.tool,
-              (SELECT m.raw
-               FROM message m
-               WHERE m.session_id = s.id
-               ORDER BY m.seq
-               LIMIT 1) AS first_raw
-       FROM session s
-       WHERE s.tool IN ('claude_code', 'codex')`,
-    )
-    .all() as {
+  const rows = ingestRows<{
     id: number;
     tool: Tool;
     source_session_id: string;
@@ -281,7 +333,19 @@ export function resolveSubagentParents(db: Database): void {
     spawn_depth: number | null;
     is_subagent: number;
     first_raw: string | null;
-  }[];
+  }>(
+    db,
+    `SELECT s.id, s.source_session_id, s.raw_meta, s.source_path, s.spawn_tool_use_id,
+              s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent,
+              s.tool,
+              (SELECT m.raw
+               FROM message m
+               WHERE m.session_id = s.id
+               ORDER BY m.seq
+               LIMIT 1) AS first_raw
+       FROM session s
+       WHERE s.tool IN ('claude_code', 'codex')`,
+  );
 
   const sessionBySource = new Map<string, number>();
   const rootByClaudeSession = new Map<string, number>();
@@ -345,40 +409,45 @@ export function resolveSubagentParents(db: Database): void {
          spawn_depth = COALESCE(spawn_depth, ?6)
      WHERE id = ?7`,
   );
-  const apply = db.transaction(() => {
-    for (const row of rows) {
-      const info = inferred.get(row.id);
-      if (info == null || !info.isSubagent) {
-        continue;
-      }
-      const rootId = rootByChild.get(row.id) ?? null;
-      let parentId: number | null = null;
-      let spawnToolUseId = info.spawnToolUseId;
-      if (spawnToolUseId == null && row.tool === "codex" && rootId != null) {
-        const spawner = findCodexSpawner.get(rootId, `%${row.source_session_id}%`) as {
-          tool_use_id: string;
-        } | null;
-        spawnToolUseId = spawner?.tool_use_id ?? null;
-      }
-      if (spawnToolUseId != null) {
-        const spawner = findSpawner.get(spawnToolUseId) as { session_id: number } | null;
-        if (spawner != null && spawner.session_id !== row.id) {
-          parentId = spawner.session_id;
+  try {
+    withImmediateTransaction(db, () => {
+      for (const row of rows) {
+        const info = inferred.get(row.id);
+        if (info == null || !info.isSubagent) {
+          continue;
         }
+        const rootId = rootByChild.get(row.id) ?? null;
+        let parentId: number | null = null;
+        let spawnToolUseId = info.spawnToolUseId;
+        if (spawnToolUseId == null && row.tool === "codex" && rootId != null) {
+          const spawner = findCodexSpawner.get(rootId, `%${row.source_session_id}%`) as {
+            tool_use_id: string;
+          } | null;
+          spawnToolUseId = spawner?.tool_use_id ?? null;
+        }
+        if (spawnToolUseId != null) {
+          const spawner = findSpawner.get(spawnToolUseId) as { session_id: number } | null;
+          if (spawner != null && spawner.session_id !== row.id) {
+            parentId = spawner.session_id;
+          }
+        }
+        parentId ??= rootId;
+        update.run(
+          1,
+          parentId === row.id ? null : parentId,
+          spawnToolUseId,
+          info.agentId,
+          info.agentType,
+          info.spawnDepth,
+          row.id,
+        );
       }
-      parentId ??= rootId;
-      update.run(
-        1,
-        parentId === row.id ? null : parentId,
-        spawnToolUseId,
-        info.agentId,
-        info.agentType,
-        info.spawnDepth,
-        row.id,
-      );
-    }
-  });
-  apply();
+    });
+  } finally {
+    update.finalize();
+    findCodexSpawner.finalize();
+    findSpawner.finalize();
+  }
 }
 
 /** One-time schema-upgrade backfill. Effort lives only in source records, so
@@ -386,18 +455,22 @@ export function resolveSubagentParents(db: Database): void {
  * marker prevents source files that genuinely omit effort from being reparsed
  * on every sync, while normal re-ingest refreshes the value when a file grows. */
 export function materializeMissingReasoningEfforts(db: Database): number {
-  const rows = db
-    .query(
-      `SELECT id, tool, source_session_id, source_path
+  const pendingStatement = db.prepare(
+    `SELECT id, tool, source_session_id, source_path
        FROM session
        WHERE reasoning_effort_checked = 0`,
-    )
-    .all() as {
+  );
+  let rows: {
     id: number;
     tool: Tool;
     source_session_id: string;
     source_path: string | null;
   }[];
+  try {
+    rows = pendingStatement.all() as typeof rows;
+  } finally {
+    pendingStatement.finalize();
+  }
   if (rows.length === 0) {
     return 0;
   }
@@ -419,12 +492,15 @@ export function materializeMissingReasoningEfforts(db: Database): number {
      SET reasoning_effort = ?2, reasoning_effort_levels = ?3, reasoning_effort_checked = 1
      WHERE id = ?1`,
   );
-  const apply = db.transaction((items: typeof efforts) => {
-    for (const row of items) {
-      update.run(row.id, row.summary, canonicalJson(row.levels));
-    }
-  });
-  apply(efforts);
+  try {
+    withImmediateTransaction(db, () => {
+      for (const row of efforts) {
+        update.run(row.id, row.summary, canonicalJson(row.levels));
+      }
+    });
+  } finally {
+    update.finalize();
+  }
   return rows.length;
 }
 
@@ -558,8 +634,10 @@ function inferSubagent(row: {
 }
 
 function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSession): void {
-  const write = db.transaction(() => {
-    db.query("UPDATE ingest_source SET session_id = NULL WHERE path = ?1").run(prepared.file.path);
+  withImmediateTransaction(db, () => {
+    runIngestStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
+      prepared.file.path,
+    ]);
     const sessionId = writeSession(
       db,
       parsed,
@@ -568,16 +646,21 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
       prepared.size,
       prepared.hash,
     );
-    db.query("DELETE FROM ingest_issue WHERE source_path = ?1").run(prepared.file.path);
+    runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
     const insertIssue = db.prepare(
       `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
        VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
     );
-    for (const issue of parsed.issues) {
-      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
+    try {
+      for (const issue of parsed.issues) {
+        insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
+      }
+    } finally {
+      insertIssue.finalize();
     }
     const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
-    db.query(
+    runIngestStatement(
+      db,
       `INSERT INTO ingest_source(
          path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at
        )
@@ -585,18 +668,18 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
        ON CONFLICT(path) DO UPDATE SET
          size = ?3, mtime = ?4, hash = ?5, session_id = ?6,
          line_count = ?7, status = ?8, last_ingested_at = datetime('now')`,
-    ).run(
-      prepared.file.path,
-      prepared.file.tool,
-      prepared.size,
-      prepared.mtime,
-      prepared.hash,
-      sessionId,
-      prepared.lineCount,
-      status,
+      [
+        prepared.file.path,
+        prepared.file.tool,
+        prepared.size,
+        prepared.mtime,
+        prepared.hash,
+        sessionId,
+        prepared.lineCount,
+        status,
+      ],
     );
   });
-  write();
 }
 
 function writeSession(
@@ -610,28 +693,34 @@ function writeSession(
   const s = parsed.session;
   let projectId: number | null = null;
   if (s.projectPath != null) {
-    db.query(
+    runIngestStatement(
+      db,
       `INSERT INTO project(path, name, first_seen_at, last_seen_at)
        VALUES (?1, ?2, datetime('now'), datetime('now'))
        ON CONFLICT(path) DO UPDATE SET last_seen_at = datetime('now')`,
-    ).run(s.projectPath, basename(s.projectPath));
-    projectId = (
-      db.query("SELECT id FROM project WHERE path = ?1").get(s.projectPath) as { id: number }
-    ).id;
+      [s.projectPath, basename(s.projectPath)],
+    );
+    projectId =
+      ingestRow<{ id: number }>(db, "SELECT id FROM project WHERE path = ?1", [s.projectPath])
+        ?.id ?? null;
   }
 
-  const existing = db
-    .query("SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2")
-    .get(s.tool, s.sourceSessionId) as { id: number } | null;
+  const existing = ingestRow<{ id: number }>(
+    db,
+    "SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2",
+    [s.tool, s.sourceSessionId],
+  );
   if (existing != null) {
-    db.query("UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1").run(
-      existing.id,
+    runIngestStatement(
+      db,
+      "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1",
+      [existing.id],
     );
   }
-  db.query("DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2").run(
+  runIngestStatement(db, "DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2", [
     s.tool,
     s.sourceSessionId,
-  );
+  ]);
 
   const refs = fileRefs(s);
   const gotFacets = facets(s);
@@ -639,7 +728,8 @@ function writeSession(
   const gotWorkType = workType(s, refs);
   const cost = estimateCost(s.model, s.totals, defaultPricing());
 
-  db.query(
+  runIngestStatement(
+    db,
     `INSERT INTO session(
        tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
        started_at, ended_at, message_count,
@@ -660,61 +750,63 @@ function writeSession(
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
              ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, 1)`,
-  ).run(
-    s.tool,
-    s.sourceSessionId,
-    projectId,
-    s.title,
-    s.cwd,
-    s.gitBranch,
-    s.model,
-    s.cliVersion,
-    s.startedAt,
-    s.endedAt,
-    s.messages.length,
-    s.totals.input,
-    s.totals.output,
-    s.totals.cacheRead,
-    s.totals.cacheCreation,
-    s.totals.reasoning,
-    cost,
-    Number(s.isArchived),
-    Number(s.isSubagent),
-    null,
-    s.spawnToolUseId,
-    s.agentId,
-    s.agentType,
-    s.spawnDepth,
-    sourcePath,
-    canonicalJson(s.rawMeta),
-    mtime,
-    size,
-    hash,
-    gotFacets.turnCount,
-    gotFacets.errorCount,
-    gotFacets.interruptionCount,
-    gotFacets.compactionCount,
-    gotFacets.sidechainMessageCount,
-    gotFacets.agentSpawnCount,
-    gotFacets.skillCount,
-    gotFacets.commandCount,
-    gotFacets.thinkingBlockCount,
-    gotFacets.thinkingChars,
-    gotFacets.activeSeconds,
-    gotOutcome,
-    gotWorkType,
-    s.estReasoningTokens,
-    s.reasoningSource,
-    existing?.id ?? null,
-    s.totals.cacheCreation1h,
-    s.reasoningEffort,
-    canonicalJson(s.reasoningEffortLevels),
+    [
+      s.tool,
+      s.sourceSessionId,
+      projectId,
+      s.title,
+      s.cwd,
+      s.gitBranch,
+      s.model,
+      s.cliVersion,
+      s.startedAt,
+      s.endedAt,
+      s.messages.length,
+      s.totals.input,
+      s.totals.output,
+      s.totals.cacheRead,
+      s.totals.cacheCreation,
+      s.totals.reasoning,
+      cost,
+      Number(s.isArchived),
+      Number(s.isSubagent),
+      null,
+      s.spawnToolUseId,
+      s.agentId,
+      s.agentType,
+      s.spawnDepth,
+      sourcePath,
+      canonicalJson(s.rawMeta),
+      mtime,
+      size,
+      hash,
+      gotFacets.turnCount,
+      gotFacets.errorCount,
+      gotFacets.interruptionCount,
+      gotFacets.compactionCount,
+      gotFacets.sidechainMessageCount,
+      gotFacets.agentSpawnCount,
+      gotFacets.skillCount,
+      gotFacets.commandCount,
+      gotFacets.thinkingBlockCount,
+      gotFacets.thinkingChars,
+      gotFacets.activeSeconds,
+      gotOutcome,
+      gotWorkType,
+      s.estReasoningTokens,
+      s.reasoningSource,
+      existing?.id ?? null,
+      s.totals.cacheCreation1h,
+      s.reasoningEffort,
+      canonicalJson(s.reasoningEffortLevels),
+    ],
   );
   const sessionId = lastInsertRowid(db);
 
   const results = new Map<string, number>();
   const resultErrors = new Map<string, boolean | null>();
   const resultText = new Map<string, string>();
+  const resultTimestamps = new Map<string, string | null>();
   const toolUseBlocks: ToolUseBlock[] = [];
   const messageIds: number[] = [];
 
@@ -732,105 +824,125 @@ function writeSession(
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
   );
 
-  for (const message of s.messages) {
-    insertMessage.run(
-      sessionId,
-      message.seq,
-      message.sourceUuid,
-      message.parentSourceUuid,
-      message.role,
-      message.model,
-      message.stopReason,
-      message.timestamp,
-      message.usage?.input ?? null,
-      message.usage?.output ?? null,
-      message.usage?.cacheRead ?? null,
-      message.usage?.cacheCreation ?? null,
-      canonicalJson(message.raw),
-    );
-    const messageId = lastInsertRowid(db);
-    messageIds.push(messageId);
-
-    for (const block of message.blocks) {
-      insertBlock.run(
-        messageId,
+  try {
+    for (const message of s.messages) {
+      insertMessage.run(
         sessionId,
-        block.ordinal,
-        block.blockType,
-        block.text,
-        block.toolName,
-        block.toolUseId,
-        block.toolInput === undefined ? null : canonicalJson(block.toolInput),
-        block.toolResult,
+        message.seq,
+        message.sourceUuid,
+        message.parentSourceUuid,
+        message.role,
+        message.model,
+        message.stopReason,
+        message.timestamp,
+        message.usage?.input ?? null,
+        message.usage?.output ?? null,
+        message.usage?.cacheRead ?? null,
+        message.usage?.cacheCreation ?? null,
+        canonicalJson(message.raw),
       );
-      const blockId = lastInsertRowid(db);
-      if (block.blockType === "tool_use") {
-        toolUseBlocks.push({
+      const messageId = lastInsertRowid(db);
+      messageIds.push(messageId);
+
+      for (const block of message.blocks) {
+        insertBlock.run(
           messageId,
-          callBlockId: blockId,
-          timestamp: message.timestamp,
-          block,
-        });
-      } else if (block.blockType === "tool_result" && block.toolUseId != null) {
-        results.set(block.toolUseId, blockId);
-        resultErrors.set(block.toolUseId, block.isError);
-        resultText.set(block.toolUseId, block.toolResult ?? "");
+          sessionId,
+          block.ordinal,
+          block.blockType,
+          block.text,
+          block.toolName,
+          block.toolUseId,
+          block.toolInput === undefined ? null : canonicalJson(block.toolInput),
+          block.toolResult,
+        );
+        const blockId = lastInsertRowid(db);
+        if (block.blockType === "tool_use") {
+          toolUseBlocks.push({
+            messageId,
+            callBlockId: blockId,
+            timestamp: message.timestamp,
+            block,
+          });
+        } else if (block.blockType === "tool_result" && block.toolUseId != null) {
+          results.set(block.toolUseId, blockId);
+          resultErrors.set(block.toolUseId, block.isError);
+          resultText.set(block.toolUseId, block.toolResult ?? "");
+          resultTimestamps.set(block.toolUseId, message.timestamp);
+        }
       }
     }
+  } finally {
+    insertBlock.finalize();
+    insertMessage.finalize();
   }
 
   const insertToolCall = db.prepare(
     `INSERT INTO tool_call(
        session_id, message_id, call_block_id, result_block_id, tool_kind, tool_name,
-       mcp_server, tool_base_name, tool_use_id, input, is_error, output_preview, output_bytes,
-       ordinal, timestamp
+       mcp_server, tool_base_name, tool_use_id, input, input_bytes, is_error, has_result,
+       output_preview, output_bytes, duration_ms, ordinal, timestamp
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
   );
-  for (const call of toolUseBlocks) {
-    const name = call.block.toolName ?? "";
-    const classified = classifyTool(name);
-    const resultBlockId =
-      call.block.toolUseId == null ? null : (results.get(call.block.toolUseId) ?? null);
-    const isError =
-      call.block.toolUseId == null || !resultErrors.has(call.block.toolUseId)
-        ? null
-        : resultErrors.get(call.block.toolUseId);
-    const output =
-      call.block.toolUseId == null ? null : (resultText.get(call.block.toolUseId) ?? null);
-    insertToolCall.run(
-      sessionId,
-      call.messageId,
-      call.callBlockId,
-      resultBlockId,
-      classified.kind,
-      name,
-      classified.mcpServer,
-      classified.baseName,
-      call.block.toolUseId,
-      call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput),
-      isError == null ? null : Number(isError),
-      output == null ? null : previewHeadTail(output, 500),
-      output == null ? null : byteLength(output),
-      call.block.ordinal,
-      call.timestamp,
-    );
+  try {
+    for (const call of toolUseBlocks) {
+      const name = call.block.toolName ?? "";
+      const classified = classifyTool(name);
+      const resultBlockId =
+        call.block.toolUseId == null ? null : (results.get(call.block.toolUseId) ?? null);
+      const isError =
+        call.block.toolUseId == null || !resultErrors.has(call.block.toolUseId)
+          ? null
+          : resultErrors.get(call.block.toolUseId);
+      const output =
+        call.block.toolUseId == null ? null : (resultText.get(call.block.toolUseId) ?? null);
+      const input = call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput);
+      const resultTimestamp =
+        call.block.toolUseId == null ? null : (resultTimestamps.get(call.block.toolUseId) ?? null);
+      insertToolCall.run(
+        sessionId,
+        call.messageId,
+        call.callBlockId,
+        resultBlockId,
+        classified.kind,
+        name,
+        classified.mcpServer,
+        classified.baseName,
+        call.block.toolUseId,
+        input,
+        input == null ? null : byteLength(input),
+        isError == null ? null : Number(isError),
+        Number(resultBlockId != null),
+        output == null ? null : previewHeadTail(output, 500),
+        output == null ? null : byteLength(output),
+        durationBetween(call.timestamp, resultTimestamp),
+        call.block.ordinal,
+        call.timestamp,
+      );
+    }
+  } finally {
+    insertToolCall.finalize();
   }
 
   const insertFileRef = db.prepare(
     `INSERT INTO file_ref(session_id, message_id, path, rel_path, ext, operation, timestamp)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
   );
-  for (const ref of refs) {
-    insertFileRef.run(
-      sessionId,
-      messageIds[ref.messageIdx] ?? null,
-      ref.path,
-      ref.relPath,
-      ref.ext,
-      ref.operation,
-      ref.timestamp,
-    );
+  try {
+    for (const ref of refs) {
+      insertFileRef.run(
+        sessionId,
+        messageIds[ref.messageIdx] ?? null,
+        ref.path,
+        ref.relPath,
+        ref.ext,
+        ref.operation,
+        ref.timestamp,
+      );
+    }
+  } finally {
+    insertFileRef.finalize();
   }
 
   materializeSessionEconomics(db, sessionId);
@@ -1016,8 +1128,20 @@ function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
+function durationBetween(start: string | null, end: string | null): number | null {
+  if (start == null || end == null) {
+    return null;
+  }
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return null;
+  }
+  return endMs - startMs;
+}
+
 function lastInsertRowid(db: Database): number {
-  return Number((db.query("SELECT last_insert_rowid() AS id").get() as { id: number }).id);
+  return Number(ingestRow<{ id: number }>(db, "SELECT last_insert_rowid() AS id")?.id ?? 0);
 }
 
 function asString(value: Json | undefined): string | null {

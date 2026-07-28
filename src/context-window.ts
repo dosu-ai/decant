@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { withImmediateTransaction } from "./db.ts";
 
 /** Baseline for Claude models whose published limit is still 200k. */
 const DEFAULT_WINDOW_TOKENS = 200_000;
@@ -158,24 +159,53 @@ interface TimelineRow {
   has_text: number;
 }
 
+type ContextQueryParam = string | number | null;
+
+function contextRows<T>(db: Database, sql: string, params: ContextQueryParam[] = []): T[] {
+  const statement = db.prepare<T, ContextQueryParam[]>(sql);
+  try {
+    return statement.all(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function contextRow<T>(db: Database, sql: string, params: ContextQueryParam[] = []): T | null {
+  const statement = db.prepare<T, ContextQueryParam[]>(sql);
+  try {
+    return statement.get(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
+function runContextStatement(db: Database, sql: string, params: ContextQueryParam[] = []): void {
+  const statement = db.prepare<unknown, ContextQueryParam[]>(sql);
+  try {
+    statement.run(...params);
+  } finally {
+    statement.finalize();
+  }
+}
+
 export function contextWindowForSession(
   db: Database,
   sessionId: number,
 ): ContextWindowTimeline | null {
-  const session = db
-    .query(
-      `SELECT id, tool, is_subagent,
-              model,
-              json_extract(raw_meta, '$.model_context_window') AS explicit_window
-       FROM session WHERE id = ?1`,
-    )
-    .get(sessionId) as {
+  const session = contextRow<{
     id: number;
     tool: string;
     is_subagent: number;
     model: string | null;
     explicit_window: number | null;
-  } | null;
+  }>(
+    db,
+    `SELECT id, tool, is_subagent,
+              model,
+              json_extract(raw_meta, '$.model_context_window') AS explicit_window
+       FROM session WHERE id = ?1`,
+    [sessionId],
+  );
   if (session == null) {
     return null;
   }
@@ -187,9 +217,9 @@ export function contextWindowForSession(
   // has_text mirrors enrich's hasRealText turn rule (a text block that is not
   // an interruption marker and not a slash-command wrapper) so per-point turn
   // numbers line up with the session's stored turn_count.
-  const rows = db
-    .query(
-      `SELECT m.seq, m.timestamp, m.role,
+  const rows = contextRows<TimelineRow>(
+    db,
+    `SELECT m.seq, m.timestamp, m.role,
               m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
               ${MESSAGE_RAW_META_SQL} AS raw_meta,
               EXISTS(
@@ -202,8 +232,8 @@ export function contextWindowForSession(
        FROM message m
        WHERE m.session_id = ?1 AND m.role IN ('assistant', 'system', 'user')
        ORDER BY m.seq`,
-    )
-    .all(sessionId) as TimelineRow[];
+    [sessionId],
+  );
 
   const points: ContextWindowPoint[] = [];
   const compactions: ContextWindowCompaction[] = [];
@@ -297,17 +327,19 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
   if (timeline == null) {
     return false;
   }
-  db.query(
+  runContextStatement(
+    db,
     `UPDATE session
      SET context_window_tokens = ?2, peak_context_tokens = ?3,
          compaction_count = ?4, turn_count = ?5
      WHERE id = ?1`,
-  ).run(
-    sessionId,
-    timeline.window_tokens,
-    timeline.peak_tokens,
-    timeline.compactions.length,
-    timeline.turn_count,
+    [
+      sessionId,
+      timeline.window_tokens,
+      timeline.peak_tokens,
+      timeline.compactions.length,
+      timeline.turn_count,
+    ],
   );
   return true;
 }
@@ -315,20 +347,20 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
 /** One-time upgrade/backfill path, mirroring the economics materializer: sync
  * calls this so sessions ingested before v11 gain rollups without re-ingest. */
 export function materializeMissingContextWindows(db: Database): number {
-  const rows = db.query("SELECT id FROM session WHERE peak_context_tokens IS NULL").all() as {
-    id: number;
-  }[];
+  const rows = contextRows<{ id: number }>(
+    db,
+    "SELECT id FROM session WHERE peak_context_tokens IS NULL",
+  );
   if (rows.length === 0) {
     return 0;
   }
-  const persist = db.transaction((items: { id: number }[]) => {
+  return withImmediateTransaction(db, () => {
     let materialized = 0;
-    for (const row of items) {
+    for (const row of rows) {
       if (materializeContextWindow(db, row.id)) {
         materialized += 1;
       }
     }
     return materialized;
   });
-  return persist(rows);
 }

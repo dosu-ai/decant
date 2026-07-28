@@ -1,6 +1,14 @@
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
@@ -9,7 +17,6 @@ import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
 import {
   handleRequest,
-  publishServerEvent,
   resolveTrustedPeers,
   serve,
   type TrustedPeerSources,
@@ -111,6 +118,12 @@ describe("server routes", () => {
     expect(root.body).toContain('rel="icon" href="/favicon.ico"');
     expect(root.body).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
     expect(root.body).toContain('name="description"');
+    for (const path of ["/reports/analytics", "/reports/session/42"]) {
+      const reportShell = await route(config, path);
+      expect(reportShell.status).toBe(200);
+      expect(reportShell.contentType).toBe("text/html; charset=utf-8");
+      expect(reportShell.body).toContain('<div id="root"></div>');
+    }
     const sourceHead = readFileSync(
       join(import.meta.dir, "..", "src", "ui", "index.html"),
       "utf8",
@@ -140,6 +153,10 @@ describe("server routes", () => {
     expect(detail.status).toBe(200);
     expect(detail.contentType).toBe("text/html; charset=utf-8");
 
+    const unknownView = await route(config, "/no-page-here");
+    expect(unknownView.status).toBe(200);
+    expect(unknownView.contentType).toBe("text/html; charset=utf-8");
+
     const localConfig = await route(config, "/api/config");
     expect(localConfig.status).toBe(200);
     expect(localConfig.body).toMatchObject({
@@ -158,7 +175,7 @@ describe("server routes", () => {
     expect(response.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
   });
 
-  test("events route streams hello and published updates", async () => {
+  test("events route streams sync worker progress", async () => {
     const config = freshConfig();
     const response = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);
     expect(response.status).toBe(200);
@@ -171,12 +188,14 @@ describe("server routes", () => {
     const hello = await reader.read();
     expect(new TextDecoder().decode(hello.value)).toContain("event: hello");
 
-    publishServerEvent({ type: "archive_updated", ingested: 2 });
+    const sync = route(config, "/api/sync", { method: "POST", body: "{}" });
     const update = await reader.read();
+    await sync;
     await reader.cancel();
     const frame = new TextDecoder().decode(update.value);
-    expect(frame).toContain("event: archive_updated");
-    expect(frame).toContain('"ingested":2');
+    expect(frame).toContain("event: sync_progress");
+    expect(frame).toContain('"scanned":0');
+    expect(frame).toContain('"total":0');
   });
 
   test("rejects non-loopback API hosts", async () => {
@@ -184,7 +203,7 @@ describe("server routes", () => {
 
     const response = await handleRequest(new Request("http://evil.example/api/config"), config);
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: "forbidden host" });
+    expect(await response.json()).toEqual({ error: "forbidden host", code: "forbidden_host" });
   });
 
   test("rejects protected routes from non-loopback peers on broad binds", async () => {
@@ -196,7 +215,10 @@ describe("server routes", () => {
       { boundHostname: "0.0.0.0", remoteAddress: "192.168.1.20" },
     );
     expect(spoofedHost.status).toBe(403);
-    expect(await spoofedHost.json()).toEqual({ error: "forbidden remote" });
+    expect(await spoofedHost.json()).toEqual({
+      error: "forbidden remote",
+      code: "forbidden_remote",
+    });
 
     const loopbackRead = await handleRequest(
       new Request("http://127.0.0.1:3000/api/config"),
@@ -226,7 +248,10 @@ describe("server routes", () => {
       { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
     );
     expect(bareLocalWrite.status).toBe(403);
-    expect(await bareLocalWrite.json()).toEqual({ error: "cross-origin writes are forbidden" });
+    expect(await bareLocalWrite.json()).toEqual({
+      error: "cross-origin writes are forbidden",
+      code: "cross_origin_write",
+    });
 
     const browserLocalWrite = await handleRequest(
       new Request("http://127.0.0.1:3000/api/sync", {
@@ -256,7 +281,10 @@ describe("server routes", () => {
       config,
     );
     expect(crossSite.status).toBe(403);
-    expect(await crossSite.json()).toEqual({ error: "cross-origin writes are forbidden" });
+    expect(await crossSite.json()).toEqual({
+      error: "cross-origin writes are forbidden",
+      code: "cross_origin_write",
+    });
 
     const textPlain = await handleRequest(
       new Request("http://127.0.0.1:3000/api/search", {
@@ -267,7 +295,10 @@ describe("server routes", () => {
       config,
     );
     expect(textPlain.status).toBe(415);
-    expect(await textPlain.json()).toEqual({ error: "content-type must be application/json" });
+    expect(await textPlain.json()).toEqual({
+      error: "content-type must be application/json",
+      code: "unsupported_media_type",
+    });
 
     const syncWithoutJson = await handleRequest(
       new Request("http://127.0.0.1:3000/api/sync", { method: "POST" }),
@@ -276,6 +307,19 @@ describe("server routes", () => {
     expect(syncWithoutJson.status).toBe(415);
     expect(await syncWithoutJson.json()).toEqual({
       error: "content-type must be application/json",
+      code: "unsupported_media_type",
+    });
+
+    const malformed = await route(config, "/api/search", {
+      method: "POST",
+      body: "{",
+    });
+    expect(malformed).toMatchObject({
+      status: 400,
+      body: {
+        error: "request body must be valid JSON",
+        code: "malformed_body",
+      },
     });
   });
 
@@ -324,6 +368,26 @@ describe("server routes", () => {
         process.env.DECANT_CONFIG_DIR = prior;
       }
     }
+  });
+
+  test("returns a copyable command when terminal launch is unsupported", async () => {
+    const config = freshConfig();
+    const response = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/launch/agent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: "codex", prompt: "review this session" }),
+      }),
+      config,
+      { launchPlatform: "linux" },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "Opening a terminal is only supported on macOS right now.",
+      code: "launch_unsupported_platform",
+      ok: false,
+      command: expect.stringContaining("codex"),
+    });
   });
 
   test("lists, gets, and searches sessions", async () => {
@@ -396,23 +460,70 @@ describe("server routes", () => {
     expect(outline.body).toEqual([
       expect.objectContaining({ seq: expect.any(Number), text: expect.any(String) }),
     ]);
-    expect((await route(config, "/api/sessions/999999/outline")).status).toBe(404);
+    expect(await route(config, "/api/sessions/999999/outline")).toMatchObject({
+      status: 404,
+      body: { code: "session_not_found", archive_empty: false },
+    });
 
     const search = await route(config, "/api/search", {
       method: "POST",
       body: JSON.stringify({ query: "auth", limit: 5 }),
     });
     expect(search.status).toBe(200);
-    expect(search.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ tool: "claude_code" })]),
-    );
+    expect(search.body).toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({
+          tool: "claude_code",
+          message_seq: expect.any(Number),
+          href: expect.stringMatching(/^\/sessions\/\d+#message-\d+$/),
+        }),
+      ]),
+      total: expect.any(Number),
+      elapsed_ms: expect.any(Number),
+    });
+    const firstSearchPage = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({ query: "auth", limit: 1 }),
+    });
+    const secondSearchPage = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({ query: "auth", limit: 1, offset: 1 }),
+    });
+    const firstPageBody = firstSearchPage.body as {
+      results: { block_id: number }[];
+      total: number;
+    };
+    const secondPageBody = secondSearchPage.body as {
+      results: { block_id: number }[];
+      total: number;
+    };
+    expect(firstPageBody.results).toHaveLength(1);
+    expect(secondPageBody.results).toHaveLength(1);
+    expect(secondPageBody.total).toBe(firstPageBody.total);
+    expect(secondPageBody.results[0]?.block_id).not.toBe(firstPageBody.results[0]?.block_id);
+
+    const scopedSearch = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({
+        query: "auth",
+        project: "/not/a/project",
+        from: "2026-05-01",
+        to: "2026-05-31",
+      }),
+    });
+    expect(scopedSearch).toMatchObject({
+      status: 200,
+      body: { results: [], total: 0, elapsed_ms: expect.any(Number) },
+    });
 
     const malformed = await route(config, "/api/search", {
       method: "POST",
       body: JSON.stringify({ query: '"' }),
     });
-    expect(malformed.status).toBe(400);
-    expect(malformed.body).toEqual({ error: "invalid search query" });
+    expect(malformed).toMatchObject({
+      status: 200,
+      body: { results: [], total: 0, elapsed_ms: expect.any(Number) },
+    });
   });
 
   test("serves per-session context-window timelines", async () => {
@@ -442,7 +553,10 @@ describe("server routes", () => {
       ],
     });
 
-    expect((await route(config, "/api/sessions/999999/context-window")).status).toBe(404);
+    expect(await route(config, "/api/sessions/999999/context-window")).toMatchObject({
+      status: 404,
+      body: { code: "session_not_found", archive_empty: false },
+    });
   });
 
   test("serves per-session ingest issues", async () => {
@@ -466,7 +580,10 @@ describe("server routes", () => {
     expect(issues.body).toEqual([
       expect.objectContaining({ code: "unparsed_line", line_no: 99, error: "not json" }),
     ]);
-    expect((await route(config, "/api/sessions/999999/issues")).status).toBe(404);
+    expect(await route(config, "/api/sessions/999999/issues")).toMatchObject({
+      status: 404,
+      body: { code: "session_not_found", archive_empty: false },
+    });
   });
 
   test("returns stats, files, tools, and recommendations", async () => {
@@ -516,6 +633,44 @@ describe("server routes", () => {
     expect(tools.status).toBe(200);
     expect(tools.body).toBeArray();
 
+    const calls = await route(
+      config,
+      "/api/tools/calls?tool=Read&project=%2FUsers%2Fdev%2Fproj&from=2026-05-01&to=2026-05-01&min_ms=1000&limit=1000&offset=0",
+    );
+    expect(calls).toMatchObject({
+      status: 200,
+      body: {
+        calls: [
+          {
+            session_id: expect.any(Number),
+            session_title: "Fix the failing auth test",
+            project: "/Users/dev/proj",
+            tool_name: "Read",
+            tool_kind: "builtin",
+            mcp_server: null,
+            input_preview: expect.stringContaining("auth_test.py"),
+            input_bytes: expect.any(Number),
+            output_preview: expect.any(String),
+            output_bytes: expect.any(Number),
+            is_error: false,
+            has_result: true,
+            duration_ms: 1000,
+            timestamp: "2026-05-01T10:00:05.000Z",
+            seq: expect.any(Number),
+          },
+        ],
+        total: 1,
+        limit: 100,
+        offset: 0,
+        summary: {
+          calls: 1,
+          errors: 0,
+          p50_ms: 1000,
+          p95_ms: 1000,
+        },
+      },
+    });
+
     const recommendations = await route(config, "/api/recommendations?status=all");
     expect(recommendations.status).toBe(200);
     expect(recommendations.body).toEqual(
@@ -529,6 +684,25 @@ describe("server routes", () => {
     expect(reread.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ key: "catalog:agents-md", score: 12345 })]),
     );
+
+    const analyticsReport = await route(
+      config,
+      "/api/reports/analytics.html?from=2026-05-01&to=2026-05-05",
+    );
+    expect(analyticsReport.status).toBe(200);
+    expect(analyticsReport.contentType).toBe("text/html; charset=utf-8");
+    expect(analyticsReport.body).toContain("<!doctype html>");
+    expect(analyticsReport.body).toContain("Agent activity report");
+    expect(analyticsReport.body).toContain(">Optimized<");
+
+    const sessionId = ((await route(config, "/api/sessions?limit=1")).body as { id: number }[])[0]
+      ?.id;
+    expect(sessionId).toBeNumber();
+    const sessionReport = await route(config, `/api/reports/session/${sessionId}.html`);
+    expect(sessionReport.status).toBe(200);
+    expect(sessionReport.contentType).toBe("text/html; charset=utf-8");
+    expect(sessionReport.body).toContain("Session analysis");
+    expect(sessionReport.body).not.toContain("<script");
   });
 
   test("returns metadata and extended analytics routes", async () => {
@@ -566,6 +740,10 @@ describe("server routes", () => {
     expect(sessionEconomics.body).toMatchObject({
       buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
       totals: expect.objectContaining({ estimated_cost_usd: expect.any(Number) }),
+    });
+    expect(await route(config, "/api/sessions/999999/token-economics")).toMatchObject({
+      status: 404,
+      body: { code: "session_not_found", archive_empty: false },
     });
 
     const now = await route(config, "/api/analytics/now");
@@ -606,12 +784,168 @@ describe("server routes", () => {
     const config = freshConfig();
     seed(config);
 
-    expect((await route(config, "/api/sessions/999999")).status).toBe(404);
-    expect((await route(config, "/api/search", { method: "POST", body: "{}" })).status).toBe(400);
-    expect((await route(config, "/api/stats/by-dimension?dim=nope")).status).toBe(400);
-    expect((await route(config, "/api/files?group=path&op=rename")).status).toBe(400);
-    expect((await route(config, "/api/recommendations?status=maybe")).status).toBe(400);
-    expect((await route(config, "/missing")).status).toBe(404);
+    expect(await route(config, "/api/sessions/999999")).toMatchObject({
+      status: 404,
+      body: {
+        error: "session not found",
+        code: "session_not_found",
+        archive_empty: false,
+      },
+    });
+    expect(await route(config, "/api/reports/session/999999.html")).toMatchObject({
+      status: 404,
+      body: {
+        error: "session not found",
+        code: "session_not_found",
+        archive_empty: false,
+      },
+    });
+    expect(await route(config, "/api/sessions/abc")).toMatchObject({
+      status: 400,
+      body: { error: "invalid session id", code: "invalid_session_id" },
+    });
+    expect(await route(config, "/api/sessions/0/outline")).toMatchObject({
+      status: 400,
+      body: { error: "invalid session id", code: "invalid_session_id" },
+    });
+    expect(await route(config, "/api/search", { method: "POST", body: "{}" })).toMatchObject({
+      status: 400,
+      body: { error: "query is required", code: "query_required" },
+    });
+    expect(await route(config, "/api/stats/by-dimension?dim=nope")).toMatchObject({
+      status: 400,
+      body: {
+        error: "unknown dimension",
+        code: "unknown_dimension",
+        allowed: ["tool", "model", "project", "day"],
+      },
+    });
+    expect(await route(config, "/api/tools/calls?session=abc")).toMatchObject({
+      status: 400,
+      body: {
+        error: "session must be a positive integer",
+        code: "invalid_request",
+      },
+    });
+    expect(await route(config, "/api/tools/calls?min_ms=-1")).toMatchObject({
+      status: 400,
+      body: {
+        error: "min_ms must be a non-negative integer",
+        code: "invalid_request",
+      },
+    });
+    expect(await route(config, "/api/tools/calls?errors_only=yes")).toMatchObject({
+      status: 400,
+      body: {
+        error: "errors_only must be true or false",
+        code: "invalid_request",
+      },
+    });
+    expect(await route(config, "/api/files?group=path&op=rename")).toMatchObject({
+      status: 400,
+      body: { error: "invalid files query", code: "invalid_files_query" },
+    });
+    expect(await route(config, "/api/recommendations?status=maybe")).toMatchObject({
+      status: 400,
+      body: { error: "unknown status", code: "unknown_status" },
+    });
+    expect(await route(config, "/api/missing")).toMatchObject({
+      status: 404,
+      body: { error: "not found", code: "not_found" },
+    });
+  });
+
+  test("distinguishes an empty archive from a stale session link", async () => {
+    const config = freshConfig();
+    expect(await route(config, "/api/sessions/42")).toMatchObject({
+      status: 404,
+      body: {
+        error: "session not found",
+        code: "session_not_found",
+        archive_empty: true,
+      },
+    });
+  });
+
+  test("maps unsupported archive schema versions to actionable conflicts", async () => {
+    for (const [version, code, message] of [
+      [999, "schema_too_new", "is newer than this build supports"],
+      [7, "schema_too_old", "predates this build's baseline"],
+    ] as const) {
+      const config = freshConfig();
+      const db = new Database(config.dbPath, { create: true });
+      db.exec(
+        `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+         INSERT INTO schema_migrations (version, applied_at) VALUES (${version}, datetime('now'));`,
+      );
+      db.close();
+
+      const response = await route(config, "/api/sessions");
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ code });
+      expect((response.body as { error: string }).error).toContain(message);
+    }
+  });
+
+  test("keeps unexpected exception details in server logs, not 500 responses", async () => {
+    const config = freshConfig();
+    const closedDb = openDb(config.dbPath);
+    closedDb.close();
+
+    const response = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sessions"),
+      config,
+      { db: closedDb },
+    );
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { code: string; error: string };
+    expect(body).toEqual({
+      code: "internal_error",
+      error: "Decant could not complete this request.",
+    });
+    expect(body.error.toLowerCase()).not.toContain("closed");
+  });
+
+  test("maps a busy archive to a retryable service response", async () => {
+    const config = freshConfig();
+    seed(config);
+    const requestDb = openDb(config.dbPath);
+    const lockDb = openDb(config.dbPath);
+    try {
+      requestDb.exec("PRAGMA busy_timeout = 1");
+      const warm = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/recommendations?status=all"),
+        config,
+        { db: requestDb },
+      );
+      expect(warm.status).toBe(200);
+
+      lockDb.exec("BEGIN IMMEDIATE");
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/recommendations/mark", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: "catalog:agents-md" }),
+        }),
+        config,
+        { db: requestDb },
+      );
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        code: "archive_locked",
+        error: "Session logs are temporarily busy. Please try again.",
+        retryable: true,
+      });
+    } finally {
+      try {
+        lockDb.exec("ROLLBACK");
+      } catch {
+        // The assertion can fail before the transaction starts.
+      }
+      lockDb.close();
+      requestDb.close();
+    }
   });
 
   test("sync route ingests configured source directories", async () => {
@@ -650,6 +984,38 @@ describe("server routes", () => {
       expect(statSync(served.dbPath).mode & 0o7777).toBe(0o600);
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test("checks the listening port before opening the archive or starting a watcher", async () => {
+    const occupied = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      reusePort: false,
+      fetch: () => new Response("occupied"),
+    });
+    const base = freshConfig();
+    const config = {
+      ...base,
+      dbPath: join(dirname(base.dbPath), "must-not-exist", "archive.db"),
+    };
+    let watcherEvents = 0;
+    try {
+      expect(() =>
+        serve({
+          config,
+          port: occupied.port,
+          watch: {
+            onEvent: () => {
+              watcherEvents += 1;
+            },
+          },
+        }),
+      ).toThrow(/address already in use|EADDRINUSE|port.*in use/i);
+      expect(existsSync(dirname(config.dbPath))).toBe(false);
+      expect(watcherEvents).toBe(0);
+    } finally {
+      await occupied.stop(true);
     }
   });
 
@@ -698,6 +1064,43 @@ describe("server routes", () => {
 
     gate.resolve();
     await pendingRequest.catch(() => {});
+  });
+
+  test("stop() cancels and awaits a manual sync when no watcher is configured", async () => {
+    const config = freshConfig();
+    const entered = Promise.withResolvers<void>();
+    let sawCancellation = false;
+    const server = serve({
+      config,
+      port: 0,
+      syncRunner: async (_config, cancel) => {
+        entered.resolve();
+        while (cancel?.aborted !== true) {
+          await Bun.sleep(1);
+        }
+        sawCancellation = true;
+        return {
+          scanned: 0,
+          ingested: 0,
+          skipped: 0,
+          issues: 0,
+          issuesByCode: {},
+          failed: 0,
+          cancelled: true,
+        };
+      },
+    });
+    const pendingRequest = fetch(`http://127.0.0.1:${server.port}/api/sync`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).catch((error: unknown) => error);
+    await entered.promise;
+
+    await server.stop(true);
+
+    expect(sawCancellation).toBe(true);
+    await pendingRequest;
   });
 });
 
@@ -974,7 +1377,10 @@ describe("trusted peer resolution", () => {
       trustedPeers,
     });
     expect(sibling.status).toBe(403);
-    expect(await sibling.json()).toEqual({ error: "forbidden remote" });
+    expect(await sibling.json()).toEqual({
+      error: "forbidden remote",
+      code: "forbidden_remote",
+    });
 
     // The browser on the host reaches the published port, and Docker forwards
     // it from the container's gateway.

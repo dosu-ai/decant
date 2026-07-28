@@ -8,13 +8,16 @@ import {
   openSync,
   type Stats,
 } from "node:fs";
+import { getDecantLogger } from "./logging.ts";
 import schemaSql from "./schema.sql" with { type: "text" };
 
 /// Highest schema version this build understands. src/schema.sql is the
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 17;
+export const LATEST_SCHEMA_VERSION = 18;
+
+const logger = getDecantLogger("db");
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -25,6 +28,52 @@ const ARCHIVE_FILE_MODE = 0o600;
 /// decant creates the directory; an existing directory is left as the owner
 /// configured it.
 export const ARCHIVE_DIR_MODE = 0o700;
+
+/**
+ * Run a synchronous write atomically without retaining Bun's cached
+ * transaction wrapper statements beyond the operation. Long-lived wrappers
+ * can keep SQLite connections alive after Database.close(), so core write
+ * paths use explicit transaction boundaries instead.
+ */
+export function withImmediateTransaction<T>(db: Database, operation: () => T): T {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    const result = operation();
+    db.exec("COMMIT;");
+    return result;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // Preserve the operation's original failure if SQLite already aborted
+      // or closed the transaction.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Drop Bun's cached `db.query()` statements, then close the connection.
+ *
+ * `Database.query()` caches its Statement on the Database. In a short-lived
+ * worker, `db.close()` can therefore defer the native close until GC; calling
+ * `self.close()` immediately afterward tears down the worker while SQLite still
+ * owns callbacks, producing SQLITE_MISUSE and invalid-connection-pointer
+ * errors. Worker paths therefore use fresh `db.prepare()` statements and
+ * finalize them at the operation boundary. Bun 1.3 also exposes
+ * clearQueryCache() at runtime (its bundled declaration currently omits it), so
+ * clear any route-style cached statements before asking SQLite to close.
+ * `close(false)` is intentional: Bun reports SQLITE_BUSY for a clean WAL
+ * connection after a large sync when forced close is requested.
+ */
+export function closeDb(db: Database): void {
+  (
+    db as Database & {
+      clearQueryCache: () => void;
+    }
+  ).clearQueryCache();
+  db.close(false);
+}
 
 /**
  * Create a missing archive file owner-only, before SQLite gets the chance to
@@ -139,7 +188,7 @@ export function openDb(path: string): Database {
   try {
     ensureSchema(db);
   } catch (error) {
-    db.close();
+    closeDb(db);
     throw error;
   }
   return db;
@@ -157,8 +206,12 @@ function ensureSchema(db: Database): void {
       const mark = db.prepare(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
       );
-      for (let version = 1; version <= LATEST_SCHEMA_VERSION; version += 1) {
-        mark.run(version);
+      try {
+        for (let version = 1; version <= LATEST_SCHEMA_VERSION; version += 1) {
+          mark.run(version);
+        }
+      } finally {
+        mark.finalize();
       }
       db.exec("COMMIT;");
     } catch (error) {
@@ -174,7 +227,7 @@ function ensureSchema(db: Database): void {
   if (current > LATEST_SCHEMA_VERSION) {
     throw new Error(
       `archive schema version ${current} is newer than this build supports ` +
-        `(${LATEST_SCHEMA_VERSION}); upgrade decant`,
+        `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
     );
   }
   if (current < 8) {
@@ -343,11 +396,102 @@ function migrate(db: Database, current: number): void {
         "INSERT INTO schema_migrations (version, applied_at) VALUES (17, datetime('now'))",
       ).run();
     }
+    if (current < 18) {
+      if (hasTable(db, "block_fts") && hasTable(db, "block")) {
+        const blockCount = (db.query("SELECT COUNT(*) AS n FROM block").get() as { n: number }).n;
+        logger.info("Rebuilding the full-text index for prefix search.", {
+          "event.name": "decant.schema.fts_rebuild",
+          "schema.version": 18,
+          "block.count": blockCount,
+        });
+        db.exec(`
+          CREATE VIRTUAL TABLE block_fts_new USING fts5(
+            text, tool_name, tool_input,
+            content='block', content_rowid='id',
+            prefix='2 3'
+          );
+          DROP TRIGGER IF EXISTS block_ai;
+          DROP TRIGGER IF EXISTS block_ad;
+          DROP TRIGGER IF EXISTS block_au;
+          DROP TABLE block_fts;
+          ALTER TABLE block_fts_new RENAME TO block_fts;
+          CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
+            INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+            VALUES (new.id, new.text, new.tool_name, new.tool_input);
+          END;
+          CREATE TRIGGER block_ad AFTER DELETE ON block BEGIN
+            INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+            VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+          END;
+          CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+            INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+            VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+            INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+            VALUES (new.id, new.text, new.tool_name, new.tool_input);
+          END;
+          INSERT INTO block_fts(block_fts) VALUES('rebuild');
+        `);
+      }
+      if (hasTable(db, "tool_call")) {
+        if (!hasColumn(db, "tool_call", "input_bytes")) {
+          db.exec("ALTER TABLE tool_call ADD COLUMN input_bytes INTEGER");
+        }
+        if (!hasColumn(db, "tool_call", "has_result")) {
+          db.exec("ALTER TABLE tool_call ADD COLUMN has_result INTEGER");
+        }
+        db.exec(`
+          UPDATE tool_call
+          SET input_bytes = length(CAST(input AS BLOB))
+          WHERE input_bytes IS NULL
+            AND input IS NOT NULL;
+          UPDATE tool_call
+          SET has_result = CASE WHEN result_block_id IS NULL THEN 0 ELSE 1 END
+          WHERE has_result IS NULL;
+        `);
+        if (
+          hasColumn(db, "tool_call", "duration_ms") &&
+          hasTable(db, "block") &&
+          hasTable(db, "message")
+        ) {
+          db.exec(`
+            UPDATE tool_call
+            SET duration_ms = (
+              SELECT CASE
+                WHEN result_message.timestamp IS NOT NULL
+                  AND call_message.timestamp IS NOT NULL
+                  AND julianday(result_message.timestamp) >= julianday(call_message.timestamp)
+                THEN CAST(ROUND(
+                  (julianday(result_message.timestamp) - julianday(call_message.timestamp))
+                  * 86400000
+                ) AS INTEGER)
+                ELSE NULL
+              END
+              FROM block AS result_block
+              JOIN message AS result_message ON result_message.id = result_block.message_id
+              LEFT JOIN message AS call_message ON call_message.id = tool_call.message_id
+              WHERE result_block.id = tool_call.result_block_id
+            )
+            WHERE duration_ms IS NULL
+              AND result_block_id IS NOT NULL;
+          `);
+        }
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (18, datetime('now'))",
+      ).run();
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
     throw error;
   }
+}
+
+function hasTable(db: Database, table: string): boolean {
+  return (
+    db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1").get(table) !=
+    null
+  );
 }
 
 function hasColumn(db: Database, table: string, column: string): boolean {

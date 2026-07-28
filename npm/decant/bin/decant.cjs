@@ -38,7 +38,7 @@ function resolveBinary(options = {}) {
   const target = targetForPlatform(platform, arch);
   if (target == null) {
     throw new Error(
-      `decant does not ship a binary for ${platform}/${arch}. Supported targets: ${supportedTargetList()}.`,
+      `Decant does not ship a binary for ${platform}/${arch}. Supported targets: ${supportedTargetList()}.`,
     );
   }
 

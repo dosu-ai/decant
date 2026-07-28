@@ -44,7 +44,9 @@ describe("local analytics share cards", () => {
       "https://dosu.dev/for-agents?utm_source=decant&utm_medium=social_share&utm_campaign=analytics_cards&utm_content=sessions_per_day",
     );
     expect(shareCardCaption(DAILY)).toContain("7 coding-agent sessions");
+    expect(shareCardCaption(DAILY)).toContain("Decant shows the pattern");
     expect(shareCardCaption(DAILY)).toContain(shareCardUrl(DAILY.kind));
+    expect(shareCardAltText(DAILY)).toContain("Decant analytics");
     expect(shareCardAltText(DAILY)).toContain("peaking at 5 on 2026-07-18");
   });
 

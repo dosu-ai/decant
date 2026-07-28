@@ -11,9 +11,12 @@ import {
   type ListFilter,
   listProjects,
   listSessions,
+  listToolCalls,
   search,
+  searchPage,
   sessionIngestIssues,
 } from "../src/query.ts";
+import { SEARCH_MATCH_END, SEARCH_MATCH_START } from "../src/search-query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { preview } from "../src/tools.ts";
 
@@ -48,6 +51,11 @@ describe("query reads", () => {
     const detail = getSession(db, list[0]?.id ?? 0);
     expect(detail).not.toBeNull();
     expect(detail?.messages).toHaveLength(4);
+    expect(
+      detail?.messages
+        .flatMap((message) => message.blocks)
+        .find((block) => block.block_type === "tool_result"),
+    ).toMatchObject({ tool_name: "Read", tool_use_id: "toolu_1" });
 
     const hits = search(db, "auth", 10);
     expect(hits.length).toBeGreaterThan(0);
@@ -550,9 +558,248 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("session summaries separate actionable ingest failures from informational sensors", () => {
+    const db = seeded();
+    const sessionId = listSessions(db)[0]?.id ?? 0;
+    db.query(
+      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+       VALUES ('/x.jsonl', 9, 'unknown record', NULL, 'unknown_record_type', datetime('now'))`,
+    ).run();
+
+    expect(getSession(db, sessionId)?.summary).toMatchObject({
+      ingest_issue_count: 0,
+      informational_ingest_issue_count: 1,
+    });
+    expect(listSessions(db)[0]).toMatchObject({
+      ingest_issue_count: 0,
+      informational_ingest_issue_count: 1,
+    });
+    db.close();
+  });
+
   test("search with no match returns empty", () => {
     const db = seeded();
     expect(search(db, "zzznotpresentzzz", 10)).toEqual([]);
+    db.close();
+  });
+
+  test("search returns matching-column snippets, deep links, totals, and pagination", () => {
+    const db = seeded();
+    const page = searchPage(db, "auth", { limit: 1 });
+    expect(page.total).toBeGreaterThan(1);
+    expect(page.results).toHaveLength(1);
+    expect(page.elapsed_ms).toBeGreaterThanOrEqual(0);
+    expect(page.results[0]).toMatchObject({
+      session_title: "Fix the failing auth test",
+      tool: "claude_code",
+      project: "/Users/dev/proj",
+      role: expect.any(String),
+      block_type: expect.any(String),
+      message_seq: expect.any(Number),
+      timestamp: expect.any(String),
+      href: expect.stringMatching(/^\/sessions\/\d+#message-\d+$/),
+    });
+
+    const second = searchPage(db, "auth", { limit: 1, offset: 1 });
+    expect(second.total).toBe(page.total);
+    expect(second.results).toHaveLength(1);
+    expect(second.results[0]?.block_id).not.toBe(page.results[0]?.block_id);
+
+    const toolInputHit = searchPage(db, "auth_test.py").results.find(
+      (hit) => hit.block_type === "tool_use",
+    );
+    expect(toolInputHit?.snippet).toContain(`${SEARCH_MATCH_START}auth_test.py${SEARCH_MATCH_END}`);
+    expect(toolInputHit?.snippet).not.toBe("Read");
+    db.close();
+  });
+
+  test("search caps pages at 100 and applies session visibility and scope filters", () => {
+    const db = seeded();
+    const visibleSessionId = listSessions(db)[0]?.id ?? 0;
+    const visibleMessageId = (
+      db
+        .query("SELECT id FROM message WHERE session_id = ? ORDER BY seq LIMIT 1")
+        .get(visibleSessionId) as { id: number }
+    ).id;
+    const insertBlock = db.prepare(
+      "INSERT INTO block(message_id, session_id, ordinal, type, text) VALUES (?, ?, ?, 'text', ?)",
+    );
+    for (let index = 0; index < 110; index += 1) {
+      insertBlock.run(visibleMessageId, visibleSessionId, 1000 + index, `bulkneedle ${index}`);
+    }
+    expect(searchPage(db, "bulkneedle", { limit: 10_000 })).toMatchObject({
+      total: 110,
+      results: expect.any(Array),
+    });
+    expect(searchPage(db, "bulkneedle", { limit: 10_000 }).results).toHaveLength(100);
+    expect(searchPage(db, "bulkneedle", { limit: 100, offset: 100 }).results).toHaveLength(10);
+
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent)
+      VALUES
+        (100, 'claude_code', 'search-subagent', 'subagent', '2026-05-01T00:00:00Z', 1),
+        (101, 'claude_code', 'search-hidden', '<local-command-caveat>hidden</local-command-caveat>', '2026-05-01T00:00:00Z', 0);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (100, 100, 0, 'user', '{}'),
+        (101, 101, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES
+        (100, 100, 0, 'text', 'visibilityneedle'),
+        (101, 101, 0, 'text', '<local-command-stdout>visibilityneedle</local-command-stdout>');
+    `);
+    insertBlock.run(visibleMessageId, visibleSessionId, 999, "visibilityneedle");
+
+    expect(searchPage(db, "visibilityneedle").total).toBe(1);
+    expect(searchPage(db, "auth", { tool: "codex" }).total).toBe(0);
+    expect(searchPage(db, "auth", { project: "/Users/dev/proj" }).total).toBeGreaterThan(0);
+    expect(searchPage(db, "auth", { project: "/elsewhere" }).total).toBe(0);
+    expect(searchPage(db, "auth", { from: "2026-05-02" }).total).toBe(0);
+    expect(searchPage(db, "auth", { to: "2026-04-30" }).total).toBe(0);
+    db.close();
+  });
+
+  test("lists tool calls with drill-down metadata, tri-state errors, filters, and pagination", () => {
+    const db = seeded();
+    const session = listSessions(db)[0];
+    if (session == null) {
+      throw new Error("seeded session must exist");
+    }
+    db.query(
+      `INSERT INTO tool_call(
+         session_id, tool_kind, tool_name, mcp_server, is_error, has_result, ordinal
+       ) VALUES (?, NULL, NULL, 'legacy-server', NULL, NULL, 99)`,
+    ).run(session.id);
+
+    const page = listToolCalls(db);
+    expect(page).toMatchObject({
+      total: 2,
+      limit: 50,
+      offset: 0,
+      summary: {
+        calls: 2,
+        errors: 0,
+        p50_ms: 1000,
+        p95_ms: 1000,
+      },
+    });
+    expect(page.calls[0]).toMatchObject({
+      session_id: session.id,
+      session_title: "Fix the failing auth test",
+      project: "/Users/dev/proj",
+      tool_name: "Read",
+      tool_kind: "builtin",
+      mcp_server: null,
+      input_preview: expect.stringContaining("auth_test.py"),
+      input_bytes: expect.any(Number),
+      output_preview: "def test_auth(): assert login()",
+      output_bytes: expect.any(Number),
+      is_error: false,
+      has_result: true,
+      duration_ms: 1000,
+      timestamp: "2026-05-01T10:00:05.000Z",
+      seq: expect.any(Number),
+    });
+    expect(page.calls[1]).toMatchObject({
+      tool_name: null,
+      tool_kind: null,
+      mcp_server: "legacy-server",
+      input_preview: null,
+      input_bytes: null,
+      output_preview: null,
+      output_bytes: null,
+      is_error: null,
+      has_result: null,
+      duration_ms: null,
+      timestamp: null,
+      seq: null,
+    });
+
+    expect(listToolCalls(db, { server: "legacy-server" }).calls).toHaveLength(1);
+    expect(listToolCalls(db, { tool: "Read", minMs: 1000 }).calls).toHaveLength(1);
+    expect(listToolCalls(db, { tool: "Read", minMs: 1001 }).calls).toHaveLength(0);
+    expect(listToolCalls(db, { sessionId: session.id }).total).toBe(2);
+    expect(listToolCalls(db, { project: "/Users/dev/proj" }).total).toBe(2);
+    expect(listToolCalls(db, { from: "2026-05-01", to: "2026-05-01" }).total).toBe(1);
+    expect(listToolCalls(db, { errorsOnly: true }).total).toBe(0);
+    expect(listToolCalls(db, { tool: "Read", minMs: 1000 }).summary).toEqual({
+      calls: 1,
+      errors: 0,
+      p50_ms: 1000,
+      p95_ms: 1000,
+    });
+    expect(listToolCalls(db, { limit: 10_000 }).limit).toBe(100);
+    expect(listToolCalls(db, { limit: 1, offset: 1 })).toMatchObject({
+      total: 2,
+      limit: 1,
+      offset: 1,
+      calls: [expect.objectContaining({ mcp_server: "legacy-server" })],
+    });
+    db.close();
+  });
+
+  test("tool-call summary covers the complete filtered result rather than one page", () => {
+    const db = seeded();
+    const sessionId = listSessions(db)[0]?.id ?? 0;
+    const insert = db.prepare(
+      `INSERT INTO tool_call(
+         session_id, tool_kind, tool_name, is_error, duration_ms, timestamp, ordinal
+       ) VALUES (?, 'builtin', 'Bulk', ?, ?, ?, ?)`,
+    );
+    for (let duration = 1; duration <= 100; duration += 1) {
+      insert.run(
+        sessionId,
+        duration === 100 ? 1 : 0,
+        duration,
+        `2026-05-01T11:${String(Math.floor(duration / 60)).padStart(2, "0")}:${String(
+          duration % 60,
+        ).padStart(2, "0")}.000Z`,
+        100 + duration,
+      );
+    }
+
+    const page = listToolCalls(db, { tool: "Bulk", limit: 1 });
+    expect(page.calls).toHaveLength(1);
+    expect(page.summary).toEqual({
+      calls: 100,
+      errors: 1,
+      p50_ms: 50,
+      p95_ms: 95,
+    });
+    expect(page.total).toBe(page.summary.calls);
+    db.close();
+  });
+
+  test("tool-call browse and summary exclude generated local-command-only sessions", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES (
+        1,
+        'claude_code',
+        'hidden-command',
+        '<local-command-caveat>Generated command context</local-command-caveat>',
+        '2026-07-05T00:00:00Z'
+      );
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES (1, 1, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES (1, 1, 0, 'text', '<command-name>/exit</command-name>');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, ordinal
+      ) VALUES (1, 'mcp', 'HiddenCommandTool', 'hidden', 1, 500, 0);
+    `);
+
+    expect(listToolCalls(db)).toMatchObject({
+      calls: [],
+      total: 0,
+      summary: {
+        calls: 0,
+        errors: 0,
+        p50_ms: null,
+        p95_ms: null,
+      },
+    });
     db.close();
   });
 

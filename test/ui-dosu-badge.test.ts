@@ -17,9 +17,9 @@ describe("Dosu provenance badge copy", () => {
 
   test("uses accessible singular and responsive visual labels", () => {
     expect(dosuBadgeAriaLabel({ directCalls: 1, treeCalls: 1 })).toBe(
-      "Optimized by Dosu; Dosu MCP used 1 time",
+      "Optimized with Dosu; Dosu MCP used 1 time",
     );
-    expect(dosuBadgeVisualLabel(false)).toBe("Optimized by Dosu");
-    expect(dosuBadgeVisualLabel(true)).toBe("Dosu");
+    expect(dosuBadgeVisualLabel(false)).toBe("Optimized");
+    expect(dosuBadgeVisualLabel(true)).toBe("Optimized");
   });
 });

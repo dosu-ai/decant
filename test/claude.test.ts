@@ -222,6 +222,28 @@ describe("parseClaudeSession", () => {
     expect(parsed.session.title).toBe("From Title Field");
   });
 
+  test("uses ai-title as a fallback without replacing the first user prompt", () => {
+    const content = [
+      '{"type":"user","message":{"role":"user","content":"Human title wins"}}',
+      '{"type":"ai-title","title":"Generated Title"}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.session.title).toBe("Human title wins");
+    expect(parsed.issues).toEqual([]);
+  });
+
+  test("treats mode and file history deltas as metadata only", () => {
+    const content = [
+      '{"type":"mode","mode":"normal"}',
+      '{"type":"file-history-delta","messageId":"m1","trackingPath":"/repo/a.ts","backup":{}}',
+      '{"type":"user","message":{"role":"user","content":"Keep this prompt"}}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.messages).toHaveLength(1);
+    expect(parsed.session.messages[0]?.role).toBe("user");
+  });
+
   test("unknown blocks and tool result arrays parse", () => {
     const content = [
       '{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"hi"},{"type":"mystery","foo":1}]}}',
@@ -239,6 +261,22 @@ describe("parseClaudeSession", () => {
     expect(messages[1]?.blocks.some((block) => block.blockType === "other")).toBe(true);
     expect(messages[2]?.role).toBe("user");
     expect(messages[2]?.blocks).toEqual([]);
+  });
+
+  test("preserves embedded images exactly for presentation-safe summarization", () => {
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+    };
+    const content = JSON.stringify({
+      type: "user",
+      uuid: "u-image",
+      timestamp: "2026-05-01T10:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "See image" }, image] },
+    });
+    const blocks = parseClaudeSession("image", content).session.messages[0]?.blocks ?? [];
+    expect(blocks.map((block) => block.blockType)).toEqual(["text", "other"]);
+    expect(JSON.parse(blocks[1]?.text ?? "")).toEqual(image);
   });
 
   test("meta without title and already titled meta are noops", () => {

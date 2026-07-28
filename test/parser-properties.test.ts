@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { afterAll, describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { INGEST_ISSUE_CODES } from "../src/model.ts";
+import { buildFtsQuery } from "../src/search-query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -51,6 +53,36 @@ const parsers = [
     parse: (content: string) => parseCodexSession("prop-session", content, new Map()),
   },
 ] as const;
+
+const searchDb = new Database(":memory:");
+searchDb.exec(`
+  CREATE VIRTUAL TABLE search_property_fts USING fts5(text, prefix='2 3');
+  INSERT INTO search_property_fts(text) VALUES ('auth token flow'), ('quoted words');
+`);
+afterAll(() => searchDb.close());
+
+describe("buildFtsQuery", () => {
+  test("quotes words, preserves phrases, escapes quotes, and prefixes only the final token", () => {
+    expect(buildFtsQuery("auth token")).toBe('"auth" "token"*');
+    expect(buildFtsQuery('auth "token flow"')).toBe('"auth" "token flow"*');
+    expect(buildFtsQuery('"say \\"hello\\"" next')).toBe('"say ""hello""" "next"*');
+    expect(buildFtsQuery('"unfinished phrase')).toBe('"unfinished phrase"*');
+    expect(buildFtsQuery('auth"token')).toBe('"auth""token"*');
+  });
+
+  test("always produces an FTS5-safe query for arbitrary user input", () => {
+    fc.assert(
+      fc.property(fc.string({ unit: "binary", maxLength: 300 }), (input) => {
+        const query = buildFtsQuery(input);
+        expect(() =>
+          searchDb
+            .query("SELECT rowid FROM search_property_fts WHERE search_property_fts MATCH ?")
+            .all(query),
+        ).not.toThrow();
+      }),
+    );
+  });
+});
 
 for (const { name, tool, parse } of parsers) {
   describe(name, () => {

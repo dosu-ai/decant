@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
 
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
@@ -74,7 +74,14 @@ export function launchAgent(
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
     `rm -rf ${shellQuote(promptDir)})"`;
-  return launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env);
+  const result = launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env);
+  if (!result.ok) {
+    rmSync(promptDir, { recursive: true, force: true });
+    if (result.command != null) {
+      return { ...result, command: command(agent, fullPrompt) ?? result.command };
+    }
+  }
+  return result;
 }
 
 export function openIde(
@@ -102,6 +109,28 @@ function launchIn(
       return run("osascript", ["-e", itermScript(cmd)]);
     case "ghostty":
       return openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
+    case "warp": {
+      const launch = createWarpLaunch(cmd, env);
+      const result = run("open", [launch.uri]);
+      if (!result.ok) {
+        rmSync(launch.configDir, { recursive: true, force: true });
+        const fallback = run("open", [
+          `warp://action/new_tab?path=${encodeURIComponent(launch.cwd)}`,
+        ]);
+        if (fallback.ok) {
+          return {
+            ok: false,
+            error: "Warp opened the project directory but could not start the agent automatically.",
+            command: cmd,
+          };
+        }
+        return {
+          ok: false,
+          error: [result.error, fallback.error].filter(Boolean).join(" · ") || "launch failed",
+        };
+      }
+      return result;
+    }
     case "alacritty":
       return openArgs("Alacritty", ["-e", shell(env), "-lc", cmd], run);
     case "kitty":
@@ -111,6 +140,35 @@ function launchIn(
     default:
       return run("osascript", ["-e", terminalAppScript(cmd)]);
   }
+}
+
+export function warpLaunchUri(
+  cmd: string,
+  env: Record<string, string | undefined> | undefined,
+): string {
+  return createWarpLaunch(cmd, env).uri;
+}
+
+function createWarpLaunch(
+  cmd: string,
+  env: Record<string, string | undefined> | undefined,
+): { configDir: string; cwd: string; uri: string } {
+  const configDir = mkdtempSync(join(tmpdir(), "decant-warp-"));
+  const configPath = join(configDir, "decant.yaml");
+  const cwd = resolve(env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir());
+  const cleanupCommand = `${cmd}; status=$?; rm -rf ${shellQuote(configDir)}; exit $status`;
+  const config = `---
+name: decant agent
+windows:
+  - tabs:
+      - title: decant
+        layout:
+          cwd: ${JSON.stringify(cwd)}
+          commands:
+            - exec: ${JSON.stringify(cleanupCommand)}
+`;
+  writeFileSync(configPath, config, { mode: 0o600 });
+  return { configDir, cwd, uri: `warp://launch/${encodeURIComponent(configPath)}` };
 }
 
 function openArgs(

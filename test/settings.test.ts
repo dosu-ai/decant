@@ -24,6 +24,12 @@ describe("settings", () => {
     });
   });
 
+  test("detects Warp and exposes it as a persisted terminal option", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "warp"), TERM_PROGRAM: "WarpTerminal" };
+    expect(detectedSettings({ env, appExists: () => false }).terminal).toBe("warp");
+    expect(saveSettings({ terminal: "warp" }, { env }).terminal).toBe("warp");
+  });
+
   test("saveSettings persists sanitized values over detected defaults", () => {
     const env = { DECANT_CONFIG_DIR: join(workDir, "save"), TERM: "xterm-kitty" };
     const saved = saveSettings(

@@ -3,8 +3,8 @@ export interface DosuEvidence {
   treeCalls: number;
 }
 
-export function dosuBadgeVisualLabel(compact: boolean): "Dosu" | "Optimized by Dosu" {
-  return compact ? "Dosu" : "Optimized by Dosu";
+export function dosuBadgeVisualLabel(_compact: boolean): "Optimized" {
+  return "Optimized";
 }
 
 export function dosuNestedCalls(evidence: DosuEvidence): number {
@@ -13,7 +13,7 @@ export function dosuNestedCalls(evidence: DosuEvidence): number {
 
 export function dosuBadgeAriaLabel(evidence: DosuEvidence): string {
   const calls = Math.max(0, evidence.treeCalls);
-  return `Optimized by Dosu; Dosu MCP used ${calls} ${calls === 1 ? "time" : "times"}`;
+  return `Optimized with Dosu; Dosu MCP used ${calls} ${calls === 1 ? "time" : "times"}`;
 }
 
 export function dosuEvidenceSummary(evidence: DosuEvidence): string {

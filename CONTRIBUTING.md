@@ -1,6 +1,6 @@
-# Contributing to decant
+# Contributing to Decant
 
-Thanks for improving decant. [AGENTS.md](AGENTS.md) is the canonical reference
+Thanks for improving Decant. [AGENTS.md](AGENTS.md) is the canonical reference
 for commands, conventions, and project invariants; this file is the shorter
 on-ramp.
 
@@ -48,7 +48,7 @@ bunx biome check .
 1. Core modules do not print; `src/cli.ts` owns output and exit codes.
 2. One Bun process owns SQLite directly. Do not reintroduce the old daemon,
    Phoenix app, token/lock file, or cross-process API contract.
-3. decant is local-first and offline: no outbound runtime network calls and no
+3. Decant is local-first and offline: no outbound runtime network calls and no
    LLM calls.
 4. Never commit secrets, private transcripts, or a personal archive DB.
 5. Pre-v8 archives are rebuild-only; v8 and newer migrate forward on open. See
@@ -65,7 +65,7 @@ Adding support for a new agent CLI? Follow the agent-executable prompt in docs/p
 
 ## How we work
 
-decant is trunk-based. There is one long-lived branch, `main`, and it is always
+Decant is trunk-based. There is one long-lived branch, `main`, and it is always
 releasable.
 
 - **Branch off `main`, keep it short-lived.** Days, not weeks. A branch that
@@ -93,7 +93,7 @@ releasable.
 
 ## Reporting bugs and proposing features
 
-Open an issue with enough detail to reproduce: decant version, OS, command,
+Open an issue with enough detail to reproduce: Decant version, OS, command,
 actual result, and expected result. For security issues, do not open a public
 issue; see [SECURITY.md](SECURITY.md).
 

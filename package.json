@@ -39,9 +39,13 @@
   "dependencies": {
     "@logtape/logtape": "^2.2.4",
     "commander": "^15.0.0",
+    "diff": "^9.0.0",
     "echarts": "^6.1.0",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.3.1"
   }
 }

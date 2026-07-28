@@ -71,10 +71,13 @@ export function byDimension(
 ): DimRow[] {
   const { groupExpr, join } = dimensionSql(dimension);
   const date = sessionDatePredicate("s", filter);
-  const rows = db
-    .query(
-      `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(date)}
+  const visible = {
+    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
+    params: date.params,
+  };
+  const statement = db.prepare(
+    `WITH filtered_session AS (
+         SELECT * FROM session s ${whereClause(visible)}
        )
        SELECT ${groupExpr} AS key,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
@@ -86,8 +89,13 @@ export function byDimension(
        FROM filtered_session s ${join}
        GROUP BY key
        ORDER BY sessions DESC`,
-    )
-    .all(...date.params) as DimRowDb[];
+  );
+  let rows: DimRowDb[];
+  try {
+    rows = statement.all(...visible.params) as DimRowDb[];
+  } finally {
+    statement.finalize();
+  }
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
@@ -97,6 +105,9 @@ export interface ToolStatRow {
   mcp_server: string | null;
   calls: number;
   errors: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  last_used_at: string | null;
 }
 
 interface ToolStatDb extends Omit<ToolStatRow, "tool_name" | "tool_kind"> {
@@ -112,26 +123,70 @@ export function toolUsage(
 ): ToolStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const date = sessionDatePredicate("s", filter);
-  const having = errorsOnly ? "HAVING errors > 0" : "";
-  // Every tool_call row references a session, so the session join exists only
-  // to apply the date filter; skip it (and its per-row lookup cost) otherwise.
-  const scope =
-    date.sql === ""
-      ? ""
-      : `JOIN (SELECT id FROM session s ${whereClause(date)}) fs ON fs.id = t.session_id`;
-  const rows = db
-    .query(
-      `SELECT t.tool_name, t.tool_kind, t.mcp_server,
-              COUNT(*) AS calls,
-              COALESCE(SUM(CASE WHEN t.is_error = 1 THEN 1 ELSE 0 END), 0) AS errors
-       FROM tool_call t
-       ${scope}
-       GROUP BY t.tool_name, t.tool_kind, t.mcp_server
-       ${having}
-       ORDER BY calls DESC
+  const errorFilter = errorsOnly ? "WHERE a.errors > 0" : "";
+  const visible = {
+    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
+    params: date.params,
+  };
+  const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
+    ON fs.id = t.session_id`;
+  const statement = db.prepare(
+    `WITH scoped AS (
+         SELECT t.tool_name, t.tool_kind, t.mcp_server, t.is_error,
+                t.duration_ms, t.timestamp
+         FROM tool_call t
+         ${scope}
+       ),
+       ranked AS (
+         SELECT tool_name, tool_kind, mcp_server, duration_ms,
+                ROW_NUMBER() OVER (
+                  PARTITION BY tool_name, tool_kind, mcp_server
+                  ORDER BY duration_ms
+                ) AS duration_rank,
+                COUNT(*) OVER (
+                  PARTITION BY tool_name, tool_kind, mcp_server
+                ) AS duration_count
+         FROM scoped
+         WHERE duration_ms IS NOT NULL
+       ),
+       latency AS (
+         SELECT tool_name, tool_kind, mcp_server,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
+                  THEN duration_ms
+                END) AS p50_ms,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+                  THEN duration_ms
+                END) AS p95_ms
+         FROM ranked
+         GROUP BY tool_name, tool_kind, mcp_server
+       ),
+       aggregate AS (
+         SELECT tool_name, tool_kind, mcp_server,
+                COUNT(*) AS calls,
+                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
+                MAX(timestamp) AS last_used_at
+         FROM scoped
+         GROUP BY tool_name, tool_kind, mcp_server
+       )
+       SELECT a.tool_name, a.tool_kind, a.mcp_server, a.calls, a.errors,
+              l.p50_ms, l.p95_ms, a.last_used_at
+       FROM aggregate a
+       LEFT JOIN latency l
+         ON l.tool_name IS a.tool_name
+        AND l.tool_kind IS a.tool_kind
+        AND l.mcp_server IS a.mcp_server
+       ${errorFilter}
+       ORDER BY a.calls DESC
        LIMIT ${limit}`,
-    )
-    .all(...date.params) as ToolStatDb[];
+  );
+  let rows: ToolStatDb[];
+  try {
+    rows = statement.all(...visible.params) as ToolStatDb[];
+  } finally {
+    statement.finalize();
+  }
   return rows.map((row) => ({
     ...row,
     tool_name: row.tool_name ?? "",
@@ -144,6 +199,9 @@ export interface McpStatRow {
   tools: number;
   calls: number;
   errors: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  last_used_at: string | null;
 }
 
 interface McpStatDb extends Omit<McpStatRow, "mcp_server"> {
@@ -153,23 +211,67 @@ interface McpStatDb extends Omit<McpStatRow, "mcp_server"> {
 export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | null): McpStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const date = sessionDatePredicate("s", filter);
-  const rows = db
-    .query(
-      `WITH filtered_session AS (
-         SELECT id, started_at FROM session s ${whereClause(date)}
+  const visible = {
+    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
+    params: date.params,
+  };
+  const statement = db.prepare(
+    `WITH filtered_session AS (
+         SELECT id, started_at FROM session s ${whereClause(visible)}
+       ),
+       scoped AS (
+         SELECT t.mcp_server, t.tool_name, t.is_error, t.duration_ms, t.timestamp
+         FROM tool_call t
+         JOIN filtered_session s ON s.id = t.session_id
+         WHERE t.tool_kind = 'mcp' AND t.mcp_server IS NOT NULL
+       ),
+       ranked AS (
+         SELECT mcp_server, duration_ms,
+                ROW_NUMBER() OVER (
+                  PARTITION BY mcp_server
+                  ORDER BY duration_ms
+                ) AS duration_rank,
+                COUNT(*) OVER (
+                  PARTITION BY mcp_server
+                ) AS duration_count
+         FROM scoped
+         WHERE duration_ms IS NOT NULL
+       ),
+       latency AS (
+         SELECT mcp_server,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
+                  THEN duration_ms
+                END) AS p50_ms,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+                  THEN duration_ms
+                END) AS p95_ms
+         FROM ranked
+         GROUP BY mcp_server
+       ),
+       aggregate AS (
+         SELECT mcp_server,
+                COUNT(DISTINCT tool_name) AS tools,
+                COUNT(*) AS calls,
+                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
+                MAX(timestamp) AS last_used_at
+         FROM scoped
+         GROUP BY mcp_server
        )
-       SELECT t.mcp_server,
-              COUNT(DISTINCT t.tool_name) AS tools,
-              COUNT(*) AS calls,
-              COALESCE(SUM(CASE WHEN t.is_error = 1 THEN 1 ELSE 0 END), 0) AS errors
-       FROM tool_call t
-       JOIN filtered_session s ON s.id = t.session_id
-       WHERE t.tool_kind = 'mcp' AND t.mcp_server IS NOT NULL
-       GROUP BY t.mcp_server
-       ORDER BY calls DESC
+       SELECT a.mcp_server, a.tools, a.calls, a.errors,
+              l.p50_ms, l.p95_ms, a.last_used_at
+       FROM aggregate a
+       LEFT JOIN latency l ON l.mcp_server = a.mcp_server
+       ORDER BY a.calls DESC
        LIMIT ?`,
-    )
-    .all(...date.params, limit) as McpStatDb[];
+  );
+  let rows: McpStatDb[];
+  try {
+    rows = statement.all(...visible.params, limit) as McpStatDb[];
+  } finally {
+    statement.finalize();
+  }
   return rows.map((row) => ({ ...row, mcp_server: row.mcp_server ?? "" }));
 }
 

@@ -14,7 +14,11 @@ import {
   Copy,
   Cpu,
   Download,
+  Ellipsis,
+  Eye,
+  FileCode2,
   FileText,
+  FileType2,
   FlaskConical,
   Folder,
   Inbox,
@@ -54,6 +58,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
 import {
@@ -62,8 +67,14 @@ import {
   type AnalyticsChartVariant,
   prepareAnalyticsChartState,
 } from "./chart-state.ts";
-import { layoutContextAnnotations } from "./context-window-layout.ts";
-import { contextWindowDisplayMode } from "./context-window-state.ts";
+import {
+  contextCurveAreaPath,
+  contextCurveLinePath,
+  groupContextMarkers,
+  layoutContextCurve,
+  layoutContextTooltip,
+} from "./context-window-layout.ts";
+import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
 import {
@@ -75,15 +86,19 @@ import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
-import { formatIssueBadge } from "./ingest-issues.ts";
+import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
   documentTitleFor,
+  isKnownRoute,
   pathOnly,
+  projectSessionsHref,
   activeRoute as resolveActiveRoute,
   activeRouteKey as resolveActiveRouteKey,
+  sessionProjectFilter,
   titleFor,
 } from "./navigation.ts";
+import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
 import {
   hasShareCardValues,
   SHARE_CARD_HEIGHT,
@@ -101,6 +116,15 @@ import {
   shareCardTitle,
 } from "./share-card.ts";
 import {
+  isDrilldownActivationKey,
+  type ToolFilters,
+  toolDateRangeFromFilters,
+  toolFiltersFromSearch,
+  toolFiltersHref,
+  withToolDateRange,
+} from "./tool-filters.ts";
+import { TranscriptCodeBlock, TranscriptMarkdown } from "./transcript-markdown.tsx";
+import {
   hasOpenModal,
   isInteractiveTarget,
   nextTranscriptSeq,
@@ -111,17 +135,25 @@ import {
 } from "./transcript-navigation.ts";
 import {
   appendTranscriptPage,
-  clampTranscriptWindowOffset,
   prependTranscriptPage,
   previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
-  transcriptWindowOffset,
+  transcriptPrefixRequest,
 } from "./transcript-pagination.ts";
 import {
   type StructuredTranscriptKind,
   type StructuredTranscriptLine,
   structuredTranscriptBlock,
 } from "./transcript-presentation.ts";
+import {
+  collapseTranscriptText,
+  embeddedAttachmentSummary,
+  languageForTool,
+  presentationForTool,
+  summarizeToolResult,
+  type TranscriptToolPresentation,
+  transcriptCollapseLabel,
+} from "./transcript-rendering.ts";
 import "./styles.css";
 
 type Summary = {
@@ -160,17 +192,48 @@ type SessionSummary = {
   subagent_estimated_cost_usd: number;
   /** Ingest diagnostics recorded against this session's source file. */
   ingest_issue_count: number;
+  informational_ingest_issue_count: number;
   dosu_mcp_direct_calls: number;
   dosu_mcp_tree_calls: number;
   subagents?: SessionSummary[];
 };
 
 type SearchHit = {
+  block_id: number;
+  block_type: string;
+  href: string;
+  message_seq: number;
+  project: string | null;
+  role: string;
   session_id: number;
   session_title: string | null;
-  tool: string;
   snippet: string;
+  timestamp: string | null;
+  tool: string;
 };
+
+type SearchResponse = {
+  elapsed_ms: number;
+  results: SearchHit[];
+  total: number;
+};
+
+type SyncProgress = {
+  failed: number;
+  ingested: number;
+  scanned: number;
+  skipped: number;
+  total: number;
+};
+
+type SyncEventPayload = {
+  status?: {
+    in_progress?: boolean;
+    last_sync_at?: string | null;
+  };
+};
+
+const LIVE_DISCONNECT_GRACE_MS = 15_000;
 
 type Activity = {
   by_hour: number[];
@@ -254,6 +317,9 @@ type ToolRow = {
   mcp_server: string | null;
   calls: number;
   errors: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  last_used_at: string | null;
 };
 
 type McpRow = {
@@ -261,6 +327,41 @@ type McpRow = {
   tools: number;
   calls: number;
   errors: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  last_used_at: string | null;
+};
+
+type ToolCallRow = {
+  id: number;
+  session_id: number;
+  session_title: string | null;
+  project: string | null;
+  tool_name: string | null;
+  tool_kind: string | null;
+  mcp_server: string | null;
+  input_preview: string | null;
+  input_bytes: number | null;
+  output_preview: string | null;
+  output_bytes: number | null;
+  is_error: boolean | null;
+  has_result: boolean | null;
+  duration_ms: number | null;
+  timestamp: string | null;
+  seq: number | null;
+};
+
+type ToolCallPage = {
+  calls: ToolCallRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: {
+    calls: number;
+    errors: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  };
 };
 
 type FileRow = {
@@ -286,6 +387,7 @@ type Recommendation = {
   url: string | null;
   link_label: string | null;
   icon: string | null;
+  impact_label?: string | null;
   tone: string | null;
   score: number;
   action: string | null;
@@ -469,7 +571,7 @@ const SLICE_LOADERS: Record<
 };
 
 // Slices the app shell itself renders (sidebar stats, sync button, pickers).
-const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds"];
+const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds", "config"];
 
 const ROUTE_SLICES: Record<string, DataSlice[]> = {
   Sessions: [],
@@ -545,6 +647,13 @@ type DateRangeSelection = {
   to: string | null;
 };
 
+function versionLabel(version: string | null | undefined): string {
+  if (version == null || version === "") {
+    return "local checkout";
+  }
+  return version === "dev" || version.startsWith("v") ? version : `v${version}`;
+}
+
 const RANGE_PRESETS = [
   { key: "7d", label: "7d", days: 7 },
   { key: "30d", label: "30d", days: 30 },
@@ -555,15 +664,25 @@ const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null
 function App() {
   const [path, setPath] = useState(locationPath);
   const [data, setData] = useState<DashboardData>(emptyData);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loadedSessionKey, setLoadedSessionKey] = useState<string | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [localSyncing, setLocalSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<unknown>(null);
+  const [syncComplete, setSyncComplete] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [liveDisconnected, setLiveDisconnected] = useState(false);
+  const [liveConnectionKey, setLiveConnectionKey] = useState(0);
+  const syncCompleteTimerRef = useRef<number | null>(null);
+  const liveDisconnectTimerRef = useRef<number | null>(null);
+  const headerSearchRef = useRef<HTMLInputElement | null>(null);
   const dateQuery = dateRangeQuery(dateRangeSelection);
-  const sessionLoadKey = `${dateQuery}:${reloadKey}`;
+  const sessionProject = sessionProjectFilter(path);
+  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRoute(path, navItems);
@@ -615,10 +734,11 @@ function App() {
 
   useEffect(() => {
     void dateQuery;
+    void sessionProject;
     setData((current) => ({ ...current, sessions: [] }));
     setLoadedSessionKey(null);
     setSessionLimit(SESSION_PAGE_SIZE);
-  }, [dateQuery]);
+  }, [dateQuery, sessionProject]);
 
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
@@ -645,7 +765,7 @@ function App() {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(errorMessage(err));
+          setError(err);
         }
       });
     return () => {
@@ -669,9 +789,11 @@ function App() {
       return;
     }
     setSessionsLoading(true);
+    const projectParam =
+      sessionProject == null ? "" : `&project=${encodeURIComponent(sessionProject)}`;
     void getJson<SessionSummary[]>(
       withDateQuery(
-        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true`,
+        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true${projectParam}`,
         dateQuery,
       ),
     )
@@ -688,7 +810,7 @@ function App() {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(errorMessage(err));
+          setError(err);
         }
       })
       .finally(() => {
@@ -705,19 +827,127 @@ function App() {
     loadedSessionKey,
     sessionLimit,
     sessionLoadKey,
+    sessionProject,
     showsSessions,
   ]);
 
   useEffect(() => {
+    // Incrementing this key intentionally replaces the EventSource when the
+    // user asks to reconnect immediately instead of waiting for its backoff.
+    void liveConnectionKey;
     const events = new EventSource("/api/events");
-    events.addEventListener("sync", requestRefresh);
-    events.addEventListener("archive_updated", requestRefresh);
-    return () => {
-      events.removeEventListener("sync", requestRefresh);
-      events.removeEventListener("archive_updated", requestRefresh);
-      events.close();
+    const markConnected = () => {
+      if (liveDisconnectTimerRef.current != null) {
+        window.clearTimeout(liveDisconnectTimerRef.current);
+        liveDisconnectTimerRef.current = null;
+      }
+      setLiveDisconnected(false);
     };
-  }, [requestRefresh]);
+    const handleProgress = (event: MessageEvent<string>) => {
+      markConnected();
+      try {
+        const payload = JSON.parse(event.data) as { progress?: SyncProgress };
+        if (payload.progress != null) {
+          setSyncProgress(payload.progress);
+          setLocalSyncing(true);
+          setData((current) =>
+            current.now == null
+              ? current
+              : { ...current, now: { ...current.now, sync_in_progress: true } },
+          );
+        }
+      } catch {
+        // A malformed progress event must not interrupt the live channel.
+      }
+    };
+    const handleSync = (event: MessageEvent<string>) => {
+      markConnected();
+      setLocalSyncing(false);
+      setSyncError(null);
+      setSyncComplete(true);
+      let payload: SyncEventPayload = {};
+      try {
+        payload = JSON.parse(event.data) as SyncEventPayload;
+      } catch {
+        // A terminal sync event is authoritative even if optional metadata is
+        // unavailable. Clear the local status immediately instead of waiting
+        // for the slower grouped dashboard refresh.
+      }
+      setData((current) =>
+        current.now == null
+          ? current
+          : {
+              ...current,
+              now: {
+                ...current.now,
+                last_sync_at: payload.status?.last_sync_at ?? current.now.last_sync_at,
+                sync_in_progress: false,
+              },
+            },
+      );
+      if (syncCompleteTimerRef.current != null) {
+        window.clearTimeout(syncCompleteTimerRef.current);
+      }
+      syncCompleteTimerRef.current = window.setTimeout(() => {
+        setSyncComplete(false);
+        setSyncProgress(null);
+      }, 1_500);
+      requestRefresh();
+    };
+    const handleOpen = () => markConnected();
+    const handleError = () => {
+      if (liveDisconnectTimerRef.current != null) {
+        return;
+      }
+      liveDisconnectTimerRef.current = window.setTimeout(() => {
+        liveDisconnectTimerRef.current = null;
+        if (events.readyState !== EventSource.OPEN) {
+          setLiveDisconnected(true);
+        }
+      }, LIVE_DISCONNECT_GRACE_MS);
+    };
+    const handleHeartbeat = () => markConnected();
+    events.addEventListener("open", handleOpen);
+    events.addEventListener("hello", handleHeartbeat);
+    events.addEventListener("ping", handleHeartbeat);
+    events.addEventListener("sync_progress", handleProgress as EventListener);
+    events.addEventListener("sync", handleSync);
+    events.addEventListener("archive_updated", requestRefresh);
+    events.addEventListener("error", handleError);
+    return () => {
+      events.removeEventListener("open", handleOpen);
+      events.removeEventListener("hello", handleHeartbeat);
+      events.removeEventListener("ping", handleHeartbeat);
+      events.removeEventListener("sync_progress", handleProgress as EventListener);
+      events.removeEventListener("sync", handleSync);
+      events.removeEventListener("archive_updated", requestRefresh);
+      events.removeEventListener("error", handleError);
+      events.close();
+      if (liveDisconnectTimerRef.current != null) {
+        window.clearTimeout(liveDisconnectTimerRef.current);
+        liveDisconnectTimerRef.current = null;
+      }
+      if (syncCompleteTimerRef.current != null) {
+        window.clearTimeout(syncCompleteTimerRef.current);
+      }
+    };
+  }, [liveConnectionKey, requestRefresh]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      const shortcut =
+        (event.key === "/" && !isInteractiveTarget(event.target)) ||
+        (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey));
+      if (!shortcut || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      headerSearchRef.current?.focus();
+      headerSearchRef.current?.select();
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
 
   const active = activeView;
   const activeKey = resolveActiveRouteKey(path, navItems);
@@ -726,16 +956,74 @@ function App() {
   // other stats; dateBounds is archive-wide and only a fallback for routes
   // that never load session rows, so it must never win over an in-range value.
   const lastActivity = latestSessionDay(data.sessions) ?? formatDay(data.dateBounds?.max ?? null);
-  const syncInProgress = data.now?.sync_in_progress === true;
+  const syncInProgress = localSyncing || data.now?.sync_in_progress === true;
   const runSync = () => {
     if (syncInProgress) {
       return;
     }
-    setError(null);
+    setSyncError(null);
+    setSyncComplete(false);
+    setSyncProgress(null);
+    setLocalSyncing(true);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
-      .then(requestRefresh)
-      .catch((err: unknown) => setError(errorMessage(err)));
+      .then(() => {
+        setLocalSyncing(false);
+        setSyncComplete(true);
+        requestRefresh();
+        if (syncCompleteTimerRef.current != null) {
+          window.clearTimeout(syncCompleteTimerRef.current);
+        }
+        syncCompleteTimerRef.current = window.setTimeout(() => {
+          setSyncComplete(false);
+          setSyncProgress(null);
+        }, 1_500);
+      })
+      .catch((err: unknown) => {
+        setLocalSyncing(false);
+        setSyncProgress(null);
+        setSyncError(err);
+      });
   };
+  const reconnectLiveUpdates = () => {
+    setLiveDisconnected(false);
+    setLiveConnectionKey((key) => key + 1);
+    requestRefresh();
+  };
+  const headerSearchQuery =
+    pathOnly(path) === "/search"
+      ? (new URLSearchParams(path.split("?", 2)[1] ?? "").get("q") ?? "")
+      : "";
+
+  const analyticsReport = pathOnly(path) === "/reports/analytics";
+  const sessionReportMatch = pathOnly(path).match(/^\/reports\/session\/(\d+)$/);
+  if (analyticsReport) {
+    const date = path.includes("?") ? (path.split("?", 2)[1] ?? "") : "";
+    const sourceHref = withDateQuery("/api/reports/analytics.html", date);
+    return (
+      <ReportRouteView
+        backHref="/"
+        downloadHref={sourceHref}
+        includes={ANALYTICS_REPORT_INCLUDES}
+        onSync={runSync}
+        sourceHref={sourceHref}
+        title="Analytics report"
+      />
+    );
+  }
+  if (sessionReportMatch != null) {
+    const id = Number(sessionReportMatch[1]);
+    const sourceHref = `/api/reports/session/${id}.html`;
+    return (
+      <ReportRouteView
+        backHref={`/sessions/${id}`}
+        downloadHref={sourceHref}
+        includes={SESSION_REPORT_INCLUDES}
+        onSync={runSync}
+        sourceHref={sourceHref}
+        title="Session report"
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -751,7 +1039,7 @@ function App() {
             <span className="brand-icon">
               <img alt="" src={dosuDecantUrl} />
             </span>
-            <span>decant</span>
+            <span>Decant</span>
           </a>
           <button
             aria-label="Close menu"
@@ -791,7 +1079,7 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Sessions in this archive">
+          <div className="sidebar-stat" title="Session logs on this device">
             <span className="sidebar-stat-icon">
               <Icon name="trend" />
             </span>
@@ -817,7 +1105,16 @@ function App() {
           ) : null}
           <a className="dosu-attribution" href={dosuLink("sidebar")} rel="noopener" target="_blank">
             <img alt="" src={dosuOfficialUrl} />
-            <span>Built by Dosu ↗</span>
+            <span>Created by Dosu</span>
+          </a>
+          <a
+            className="sidebar-version"
+            href="https://github.com/dosu-ai/decant/releases"
+            rel="noopener"
+            target="_blank"
+            title={`Current build: ${versionLabel(data.config?.version)}`}
+          >
+            Decant {versionLabel(data.config?.version)}
           </a>
         </div>
       </aside>
@@ -832,17 +1129,29 @@ function App() {
             <Icon name="menu" />
           </button>
           <h1>{titleFor(active)}</h1>
+          <label className="topbar-search">
+            <Icon name="search" />
+            <input
+              aria-label="Search session logs"
+              autoComplete="off"
+              onChange={(event) => updateSearchRoute(event.target.value, setPath)}
+              placeholder="Search sessions, messages, and tools…"
+              ref={headerSearchRef}
+              value={headerSearchQuery}
+            />
+            <kbd>⌘K</kbd>
+          </label>
           <div className="topbar-spacer" />
           <a
-            className="search-shortcut"
+            aria-label="Search"
+            className="icon-button topbar-search-mobile"
             href="/search"
             onClick={(event) => navigate(event, "/search", setPath)}
           >
             <Icon name="search" />
-            <span>Search...</span>
-            <kbd>/</kbd>
           </a>
           <button
+            aria-label="Sync session logs"
             aria-busy={syncInProgress}
             className={`secondary-button sync-button${syncInProgress ? " is-syncing" : ""}`}
             disabled={syncInProgress}
@@ -850,8 +1159,17 @@ function App() {
             type="button"
           >
             <Icon name="refresh" />
-            {syncInProgress ? "Syncing" : "Sync"}
+            {syncInProgress ? null : "Sync"}
           </button>
+          <span aria-live="polite" className="sr-only" role="status">
+            {syncInProgress
+              ? syncProgress == null
+                ? "Syncing session logs"
+                : `Syncing ${syncProgress.scanned} of ${syncProgress.total}`
+              : syncComplete
+                ? `Sync complete${syncProgress?.ingested ? `, ${syncProgress.ingested} ingested` : ""}`
+                : ""}
+          </span>
           <a
             aria-label="Settings"
             className="icon-button"
@@ -880,20 +1198,36 @@ function App() {
         </header>
         <main className="content">
           <div className="content-wrap">
-            {error != null ? <div className="notice danger">{error}</div> : null}
-            {renderView(active, path, data, {
-              dateRange: dateRangeSelection,
-              onDateRangeChange: (next) => {
-                setSessionLimit(SESSION_PAGE_SIZE);
-                setDateRangeSelection(next);
-              },
-              refresh: requestRefresh,
-              runSync,
-              sessionLimit,
-              sessionsLoading,
-              setSessionLimit,
-              syncing: syncInProgress,
-            })}
+            {liveDisconnected ? (
+              <div className="live-disconnected" role="status">
+                <span>Live updates disconnected · the browser will reconnect automatically.</span>
+                <button className="secondary-button" onClick={reconnectLiveUpdates} type="button">
+                  Reconnect
+                </button>
+              </div>
+            ) : null}
+            {syncError != null ? (
+              <div className="inline-recovery">
+                <ApiFailureState error={syncError} onRetry={runSync} />
+              </div>
+            ) : null}
+            {error != null ? (
+              <ApiFailureState error={error} onRetry={requestRefresh} onSync={runSync} />
+            ) : (
+              renderView(active, path, data, {
+                dateRange: dateRangeSelection,
+                onDateRangeChange: (next) => {
+                  setSessionLimit(SESSION_PAGE_SIZE);
+                  setDateRangeSelection(next);
+                },
+                refresh: requestRefresh,
+                runSync,
+                sessionLimit,
+                sessionsLoading,
+                setSessionLimit,
+                syncing: syncInProgress,
+              })
+            )}
           </div>
         </main>
       </div>
@@ -917,8 +1251,17 @@ function renderView(
   },
 ) {
   const pathname = pathOnly(path);
-  if (pathname.startsWith("/sessions/")) {
-    return <SessionDetailView id={Number(pathname.split("/").at(-1))} />;
+  if (/^\/sessions\/\d+$/.test(pathname)) {
+    return (
+      <SessionDetailView
+        id={Number(pathname.split("/").at(-1))}
+        onSync={actions.runSync}
+        syncing={actions.syncing}
+      />
+    );
+  }
+  if (!isKnownRoute(path, navItems)) {
+    return <NotFoundView pathname={pathname} />;
   }
   switch (active) {
     case "Sessions":
@@ -930,10 +1273,13 @@ function renderView(
           loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
+          path={path}
         />
       );
     case "Projects":
-      return <ProjectsView projects={data.projects} />;
+      return (
+        <ProjectsView onSync={actions.runSync} projects={data.projects} syncing={actions.syncing} />
+      );
     case "Search":
       return <SearchView path={path} />;
     case "Analytics":
@@ -977,17 +1323,23 @@ function renderView(
         <SettingsView config={data.config} onSaved={actions.refresh} settingsInfo={data.settings} />
       );
     default:
-      return (
-        <SessionsView
-          data={data}
-          dateRange={actions.dateRange}
-          limit={actions.sessionLimit}
-          loading={actions.sessionsLoading}
-          onDateRangeChange={actions.onDateRangeChange}
-          onLimitChange={actions.setSessionLimit}
-        />
-      );
+      return <NotFoundView pathname={pathname} />;
   }
+}
+
+function NotFoundView({ pathname }: { pathname: string }) {
+  return (
+    <ErrorState
+      action={
+        <a className="primary-button" href="/">
+          Back to Analytics
+        </a>
+      }
+      detail={`There is no page at ${pathname}.`}
+      icon="inbox"
+      title="Page not found"
+    />
+  );
 }
 
 function SessionsView({
@@ -997,6 +1349,7 @@ function SessionsView({
   loading,
   onDateRangeChange,
   onLimitChange,
+  path,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
@@ -1004,13 +1357,16 @@ function SessionsView({
   loading: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
+  path: string;
 }) {
   const [query, setQuery] = useState("");
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
-  const hasMore = !loading && data.sessions.length < total;
+  const project = sessionProjectFilter(path);
+  const hasMore =
+    !loading && (project == null ? data.sessions.length < total : data.sessions.length >= limit);
   const waitingForSessions = shouldShowSessionSkeleton({
     isLoading: loading,
     loadedRows: data.sessions.length,
@@ -1070,7 +1426,7 @@ function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code and Codex session in your local archive.</p>
+          <p>Every Claude Code and Codex session log on this device.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
@@ -1109,11 +1465,22 @@ function SessionsView({
             value={query}
           />
         </div>
+        {project != null ? (
+          <div className="active-filter-row">
+            <span className="filter-pill">
+              Project: <strong>{basename(project)}</strong>
+              <a aria-label="Clear project filter" href="/sessions">
+                <Icon name="x" />
+              </a>
+            </span>
+          </div>
+        ) : null}
         <div className="table-scroll">
           <table className="data-table sessions-table">
             <colgroup>
               <col className="col-session-tool" />
               <col className="col-session-title" />
+              <col className="col-session-project" />
               <col className="col-session-model" />
               <col className="col-session-effort" />
               <col className="col-session-context" />
@@ -1127,6 +1494,7 @@ function SessionsView({
               <tr>
                 <th>Tool</th>
                 <th>Title</th>
+                <th>Project</th>
                 <th>Model</th>
                 <th>Effort</th>
                 <th className="numeric">Peak ctx</th>
@@ -1141,7 +1509,7 @@ function SessionsView({
               {waitingForSessions ? <SessionTableSkeletonRows /> : null}
               {!waitingForSessions && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     {query.trim() === ""
                       ? "No sessions ingested yet."
                       : "No sessions match that filter."}
@@ -1176,6 +1544,9 @@ function SessionTableSkeletonRows() {
         <span className="skeleton-line table-skeleton-line model" />
       </td>
       <td>
+        <span className="skeleton-line table-skeleton-line model" />
+      </td>
+      <td>
         <span className="skeleton-line table-skeleton-line effort" />
       </td>
       <td className="numeric">
@@ -1200,7 +1571,15 @@ function SessionTableSkeletonRows() {
   ));
 }
 
-function ProjectsView({ projects }: { projects: ProjectSummary[] }) {
+function ProjectsView({
+  onSync,
+  projects,
+  syncing,
+}: {
+  onSync: () => void;
+  projects: ProjectSummary[];
+  syncing: boolean;
+}) {
   const sorted = projects
     .slice()
     .sort(
@@ -1245,6 +1624,19 @@ function ProjectsView({ projects }: { projects: ProjectSummary[] }) {
         </div>
         {sorted.length === 0 ? (
           <EmptyState
+            action={
+              <button
+                aria-busy={syncing}
+                aria-label="Sync session logs"
+                className={`primary-button sync-button${syncing ? " is-syncing" : ""}`}
+                disabled={syncing}
+                onClick={onSync}
+                type="button"
+              >
+                <Icon name="refresh" />
+                {syncing ? null : "Sync now"}
+              </button>
+            }
             icon="folder"
             message="Projects appear after sessions are synced."
             title="No projects"
@@ -1276,10 +1668,10 @@ function ProjectsView({ projects }: { projects: ProjectSummary[] }) {
                 {sorted.map((project) => (
                   <tr key={project.id}>
                     <td className="truncate-cell" title={project.path}>
-                      <span className="path-stack">
+                      <a className="path-stack" href={projectSessionsHref(project.path)}>
                         <strong>{projectName(project)}</strong>
                         <small>{project.path}</small>
-                      </span>
+                      </a>
                     </td>
                     <td>
                       <ProjectKind project={project} />
@@ -1491,6 +1883,13 @@ function SessionTableRow({
           {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
         </span>
       </td>
+      <td className="truncate-cell" title={session.project_path ?? ""}>
+        {session.project_path == null ? (
+          <span className="faint">-</span>
+        ) : (
+          <a href={projectSessionsHref(session.project_path)}>{basename(session.project_path)}</a>
+        )}
+      </td>
       <td>
         <ModelBadge model={session.model} />
       </td>
@@ -1684,112 +2083,322 @@ function SearchView({ path }: { path: string }) {
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [total, setTotal] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [retryKey, setRetryKey] = useState(0);
+  const [recentSearches, setRecentSearches] = useState(readRecentSearches);
+  const searchEpochRef = useRef(0);
+  const loadMoreControllerRef = useRef<AbortController | null>(null);
 
-  const runSearch = () => {
+  useLayoutEffect(() => {
+    searchEpochRef.current += 1;
+    loadMoreControllerRef.current?.abort();
+    loadMoreControllerRef.current = null;
+    setQuery(initialQuery);
+    return () => {
+      loadMoreControllerRef.current?.abort();
+    };
+  }, [initialQuery]);
+
+  useEffect(() => {
+    const epoch = searchEpochRef.current + 1;
+    searchEpochRef.current = epoch;
+    loadMoreControllerRef.current?.abort();
+    loadMoreControllerRef.current = null;
     const trimmed = query.trim();
-    if (trimmed === "") {
+    void retryKey;
+    if (trimmed.length < 2) {
       setHits([]);
+      setTotal(0);
+      setElapsedMs(0);
+      setSearching(false);
       setError(null);
       return;
     }
     setSearching(true);
     setError(null);
-    void getJson<SearchHit[]>("/api/search", {
-      method: "POST",
-      body: JSON.stringify({ query: trimmed, limit: 25 }),
-    })
-      .then(setHits)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setSearching(false));
-  };
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void getJson<SearchResponse>("/api/search", {
+        method: "POST",
+        body: JSON.stringify({ query: trimmed, limit: 25, offset: 0 }),
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (controller.signal.aborted || searchEpochRef.current !== epoch) {
+            return;
+          }
+          setHits(response.results);
+          setTotal(response.total);
+          setElapsedMs(response.elapsed_ms);
+          setActiveIndex(response.results.length > 0 ? 0 : -1);
+          setRecentSearches(rememberSearch(trimmed));
+        })
+        .catch((err: unknown) => {
+          if (!controller.signal.aborted && searchEpochRef.current === epoch) {
+            setError(err);
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted && searchEpochRef.current === epoch) {
+            setSearching(false);
+          }
+        });
+    }, 150);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, retryKey]);
 
-  useEffect(() => {
-    setQuery(initialQuery);
-    if (initialQuery.trim() === "") {
-      setHits([]);
+  const orderedHits = visuallyOrderedSearchHits(hits);
+  const groups = groupSearchHits(orderedHits);
+  const activeHit = activeIndex < 0 ? null : (orderedHits[activeIndex] ?? null);
+  const loadMore = () => {
+    const trimmed = query.trim();
+    if (searching || hits.length >= total || trimmed.length < 2) {
       return;
     }
     setSearching(true);
     setError(null);
-    void getJson<SearchHit[]>("/api/search", {
+    const epoch = searchEpochRef.current;
+    const controller = new AbortController();
+    loadMoreControllerRef.current?.abort();
+    loadMoreControllerRef.current = controller;
+    void getJson<SearchResponse>("/api/search", {
       method: "POST",
-      body: JSON.stringify({ query: initialQuery, limit: 25 }),
+      body: JSON.stringify({ query: trimmed, limit: 25, offset: hits.length }),
+      signal: controller.signal,
     })
-      .then(setHits)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setSearching(false));
-  }, [initialQuery]);
+      .then((response) => {
+        if (controller.signal.aborted || searchEpochRef.current !== epoch) {
+          return;
+        }
+        setHits((current) => [...current, ...response.results]);
+        setTotal(response.total);
+        setElapsedMs(response.elapsed_ms);
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted && searchEpochRef.current === epoch) {
+          setError(err);
+        }
+      })
+      .finally(() => {
+        if (loadMoreControllerRef.current === controller) {
+          loadMoreControllerRef.current = null;
+        }
+        if (!controller.signal.aborted && searchEpochRef.current === epoch) {
+          setSearching(false);
+        }
+      });
+  };
 
   return (
     <div className="search-page">
       <header className="page-heading">
         <h1>Search</h1>
-        <p>Full-text search across every message and tool call in your archive.</p>
+        <p>Full-text search across every message and tool call in your session logs.</p>
       </header>
 
-      <form
-        className="search-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          runSearch();
-        }}
-      >
+      <form className="search-form" onSubmit={(event) => event.preventDefault()}>
         <Icon name="search" />
         <input
           autoComplete="off"
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            searchEpochRef.current += 1;
+            loadMoreControllerRef.current?.abort();
+            loadMoreControllerRef.current = null;
+            updateSearchRoute(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" && orderedHits.length > 0) {
+              event.preventDefault();
+              setActiveIndex((index) => (index + 1 + orderedHits.length) % orderedHits.length);
+            } else if (event.key === "ArrowUp" && orderedHits.length > 0) {
+              event.preventDefault();
+              setActiveIndex((index) => (index - 1 + orderedHits.length) % orderedHits.length);
+            } else if (event.key === "Enter" && activeHit != null) {
+              event.preventDefault();
+              window.location.assign(activeHit.href);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              updateSearchRoute("");
+            }
+          }}
           placeholder="Search across all sessions and tool calls..."
           value={query}
         />
       </form>
 
-      {query.trim() !== "" ? (
+      {query.trim().length >= 2 ? (
         <p className="result-caption">
-          {formatInt(hits.length)} {hits.length === 1 ? "result" : "results"}
+          {formatInt(total)} {total === 1 ? "result" : "results"} · {formatSearchTime(elapsedMs)}
         </p>
       ) : null}
-      {error != null ? <div className="notice danger">{error}</div> : null}
+      {error instanceof ApiError && error.code === "invalid_query_syntax" ? (
+        <div className="notice">
+          That search could not be parsed. Try plain words or a balanced quoted phrase.
+        </div>
+      ) : error != null ? (
+        <ApiFailureState error={error} onRetry={() => setRetryKey((key) => key + 1)} />
+      ) : null}
 
       <div className="search-results">
-        {searching ? <div className="empty-state">Searching...</div> : null}
-        {!searching && query.trim() === "" ? (
+        {searching && hits.length === 0 ? <div className="searching-state">Searching…</div> : null}
+        {!searching && query.trim().length < 2 ? (
           <EmptyState
+            action={
+              recentSearches.length > 0 ? (
+                <div className="recent-searches">
+                  {recentSearches.map((recent) => (
+                    <button
+                      className="secondary-button"
+                      key={recent}
+                      onClick={() => updateSearchRoute(recent)}
+                      type="button"
+                    >
+                      {recent}
+                    </button>
+                  ))}
+                </div>
+              ) : undefined
+            }
             icon="search"
-            message="Find any message or tool call across every session by keyword."
-            title="Search your archive"
+            message="Type at least two characters to search messages, tools, and sessions."
+            title="Search your session logs"
           />
         ) : null}
-        {!searching && query.trim() !== "" && hits.length === 0 ? (
+        {!searching && query.trim().length >= 2 && hits.length === 0 ? (
           <EmptyState
+            action={
+              <button
+                className="secondary-button"
+                onClick={() => updateSearchRoute("")}
+                type="button"
+              >
+                Clear search
+              </button>
+            }
             icon="inbox"
             message="Nothing matched your search. Try a different term."
             title="No matches"
           />
         ) : null}
-        {hits.map((hit) => (
-          <a
-            className="result-card"
-            href={`/sessions/${hit.session_id}`}
-            key={`${hit.session_id}-${hit.snippet}`}
-          >
-            <div className="result-card-heading">
-              <span>{hit.session_title ?? `Session ${hit.session_id}`}</span>
+        {groups.map((group) => (
+          <section className="search-result-group" key={group.sessionId}>
+            <header className="search-group-heading">
+              <div className="search-group-title">
+                <strong>{group.title}</strong>
+                <span>{basename(group.project)}</span>
+              </div>
+              <span>{shortDate(group.timestamp ?? "")}</span>
+            </header>
+            <div>
+              {group.hits.map((hit) => {
+                const index = orderedHits.indexOf(hit);
+                return (
+                  <a
+                    aria-current={index === activeIndex ? "true" : undefined}
+                    className="result-card search-hit-row"
+                    href={hit.href}
+                    key={hit.block_id}
+                    onMouseEnter={() => setActiveIndex(index)}
+                  >
+                    <div className="result-card-heading">
+                      <Badge tone="neutral">{searchHitLabel(hit)}</Badge>
+                      <span>message {hit.message_seq}</span>
+                    </div>
+                    <p>
+                      <HighlightedSnippet snippet={hit.snippet} />
+                    </p>
+                  </a>
+                );
+              })}
             </div>
-            <p>
-              <HighlightedSnippet snippet={hit.snippet} />
-            </p>
-          </a>
+          </section>
         ))}
+        {hits.length < total ? (
+          <button
+            className="secondary-button search-load-more"
+            disabled={searching}
+            onClick={loadMore}
+            type="button"
+          >
+            {searching ? "Loading…" : `Load more · ${formatInt(total - hits.length)} remaining`}
+          </button>
+        ) : null}
       </div>
     </div>
   );
 }
 
+function groupSearchHits(hits: SearchHit[]) {
+  const groups = new Map<
+    number,
+    {
+      hits: SearchHit[];
+      project: string | null;
+      sessionId: number;
+      timestamp: string | null;
+      title: string;
+    }
+  >();
+  for (const hit of hits) {
+    const group = groups.get(hit.session_id);
+    if (group == null) {
+      groups.set(hit.session_id, {
+        hits: [hit],
+        project: hit.project,
+        sessionId: hit.session_id,
+        timestamp: hit.timestamp,
+        title: hit.session_title ?? `Session ${hit.session_id}`,
+      });
+    } else {
+      group.hits.push(hit);
+    }
+  }
+  return [...groups.values()];
+}
+
+function searchHitLabel(hit: SearchHit): string {
+  if (hit.block_type === "tool_use") {
+    return hit.tool === "" ? "tool call" : hit.tool;
+  }
+  return hit.role === "" ? hit.block_type : hit.role;
+}
+
+function formatSearchTime(elapsedMs: number): string {
+  return elapsedMs < 1 ? "<1 ms" : `${Math.round(elapsedMs)} ms`;
+}
+
+function readRecentSearches(): string[] {
+  try {
+    const key = "decant-recent-searches";
+    const current = JSON.parse(localStorage.getItem(key) ?? "[]") as unknown;
+    return Array.isArray(current)
+      ? current.filter((value): value is string => typeof value === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSearch(query: string): string[] {
+  const values = [query, ...readRecentSearches().filter((value) => value !== query)].slice(0, 8);
+  try {
+    localStorage.setItem("decant-recent-searches", JSON.stringify(values));
+  } catch {
+    // Search still works when storage is unavailable.
+  }
+  return values;
+}
+
 function HighlightedSnippet({ snippet }: { snippet: string }) {
   return (
     <>
-      {snippetParts(snippet).map((part) =>
+      {searchSnippetParts(snippet).map((part) =>
         part.match ? (
           <mark key={part.key}>{part.text}</mark>
         ) : (
@@ -1811,8 +2420,8 @@ type ModelSortKey =
   | "reasoning_tokens"
   | "sessions";
 type ProjectSortKey = "cost" | "key" | "sessions";
-type McpSortKey = "calls" | "errors" | "server" | "tools";
-type ToolSortKey = "calls" | "errors" | "kind" | "server" | "tool";
+type McpSortKey = "calls" | "errors" | "last_used" | "p50" | "server" | "tools";
+type ToolSortKey = "calls" | "errors" | "kind" | "last_used" | "p50" | "server" | "tool";
 type FileSortKey =
   | "deletes"
   | "edits"
@@ -1887,6 +2496,10 @@ function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
       return row.calls;
     case "errors":
       return row.errors;
+    case "last_used":
+      return row.last_used_at == null ? 0 : Date.parse(row.last_used_at);
+    case "p50":
+      return row.p50_ms;
     case "server":
       return row.mcp_server;
     case "tools":
@@ -1902,6 +2515,10 @@ function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
       return row.errors;
     case "kind":
       return row.tool_kind;
+    case "last_used":
+      return row.last_used_at == null ? 0 : Date.parse(row.last_used_at);
+    case "p50":
+      return row.p50_ms;
     case "server":
       return row.mcp_server;
     case "tool":
@@ -1947,17 +2564,498 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
         </span>
         <h2>No sessions yet</h2>
         <p>
-          decant reads the JSONL logs Claude Code and Codex already write and turns them into a
-          searchable archive with token, cost, and context-window analytics. Nothing leaves this
-          machine.
+          Decant reads the JSONL logs Claude Code and Codex already write and turns them into a
+          searchable session-log index with token, cost, and context-window analytics. Nothing
+          leaves this machine.
         </p>
         <code>decant sync</code>
-        <button className="secondary-button" disabled={syncing} onClick={onSync} type="button">
-          {syncing ? "Syncing…" : "Sync now"}
+        <button
+          aria-busy={syncing}
+          aria-label="Sync session logs"
+          className={`secondary-button sync-button${syncing ? " is-syncing" : ""}`}
+          disabled={syncing}
+          onClick={onSync}
+          type="button"
+        >
+          <Icon name="refresh" />
+          {syncing ? null : "Sync now"}
         </button>
       </div>
     </section>
   );
+}
+
+const ANALYTICS_REPORT_INCLUDES = [
+  "Selected date range, session totals, tokens, and estimated costs",
+  "Model names and full project paths, activity charts, and token economics",
+  "For all-time reports, up to five open insight titles, details, impact labels, and suggestions",
+] as const;
+
+const SESSION_REPORT_INCLUDES = [
+  "Session title, project path, model, effort, dates, and cost",
+  "Context-window, token-economics, tool-call, and file-touch summaries",
+  "Stored tool input and output sizes, errors, and latency aggregates",
+] as const;
+
+const REPORT_NEVER_INCLUDES = [
+  "Transcript messages or tool-result bodies beyond stored previews",
+  "Credentials, source files, or the session-log database",
+  "Remote scripts, fonts, or tracking pixels",
+] as const;
+
+function dialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
+  if (dialog == null) {
+    return [];
+  }
+  return Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.getClientRects().length > 0);
+}
+
+function useDialogFocusTrap(
+  open: boolean,
+  dialogRef: { current: HTMLElement | null },
+  onClose: () => void,
+) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      (dialogFocusTargets(dialog)[0] ?? dialog)?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const dialog = dialogRef.current;
+      const focusTargets = dialogFocusTargets(dialog);
+      const first = focusTargets[0];
+      const last = focusTargets.at(-1);
+      if (dialog == null || first == null || last == null) {
+        return;
+      }
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      if (returnFocus?.isConnected === true) {
+        returnFocus.focus();
+      }
+    };
+  }, [dialogRef, onClose, open]);
+}
+
+function PrivacyReviewLists({
+  className,
+  excluded,
+  excludedLabel,
+  included,
+  includedLabel,
+}: {
+  className: string;
+  excluded: readonly string[];
+  excludedLabel: string;
+  included: readonly string[];
+  includedLabel: string;
+}) {
+  return (
+    <div className={className}>
+      <div>
+        <h3>{includedLabel}</h3>
+        <ul>
+          {included.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <h3>{excludedLabel}</h3>
+        <ul>
+          {excluded.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function ExportReviewSheet({
+  actions,
+  includes,
+  notice,
+  onClose,
+  open,
+  title,
+}: {
+  actions: ReactNode;
+  includes: readonly string[];
+  notice?: ReactNode;
+  onClose: () => void;
+  open: boolean;
+  title: string;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  useDialogFocusTrap(open, dialogRef, onClose);
+  if (!open) {
+    return null;
+  }
+  return createPortal(
+    <div className="report-review-backdrop">
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="report-review-sheet"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header>
+          <div>
+            <span className="section-eyebrow">Privacy review</span>
+            <h2 id={titleId}>{title}</h2>
+          </div>
+          <button
+            aria-label="Close report review"
+            className="icon-button"
+            onClick={onClose}
+            type="button"
+          >
+            <Icon name="x" />
+          </button>
+        </header>
+        <div className="report-review-body">
+          <PrivacyReviewLists
+            className="report-privacy-review"
+            excluded={REPORT_NEVER_INCLUDES}
+            excludedLabel="It never includes"
+            included={includes}
+            includedLabel="This report includes"
+          />
+          {notice}
+        </div>
+        <footer>{actions}</footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function ReportExportButton({
+  href,
+  includes,
+  previewHref,
+  title,
+}: {
+  href: string;
+  includes: readonly string[];
+  previewHref: string;
+  title: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const closeReview = useCallback(() => setOpen(false), []);
+
+  const printReport = () => {
+    const preview = window.open("", "_blank", "noopener=false");
+    if (preview == null) {
+      setError("Allow pop-ups for this local page, then try again.");
+      return;
+    }
+    preview.document.write("<p style='font-family:system-ui;padding:2rem'>Preparing report…</p>");
+    setPrinting(true);
+    setError(null);
+    void fetch(href)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Report request failed (${response.status})`);
+        }
+        const documentHtml = await response.text();
+        preview.document.open();
+        preview.document.write(documentHtml);
+        preview.document.close();
+        window.setTimeout(() => {
+          preview.focus();
+          preview.print();
+        }, 250);
+        closeReview();
+      })
+      .catch((reason: unknown) => {
+        preview.close();
+        setError(errorMessage(reason));
+      })
+      .finally(() => setPrinting(false));
+  };
+
+  return (
+    <>
+      <button
+        className="primary-button report-action-button"
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        <Icon name="eye" />
+        View report
+      </button>
+      <ExportReviewSheet
+        actions={
+          <>
+            <button
+              className="secondary-button"
+              disabled={printing}
+              onClick={printReport}
+              type="button"
+            >
+              <Icon name="filePdf" />
+              Save as PDF
+            </button>
+            <a className="secondary-button" download href={href} onClick={closeReview}>
+              <Icon name="fileCode" />
+              Download HTML
+            </a>
+            <a
+              className="primary-button"
+              href={previewHref}
+              onClick={(event) => {
+                closeReview();
+                navigate(event, previewHref);
+              }}
+            >
+              <Icon name="eye" />
+              View report
+            </a>
+          </>
+        }
+        includes={includes}
+        notice={error != null ? <div className="notice danger">{error}</div> : null}
+        onClose={closeReview}
+        open={open}
+        title={title}
+      />
+    </>
+  );
+}
+
+function ReportRouteExportActions({
+  downloadHref,
+  includes,
+  onPrint,
+  printDisabled,
+  title,
+}: {
+  downloadHref: string;
+  includes: readonly string[];
+  onPrint: () => void;
+  printDisabled: boolean;
+  title: string;
+}) {
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const closeReview = useCallback(() => setReviewOpen(false), []);
+  return (
+    <>
+      <button className="secondary-button" onClick={() => setReviewOpen(true)} type="button">
+        <Icon name="fileCode" />
+        Download HTML
+      </button>
+      <button
+        className="primary-button"
+        disabled={printDisabled}
+        onClick={() => setReviewOpen(true)}
+        type="button"
+      >
+        <Icon name="filePdf" />
+        Save as PDF
+      </button>
+      <ExportReviewSheet
+        actions={
+          <>
+            <button
+              className="secondary-button"
+              disabled={printDisabled}
+              onClick={() => {
+                closeReview();
+                onPrint();
+              }}
+              type="button"
+            >
+              <Icon name="filePdf" />
+              Save as PDF
+            </button>
+            <a className="secondary-button" download href={downloadHref} onClick={closeReview}>
+              <Icon name="fileCode" />
+              Download HTML
+            </a>
+          </>
+        }
+        includes={includes}
+        onClose={closeReview}
+        open={reviewOpen}
+        title={`Review ${title.toLowerCase()}`}
+      />
+    </>
+  );
+}
+
+function ReportRouteView({
+  backHref,
+  downloadHref,
+  includes,
+  onSync,
+  sourceHref,
+  title,
+}: {
+  backHref: string;
+  downloadHref: string;
+  includes: readonly string[];
+  onSync: () => void;
+  sourceHref: string;
+  title: string;
+}) {
+  const [documentHtml, setDocumentHtml] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    void retryKey;
+    const controller = new AbortController();
+    setDocumentHtml(null);
+    setError(null);
+    void fetchReportHtml(sourceHref, controller.signal)
+      .then(setDocumentHtml)
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(reason);
+        }
+      });
+    return () => controller.abort();
+  }, [retryKey, sourceHref]);
+
+  return (
+    <div
+      style={{
+        background: "#eef0ec",
+        color: "#24302a",
+        minHeight: "100vh",
+      }}
+    >
+      <style>{`
+        @media print {
+          .report-route-toolbar { display: none !important; }
+          .report-route-frame { height: 100vh !important; }
+        }
+      `}</style>
+      <header
+        className="report-route-toolbar"
+        style={{
+          alignItems: "center",
+          background: "#fff",
+          borderBottom: "1px solid #dce1da",
+          display: "flex",
+          gap: "10px",
+          minHeight: "58px",
+          padding: "10px 18px",
+          position: "sticky",
+          top: 0,
+          zIndex: 2,
+        }}
+      >
+        <a
+          className="secondary-button"
+          href={backHref}
+          onClick={(event) => navigate(event, backHref)}
+        >
+          <Icon name="arrowLeft" />
+          Back
+        </a>
+        <strong style={{ marginRight: "auto" }}>{title}</strong>
+        <ReportRouteExportActions
+          downloadHref={downloadHref}
+          includes={includes}
+          onPrint={() => frameRef.current?.contentWindow?.print()}
+          printDisabled={documentHtml == null}
+          title={title}
+        />
+      </header>
+      {error != null ? (
+        <div style={{ margin: "32px auto", maxWidth: "760px", padding: "0 20px" }}>
+          <ApiFailureState
+            error={error}
+            onRetry={() => setRetryKey((key) => key + 1)}
+            onSync={onSync}
+          />
+        </div>
+      ) : documentHtml == null ? (
+        <div style={{ margin: "32px auto", maxWidth: "760px", padding: "0 20px" }}>
+          <EmptyState
+            icon="file"
+            message="Preparing the local report preview."
+            title="Loading report"
+          />
+        </div>
+      ) : (
+        <iframe
+          className="report-route-frame"
+          ref={frameRef}
+          srcDoc={documentHtml}
+          style={{
+            background: "#fff",
+            border: 0,
+            display: "block",
+            height: "calc(100vh - 58px)",
+            width: "100%",
+          }}
+          title={`${title} preview`}
+        />
+      )}
+    </div>
+  );
+}
+
+async function fetchReportHtml(path: string, signal: AbortSignal): Promise<string> {
+  const response = await fetch(path, {
+    headers: { accept: "text/html, application/json" },
+    signal,
+  });
+  if (response.ok) {
+    return response.text();
+  }
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = (await response.json()) as Record<string, unknown>;
+  } catch {
+    // The recovery component has a status-based fallback for non-JSON errors.
+  }
+  const code =
+    typeof payload.code === "string" && payload.code !== "" ? payload.code : "request_failed";
+  const message =
+    typeof payload.error === "string" && payload.error !== ""
+      ? payload.error
+      : `Report request failed (${response.status})`;
+  const { code: _code, error: _error, ...extras } = payload;
+  throw new ApiError(response.status, code, message, extras);
 }
 
 function AnalyticsView({
@@ -2015,7 +3113,19 @@ function AnalyticsView({
           <h1>Analytics</h1>
           <p>Usage and cost across your sessions.</p>
         </div>
-        <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
+        <div className="page-heading-actions">
+          <ReportExportButton
+            href={withDateQuery("/api/reports/analytics.html", dateRangeQuery(dateRange))}
+            includes={ANALYTICS_REPORT_INCLUDES}
+            previewHref={withDateQuery("/reports/analytics", dateRangeQuery(dateRange))}
+            title="Review analytics report"
+          />
+          <DateRangeControl
+            bounds={data.dateBounds}
+            range={dateRange}
+            onChange={onDateRangeChange}
+          />
+        </div>
       </header>
 
       <div className="stat-grid analytics-stat-grid">
@@ -2061,12 +3171,14 @@ function AnalyticsView({
 
       <div className="split">
         <DailyPanel
+          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
           rows={byDay}
           metric="sessions"
           timezone={data.activity?.timezone}
           title="Sessions per day"
         />
         <DailyPanel
+          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
           rows={byDay}
           metric="cost"
           timezone={data.activity?.timezone}
@@ -2087,7 +3199,7 @@ function AnalyticsView({
         <aside className="dosu-callout">
           <img alt="" src={dosuOfficialUrl} />
           <div>
-            <strong>Your archive shows the pattern.</strong>
+            <strong>Your session logs show the pattern.</strong>
             <span>Dosu helps the next agent use it.</span>
           </div>
           <a href={dosuLink("analytics_callout")} rel="noopener" target="_blank">
@@ -2241,7 +3353,7 @@ function AnalyticsView({
                 {projectRows.map((row) => (
                   <tr key={row.key}>
                     <td className="mono truncate-cell" title={row.key}>
-                      {basename(row.key)}
+                      <a href={projectSessionsHref(row.key)}>{basename(row.key)}</a>
                     </td>
                     <td className="numeric muted">{formatInt(row.sessions)}</td>
                     <td className="numeric">{money(row.estimated_cost_usd)}</td>
@@ -2669,11 +3781,13 @@ function WeekdayPanel({
 }
 
 function DailyPanel({
+  onShowAllTime,
   rows,
   metric,
   timezone,
   title,
 }: {
+  onShowAllTime: () => void;
   rows: DimensionRow[];
   metric: "sessions" | "cost";
   timezone: string | undefined;
@@ -2705,7 +3819,16 @@ function DailyPanel({
       </div>
       <div className="panel-body">
         {rows.length === 0 ? (
-          <EmptyState icon="chart" message="Widen the date range." title="No data in range" />
+          <EmptyState
+            action={
+              <button className="secondary-button" onClick={onShowAllTime} type="button">
+                All time
+              </button>
+            }
+            icon="chart"
+            message="Widen the date range."
+            title="No data in range"
+          />
         ) : (
           <AnalyticsChart
             labels={labels}
@@ -2737,8 +3860,8 @@ function ShareChartButton({
   const [status, setStatus] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const renderVersionRef = useRef(0);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
+  const closeShareReview = useCallback(() => setOpen(false), []);
   const title = shareCardTitle(input.kind);
   const caption = shareCardCaption(input);
   const altText = shareCardAltText(input);
@@ -2787,49 +3910,7 @@ function ShareChartButton({
     [],
   );
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const returnFocus =
-      document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
-    const focusFrame = window.requestAnimationFrame(() => {
-      shareDialogFocusTargets(dialogRef.current)[0]?.focus();
-    });
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-      const dialog = dialogRef.current;
-      const focusTargets = shareDialogFocusTargets(dialog);
-      const first = focusTargets[0];
-      const last = focusTargets.at(-1);
-      if (dialog == null || first == null || last == null) {
-        return;
-      }
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !dialog.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", onKeyDown);
-      if (returnFocus?.isConnected === true) {
-        returnFocus.focus();
-      }
-    };
-  }, [open]);
+  useDialogFocusTrap(open, dialogRef, closeShareReview);
 
   const copyText = async (value: string, success: string) => {
     try {
@@ -2896,11 +3977,10 @@ function ShareChartButton({
           setOpen(true);
           void renderPreview();
         }}
-        ref={triggerRef}
         type="button"
       >
         <Icon name="share" />
-        Share ↗
+        Share
       </button>
       {open
         ? createPortal(
@@ -2911,6 +3991,7 @@ function ShareChartButton({
                 className="share-review-sheet"
                 ref={dialogRef}
                 role="dialog"
+                tabIndex={-1}
               >
                 <header>
                   <div>
@@ -2920,7 +4001,7 @@ function ShareChartButton({
                   <button
                     aria-label="Close share review"
                     className="icon-button"
-                    onClick={() => setOpen(false)}
+                    onClick={closeShareReview}
                     type="button"
                   >
                     <Icon name="x" />
@@ -2937,24 +4018,13 @@ function ShareChartButton({
                     )}
                     <p className="share-export-size">2× high-density PNG · 2400 × 1260</p>
                   </div>
-                  <div className="share-privacy-review">
-                    <div>
-                      <h3>Included</h3>
-                      <ul>
-                        {SHARE_INCLUDED_FIELDS.map((field) => (
-                          <li key={field}>{field}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <h3>Always excluded</h3>
-                      <ul>
-                        {SHARE_EXCLUDED_FIELDS.map((field) => (
-                          <li key={field}>{field}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
+                  <PrivacyReviewLists
+                    className="share-privacy-review"
+                    excluded={SHARE_EXCLUDED_FIELDS}
+                    excludedLabel="Always excluded"
+                    included={SHARE_INCLUDED_FIELDS}
+                    includedLabel="Included"
+                  />
                   <div className="share-copy-review">
                     <div>
                       <strong>Caption</strong>
@@ -3021,17 +4091,6 @@ function ShareChartButton({
   );
 }
 
-function shareDialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
-  if (dialog == null) {
-    return [];
-  }
-  return Array.from(
-    dialog.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => element.getClientRects().length > 0);
-}
-
 async function renderShareCardPng(
   input: ShareCardCopyInput,
   metric: AnalyticsChartMetric,
@@ -3094,7 +4153,7 @@ async function renderShareCardPng(
   context.drawImage(decantImage, 68, 58, 34, 34);
   context.fillStyle = "#e7eaf0";
   context.font = "650 22px Inter, ui-sans-serif, system-ui, sans-serif";
-  context.fillText("decant", 114, 83);
+  context.fillText("Decant", 114, 83);
   context.fillStyle = "#9aa6b8";
   context.font = "500 17px Inter, ui-sans-serif, system-ui, sans-serif";
   context.textAlign = "right";
@@ -3115,7 +4174,7 @@ async function renderShareCardPng(
   context.drawImage(dosuImage, SHARE_CARD_WIDTH - 244, 537, 24, 25);
   context.fillStyle = "#9aa6b8";
   context.font = "600 16px Inter, ui-sans-serif, system-ui, sans-serif";
-  context.fillText("decant · by Dosu", SHARE_CARD_WIDTH - 210, 557);
+  context.fillText("Decant · by Dosu", SHARE_CARD_WIDTH - 210, 557);
 
   return await canvasPngBlob(canvas);
 }
@@ -3458,7 +4517,11 @@ type IconName =
   | "cpu"
   | "desktop"
   | "download"
+  | "ellipsis"
+  | "eye"
   | "file"
+  | "fileCode"
+  | "filePdf"
   | "folder"
   | "info"
   | "inbox"
@@ -3604,7 +4667,17 @@ function displayModelLabel(model: string | null | undefined): string | null {
   return stripped === "" ? null : stripped;
 }
 
-function EmptyState({ icon, message, title }: { icon: IconName; message: string; title: string }) {
+function EmptyState({
+  action,
+  icon,
+  message,
+  title,
+}: {
+  action?: ReactNode;
+  icon: IconName;
+  message: string;
+  title: string;
+}) {
   return (
     <div className="empty-state">
       <span>
@@ -3612,6 +4685,227 @@ function EmptyState({ icon, message, title }: { icon: IconName; message: string;
       </span>
       <h3>{title}</h3>
       <p>{message}</p>
+      {action != null ? <div className="state-actions">{action}</div> : null}
+    </div>
+  );
+}
+
+function ErrorState({
+  action,
+  detail,
+  icon = "info",
+  secondaryAction,
+  title,
+}: {
+  action?: ReactNode;
+  detail: string;
+  icon?: IconName;
+  secondaryAction?: ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="error-state" role="alert">
+      <span>
+        <Icon name={icon} />
+      </span>
+      <div>
+        <h3>{title}</h3>
+        <p>{detail}</p>
+        {action != null || secondaryAction != null ? (
+          <div className="state-actions">
+            {action}
+            {secondaryAction}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type RecoveryPresentation = {
+  actionHref?: string;
+  actionLabel?: string;
+  command?: string;
+  detail: string;
+  icon: IconName;
+  retry: boolean;
+  title: string;
+  useSync?: boolean;
+};
+
+function recoveryPresentation(error: unknown): RecoveryPresentation {
+  if (!(error instanceof ApiError)) {
+    return {
+      detail:
+        "Decant could not reach the local server. Restart `decant serve` if needed, then retry.",
+      icon: "info",
+      retry: true,
+      title: "Request failed",
+    };
+  }
+  switch (error.code) {
+    case "session_not_found":
+      return error.extras.archive_empty === true
+        ? {
+            actionHref: "/sessions",
+            actionLabel: "Back to sessions",
+            detail: "There are no session logs on this device yet. Sync to import them.",
+            icon: "sessions",
+            retry: false,
+            title: "No session logs yet",
+            useSync: true,
+          }
+        : {
+            actionHref: "/sessions",
+            actionLabel: "Back to sessions",
+            detail: "This session log is no longer available. It may have moved after a rebuild.",
+            icon: "inbox",
+            retry: false,
+            title: "Session not found",
+            useSync: true,
+          };
+    case "schema_too_new":
+      return {
+        actionHref: "https://github.com/dosu-ai/decant/releases",
+        actionLabel: "Update Decant",
+        detail:
+          "These session logs were indexed by a newer Decant build. Update Decant, then retry.",
+        icon: "info",
+        retry: true,
+        title: "Decant is out of date",
+      };
+    case "schema_too_old":
+      return {
+        actionHref: "https://github.com/dosu-ai/decant#configuration",
+        actionLabel: "View rebuild guide",
+        detail:
+          "The session log index predates the supported schema baseline. Back it up, rebuild it, and sync the source logs again.",
+        icon: "info",
+        retry: false,
+        title: "Session log index rebuild required",
+      };
+    case "launch_unsupported_platform":
+      return {
+        command: typeof error.extras.command === "string" ? error.extras.command : undefined,
+        detail:
+          "Native agent and editor launching is available on macOS. Copy the prompt or command and run it manually here.",
+        icon: "info",
+        retry: false,
+        title: "Native launch is unavailable",
+      };
+    case "launch_failed":
+      return {
+        command: typeof error.extras.command === "string" ? error.extras.command : undefined,
+        actionHref: "/settings",
+        actionLabel: "Check launcher settings",
+        detail:
+          "Decant could not open the selected app. Check the launcher setting, then try again.",
+        icon: "info",
+        retry: true,
+        title: "Launch failed",
+      };
+    case "archive_locked":
+      return {
+        detail:
+          "Another Decant operation is using the session log index. Wait a moment, then retry.",
+        icon: "clock",
+        retry: true,
+        title: "Session logs are busy",
+      };
+    case "internal_error":
+      return {
+        detail:
+          "Decant hit an unexpected local error. Restart `decant serve`, then retry. If it continues, check the server log for the private diagnostic.",
+        icon: "info",
+        retry: true,
+        title: "Decant could not complete the request",
+      };
+    default:
+      if (error.status >= 500) {
+        return {
+          detail:
+            "Decant hit an unexpected local error. Restart `decant serve`, then retry. If it continues, check the server log.",
+          icon: "info",
+          retry: true,
+          title: "Decant could not complete the request",
+        };
+      }
+      return {
+        detail: "Decant could not complete this request. Check the input and try again.",
+        icon: "info",
+        retry: true,
+        title: "Request failed",
+      };
+  }
+}
+
+function ApiFailureState({
+  error,
+  onRetry,
+  onSync,
+}: {
+  error: unknown;
+  onRetry?: () => void;
+  onSync?: () => void;
+}) {
+  const [commandCopied, setCommandCopied] = useState(false);
+  const recovery = recoveryPresentation(error);
+  const retryIsPrimary =
+    !recovery.useSync && recovery.actionHref == null && recovery.retry && onRetry != null;
+  const action =
+    recovery.actionHref != null && recovery.actionLabel != null ? (
+      <a
+        className="primary-button"
+        href={recovery.actionHref}
+        rel={recovery.actionHref.startsWith("http") ? "noopener" : undefined}
+        target={recovery.actionHref.startsWith("http") ? "_blank" : undefined}
+      >
+        {recovery.actionLabel}
+      </a>
+    ) : recovery.useSync && onSync != null ? (
+      <button className="primary-button" onClick={onSync} type="button">
+        Sync now
+      </button>
+    ) : retryIsPrimary ? (
+      <button className="primary-button" onClick={onRetry} type="button">
+        Retry
+      </button>
+    ) : null;
+  const secondaryAction =
+    recovery.useSync && onSync != null && action != null ? (
+      <button className="secondary-button" onClick={onSync} type="button">
+        Sync now
+      </button>
+    ) : recovery.retry && onRetry != null && action != null && !retryIsPrimary ? (
+      <button className="secondary-button" onClick={onRetry} type="button">
+        Retry
+      </button>
+    ) : null;
+  return (
+    <div className="api-failure">
+      <ErrorState
+        action={action}
+        detail={recovery.detail}
+        icon={recovery.icon}
+        secondaryAction={secondaryAction}
+        title={recovery.title}
+      />
+      {recovery.command != null ? (
+        <div className="recovery-command">
+          <code>{recovery.command}</code>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(recovery.command ?? "");
+              setCommandCopied(true);
+            }}
+            type="button"
+          >
+            <Icon name={commandCopied ? "check" : "copy"} />
+            {commandCopied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3729,7 +5023,10 @@ function RecommendationHero({
       </span>
       <div>
         <span className={`signal-kicker tone-${toneName(row.tone)}`}>Top signal</span>
-        <h3>{row.title}</h3>
+        <div className="signal-hero-title">
+          <h3>{row.title}</h3>
+          {row.impact_label != null ? <strong>{row.impact_label}</strong> : null}
+        </div>
         {row.detail != null ? <p>{row.detail}</p> : null}
         {row.suggestion != null ? (
           <div className="suggestion-block">
@@ -3760,57 +5057,59 @@ function RecommendationRow({
   pending: string | null;
   row: Recommendation;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const rationale = row.detail ?? row.suggestion ?? "Open for the evidence and next step.";
   return (
-    <div className="signal-row">
-      <span className={`signal-rail tone-${toneName(row.tone)}`} />
-      <span className={`signal-icon tone-${toneName(row.tone)}`}>
-        <Icon name={recommendationIcon(row)} />
-      </span>
-      <div>
-        <p>{row.title}</p>
-        {row.detail != null ? <small>{row.detail}</small> : null}
-        <PromotionMeta row={row} />
-      </div>
-      <RecommendationActions
-        canLaunch={canLaunch}
-        compact
-        onComplete={onComplete}
-        pending={pending}
-        row={row}
-      />
-    </div>
-  );
-}
-
-function RecommendationCard({
-  canLaunch,
-  featured,
-  onComplete,
-  pending,
-  row,
-}: {
-  canLaunch: boolean;
-  featured: boolean;
-  onComplete: (row: Recommendation) => void;
-  pending: string | null;
-  row: Recommendation;
-}) {
-  return (
-    <article className={`catalog-card${featured ? " is-featured" : ""}`}>
-      <div>
+    <article className={`signal-row${expanded ? " is-expanded" : ""}`}>
+      <div className="signal-row-summary">
         <span className={`signal-icon tone-${toneName(row.tone)}`}>
           <Icon name={recommendationIcon(row)} />
         </span>
-        <h4>{row.title}</h4>
+        <button
+          aria-expanded={expanded}
+          className="signal-row-title"
+          onClick={() => setExpanded((value) => !value)}
+          type="button"
+        >
+          {row.title}
+        </button>
+        <span className="signal-row-rationale">{rationale}</span>
+        <strong className="signal-row-impact">{row.impact_label ?? toneName(row.tone)}</strong>
+        <button
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${row.title}`}
+          className="signal-row-expand"
+          onClick={() => setExpanded((value) => !value)}
+          type="button"
+        >
+          <span>{expanded ? "Close" : "View"}</span>
+          <Icon name={expanded ? "chevronUp" : "chevronDown"} />
+        </button>
       </div>
-      {row.detail != null ? <p>{row.detail}</p> : null}
-      <PromotionPanel compact row={row} />
-      <RecommendationActions
-        canLaunch={canLaunch}
-        onComplete={onComplete}
-        pending={pending}
-        row={row}
-      />
+      {expanded ? (
+        <div className="signal-row-detail">
+          {row.detail != null ? <p>{row.detail}</p> : null}
+          {row.suggestion != null ? (
+            <div className="suggestion-block">
+              <span>Suggested</span>
+              <p>{row.suggestion}</p>
+            </div>
+          ) : null}
+          {row.evidence != null ? (
+            <p className="signal-row-evidence">
+              <strong>Evidence</strong>
+              {row.evidence}
+            </p>
+          ) : null}
+          <PromotionPanel row={row} />
+          <RecommendationActions
+            canLaunch={canLaunch}
+            onComplete={onComplete}
+            pending={pending}
+            row={row}
+          />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -3837,9 +5136,11 @@ function RecommendationActions({
           onClick={() => onComplete(row)}
           type="button"
         >
-          <Icon name={canLaunch ? "bolt" : "check"} />
+          <Icon name={canLaunch ? "bolt" : isPresent(row.prompt) ? "copy" : "check"} />
           {pending === row.key
-            ? "Saving"
+            ? !canLaunch && isPresent(row.prompt)
+              ? "Copying"
+              : "Saving"
             : compact
               ? "Run"
               : canLaunch
@@ -3848,11 +5149,64 @@ function RecommendationActions({
         </button>
       ) : null}
       {row.url != null ? (
-        <a href={row.url} rel="noreferrer" target="_blank">
-          {row.link_label ?? "Docs"}
-        </a>
+        <RecommendationOverflow label={row.link_label ?? "Docs"} title={row.title} url={row.url} />
       ) : null}
     </div>
+  );
+}
+
+function RecommendationOverflow({
+  label,
+  title,
+  url,
+}: {
+  label: string;
+  title: string;
+  url: string;
+}) {
+  const menuRef = useRef<HTMLDetailsElement | null>(null);
+  return (
+    <details
+      className="recommendation-overflow"
+      onBlur={(event) => {
+        if (
+          !(event.relatedTarget instanceof Node) ||
+          !event.currentTarget.contains(event.relatedTarget)
+        ) {
+          event.currentTarget.open = false;
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") {
+          return;
+        }
+        event.preventDefault();
+        if (menuRef.current != null) {
+          menuRef.current.open = false;
+          menuRef.current.querySelector("summary")?.focus();
+        }
+      }}
+      ref={menuRef}
+    >
+      <summary aria-label={`More actions for ${title}`} title="More actions">
+        <Icon name="ellipsis" />
+      </summary>
+      <div className="recommendation-overflow-menu">
+        <a
+          href={url}
+          onClick={() => {
+            if (menuRef.current != null) {
+              menuRef.current.open = false;
+            }
+          }}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <span>{label}</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </details>
   );
 }
 
@@ -3889,18 +5243,6 @@ function PromotionPanel({ compact = false, row }: { compact?: boolean; row: Reco
           </div>
         ) : null}
       </dl>
-    </div>
-  );
-}
-
-function PromotionMeta({ row }: { row: Recommendation }) {
-  if (!hasPromotion(row)) {
-    return null;
-  }
-  return (
-    <div className="promotion-meta">
-      {row.memory_layer != null ? <span>{row.memory_layer}</span> : null}
-      {row.promotion_target != null ? <span>{row.promotion_target}</span> : null}
     </div>
   );
 }
@@ -3948,8 +5290,16 @@ function iconComponent(name: IconName): LucideIcon {
       return Monitor;
     case "download":
       return Download;
+    case "ellipsis":
+      return Ellipsis;
+    case "eye":
+      return Eye;
     case "file":
       return FileText;
+    case "fileCode":
+      return FileCode2;
+    case "filePdf":
+      return FileType2;
     case "folder":
       return Folder;
     case "info":
@@ -4217,7 +5567,12 @@ function InsightsView({
   onMarked: () => void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [failedAction, setFailedAction] = useState<Recommendation | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const openRows = rows.filter((row) => row.status === "open");
   const implementedRows = rows
     .filter((row) => row.status === "implemented")
@@ -4239,6 +5594,8 @@ function InsightsView({
   });
   const completeRecommendation = (row: Recommendation) => {
     setError(null);
+    setFailedAction(null);
+    setCopyFeedback(null);
     if (isPresent(row.prompt) && canLaunch && settingsInfo != null) {
       setPending(row.key);
       void getJson<{ ok: boolean }>("/api/launch/agent", {
@@ -4250,12 +5607,29 @@ function InsightsView({
         }),
       })
         .then(() => onMarked())
-        .catch((err: unknown) => setError(errorMessage(err)))
+        .catch((err: unknown) => {
+          setError(err);
+          setFailedAction(row);
+        })
         .finally(() => setPending(null));
       return;
     }
     if (isPresent(row.prompt)) {
-      void navigator.clipboard?.writeText(handoffPrompt(row));
+      setPending(row.key);
+      void copyTextToClipboard(handoffPrompt(row))
+        .then(() => {
+          setCopyFeedback({
+            kind: "success",
+            message: `Copied the setup prompt for “${row.title}”.`,
+          });
+        })
+        .catch(() => {
+          setCopyFeedback({
+            kind: "error",
+            message: "Could not copy the setup prompt. Select the insight text and try again.",
+          });
+        })
+        .finally(() => setPending(null));
       return;
     }
     setPending(row.key);
@@ -4264,14 +5638,17 @@ function InsightsView({
       body: JSON.stringify({ key: row.key, source: "ui" }),
     })
       .then(onMarked)
-      .catch((err: unknown) => setError(errorMessage(err)))
+      .catch((err: unknown) => {
+        setError(err);
+        setFailedAction(row);
+      })
       .finally(() => setPending(null));
   };
 
   return (
     <div className="view-stack insights-stack">
       <header className="page-heading insights-heading">
-        <span className="page-eyebrow">Archive → action</span>
+        <span className="page-eyebrow">Session logs → action</span>
         <h1>Insights</h1>
         <p>
           Decant finds recurring patterns in your local sessions, ranks the ones worth acting on,
@@ -4279,12 +5656,25 @@ function InsightsView({
         </p>
       </header>
 
-      {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
+      {error != null ? (
+        <ApiFailureState
+          error={error}
+          onRetry={failedAction == null ? undefined : () => completeRecommendation(failedAction)}
+        />
+      ) : null}
+      {copyFeedback != null ? (
+        <div
+          className={`notice${copyFeedback.kind === "error" ? " danger" : ""}`}
+          role={copyFeedback.kind === "error" ? "alert" : "status"}
+        >
+          {copyFeedback.message}
+        </div>
+      ) : null}
 
       <section className="view-stack insights-section">
         <div className="section-title-row insights-section-heading">
           <div>
-            <span className="section-eyebrow">Detected in your archive</span>
+            <span className="section-eyebrow">Detected in your session logs</span>
             <h2>Patterns worth acting on</h2>
             <p>Evidence-backed signals from your own sessions, ranked by expected impact.</p>
           </div>
@@ -4334,13 +5724,15 @@ function InsightsView({
               <p>Project practices your coding agents can use in every session.</p>
             </div>
           </div>
-          {catalogGroups.map(([category, items], groupIndex) => (
+          {catalogGroups.map(([category, items]) => (
             <div className="catalog-group" key={category}>
-              <h3>{category}</h3>
-              <div className="catalog-grid">
-                {items.map((row, index) => (
-                  <RecommendationCard
-                    featured={groupIndex === 0 && index === 0}
+              <div className="catalog-group-heading">
+                <h3>{category}</h3>
+                <span>{formatInt(items.length)}</span>
+              </div>
+              <div className="signal-list">
+                {items.map((row) => (
+                  <RecommendationRow
                     key={row.key}
                     pending={pending}
                     row={row}
@@ -4352,8 +5744,8 @@ function InsightsView({
             </div>
           ))}
           {showDosuSuggestion ? (
-            <div className="insights-dosu-suggestion">
-              <DosuInsightsCard />
+            <div className="signal-list insights-dosu-list">
+              <DosuInsightsRow />
             </div>
           ) : null}
         </section>
@@ -4369,7 +5761,7 @@ function InsightsView({
             </div>
             <span className="section-count">{formatInt(implementedRows.length)} saved</span>
           </div>
-          <div className="catalog-grid">
+          <div className="implemented-list">
             {implementedRows.map((row) => (
               <ImplementedRecommendationCard key={row.key} row={row} />
             ))}
@@ -4380,29 +5772,31 @@ function InsightsView({
   );
 }
 
-function DosuInsightsCard() {
+function DosuInsightsRow() {
   return (
-    <article className="catalog-card dosu-insights-card">
-      <div>
-        <span className="dosu-card-mark">
+    <article className="signal-row dosu-insights-row">
+      <div className="signal-row-summary">
+        <span className="signal-icon dosu-row-mark">
           <img alt="" src={dosuOfficialUrl} />
         </span>
-        <div>
+        <div className="dosu-row-title">
           <span className="dosu-card-kicker">Optional · Dosu</span>
-          <h4>Make these patterns available to every coding agent</h4>
+          <strong>Make these patterns available to every coding agent</strong>
         </div>
-      </div>
-      <p>
-        Dosu turns repeated fixes and project conventions into durable context your agents can
-        retrieve when they need it.
-      </p>
-      <div className="recommendation-actions">
-        <div>
-          <strong>Use Dosu with your agents</strong>
-          <small>Opens only after your click</small>
-        </div>
-        <a href={dosuLink("insights_card")} rel="noopener" target="_blank">
-          See how →
+        <span className="signal-row-rationale">
+          Dosu turns repeated fixes and project conventions into durable context your agents can
+          retrieve when they need it.
+        </span>
+        <strong className="signal-row-impact">Optional</strong>
+        <a
+          aria-label="See how Dosu works with your agents (opens in a new tab)"
+          className="signal-row-expand dosu-row-action"
+          href={dosuLink("insights_card")}
+          rel="noopener"
+          target="_blank"
+        >
+          <span>See how</span>
+          <Icon name="chevronRight" />
         </a>
       </div>
     </article>
@@ -4431,6 +5825,239 @@ function ImplementedRecommendationCard({ row }: { row: Recommendation }) {
   );
 }
 
+function toolAggregate(tools: ToolRow[], summary: ToolCallPage["summary"]) {
+  const totalCalls = summary.calls;
+  const totalErrors = summary.errors;
+  return {
+    totalCalls,
+    errorRate: totalCalls === 0 ? 0 : (totalErrors / totalCalls) * 100,
+    p50: summary.p50_ms,
+    p95: summary.p95_ms,
+    topTool: tools.slice().sort((left, right) => right.calls - left.calls)[0]?.tool_name ?? null,
+  };
+}
+
+function durationPrecise(value: number | null): string {
+  if (value == null) {
+    return "—";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)} ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)} s`;
+  }
+  return duration(value);
+}
+
+function formatBytes(value: number | null): string {
+  if (value == null) {
+    return "—";
+  }
+  if (value < 1024) {
+    return `${formatInt(value)} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function toolCallInputLabel(value: string | null): string {
+  if (!isPresent(value)) {
+    return "—";
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed != null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      for (const key of ["path", "file_path", "command", "cmd", "query", "url"]) {
+        const candidate = record[key];
+        if (typeof candidate === "string" && candidate.trim() !== "") {
+          return firstLine(candidate, 120);
+        }
+      }
+    }
+  } catch {
+    // Providers may store an abbreviated preview that is no longer valid JSON.
+  }
+  return firstLine(value, 120);
+}
+
+function prettyToolValue(value: string | null): string {
+  if (!isPresent(value)) {
+    return "No value recorded.";
+  }
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function ToolCallStatus({ call }: { call: ToolCallRow }) {
+  const status =
+    call.is_error === true
+      ? { className: "is-error", label: "Error" }
+      : call.is_error === false
+        ? { className: "is-success", label: "Succeeded" }
+        : call.has_result === false
+          ? { className: "is-pending", label: "No result" }
+          : { className: "is-unknown", label: "Unknown" };
+  return (
+    <span
+      aria-label={status.label}
+      className={`tool-call-status ${status.className}`}
+      role="img"
+      title={status.label}
+    />
+  );
+}
+
+function DrilldownTableRow({
+  children,
+  href,
+  label,
+}: {
+  children: ReactNode;
+  href: string;
+  label: string;
+}) {
+  const activate = () => {
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: An anchor cannot legally wrap a table row.
+    <tr
+      aria-label={label}
+      className="clickable-row drilldown-row"
+      onClick={activate}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLTableRowElement>) => {
+        if (!isDrilldownActivationKey(event.key)) {
+          return;
+        }
+        event.preventDefault();
+        activate();
+      }}
+      role="link"
+      tabIndex={0}
+    >
+      {children}
+    </tr>
+  );
+}
+
+function ToolCallDetail({
+  call,
+  onClose,
+  onTabChange,
+  tab,
+}: {
+  call: ToolCallRow;
+  onClose: () => void;
+  onTabChange: (tab: "preview" | "raw") => void;
+  tab: "preview" | "raw";
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const transcriptHref =
+    call.seq == null
+      ? `/sessions/${call.session_id}`
+      : `/sessions/${call.session_id}#message-${call.seq}`;
+  useDialogFocusTrap(true, dialogRef, onClose);
+  return (
+    <>
+      <button
+        aria-label="Close tool call details"
+        className="tool-detail-backdrop"
+        onClick={onClose}
+        type="button"
+      />
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="tool-detail-panel"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header>
+          <div>
+            <span className="section-eyebrow">
+              {call.mcp_server ?? call.tool_kind ?? "Tool call"}
+            </span>
+            <h2 id={titleId}>{call.tool_name ?? "Unknown tool"}</h2>
+          </div>
+          <button
+            aria-label="Close details"
+            className="icon-button"
+            onClick={onClose}
+            type="button"
+          >
+            <Icon name="x" />
+          </button>
+        </header>
+        <dl className="tool-detail-meta">
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <ToolCallStatus call={call} />
+            </dd>
+          </div>
+          <div>
+            <dt>Duration</dt>
+            <dd>{durationPrecise(call.duration_ms)}</dd>
+          </div>
+          <div>
+            <dt>Input</dt>
+            <dd>{formatBytes(call.input_bytes)}</dd>
+          </div>
+          <div>
+            <dt>Output</dt>
+            <dd>{formatBytes(call.output_bytes)}</dd>
+          </div>
+        </dl>
+        <div className="segment-row">
+          <fieldset className="segmented-control">
+            <legend className="sr-only">Detail format</legend>
+            {(["preview", "raw"] as const).map((choice) => (
+              <button
+                aria-pressed={tab === choice}
+                key={choice}
+                onClick={() => onTabChange(choice)}
+                type="button"
+              >
+                {capitalize(choice)}
+              </button>
+            ))}
+          </fieldset>
+        </div>
+        <div className="tool-detail-content">
+          <section>
+            <h3>Input</h3>
+            <pre>
+              {tab === "raw" ? (call.input_preview ?? "") : prettyToolValue(call.input_preview)}
+            </pre>
+          </section>
+          <section>
+            <h3>{call.is_error === true ? "Error output" : "Output preview"}</h3>
+            <pre>
+              {tab === "raw" ? (call.output_preview ?? "") : prettyToolValue(call.output_preview)}
+            </pre>
+          </section>
+        </div>
+        <footer>
+          <a className="primary-button" href={transcriptHref}>
+            Open in transcript →
+          </a>
+          <span className="muted">{call.session_title ?? `Session ${call.session_id}`}</span>
+        </footer>
+      </section>
+    </>
+  );
+}
+
 function ToolsView({
   data,
   dateRange,
@@ -4440,6 +6067,7 @@ function ToolsView({
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
 }) {
+  const locationFilters = toolFiltersFromSearch(window.location.search);
   const [mcpSort, setMcpSort] = useState<SortState<McpSortKey>>({
     key: "calls",
     direction: "desc",
@@ -4448,21 +6076,164 @@ function ToolsView({
     key: "calls",
     direction: "desc",
   });
+  const [callPage, setCallPage] = useState<ToolCallPage>({
+    calls: [],
+    total: 0,
+    limit: 50,
+    offset: locationFilters.offset,
+    summary: { calls: 0, errors: 0, p50_ms: null, p95_ms: null },
+  });
+  const [callError, setCallError] = useState<string | null>(null);
+  const [callsLoading, setCallsLoading] = useState(true);
+  const [selectedCall, setSelectedCall] = useState<ToolCallRow | null>(null);
+  const [detailTab, setDetailTab] = useState<"preview" | "raw">("preview");
+  const closeToolDetail = useCallback(() => setSelectedCall(null), []);
   const mcpRows = useMemo(() => sortRows(data.mcp, mcpSort, mcpSortValue), [data.mcp, mcpSort]);
   const toolRows = useMemo(
     () => sortRows(data.tools, toolSort, toolSortValue),
     [data.tools, toolSort],
   );
+  const callQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (locationFilters.tool !== "") {
+      params.set("tool", locationFilters.tool);
+    }
+    if (locationFilters.server !== "") {
+      params.set("server", locationFilters.server);
+    }
+    if (locationFilters.errorsOnly) {
+      params.set("errors_only", "true");
+    }
+    if (locationFilters.minMs > 0) {
+      params.set("min_ms", String(locationFilters.minMs));
+    }
+    if (locationFilters.from != null) {
+      params.set("from", locationFilters.from);
+    }
+    if (locationFilters.to != null) {
+      params.set("to", locationFilters.to);
+    }
+    params.set("limit", "50");
+    params.set("offset", String(locationFilters.offset));
+    return params.toString();
+  }, [
+    locationFilters.errorsOnly,
+    locationFilters.from,
+    locationFilters.minMs,
+    locationFilters.offset,
+    locationFilters.server,
+    locationFilters.to,
+    locationFilters.tool,
+  ]);
+  const aggregate = useMemo(
+    () => toolAggregate(data.tools, callPage.summary),
+    [data.tools, callPage],
+  );
+  const durationAvailable =
+    data.tools.some((row) => row.p50_ms != null) ||
+    callPage.calls.some((row) => row.duration_ms != null);
+
+  useEffect(() => {
+    const restored = toolDateRangeFromFilters({
+      from: locationFilters.from,
+      to: locationFilters.to,
+    });
+    if (restored.from === dateRange.from && restored.to === dateRange.to) {
+      return;
+    }
+    onDateRangeChange(restored);
+  }, [dateRange.from, dateRange.to, locationFilters.from, locationFilters.to, onDateRangeChange]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCallsLoading(true);
+    setCallError(null);
+    void getJson<ToolCallPage>(`/api/tools/calls?${callQuery}`, {
+      signal: controller.signal,
+    })
+      .then((page) => setCallPage(page))
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setCallError(errorMessage(error));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setCallsLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [callQuery]);
+
+  const updateFilters = (patch: Partial<ToolFilters>) => {
+    const next = { ...locationFilters, ...patch };
+    if (
+      patch.tool != null ||
+      patch.server != null ||
+      patch.errorsOnly != null ||
+      patch.minMs != null ||
+      patch.from !== undefined ||
+      patch.to !== undefined
+    ) {
+      next.offset = 0;
+    }
+    const href = toolFiltersHref(next);
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+  const clearedFiltersHref = toolFiltersHref({
+    ...locationFilters,
+    errorsOnly: false,
+    minMs: 0,
+    offset: 0,
+    server: "",
+    tool: "",
+  });
 
   return (
     <div className="view-stack">
       <header className="page-heading inline-heading">
         <div>
           <h1>Tools &amp; MCP</h1>
-          <p>Tool and MCP-server call volume, scoped to your archive.</p>
+          <p>Tool and MCP-server call volume, scoped to your session logs.</p>
         </div>
-        <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
+        <DateRangeControl
+          bounds={data.dateBounds}
+          range={dateRange}
+          onChange={(range) => {
+            onDateRangeChange(range);
+            const href = toolFiltersHref(withToolDateRange(locationFilters, range));
+            window.history.pushState(null, "", href);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }}
+        />
       </header>
+
+      <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
+        <StatCard
+          icon="tools"
+          label="Total calls"
+          tone="accent"
+          value={formatInt(aggregate.totalCalls)}
+        />
+        <StatCard
+          icon="info"
+          label="Error rate"
+          tone={aggregate.errorRate > 0 ? "danger" : "success"}
+          value={aggregate.totalCalls === 0 ? "—" : `${aggregate.errorRate.toFixed(1)}%`}
+        />
+        <StatCard
+          icon="clock"
+          label="p50 / p95"
+          tone="info"
+          value={
+            aggregate.p50 == null || aggregate.p95 == null
+              ? "—"
+              : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
+          }
+        />
+        <StatCard icon="bolt" label="Top tool" tone="warning" value={aggregate.topTool ?? "—"} />
+      </section>
 
       <section className="panel">
         <div className="panel-heading">
@@ -4484,6 +6255,8 @@ function ToolsView({
                 <col className="col-wide" />
                 <col className="col-number" />
                 <col className="col-number" />
+                <col className="col-number" />
+                {durationAvailable ? <col className="col-number" /> : null}
                 <col className="col-number" />
               </colgroup>
               <thead>
@@ -4515,28 +6288,59 @@ function ToolsView({
                     sort={mcpSort}
                     sortKey="errors"
                   />
+                  {durationAvailable ? (
+                    <SortableHeader
+                      align="right"
+                      label="Median"
+                      onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                      sort={mcpSort}
+                      sortKey="p50"
+                    />
+                  ) : null}
+                  <SortableHeader
+                    align="right"
+                    label="Last used"
+                    onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                    sort={mcpSort}
+                    sortKey="last_used"
+                  />
                 </tr>
               </thead>
               <tbody>
-                {mcpRows.map((row) => (
-                  <tr key={row.mcp_server}>
-                    <td className="mono">
-                      <span className="icon-cell">
-                        <Icon name="cpu" />
-                        <span>{row.mcp_server}</span>
-                      </span>
-                    </td>
-                    <td className="numeric muted">{formatInt(row.tools)}</td>
-                    <td className="numeric">{formatInt(row.calls)}</td>
-                    <td className="numeric">
-                      {row.errors > 0 ? (
-                        <Badge tone="danger">{formatInt(row.errors)}</Badge>
-                      ) : (
-                        <span className="faint">0</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {mcpRows.map((row) => {
+                  const href = toolFiltersHref({
+                    ...locationFilters,
+                    server: row.mcp_server,
+                    offset: 0,
+                  });
+                  return (
+                    <DrilldownTableRow
+                      href={href}
+                      key={row.mcp_server}
+                      label={`Show calls from MCP server ${row.mcp_server}`}
+                    >
+                      <td className="mono">
+                        <span className="icon-cell drilldown-label">
+                          <Icon name="cpu" />
+                          <span>{row.mcp_server}</span>
+                        </span>
+                      </td>
+                      <td className="numeric muted">{formatInt(row.tools)}</td>
+                      <td className="numeric">{formatInt(row.calls)}</td>
+                      <td className="numeric">
+                        {row.errors > 0 ? (
+                          <Badge tone="danger">{formatInt(row.errors)}</Badge>
+                        ) : (
+                          <span className="faint">0</span>
+                        )}
+                      </td>
+                      {durationAvailable ? (
+                        <td className="numeric muted">{durationPrecise(row.p50_ms)}</td>
+                      ) : null}
+                      <td className="numeric muted">{relativeTime(row.last_used_at)}</td>
+                    </DrilldownTableRow>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -4557,6 +6361,8 @@ function ToolsView({
               <col className="col-kind" />
               <col className="col-server" />
               <col className="col-number" />
+              <col className="col-number" />
+              {durationAvailable ? <col className="col-number" /> : null}
               <col className="col-number" />
             </colgroup>
             <thead>
@@ -4593,46 +6399,269 @@ function ToolsView({
                   sort={toolSort}
                   sortKey="errors"
                 />
+                {durationAvailable ? (
+                  <SortableHeader
+                    align="right"
+                    label="Median"
+                    onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                    sort={toolSort}
+                    sortKey="p50"
+                  />
+                ) : null}
+                <SortableHeader
+                  align="right"
+                  label="Last used"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="last_used"
+                />
               </tr>
             </thead>
             <tbody>
               {toolRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No tool calls.</td>
+                  <td colSpan={durationAvailable ? 7 : 6}>No tool calls.</td>
                 </tr>
               ) : null}
-              {toolRows.map((row) => (
-                <tr key={`${row.tool_name}-${row.tool_kind}-${row.mcp_server ?? ""}`}>
-                  <td className="mono">{row.tool_name}</td>
-                  <td>
-                    <Badge tone={row.tool_kind === "mcp" ? "accent" : "neutral"}>
-                      {row.tool_kind === "mcp" ? "MCP" : "built-in"}
-                    </Badge>
-                  </td>
-                  <td className="mono muted">
-                    {row.mcp_server != null && row.mcp_server !== "" ? (
-                      <span className="icon-cell">
-                        <Icon name="cpu" />
-                        {row.mcp_server}
-                      </span>
-                    ) : (
-                      <span className="faint">-</span>
-                    )}
-                  </td>
-                  <td className="numeric">{formatInt(row.calls)}</td>
-                  <td className="numeric">
-                    {row.errors > 0 ? (
-                      <Badge tone="danger">{formatInt(row.errors)}</Badge>
-                    ) : (
-                      <span className="faint">0</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {toolRows.map((row) => {
+                const href = toolFiltersHref({
+                  ...locationFilters,
+                  tool: row.tool_name,
+                  offset: 0,
+                });
+                return (
+                  <DrilldownTableRow
+                    href={href}
+                    key={`${row.tool_name}-${row.tool_kind}-${row.mcp_server ?? ""}`}
+                    label={`Show calls to tool ${row.tool_name}`}
+                  >
+                    <td className="mono drilldown-label">{row.tool_name}</td>
+                    <td>
+                      <Badge tone={row.tool_kind === "mcp" ? "accent" : "neutral"}>
+                        {row.tool_kind === "mcp" ? "MCP" : "built-in"}
+                      </Badge>
+                    </td>
+                    <td className="mono muted">
+                      {row.mcp_server != null && row.mcp_server !== "" ? (
+                        <span className="icon-cell">
+                          <Icon name="cpu" />
+                          {row.mcp_server}
+                        </span>
+                      ) : (
+                        <span className="faint">-</span>
+                      )}
+                    </td>
+                    <td className="numeric">{formatInt(row.calls)}</td>
+                    <td className="numeric">
+                      {row.errors > 0 ? (
+                        <Badge tone="danger">{formatInt(row.errors)}</Badge>
+                      ) : (
+                        <span className="faint">0</span>
+                      )}
+                    </td>
+                    {durationAvailable ? (
+                      <td className="numeric muted">{durationPrecise(row.p50_ms)}</td>
+                    ) : null}
+                    <td className="numeric muted">{relativeTime(row.last_used_at)}</td>
+                  </DrilldownTableRow>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </section>
+
+      <section className="panel">
+        <div className="panel-heading tool-calls-heading">
+          <div>
+            <h2>Calls</h2>
+            <p>Inspect individual tool activity, inputs, results, and latency</p>
+          </div>
+          <span className="muted">{formatInt(callPage.total)} matching</span>
+        </div>
+        <div className="tool-filter-bar">
+          <label>
+            <span>Tool</span>
+            <select
+              onChange={(event) => updateFilters({ tool: event.target.value })}
+              value={locationFilters.tool}
+            >
+              <option value="">All tools</option>
+              {data.tools.map((row) => (
+                <option key={`${row.tool_name}-${row.mcp_server ?? ""}`} value={row.tool_name}>
+                  {row.tool_name} ({formatInt(row.calls)})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Server</span>
+            <select
+              onChange={(event) => updateFilters({ server: event.target.value })}
+              value={locationFilters.server}
+            >
+              <option value="">All servers</option>
+              {data.mcp.map((row) => (
+                <option key={row.mcp_server} value={row.mcp_server}>
+                  {row.mcp_server} ({formatInt(row.calls)})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Minimum duration</span>
+            <select
+              onChange={(event) => updateFilters({ minMs: Number(event.target.value) })}
+              value={locationFilters.minMs}
+            >
+              <option value={0}>Any duration</option>
+              <option value={100}>100 ms+</option>
+              <option value={1000}>1 s+</option>
+              <option value={5000}>5 s+</option>
+              <option value={30000}>30 s+</option>
+            </select>
+          </label>
+          <label className="tool-error-toggle">
+            <input
+              checked={locationFilters.errorsOnly}
+              onChange={(event) => updateFilters({ errorsOnly: event.target.checked })}
+              type="checkbox"
+            />
+            Errors only
+          </label>
+          {locationFilters.tool !== "" ||
+          locationFilters.server !== "" ||
+          locationFilters.errorsOnly ||
+          locationFilters.minMs > 0 ? (
+            <a
+              className="secondary-button"
+              href={clearedFiltersHref}
+              onClick={(event) => navigate(event, clearedFiltersHref)}
+            >
+              Clear filters
+            </a>
+          ) : null}
+        </div>
+        {callError != null ? (
+          <ErrorState
+            action={
+              <button className="secondary-button" onClick={() => updateFilters({})} type="button">
+                Retry
+              </button>
+            }
+            detail={callError}
+            title="Tool calls could not be loaded"
+          />
+        ) : callsLoading && callPage.calls.length === 0 ? (
+          <div className="panel-body muted">Loading calls…</div>
+        ) : callPage.calls.length === 0 ? (
+          <EmptyState
+            icon="tools"
+            message="Try a wider date range or clear one of the filters."
+            title="No matching tool calls"
+          />
+        ) : (
+          <>
+            <div className="table-scroll">
+              <table className="data-table tool-calls-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Tool</th>
+                    <th>Input preview</th>
+                    {durationAvailable ? <th className="numeric">Duration</th> : null}
+                    <th className="numeric">Output</th>
+                    <th className="numeric">When</th>
+                    <th>Session</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {callPage.calls.map((call) => (
+                    <tr
+                      className="clickable-row"
+                      key={call.id}
+                      onClick={() => {
+                        setSelectedCall(call);
+                        setDetailTab("preview");
+                      }}
+                    >
+                      <td>
+                        <ToolCallStatus call={call} />
+                      </td>
+                      <td className="mono">
+                        <button
+                          aria-label={`Inspect ${call.tool_name ?? "unknown tool"} call`}
+                          className="tool-call-detail-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedCall(call);
+                            setDetailTab("preview");
+                          }}
+                          type="button"
+                        >
+                          {call.tool_name ?? "Unknown"}
+                        </button>
+                      </td>
+                      <td className="truncate-cell muted">
+                        {toolCallInputLabel(call.input_preview)}
+                      </td>
+                      {durationAvailable ? (
+                        <td className="numeric muted">{durationPrecise(call.duration_ms)}</td>
+                      ) : null}
+                      <td className="numeric muted">{formatBytes(call.output_bytes)}</td>
+                      <td className="numeric muted">{relativeTime(call.timestamp)}</td>
+                      <td>
+                        <a
+                          href={`/sessions/${call.session_id}`}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          {call.session_title ?? `Session ${call.session_id}`} →
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="tool-call-pagination">
+              <button
+                className="secondary-button"
+                disabled={callPage.offset === 0}
+                onClick={() =>
+                  updateFilters({ offset: Math.max(0, callPage.offset - callPage.limit) })
+                }
+                type="button"
+              >
+                <Icon name="chevronLeft" />
+                Previous
+              </button>
+              <span className="muted">
+                {formatInt(callPage.offset + 1)}–
+                {formatInt(Math.min(callPage.offset + callPage.calls.length, callPage.total))} of{" "}
+                {formatInt(callPage.total)}
+              </span>
+              <button
+                className="secondary-button"
+                disabled={callPage.offset + callPage.calls.length >= callPage.total}
+                onClick={() => updateFilters({ offset: callPage.offset + callPage.limit })}
+                type="button"
+              >
+                Next
+                <Icon name="chevronRight" />
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+
+      {selectedCall != null ? (
+        <ToolCallDetail
+          call={selectedCall}
+          onClose={closeToolDetail}
+          onTabChange={setDetailTab}
+          tab={detailTab}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4651,6 +6680,9 @@ function FilesView({
   const [group, setGroup] = useState<"path" | "ext">("path");
   const [op, setOp] = useState<"read" | "edit" | "write" | "delete" | null>(null);
   const [fileRows, setFileRows] = useState(rows);
+  const [fileError, setFileError] = useState<unknown>(null);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesRetryKey, setFilesRetryKey] = useState(0);
   const [fileSort, setFileSort] = useState<SortState<FileSortKey>>({
     key: "total",
     direction: "desc",
@@ -4667,19 +6699,28 @@ function FilesView({
   }, [group, op, rows]);
 
   useEffect(() => {
-    let cancelled = false;
+    void filesRetryKey;
+    const controller = new AbortController();
     const opParam = op == null ? "" : `&op=${op}`;
+    setFileError(null);
+    setFilesLoading(true);
     void getJson<FileRow[]>(
       withDateQuery(`/api/files?group=${group}&limit=100${opParam}`, dateRangeQuery(dateRange)),
-    ).then((nextRows) => {
-      if (!cancelled) {
-        setFileRows(nextRows);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [dateRange, group, op]);
+      { signal: controller.signal },
+    )
+      .then(setFileRows)
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setFileError(reason);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setFilesLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [dateRange, filesRetryKey, group, op]);
 
   return (
     <div className="view-stack">
@@ -4724,10 +6765,14 @@ function FilesView({
             <p>Per-operation counts from tool-call evidence, ordered by activity</p>
           </div>
         </div>
-        {fileRows.length === 0 ? (
+        {fileError != null ? (
+          <ApiFailureState error={fileError} onRetry={() => setFilesRetryKey((key) => key + 1)} />
+        ) : filesLoading && fileRows.length === 0 ? (
+          <div className="panel-body muted">Loading file activity…</div>
+        ) : fileRows.length === 0 ? (
           <EmptyState
             icon="file"
-            message="Hotspots appear once the archive has file activity."
+            message="Hotspots appear once your session logs contain file activity."
             title="No file activity"
           />
         ) : (
@@ -4819,7 +6864,11 @@ function FilesView({
                     </td>
                     {group === "path" ? (
                       <td className="muted" title={row.project ?? ""}>
-                        {basename(row.project)}
+                        {row.project == null ? (
+                          <span className="faint">-</span>
+                        ) : (
+                          <a href={projectSessionsHref(row.project)}>{basename(row.project)}</a>
+                        )}
                       </td>
                     ) : null}
                     <td className="numeric muted">{formatInt(row.reads)}</td>
@@ -4841,7 +6890,6 @@ function FilesView({
 }
 
 function SettingsView({
-  config,
   onSaved,
   settingsInfo,
 }: {
@@ -4888,7 +6936,7 @@ function SettingsView({
       <header className="page-heading">
         <h1>Settings</h1>
         <p>
-          How decant opens things on your machine. We start from what we detect and remember your
+          How Decant opens things on your machine. We start from what we detect and remember your
           choices.
         </p>
       </header>
@@ -4944,9 +6992,9 @@ function SettingsView({
       <section className="panel about-decant">
         <div className="panel-heading">
           <div>
-            <h2>About decant</h2>
+            <h2>About Decant</h2>
             <p>
-              Local-first analytics for Claude Code and Codex sessions. decant is an open source
+              Local-first analytics for Claude Code and Codex sessions. Decant is an open source
               tool from Dosu.
             </p>
           </div>
@@ -4969,26 +7017,8 @@ function SettingsView({
             </a>
           </div>
           <p className="about-privacy">
-            decant makes no outbound network calls; your archive stays on this machine.
+            Decant makes no outbound network calls; your session logs stay on this machine.
           </p>
-          <dl className="archive-info">
-            <div>
-              <dt>Version</dt>
-              <dd>{config?.version ?? "0.0.0-dev"}</dd>
-            </div>
-            <div>
-              <dt>Archive</dt>
-              <dd title={config?.dbPath}>{config?.dbPath ?? "Loading…"}</dd>
-            </div>
-            <div>
-              <dt>Claude Code sessions</dt>
-              <dd title={config?.claudeDir}>{config?.claudeDir ?? "Loading…"}</dd>
-            </div>
-            <div>
-              <dt>Codex sessions</dt>
-              <dd title={config?.codexDir}>{config?.codexDir ?? "Loading…"}</dd>
-            </div>
-          </dl>
         </div>
       </section>
     </div>
@@ -5028,12 +7058,20 @@ function SettingSelect({
   );
 }
 
-function SessionDetailView({ id }: { id: number }) {
+function SessionDetailView({
+  id,
+  onSync,
+  syncing,
+}: {
+  id: number;
+  onSync: () => void;
+  syncing: boolean;
+}) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
   const [outline, setOutline] = useState<SessionOutlineItemData[] | null>(null);
   const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [contextWindow, setContextWindow] = useState<ContextWindowTimelineData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [economicsError, setEconomicsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -5043,7 +7081,8 @@ function SessionDetailView({ id }: { id: number }) {
   const [loadEarlierError, setLoadEarlierError] = useState<string | null>(null);
   const [showIssues, setShowIssues] = useState(false);
   const [issues, setIssues] = useState<SessionIngestIssue[] | null>(null);
-  const [issuesError, setIssuesError] = useState<string | null>(null);
+  const [issuesError, setIssuesError] = useState<unknown>(null);
+  const [detailRetryKey, setDetailRetryKey] = useState(0);
   const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
   const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
   const detailRef = useRef<SessionDetailData | null>(null);
@@ -5052,8 +7091,10 @@ function SessionDetailView({ id }: { id: number }) {
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadMorePromiseRef = useRef<Promise<boolean> | null>(null);
   const sessionVersionRef = useRef(0);
+  const jumpGenerationRef = useRef(0);
 
   useEffect(() => {
+    void detailRetryKey;
     const sessionVersion = sessionVersionRef.current + 1;
     sessionVersionRef.current = sessionVersion;
     let cancelled = false;
@@ -5072,6 +7113,7 @@ function SessionDetailView({ id }: { id: number }) {
     setIssues(null);
     setIssuesError(null);
     setJumpingToSeq(null);
+    jumpGenerationRef.current += 1;
     activeMessageSeqRef.current = null;
     handledMessageHashRef.current = null;
     setActiveMessageSeq(null);
@@ -5090,7 +7132,7 @@ function SessionDetailView({ id }: { id: number }) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(errorMessage(err));
+          setError(err);
         }
       });
     void getJson<SessionOutlineItemData[]>(`/api/sessions/${id}/outline`)
@@ -5125,7 +7167,7 @@ function SessionDetailView({ id }: { id: number }) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [detailRetryKey, id]);
 
   // Ingest issues are fetched lazily, on first expand, rather than eagerly
   // alongside outline/economics/context-window above: most sessions have
@@ -5145,7 +7187,7 @@ function SessionDetailView({ id }: { id: number }) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setIssuesError(errorMessage(err));
+          setIssuesError(err);
         }
       });
     return () => {
@@ -5320,18 +7362,21 @@ function SessionDetailView({ id }: { id: number }) {
           if (current == null || current.summary.id !== id) {
             return false;
           }
-          if (current.messages.some((message) => message.seq === seq)) {
+          if (
+            (current.message_offset ?? 0) === 0 &&
+            current.messages.some((message) => message.seq === seq)
+          ) {
             return true;
           }
-          const offset = clampTranscriptWindowOffset(
-            transcriptWindowOffset(seq),
+          const request = transcriptPrefixRequest(
+            seq,
             current.summary.message_count,
             SESSION_DETAIL_MESSAGE_PAGE_SIZE,
           );
           setLoadingMore(true);
           setLoadMoreError(null);
           return getJson<SessionDetailData>(
-            `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_PAGE_SIZE}&message_offset=${offset}`,
+            `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {
@@ -5343,13 +7388,28 @@ function SessionDetailView({ id }: { id: number }) {
               if (page.messages.length === 0) {
                 return false;
               }
+              const latest = detailRef.current;
+              if (latest == null || latest.summary.id !== id) {
+                return false;
+              }
+              const messages =
+                (latest.message_offset ?? 0) > 0
+                  ? appendTranscriptPage(page.messages, latest.messages)
+                  : page.messages;
               const nextDetail = {
                 ...page,
-                message_offset: page.message_offset ?? offset,
-                message_limit: SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+                messages,
+                message_offset: 0,
+                message_limit: request.limit,
+                has_more_messages:
+                  messages.length < latest.summary.message_count ||
+                  page.has_more_messages === true ||
+                  latest.has_more_messages === true,
               };
               detailRef.current = nextDetail;
-              setDetail(nextDetail);
+              flushSync(() => {
+                setDetail(nextDetail);
+              });
               return nextDetail.messages.some((message) => message.seq === seq);
             })
             .catch((err: unknown) => {
@@ -5372,24 +7432,42 @@ function SessionDetailView({ id }: { id: number }) {
   const jumpToMessage = useCallback(
     async (seq: number) => {
       const sessionVersion = sessionVersionRef.current;
+      const jumpGeneration = jumpGenerationRef.current + 1;
+      jumpGenerationRef.current = jumpGeneration;
       const hash = `#message-${seq}`;
       handledMessageHashRef.current = `${id}:${seq}`;
       window.history.replaceState(null, "", hash);
       setJumpingToSeq(seq);
       try {
         const loaded = await loadMessageWindow(seq);
-        if (!loaded || sessionVersionRef.current !== sessionVersion) {
+        if (
+          !loaded ||
+          sessionVersionRef.current !== sessionVersion ||
+          jumpGenerationRef.current !== jumpGeneration
+        ) {
           return;
         }
         activeMessageSeqRef.current = seq;
         setActiveMessageSeq(seq);
         requestAnimationFrame(() => {
-          if (sessionVersionRef.current === sessionVersion) {
-            scrollTranscriptMessage(seq);
+          if (
+            sessionVersionRef.current === sessionVersion &&
+            jumpGenerationRef.current === jumpGeneration
+          ) {
+            scrollTranscriptMessage(
+              seq,
+              true,
+              () =>
+                sessionVersionRef.current === sessionVersion &&
+                jumpGenerationRef.current === jumpGeneration,
+            );
           }
         });
       } finally {
-        if (sessionVersionRef.current === sessionVersion) {
+        if (
+          sessionVersionRef.current === sessionVersion &&
+          jumpGenerationRef.current === jumpGeneration
+        ) {
           setJumpingToSeq((current) => (current === seq ? null : current));
         }
       }
@@ -5511,7 +7589,13 @@ function SessionDetailView({ id }: { id: number }) {
   const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
 
   if (error != null) {
-    return <div className="notice danger">Unable to load session: {error}</div>;
+    return (
+      <ApiFailureState
+        error={error}
+        onRetry={() => setDetailRetryKey((key) => key + 1)}
+        onSync={onSync}
+      />
+    );
   }
 
   if (detail == null) {
@@ -5531,13 +7615,24 @@ function SessionDetailView({ id }: { id: number }) {
   const compactionBySeq = new Map(
     (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
   );
+  const compactionNumberBySeq = new Map(
+    (contextWindow?.compactions ?? []).map((compaction, index) => [compaction.seq, index + 1]),
+  );
   const windowTokens = contextWindow?.window_tokens ?? null;
 
   return (
     <div className="session-detail">
       <header className="thread-header">
         <div className="thread-header-inner">
-          <h1>{sessionDisplayTitle(detail.summary)}</h1>
+          <div className="thread-header-title-row">
+            <h1>{sessionDisplayTitle(detail.summary)}</h1>
+            <ReportExportButton
+              href={`/api/reports/session/${detail.summary.id}.html`}
+              includes={SESSION_REPORT_INCLUDES}
+              previewHref={`/reports/session/${detail.summary.id}`}
+              title="Review session report"
+            />
+          </div>
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
@@ -5550,7 +7645,7 @@ function SessionDetailView({ id }: { id: number }) {
             {detail.summary.ingest_issue_count > 0 ? (
               <button
                 aria-expanded={showIssues}
-                aria-label={`${showIssues ? "Hide" : "Show"} ingest issues`}
+                aria-label={`${showIssues ? "Hide" : "Show"} ingest diagnostics`}
                 className="badge-button"
                 onClick={() => setShowIssues((value) => !value)}
                 type="button"
@@ -5559,10 +7654,14 @@ function SessionDetailView({ id }: { id: number }) {
               </button>
             ) : null}
             {detail.summary.project_path != null ? (
-              <span className="project-chip" title={detail.summary.project_path}>
+              <a
+                className="project-chip"
+                href={projectSessionsHref(detail.summary.project_path)}
+                title={detail.summary.project_path}
+              >
                 <Icon name="folder" />
-                {detail.summary.project_path}
-              </span>
+                {basename(detail.summary.project_path)}
+              </a>
             ) : null}
           </div>
           <div className="thread-stats">
@@ -5585,7 +7684,15 @@ function SessionDetailView({ id }: { id: number }) {
         </div>
       </header>
 
-      {showIssues ? <IngestIssuesPanel error={issuesError} issues={issues} /> : null}
+      {showIssues ? (
+        <IngestIssuesPanel
+          error={issuesError}
+          issues={issues}
+          onResync={onSync}
+          onRetry={() => setIssuesError(null)}
+          syncing={syncing}
+        />
+      ) : null}
 
       <a className="back-link" href="/sessions" onClick={(event) => navigate(event, "/sessions")}>
         <Icon name="arrowLeft" />
@@ -5695,6 +7802,7 @@ function SessionDetailView({ id }: { id: number }) {
             <TranscriptTurn
               active={activeMessageSeq === message.seq}
               compaction={compactionBySeq.get(message.seq) ?? null}
+              compactionNumber={compactionNumberBySeq.get(message.seq) ?? null}
               key={messageKey(message)}
               message={message}
               sessionIsSubagent={detail.summary.is_subagent}
@@ -5746,37 +7854,81 @@ function SessionDetailView({ id }: { id: number }) {
 function IngestIssuesPanel({
   error,
   issues,
+  onResync,
+  onRetry,
+  syncing,
 }: {
-  error: string | null;
+  error: unknown;
   issues: SessionIngestIssue[] | null;
+  onResync: () => void;
+  onRetry: () => void;
+  syncing: boolean;
 }) {
+  const unknownIssues = issues?.filter((issue) => issue.code === "unknown_record_type") ?? [];
+  const otherIssues = issues?.filter((issue) => issue.code !== "unknown_record_type") ?? [];
+  const unknownSummary = unknownRecordTypeSummary(unknownIssues.map((issue) => issue.error));
   return (
     <section className="panel ingest-issues-panel">
       <div className="panel-heading">
         <div>
-          <h2>Ingest issues</h2>
-          <p>Diagnostics recorded when this session's source file was last ingested.</p>
+          <h2>Ingest diagnostics</h2>
+          <p>
+            A source line could not be parsed, so this session may be incomplete. Informational
+            parser notes are included here for context.
+          </p>
         </div>
+        <button
+          aria-busy={syncing}
+          aria-label="Re-sync session logs"
+          className={`secondary-button sync-button${syncing ? " is-syncing" : ""}`}
+          disabled={syncing}
+          onClick={onResync}
+          type="button"
+        >
+          <Icon name="refresh" />
+          {syncing ? null : "Re-sync"}
+        </button>
       </div>
       <div className="panel-body">
         {error != null ? (
-          <div className="notice inline-notice">Unable to load ingest issues: {error}</div>
+          <ApiFailureState error={error} onRetry={onRetry} />
         ) : issues == null ? (
           <p className="faint">Loading issues…</p>
         ) : issues.length === 0 ? (
           <p className="faint">No issues recorded for this session.</p>
         ) : (
           <div className="signal-list">
-            {issues.map((issue, index) => (
+            {unknownSummary.count > 0 ? (
+              <div className="ingest-issue-row is-informational">
+                <div className="muted">
+                  Decant safely preserved or ignored {formatInt(unknownSummary.count)} unknown
+                  source {unknownSummary.count === 1 ? "record type" : "record types"}
+                  {unknownSummary.types.length > 0
+                    ? `: ${unknownSummary.types.map((type) => `“${type}”`).join(", ")}`
+                    : ""}
+                  .{" "}
+                  <a
+                    href="https://github.com/dosu-ai/decant/releases"
+                    rel="noopener"
+                    target="_blank"
+                  >
+                    Check for a Decant update
+                  </a>{" "}
+                  before re-syncing.
+                </div>
+              </div>
+            ) : null}
+            {otherIssues.map((issue, index) => (
               // No stable id in the wire shape; composite of the fields shown
               // plus the map index, since byte-identical rows (e.g. repeated
               // duplicate_tool_result issues) would otherwise collide.
               <div
-                className="signal-row"
+                className={`ingest-issue-row ${
+                  issue.code === "unparsed_line" ? "is-warning" : "is-informational"
+                }`}
                 // biome-ignore lint/suspicious/noArrayIndexKey: fetched once and never reorders; index only disambiguates byte-identical rows.
                 key={`${issue.code}-${issue.line_no}-${issue.error}-${index}`}
               >
-                <span className="signal-rail tone-warning" />
                 <div>
                   <div>
                     <code className="mono">{issue.code}</code>
@@ -5892,6 +8044,7 @@ type TranscriptBlockData = {
 const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
+  compactionNumber,
   message,
   sessionIsSubagent,
   subagentsByToolUse,
@@ -5900,6 +8053,7 @@ const TranscriptTurn = memo(function TranscriptTurn({
 }: {
   active: boolean;
   compaction: ContextWindowCompactionData | null;
+  compactionNumber: number | null;
   message: SessionDetailData["messages"][number];
   sessionIsSubagent: boolean;
   subagentsByToolUse: Map<string, SubagentDetailData[]>;
@@ -5912,6 +8066,7 @@ const TranscriptTurn = memo(function TranscriptTurn({
         active={active}
         anchorId={`message-${message.seq}`}
         compaction={compaction}
+        compactionNumber={compactionNumber}
         message={message}
       />
     );
@@ -5965,11 +8120,13 @@ function CompactionTurn({
   active = false,
   anchorId,
   compaction,
+  compactionNumber = null,
   message,
 }: {
   active?: boolean;
   anchorId?: string;
   compaction: ContextWindowCompactionData | null;
+  compactionNumber?: number | null;
   message: SessionDetailData["messages"][number];
 }) {
   const trigger = compaction?.trigger ?? message.compact_trigger;
@@ -5980,9 +8137,10 @@ function CompactionTurn({
       aria-current={active ? "true" : undefined}
       className={`turn compaction-turn${active ? " is-keyboard-active" : ""}`}
       id={anchorId}
+      tabIndex={-1}
     >
       <Badge mono tone="accent">
-        Compacted
+        {compactionNumber == null ? "Compacted" : `Compaction ${compactionNumber}`}
       </Badge>
       <div className="turn-meta">
         {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
@@ -6037,13 +8195,12 @@ function ContextChip({ tokens, windowTokens }: { tokens: number; windowTokens: n
   );
 }
 
-const STRIP_HEIGHT = 198;
-const STRIP_PLOT_TOP = 48;
+const STRIP_HEIGHT = 214;
+const STRIP_PLOT_TOP = 44;
 const STRIP_RUG_HEIGHT = 30;
 const STRIP_PAD_LEFT = 46;
 const STRIP_PAD_RIGHT = 16;
 const STRIP_WINDOW_LABEL_Y = 13;
-const STRIP_ANNOTATION_LABEL_YS = [28, 41] as const;
 /** Auto-compact fires near the top of the window; the exact threshold varies
  * by version, so the zone is a directional hint, not a promise. */
 const STRIP_AUTO_COMPACT_ZONE = 0.8;
@@ -6118,8 +8275,12 @@ function ContextWindowStrip({
   windowTokens: number;
 }) {
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [hoverCompactionGroup, setHoverCompactionGroup] = useState<number | null>(null);
+  const [selectedCompactionGroup, setSelectedCompactionGroup] = useState<number | null>(null);
+  const [tooltipSize, setTooltipSize] = useState({ height: 158, width: 208 });
 
   useLayoutEffect(() => {
     const element = frameRef.current;
@@ -6146,90 +8307,23 @@ function ContextWindowStrip({
 
   const plotLeft = STRIP_PAD_LEFT;
   const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
-  const plotWidth = plotRight - plotLeft;
   const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
   const yAt = (tokens: number) =>
     STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
 
-  // Equal-width turn slots: every turn spans the same share of the axis and a
-  // turn's calls subdivide its slot, so the x-axis reads as a regular scale.
-  const turnOrder: number[] = [];
-  const callsPerTurn = new Map<number, number>();
-  for (const point of points) {
-    if (!callsPerTurn.has(point.turn)) {
-      turnOrder.push(point.turn);
-    }
-    callsPerTurn.set(point.turn, (callsPerTurn.get(point.turn) ?? 0) + 1);
-  }
-  const slotByTurn = new Map(turnOrder.map((turn, index) => [turn, index] as const));
-  const slotWidth = plotWidth / turnOrder.length;
-  const seenInTurn = new Map<number, number>();
-  const xs = points.map((point) => {
-    const position = seenInTurn.get(point.turn) ?? 0;
-    seenInTurn.set(point.turn, position + 1);
-    const slot = slotByTurn.get(point.turn) ?? 0;
-    const calls = callsPerTurn.get(point.turn) ?? 1;
-    return plotLeft + (slot + (position + 0.5) / calls) * slotWidth;
-  });
-  const xOf = (index: number) => xs[index] ?? plotLeft;
-
-  // Split the curve at compaction boundaries so each drop renders as a cliff.
-  const segments: [number, number][][] = [];
-  {
-    let current: [number, number][] = [];
-    let nextCompaction = 0;
-    points.forEach((point, index) => {
-      let cut = false;
-      while (
-        nextCompaction < compactions.length &&
-        (compactions[nextCompaction]?.seq ?? 0) < point.seq
-      ) {
-        nextCompaction += 1;
-        cut = true;
-      }
-      if (cut && current.length > 0) {
-        segments.push(current);
-        current = [];
-      }
-      current.push([xOf(index), yAt(point.context_tokens)]);
-    });
-    if (current.length > 0) {
-      segments.push(current);
-    }
-  }
-
-  const linePath = (coords: [number, number][]) =>
-    coords
-      .map(([px, py], index) => `${index === 0 ? "M" : "L"}${px.toFixed(1)} ${py.toFixed(1)}`)
-      .join(" ");
-  const areaPath = (coords: [number, number][]) => {
-    const first = coords[0];
-    const last = coords[coords.length - 1];
-    if (first == null || last == null) {
-      return "";
-    }
-    return `${linePath(coords)} L${last[0].toFixed(1)} ${baseY} L${first[0].toFixed(1)} ${baseY} Z`;
-  };
-  const markerX = (compaction: ContextWindowCompactionData) => {
-    const after = points.findIndex((point) => point.seq > compaction.seq);
-    if (after < 0) {
-      return xOf(points.length - 1);
-    }
-    if (after === 0) {
-      return xOf(0);
-    }
-    return (xOf(after - 1) + xOf(after)) / 2;
-  };
-  const compactionMarks = compactions.map((compaction) => ({
-    compaction,
-    text: compactionMarkText(compaction),
-    x: markerX(compaction),
-  }));
-  const compactionLabels = layoutContextAnnotations(compactionMarks, {
-    labelYs: STRIP_ANNOTATION_LABEL_YS,
+  const curveLayout = layoutContextCurve(points, compactions, {
     plotLeft,
     plotRight,
+    yAt,
   });
+  const { markerXs, segments, slotWidth, turnOrder, xs } = curveLayout;
+  const xOf = (index: number) => xs[index] ?? plotLeft;
+
+  const compactionMarks = compactions.map((compaction, index) => ({
+    compaction,
+    x: markerXs[index] ?? plotLeft,
+  }));
+  const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
 
   // Regular turn axis: a boundary tick at each slot edge, labels centered in
   // their slot for every labelStep-th turn.
@@ -6260,6 +8354,7 @@ function ContextWindowStrip({
   const endLabelAbove = endY > STRIP_PLOT_TOP + 30;
 
   const handleMove = (event: { clientX: number; currentTarget: SVGSVGElement }) => {
+    setHoverCompactionGroup(null);
     const rect = event.currentTarget.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
     let nearest = 0;
@@ -6274,7 +8369,41 @@ function ContextWindowStrip({
     setHoverIndex(nearest);
   };
   const hovered = hoverIndex == null ? null : (points[hoverIndex] ?? null);
-  const tooltipFlips = hovered != null && hoverIndex != null && xOf(hoverIndex) > stripWidth - 210;
+  const hoveredIsFullCacheMiss =
+    hoverIndex != null && isFullCacheMiss(points, hoverIndex, compactions);
+  const activeCompactionGroup = selectedCompactionGroup ?? hoverCompactionGroup;
+  const hoveredCompactions =
+    activeCompactionGroup == null ? null : (compactionGroups[activeCompactionGroup] ?? null);
+  useLayoutEffect(() => {
+    const element = tooltipRef.current;
+    if (element == null || (hovered == null && activeCompactionGroup == null)) {
+      return;
+    }
+    const next = {
+      height: Math.ceil(element.getBoundingClientRect().height),
+      width: Math.ceil(element.getBoundingClientRect().width),
+    };
+    setTooltipSize((current) =>
+      current.height === next.height && current.width === next.width ? current : next,
+    );
+  }, [hovered, activeCompactionGroup]);
+  const tooltipAnchor =
+    hoveredCompactions != null
+      ? { x: hoveredCompactions.x, y: STRIP_PLOT_TOP }
+      : hovered != null && hoverIndex != null
+        ? { x: xOf(hoverIndex), y: yAt(hovered.context_tokens) }
+        : null;
+  const tooltipLayout =
+    tooltipAnchor != null
+      ? layoutContextTooltip({
+          anchorX: tooltipAnchor.x,
+          anchorY: tooltipAnchor.y,
+          frameHeight: STRIP_HEIGHT,
+          frameWidth: stripWidth,
+          tooltipHeight: tooltipSize.height,
+          tooltipWidth: tooltipSize.width,
+        })
+      : null;
   const handleJump = () => {
     if (hovered == null) {
       return;
@@ -6321,10 +8450,16 @@ function ContextWindowStrip({
                 aria-label={`Context window usage across ${points.length} API calls and ${timeline.turn_count} turns; peak ${peakLabel} of ${compact(windowTokens)}`}
                 className="ctx-strip"
                 height={STRIP_HEIGHT}
-                onClick={handleJump}
-                onMouseLeave={() => setHoverIndex(null)}
+                onClick={(event) => {
+                  setSelectedCompactionGroup(null);
+                  handleJump();
+                  event.currentTarget.focus();
+                }}
+                onMouseLeave={() => {
+                  setHoverIndex(null);
+                  setHoverCompactionGroup(null);
+                }}
                 onMouseMove={handleMove}
-                role="img"
                 width={stripWidth}
               >
                 <rect
@@ -6367,8 +8502,8 @@ function ContextWindowStrip({
                 </text>
                 {segments.map((coords) => (
                   <g key={`seg-${coords[0]?.[0] ?? 0}`}>
-                    <path className="ctx-strip-area" d={areaPath(coords)} />
-                    <path className="ctx-strip-line" d={linePath(coords)} />
+                    <path className="ctx-strip-area" d={contextCurveAreaPath(coords, baseY)} />
+                    <path className="ctx-strip-line" d={contextCurveLinePath(coords)} />
                   </g>
                 ))}
                 <g className="ctx-strip-rug">
@@ -6398,39 +8533,72 @@ function ContextWindowStrip({
                     );
                   })}
                 </g>
-                {compactionMarks.map(({ compaction, x }, compactionIndex) => {
-                  const label = compactionLabels[compactionIndex];
-                  const marker = (
-                    <g className="ctx-strip-compaction" key={`marker-${compaction.seq}`}>
-                      <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
-                      <text
-                        textAnchor={label?.anchor ?? "start"}
-                        x={label?.textX ?? x + 6}
-                        y={label?.textY ?? STRIP_ANNOTATION_LABEL_YS[0]}
-                      >
-                        {compactionMarkText(compaction)}
-                      </text>
-                      <rect
-                        fill="transparent"
-                        height={baseY - STRIP_PLOT_TOP}
-                        width={16}
-                        x={x - 8}
-                        y={STRIP_PLOT_TOP}
-                      >
-                        <title>{compactionLabel(compaction)}</title>
-                      </rect>
-                    </g>
-                  );
+                {compactionMarks.map(({ compaction, x }) => (
+                  <g className="ctx-strip-compaction" key={`compaction-mark-${compaction.seq}`}>
+                    <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
+                    <rect
+                      fill="transparent"
+                      height={baseY - STRIP_PLOT_TOP}
+                      width={16}
+                      x={x - 8}
+                      y={STRIP_PLOT_TOP}
+                    >
+                      <title>{compactionLabel(compaction)}</title>
+                    </rect>
+                  </g>
+                ))}
+                {compactionGroups.map((group, groupIndex) => {
+                  const first = (group.indexes[0] ?? 0) + 1;
+                  const last = (group.indexes.at(-1) ?? 0) + 1;
+                  const firstCompaction = compactions[group.indexes[0] ?? 0];
+                  const label = first === last ? `${first}` : `${first}–${last}`;
+                  const markerWidth = first === last ? 18 : Math.max(28, label.length * 6 + 10);
                   return (
                     <a
-                      href={`#message-${compaction.seq}`}
-                      key={`compaction-${compaction.seq}`}
+                      aria-label={
+                        first === last && firstCompaction != null
+                          ? `Compaction ${first}: ${compactionTokenRange(firstCompaction)} tokens`
+                          : `Compactions ${first} through ${last}`
+                      }
+                      href={`#message-${firstCompaction?.seq ?? 0}`}
+                      key={`compaction-group-${first}-${last}`}
                       onClick={(event) => {
                         event.preventDefault();
-                        void onJump(compaction.seq);
+                        event.stopPropagation();
+                        const seq = firstCompaction?.seq;
+                        if (group.indexes.length > 1) {
+                          setHoverIndex(null);
+                          setSelectedCompactionGroup(groupIndex);
+                        } else if (seq != null) {
+                          setSelectedCompactionGroup(null);
+                          void onJump(seq);
+                        }
                       }}
+                      onFocus={() => {
+                        setHoverIndex(null);
+                        setHoverCompactionGroup(groupIndex);
+                        if (group.indexes.length > 1) {
+                          setSelectedCompactionGroup(groupIndex);
+                        }
+                      }}
+                      onMouseEnter={() => {
+                        setHoverIndex(null);
+                        setHoverCompactionGroup(groupIndex);
+                      }}
+                      onMouseMove={(event) => event.stopPropagation()}
                     >
-                      {marker}
+                      <g className="ctx-strip-compaction-marker">
+                        <rect
+                          height={18}
+                          rx={9}
+                          width={markerWidth}
+                          x={group.x - markerWidth / 2}
+                          y={STRIP_PLOT_TOP - 21}
+                        />
+                        <text textAnchor="middle" x={group.x} y={STRIP_PLOT_TOP - 8}>
+                          {label}
+                        </text>
+                      </g>
                     </a>
                   );
                 })}
@@ -6452,7 +8620,9 @@ function ContextWindowStrip({
                 ) : null}
                 <g className="ctx-strip-end">
                   <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
-                  <circle cx={endX} cy={endY} r={3} />
+                  <circle cx={endX} cy={endY} r={3}>
+                    <title>End · {compact(lastPoint?.context_tokens ?? 0)} tokens</title>
+                  </circle>
                   <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
                     {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
                     {compact(lastPoint?.context_tokens ?? 0)}
@@ -6470,37 +8640,97 @@ function ContextWindowStrip({
                   </g>
                 ) : null}
               </svg>
-              {hovered != null && hoverIndex != null ? (
+              {hoveredCompactions != null ? (
+                <div
+                  className={`ctx-tooltip ctx-compaction-tooltip${
+                    selectedCompactionGroup != null ? " is-interactive" : ""
+                  }`}
+                  style={{
+                    left: tooltipLayout?.left ?? 2,
+                    top: tooltipLayout?.top ?? 2,
+                  }}
+                  ref={tooltipRef}
+                >
+                  <div className="ctx-tooltip-when">Context boundary</div>
+                  <strong>
+                    {hoveredCompactions.indexes.length === 1
+                      ? `Compaction ${(hoveredCompactions.indexes[0] ?? 0) + 1}`
+                      : `Compactions ${(hoveredCompactions.indexes[0] ?? 0) + 1}–${
+                          (hoveredCompactions.indexes.at(-1) ?? 0) + 1
+                        }`}
+                  </strong>
+                  <div className="ctx-tooltip-rows">
+                    {hoveredCompactions.indexes.map((compactionIndex) => {
+                      const compaction = compactions[compactionIndex];
+                      return compaction == null ? null : selectedCompactionGroup != null ? (
+                        <a
+                          href={`#message-${compaction.seq}`}
+                          key={`compaction-link-${compaction.seq}`}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            setSelectedCompactionGroup(null);
+                            setHoverCompactionGroup(null);
+                            void onJump(compaction.seq);
+                          }}
+                        >
+                          <span>Compaction {compactionIndex + 1}</span>
+                          <span>{compactionTokenRange(compaction)}</span>
+                        </a>
+                      ) : (
+                        <span
+                          className="ctx-tooltip-compaction-row"
+                          key={`compaction-row-${compaction.seq}`}
+                        >
+                          <span>Compaction {compactionIndex + 1}</span>
+                          <span>{compactionTokenRange(compaction)}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <div className="ctx-tooltip-hint">
+                    {selectedCompactionGroup != null
+                      ? "Choose a compaction to jump to the thread."
+                      : hoveredCompactions.indexes.length > 1
+                        ? "Select the numbered group to choose an exact compaction."
+                        : "Select the marker to jump to the thread."}
+                  </div>
+                </div>
+              ) : hovered != null && hoverIndex != null ? (
                 <div
                   className="ctx-tooltip"
                   style={{
-                    left: tooltipFlips ? xOf(hoverIndex) - 196 : xOf(hoverIndex) + 12,
-                    top: Math.max(
-                      2,
-                      Math.min(yAt(hovered.context_tokens) - 24, STRIP_HEIGHT - 118),
-                    ),
+                    left: tooltipLayout?.left ?? 2,
+                    top: tooltipLayout?.top ?? 2,
                   }}
+                  ref={tooltipRef}
                 >
                   <div className="ctx-tooltip-when">
                     turn {hovered.turn} · call {hoverIndex + 1} of {points.length}
                   </div>
                   <strong>
                     {Math.round((hovered.context_tokens / windowTokens) * 100)}% ·{" "}
-                    {formatInt(hovered.context_tokens)} tokens
+                    {formatInt(hovered.context_tokens)} tokens in context
                   </strong>
-                  {/* The log's raw input_tokens is a streaming placeholder
-                      (usually 0-5, upstream anthropics/claude-code#25941);
-                      the accurate fresh-context number is cache_creation, so
-                      the two fold into one row and the rows sum to the
-                      headline total. */}
                   <div className="ctx-tooltip-rows">
                     <span>cache read</span>
                     <span>{compact(hovered.cache_read_tokens)}</span>
-                    <span>fresh input</span>
-                    <span>{compact(hovered.cache_creation_tokens + hovered.input_tokens)}</span>
-                    <span>output</span>
-                    <span>{compact(hovered.output_tokens)}</span>
+                    <span>cache write</span>
+                    <span>{compact(hovered.cache_creation_tokens)}</span>
+                    {/* Claude Code sometimes reports raw input_tokens as a
+                        small streaming placeholder; keeping it separate is
+                        still more honest than folding it into cache writes. */}
+                    <span>uncached input</span>
+                    <span>{compact(hovered.input_tokens)}</span>
                   </div>
+                  <div className="ctx-tooltip-output">
+                    <span>output · this call</span>
+                    <span>{compact(hovered.output_tokens)} tokens</span>
+                  </div>
+                  {hoveredIsFullCacheMiss ? (
+                    <div className="ctx-tooltip-warning">
+                      full cache miss — entire prompt re-sent
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </>
@@ -6520,13 +8750,12 @@ function turnLabelStep(turnCount: number): number {
   return 1000;
 }
 
-function compactionMarkText(compaction: ContextWindowCompactionData): string {
-  const trigger = compaction.trigger != null ? `${compaction.trigger}-compact` : "compacted";
+function compactionTokenRange(compaction: ContextWindowCompactionData): string {
   if (compaction.pre_tokens == null) {
-    return `⇣ ${trigger}`;
+    return "Token count unavailable";
   }
   const post = compaction.post_tokens != null ? ` → ${compact(compaction.post_tokens)}` : "";
-  return `⇣ ${trigger} · ${compact(compaction.pre_tokens)}${post}`;
+  return `${compact(compaction.pre_tokens)}${post}`;
 }
 
 function compactionLabel(compaction: ContextWindowCompactionData): string {
@@ -6549,9 +8778,10 @@ function TranscriptBlock({
 }) {
   if (block.block_type === "tool_use") {
     const isDosu = isDosuToolName(block.tool_name);
+    const presentation = presentationForTool(block.tool_name, block.tool_input);
     return (
       <div className={`tool-call${isDosu ? " is-dosu" : ""}`}>
-        <div>
+        <div className="tool-call-header">
           {isDosu ? (
             <span className="dosu-tool-mark">
               <img alt="" src={dosuOfficialUrl} />
@@ -6560,17 +8790,10 @@ function TranscriptBlock({
             <Icon name="bolt" />
           )}
           <span className="tool-call-name">{block.tool_name ?? "tool_use"}</span>
-          {isDosu ? (
-            <span className="dosu-tool-badge">Optimized by Dosu</span>
-          ) : (
-            <small>tool call</small>
-          )}
+          {isDosu ? <span className="dosu-tool-badge">Optimized</span> : <small>tool call</small>}
         </div>
         {isPresent(block.tool_input) ? (
-          <details open={block.tool_input.length <= 240}>
-            <summary>arguments</summary>
-            <pre>{prettyJson(block.tool_input)}</pre>
-          </details>
+          <ToolCallPresentation forceOpen={isDosu} presentation={presentation} />
         ) : null}
         {subagents.map((subagent) => (
           <SubagentCard key={subagent.summary.id} subagent={subagent} />
@@ -6582,12 +8805,7 @@ function TranscriptBlock({
     if (!isPresent(block.tool_result)) {
       return null;
     }
-    return (
-      <details className="tool-result">
-        <summary>result</summary>
-        <pre>{block.tool_result}</pre>
-      </details>
-    );
+    return <ToolResultBlock block={block} forceOpen={isDosuToolName(block.tool_name)} />;
   }
   if (block.block_type === "thinking") {
     if (!isPresent(block.text)) {
@@ -6603,11 +8821,177 @@ function TranscriptBlock({
   if (!isPresent(block.text)) {
     return null;
   }
+  const attachment = embeddedAttachmentSummary(block.block_type, block.text);
+  if (attachment != null) {
+    return (
+      <div className="transcript-attachment">
+        <span className="transcript-attachment-icon">
+          <Icon name="file" />
+        </span>
+        <div>
+          <strong>Embedded image</strong>
+          <span>
+            {attachment.mediaType.split("/", 2)[1]?.toUpperCase() ?? "Image"} ·{" "}
+            {formatBytes(attachment.byteLength)}
+          </span>
+          <small>Payload preserved in the local session log</small>
+        </div>
+      </div>
+    );
+  }
   const special = specialTranscriptBlock(block.text);
   if (special != null) {
     return <SpecialTranscriptBlock block={special} tool={tool} />;
   }
-  return <p className="text-block">{block.text}</p>;
+  return <TranscriptMarkdown>{block.text}</TranscriptMarkdown>;
+}
+
+function ToolCallPresentation({
+  forceOpen = false,
+  presentation,
+}: {
+  forceOpen?: boolean;
+  presentation: TranscriptToolPresentation;
+}) {
+  switch (presentation.kind) {
+    case "shell":
+      return (
+        <div className="tool-presentation tool-shell">
+          {presentation.caption != null ? <p>{presentation.caption}</p> : null}
+          <TranscriptCodeBlock
+            code={`$ ${presentation.command}`}
+            deferUntilVisible={false}
+            language="bash"
+          />
+        </div>
+      );
+    case "file":
+      return (
+        <div className="tool-presentation tool-file">
+          <ToolPathHeader operation={presentation.operation} path={presentation.path} />
+          {presentation.content != null ? (
+            <TranscriptCodeBlock
+              code={presentation.content}
+              deferUntilVisible={false}
+              language={presentation.language}
+            />
+          ) : (
+            <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
+          )}
+        </div>
+      );
+    case "edit":
+      return (
+        <div className="tool-presentation tool-edit">
+          <ToolPathHeader operation="edit" path={presentation.path} />
+          {presentation.diff.length > 0 ? (
+            <div className="tool-diff">
+              {presentation.diff.map((line) => {
+                let partOffset = 0;
+                return (
+                  <div
+                    className={`tool-diff-line is-${line.kind}`}
+                    key={`${line.kind}-${line.oldLine ?? "x"}-${line.newLine ?? "x"}-${line.text}`}
+                  >
+                    <span>{line.oldLine ?? ""}</span>
+                    <span>{line.newLine ?? ""}</span>
+                    <code>
+                      {line.parts.map((part) => {
+                        const key = `${part.kind}-${partOffset}`;
+                        partOffset += part.value.length;
+                        return (
+                          <span className={`is-${part.kind}`} key={key}>
+                            {part.value}
+                          </span>
+                        );
+                      })}
+                    </code>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
+          )}
+        </div>
+      );
+    case "search":
+      return (
+        <div className="tool-presentation tool-search">
+          <div className="tool-presentation-chips">
+            <Badge tone="info">{presentation.searchKind}</Badge>
+            {presentation.pattern != null ? <code>{presentation.pattern}</code> : null}
+            {presentation.path != null ? <code>{presentation.path}</code> : null}
+          </div>
+          <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
+        </div>
+      );
+    case "json":
+      return (
+        <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
+      );
+  }
+}
+
+function ToolPathHeader({
+  operation,
+  path,
+}: {
+  operation: "edit" | "read" | "write";
+  path: string | null;
+}) {
+  return (
+    <div className="tool-path-header">
+      <Badge tone={operation === "read" ? "info" : operation === "edit" ? "warning" : "success"}>
+        {operation}
+      </Badge>
+      <code title={path ?? ""}>{path ?? "Unknown path"}</code>
+    </div>
+  );
+}
+
+function CollapsedToolArguments({
+  argumentsText,
+  forceOpen = false,
+}: {
+  argumentsText: string;
+  forceOpen?: boolean;
+}) {
+  return (
+    <details className="tool-arguments" open={forceOpen || argumentsText.length <= 240}>
+      <summary>arguments</summary>
+      <TranscriptCodeBlock code={argumentsText} deferUntilVisible={false} language="json" />
+    </details>
+  );
+}
+
+function ToolResultBlock({
+  block,
+  forceOpen = false,
+}: {
+  block: TranscriptBlockData;
+  forceOpen?: boolean;
+}) {
+  const result = block.tool_result ?? "";
+  const collapsed = collapseTranscriptText(result);
+  const [expanded, setExpanded] = useState(forceOpen || !collapsed.shouldCollapse);
+  const summary = summarizeToolResult(block.tool_name, result);
+  return (
+    <details
+      className="tool-result"
+      onToggle={(event) => setExpanded(forceOpen || event.currentTarget.open)}
+      open={forceOpen || expanded}
+    >
+      <summary>
+        result{summary == null ? "" : ` · ${summary}`}
+        {!expanded && collapsed.shouldCollapse ? ` · ${transcriptCollapseLabel(collapsed)}` : ""}
+      </summary>
+      <TranscriptCodeBlock
+        code={expanded ? result : collapsed.preview}
+        language={languageForTool(block.tool_name, block.tool_input)}
+      />
+    </details>
+  );
 }
 
 function SessionDetailSkeleton() {
@@ -6883,6 +9267,11 @@ function shortPath(value: string): string {
 function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
   const messages = renderableMessages(subagent.messages);
   const nested = subagentMap(subagent.subagents);
+  const compactionNumberBySeq = new Map(
+    messages
+      .filter((message) => message.is_compact_boundary)
+      .map((message, index) => [message.seq, index + 1]),
+  );
   return (
     <details className="subagent-card">
       <summary>
@@ -6911,7 +9300,12 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         <div className="subagent-transcript">
           {messages.map((message) =>
             message.is_compact_boundary ? (
-              <CompactionTurn compaction={null} key={messageKey(message)} message={message} />
+              <CompactionTurn
+                compaction={null}
+                compactionNumber={compactionNumberBySeq.get(message.seq) ?? null}
+                key={messageKey(message)}
+                message={message}
+              />
             ) : (
               <article
                 className={`turn is-subagent${
@@ -7221,22 +9615,30 @@ function nearestTranscriptSeq(sequences: readonly number[]): number | null {
   return nearest?.seq ?? sequences[0] ?? null;
 }
 
-function scrollTranscriptMessage(seq: number) {
-  revealTranscriptMessage(
-    document.getElementById(`message-${seq}`),
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-}
-
-async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+function scrollTranscriptMessage(seq: number, stabilize = false, isCurrent = () => true) {
+  const target = document.getElementById(`message-${seq}`);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!revealTranscriptMessage(target, reducedMotion || stabilize) || !stabilize) {
+    return;
   }
-  return (await response.json()) as T;
+
+  // content-visibility keeps thousand-message transcripts fast by estimating
+  // off-screen turn heights. A deep jump reveals and measures those turns over
+  // the next few frames, so the first scroll can drift as estimates become real
+  // heights. Re-align without animation until the layout settles; focus stays
+  // on the target from the first reveal and stale rapid jumps cancel the loop.
+  let remaining = 7;
+  const realign = () => {
+    if (!isCurrent() || target == null) {
+      return;
+    }
+    target.scrollIntoView({ behavior: "auto", block: "start" });
+    remaining -= 1;
+    if (remaining > 0) {
+      requestAnimationFrame(() => requestAnimationFrame(realign));
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(realign));
 }
 
 function applyDatePreset(
@@ -7286,8 +9688,14 @@ function withDateQuery(path: string, dateQuery: string): string {
 }
 
 function dateRangeLabel(range: DateRangeSelection): string {
-  if (range.from == null || range.to == null) {
+  if (range.from == null && range.to == null) {
     return "All time";
+  }
+  if (range.from == null) {
+    return `Through ${formatDateLabel(range.to ?? "")}`;
+  }
+  if (range.to == null) {
+    return `From ${formatDateLabel(range.from)}`;
   }
   return range.from === range.to
     ? formatDateLabel(range.from)
@@ -7337,6 +9745,42 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function copyTextToClipboard(value: string): Promise<void> {
+  let clipboardError: unknown = null;
+  if (navigator.clipboard?.writeText != null) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (error) {
+      clipboardError = error;
+    }
+  }
+
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.append(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw clipboardError instanceof Error
+        ? clipboardError
+        : new Error("Clipboard access is unavailable.");
+    }
+  } finally {
+    textarea.remove();
+    if (returnFocus?.isConnected === true) {
+      returnFocus.focus({ preventScroll: true });
+    }
+  }
+}
+
 function shortDate(value: string): string {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) {
@@ -7354,47 +9798,6 @@ function implementedTimestamp(row: Recommendation): number {
   return Number.isFinite(time) ? time : 0;
 }
 
-function prettyJson(value: string | null): string {
-  if (value == null || value === "") {
-    return "";
-  }
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
-}
-
-function snippetParts(snippet: string): { key: string; text: string; match: boolean }[] {
-  const parts: { key: string; text: string; match: boolean }[] = [];
-  let remaining = snippet;
-  let offset = 0;
-  while (remaining !== "") {
-    const start = remaining.indexOf("[");
-    if (start < 0) {
-      parts.push({ key: `text-${offset}`, text: remaining, match: false });
-      break;
-    }
-    if (start > 0) {
-      parts.push({ key: `text-${offset}`, text: remaining.slice(0, start), match: false });
-    }
-    const close = remaining.indexOf("]", start + 1);
-    if (close < 0) {
-      parts.push({ key: `text-${offset + start}`, text: remaining.slice(start), match: false });
-      break;
-    }
-    parts.push({
-      key: `match-${offset + start}`,
-      text: remaining.slice(start + 1, close),
-      match: true,
-    });
-    const consumed = close + 1;
-    offset += consumed;
-    remaining = remaining.slice(consumed);
-  }
-  return parts;
-}
-
 function basename(path: string | null | undefined): string {
   if (path == null || path === "") {
     return "-";
@@ -7404,6 +9807,22 @@ function basename(path: string | null | undefined): string {
 
 function locationPath(): string {
   return `${window.location.pathname}${window.location.search}`;
+}
+
+function updateSearchRoute(query: string, setPath?: (path: string) => void) {
+  const trimmed = query.trimStart();
+  const href = trimmed === "" ? "/search" : `/search?q=${encodeURIComponent(trimmed)}`;
+  if (pathOnly(locationPath()) === "/search") {
+    window.history.replaceState(null, "", href);
+  } else {
+    window.history.pushState(null, "", href);
+  }
+  const next = locationPath();
+  if (setPath != null) {
+    setPath(next);
+  } else {
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
 }
 
 function navigate(
@@ -7428,8 +9847,8 @@ function FramedNotice() {
   return (
     <EmptyState
       icon="shield"
-      message="Open decant directly in its own browser tab or window to use it."
-      title="decant cannot be displayed in a frame"
+      message="Open Decant directly in its own browser tab or window to use it."
+      title="Decant cannot be displayed in a frame"
     />
   );
 }

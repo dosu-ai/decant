@@ -23,7 +23,9 @@ const KNOWN_META = new Set([
   "last-prompt",
   "permission-mode",
   "attachment",
+  "file-history-delta",
   "file-history-snapshot",
+  "mode",
   "queue-operation",
 ]);
 
@@ -66,7 +68,8 @@ export function parseClaudeSession(
   let resultTotals: TokenUsage | null = null;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
-  let title: string | null = null;
+  let promptTitle: string | null = null;
+  let metadataTitle: string | null = null;
   let seq = 0;
   const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
@@ -112,10 +115,10 @@ export function parseClaudeSession(
 
     if (typ === "user") {
       const message = parseUser(value, seq);
-      if (title == null && message.role === "user") {
+      if (promptTitle == null && message.role === "user") {
         const text = firstText(message);
         if (text != null) {
-          title = truncate(text, 120);
+          promptTitle = truncate(text, 120);
         }
       }
       messages.push(message);
@@ -138,10 +141,10 @@ export function parseClaudeSession(
     } else if (typ === "result") {
       resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
     } else if (KNOWN_META.has(typ)) {
-      if (title == null) {
+      if (metadataTitle == null) {
         const metaTitle = stringAt(value, "summary", "title");
         if (metaTitle != null) {
-          title = truncate(metaTitle, 120);
+          metadataTitle = truncate(metaTitle, 120);
         }
       }
     } else {
@@ -210,7 +213,10 @@ export function parseClaudeSession(
     tool: "claude_code",
     sourceSessionId,
     projectPath: cwd,
-    title,
+    // Claude emits ai-title after the first user record in normal sessions.
+    // Keep the human prompt as the display title and use its metadata only
+    // when the session has no usable prompt.
+    title: promptTitle ?? metadataTitle,
     cwd,
     gitBranch,
     model,

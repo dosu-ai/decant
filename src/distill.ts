@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { compareCodePoints } from "./order.ts";
+import { DECANT_VERSION } from "./version.ts";
 
-export const DECANT_VERSION = process.env.DECANT_BUILD_VERSION ?? "0.0.0-dev";
+export { DECANT_VERSION };
 
 export const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
 export type OpKind = (typeof OP_KINDS)[number];
@@ -401,7 +402,7 @@ export function renderReplay(
   const ops = replayOps(db, sessionId);
   let out = "#!/usr/bin/env bash\n";
   out += `# Replay of ${commentSafe(meta.tool)} session ${sessionId}: ${commentSafe(meta.title ?? "(untitled)")}\n`;
-  out += `# Distilled by decant ${DECANT_VERSION}. Best-effort, REVIEW before running.\n`;
+  out += `# Distilled by Decant ${DECANT_VERSION}. Best-effort, REVIEW before running.\n`;
   out += "# Assumes the same starting file state; secrets are best-effort redacted.\n";
   out += "set -euo pipefail\n";
   out += `PROJECT_ROOT="\${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"\ncd "$PROJECT_ROOT"\n\n`;
@@ -478,7 +479,7 @@ description: Distilled workflow for ${project} — proven commands and the files
 
 # ${project} workflow
 
-_Distilled by decant ${distillation.generated_with} from ${distillation.session_count} session(s). Review and edit before use._
+_Distilled by Decant ${distillation.generated_with} from ${distillation.session_count} session(s). Review and edit before use._
 
 ## When to use
 
@@ -493,7 +494,7 @@ ${commands}`;
     case "agents":
       return `## ${project} — distilled workflow
 
-_decant ${distillation.generated_with}, from ${distillation.session_count} session(s). Review before committing._
+_Decant ${distillation.generated_with}, from ${distillation.session_count} session(s). Review before committing._
 
 ### Commands
 
@@ -506,7 +507,7 @@ ${files}`;
 description: Run the distilled ${project} workflow
 ---
 
-Proven commands for ${project} (decant, ${distillation.session_count} session(s)):
+Proven commands for ${project} (Decant, ${distillation.session_count} session(s)):
 
 ${commands}`;
   }
@@ -627,7 +628,7 @@ function headerLines(distillation: Distillation, options: ScriptOpts): string[] 
       ? "faithful single-session order"
       : "ranked by frequency × success";
   return [
-    `Distilled by decant ${distillation.generated_with} from ${distillation.scope_label}`,
+    `Distilled by Decant ${distillation.generated_with} from ${distillation.scope_label}`,
     `${distillation.session_count} session(s) (${day(distillation.date_from)}..${day(
       distillation.date_to,
     )}). Commands you actually ran, ${mode}.`,

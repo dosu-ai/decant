@@ -1,4 +1,4 @@
-# decant
+# Decant
 
 Local-first analysis of Claude Code and Codex sessions: token spend, context
 windows, files touched, and cost.
@@ -29,7 +29,7 @@ command is just `decant`.
 Supported platforms are macOS and Linux on x64 and arm64. On unsupported
 platforms, the launcher exits with a clear message:
 
-> decant does not ship a binary for win32/x64. Supported targets:
+> Decant does not ship a binary for win32/x64. Supported targets:
 > darwin/arm64, darwin/x64, linux/arm64, linux/x64.
 
 Source, docs, and release assets live at

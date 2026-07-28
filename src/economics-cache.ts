@@ -76,9 +76,8 @@ export class EconomicsCache {
     }
   }
 
-  /** Aborts any in-flight rebuild (killing its worker immediately, rather than
-   * leaving shutdown waiting out a multi-second archive scan) and stops
-   * scheduling new ones. */
+  /** Aborts any in-flight rebuild and stops scheduling new ones. The worker
+   * releases its own SQLite connection before closing its event loop. */
   dispose(): void {
     this.#disposed = true;
     this.#buildAbort?.abort();
@@ -148,26 +147,33 @@ function computeVectorsInWorker(
   { signal }: ComputeVectorsOptions,
 ): Promise<SessionEconomicsVector[]> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./stats-worker.ts", import.meta.url), { type: "module" });
-    const onAbort = (): void => {
-      worker.terminate();
-      reject(new Error("aborted"));
-    };
     if (signal.aborted) {
-      onAbort();
+      reject(new Error("aborted"));
       return;
     }
+    const worker = new Worker(new URL("./stats-worker.ts", import.meta.url), { type: "module" });
+    const cancelBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const cancelView = new Int32Array(cancelBuffer);
+    let promiseSettled = false;
+    const onAbort = (): void => {
+      Atomics.store(cancelView, 0, 1);
+    };
     signal.addEventListener("abort", onAbort, { once: true });
     const settle = (): void => {
       signal.removeEventListener("abort", onAbort);
-      worker.terminate();
     };
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { ok: true; vectors: SessionEconomicsVector[] }
         | { ok: false; error: string };
       settle();
-      if (data.ok) {
+      if (promiseSettled) {
+        return;
+      }
+      promiseSettled = true;
+      if (signal.aborted) {
+        reject(new Error("aborted"));
+      } else if (data.ok) {
         resolve(data.vectors);
       } else {
         reject(new Error(data.error));
@@ -175,8 +181,12 @@ function computeVectorsInWorker(
     });
     worker.addEventListener("error", (event) => {
       settle();
+      if (promiseSettled) {
+        return;
+      }
+      promiseSettled = true;
       reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
     });
-    worker.postMessage({ dbPath });
+    worker.postMessage({ dbPath, cancelBuffer });
   });
 }

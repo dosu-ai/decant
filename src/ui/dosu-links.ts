@@ -1,4 +1,11 @@
-type DosuLink = "about" | "analytics_callout" | "insights_card" | "session_badge" | "sidebar";
+type DosuLink =
+  | "about"
+  | "analytics_callout"
+  | "insights_card"
+  | "report_cta"
+  | "report_footer"
+  | "session_badge"
+  | "sidebar";
 
 const LINK_CONFIG: Record<
   DosuLink,
@@ -16,6 +23,18 @@ const LINK_CONFIG: Record<
     medium: "app",
     campaign: "contextual_cta",
     content: "insights_card",
+  },
+  report_cta: {
+    path: "/for-agents",
+    medium: "app",
+    campaign: "contextual_cta",
+    content: "report_cta",
+  },
+  report_footer: {
+    path: "",
+    medium: "app",
+    campaign: "attribution",
+    content: "report_footer",
   },
   session_badge: {
     path: "/for-agents",

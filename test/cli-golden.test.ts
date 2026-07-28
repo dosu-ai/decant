@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
 const goldenDir = join(import.meta.dir, "golden");
@@ -34,6 +35,9 @@ function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string }
 }
 
 function stripVolatileIds(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replaceAll(DECANT_VERSION, "0.0.0-dev");
+  }
   if (Array.isArray(value)) {
     return value.map(stripVolatileIds);
   }

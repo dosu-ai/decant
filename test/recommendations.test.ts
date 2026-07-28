@@ -94,6 +94,7 @@ describe("recommendations", () => {
       title: "AGENTS.md at the repo root",
       url: "https://agents.md",
       category: "Foundations",
+      impact_label: null,
       score: 0,
     });
     expect(rows[0]?.prompt).toStartWith("Create a high-quality AGENTS.md");
@@ -115,20 +116,24 @@ describe("recommendations", () => {
       title: '"fetch" fails 20% of the time',
       detail: '5 errors across 25 calls on "svc".',
       tone: "danger",
+      impact_label: "20% error rate",
       score: 5,
     });
     expect(rows.find((row) => row.key === "signal:heavy-server:svc")).toMatchObject({
       score: 42.5,
       tone: "accent",
+      impact_label: "85 calls",
     });
     expect(rows.find((row) => row.key === "signal:heavy-tool:Bash")).toMatchObject({
       score: 62.5,
       tone: "info",
+      impact_label: "250 calls",
     });
     expect(rows.find((row) => row.key === "signal:cost-concentration")).toMatchObject({
       title: '83% of spend is on "claude-opus-4-7"',
       detail: "$10.00 of $12.00 total.",
       tone: "warning",
+      impact_label: "83% of spend",
     });
     db.close();
   });
@@ -217,6 +222,18 @@ describe("recommendations", () => {
     expect(keys(rows)).toContain("signal:abandoned-rate");
     expect(rows.find((row) => row.key === "signal:hot-context:AGENTS.md")?.suggestion).toContain(
       "decant distill skill",
+    );
+    expect(rows.find((row) => row.key === "signal:hot-context:AGENTS.md")?.impact_label).toBe(
+      "9 sessions",
+    );
+    expect(rows.find((row) => row.key === "signal:churn:src/parser.rs")?.impact_label).toBe(
+      "7 sessions",
+    );
+    expect(rows.find((row) => row.key === "signal:search-heavy")?.impact_label).toBe(
+      "5 searches/session",
+    );
+    expect(rows.find((row) => row.key === "signal:abandoned-rate")?.impact_label).toBe(
+      "35% abandoned",
     );
     db.close();
   });
@@ -330,6 +347,7 @@ describe("recommendations", () => {
     const out = signals(db).filter((rec) => rec.key === "signal:ingest-health");
     expect(out).toHaveLength(1);
     expect(out[0]?.title).toContain("5");
+    expect(out[0]?.impact_label).toBe("25% affected");
     db.close();
   });
 

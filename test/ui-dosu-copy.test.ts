@@ -10,11 +10,17 @@ const npmReadme = readFileSync(join(root, "npm", "decant", "README.md"), "utf8")
 
 describe("Dosu product copy", () => {
   test("keeps attribution, contextual conversion, privacy, and provenance distinct", () => {
-    expect(main).toContain("Built by Dosu ↗");
+    expect(main).toContain("<span>Created by Dosu</span>");
+    expect(main).not.toContain("Built by Dosu ↗");
     expect(main).toContain("Make these patterns available to every coding agent");
-    expect(main).toContain("Your archive shows the pattern.");
-    expect(main).toContain("decant is an open source");
-    expect(badge).toContain("Optimized by Dosu");
+    expect(main).toContain("Your session logs show the pattern.");
+    expect(main).toContain("Decant is an open source");
+    expect(badge).toContain('"Optimized"');
+    expect(main).toContain('["summary", "now", "dateBounds", "config"]');
+    expect(main).toContain("Decant {versionLabel(data.config?.version)}");
+    expect(main).not.toContain("Decant {versionLabel(data.config?.version)} ↗");
+    expect(main).toContain('context.fillText("Decant", 114, 83)');
+    expect(main).toContain('context.fillText("Decant · by Dosu", SHARE_CARD_WIDTH - 210, 557)');
     expect(main).not.toContain("saved you $");
   });
 

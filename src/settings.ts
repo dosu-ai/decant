@@ -3,7 +3,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 export type AgentKey = "claude" | "codex";
-export type TerminalKey = "terminal" | "iterm" | "ghostty" | "wezterm" | "kitty" | "alacritty";
+export type TerminalKey =
+  | "terminal"
+  | "iterm"
+  | "ghostty"
+  | "warp"
+  | "wezterm"
+  | "kitty"
+  | "alacritty";
 export type IdeKey = "vscode" | "cursor" | "zed" | "sublime" | "intellij";
 export type DosuSuggestionsKey = "show" | "hide";
 
@@ -25,6 +32,7 @@ const validTerminals = new Set<TerminalKey>([
   "terminal",
   "iterm",
   "ghostty",
+  "warp",
   "wezterm",
   "kitty",
   "alacritty",
@@ -41,6 +49,7 @@ export const terminalOptions: [TerminalKey, string][] = [
   ["terminal", "Terminal"],
   ["iterm", "iTerm"],
   ["ghostty", "Ghostty"],
+  ["warp", "Warp"],
   ["wezterm", "WezTerm"],
   ["kitty", "kitty"],
   ["alacritty", "Alacritty"],
@@ -134,6 +143,8 @@ function detectTerminal(env: Record<string, string | undefined>): TerminalKey {
       return "iterm";
     case "ghostty":
       return "ghostty";
+    case "WarpTerminal":
+      return "warp";
     case "WezTerm":
       return "wezterm";
     case "Apple_Terminal":

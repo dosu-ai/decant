@@ -138,9 +138,10 @@ describe("watch mode", () => {
       intervalMs: 0,
       syncOnStart: false,
       onEvent: (event) => events.push(event),
-      runner: (runnerConfig, status) => {
+      runner: (runnerConfig, status, _cancel, onProgress) => {
         runnerCalls.push(runnerConfig.dbPath);
         status.start();
+        onProgress({ scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 3 });
         const report = {
           scanned: 3,
           ingested: 2,
@@ -160,6 +161,12 @@ describe("watch mode", () => {
     expect(runnerCalls).toEqual([config.dbPath]);
     expect(event.report.ingested).toBe(2);
     expect(event.status.last_report).toContain("ingested 2");
+    expect(events).toContainEqual({
+      type: "sync_progress",
+      reason: "manual",
+      progress: { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 3 },
+      status: expect.objectContaining({ in_progress: true }),
+    });
     await handle.stop();
   });
 

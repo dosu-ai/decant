@@ -28,12 +28,19 @@ describe("responsive session detail styles", () => {
     expect(rule(".text-block,\n.thinking-block p")).toContain("overflow-wrap: anywhere");
     expect(rule(".special-block p")).toContain("overflow-wrap: anywhere");
     expect(rule(".special-block .realtime-line p")).toContain("overflow-wrap: anywhere");
+    expect(rule(".tool-shell .transcript-code-pre")).toContain("white-space: pre-wrap");
+    expect(rule(".tool-shell .transcript-code-pre")).toContain("overflow-wrap: anywhere");
+    expect(rule(".tool-arguments .transcript-code-pre")).toContain("white-space: pre-wrap");
+    expect(rule(".tool-arguments .transcript-code-pre")).toContain("overflow-wrap: anywhere");
+    expect(rule(".tool-presentation > p")).toContain("overflow-wrap: anywhere");
   });
 
   test("keeps wide data surfaces inside their panels", () => {
     expect(rule(".activity-table-wrap")).toContain("overflow-x: auto");
     expect(rule(".ctx-strip-frame")).toContain("overflow: hidden");
     expect(rule(".ctx-strip")).toContain("max-width: 100%");
+    expect(rule(".ctx-tooltip")).toContain("max-width: calc(100% - 4px)");
+    expect(rule(".ctx-strip-compaction-marker rect")).toContain("stroke: var(--accent)");
   });
 
   test("collapses the transcript navigation at laptop widths", () => {

@@ -185,26 +185,34 @@ describe("economics cache", () => {
     db.close();
   });
 
-  test("dispose() aborts an in-flight rebuild instead of waiting for it", async () => {
+  test("dispose() aborts an in-flight rebuild and settled() awaits provider cleanup", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
-    let sawAbort = false;
+    const sawAbort = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
     const cache = new EconomicsCache({
       dbPath,
       db,
       computeVectors: (_path, { signal }) =>
         new Promise((_resolve, reject) => {
           signal.addEventListener("abort", () => {
-            sawAbort = true;
-            reject(new Error("aborted"));
+            sawAbort.resolve();
+            void releaseCleanup.promise.then(() => reject(new Error("aborted")));
           });
         }),
     });
 
     cache.prewarm();
     cache.dispose();
-    await cache.settled();
-    expect(sawAbort).toBe(true);
+    await sawAbort.promise;
+    let settled = false;
+    const settling = cache.settled().then(() => {
+      settled = true;
+    });
+    await Bun.sleep(10);
+    expect(settled).toBe(false);
+    releaseCleanup.resolve();
+    await settling;
     db.close();
   });
 
@@ -216,6 +224,52 @@ describe("economics cache", () => {
     expect(viaWorker).toEqual(tokenEconomics(direct));
     direct.close();
     cache.dispose();
+  });
+
+  test("stats worker acknowledges cooperative cancellation after closing SQLite", async () => {
+    const dbPath = seededDbPath();
+    const cancelBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    Atomics.store(new Int32Array(cancelBuffer), 0, 1);
+    const worker = new Worker(new URL("../src/stats-worker.ts", import.meta.url), {
+      type: "module",
+    });
+    const result = await Promise.race([
+      new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+        worker.addEventListener(
+          "message",
+          (event) => resolve(event.data as { ok: boolean; error?: string }),
+          { once: true },
+        );
+        worker.addEventListener(
+          "error",
+          (event) =>
+            reject(event.error instanceof Error ? event.error : new Error(String(event.error))),
+          { once: true },
+        );
+        worker.postMessage({ dbPath, cancelBuffer });
+      }),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("stats worker did not acknowledge cancellation")), 2_000),
+      ),
+    ]);
+
+    expect(result).toEqual({ ok: false, error: "aborted" });
+  });
+
+  test("dispose settles the default stats-worker path cooperatively", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    const cache = new EconomicsCache({ dbPath, db });
+
+    cache.prewarm();
+    cache.dispose();
+    await Promise.race([
+      cache.settled(),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("default stats worker did not settle")), 2_000),
+      ),
+    ]);
+    db.close();
   });
 
   test("token-economics route answers from the cache when provided", async () => {

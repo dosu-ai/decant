@@ -3,12 +3,18 @@
     "mcp_server": "github",
     "tools": 2,
     "calls": 2,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 1000,
+    "p95_ms": 1000,
+    "last_used_at": "2026-05-06T09:00:04.000Z"
   },
   {
     "mcp_server": "dosu",
     "tools": 1,
     "calls": 1,
-    "errors": 0
+    "errors": 0,
+    "p50_ms": 3000,
+    "p95_ms": 3000,
+    "last_used_at": "2026-05-06T09:00:03.000Z"
   }
 ]

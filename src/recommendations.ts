@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { withImmediateTransaction } from "./db.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
 
 export interface Recommendation {
@@ -14,6 +15,7 @@ export interface Recommendation {
   link_label: string | null;
   icon: string | null;
   tone: string | null;
+  impact_label: string | null;
   score: number;
 }
 
@@ -55,6 +57,24 @@ const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
 const WINDOW = "s.started_at >= date('now','-30 days')";
+
+function queryOne<T>(db: Database, sql: string): T {
+  const statement = db.prepare(sql);
+  try {
+    return statement.get() as T;
+  } finally {
+    statement.finalize();
+  }
+}
+
+function queryRows<T>(db: Database, sql: string): T[] {
+  const statement = db.prepare(sql);
+  try {
+    return statement.all() as T[];
+  } finally {
+    statement.finalize();
+  }
+}
 
 export function parseStatusFilter(value: string): StatusFilter | null {
   return value === "open" || value === "implemented" || value === "all" ? value : null;
@@ -103,6 +123,7 @@ export function catalog(): Recommendation[] {
     link_label: linkLabel,
     icon,
     tone: null,
+    impact_label: null,
     score: 0,
   });
 
@@ -196,8 +217,8 @@ export function current(db: Database): Recommendation[] {
 
 export function regenerate(db: Database): void {
   const recs = current(db);
-  const now = nowRfc3339(db);
-  const write = db.transaction(() => {
+  const now = nowRfc3339();
+  withImmediateTransaction(db, () => {
     const upsert = db.prepare(
       `INSERT INTO recommendation
          (key, kind, category, title, detail, suggestion, prompt, url,
@@ -220,37 +241,45 @@ export function regenerate(db: Database): void {
          score = excluded.score,
          updated_at = excluded.updated_at`,
     );
-    for (const rec of recs) {
-      upsert.run(
-        rec.key,
-        rec.kind,
-        rec.category,
-        rec.title,
-        rec.detail,
-        rec.suggestion,
-        rec.prompt,
-        rec.url,
-        rec.link_label,
-        rec.icon,
-        rec.tone,
-        rec.score,
-        now,
-      );
-    }
+    try {
+      for (const rec of recs) {
+        upsert.run(
+          rec.key,
+          rec.kind,
+          rec.category,
+          rec.title,
+          rec.detail,
+          rec.suggestion,
+          rec.prompt,
+          rec.url,
+          rec.link_label,
+          rec.icon,
+          rec.tone,
+          rec.score,
+          now,
+        );
+      }
 
-    const signalKeys = recs.filter((rec) => rec.kind === "signal").map((rec) => rec.key);
-    let sql = `UPDATE recommendation
-                 SET status = 'implemented', status_source = 'activity',
-                     implemented_at = ?1, updated_at = ?1
-               WHERE kind = 'signal' AND status = 'open'`;
-    const params: string[] = [now];
-    if (signalKeys.length > 0) {
-      sql += ` AND key NOT IN (${signalKeys.map(() => "?").join(", ")})`;
-      params.push(...signalKeys);
+      const signalKeys = recs.filter((rec) => rec.kind === "signal").map((rec) => rec.key);
+      let sql = `UPDATE recommendation
+                   SET status = 'implemented', status_source = 'activity',
+                       implemented_at = ?1, updated_at = ?1
+                 WHERE kind = 'signal' AND status = 'open'`;
+      const params: string[] = [now];
+      if (signalKeys.length > 0) {
+        sql += ` AND key NOT IN (${signalKeys.map(() => "?").join(", ")})`;
+        params.push(...signalKeys);
+      }
+      const resolveStale = db.prepare(sql);
+      try {
+        resolveStale.run(...params);
+      } finally {
+        resolveStale.finalize();
+      }
+    } finally {
+      upsert.finalize();
     }
-    db.query(sql).run(...params);
   });
-  write();
 }
 
 export function markImplemented(
@@ -259,7 +288,7 @@ export function markImplemented(
   source: string,
   note?: string | null,
 ): boolean {
-  const now = nowRfc3339(db);
+  const now = nowRfc3339();
   const result = db
     .query(
       `UPDATE recommendation
@@ -275,6 +304,9 @@ export function markImplemented(
 }
 
 export function list(db: Database, status: StatusFilter = "open"): StoredRecommendation[] {
+  const impactLabels = new Map(
+    signals(db).map((recommendation) => [recommendation.key, recommendation.impact_label]),
+  );
   const where =
     status === "open"
       ? "WHERE status = 'open'"
@@ -295,6 +327,7 @@ export function list(db: Database, status: StatusFilter = "open"): StoredRecomme
     const rec: StoredRecommendation = {
       ...row,
       kind: row.kind as "signal" | "catalog",
+      impact_label: impactLabels.get(row.key) ?? null,
       memory_layer: null,
       promotion_target: null,
       trigger: null,
@@ -381,6 +414,7 @@ function errorHotspots(tools: ReturnType<typeof toolUsage>): Recommendation[] {
         link_label: "Skills guide",
         icon: "hero-exclamation-triangle",
         tone: "danger",
+        impact_label: `${pct}% error rate`,
         score: rate * tool.calls,
       },
     ];
@@ -404,6 +438,7 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
             link_label: "Skills guide",
             icon: "hero-cpu-chip",
             tone: "accent",
+            impact_label: `${server.calls} calls`,
             score: server.calls / 2,
           },
         ]
@@ -431,6 +466,7 @@ function heavyTools(tools: ReturnType<typeof toolUsage>): Recommendation[] {
               link_label: "Skills guide",
               icon: "hero-bolt",
               tone: "info",
+              impact_label: `${tool.calls} calls`,
               score: tool.calls / 4,
             },
           ]
@@ -463,6 +499,7 @@ function costConcentration(models: ReturnType<typeof byDimension>): Recommendati
       link_label: null,
       icon: "hero-currency-dollar",
       tone: "warning",
+      impact_label: `${pct}% of spend`,
       score: 5,
     },
   ];
@@ -473,9 +510,9 @@ function fmtUsd(value: number): string {
 }
 
 function hotContextFiles(db: Database): Recommendation[] {
-  const rows = db
-    .query(
-      `SELECT f.rel_path AS key,
+  const rows = queryRows<{ key: string; readers: number }>(
+    db,
+    `SELECT f.rel_path AS key,
               COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN f.session_id END) AS readers,
               COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN f.session_id END) AS editors
        FROM file_ref f JOIN session s ON s.id = f.session_id
@@ -484,8 +521,7 @@ function hotContextFiles(db: Database): Recommendation[] {
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
        ORDER BY readers DESC
        LIMIT 2`,
-    )
-    .all() as { key: string; readers: number }[];
+  );
   return rows.map(({ key: relPath, readers }) => {
     const path = quoted(relPath);
     return {
@@ -500,23 +536,23 @@ function hotContextFiles(db: Database): Recommendation[] {
       link_label: "Skills guide",
       icon: "hero-book-open",
       tone: "accent",
+      impact_label: `${readers} sessions`,
       score: readers,
     };
   });
 }
 
 function churnFiles(db: Database): Recommendation[] {
-  const rows = db
-    .query(
-      `SELECT f.rel_path AS key, COUNT(DISTINCT f.session_id) AS editors
+  const rows = queryRows<{ key: string; editors: number }>(
+    db,
+    `SELECT f.rel_path AS key, COUNT(DISTINCT f.session_id) AS editors
        FROM file_ref f JOIN session s ON s.id = f.session_id
        WHERE ${WINDOW} AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
        GROUP BY key
        HAVING editors >= ${CHURN_MIN_SESSIONS}
        ORDER BY editors DESC
        LIMIT 2`,
-    )
-    .all() as { key: string; editors: number }[];
+  );
   return rows.map(({ key: relPath, editors }) => {
     const path = quoted(relPath);
     return {
@@ -531,21 +567,22 @@ function churnFiles(db: Database): Recommendation[] {
       link_label: null,
       icon: "hero-fire",
       tone: "warning",
+      impact_label: `${editors} sessions`,
       score: editors * 1.5,
     };
   });
 }
 
 function searchHeavy(db: Database): Recommendation[] {
-  const counts = db
-    .query(
-      `SELECT COUNT(*) AS searches, COUNT(DISTINCT s.id) AS sessions
+  const counts = queryOne<{ searches: number; sessions: number }>(
+    db,
+    `SELECT COUNT(*) AS searches, COUNT(DISTINCT s.id) AS sessions
        FROM tool_call tc JOIN session s ON s.id = tc.session_id
        WHERE ${WINDOW} AND tc.tool_name IN ('Grep','Glob')`,
-    )
-    .get() as { searches: number; sessions: number };
-  const inWindow = (
-    db.query(`SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`).get() as { n: number }
+  );
+  const inWindow = queryOne<{ n: number }>(
+    db,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`,
   ).n;
   if (inWindow < SEARCH_HEAVY_MIN_SESSIONS || counts.sessions === 0) {
     return [];
@@ -569,20 +606,20 @@ function searchHeavy(db: Database): Recommendation[] {
       link_label: null,
       icon: "hero-magnifying-glass",
       tone: "info",
+      impact_label: `${rounded} searches/session`,
       score: ratio * 2,
     },
   ];
 }
 
 function abandonedRate(db: Database): Recommendation[] {
-  const row = db
-    .query(
-      `SELECT COUNT(*) AS classified,
+  const row = queryOne<{ classified: number; abandoned: number | null }>(
+    db,
+    `SELECT COUNT(*) AS classified,
               SUM(s.outcome = 'abandoned') AS abandoned
        FROM session s
        WHERE ${WINDOW} AND s.outcome IS NOT NULL`,
-    )
-    .get() as { classified: number; abandoned: number | null };
+  );
   const abandoned = row.abandoned ?? 0;
   if (row.classified < ABANDONED_MIN_CLASSIFIED) {
     return [];
@@ -606,21 +643,22 @@ function abandonedRate(db: Database): Recommendation[] {
       link_label: null,
       icon: "hero-hand-raised",
       tone: "danger",
+      impact_label: `${pct}% abandoned`,
       score: pct / 3,
     },
   ];
 }
 
 function ingestHealth(db: Database): Recommendation[] {
-  const counts = db
-    .query(
-      `SELECT COUNT(DISTINCT s.id) AS affected
+  const counts = queryOne<{ affected: number }>(
+    db,
+    `SELECT COUNT(DISTINCT s.id) AS affected
        FROM session s JOIN ingest_issue ii ON ii.source_path = s.source_path
        WHERE ${WINDOW} AND ii.code != 'unparsed_line'`,
-    )
-    .get() as { affected: number };
-  const inWindow = (
-    db.query(`SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`).get() as { n: number }
+  );
+  const inWindow = queryOne<{ n: number }>(
+    db,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`,
   ).n;
   if (inWindow < INGEST_HEALTH_MIN_SESSIONS || counts.affected === 0) {
     return [];
@@ -638,23 +676,20 @@ function ingestHealth(db: Database): Recommendation[] {
       title: `${counts.affected} recent sessions ingested with diagnostics`,
       detail: `${pct}% of the last 30 days' sessions carry ingest diagnostics (unknown record types or tool-linkage anomalies) — a source CLI likely changed its transcript format.`,
       suggestion:
-        "Update decant to the latest release; if the diagnostics persist, file an issue with the output of `decant sync --json` (it includes per-code counts, no transcript content).",
+        "Update Decant to the latest release; if the diagnostics persist, file an issue with the output of `decant sync --json` (it includes per-code counts, no transcript content).",
       prompt: null,
       url: "https://github.com/dosu-ai/decant/issues",
       link_label: "Report a format change",
       icon: "hero-exclamation-triangle",
       tone: "warning",
+      impact_label: `${pct}% affected`,
       score: counts.affected * 2,
     },
   ];
 }
 
-function nowRfc3339(db: Database): string {
-  return (
-    db.query("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now') AS now").get() as {
-      now: string;
-    }
-  ).now;
+function nowRfc3339(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function applyPromotionCard(rec: StoredRecommendation): void {
@@ -835,6 +870,7 @@ function card(
 interface StoredRecommendationDb
   extends Omit<
     StoredRecommendation,
+    | "impact_label"
     | "kind"
     | "memory_layer"
     | "promotion_target"

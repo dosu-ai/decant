@@ -12,7 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
-import { LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 
@@ -546,6 +547,24 @@ describe("runCli", () => {
     expect(statSync(dbPath).mode & 0o7777).toBe(0o600);
   });
 
+  test("read-only list and search remain available while another connection holds the writer lock", async () => {
+    const { dbPath } = await syncedCase();
+    const writer = openDb(dbPath);
+    writer.exec("BEGIN IMMEDIATE;");
+    try {
+      const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+      expect(list).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(list.stdout)).toBeArray();
+
+      const search = await runCli(["--db", dbPath, "--json", "--no-sync", "search", "auth"]);
+      expect(search).toMatchObject({ code: 0, stderr: "" });
+      expect((JSON.parse(search.stdout) as unknown[]).length).toBeGreaterThan(0);
+    } finally {
+      writer.exec("ROLLBACK;");
+      closeDb(writer);
+    }
+  }, 10_000);
+
   test("invalid options return code 2 with an error", async () => {
     const { dbPath } = await syncedCase();
     const unknownOption = await runCli(["--definitely-not-real"]);
@@ -596,7 +615,7 @@ describe("runCli", () => {
   test("version and live output mode", async () => {
     const version = await runCli(["--version"]);
     expect(version).toMatchObject({ code: 0, stderr: "" });
-    expect(version.stdout).toContain("0.0.0-dev");
+    expect(version.stdout).toContain(DECANT_VERSION);
 
     let streamed = "";
     const live = await runCli(["--version"], {
@@ -607,7 +626,7 @@ describe("runCli", () => {
       writeStderr: () => {},
     });
     expect(live).toMatchObject({ code: 0, stdout: "", stderr: "" });
-    expect(streamed).toContain("0.0.0-dev");
+    expect(streamed).toContain(DECANT_VERSION);
   });
 
   test("completion emits shell scripts and rejects unknown shells", async () => {
@@ -628,7 +647,7 @@ describe("runCli", () => {
   test("watch and serve modes are discoverable", async () => {
     const watch = await runCli(["watch", "--help"]);
     expect(watch).toMatchObject({ code: 0, stderr: "" });
-    expect(watch.stdout).toContain("keep the archive current");
+    expect(watch.stdout).toContain("keep the session log index current");
     expect(watch.stdout).toContain("--interval-ms");
     expect(watch.stdout).toContain("--no-fs-watch");
     expect(watch.stdout).not.toContain("--trusted-peer");

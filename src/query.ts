@@ -7,8 +7,14 @@ import {
 } from "./context-window.ts";
 import { sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
+import {
+  bracketSearchMatches,
+  buildFtsQuery,
+  SEARCH_MATCH_END,
+  SEARCH_MATCH_START,
+} from "./search-query.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
-import { preview } from "./tools.ts";
+import { preview, previewHeadTail } from "./tools.ts";
 
 export interface SessionSummary {
   id: number;
@@ -37,8 +43,11 @@ export interface SessionSummary {
   compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
-  /** Ingest diagnostics recorded against this session's source file. */
+  /** Actionable ingest diagnostics (currently only dropped/unparsed source lines).
+   * Kept under the established wire name so older clients show the safe count. */
   ingest_issue_count: number;
+  /** Informational parser/linkage sensors preserved in the archive. */
+  informational_ingest_issue_count: number;
   /** Verified Dosu MCP calls made by this session alone. */
   dosu_mcp_direct_calls: number;
   /** Verified Dosu MCP calls made by this session and descendants, depth <= 5. */
@@ -79,8 +88,12 @@ const SESSION_SUMMARY_SELECT = `
          s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
          COALESCE(sa.subagent_count, 0) AS subagent_count,
          COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd,
-         (SELECT COUNT(*) FROM ingest_issue ii WHERE ii.source_path = s.source_path)
+         (SELECT COUNT(*) FROM ingest_issue ii
+          WHERE ii.source_path = s.source_path AND ii.code = 'unparsed_line')
            AS ingest_issue_count,
+         (SELECT COUNT(*) FROM ingest_issue ii
+          WHERE ii.source_path = s.source_path AND ii.code != 'unparsed_line')
+           AS informational_ingest_issue_count,
          0 AS dosu_mcp_direct_calls,
          0 AS dosu_mcp_tree_calls
   FROM session s
@@ -135,24 +148,268 @@ export interface SearchHit {
   tool: string;
   block_id: number;
   snippet: string;
+  message_seq: number;
+  timestamp: string | null;
+  project: string | null;
+  role: string;
+  block_type: string;
+  href: string;
 }
 
 export function search(db: Database, query: string, limitValue = 30): SearchHit[] {
-  const limit = normalizeLimit(limitValue, 30);
-  return db
+  return searchPage(db, query, { limit: limitValue }).results.map((hit) => ({
+    ...hit,
+    snippet: bracketSearchMatches(hit.snippet),
+  }));
+}
+
+export interface SearchFilter {
+  tool?: string | null;
+  project?: string | null;
+  limit?: number | null;
+  offset?: number | null;
+  from?: string | null;
+  to?: string | null;
+}
+
+export interface SearchPage {
+  results: SearchHit[];
+  total: number;
+  elapsed_ms: number;
+}
+
+interface SearchHitRow extends Omit<SearchHit, "href" | "snippet"> {
+  text_snippet: string | null;
+  tool_name_snippet: string | null;
+  tool_input_snippet: string | null;
+}
+
+const SEARCH_MATCH_START_CODE_POINT = SEARCH_MATCH_START.codePointAt(0) ?? 0xe000;
+const SEARCH_MATCH_END_CODE_POINT = SEARCH_MATCH_END.codePointAt(0) ?? 0xe001;
+
+export function searchPage(db: Database, query: string, filter: SearchFilter = {}): SearchPage {
+  const startedAt = performance.now();
+  const ftsQuery = buildFtsQuery(query);
+  const limit = normalizeLimit(filter.limit, 30, 100);
+  const offset = normalizeOffset(filter.offset);
+  const clauses = ["block_fts MATCH ?", "s.is_subagent = 0", visibleSessionPredicate("s")];
+  const params: (string | number)[] = [ftsQuery];
+  if (filter.tool != null) {
+    clauses.push("s.tool = ?");
+    params.push(filter.tool);
+  }
+  if (filter.project != null) {
+    clauses.push("COALESCE(p.path, '') = ?");
+    params.push(filter.project);
+  }
+  const date = sessionDatePredicate("s", filter);
+  if (date.sql !== "") {
+    clauses.push(date.sql);
+    params.push(...date.params);
+  }
+  const joins = `
+    FROM block_fts
+    JOIN block b ON b.id = block_fts.rowid
+    JOIN message m ON m.id = b.message_id
+    JOIN session s ON s.id = b.session_id
+    LEFT JOIN project p ON p.id = s.project_id`;
+  const where = `WHERE ${clauses.join(" AND ")}`;
+  const total = (
+    db.query(`SELECT COUNT(*) AS count ${joins} ${where}`).get(...params) as { count: number }
+  ).count;
+  const rows = db
     .query(
       `SELECT b.session_id, s.title AS session_title, s.tool, b.id AS block_id,
-              COALESCE(snippet(block_fts, 0, '[', ']', '…', 12),
-                       snippet(block_fts, 1, '[', ']', '…', 12),
-                       snippet(block_fts, 2, '[', ']', '…', 12), '') AS snippet
-       FROM block_fts
-       JOIN block b ON b.id = block_fts.rowid
-       JOIN session s ON s.id = b.session_id
-       WHERE block_fts MATCH ?1
-       ORDER BY bm25(block_fts)
-       LIMIT ?2`,
+              m.seq AS message_seq, m.timestamp, p.path AS project,
+              m.role, b.type AS block_type,
+              snippet(block_fts, 0, char(${SEARCH_MATCH_START_CODE_POINT}),
+                      char(${SEARCH_MATCH_END_CODE_POINT}), '…', 12) AS text_snippet,
+              snippet(block_fts, 1, char(${SEARCH_MATCH_START_CODE_POINT}),
+                      char(${SEARCH_MATCH_END_CODE_POINT}), '…', 12) AS tool_name_snippet,
+              snippet(block_fts, 2, char(${SEARCH_MATCH_START_CODE_POINT}),
+                      char(${SEARCH_MATCH_END_CODE_POINT}), '…', 12) AS tool_input_snippet
+       ${joins}
+       ${where}
+       ORDER BY bm25(block_fts, 4.0, 2.0, 1.0), b.id
+       LIMIT ? OFFSET ?`,
     )
-    .all(query, limit) as SearchHit[];
+    .all(...params, limit, offset) as SearchHitRow[];
+  return {
+    results: rows.map((row) => ({
+      session_id: row.session_id,
+      session_title: row.session_title,
+      tool: row.tool,
+      block_id: row.block_id,
+      snippet: matchingSnippet(row),
+      message_seq: row.message_seq,
+      timestamp: row.timestamp,
+      project: row.project,
+      role: row.role,
+      block_type: row.block_type,
+      href: `/sessions/${row.session_id}#message-${row.message_seq}`,
+    })),
+    total,
+    elapsed_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+  };
+}
+
+function matchingSnippet(row: SearchHitRow): string {
+  const snippets = [row.text_snippet, row.tool_name_snippet, row.tool_input_snippet];
+  const snippet =
+    snippets.find((candidate) => candidate?.includes(SEARCH_MATCH_START)) ??
+    snippets.find((candidate) => candidate != null) ??
+    "";
+  return snippet;
+}
+
+export interface ToolCallFilter {
+  tool?: string | null;
+  server?: string | null;
+  errorsOnly?: boolean;
+  sessionId?: number | null;
+  project?: string | null;
+  from?: string | null;
+  to?: string | null;
+  minMs?: number | null;
+  limit?: number | null;
+  offset?: number | null;
+}
+
+export interface ToolCallRow {
+  id: number;
+  session_id: number;
+  session_title: string | null;
+  project: string | null;
+  tool_name: string | null;
+  tool_kind: string | null;
+  mcp_server: string | null;
+  input_preview: string | null;
+  input_bytes: number | null;
+  output_preview: string | null;
+  output_bytes: number | null;
+  is_error: boolean | null;
+  has_result: boolean | null;
+  duration_ms: number | null;
+  timestamp: string | null;
+  seq: number | null;
+}
+
+export interface ToolCallPage {
+  calls: ToolCallRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: ToolCallSummary;
+}
+
+export interface ToolCallSummary {
+  calls: number;
+  errors: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+}
+
+interface ToolCallDbRow extends Omit<ToolCallRow, "input_preview" | "is_error" | "has_result"> {
+  input: string | null;
+  is_error: number | null;
+  has_result: number | null;
+}
+
+export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCallPage {
+  const limit = normalizeLimit(filter.limit, 50, 100);
+  const offset = normalizeOffset(filter.offset);
+  const clauses: string[] = [visibleSessionPredicate("s")];
+  const params: (string | number)[] = [];
+  if (filter.tool != null) {
+    clauses.push("t.tool_name = ?");
+    params.push(filter.tool);
+  }
+  if (filter.server != null) {
+    clauses.push("t.mcp_server = ?");
+    params.push(filter.server);
+  }
+  if (filter.errorsOnly === true) {
+    clauses.push("t.is_error = 1");
+  }
+  if (filter.sessionId != null) {
+    clauses.push("t.session_id = ?");
+    params.push(filter.sessionId);
+  }
+  if (filter.project != null) {
+    clauses.push("p.path = ?");
+    params.push(filter.project);
+  }
+  if (filter.from != null) {
+    clauses.push("substr(t.timestamp, 1, 10) >= ?");
+    params.push(filter.from);
+  }
+  if (filter.to != null) {
+    clauses.push("substr(t.timestamp, 1, 10) <= ?");
+    params.push(filter.to);
+  }
+  if (filter.minMs != null) {
+    clauses.push("t.duration_ms >= ?");
+    params.push(Math.max(0, filter.minMs));
+  }
+  const joins = `
+    FROM tool_call t
+    JOIN session s ON s.id = t.session_id
+    LEFT JOIN project p ON p.id = s.project_id
+    LEFT JOIN message m ON m.id = t.message_id`;
+  const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
+  const summary = db
+    .query(
+      `WITH filtered AS (
+         SELECT t.is_error, t.duration_ms
+         ${joins}
+         ${where}
+       ),
+       ranked AS (
+         SELECT duration_ms,
+                ROW_NUMBER() OVER (ORDER BY duration_ms) AS duration_rank,
+                COUNT(*) OVER () AS duration_count
+         FROM filtered
+         WHERE duration_ms IS NOT NULL
+       )
+       SELECT
+         (SELECT COUNT(*) FROM filtered) AS calls,
+         (SELECT COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
+          FROM filtered) AS errors,
+         MAX(CASE
+           WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
+           THEN duration_ms
+         END) AS p50_ms,
+         MAX(CASE
+           WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+           THEN duration_ms
+         END) AS p95_ms
+       FROM ranked`,
+    )
+    .get(...params) as ToolCallSummary;
+  const rows = db
+    .query(
+      `SELECT t.id, t.session_id, s.title AS session_title, p.path AS project,
+              t.tool_name, t.tool_kind,
+              t.mcp_server, t.input, t.input_bytes, t.output_preview, t.output_bytes,
+              t.is_error, t.has_result, t.duration_ms, t.timestamp, m.seq
+       ${joins}
+       ${where}
+       ORDER BY t.timestamp DESC, t.id DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as ToolCallDbRow[];
+  return {
+    calls: rows.map(({ input, is_error, has_result, ...row }) => ({
+      ...row,
+      input_preview: input == null ? null : previewHeadTail(input, 500),
+      is_error: is_error == null ? null : is_error === 1,
+      has_result: has_result == null ? null : has_result === 1,
+    })),
+    total: summary.calls,
+    limit,
+    offset,
+    summary,
+  };
 }
 
 export interface BlockView {
@@ -260,6 +517,19 @@ interface MessageBlockRow {
   tool_result: string | null;
 }
 
+const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
+  b.tool_name,
+  CASE WHEN b.type = 'tool_result' THEN (
+    SELECT call.tool_name
+    FROM block call
+    WHERE call.session_id = b.session_id
+      AND call.type = 'tool_use'
+      AND call.tool_use_id = b.tool_use_id
+    ORDER BY call.id
+    LIMIT 1
+  ) END
+)`;
+
 export function getSession(
   db: Database,
   id: number,
@@ -284,7 +554,8 @@ export function getSession(
                     m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
-                    b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
+                    ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
+                    b.tool_use_id, b.tool_input, b.tool_result
              FROM message m
              LEFT JOIN block b ON b.message_id = m.id
              WHERE m.session_id = ?1
@@ -304,7 +575,8 @@ export function getSession(
                     m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
-                    b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
+                    ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
+                    b.tool_use_id, b.tool_input, b.tool_result
              FROM page_message pm
              JOIN message m ON m.id = pm.id
              LEFT JOIN block b ON b.message_id = m.id
@@ -943,10 +1215,16 @@ function withNestedSubagents(db: Database, sessions: SessionSummary[]): SessionS
   return sessions.map((session) => attach(session, 0, new Set()));
 }
 
-function normalizeLimit(value: number | null | undefined, fallback: number): number {
-  return value != null && value > 0 ? value : fallback;
+function normalizeLimit(
+  value: number | null | undefined,
+  fallback: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  return value != null && Number.isFinite(value) && value > 0
+    ? Math.min(Math.floor(value), maximum)
+    : fallback;
 }
 
 function normalizeOffset(value: number | null | undefined): number {
-  return value != null && value > 0 ? value : 0;
+  return value != null && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }

@@ -42,6 +42,12 @@ guard reads or writes the whole archive.
 - `GET /tools`
 - `GET /files`
 - `GET /settings`
+- `GET /reports/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /reports/session/:id`
+
+The report UI routes render a light, print-ready preview with Back, Download
+HTML, and Save as PDF controls. They read the same local-only report endpoints
+listed below; the session preview intentionally omits transcript content.
 
 ## JSON
 
@@ -67,9 +73,12 @@ guard reads or writes the whole archive.
 - `GET /api/analytics/model-sparklines?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/analytics/token-economics?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/analytics/now`
+- `GET /api/reports/analytics.html?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /api/reports/session/:id.html`
 - `GET /api/date-bounds`
 - `GET /api/metadata/date-bounds`
 - `GET /api/files?group=path|ext&op=read|edit|write|delete&from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /api/tools/calls?tool=&server=&errors_only=&session=&project=&from=&to=&min_ms=&limit=&offset=`
 - `GET /api/tools/usage?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/tools/mcp-usage?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/recommendations?status=open|implemented|all`
@@ -77,9 +86,33 @@ guard reads or writes the whole archive.
 - `POST /api/launch/agent`
 - `POST /api/launch/ide`
 
+Report routes download self-contained, zero-JavaScript HTML documents with
+inline styles and SVG charts. Analytics reports honor the inclusive date
+filter. Session reports omit transcript content by design and return the same
+coded `session_not_found` response as session detail when the id is absent.
+
+Errors use stable codes so the UI can offer recovery without exposing private
+exception text. In particular, an unexpected `500` returns `internal_error`
+with generic prose while the structured server log retains the diagnostic.
+`archive_locked` is retryable, schema conflicts distinguish `schema_too_new`
+from `schema_too_old`, and missing sessions include `archive_empty`.
+
 Session and archive token-economics routes aggregate versioned per-session
 vectors persisted during ingest. The first sync after a schema upgrade
 backfills vectors for unchanged sessions.
+
+The tool-call browse route returns
+`{ calls: ToolCallRow[], total, limit, offset, summary }`, ordered newest first.
+`summary` reports calls, confirmed errors, and nearest-rank `p50_ms`/`p95_ms`
+over the complete filtered result, not only the current page. `limit` defaults
+to 50 and is capped at 100. `tool`, `server`, `session`, and `project` are
+exact-match filters; `errors_only=true` includes only confirmed errors; `from`
+and `to` filter call timestamps by inclusive UTC date; and `min_ms` filters
+measured durations. A legacy or provider-opaque value stays JSON `null`: in
+particular, `is_error: null` means the archive cannot determine whether the
+call failed, not success. The per-tool and per-MCP-server usage routes also
+return nearest-rank `p50_ms`/`p95_ms` plus `last_used_at`; each is `null` when
+the underlying rows do not contain the relevant source metadata.
 
 Session detail accepts `message_limit` and `message_offset` for transcript
 pagination. The outline route returns lightweight entries for each human/prompt
@@ -132,7 +165,7 @@ model's general API limit. Session rows also carry materialized rollups
 (`context_window_tokens`, `peak_context_tokens`, plus the existing
 `compaction_count`) computed at ingest; the first sync after a schema upgrade
 backfills them, like the economics vectors.
-Codex sessions ingested by older decant builds, as well as source rollouts
+Codex sessions ingested by older Decant builds, as well as source rollouts
 predating `last_token_usage`, return empty `points` until the source changes
 and is re-ingested or the archive is rebuilt.
 

@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
   BarChart3,
+  ChartNoAxesCombined,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -71,6 +72,7 @@ import {
   shouldShowDosuCta,
 } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
+import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { formatIssueBadge } from "./ingest-issues.ts";
@@ -787,21 +789,27 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Live and auto-syncing">
-            <span className="live-dot" />
+          <div className="sidebar-stat" title="Sessions in this archive">
+            <span className="sidebar-stat-icon">
+              <Icon name="trend" />
+            </span>
             <span>
               <strong>{formatInt(metrics?.sessions ?? 0)}</strong> sessions
             </span>
           </div>
           <div className="sidebar-stat">
-            <Icon name="money" />
+            <span className="sidebar-stat-icon">
+              <Icon name="money" />
+            </span>
             <span>
               <strong>{money(metrics?.estimated_cost_usd ?? 0)}</strong> tracked
             </span>
           </div>
           {lastActivity != null ? (
             <div className="sidebar-stat">
-              <Icon name="clock" />
+              <span className="sidebar-stat-icon">
+                <Icon name="clock" />
+              </span>
               <span>latest {lastActivity}</span>
             </div>
           ) : null}
@@ -3410,6 +3418,7 @@ type IconName =
   | "settings"
   | "shield"
   | "sun"
+  | "trend"
   | "tools"
   | "upload"
   | "x";
@@ -3917,6 +3926,8 @@ function iconComponent(name: IconName): LucideIcon {
       return ShieldCheck;
     case "sun":
       return Sun;
+    case "trend":
+      return ChartNoAxesCombined;
     case "tools":
       return Wrench;
     case "upload":
@@ -4201,20 +4212,27 @@ function InsightsView({
 
   return (
     <div className="view-stack insights-stack">
-      <header className="page-heading">
+      <header className="page-heading insights-heading">
+        <span className="page-eyebrow">Archive → action</span>
         <h1>Insights</h1>
-        <p>What could make your coding agents better, drawn from your archive.</p>
+        <p>
+          Decant finds recurring patterns in your local sessions, ranks the ones worth acting on,
+          and suggests durable improvements for future agent runs.
+        </p>
       </header>
 
       {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
 
-      <section className="view-stack">
-        <div className="section-title-row">
+      <section className="view-stack insights-section">
+        <div className="section-title-row insights-section-heading">
           <div>
-            <h2>Promotion candidates</h2>
-            <p>Data-backed lessons ranked by impact</p>
+            <span className="section-eyebrow">Detected in your archive</span>
+            <h2>Patterns worth acting on</h2>
+            <p>Evidence-backed signals from your own sessions, ranked by expected impact.</p>
           </div>
-          {signals.length > 0 ? <span>{formatInt(signals.length)} active</span> : null}
+          {signals.length > 0 ? (
+            <span className="section-count">{formatInt(signals.length)} active</span>
+          ) : null}
         </div>
 
         {signals.length === 0 ? (
@@ -4250,11 +4268,12 @@ function InsightsView({
       </section>
 
       {catalogGroups.length > 0 || showDosuSuggestion ? (
-        <section className="view-stack">
-          <div className="section-title-row">
+        <section className="view-stack insights-section">
+          <div className="section-title-row insights-section-heading">
             <div>
-              <h2>Recommended for coding agents</h2>
-              <p>Set these up to make your agents faster and more consistent</p>
+              <span className="section-eyebrow">Reusable improvements</span>
+              <h2>Set up for future runs</h2>
+              <p>Project practices your coding agents can use in every session.</p>
             </div>
           </div>
           {catalogGroups.map(([category, items], groupIndex) => (
@@ -4271,12 +4290,11 @@ function InsightsView({
                     canLaunch={canLaunch}
                   />
                 ))}
-                {groupIndex === 0 && showDosuSuggestion ? <DosuInsightsCard /> : null}
               </div>
             </div>
           ))}
-          {catalogGroups.length === 0 && showDosuSuggestion ? (
-            <div className="catalog-grid">
+          {showDosuSuggestion ? (
+            <div className="insights-dosu-suggestion">
               <DosuInsightsCard />
             </div>
           ) : null}
@@ -4284,13 +4302,14 @@ function InsightsView({
       ) : null}
 
       {implementedRows.length > 0 ? (
-        <section className="view-stack insights-history-heading">
-          <div className="section-title-row">
+        <section className="view-stack insights-history-heading insights-section">
+          <div className="section-title-row insights-section-heading">
             <div>
-              <h2>Implemented</h2>
-              <p>Recommendations already marked complete</p>
+              <span className="section-eyebrow">History</span>
+              <h2>Already implemented</h2>
+              <p>Improvements you have already marked complete.</p>
             </div>
-            <span>{formatInt(implementedRows.length)} saved</span>
+            <span className="section-count">{formatInt(implementedRows.length)} saved</span>
           </div>
           <div className="catalog-grid">
             {implementedRows.map((row) => (
@@ -4311,7 +4330,7 @@ function DosuInsightsCard() {
           <img alt="" src={dosuOfficialUrl} />
         </span>
         <div>
-          <span className="dosu-card-kicker">Dosu</span>
+          <span className="dosu-card-kicker">Optional · Dosu</span>
           <h4>Make these patterns available to every coding agent</h4>
         </div>
       </div>
@@ -5542,26 +5561,33 @@ function SessionDetailView({ id }: { id: number }) {
               </span>
               Move through messages
             </div>
-            {toc.length === 0 ? <p>No prompts to list</p> : null}
+            {toc.length === 0 ? <p>No prompts or Dosu calls to list</p> : null}
             {toc.map((item) => (
               <a
+                aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
                 className={[
+                  item.kind === "dosu" ? "is-dosu" : null,
                   jumpingToSeq === item.seq ? "is-loading" : null,
                   activeMessageSeq === item.seq ? "is-current" : null,
                 ]
                   .filter(isPresent)
                   .join(" ")}
                 href={`#message-${item.seq}`}
-                key={item.seq}
+                key={item.key}
                 onClick={(event) => {
                   event.preventDefault();
                   void jumpToMessage(item.seq);
                 }}
               >
-                <span className="toc-icon">
-                  <Icon name={item.icon} />
+                <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
+                  {item.kind === "dosu" ? (
+                    <img alt="" src={dosuOfficialUrl} />
+                  ) : (
+                    <Icon name={item.icon} />
+                  )}
                 </span>
                 <span>{item.label}</span>
+                {item.kind === "dosu" ? <em>Dosu</em> : null}
                 {jumpingToSeq === item.seq ? <b>loading</b> : null}
               </a>
             ))}
@@ -5737,6 +5763,8 @@ type SessionDetailData = {
 type SessionOutlineItemData = {
   seq: number;
   text: string;
+  kind: "prompt" | "dosu";
+  ordinal: number;
 };
 
 /** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
@@ -6462,12 +6490,23 @@ function TranscriptBlock({
   tool?: string;
 }) {
   if (block.block_type === "tool_use") {
+    const isDosu = isDosuToolName(block.tool_name);
     return (
-      <div className="tool-call">
+      <div className={`tool-call${isDosu ? " is-dosu" : ""}`}>
         <div>
-          <Icon name="bolt" />
-          <span>{block.tool_name ?? "tool_use"}</span>
-          <small>tool call</small>
+          {isDosu ? (
+            <span className="dosu-tool-mark">
+              <img alt="" src={dosuOfficialUrl} />
+            </span>
+          ) : (
+            <Icon name="bolt" />
+          )}
+          <span className="tool-call-name">{block.tool_name ?? "tool_use"}</span>
+          {isDosu ? (
+            <span className="dosu-tool-badge">Optimized by Dosu</span>
+          ) : (
+            <small>tool call</small>
+          )}
         </div>
         {isPresent(block.tool_input) ? (
           <details open={block.tool_input.length <= 240}>
@@ -6885,36 +6924,62 @@ function renderableMessages(
 
 function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   return messages.flatMap((message) => {
+    const items: ThreadTocItem[] = [];
     // Compact summaries are machine-generated continuations, not prompts.
-    if (message.role !== "user" || message.is_compact_summary) {
-      return [];
+    if (message.role === "user" && !message.is_compact_summary) {
+      const label =
+        message.blocks.find((block) => block.block_type === "text" && isPresent(block.text))
+          ?.text ?? "";
+      if (label.trim() !== "") {
+        items.push({
+          key: `prompt:${message.seq}`,
+          seq: message.seq,
+          kind: "prompt",
+          ...tocPresentation(label),
+        });
+      }
     }
-    const label =
-      message.blocks.find((block) => block.block_type === "text" && isPresent(block.text))?.text ??
-      "";
-    if (label.trim() === "") {
-      return [];
-    }
-    return [
-      {
+    for (const block of message.blocks) {
+      if (block.block_type !== "tool_use" || !isDosuToolName(block.tool_name)) {
+        continue;
+      }
+      items.push({
+        key: `dosu:${message.seq}:${block.ordinal}`,
         seq: message.seq,
-        ...tocPresentation(label),
-      },
-    ];
+        label: dosuToolDisplayName(block.tool_name),
+        icon: "bolt",
+        kind: "dosu",
+      });
+    }
+    return items;
   });
 }
 
 function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[] {
-  return outline.map((item) => ({
-    seq: item.seq,
-    ...tocPresentation(item.text),
-  }));
+  return outline.map((item) =>
+    item.kind === "dosu"
+      ? {
+          key: `dosu:${item.seq}:${item.ordinal}`,
+          seq: item.seq,
+          label: item.text || "Dosu tool",
+          icon: "bolt",
+          kind: "dosu",
+        }
+      : {
+          key: `prompt:${item.seq}`,
+          seq: item.seq,
+          kind: "prompt",
+          ...tocPresentation(item.text),
+        },
+  );
 }
 
 type ThreadTocItem = {
+  key: string;
   seq: number;
   label: string;
   icon: IconName;
+  kind: "prompt" | "dosu";
 };
 
 function tocPresentation(text: string): { label: string; icon: IconName } {
@@ -6940,7 +7005,10 @@ function threadStats(
   totals?: SessionDetailData["totals"],
 ) {
   return {
-    turns: fullTurnCount != null && fullTurnCount > 0 ? fullTurnCount : toc.length,
+    turns:
+      fullTurnCount != null && fullTurnCount > 0
+        ? fullTurnCount
+        : toc.filter((item) => item.kind === "prompt").length,
     replies:
       totals?.reply_count ?? messages.filter((message) => message.role === "assistant").length,
     toolCalls:

@@ -224,10 +224,20 @@ export interface SessionReadOptions {
 export interface SessionOutlineItem {
   seq: number;
   text: string;
+  kind: "prompt" | "dosu";
+  ordinal: number;
 }
 
-interface SessionOutlineRow extends SessionOutlineItem {
+interface SessionPromptOutlineRow {
+  seq: number;
+  text: string;
   raw_meta: string | null;
+}
+
+interface SessionDosuOutlineRow {
+  seq: number;
+  text: string;
+  ordinal: number;
 }
 
 interface MessageBlockRow {
@@ -415,16 +425,17 @@ function getSessionTotals(db: Database, id: number): SessionTotals {
 }
 
 /**
- * Return the lightweight prompt outline independently from paged transcript
- * bodies. This keeps every turn reachable from the sticky navigation without
- * loading every rich block, tool result, and code sample up front.
+ * Return the lightweight prompt and verified Dosu-call outline independently
+ * from paged transcript bodies. This keeps every user turn and Dosu
+ * optimization reachable from sticky navigation without loading every rich
+ * block, tool result, and code sample up front.
  */
 export function getSessionOutline(db: Database, id: number): SessionOutlineItem[] | null {
   const session = db.query("SELECT 1 AS present FROM session WHERE id = ?1").get(id);
   if (session == null) {
     return null;
   }
-  const rows = db
+  const promptRows = db
     .query(
       `SELECT m.seq,
               (
@@ -446,10 +457,31 @@ export function getSessionOutline(db: Database, id: number): SessionOutlineItem[
          )
        ORDER BY m.seq`,
     )
-    .all(id) as SessionOutlineRow[];
-  return rows
+    .all(id) as SessionPromptOutlineRow[];
+  const serverPlaceholders = CONFIRMED_DOSU_SERVER_IDS.map(() => "?").join(", ");
+  const dosuRows = db
+    .query(
+      `SELECT m.seq, COALESCE(NULLIF(tc.tool_base_name, ''), tc.tool_name) AS text, tc.ordinal
+       FROM tool_call tc
+       JOIN message m ON m.id = tc.message_id
+       WHERE tc.session_id = ?1
+         AND tc.tool_kind = 'mcp'
+         AND tc.mcp_server IN (${serverPlaceholders})
+       ORDER BY m.seq, tc.ordinal`,
+    )
+    .all(id, ...CONFIRMED_DOSU_SERVER_IDS) as SessionDosuOutlineRow[];
+  const prompts: SessionOutlineItem[] = promptRows
     .filter((row) => !parseMessageRawMeta(row.raw_meta).isCompactSummary)
-    .map(({ seq, text }) => ({ seq, text }));
+    .map(({ seq, text }) => ({ seq, text, kind: "prompt", ordinal: -1 }));
+  const dosuCalls: SessionOutlineItem[] = dosuRows.map(({ seq, text, ordinal }) => ({
+    seq,
+    text,
+    kind: "dosu",
+    ordinal,
+  }));
+  return [...prompts, ...dosuCalls].sort(
+    (left, right) => left.seq - right.seq || left.ordinal - right.ordinal,
+  );
 }
 
 export interface SessionIngestIssue {

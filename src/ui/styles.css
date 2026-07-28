@@ -253,42 +253,56 @@ nav a[aria-current="page"] svg {
 
 .sidebar-footer {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   margin-top: auto;
   border-top: 1px solid var(--line);
-  padding: 12px 16px;
+  padding: 13px 16px 14px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
 }
 
 .sidebar-stat {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 23px;
   min-width: 0;
 }
 
-.sidebar-stat svg {
-  width: 14px;
-  height: 14px;
+.sidebar-stat-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
   color: var(--faint);
+}
+
+.sidebar-stat-icon svg {
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+  stroke-width: 1.9;
 }
 
 .sidebar-stat strong {
   color: var(--fg);
-  font-weight: 650;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
 }
 
 .dosu-attribution {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  margin-top: 5px;
+  gap: 10px;
+  margin-top: 7px;
   border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
   color: var(--faint);
   font-size: 12px;
   font-weight: 550;
-  padding-top: 10px;
+  padding-top: 11px;
   transition: color 0.12s ease;
 }
 
@@ -297,27 +311,8 @@ nav a[aria-current="page"] svg {
 }
 
 .dosu-attribution img {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--success);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
+  width: 17px;
+  height: 17px;
 }
 
 .workspace {
@@ -2126,7 +2121,66 @@ mark {
 }
 
 .insights-stack {
-  gap: 40px;
+  gap: 36px;
+}
+
+.insights-heading {
+  max-width: 62rem;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.page-eyebrow,
+.section-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.insights-heading h1 {
+  font-size: 28px;
+  font-weight: 680;
+  line-height: 1.15;
+}
+
+.insights-heading p {
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.insights-section {
+  gap: 16px;
+}
+
+.insights-section-heading {
+  align-items: flex-start;
+}
+
+.insights-section-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.insights-section-heading h2 {
+  font-size: 20px;
+  font-weight: 660;
+}
+
+.insights-section-heading p {
+  line-height: 1.45;
+}
+
+.section-count {
+  width: fit-content;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  line-height: 1;
+  padding: 6px 9px;
 }
 
 .dosu-callout {
@@ -2377,8 +2431,15 @@ mark {
   gap: 12px;
 }
 
+.insights-dosu-suggestion {
+  display: grid;
+  width: min(100%, 32rem);
+  justify-self: end;
+  margin-top: 4px;
+}
+
 .insights-history-heading {
-  margin-top: 20px;
+  margin-top: 8px;
 }
 
 .catalog-card {
@@ -2397,6 +2458,7 @@ mark {
 .dosu-insights-card {
   border-color: color-mix(in oklab, #b4bb91 38%, var(--line));
   background: color-mix(in oklab, #b4bb91 7%, var(--surface));
+  box-shadow: 0 12px 28px -26px color-mix(in oklab, #65704b 48%, transparent);
 }
 
 .dosu-card-mark {
@@ -2909,6 +2971,24 @@ mark {
   stroke-width: 1.8;
 }
 
+.toc-icon img {
+  width: 15px;
+  height: 15px;
+}
+
+.toc-icon.is-dosu {
+  background: color-mix(in oklab, #b4bb91 16%, transparent);
+}
+
+.toc a.is-dosu {
+  color: var(--fg);
+}
+
+.toc a.is-dosu:hover .toc-icon,
+.toc a.is-dosu.is-current .toc-icon {
+  background: color-mix(in oklab, #b4bb91 25%, transparent);
+}
+
 .toc a:hover .toc-icon {
   background: color-mix(in oklab, var(--accent) 10%, transparent);
   color: var(--accent);
@@ -2923,6 +3003,18 @@ mark {
   color: var(--faint);
   font-size: 10px;
   font-weight: 600;
+}
+
+.toc em {
+  align-self: center;
+  border: 1px solid color-mix(in oklab, #b4bb91 40%, var(--line));
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
 }
 
 .transcript-column {
@@ -3016,7 +3108,8 @@ mark {
 }
 
 .tool-call > div {
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -3024,7 +3117,13 @@ mark {
   font-size: 14px;
 }
 
-.tool-call > div span {
+.tool-call > div > svg {
+  width: 15px;
+  height: 15px;
+  justify-self: center;
+}
+
+.tool-call > div .tool-call-name {
   overflow: hidden;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   text-overflow: ellipsis;
@@ -3038,6 +3137,40 @@ mark {
 
 .tool-call details {
   margin-top: 6px;
+}
+
+.tool-call.is-dosu {
+  border-color: color-mix(in oklab, #b4bb91 58%, var(--line));
+  background: color-mix(in oklab, #b4bb91 9%, var(--surface));
+  box-shadow:
+    inset 3px 0 0 color-mix(in oklab, #899364 70%, transparent),
+    0 12px 28px -22px color-mix(in oklab, #65704b 65%, transparent);
+  padding-left: 12px;
+}
+
+.dosu-tool-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in oklab, #b4bb91 18%, transparent);
+}
+
+.dosu-tool-mark img {
+  width: 17px;
+  height: 17px;
+}
+
+.dosu-tool-badge {
+  border: 1px solid color-mix(in oklab, #b4bb91 48%, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 7px;
+  white-space: nowrap;
 }
 
 .tool-result {

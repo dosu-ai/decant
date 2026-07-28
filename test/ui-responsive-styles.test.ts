@@ -50,6 +50,12 @@ describe("responsive session detail styles", () => {
 });
 
 describe("responsive Dosu surfaces", () => {
+  test("aligns sidebar metadata and attribution to the same icon column", () => {
+    expect(rule(".sidebar-stat")).toContain("grid-template-columns: 18px minmax(0, 1fr)");
+    expect(rule(".dosu-attribution")).toContain("grid-template-columns: 18px minmax(0, 1fr)");
+    expect(styles).not.toContain(".live-dot");
+  });
+
   test("keeps ambient attribution quiet until interaction", () => {
     expect(rule(".dosu-attribution")).toContain("font-size: 12px");
     expect(rule(".dosu-attribution")).toContain("color: var(--faint)");
@@ -82,5 +88,11 @@ describe("responsive Dosu surfaces", () => {
     const mobileRules = styles.slice(mobileStart, reducedMotionStart);
     expect(mobileRules).toContain(".share-privacy-review");
     expect(mobileRules).toContain("grid-template-columns: 1fr");
+  });
+
+  test("elevates verified Dosu calls and gives their thread markers a distinct surface", () => {
+    expect(rule(".tool-call.is-dosu")).toContain("box-shadow:");
+    expect(rule(".tool-call.is-dosu")).toContain("background:");
+    expect(rule(".toc-icon.is-dosu")).toContain("background:");
   });
 });

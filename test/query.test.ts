@@ -82,7 +82,7 @@ describe("query reads", () => {
     db.close();
   });
 
-  test("pages session messages and returns a lightweight complete prompt outline", () => {
+  test("pages session messages and returns a lightweight complete navigation outline", () => {
     const db = seeded();
     const id = listSessions(db)[0]?.id ?? 0;
 
@@ -98,7 +98,14 @@ describe("query reads", () => {
       message_limit: 2,
       has_more_messages: false,
     });
-    expect(getSessionOutline(db, id)).toEqual([{ seq: 0, text: "Fix the failing auth test" }]);
+    expect(getSessionOutline(db, id)).toEqual([
+      {
+        seq: 0,
+        text: "Fix the failing auth test",
+        kind: "prompt",
+        ordinal: -1,
+      },
+    ]);
     expect(getSessionOutline(db, 999_999)).toBeNull();
     db.close();
   });
@@ -430,17 +437,25 @@ describe("query reads", () => {
         (3, 'claude_code', 'text-only', 'Dosu mentioned in text',
          '2026-07-01T00:02:00Z', 0, NULL);
       INSERT INTO message(id, session_id, seq, role, raw)
-      VALUES (1, 3, 0, 'user', '{}');
-      INSERT INTO block(message_id, session_id, ordinal, type, text)
-      VALUES (1, 3, 0, 'text', 'Dosu was mentioned, but no MCP call happened.');
-      INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server)
       VALUES
-        (1, 'mcp', 'mcp__dosu__read_knowledge', 'dosu'),
-        (1, 'mcp', 'mcp__claude_ai_Dosu__search', 'claude_ai_Dosu'),
-        (1, 'mcp', 'mcp__github__search', 'github'),
-        (1, 'mcp', 'mcp__my_dosu_proxy__search', 'my_dosu_proxy'),
-        (1, 'builtin', 'dosu', 'dosu'),
-        (2, 'mcp', 'mcp__dosu__save_topic', 'dosu');
+        (1, 3, 0, 'user', '{}'),
+        (2, 1, 0, 'user', '{}'),
+        (3, 1, 1, 'assistant', '{}'),
+        (4, 1, 2, 'assistant', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES
+        (1, 3, 0, 'text', 'Dosu was mentioned, but no MCP call happened.'),
+        (2, 1, 0, 'text', 'Investigate the failing workflow.');
+      INSERT INTO tool_call(
+        session_id, message_id, ordinal, tool_kind, tool_name, mcp_server, tool_base_name
+      )
+      VALUES
+        (1, 3, 0, 'mcp', 'mcp__dosu__read_knowledge', 'dosu', 'read_knowledge'),
+        (1, 4, 0, 'mcp', 'mcp__claude_ai_Dosu__search', 'claude_ai_Dosu', 'search'),
+        (1, NULL, 0, 'mcp', 'mcp__github__search', 'github', 'search'),
+        (1, NULL, 0, 'mcp', 'mcp__my_dosu_proxy__search', 'my_dosu_proxy', 'search'),
+        (1, NULL, 0, 'builtin', 'dosu', 'dosu', 'dosu'),
+        (2, NULL, 0, 'mcp', 'mcp__dosu__save_topic', 'dosu', 'save_topic');
     `);
 
     const roots = listSessions(db, { includeNestedSubagents: true, limit: 10 });
@@ -471,6 +486,16 @@ describe("query reads", () => {
       dosu_mcp_direct_calls: 1,
       dosu_mcp_tree_calls: 1,
     });
+    expect(getSessionOutline(db, 1)).toEqual([
+      {
+        seq: 0,
+        text: "Investigate the failing workflow.",
+        kind: "prompt",
+        ordinal: -1,
+      },
+      { seq: 1, text: "read_knowledge", kind: "dosu", ordinal: 0 },
+      { seq: 2, text: "search", kind: "dosu", ordinal: 0 },
+    ]);
     db.close();
   });
 

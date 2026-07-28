@@ -82,10 +82,11 @@ vectors persisted during ingest. The first sync after a schema upgrade
 backfills vectors for unchanged sessions.
 
 Session detail accepts `message_limit` and `message_offset` for transcript
-pagination. The outline route returns only the sequence number and a short
-excerpt from the first text block for each human/prompt turn, so the sticky
-thread navigation can cover the whole session without loading every rich
-transcript block up front.
+pagination. The outline route returns lightweight entries for each human/prompt
+turn and verified Dosu MCP call: sequence number, kind, ordinal, and either a
+short prompt excerpt or normalized tool name. This lets sticky thread
+navigation cover the whole session and point to Dosu optimizations without
+loading every rich transcript block up front.
 
 Session detail also returns `totals`, holding `reply_count` and
 `tool_call_count` aggregated across the whole session rather than the requested

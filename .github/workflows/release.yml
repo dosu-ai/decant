@@ -67,7 +67,7 @@ jobs:
       # zizmor: ignore[artipacked] — the tag guard below runs `git fetch origin`,
       # which needs the credentials checkout persists. This job uploads no
       # artifacts, so there is nothing for them to leak into.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0 # zizmor: ignore[artipacked]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
       - name: Derive, validate, and guard VERSION
         id: v

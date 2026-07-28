@@ -8,6 +8,9 @@ Your coding agent sessions contain a lot of useful information. What tokens got
 spent on, how full the context window got, which files an agent worked with, and
 what a run cost. decant gives you insight into what's on disk, right now.
 
+Built by [Dosu](https://dosu.dev) for developers who want their agents to learn
+from real work.
+
 It reads the JSONL logs Claude Code and Codex already write
 (`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalizes
 both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,

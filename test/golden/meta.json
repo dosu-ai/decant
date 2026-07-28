@@ -9,6 +9,7 @@
     "fixtures/claude/sample.jsonl",
     "fixtures/codex/distill.jsonl",
     "fixtures/codex/enriched.jsonl",
+    "fixtures/codex/mcp.jsonl",
     "fixtures/codex/sample.jsonl"
   ],
   "row_dumps": [

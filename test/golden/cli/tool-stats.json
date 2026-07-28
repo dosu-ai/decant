@@ -63,9 +63,9 @@
     "errors": 0
   },
   {
-    "tool_name": "mcp__github__create_issue",
-    "tool_kind": "mcp",
-    "mcp_server": "github",
+    "tool_name": "dosu__unqualified_tool",
+    "tool_kind": "builtin",
+    "mcp_server": null,
     "calls": 1,
     "errors": 0
   }

@@ -27,7 +27,41 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "title": "Check durable project context",
+    "project_path": "/Users/dev/proj",
+    "model": "gpt-5.4",
+    "reasoning_effort": "medium",
+    "reasoning_effort_levels": [
+      "medium"
+    ],
+    "started_at": "2026-05-06T09:00:00.000Z",
+    "ended_at": "2026-05-06T09:00:07.000Z",
+    "message_count": 6,
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "estimated_cost_usd": 0,
+    "is_archived": false,
+    "is_subagent": false,
+    "parent_session_id": null,
+    "spawn_tool_use_id": null,
+    "agent_id": null,
+    "agent_type": null,
+    "spawn_depth": null,
+    "context_window_tokens": null,
+    "peak_context_tokens": 0,
+    "compaction_count": 0,
+    "subagent_count": 0,
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 1,
+    "dosu_mcp_tree_calls": 1
   },
   {
     "tool": "claude_code",
@@ -55,7 +89,9 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   },
   {
     "tool": "claude_code",
@@ -83,7 +119,9 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   },
   {
     "tool": "codex",
@@ -113,7 +151,9 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   },
   {
     "tool": "claude_code",
@@ -141,7 +181,9 @@
     "compaction_count": 1,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   },
   {
     "tool": "codex",
@@ -171,7 +213,9 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   },
   {
     "tool": "claude_code",
@@ -199,6 +243,8 @@
     "compaction_count": 0,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,
-    "ingest_issue_count": 0
+    "ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 0,
+    "dosu_mcp_tree_calls": 0
   }
 ]

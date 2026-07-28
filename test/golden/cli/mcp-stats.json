@@ -1,6 +1,12 @@
 [
   {
     "mcp_server": "github",
+    "tools": 2,
+    "calls": 2,
+    "errors": 0
+  },
+  {
+    "mcp_server": "dosu",
     "tools": 1,
     "calls": 1,
     "errors": 0

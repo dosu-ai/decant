@@ -53,7 +53,7 @@ function stageFixtures(dir: string): IngestConfig {
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(fixtureRoot, "claude", name), join(claudeDir, name));
   }
-  for (const name of ["distill.jsonl", "enriched.jsonl", "sample.jsonl"]) {
+  for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(fixtureRoot, "codex", name), join(codexDir, "sessions", `rollout-${name}`));
   }
 
@@ -1128,7 +1128,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 7, ingested: 7, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 8, ingested: 8, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));

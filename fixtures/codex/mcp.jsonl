@@ -1,0 +1,8 @@
+{"type":"session_meta","timestamp":"2026-05-06T09:00:00.000Z","payload":{"id":"sess-codex-mcp","cwd":"/Users/dev/proj","originator":"codex_cli_rs","cli_version":"0.116.0","source":"cli","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-05-06T09:00:01.000Z","payload":{"cwd":"/Users/dev/proj","model":"gpt-5.4","effort":"medium","approval_policy":"on-request"}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check durable project context"}]}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:03.000Z","payload":{"type":"mcp_tool_call","namespace":"mcp__dosu","name":"read_knowledge","call_id":"call_dosu","arguments":{"query":"synthetic context"}}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:04.000Z","payload":{"type":"mcp_tool_call","namespace":"mcp__github","name":"search_code","call_id":"call_github","arguments":{"query":"synthetic"}}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:05.000Z","payload":{"type":"mcp_tool_call","namespace":"dosu","name":"unqualified_tool","call_id":"call_unqualified","arguments":{"query":"synthetic"}}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:06.000Z","payload":{"type":"function_call_output","call_id":"call_dosu","output":"synthetic result"}}
+{"type":"response_item","timestamp":"2026-05-06T09:00:07.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Context checked."}]}}

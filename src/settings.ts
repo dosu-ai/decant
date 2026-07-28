@@ -5,11 +5,13 @@ import { dirname, join, resolve } from "node:path";
 export type AgentKey = "claude" | "codex";
 export type TerminalKey = "terminal" | "iterm" | "ghostty" | "wezterm" | "kitty" | "alacritty";
 export type IdeKey = "vscode" | "cursor" | "zed" | "sublime" | "intellij";
+export type DosuSuggestionsKey = "show" | "hide";
 
 export interface UserSettings {
   agent: AgentKey;
   terminal: TerminalKey;
   ide: IdeKey;
+  dosuSuggestions: DosuSuggestionsKey;
 }
 
 export interface SettingsOptions {
@@ -28,6 +30,7 @@ const validTerminals = new Set<TerminalKey>([
   "alacritty",
 ]);
 const validIdes = new Set<IdeKey>(["vscode", "cursor", "zed", "sublime", "intellij"]);
+const validDosuSuggestions = new Set<DosuSuggestionsKey>(["show", "hide"]);
 
 export const agentOptions: [AgentKey, string][] = [
   ["claude", "Claude"],
@@ -51,6 +54,11 @@ export const ideOptions: [IdeKey, string][] = [
   ["intellij", "IntelliJ IDEA"],
 ];
 
+export const dosuSuggestionOptions: [DosuSuggestionsKey, string][] = [
+  ["show", "Show"],
+  ["hide", "Hide"],
+];
+
 export function settingsPath(options: SettingsOptions = {}): string {
   const env = options.env ?? process.env;
   const home = (options.homeDir ?? homedir()) || ".";
@@ -63,6 +71,7 @@ export function detectedSettings(options: SettingsOptions = {}): UserSettings {
     agent: "claude",
     terminal: detectTerminal(options.env ?? process.env),
     ide: detectIde(options.appExists ?? ((name) => existsSync(`/Applications/${name}.app`))),
+    dosuSuggestions: "show",
   };
 }
 
@@ -109,6 +118,12 @@ function sanitize(attrs: unknown): Partial<UserSettings> {
   }
   if (typeof raw.ide === "string" && validIdes.has(raw.ide as IdeKey)) {
     out.ide = raw.ide as IdeKey;
+  }
+  if (
+    typeof raw.dosuSuggestions === "string" &&
+    validDosuSuggestions.has(raw.dosuSuggestions as DosuSuggestionsKey)
+  ) {
+    out.dosuSuggestions = raw.dosuSuggestions as DosuSuggestionsKey;
   }
   return out;
 }

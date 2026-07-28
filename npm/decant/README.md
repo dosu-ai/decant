@@ -3,6 +3,9 @@
 Local-first analysis of Claude Code and Codex sessions: token spend, context
 windows, files touched, and cost.
 
+Built by [Dosu](https://dosu.dev) for developers who want their agents to learn
+from real work.
+
 `decant` is the Node-compatible launcher for the compiled `decant` CLI. It
 selects the matching optional platform package, then runs the embedded
 Bun-compiled binary.

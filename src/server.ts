@@ -5,6 +5,7 @@ import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
+import { DECANT_VERSION } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
@@ -25,6 +26,7 @@ import {
 } from "./recommendations.ts";
 import {
   agentOptions,
+  dosuSuggestionOptions,
   getSettings,
   ideOptions,
   saveSettings,
@@ -45,6 +47,8 @@ import {
   totals,
 } from "./stats.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
+import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
+import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
 import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
 
@@ -120,6 +124,12 @@ export async function handleRequest(
   }
   const dateFilter = dateFilterFromSearch(url.searchParams);
   try {
+    if (request.method === "GET" && url.pathname === "/favicon.ico") {
+      return embeddedAsset(faviconPath, "image/x-icon");
+    }
+    if (request.method === "GET" && url.pathname === "/apple-touch-icon.png") {
+      return embeddedAsset(appleTouchIconPath, "image/png");
+    }
     if (request.method === "GET" && url.pathname === "/") {
       return html(indexHtml());
     }
@@ -134,6 +144,7 @@ export async function handleRequest(
         dbPath: config.dbPath,
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
+        version: DECANT_VERSION,
       });
     }
     if (request.method === "GET" && url.pathname === "/api/settings") {
@@ -382,6 +393,7 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
       agents: agentOptions,
       terminals: terminalOptions,
       ides: ideOptions,
+      dosuSuggestions: dosuSuggestionOptions,
     },
   };
 }
@@ -559,6 +571,12 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     hostname,
     port,
     routes: {
+      "/favicon.ico": new Response(Bun.file(faviconPath), {
+        headers: { "cache-control": "public, max-age=86400", "content-type": "image/x-icon" },
+      }),
+      "/apple-touch-icon.png": new Response(Bun.file(appleTouchIconPath), {
+        headers: { "cache-control": "public, max-age=86400", "content-type": "image/png" },
+      }),
       "/": uiBundle,
       "/projects": uiBundle,
       "/sessions": uiBundle,
@@ -1200,6 +1218,12 @@ function indexHtml(): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Local-first analytics for Claude Code and Codex sessions. Search transcripts, inspect cost and context, and turn repeated work into durable agent knowledge."
+    />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 256x256" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
     <title>decant</title>
   </head>
   <body>
@@ -1208,4 +1232,13 @@ function indexHtml(): string {
   </body>
 </html>
 `;
+}
+
+function embeddedAsset(path: string, contentType: string): Response {
+  return new Response(Bun.file(path), {
+    headers: {
+      "cache-control": "public, max-age=86400",
+      "content-type": contentType,
+    },
+  });
 }

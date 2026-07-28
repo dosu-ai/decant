@@ -16,7 +16,12 @@ describe("settings", () => {
         env,
         appExists: (name) => name === "Cursor",
       }),
-    ).toEqual({ agent: "claude", terminal: "iterm", ide: "cursor" });
+    ).toEqual({
+      agent: "claude",
+      terminal: "iterm",
+      ide: "cursor",
+      dosuSuggestions: "show",
+    });
   });
 
   test("saveSettings persists sanitized values over detected defaults", () => {
@@ -26,19 +31,34 @@ describe("settings", () => {
         agent: "codex",
         terminal: "ghostty",
         ide: "zed",
+        dosuSuggestions: "hide",
         unknown: "ignored",
       },
       { env, appExists: () => false },
     );
-    expect(saved).toEqual({ agent: "codex", terminal: "ghostty", ide: "zed" });
+    expect(saved).toEqual({
+      agent: "codex",
+      terminal: "ghostty",
+      ide: "zed",
+      dosuSuggestions: "hide",
+    });
     expect(JSON.parse(readFileSync(settingsPath({ env }), "utf8"))).toEqual({
       agent: "codex",
       terminal: "ghostty",
       ide: "zed",
+      dosuSuggestions: "hide",
     });
 
-    const merged = saveSettings({ agent: "nope", terminal: "wezterm" }, { env });
-    expect(merged).toMatchObject({ agent: "codex", terminal: "wezterm", ide: "zed" });
+    const merged = saveSettings(
+      { agent: "nope", terminal: "wezterm", dosuSuggestions: "nope" },
+      { env },
+    );
+    expect(merged).toMatchObject({
+      agent: "codex",
+      terminal: "wezterm",
+      ide: "zed",
+      dosuSuggestions: "hide",
+    });
     expect(getSettings({ env }).terminal).toBe("wezterm");
   });
 });

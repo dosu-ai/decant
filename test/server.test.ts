@@ -108,6 +108,25 @@ describe("server routes", () => {
     expect(root.contentType).toBe("text/html; charset=utf-8");
     expect(root.body).toContain('<div id="root"></div>');
     expect(root.body).toContain("/src/ui/main.tsx");
+    expect(root.body).toContain('rel="icon" href="/favicon.ico"');
+    expect(root.body).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
+    expect(root.body).toContain('name="description"');
+    const sourceHead = readFileSync(
+      join(import.meta.dir, "..", "src", "ui", "index.html"),
+      "utf8",
+    ).match(/<head>([\s\S]*?)<\/head>/)?.[1];
+    expect(sourceHead).toContain('href="./assets/favicon.ico"');
+    expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
+    expect(sourceHead).toContain("Local-first analytics for Claude Code and Codex sessions.");
+
+    const favicon = await route(config, "/favicon.ico");
+    expect(favicon.status).toBe(200);
+    expect(favicon.contentType).toBe("image/x-icon");
+    expect(typeof favicon.body).toBe("string");
+
+    const touchIcon = await route(config, "/apple-touch-icon.png");
+    expect(touchIcon.status).toBe(200);
+    expect(touchIcon.contentType).toBe("image/png");
   });
 
   test("app routes fall back to the React shell and config is exposed locally", async () => {
@@ -268,18 +287,35 @@ describe("server routes", () => {
       const settings = await route(config, "/api/settings");
       expect(settings.status).toBe(200);
       expect(settings.body).toMatchObject({
-        settings: expect.objectContaining({ agent: "claude" }),
-        options: expect.objectContaining({ agents: expect.any(Array) }),
+        settings: expect.objectContaining({ agent: "claude", dosuSuggestions: "show" }),
+        options: expect.objectContaining({
+          agents: expect.any(Array),
+          dosuSuggestions: [
+            ["show", "Show"],
+            ["hide", "Hide"],
+          ],
+        }),
       });
 
       const saved = await route(config, "/api/settings", {
         method: "POST",
-        body: JSON.stringify({ agent: "codex", terminal: "wezterm", ide: "zed", extra: "no" }),
+        body: JSON.stringify({
+          agent: "codex",
+          terminal: "wezterm",
+          ide: "zed",
+          dosuSuggestions: "hide",
+          extra: "no",
+        }),
       });
       expect(saved.status).toBe(200);
       expect(saved.body).toMatchObject({
         saved: true,
-        settings: { agent: "codex", terminal: "wezterm", ide: "zed" },
+        settings: {
+          agent: "codex",
+          terminal: "wezterm",
+          ide: "zed",
+          dosuSuggestions: "hide",
+        },
       });
     } finally {
       if (prior == null) {

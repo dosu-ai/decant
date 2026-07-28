@@ -2,7 +2,7 @@
   "name": "@dosu/decant",
   "version": "0.0.0",
   "private": true,
-  "description": "Local-first analysis of Claude Code and Codex sessions: token spend, context windows, files touched, and cost.",
+  "description": "Local-first analytics for Claude Code and Codex sessions, built by Dosu.",
   "license": "Apache-2.0",
   "repository": "https://github.com/dosu-ai/decant",
   "packageManager": "bun@1.3.14",

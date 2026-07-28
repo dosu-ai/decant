@@ -48,3 +48,39 @@ describe("responsive session detail styles", () => {
     expect(laptopRules).toContain("display: none");
   });
 });
+
+describe("responsive Dosu surfaces", () => {
+  test("keeps ambient attribution quiet until interaction", () => {
+    expect(rule(".dosu-attribution")).toContain("font-size: 12px");
+    expect(rule(".dosu-attribution")).toContain("color: var(--faint)");
+    expect(rule(".dosu-attribution:hover")).toContain("color: var(--fg)");
+  });
+
+  test("gives the badge a compact mobile label without removing its full accessible name", () => {
+    expect(rule(".dosu-label-compact")).toContain("display: none");
+    const mobileStart = styles.indexOf("@media (max-width: 640px)");
+    const reducedMotionStart = styles.indexOf(
+      "@media (prefers-reduced-motion: reduce)",
+      mobileStart,
+    );
+    const mobileRules = styles.slice(mobileStart, reducedMotionStart);
+    expect(mobileRules).toContain(".dosu-label-full");
+    expect(mobileRules).toContain("display: none");
+    expect(mobileRules).toContain(".dosu-label-compact");
+    expect(mobileRules).toContain("display: inline");
+  });
+
+  test("contains the share review sheet and stacks its privacy contract on mobile", () => {
+    expect(rule(".share-review-sheet")).toContain("max-height: calc(100vh - 48px)");
+    expect(rule(".share-review-sheet")).toContain("overflow-y: auto");
+    expect(rule(".share-copy-review p")).toContain("overflow-wrap: anywhere");
+    const mobileStart = styles.indexOf("@media (max-width: 640px)");
+    const reducedMotionStart = styles.indexOf(
+      "@media (prefers-reduced-motion: reduce)",
+      mobileStart,
+    );
+    const mobileRules = styles.slice(mobileStart, reducedMotionStart);
+    expect(mobileRules).toContain(".share-privacy-review");
+    expect(mobileRules).toContain("grid-template-columns: 1fr");
+  });
+});

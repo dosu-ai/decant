@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   activeRoute,
   activeRouteKey,
+  documentTitleFor,
   type NavDestination,
   pathOnly,
   titleFor,
@@ -89,5 +90,28 @@ describe("titleFor", () => {
     expect(titleFor("Sessions")).toBe("Session Archive");
     expect(titleFor("Analytics")).toBe("Analytics");
     expect(titleFor("Tools & MCP")).toBe("Tools & MCP");
+  });
+});
+
+describe("documentTitleFor", () => {
+  test.each([
+    ["/", "Analytics · decant"],
+    ["/analytics", "Analytics · decant"],
+    ["/sessions", "Sessions · decant"],
+    ["/sessions/42", "Session detail · decant"],
+    ["/projects", "Projects · decant"],
+    ["/search", "Search · decant"],
+    ["/insights", "Insights · decant"],
+    ["/tools", "Tools & MCP · decant"],
+    ["/files", "File hotspots · decant"],
+    ["/settings", "Settings · decant"],
+  ])("maps %s to a privacy-safe browser title", (path, expected) => {
+    expect(documentTitleFor(path, ITEMS)).toBe(expected);
+  });
+
+  test("never places a session title or query string in browser history", () => {
+    expect(documentTitleFor("/sessions/42?title=private-repository", ITEMS)).toBe(
+      "Session detail · decant",
+    );
   });
 });

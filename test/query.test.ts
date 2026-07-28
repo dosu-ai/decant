@@ -419,6 +419,61 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("derives Dosu provenance only from exact normalized MCP evidence", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent,
+                          parent_session_id)
+      VALUES
+        (1, 'claude_code', 'dosu-root', 'Root', '2026-07-01T00:00:00Z', 0, NULL),
+        (2, 'codex', 'dosu-child', 'Child', '2026-07-01T00:01:00Z', 1, 1),
+        (3, 'claude_code', 'text-only', 'Dosu mentioned in text',
+         '2026-07-01T00:02:00Z', 0, NULL);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES (1, 3, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES (1, 3, 0, 'text', 'Dosu was mentioned, but no MCP call happened.');
+      INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server)
+      VALUES
+        (1, 'mcp', 'mcp__dosu__read_knowledge', 'dosu'),
+        (1, 'mcp', 'mcp__claude_ai_Dosu__search', 'claude_ai_Dosu'),
+        (1, 'mcp', 'mcp__github__search', 'github'),
+        (1, 'mcp', 'mcp__my_dosu_proxy__search', 'my_dosu_proxy'),
+        (1, 'builtin', 'dosu', 'dosu'),
+        (2, 'mcp', 'mcp__dosu__save_topic', 'dosu');
+    `);
+
+    const roots = listSessions(db, { includeNestedSubagents: true, limit: 10 });
+    const root = roots.find((session) => session.id === 1);
+    const textOnly = roots.find((session) => session.id === 3);
+    expect(root).toMatchObject({
+      dosu_mcp_direct_calls: 2,
+      dosu_mcp_tree_calls: 3,
+      subagents: [
+        expect.objectContaining({
+          id: 2,
+          dosu_mcp_direct_calls: 1,
+          dosu_mcp_tree_calls: 1,
+        }),
+      ],
+    });
+    expect(textOnly).toMatchObject({
+      dosu_mcp_direct_calls: 0,
+      dosu_mcp_tree_calls: 0,
+    });
+
+    const detail = getSession(db, 1);
+    expect(detail?.summary).toMatchObject({
+      dosu_mcp_direct_calls: 2,
+      dosu_mcp_tree_calls: 3,
+    });
+    expect(detail?.subagents[0]?.summary).toMatchObject({
+      dosu_mcp_direct_calls: 1,
+      dosu_mcp_tree_calls: 1,
+    });
+    db.close();
+  });
+
   test("sessionIngestIssues returns typed rows joined by source path", () => {
     const db = freshDb();
     const content = readFileSync(

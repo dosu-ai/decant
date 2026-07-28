@@ -8,7 +8,12 @@ import type { UserSettings } from "../src/settings.ts";
 const workDir = mkdtempSync(join(tmpdir(), "decant-launcher-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-const settings: UserSettings = { agent: "claude", terminal: "ghostty", ide: "cursor" };
+const settings: UserSettings = {
+  agent: "claude",
+  terminal: "ghostty",
+  ide: "cursor",
+  dosuSuggestions: "show",
+};
 
 describe("launcher", () => {
   test("canLaunch is macOS only and fallback commands are quoted", () => {

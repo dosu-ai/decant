@@ -64,3 +64,13 @@ export function activeRouteKey(path: string, items: readonly NavDestination[]): 
 export function titleFor(active: string): string {
   return active === "Sessions" ? "Session Archive" : active;
 }
+
+export function documentTitleFor(path: string, items: readonly NavDestination[]): string {
+  const pathname = pathOnly(path);
+  if (/^\/sessions\/[^/]+$/.test(pathname)) {
+    return "Session detail · decant";
+  }
+  const active = resolve(path, items)?.label ?? HOME_LABEL;
+  const label = active === "Files" ? "File hotspots" : active;
+  return `${label} · decant`;
+}

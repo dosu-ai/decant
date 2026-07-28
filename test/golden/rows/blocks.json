@@ -730,5 +730,77 @@
     "tool_use_id": null,
     "tool_input": null,
     "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 0,
+    "ordinal": 0,
+    "type": "text",
+    "text": "Check durable project context",
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 1,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__dosu__read_knowledge",
+    "tool_use_id": "call_dosu",
+    "tool_input": "{\"query\":\"synthetic context\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 2,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__github__search_code",
+    "tool_use_id": "call_github",
+    "tool_input": "{\"query\":\"synthetic\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 3,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "dosu__unqualified_tool",
+    "tool_use_id": "call_unqualified",
+    "tool_input": "{\"query\":\"synthetic\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 4,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "call_dosu",
+    "tool_input": null,
+    "tool_result": "synthetic result"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 5,
+    "ordinal": 0,
+    "type": "text",
+    "text": "Context checked.",
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
   }
 ]

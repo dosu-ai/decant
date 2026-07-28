@@ -10,6 +10,8 @@
 
 # Browser-automation artifacts
 .playwright-mcp/
+.playwright-cli/
+/output/playwright/
 
 # TypeScript app
 # No trailing slash: a bare name also matches a symlink, which a directory

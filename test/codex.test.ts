@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -306,5 +307,20 @@ describe("parseCodexSession", () => {
 
     expect(messages[0]?.blocks[0]?.toolName).toBe("mcp__dosu__read_knowledge");
     expect(messages[1]?.blocks[0]?.toolName).toBe("");
+  });
+
+  test("parses the synthetic MCP fixture with exact and mcp-prefix-less namespaces", () => {
+    const content = readFileSync(
+      join(import.meta.dir, "..", "fixtures", "codex", "mcp.jsonl"),
+      "utf8",
+    );
+    const messages = parseCodexSession("fallback", content, new Map()).session.messages;
+    const toolNames = messages.flatMap((message) =>
+      message.blocks.flatMap((block) => (block.toolName == null ? [] : [block.toolName])),
+    );
+
+    expect(toolNames).toContain("mcp__dosu__read_knowledge");
+    expect(toolNames).toContain("mcp__github__search_code");
+    expect(toolNames).toContain("dosu__unqualified_tool");
   });
 });

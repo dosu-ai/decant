@@ -6,6 +6,7 @@ import {
   parseMessageRawMeta,
 } from "./context-window.ts";
 import { sessionDatePredicate } from "./date-filter.ts";
+import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { preview } from "./tools.ts";
 
@@ -38,6 +39,10 @@ export interface SessionSummary {
   subagent_estimated_cost_usd: number;
   /** Ingest diagnostics recorded against this session's source file. */
   ingest_issue_count: number;
+  /** Verified Dosu MCP calls made by this session alone. */
+  dosu_mcp_direct_calls: number;
+  /** Verified Dosu MCP calls made by this session and descendants, depth <= 5. */
+  dosu_mcp_tree_calls: number;
   subagents?: SessionSummary[];
 }
 
@@ -75,7 +80,9 @@ const SESSION_SUMMARY_SELECT = `
          COALESCE(sa.subagent_count, 0) AS subagent_count,
          COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd,
          (SELECT COUNT(*) FROM ingest_issue ii WHERE ii.source_path = s.source_path)
-           AS ingest_issue_count
+           AS ingest_issue_count,
+         0 AS dosu_mcp_direct_calls,
+         0 AS dosu_mcp_tree_calls
   FROM session s
   LEFT JOIN project p ON p.id = s.project_id
   LEFT JOIN (
@@ -117,7 +124,9 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
     .query(`${SESSION_SUMMARY_SELECT}${where} ORDER BY s.started_at DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as SessionSummaryRow[];
   const summaries = withDisplayTitles(db, rows.map(mapSessionSummary));
-  return filter.includeNestedSubagents === true ? withNestedSubagents(db, summaries) : summaries;
+  const nested =
+    filter.includeNestedSubagents === true ? withNestedSubagents(db, summaries) : summaries;
+  return withDosuMcpEvidence(db, nested);
 }
 
 export interface SearchHit {
@@ -247,30 +256,7 @@ export function getSession(
   options: SessionReadOptions = {},
 ): SessionDetail | null {
   const summaryRow = db
-    .query(
-      `SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
-              s.model, s.reasoning_effort,
-              s.reasoning_effort_levels AS reasoning_effort_levels_json,
-              s.started_at, s.ended_at, s.message_count,
-              s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
-              s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
-              s.agent_id, s.agent_type, s.spawn_depth,
-              s.context_window_tokens, s.peak_context_tokens, s.compaction_count,
-              COALESCE(sa.subagent_count, 0) AS subagent_count,
-              COALESCE(sa.subagent_estimated_cost_usd, 0.0) AS subagent_estimated_cost_usd,
-              (SELECT COUNT(*) FROM ingest_issue ii WHERE ii.source_path = s.source_path)
-                AS ingest_issue_count
-       FROM session s
-       LEFT JOIN project p ON p.id = s.project_id
-       LEFT JOIN (
-         SELECT parent_session_id, COUNT(*) AS subagent_count,
-                COALESCE(SUM(estimated_cost_usd), 0.0) AS subagent_estimated_cost_usd
-         FROM session
-         WHERE is_subagent = 1 AND parent_session_id IS NOT NULL
-         GROUP BY parent_session_id
-       ) sa ON sa.parent_session_id = s.id
-       WHERE s.id = ?1`,
-    )
+    .query(`${SESSION_SUMMARY_SELECT} WHERE s.id = ?1`)
     .get(id) as SessionSummaryRow | null;
   if (summaryRow == null) {
     return null;
@@ -369,9 +355,10 @@ export function getSession(
     )
     .all(id) as SessionSummaryRow[];
   const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
-  const rootSummary = titled[0] ?? mapSessionSummary(summaryRow);
+  const evidenced = withDosuMcpEvidence(db, titled);
+  const rootSummary = evidenced[0] ?? mapSessionSummary(summaryRow);
   const childrenByParent = new Map<number, SessionSummary[]>();
-  for (const child of titled.slice(1)) {
+  for (const child of evidenced.slice(1)) {
     if (child.parent_session_id == null) {
       continue;
     }
@@ -585,6 +572,80 @@ function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
     is_archived: row.is_archived !== 0,
     is_subagent: row.is_subagent !== 0,
   };
+}
+
+interface DosuMcpEvidenceRow {
+  root_id: number;
+  direct_calls: number;
+  tree_calls: number;
+}
+
+/**
+ * Adds provenance counts in one bounded aggregate for the complete returned
+ * batch. Exact MCP server IDs are the only accepted evidence; no transcript or
+ * repository text participates.
+ */
+function withDosuMcpEvidence(db: Database, sessions: SessionSummary[]): SessionSummary[] {
+  const flattened = flattenSessionSummaries(sessions);
+  if (flattened.length === 0) {
+    return sessions;
+  }
+  const ids = [...new Set(flattened.map((session) => session.id))];
+  const idPlaceholders = ids.map(() => "?").join(", ");
+  const serverPlaceholders = CONFIRMED_DOSU_SERVER_IDS.map(() => "?").join(", ");
+  const rows = db
+    .query(
+      `WITH RECURSIVE subtree(root_id, session_id, depth) AS (
+         SELECT s.id, s.id, 0
+         FROM session s
+         WHERE s.id IN (${idPlaceholders})
+         UNION ALL
+         SELECT subtree.root_id, child.id, subtree.depth + 1
+         FROM session child
+         JOIN subtree ON child.parent_session_id = subtree.session_id
+         WHERE subtree.depth < 5
+       ),
+       evidence AS (
+         SELECT subtree.root_id, subtree.depth
+         FROM subtree
+         JOIN tool_call tc ON tc.session_id = subtree.session_id
+         WHERE tc.tool_kind = 'mcp'
+           AND tc.mcp_server IN (${serverPlaceholders})
+       )
+       SELECT root_id,
+              SUM(CASE WHEN depth = 0 THEN 1 ELSE 0 END) AS direct_calls,
+              COUNT(*) AS tree_calls
+       FROM evidence
+       GROUP BY root_id`,
+    )
+    .all(...ids, ...CONFIRMED_DOSU_SERVER_IDS) as DosuMcpEvidenceRow[];
+  const byId = new Map(rows.map((row) => [row.root_id, row]));
+
+  const enrich = (session: SessionSummary): SessionSummary => {
+    const evidence = byId.get(session.id);
+    const subagents = session.subagents?.map(enrich);
+    return {
+      ...session,
+      dosu_mcp_direct_calls: evidence?.direct_calls ?? 0,
+      dosu_mcp_tree_calls: evidence?.tree_calls ?? 0,
+      ...(subagents == null ? {} : { subagents }),
+    };
+  };
+  return sessions.map(enrich);
+}
+
+function flattenSessionSummaries(sessions: SessionSummary[]): SessionSummary[] {
+  const flattened: SessionSummary[] = [];
+  const visit = (session: SessionSummary) => {
+    flattened.push(session);
+    for (const subagent of session.subagents ?? []) {
+      visit(subagent);
+    }
+  };
+  for (const session of sessions) {
+    visit(session);
+  }
+  return flattened;
 }
 
 function parseReasoningEffortLevels(value: string | null | undefined): string[] {

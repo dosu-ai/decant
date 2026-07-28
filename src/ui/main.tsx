@@ -85,6 +85,7 @@ import {
   titleFor,
 } from "./navigation.ts";
 import {
+  hasShareCardValues,
   SHARE_CARD_HEIGHT,
   SHARE_CARD_SCALE,
   SHARE_CARD_WIDTH,
@@ -2284,7 +2285,12 @@ function ActivityPanel({
               : `Local time, you ship most around ${hourLabel(peak)}`}
           </p>
         </div>
-        <ShareChartButton input={shareInput} metric="int" variant="bar" />
+        <ShareChartButton
+          disabled={!hasShareCardValues(activity?.by_hour)}
+          input={shareInput}
+          metric="int"
+          variant="bar"
+        />
       </div>
       <div className="panel-body chart-panel-body">
         <AnalyticsChart
@@ -2643,7 +2649,12 @@ function WeekdayPanel({
           <h2>Busiest days</h2>
           <p>{peak == null ? "Sessions by weekday" : `You ship most on ${weekdayLabel(peak)}`}</p>
         </div>
-        <ShareChartButton input={shareInput} metric="int" variant="bar" />
+        <ShareChartButton
+          disabled={!hasShareCardValues(activity?.by_weekday)}
+          input={shareInput}
+          metric="int"
+          variant="bar"
+        />
       </div>
       <div className="panel-body chart-panel-body">
         <AnalyticsChart

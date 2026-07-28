@@ -34,6 +34,12 @@ export interface ShareCardCopyInput {
   values: number[];
 }
 
+export function hasShareCardValues(
+  values: readonly number[] | null | undefined,
+): values is readonly number[] {
+  return (values?.length ?? 0) > 0;
+}
+
 const TITLES: Record<ShareCardKind, string> = {
   busiest_days: "Busiest days",
   busiest_hours: "Busiest hours",

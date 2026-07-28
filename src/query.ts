@@ -623,14 +623,13 @@ function withDosuMcpEvidence(db: Database, sessions: SessionSummary[]): SessionS
     return sessions;
   }
   const ids = [...new Set(flattened.map((session) => session.id))];
-  const idPlaceholders = ids.map(() => "?").join(", ");
   const serverPlaceholders = CONFIRMED_DOSU_SERVER_IDS.map(() => "?").join(", ");
   const rows = db
     .query(
       `WITH RECURSIVE subtree(root_id, session_id, depth) AS (
          SELECT s.id, s.id, 0
          FROM session s
-         WHERE s.id IN (${idPlaceholders})
+         WHERE s.id IN (SELECT value FROM json_each(?))
          UNION ALL
          SELECT subtree.root_id, child.id, subtree.depth + 1
          FROM session child
@@ -650,7 +649,7 @@ function withDosuMcpEvidence(db: Database, sessions: SessionSummary[]): SessionS
        FROM evidence
        GROUP BY root_id`,
     )
-    .all(...ids, ...CONFIRMED_DOSU_SERVER_IDS) as DosuMcpEvidenceRow[];
+    .all(JSON.stringify(ids), ...CONFIRMED_DOSU_SERVER_IDS) as DosuMcpEvidenceRow[];
   const byId = new Map(rows.map((row) => [row.root_id, row]));
 
   const enrich = (session: SessionSummary): SessionSummary => {

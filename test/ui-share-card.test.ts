@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  hasShareCardValues,
   SHARE_CARD_HEIGHT,
   SHARE_CARD_SCALE,
   SHARE_CARD_WIDTH,
@@ -22,6 +23,12 @@ const DAILY = {
 };
 
 describe("local analytics share cards", () => {
+  test("requires at least one aggregate value before sharing", () => {
+    expect(hasShareCardValues(null)).toBe(false);
+    expect(hasShareCardValues([])).toBe(false);
+    expect(hasShareCardValues([0])).toBe(true);
+  });
+
   test("exports at 2× high density by default", () => {
     expect(SHARE_CARD_SCALE).toBe(2);
     expect(SHARE_CARD_WIDTH * SHARE_CARD_SCALE).toBe(2400);

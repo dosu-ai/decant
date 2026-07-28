@@ -476,6 +476,11 @@ describe("query reads", () => {
       dosu_mcp_direct_calls: 0,
       dosu_mcp_tree_calls: 0,
     });
+    expect(listSessions(db, { limit: 1 })[0]).toMatchObject({
+      id: 3,
+      dosu_mcp_direct_calls: 0,
+      dosu_mcp_tree_calls: 0,
+    });
 
     const detail = getSession(db, 1);
     expect(detail?.summary).toMatchObject({

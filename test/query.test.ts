@@ -728,6 +728,12 @@ describe("query reads", () => {
       p50_ms: 1000,
       p95_ms: 1000,
     });
+    expect(listToolCalls(db, { tool: "missing" }).summary).toEqual({
+      calls: 0,
+      errors: 0,
+      p50_ms: null,
+      p95_ms: null,
+    });
     expect(listToolCalls(db, { limit: 10_000 }).limit).toBe(100);
     expect(listToolCalls(db, { limit: 1, offset: 1 })).toMatchObject({
       total: 2,

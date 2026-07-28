@@ -262,6 +262,17 @@ describe("report charts", () => {
     expect(renderSessionsByDayChart(daily)).toContain("<svg");
   });
 
+  test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {
+    const svg = renderSessionsByDayChart([
+      {
+        ...firstDay,
+        key: "</text><script>globalThis.pwned = true</script><text>",
+      },
+    ]);
+    expect(svg).not.toContain("<script");
+    expect(svg).toContain("&lt;script&gt;");
+  });
+
   test("uses the live context strip's call slots, curve breaks, and compaction positions", () => {
     const sourceTimeline = session.contextWindow;
     expect(sourceTimeline).not.toBeNull();
@@ -329,6 +340,7 @@ describe("static report rendering", () => {
     expect(html).toContain("Dosu keeps agent context fresh automatically");
     expect(html).toContain("utm_content=report_cta");
     expect(html).toContain("<svg");
+    expect(html).not.toContain("data-report-chart");
   });
 
   test("omits archive-wide insights from date-filtered reports", () => {

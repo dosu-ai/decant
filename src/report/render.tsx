@@ -79,8 +79,8 @@ export function renderAnalyticsReport(
       <section className="section">
         <h2>Activity over time</h2>
         <div className="figure-grid">
-          <ReportFigure caption="Sessions per day" chartId="sessions-by-day" />
-          <ReportFigure caption="Estimated cost per day" chartId="cost-by-day" />
+          <ReportFigure caption="Sessions per day" svg={sessionsSvg} />
+          <ReportFigure caption="Estimated cost per day" svg={costSvg} />
         </div>
       </section>
 
@@ -124,10 +124,7 @@ export function renderAnalyticsReport(
       <ReportFooter options={normalized} />
     </main>
   );
-  return staticDocument("Agent activity report · Decant", body, normalized.fontCss, {
-    "sessions-by-day": sessionsSvg,
-    "cost-by-day": costSvg,
-  });
+  return staticDocument("Agent activity report · Decant", body, normalized.fontCss);
 }
 
 export function renderSessionReport(
@@ -176,7 +173,7 @@ export function renderSessionReport(
           <p className="empty">No context-window telemetry is available for this session.</p>
         ) : (
           <>
-            <ReportFigure caption="Context occupancy across calls" chartId="context-window" />
+            <ReportFigure caption="Context occupancy across calls" svg={contextSvg} />
             <dl className="activity-note">
               <div>
                 <dt>Peak occupancy</dt>
@@ -230,9 +227,7 @@ export function renderSessionReport(
       <ReportFooter options={normalized} />
     </main>
   );
-  return staticDocument("Session report · Decant", body, normalized.fontCss, {
-    ...(contextSvg == null ? {} : { "context-window": contextSvg }),
-  });
+  return staticDocument("Session report · Decant", body, normalized.fontCss);
 }
 
 function ReportHeader({
@@ -277,11 +272,12 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReportFigure({ caption, chartId }: { caption: string; chartId: string }) {
+function ReportFigure({ caption, svg }: { caption: string; svg: string }) {
   return (
     <figure>
       <figcaption>{caption}</figcaption>
-      <div className="chart" data-report-chart={chartId} />
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: ECharts SSR is the only source and escapes dynamic chart labels. */}
+      <div className="chart" dangerouslySetInnerHTML={{ __html: svg }} />
     </figure>
   );
 }
@@ -414,13 +410,8 @@ function ReportFooter({ options }: { options: NormalizedRenderOptions }) {
   );
 }
 
-function staticDocument(
-  title: string,
-  body: React.ReactNode,
-  fontCss: string,
-  charts: Readonly<Record<string, string>>,
-): string {
-  let markup = renderToStaticMarkup(
+function staticDocument(title: string, body: React.ReactNode, fontCss: string): string {
+  const markup = renderToStaticMarkup(
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
@@ -432,10 +423,6 @@ function staticDocument(
       <body>{body}</body>
     </html>,
   );
-  for (const [id, svg] of Object.entries(charts)) {
-    const placeholder = `<div class="chart" data-report-chart="${id}"></div>`;
-    markup = markup.replace(placeholder, `<div class="chart">${svg}</div>`);
-  }
   return `<!doctype html>${markup}`;
 }
 

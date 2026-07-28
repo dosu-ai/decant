@@ -110,10 +110,10 @@ function ingestRow<T>(db: Database, sql: string, params: IngestQueryParam[] = []
   }
 }
 
-function runIngestStatement(db: Database, sql: string, params: IngestQueryParam[] = []): void {
+function runIngestStatement(db: Database, sql: string, params: IngestQueryParam[] = []): number {
   const statement = db.prepare<unknown, IngestQueryParam[]>(sql);
   try {
-    statement.run(...params);
+    return Number(statement.run(...params).lastInsertRowid);
   } finally {
     statement.finalize();
   }
@@ -728,7 +728,7 @@ function writeSession(
   const gotWorkType = workType(s, refs);
   const cost = estimateCost(s.model, s.totals, defaultPricing());
 
-  runIngestStatement(
+  const sessionId = runIngestStatement(
     db,
     `INSERT INTO session(
        tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
@@ -801,7 +801,6 @@ function writeSession(
       canonicalJson(s.reasoningEffortLevels),
     ],
   );
-  const sessionId = lastInsertRowid(db);
 
   const results = new Map<string, number>();
   const resultErrors = new Map<string, boolean | null>();
@@ -826,37 +825,39 @@ function writeSession(
 
   try {
     for (const message of s.messages) {
-      insertMessage.run(
-        sessionId,
-        message.seq,
-        message.sourceUuid,
-        message.parentSourceUuid,
-        message.role,
-        message.model,
-        message.stopReason,
-        message.timestamp,
-        message.usage?.input ?? null,
-        message.usage?.output ?? null,
-        message.usage?.cacheRead ?? null,
-        message.usage?.cacheCreation ?? null,
-        canonicalJson(message.raw),
+      const messageId = Number(
+        insertMessage.run(
+          sessionId,
+          message.seq,
+          message.sourceUuid,
+          message.parentSourceUuid,
+          message.role,
+          message.model,
+          message.stopReason,
+          message.timestamp,
+          message.usage?.input ?? null,
+          message.usage?.output ?? null,
+          message.usage?.cacheRead ?? null,
+          message.usage?.cacheCreation ?? null,
+          canonicalJson(message.raw),
+        ).lastInsertRowid,
       );
-      const messageId = lastInsertRowid(db);
       messageIds.push(messageId);
 
       for (const block of message.blocks) {
-        insertBlock.run(
-          messageId,
-          sessionId,
-          block.ordinal,
-          block.blockType,
-          block.text,
-          block.toolName,
-          block.toolUseId,
-          block.toolInput === undefined ? null : canonicalJson(block.toolInput),
-          block.toolResult,
+        const blockId = Number(
+          insertBlock.run(
+            messageId,
+            sessionId,
+            block.ordinal,
+            block.blockType,
+            block.text,
+            block.toolName,
+            block.toolUseId,
+            block.toolInput === undefined ? null : canonicalJson(block.toolInput),
+            block.toolResult,
+          ).lastInsertRowid,
         );
-        const blockId = lastInsertRowid(db);
         if (block.blockType === "tool_use") {
           toolUseBlocks.push({
             messageId,
@@ -1138,10 +1139,6 @@ function durationBetween(start: string | null, end: string | null): number | nul
     return null;
   }
   return endMs - startMs;
-}
-
-function lastInsertRowid(db: Database): number {
-  return Number(ingestRow<{ id: number }>(db, "SELECT last_insert_rowid() AS id")?.id ?? 0);
 }
 
 function asString(value: Json | undefined): string | null {

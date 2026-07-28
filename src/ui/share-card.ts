@@ -52,6 +52,10 @@ export function shareCardTitle(kind: ShareCardKind): string {
   return TITLES[kind];
 }
 
+export function shareCardButtonLabel(kind: ShareCardKind): string {
+  return `Share ${shareCardTitle(kind)}`;
+}
+
 export function shareCardQualifier(kind: ShareCardKind): string {
   return QUALIFIERS[kind];
 }

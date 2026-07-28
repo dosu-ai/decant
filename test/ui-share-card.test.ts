@@ -6,6 +6,7 @@ import {
   SHARE_EXCLUDED_FIELDS,
   SHARE_INCLUDED_FIELDS,
   shareCardAltText,
+  shareCardButtonLabel,
   shareCardCaption,
   shareCardFilename,
   shareCardUrl,
@@ -31,6 +32,7 @@ describe("local analytics share cards", () => {
     expect(shareCardFilename(DAILY.kind, DAILY.start, DAILY.end)).toBe(
       "decant-sessions-per-day-2026-07-17-2026-07-23.png",
     );
+    expect(shareCardButtonLabel(DAILY.kind)).toBe("Share Sessions per day");
     expect(shareCardUrl(DAILY.kind)).toBe(
       "https://dosu.dev/for-agents?utm_source=decant&utm_medium=social_share&utm_campaign=analytics_cards&utm_content=sessions_per_day",
     );

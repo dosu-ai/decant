@@ -92,6 +92,7 @@ import {
   SHARE_INCLUDED_FIELDS,
   type ShareCardCopyInput,
   shareCardAltText,
+  shareCardButtonLabel,
   shareCardCaption,
   shareCardFilename,
   shareCardQualifier,
@@ -1525,23 +1526,22 @@ function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
         <div className="dosu-evidence-tooltip">
           <strong>Dosu MCP used in this session</strong>
           <p>{dosuEvidenceSummary(evidence)}</p>
-          <a href={dosuLink("session_badge")} rel="noopener" target="_blank">
-            How Dosu helps agents →
-          </a>
         </div>
       }
     >
       {(tooltipProps) => (
-        <button
+        <a
           {...tooltipProps}
           aria-label={dosuBadgeAriaLabel(evidence)}
           className="dosu-provenance-badge"
-          type="button"
+          href={dosuLink("session_badge")}
+          rel="noopener"
+          target="_blank"
         >
           <img alt="" src={dosuOfficialUrl} />
           <span className="dosu-label-full">{dosuBadgeVisualLabel(false)}</span>
           <span className="dosu-label-compact">{dosuBadgeVisualLabel(true)}</span>
-        </button>
+        </a>
       )}
     </Tooltip>
   );
@@ -2726,6 +2726,8 @@ function ShareChartButton({
   const [status, setStatus] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const renderVersionRef = useRef(0);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
   const title = shareCardTitle(input.kind);
   const caption = shareCardCaption(input);
   const altText = shareCardAltText(input);
@@ -2778,13 +2780,44 @@ function ShareChartButton({
     if (!open) {
       return;
     }
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
+    const focusFrame = window.requestAnimationFrame(() => {
+      shareDialogFocusTargets(dialogRef.current)[0]?.focus();
+    });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
         setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const dialog = dialogRef.current;
+      const focusTargets = shareDialogFocusTargets(dialog);
+      const first = focusTargets[0];
+      const last = focusTargets.at(-1);
+      if (dialog == null || first == null || last == null) {
+        return;
+      }
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      if (returnFocus?.isConnected === true) {
+        returnFocus.focus();
+      }
+    };
   }, [open]);
 
   const copyText = async (value: string, success: string) => {
@@ -2845,12 +2878,14 @@ function ShareChartButton({
   return (
     <>
       <button
+        aria-label={shareCardButtonLabel(input.kind)}
         className="chart-share-button"
         disabled={disabled}
         onClick={() => {
           setOpen(true);
           void renderPreview();
         }}
+        ref={triggerRef}
         type="button"
       >
         <Icon name="share" />
@@ -2863,6 +2898,7 @@ function ShareChartButton({
                 aria-labelledby={`share-title-${input.kind}`}
                 aria-modal="true"
                 className="share-review-sheet"
+                ref={dialogRef}
                 role="dialog"
               >
                 <header>
@@ -2972,6 +3008,17 @@ function ShareChartButton({
         : null}
     </>
   );
+}
+
+function shareDialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
+  if (dialog == null) {
+    return [];
+  }
+  return Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.getClientRects().length > 0);
 }
 
 async function renderShareCardPng(

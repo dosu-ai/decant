@@ -1111,13 +1111,6 @@ td a:hover {
   color: var(--muted);
 }
 
-.dosu-evidence-tooltip a {
-  width: fit-content;
-  margin-top: 3px;
-  color: var(--accent-hover);
-  font-weight: 650;
-}
-
 .session-title-stack a,
 .session-title-stack small {
   overflow: hidden;

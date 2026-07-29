@@ -662,13 +662,6 @@ function writeIngestedFile(
     runIngestStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
-    if (isDeletedSessionIdentity(db, parsed.session.tool, parsed.session.sourceSessionId)) {
-      runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [
-        prepared.file.path,
-      ]);
-      writeIngestSource(db, prepared, null, "skipped_deleted");
-      return "tombstoned";
-    }
     const sessionId = writeSession(
       db,
       parsed,

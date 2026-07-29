@@ -21,7 +21,8 @@ export function DosuOptimizedMark(): ReactElement {
       aria-label="Optimized with Dosu"
       className="dosu-optimized"
       href={reportDosuLink("report_footer")}
-      rel="noreferrer"
+      rel="noopener noreferrer"
+      target="_blank"
     >
       <svg
         aria-hidden="true"

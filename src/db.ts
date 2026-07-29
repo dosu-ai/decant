@@ -397,6 +397,20 @@ function migrate(db: Database, current: number): void {
       ).run();
     }
     if (current < 18) {
+      if (hasTable(db, "block")) {
+        db.exec("CREATE INDEX IF NOT EXISTS idx_block_tool_use ON block(session_id, tool_use_id)");
+      }
+      if (hasTable(db, "recommendation") && !hasColumn(db, "recommendation", "impact_label")) {
+        db.exec("ALTER TABLE recommendation ADD COLUMN impact_label TEXT");
+      }
+      if (
+        hasTable(db, "recommendation") &&
+        !hasColumn(db, "recommendation", "impact_label_checked")
+      ) {
+        db.exec(
+          "ALTER TABLE recommendation ADD COLUMN impact_label_checked INTEGER NOT NULL DEFAULT 0",
+        );
+      }
       if (hasTable(db, "block_fts") && hasTable(db, "block")) {
         const blockCount = (db.query("SELECT COUNT(*) AS n FROM block").get() as { n: number }).n;
         logger.info("Rebuilding the full-text index for prefix search.", {
@@ -458,10 +472,12 @@ function migrate(db: Database, current: number): void {
             SET duration_ms = (
               SELECT CASE
                 WHEN result_message.timestamp IS NOT NULL
-                  AND call_message.timestamp IS NOT NULL
-                  AND julianday(result_message.timestamp) >= julianday(call_message.timestamp)
+                  AND COALESCE(call_message.timestamp, tool_call.timestamp) IS NOT NULL
+                  AND julianday(result_message.timestamp) >=
+                    julianday(COALESCE(call_message.timestamp, tool_call.timestamp))
                 THEN CAST(ROUND(
-                  (julianday(result_message.timestamp) - julianday(call_message.timestamp))
+                  (julianday(result_message.timestamp) -
+                    julianday(COALESCE(call_message.timestamp, tool_call.timestamp)))
                   * 86400000
                 ) AS INTEGER)
                 ELSE NULL

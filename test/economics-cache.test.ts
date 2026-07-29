@@ -216,6 +216,27 @@ describe("economics cache", () => {
     db.close();
   });
 
+  test("dispose() bounds shutdown when a provider ignores cancellation", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    const cache = new EconomicsCache({
+      dbPath,
+      db,
+      settleTimeoutMs: 5,
+      computeVectors: () => new Promise(() => {}),
+    });
+
+    cache.prewarm();
+    cache.dispose();
+    await Promise.race([
+      cache.settled(),
+      Bun.sleep(100).then(() => {
+        throw new Error("settled timed out");
+      }),
+    ]);
+    db.close();
+  });
+
   test("stats worker computes the same vectors as an in-process run", async () => {
     const dbPath = seededDbPath();
     const cache = new EconomicsCache({ dbPath, db: openDb(dbPath) });

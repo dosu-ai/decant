@@ -54,6 +54,13 @@ Before the first tag, also confirm:
 - `main` is green and carries the release-blocking work — the tag is what
   publishes it, so nothing lands as a follow-up.
 
+## v18 archive upgrade note
+
+The first open of an existing v17 archive rebuilds its FTS index synchronously
+as part of the v18 migration. Large archives can therefore take noticeably
+longer to start once; Decant logs the migration before beginning the rebuild.
+Later starts use the migrated index and do not repeat this work.
+
 ## Steady-state release
 
 Every release after the bootstrap:

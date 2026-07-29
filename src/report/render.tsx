@@ -37,8 +37,8 @@ export function renderAnalyticsReport(
   const normalized = normalizeOptions(options);
   const dateScoped = data.range.from != null || data.range.to != null;
   const range = formatRange(data.range.from, data.range.to);
-  const sessionsSvg = renderSessionsByDayChart(data.sessionsByDay);
-  const costSvg = renderCostByDayChart(data.sessionsByDay);
+  const sessionsSvg = renderSessionsByDayChart(data.sessionsByDay, { width: 380, height: 220 });
+  const costSvg = renderCostByDayChart(data.sessionsByDay, { width: 380, height: 220 });
   const body = (
     <main className="report">
       <ReportHeader
@@ -147,7 +147,7 @@ export function renderSessionReport(
     <main className="report">
       <ReportHeader
         eyebrow="Session analysis"
-        lede="A focused record of this session’s shape, resource use, tools, and context-window pressure. Transcript content is not included."
+        lede="A focused record of this session’s shape, resource use, tools, and context-window pressure. Transcript content beyond the prompt preview is not included."
         meta={meta}
         subject={summary.title ?? "Untitled session"}
         title="Session report"
@@ -276,7 +276,7 @@ function ReportFigure({ caption, svg }: { caption: string; svg: string }) {
   return (
     <figure>
       <figcaption>{caption}</figcaption>
-      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: ECharts SSR is the only source and escapes dynamic chart labels. */}
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderChartSvg rejects active markup and event-handler attributes before this fixed local SVG reaches the report. */}
       <div className="chart" dangerouslySetInnerHTML={{ __html: svg }} />
     </figure>
   );
@@ -368,8 +368,8 @@ function ToolTable({ rows }: { rows: SessionToolReportRow[] }) {
           <th>Kind / server</th>
           <th className="number">Calls</th>
           <th className="number">Errors</th>
-          <th className="number">p50</th>
-          <th className="number">p95</th>
+          <th className="number">Median elapsed</th>
+          <th className="number">p95 elapsed</th>
         </tr>
       </thead>
       <tbody>
@@ -401,7 +401,7 @@ function ReportFooter({ options }: { options: NormalizedRenderOptions }) {
       </div>
       {shouldShowReportCta(options.dosuSuggestions) ? (
         <p className="report-cta">
-          <a href={reportDosuLink("report_cta")} rel="noreferrer">
+          <a href={reportDosuLink("report_cta")} rel="noopener noreferrer" target="_blank">
             Dosu keeps agent context fresh automatically →
           </a>
         </p>

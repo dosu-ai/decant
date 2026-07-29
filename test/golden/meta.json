@@ -1,7 +1,7 @@
 {
-  "generator": "frozen pre-typescript golden snapshot",
-  "source_of_truth": "pre-typescript implementation",
-  "baseline_rev": "bea97bcb49884cb7a7de9dc6cf441925c597c749-dirty",
+  "generator": "synthetic TypeScript golden snapshot",
+  "source_of_truth": "scripts/regen-goldens.ts",
+  "regeneration": "mechanically regenerated from the listed synthetic fixtures",
   "fixtures": [
     "fixtures/claude/distill.jsonl",
     "fixtures/claude/enriched.jsonl",

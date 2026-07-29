@@ -199,6 +199,11 @@ describe("tool-aware transcript presentation", () => {
     });
   });
 
+  test("falls back to the structured arguments instead of diffing oversized edits", () => {
+    const oversized = "x".repeat(60 * 1024);
+    expect(createToolDiff(oversized, `${oversized}y`)).toEqual([]);
+  });
+
   test("summarizes search result counts without inventing other tool metrics", () => {
     expect(summarizeToolResult("Grep", "one\ntwo\n\nthree")).toBe("3 matches");
     expect(summarizeToolResult("Glob", "a.ts\nb.ts")).toBe("2 paths");

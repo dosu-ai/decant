@@ -1145,6 +1145,46 @@ describe("sync", () => {
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
     }
+
+    db.exec(`
+      INSERT INTO recommendation
+        (key, kind, title, impact_label_checked, score, status, first_seen_at, updated_at)
+      VALUES
+        ('signal:historical', 'signal', 'Historical signal', 0, 1, 'implemented',
+         '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    `);
+    db.exec(
+      "UPDATE recommendation SET impact_label = NULL, impact_label_checked = 0 WHERE kind = 'signal'",
+    );
+    db.exec(`
+      UPDATE recommendation
+      SET status = 'implemented', status_source = 'manual'
+      WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
+    `);
+    const noOpReport = sync(db, config);
+    expect(noOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT COUNT(*) AS missing
+             FROM recommendation
+            WHERE kind = 'signal' AND key != 'signal:historical' AND impact_label IS NULL`,
+        )
+        .get(),
+    ).toEqual({ missing: 0 });
+    expect(
+      db
+        .query(
+          "SELECT impact_label, impact_label_checked FROM recommendation WHERE key = 'signal:historical'",
+        )
+        .get(),
+    ).toEqual({ impact_label: null, impact_label_checked: 1 });
+    db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
+    const secondNoOpReport = sync(db, config);
+    expect(secondNoOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(
+      db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
+    ).toEqual({ score: 12345 });
     db.close();
   });
 });

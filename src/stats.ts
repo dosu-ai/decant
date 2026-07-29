@@ -43,11 +43,15 @@ export function totals(db: Database, filter?: DateFilter | null): Totals {
 }
 
 export type Dimension = "tool" | "model" | "project" | "day";
+export const DIMENSIONS = [
+  "tool",
+  "model",
+  "project",
+  "day",
+] as const satisfies readonly Dimension[];
 
 export function parseDimension(value: string): Dimension | null {
-  return value === "tool" || value === "model" || value === "project" || value === "day"
-    ? value
-    : null;
+  return DIMENSIONS.includes(value as Dimension) ? (value as Dimension) : null;
 }
 
 export interface DimRow {

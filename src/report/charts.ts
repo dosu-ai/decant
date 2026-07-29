@@ -16,9 +16,28 @@ const RULE = "#dce1da";
 const SAGE = "#778561";
 const SAGE_LIGHT = "#b4bb91";
 const REPORT_SANS_STACK =
-  '"IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  "'IBM Plex Sans', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const CONTEXT_GRID_HORIZONTAL_PADDING = 80;
 const CONTEXT_MARKER_GAP_PX = 3;
+const REPORT_SVG_TAGS = new Set([
+  "svg",
+  "g",
+  "path",
+  "rect",
+  "circle",
+  "line",
+  "polyline",
+  "polygon",
+  "ellipse",
+  "text",
+  "tspan",
+  "defs",
+  "clippath",
+  "lineargradient",
+  "radialgradient",
+  "stop",
+]);
+const SVG_STYLE_ELEMENT = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
 export interface ReportContextWindowGeometry {
   compactionXs: number[];
@@ -53,9 +72,63 @@ export function renderChartSvg(option: echarts.EChartsOption, size: ReportChartS
         ...(option.textStyle ?? {}),
       },
     });
-    return chart.renderToSVGString();
+    return sanitizeReportSvg(chart.renderToSVGString());
   } finally {
     chart.dispose();
+  }
+}
+
+/**
+ * ECharts renders a fixed, local option schema in SSR mode, but attribute values
+ * are not an HTML escaping boundary. Reject active markup before an SVG reaches
+ * the report's intentionally inline render path.
+ */
+function sanitizeReportSvg(svg: string): string {
+  const styleElements = [...svg.matchAll(SVG_STYLE_ELEMENT)];
+  if (styleElements.length > 1) {
+    throw new Error("report chart contains injected style markup");
+  }
+  const styleBody = styleElements[0]?.[1];
+  if (
+    styleBody != null &&
+    (!/^\s*<!\[CDATA\[[\s\S]*\]\]>\s*$/.test(styleBody) ||
+      /@import|url\s*\(|expression\s*\(|(?:javascript|data|https?):|\/\//i.test(styleBody))
+  ) {
+    throw new Error("report chart contains active style markup");
+  }
+  const sanitized = svg.replace(SVG_STYLE_ELEMENT, "");
+  assertSafeReportSvg(sanitized);
+  return sanitized;
+}
+
+function assertSafeReportSvg(svg: string): void {
+  if (!svg.startsWith("<svg")) {
+    throw new Error("report chart did not render an SVG");
+  }
+  if (/<!doctype|<!entity|<\?xml-stylesheet/i.test(svg)) {
+    throw new Error("report chart contains active markup");
+  }
+  for (const match of svg.matchAll(/<\/?([a-z][\w:-]*)\b/gi)) {
+    const tag = match[1]?.toLowerCase();
+    if (tag != null && !REPORT_SVG_TAGS.has(tag)) {
+      throw new Error(`report chart contains unsupported <${tag}> markup`);
+    }
+  }
+  if (/(?:^|[\s<])on[a-z][\w:.-]*\s*=/i.test(svg)) {
+    throw new Error("report chart contains an event-handler attribute");
+  }
+  if (/(?:href|src)\s*=/i.test(svg)) {
+    throw new Error("report chart contains an external or active URL");
+  }
+  const withoutInternalPaintServers = svg.replace(/url\(\s*#[-\w:.]+\s*\)/gi, "");
+  if (/url\s*\(/i.test(withoutInternalPaintServers)) {
+    throw new Error("report chart contains an external paint server");
+  }
+  for (const match of svg.matchAll(/\sstyle\s*=\s*(["'])([\s\S]*?)\1/gi)) {
+    const style = match[2] ?? "";
+    if (/&|@import|expression\s*\(|(?:javascript|data|https?):|\/\//i.test(style)) {
+      throw new Error("report chart contains an active style attribute");
+    }
   }
 }
 

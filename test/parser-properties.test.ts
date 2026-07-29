@@ -82,6 +82,18 @@ describe("buildFtsQuery", () => {
       }),
     );
   });
+
+  test("repairs lone UTF-16 surrogates before quoting", () => {
+    for (const input of ["a\uD800:b", "a\uDFFF:b", "\uD800", "\uDFFF"]) {
+      const query = buildFtsQuery(input);
+      expect(() =>
+        searchDb
+          .query("SELECT rowid FROM search_property_fts WHERE search_property_fts MATCH ?")
+          .all(query),
+      ).not.toThrow();
+      expect(query).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
+  });
 });
 
 for (const { name, tool, parse } of parsers) {

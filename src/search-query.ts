@@ -16,7 +16,7 @@ export function bracketSearchMatches(snippet: string): string {
  * Embedded quotes are escaped with FTS5's doubled-quote syntax.
  */
 export function buildFtsQuery(input: string): string {
-  const tokens = searchTokens(input.replaceAll("\u0000", " "));
+  const tokens = searchTokens(input.toWellFormed().replaceAll("\u0000", " "));
   if (tokens.length === 0) {
     return '""';
   }

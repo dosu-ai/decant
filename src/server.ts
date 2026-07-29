@@ -24,6 +24,7 @@ import {
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
+  STATUS_FILTERS,
 } from "./recommendations.ts";
 import {
   assembleAnalyticsReport,
@@ -43,6 +44,7 @@ import {
 import {
   activity as activityStats,
   byDimension,
+  DIMENSIONS,
   dateBounds,
   fileHotspots,
   mcpUsage,
@@ -57,7 +59,13 @@ import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
-import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
+import {
+  type SyncRunnerResult,
+  type SyncStatusStore,
+  startWatch,
+  type WatchEvent,
+  type WatchHandle,
+} from "./watch.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
@@ -98,8 +106,17 @@ export type SyncWorkerRunner = (
   cancel?: { aborted: boolean },
   onProgress?: (progress: SyncProgress) => void,
 ) => Promise<SyncReport>;
+export interface SyncRunHandle {
+  promise: Promise<SyncReport>;
+  owned: boolean;
+}
 export interface SyncCoordinator {
   run: SyncWorkerRunner;
+  runWithOwnership(
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+  ): SyncRunHandle;
   close(): Promise<void>;
 }
 export interface SyncCoordinatorOptions {
@@ -116,7 +133,6 @@ export type ApiErrorCode =
   | "invalid_files_query"
   | "invalid_request"
   | "invalid_session_id"
-  | "invalid_query_syntax"
   | "launch_failed"
   | "launch_unsupported_platform"
   | "malformed_body"
@@ -125,6 +141,7 @@ export type ApiErrorCode =
   | "recommendation_not_found"
   | "schema_too_new"
   | "schema_too_old"
+  | "service_starting"
   | "session_not_found"
   | "unknown_dimension"
   | "unknown_status"
@@ -148,6 +165,7 @@ interface RequestContext {
   db?: Db;
   economics?: EconomicsCache;
   runSync?: SyncWorkerRunner;
+  syncCoordinator?: SyncCoordinator;
   launchPlatform?: NodeJS.Platform;
   boundHostname?: string;
   remoteAddress?: string | null;
@@ -284,7 +302,12 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      return await syncNow(config, context.economics, context.runSync);
+      return await syncNow(
+        config,
+        context.economics,
+        context.runSync,
+        context.syncCoordinator?.runWithOwnership,
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
@@ -363,6 +386,7 @@ export async function handleRequest(
         query?: string;
         tool?: string | null;
         project?: string | null;
+        include_subagents?: boolean;
         from?: string | null;
         to?: string | null;
         limit?: number;
@@ -373,23 +397,17 @@ export async function handleRequest(
       }
       const query = body.query;
       return withDb(config, context, (db) => {
-        try {
-          return json(
-            searchPage(db, query, {
-              tool: body.tool,
-              project: body.project,
-              from: body.from,
-              to: body.to,
-              limit: body.limit,
-              offset: body.offset,
-            }),
-          );
-        } catch (error) {
-          if (isSearchSyntaxError(error)) {
-            return errorResponse("invalid_query_syntax", "invalid search query", {}, 400);
-          }
-          throw error;
-        }
+        return json(
+          searchPage(db, query, {
+            tool: body.tool,
+            project: body.project,
+            includeSubagents: body.include_subagents === true,
+            from: body.from,
+            to: body.to,
+            limit: body.limit,
+            offset: body.offset,
+          }),
+        );
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
@@ -401,7 +419,7 @@ export async function handleRequest(
         return errorResponse(
           "unknown_dimension",
           "unknown dimension",
-          { allowed: ["tool", "model", "project", "day"] },
+          { allowed: DIMENSIONS },
           400,
         );
       }
@@ -438,6 +456,16 @@ export async function handleRequest(
           "decant-analytics-report.html",
         ),
       );
+    }
+    const possibleSessionReportRoute = url.pathname.match(
+      /^\/api\/reports\/session\/([^/]+)\.html$/,
+    );
+    if (
+      request.method === "GET" &&
+      possibleSessionReportRoute != null &&
+      !isValidSessionId(possibleSessionReportRoute[1] ?? "")
+    ) {
+      return errorResponse("invalid_session_id", "invalid session id", {}, 400);
     }
     const sessionReportMatch = url.pathname.match(/^\/api\/reports\/session\/(\d+)\.html$/);
     if (request.method === "GET" && sessionReportMatch != null) {
@@ -519,7 +547,7 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");
       if (status == null) {
-        return errorResponse("unknown_status", "unknown status", {}, 400);
+        return errorResponse("unknown_status", "unknown status", { allowed: STATUS_FILTERS }, 400);
       }
       return withDb(config, context, (db) => json(listRecommendations(db, status)));
     }
@@ -549,13 +577,23 @@ export async function handleRequest(
     }
     return errorResponse("not_found", "not found", {}, 404);
   } catch (error) {
-    context.logger?.error("HTTP request failed.", {
-      "event.name": "http.server.request.exception",
-      "http.request.method": request.method,
-      "url.path": url.pathname,
-      ...exceptionAttributes(error),
-    });
-    return responseForError(error);
+    const response = responseForError(error);
+    if (response.status >= 500) {
+      context.logger?.error("HTTP request failed.", {
+        "event.name": "http.server.request.exception",
+        "http.request.method": request.method,
+        "url.path": url.pathname,
+        ...exceptionAttributes(error),
+      });
+    } else {
+      context.logger?.warning("HTTP request rejected.", {
+        "event.name": "http.server.request.rejected",
+        "http.request.method": request.method,
+        "http.response.status_code": response.status,
+        "url.path": url.pathname,
+      });
+    }
+    return response;
   }
 }
 
@@ -577,18 +615,28 @@ async function syncNow(
   config: Config,
   economics?: EconomicsCache,
   runSync: SyncWorkerRunner = runSyncWorker,
+  runWithOwnership?: SyncCoordinator["runWithOwnership"],
 ): Promise<Response> {
-  syncStatus.in_progress = true;
-  syncStatus.last_error = null;
-  try {
-    const report = await runSync(config, undefined, (progress) => {
-      publishServerEvent({
-        type: "sync_progress",
-        reason: "manual",
-        progress,
-        status: { ...syncStatus },
-      });
+  const progress = (update: SyncProgress): void => {
+    publishServerEvent({
+      type: "sync_progress",
+      reason: "manual",
+      progress: update,
+      status: { ...syncStatus },
     });
+  };
+  const handle =
+    runWithOwnership?.(config, undefined, progress) ??
+    ({ promise: runSync(config, undefined, progress), owned: true } satisfies SyncRunHandle);
+  if (handle.owned) {
+    syncStatus.in_progress = true;
+    syncStatus.last_error = null;
+  }
+  try {
+    const report = await handle.promise;
+    if (!handle.owned) {
+      return json(report);
+    }
     syncStatus.in_progress = false;
     syncStatus.last_sync_at = new Date().toISOString();
     syncStatus.last_report =
@@ -606,9 +654,11 @@ async function syncNow(
     }
     return json(report);
   } catch (error) {
-    syncStatus.in_progress = false;
-    syncStatus.last_sync_at = new Date().toISOString();
-    syncStatus.last_error = error instanceof Error ? error.message : String(error);
+    if (handle.owned) {
+      syncStatus.in_progress = false;
+      syncStatus.last_sync_at = new Date().toISOString();
+      syncStatus.last_error = error instanceof Error ? error.message : String(error);
+    }
     throw error;
   }
 }
@@ -688,18 +738,26 @@ export function createSyncCoordinator(
     cancelSources: Set<{ aborted: boolean }>;
   } | null = null;
 
-  const run: SyncWorkerRunner = (config, cancel, onProgress) => {
+  const start = (
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+    listenWhenJoined = true,
+  ): SyncRunHandle => {
     if (closed) {
-      return Promise.reject(new Error("sync coordinator is closed"));
+      return {
+        promise: Promise.reject(new Error("sync coordinator is closed")),
+        owned: false,
+      };
     }
     if (active != null) {
       if (cancel != null) {
         active.cancelSources.add(cancel);
       }
-      if (onProgress != null) {
+      if (listenWhenJoined && onProgress != null) {
         active.listeners.add(onProgress);
       }
-      return active.promise;
+      return { promise: active.promise, owned: false };
     }
 
     const listeners = new Set<(progress: SyncProgress) => void>();
@@ -766,8 +824,12 @@ export function createSyncCoordinator(
         }
       });
     active = { promise, listeners, cancelSources };
-    return promise;
+    return { promise, owned: true };
   };
+  const run: SyncWorkerRunner = (config, cancel, onProgress) =>
+    start(config, cancel, onProgress).promise;
+  const runWithOwnership: SyncCoordinator["runWithOwnership"] = (config, cancel, onProgress) =>
+    start(config, cancel, onProgress, false);
 
   const close = async (): Promise<void> => {
     closed = true;
@@ -781,7 +843,7 @@ export function createSyncCoordinator(
     }
   };
 
-  return { run, close };
+  return { run, runWithOwnership, close };
 }
 
 interface EventClient {
@@ -880,7 +942,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       const activeEconomics = economics;
       if (activeDb == null || activeEconomics == null) {
         return errorResponse(
-          "internal_error",
+          "service_starting",
           "Decant is still starting. Please try again.",
           { retryable: true },
           503,
@@ -891,6 +953,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           db: activeDb,
           economics: activeEconomics,
           runSync: syncCoordinator.run,
+          syncCoordinator,
           boundHostname: hostname,
           remoteAddress: bunServer.requestIP(request)?.address ?? null,
           trustedPeers,
@@ -940,7 +1003,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
         debounceMs: options.watch.debounceMs,
         enableWatch: options.watch.enableWatch,
         runner: (config, status, cancel, onProgress) =>
-          workerSyncRunner(config, status, cancel, onProgress, syncCoordinator.run),
+          workerSyncRunner(config, status, cancel, onProgress, syncCoordinator.runWithOwnership),
         onEvent: (event) => {
           if (economics != null) {
             applyWatchEvent(event, economics);
@@ -1004,13 +1067,17 @@ async function workerSyncRunner(
   status: SyncStatusStore,
   cancel: { aborted: boolean },
   onProgress: (progress: SyncProgress) => void,
-  runSync: SyncWorkerRunner = runSyncWorker,
-): Promise<ReturnType<typeof ingestSync>> {
+  runSync: SyncCoordinator["runWithOwnership"] = (workerConfig, workerCancel, workerProgress) => ({
+    promise: runSyncWorker(workerConfig, workerCancel, workerProgress),
+    owned: true,
+  }),
+): Promise<SyncRunnerResult> {
   status.start();
   try {
-    const report = await runSync(config, cancel, onProgress);
+    const handle = runSync(config, cancel, onProgress);
+    const report = await handle.promise;
     status.finishOk(report);
-    return report;
+    return { report, emitTerminal: handle.owned };
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     throw error;
@@ -1057,17 +1124,6 @@ function ensureDerivedMetadata(db: Db): void {
   }
   refreshDerivedMetadata(db, { ignoreReadonly: true });
   metadataHydrated.add(db);
-}
-
-function isSearchSyntaxError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("fts5") ||
-    lower.includes("malformed") ||
-    lower.includes("unterminated") ||
-    lower.includes("syntax")
-  );
 }
 
 export function errorResponse(
@@ -1582,7 +1638,8 @@ function reportHtmlResponse(value: string, filename: string): Response {
   return new Response(value, {
     headers: {
       "content-disposition": `attachment; filename="${filename}"`,
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'none'",
       "content-type": "text/html; charset=utf-8",
       "x-content-type-options": "nosniff",
     },

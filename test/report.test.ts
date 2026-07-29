@@ -258,6 +258,7 @@ describe("report charts", () => {
     expect(svg).toMatch(/^<svg\b/);
     expect(svg.length).toBeGreaterThan(200);
     expect(svg).not.toContain("<script");
+    expect(svg).not.toContain("<style");
     expect(svg).toContain("IBM Plex Sans");
     expect(renderSessionsByDayChart(daily)).toContain("<svg");
   });
@@ -271,6 +272,40 @@ describe("report charts", () => {
     ]);
     expect(svg).not.toContain("<script");
     expect(svg).toContain("&lt;script&gt;");
+  });
+
+  test("rejects active attribute injection in chart options", () => {
+    expect(() =>
+      renderChartSvg({
+        xAxis: { type: "category", data: ["one"] },
+        yAxis: { type: "value" },
+        series: [
+          {
+            type: "bar",
+            data: [1],
+            itemStyle: { color: '#fff" onload="alert(1)' },
+          },
+        ],
+      }),
+    ).toThrow(/event-handler attribute/);
+  });
+
+  test("rejects injected style tags and external CSS references", () => {
+    expect(() =>
+      renderChartSvg({
+        xAxis: { type: "category", data: ["one"] },
+        yAxis: { type: "value" },
+        series: [
+          {
+            type: "bar",
+            data: [1],
+            itemStyle: {
+              color: '#fff"><style>@import url(https://example.com/leak);</style><rect fill="#fff',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/style markup|unsupported <style>/);
   });
 
   test("uses the live context strip's call slots, curve breaks, and compaction positions", () => {
@@ -340,6 +375,7 @@ describe("static report rendering", () => {
     expect(html).toContain("Dosu keeps agent context fresh automatically");
     expect(html).toContain("utm_content=report_cta");
     expect(html).toContain("<svg");
+    expect(html).toContain('width="380" height="220"');
     expect(html).not.toContain("data-report-chart");
   });
 
@@ -375,6 +411,7 @@ describe("static report rendering", () => {
     expect(html).toContain(
       '<p class="report-subject"><span>Session prompt</span>Fix &lt;unsafe&gt; auth behavior</p>',
     );
+    expect(html).toContain("Transcript content beyond the prompt preview is not included.");
     expect(html.indexOf("<h2>Token economics</h2>")).toBeLessThan(
       html.indexOf("<h2>Context window</h2>"),
     );

@@ -20,6 +20,11 @@ export interface Recommendation {
 }
 
 export type StatusFilter = "open" | "implemented" | "all";
+export const STATUS_FILTERS = [
+  "open",
+  "implemented",
+  "all",
+] as const satisfies readonly StatusFilter[];
 
 export interface StoredRecommendation extends Omit<Recommendation, "score"> {
   score: number | null;
@@ -77,7 +82,7 @@ function queryRows<T>(db: Database, sql: string): T[] {
 }
 
 export function parseStatusFilter(value: string): StatusFilter | null {
-  return value === "open" || value === "implemented" || value === "all" ? value : null;
+  return STATUS_FILTERS.includes(value as StatusFilter) ? (value as StatusFilter) : null;
 }
 
 export function signals(db: Database): Recommendation[] {
@@ -222,11 +227,12 @@ export function regenerate(db: Database): void {
     const upsert = db.prepare(
       `INSERT INTO recommendation
          (key, kind, category, title, detail, suggestion, prompt, url,
-          link_label, icon, tone, score, status, status_source, note,
+          link_label, icon, tone, impact_label, impact_label_checked, score,
+          status, status_source, note,
           first_seen_at, updated_at, implemented_at)
        VALUES
-         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-          'open', NULL, NULL, ?13, ?13, NULL)
+         (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13,
+          'open', NULL, NULL, ?14, ?14, NULL)
        ON CONFLICT(key) DO UPDATE SET
          kind = excluded.kind,
          category = excluded.category,
@@ -238,6 +244,8 @@ export function regenerate(db: Database): void {
          link_label = excluded.link_label,
          icon = excluded.icon,
          tone = excluded.tone,
+         impact_label = excluded.impact_label,
+         impact_label_checked = 1,
          score = excluded.score,
          updated_at = excluded.updated_at`,
     );
@@ -255,6 +263,7 @@ export function regenerate(db: Database): void {
           rec.link_label,
           rec.icon,
           rec.tone,
+          rec.impact_label,
           rec.score,
           now,
         );
@@ -276,6 +285,11 @@ export function regenerate(db: Database): void {
       } finally {
         resolveStale.finalize();
       }
+      db.exec(`
+        UPDATE recommendation
+        SET impact_label_checked = 1
+        WHERE kind = 'signal' AND impact_label_checked = 0
+      `);
     } finally {
       upsert.finalize();
     }
@@ -304,9 +318,6 @@ export function markImplemented(
 }
 
 export function list(db: Database, status: StatusFilter = "open"): StoredRecommendation[] {
-  const impactLabels = new Map(
-    signals(db).map((recommendation) => [recommendation.key, recommendation.impact_label]),
-  );
   const where =
     status === "open"
       ? "WHERE status = 'open'"
@@ -316,7 +327,7 @@ export function list(db: Database, status: StatusFilter = "open"): StoredRecomme
   const rows = db
     .query(
       `SELECT key, kind, category, title, detail, suggestion, prompt, url,
-              link_label, icon, tone, score, status, status_source, note,
+              link_label, icon, tone, impact_label, score, status, status_source, note,
               first_seen_at, updated_at, implemented_at
        FROM recommendation
        ${where}
@@ -327,7 +338,7 @@ export function list(db: Database, status: StatusFilter = "open"): StoredRecomme
     const rec: StoredRecommendation = {
       ...row,
       kind: row.kind as "signal" | "catalog",
-      impact_label: impactLabels.get(row.key) ?? null,
+      impact_label: row.impact_label,
       memory_layer: null,
       promotion_target: null,
       trigger: null,
@@ -870,7 +881,6 @@ function card(
 interface StoredRecommendationDb
   extends Omit<
     StoredRecommendation,
-    | "impact_label"
     | "kind"
     | "memory_layer"
     | "promotion_target"

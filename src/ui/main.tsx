@@ -216,6 +216,7 @@ type SearchResponse = {
   elapsed_ms: number;
   results: SearchHit[];
   total: number;
+  total_is_capped: boolean;
 };
 
 type SyncProgress = {
@@ -361,7 +362,7 @@ type ToolCallPage = {
     errors: number;
     p50_ms: number | null;
     p95_ms: number | null;
-  };
+  } | null;
 };
 
 type FileRow = {
@@ -935,15 +936,28 @@ function App() {
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
-      const shortcut =
-        (event.key === "/" && !isInteractiveTarget(event.target)) ||
-        (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey));
-      if (!shortcut || event.altKey) {
+      const targetIsInteractive =
+        isInteractiveTarget(event.target) || isInteractiveTarget(document.activeElement);
+      const slash =
+        event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      const commandK =
+        event.key.toLowerCase() === "k" &&
+        event.metaKey !== event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey;
+      const input = headerSearchRef.current;
+      if (
+        (!slash && !commandK) ||
+        targetIsInteractive ||
+        hasOpenModal(document) ||
+        input == null ||
+        input.getClientRects().length === 0
+      ) {
         return;
       }
       event.preventDefault();
-      headerSearchRef.current?.focus();
-      headerSearchRef.current?.select();
+      input.focus();
+      input.select();
     };
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
@@ -1003,6 +1017,7 @@ function App() {
       <ReportRouteView
         backHref="/"
         downloadHref={sourceHref}
+        excluded={ANALYTICS_REPORT_NEVER_INCLUDES}
         includes={ANALYTICS_REPORT_INCLUDES}
         onSync={runSync}
         sourceHref={sourceHref}
@@ -1017,6 +1032,7 @@ function App() {
       <ReportRouteView
         backHref={`/sessions/${id}`}
         downloadHref={sourceHref}
+        excluded={SESSION_REPORT_NEVER_INCLUDES}
         includes={SESSION_REPORT_INCLUDES}
         onSync={runSync}
         sourceHref={sourceHref}
@@ -1139,7 +1155,7 @@ function App() {
               ref={headerSearchRef}
               value={headerSearchQuery}
             />
-            <kbd>⌘K</kbd>
+            <kbd>{navigator.platform.includes("Mac") ? "⌘K" : "Ctrl K"}</kbd>
           </label>
           <div className="topbar-spacer" />
           <a
@@ -2085,17 +2101,25 @@ function SearchView({ path }: { path: string }) {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
+  const [totalIsCapped, setTotalIsCapped] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [retryKey, setRetryKey] = useState(0);
   const [recentSearches, setRecentSearches] = useState(readRecentSearches);
   const searchEpochRef = useRef(0);
+  const resultsQueryRef = useRef<string | null>(null);
   const loadMoreControllerRef = useRef<AbortController | null>(null);
 
   useLayoutEffect(() => {
     searchEpochRef.current += 1;
+    resultsQueryRef.current = null;
     loadMoreControllerRef.current?.abort();
     loadMoreControllerRef.current = null;
+    setHits([]);
+    setTotal(0);
+    setTotalIsCapped(false);
+    setElapsedMs(0);
+    setActiveIndex(-1);
     setQuery(initialQuery);
     return () => {
       loadMoreControllerRef.current?.abort();
@@ -2110,8 +2134,10 @@ function SearchView({ path }: { path: string }) {
     const trimmed = query.trim();
     void retryKey;
     if (trimmed.length < 2) {
+      resultsQueryRef.current = null;
       setHits([]);
       setTotal(0);
+      setTotalIsCapped(false);
       setElapsedMs(0);
       setSearching(false);
       setError(null);
@@ -2123,7 +2149,12 @@ function SearchView({ path }: { path: string }) {
     const timer = window.setTimeout(() => {
       void getJson<SearchResponse>("/api/search", {
         method: "POST",
-        body: JSON.stringify({ query: trimmed, limit: 25, offset: 0 }),
+        body: JSON.stringify({
+          query: trimmed,
+          include_subagents: true,
+          limit: 25,
+          offset: 0,
+        }),
         signal: controller.signal,
       })
         .then((response) => {
@@ -2132,8 +2163,10 @@ function SearchView({ path }: { path: string }) {
           }
           setHits(response.results);
           setTotal(response.total);
+          setTotalIsCapped(response.total_is_capped);
           setElapsedMs(response.elapsed_ms);
           setActiveIndex(response.results.length > 0 ? 0 : -1);
+          resultsQueryRef.current = trimmed;
           setRecentSearches(rememberSearch(trimmed));
         })
         .catch((err: unknown) => {
@@ -2156,6 +2189,15 @@ function SearchView({ path }: { path: string }) {
   const orderedHits = visuallyOrderedSearchHits(hits);
   const groups = groupSearchHits(orderedHits);
   const activeHit = activeIndex < 0 ? null : (orderedHits[activeIndex] ?? null);
+  const activeHitId = activeHit == null ? undefined : `search-hit-${activeHit.block_id}`;
+  useEffect(() => {
+    if (activeIndex < 0) {
+      return;
+    }
+    document
+      .querySelector<HTMLElement>(`[data-search-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
   const loadMore = () => {
     const trimmed = query.trim();
     if (searching || hits.length >= total || trimmed.length < 2) {
@@ -2169,7 +2211,12 @@ function SearchView({ path }: { path: string }) {
     loadMoreControllerRef.current = controller;
     void getJson<SearchResponse>("/api/search", {
       method: "POST",
-      body: JSON.stringify({ query: trimmed, limit: 25, offset: hits.length }),
+      body: JSON.stringify({
+        query: trimmed,
+        include_subagents: true,
+        limit: 25,
+        offset: hits.length,
+      }),
       signal: controller.signal,
     })
       .then((response) => {
@@ -2178,6 +2225,7 @@ function SearchView({ path }: { path: string }) {
         }
         setHits((current) => [...current, ...response.results]);
         setTotal(response.total);
+        setTotalIsCapped(response.total_is_capped);
         setElapsedMs(response.elapsed_ms);
       })
       .catch((err: unknown) => {
@@ -2205,11 +2253,23 @@ function SearchView({ path }: { path: string }) {
       <form className="search-form" onSubmit={(event) => event.preventDefault()}>
         <Icon name="search" />
         <input
+          aria-activedescendant={activeHitId}
+          aria-autocomplete="list"
+          aria-busy={searching}
+          aria-controls="search-results-listbox"
+          aria-expanded={orderedHits.length > 0}
           autoComplete="off"
           onChange={(event) => {
             searchEpochRef.current += 1;
+            resultsQueryRef.current = null;
             loadMoreControllerRef.current?.abort();
             loadMoreControllerRef.current = null;
+            setHits([]);
+            setTotal(0);
+            setTotalIsCapped(false);
+            setElapsedMs(0);
+            setActiveIndex(-1);
+            setSearching(event.target.value.trim().length >= 2);
             updateSearchRoute(event.target.value);
           }}
           onKeyDown={(event) => {
@@ -2219,29 +2279,33 @@ function SearchView({ path }: { path: string }) {
             } else if (event.key === "ArrowUp" && orderedHits.length > 0) {
               event.preventDefault();
               setActiveIndex((index) => (index - 1 + orderedHits.length) % orderedHits.length);
-            } else if (event.key === "Enter" && activeHit != null) {
+            } else if (
+              event.key === "Enter" &&
+              !searching &&
+              activeHit != null &&
+              resultsQueryRef.current === query.trim()
+            ) {
               event.preventDefault();
-              window.location.assign(activeHit.href);
+              visit(activeHit.href);
             } else if (event.key === "Escape") {
               event.preventDefault();
               updateSearchRoute("");
             }
           }}
           placeholder="Search across all sessions and tool calls..."
+          role="combobox"
           value={query}
         />
       </form>
 
       {query.trim().length >= 2 ? (
         <p className="result-caption">
-          {formatInt(total)} {total === 1 ? "result" : "results"} · {formatSearchTime(elapsedMs)}
+          {formatInt(total)}
+          {totalIsCapped ? "+" : ""} {total === 1 ? "result" : "results"} ·{" "}
+          {formatSearchTime(elapsedMs)}
         </p>
       ) : null}
-      {error instanceof ApiError && error.code === "invalid_query_syntax" ? (
-        <div className="notice">
-          That search could not be parsed. Try plain words or a balanced quoted phrase.
-        </div>
-      ) : error != null ? (
+      {error != null ? (
         <ApiFailureState error={error} onRetry={() => setRetryKey((key) => key + 1)} />
       ) : null}
 
@@ -2286,39 +2350,46 @@ function SearchView({ path }: { path: string }) {
             title="No matches"
           />
         ) : null}
-        {groups.map((group) => (
-          <section className="search-result-group" key={group.sessionId}>
-            <header className="search-group-heading">
-              <div className="search-group-title">
-                <strong>{group.title}</strong>
-                <span>{basename(group.project)}</span>
+        <div aria-label="Search results" id="search-results-listbox" role="listbox">
+          {groups.map((group) => (
+            <section className="search-result-group" key={group.sessionId} role="presentation">
+              <header className="search-group-heading">
+                <div className="search-group-title">
+                  <strong>{group.title}</strong>
+                  <span>{basename(group.project)}</span>
+                </div>
+                <span>{shortDate(group.timestamp ?? "")}</span>
+              </header>
+              <div role="presentation">
+                {group.hits.map((hit) => {
+                  const index = orderedHits.indexOf(hit);
+                  return (
+                    <a
+                      aria-current={index === activeIndex ? "true" : undefined}
+                      aria-selected={index === activeIndex}
+                      className="result-card search-hit-row"
+                      data-search-index={index}
+                      href={hit.href}
+                      id={`search-hit-${hit.block_id}`}
+                      key={hit.block_id}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onClick={(event) => navigate(event, hit.href)}
+                      role="option"
+                    >
+                      <div className="result-card-heading">
+                        <Badge tone="neutral">{searchHitLabel(hit)}</Badge>
+                        <span>message {hit.message_seq}</span>
+                      </div>
+                      <p>
+                        <HighlightedSnippet snippet={hit.snippet} />
+                      </p>
+                    </a>
+                  );
+                })}
               </div>
-              <span>{shortDate(group.timestamp ?? "")}</span>
-            </header>
-            <div>
-              {group.hits.map((hit) => {
-                const index = orderedHits.indexOf(hit);
-                return (
-                  <a
-                    aria-current={index === activeIndex ? "true" : undefined}
-                    className="result-card search-hit-row"
-                    href={hit.href}
-                    key={hit.block_id}
-                    onMouseEnter={() => setActiveIndex(index)}
-                  >
-                    <div className="result-card-heading">
-                      <Badge tone="neutral">{searchHitLabel(hit)}</Badge>
-                      <span>message {hit.message_seq}</span>
-                    </div>
-                    <p>
-                      <HighlightedSnippet snippet={hit.snippet} />
-                    </p>
-                  </a>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+            </section>
+          ))}
+        </div>
         {hits.length < total ? (
           <button
             className="secondary-button search-load-more"
@@ -2586,20 +2657,27 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
 }
 
 const ANALYTICS_REPORT_INCLUDES = [
-  "Selected date range, session totals, tokens, and estimated costs",
+  "Selected date range, local timezone, session totals, tokens, and estimated costs",
   "Model names and full project paths, activity charts, and token economics",
   "For all-time reports, up to five open insight titles, details, impact labels, and suggestions",
 ] as const;
 
 const SESSION_REPORT_INCLUDES = [
-  "Session title, project path, model, effort, dates, and cost",
-  "Context-window, token-economics, tool-call, and file-touch summaries",
-  "Stored tool input and output sizes, errors, and latency aggregates",
+  "Session title and first user-prompt preview (up to 180 characters)",
+  "Full project path, model, effort, dates, and estimated cost",
+  "Context-window and token-economics summaries",
+  "Tool-call aggregates and up to 25 referenced file paths",
 ] as const;
 
-const REPORT_NEVER_INCLUDES = [
-  "Transcript messages or tool-result bodies beyond stored previews",
-  "Credentials, source files, or the session-log database",
+const ANALYTICS_REPORT_NEVER_INCLUDES = [
+  "Transcript messages, tool inputs, or tool-result bodies",
+  "Credentials, source-file contents, or the session-log database",
+  "Remote scripts, fonts, or tracking pixels",
+] as const;
+
+const SESSION_REPORT_NEVER_INCLUDES = [
+  "Transcript messages beyond the disclosed prompt preview, tool inputs, or tool-result bodies",
+  "Credentials, source-file contents, or the session-log database",
   "Remote scripts, fonts, or tracking pixels",
 ] as const;
 
@@ -2702,6 +2780,7 @@ function PrivacyReviewLists({
 
 function ExportReviewSheet({
   actions,
+  excluded,
   includes,
   notice,
   onClose,
@@ -2709,6 +2788,7 @@ function ExportReviewSheet({
   title,
 }: {
   actions: ReactNode;
+  excluded: readonly string[];
   includes: readonly string[];
   notice?: ReactNode;
   onClose: () => void;
@@ -2748,7 +2828,7 @@ function ExportReviewSheet({
         <div className="report-review-body">
           <PrivacyReviewLists
             className="report-privacy-review"
-            excluded={REPORT_NEVER_INCLUDES}
+            excluded={excluded}
             excludedLabel="It never includes"
             included={includes}
             includedLabel="This report includes"
@@ -2763,11 +2843,13 @@ function ExportReviewSheet({
 }
 
 function ReportExportButton({
+  excluded,
   href,
   includes,
   previewHref,
   title,
 }: {
+  excluded: readonly string[];
   href: string;
   includes: readonly string[];
   previewHref: string;
@@ -2796,10 +2878,9 @@ function ReportExportButton({
         preview.document.open();
         preview.document.write(documentHtml);
         preview.document.close();
-        window.setTimeout(() => {
-          preview.focus();
-          preview.print();
-        }, 250);
+        await waitForReportFonts(preview.document);
+        preview.focus();
+        preview.print();
         closeReview();
       })
       .catch((reason: unknown) => {
@@ -2848,6 +2929,7 @@ function ReportExportButton({
             </a>
           </>
         }
+        excluded={excluded}
         includes={includes}
         notice={error != null ? <div className="notice danger">{error}</div> : null}
         onClose={closeReview}
@@ -2860,12 +2942,14 @@ function ReportExportButton({
 
 function ReportRouteExportActions({
   downloadHref,
+  excluded,
   includes,
   onPrint,
   printDisabled,
   title,
 }: {
   downloadHref: string;
+  excluded: readonly string[];
   includes: readonly string[];
   onPrint: () => void;
   printDisabled: boolean;
@@ -2909,6 +2993,7 @@ function ReportRouteExportActions({
             </a>
           </>
         }
+        excluded={excluded}
         includes={includes}
         onClose={closeReview}
         open={reviewOpen}
@@ -2921,6 +3006,7 @@ function ReportRouteExportActions({
 function ReportRouteView({
   backHref,
   downloadHref,
+  excluded,
   includes,
   onSync,
   sourceHref,
@@ -2928,6 +3014,7 @@ function ReportRouteView({
 }: {
   backHref: string;
   downloadHref: string;
+  excluded: readonly string[];
   includes: readonly string[];
   onSync: () => void;
   sourceHref: string;
@@ -2993,8 +3080,14 @@ function ReportRouteView({
         <strong style={{ marginRight: "auto" }}>{title}</strong>
         <ReportRouteExportActions
           downloadHref={downloadHref}
+          excluded={excluded}
           includes={includes}
-          onPrint={() => frameRef.current?.contentWindow?.print()}
+          onPrint={() => {
+            const frameWindow = frameRef.current?.contentWindow;
+            if (frameWindow != null) {
+              void waitForReportFonts(frameWindow.document).then(() => frameWindow.print());
+            }
+          }}
           printDisabled={documentHtml == null}
           title={title}
         />
@@ -3019,6 +3112,7 @@ function ReportRouteView({
         <iframe
           className="report-route-frame"
           ref={frameRef}
+          sandbox="allow-same-origin allow-modals allow-popups allow-popups-to-escape-sandbox"
           srcDoc={documentHtml}
           style={{
             background: "#fff",
@@ -3032,6 +3126,13 @@ function ReportRouteView({
       )}
     </div>
   );
+}
+
+async function waitForReportFonts(document: Document): Promise<void> {
+  if (document.fonts == null) {
+    return;
+  }
+  await document.fonts.ready;
 }
 
 async function fetchReportHtml(path: string, signal: AbortSignal): Promise<string> {
@@ -3115,6 +3216,7 @@ function AnalyticsView({
         </div>
         <div className="page-heading-actions">
           <ReportExportButton
+            excluded={ANALYTICS_REPORT_NEVER_INCLUDES}
             href={withDateQuery("/api/reports/analytics.html", dateRangeQuery(dateRange))}
             includes={ANALYTICS_REPORT_INCLUDES}
             previewHref={withDateQuery("/reports/analytics", dateRangeQuery(dateRange))}
@@ -4812,6 +4914,13 @@ function recoveryPresentation(error: unknown): RecoveryPresentation {
         retry: true,
         title: "Session logs are busy",
       };
+    case "service_starting":
+      return {
+        detail: "Decant is finishing local startup. Try again in a moment.",
+        icon: "clock",
+        retry: true,
+        title: "Decant is starting",
+      };
     case "internal_error":
       return {
         detail:
@@ -4896,8 +5005,9 @@ function ApiFailureState({
           <button
             className="secondary-button"
             onClick={() => {
-              void navigator.clipboard?.writeText(recovery.command ?? "");
-              setCommandCopied(true);
+              void copyTextToClipboard(recovery.command ?? "")
+                .then(() => setCommandCopied(true))
+                .catch(() => setCommandCopied(false));
             }}
             type="button"
           >
@@ -5826,13 +5936,14 @@ function ImplementedRecommendationCard({ row }: { row: Recommendation }) {
 }
 
 function toolAggregate(tools: ToolRow[], summary: ToolCallPage["summary"]) {
-  const totalCalls = summary.calls;
-  const totalErrors = summary.errors;
+  const resolvedSummary = summary ?? { calls: 0, errors: 0, p50_ms: null, p95_ms: null };
+  const totalCalls = resolvedSummary.calls;
+  const totalErrors = resolvedSummary.errors;
   return {
     totalCalls,
     errorRate: totalCalls === 0 ? 0 : (totalErrors / totalCalls) * 100,
-    p50: summary.p50_ms,
-    p95: summary.p95_ms,
+    p50: resolvedSummary.p50_ms,
+    p95: resolvedSummary.p95_ms,
     topTool: tools.slice().sort((left, right) => right.calls - left.calls)[0]?.tool_name ?? null,
   };
 }
@@ -6006,7 +6117,7 @@ function ToolCallDetail({
             </dd>
           </div>
           <div>
-            <dt>Duration</dt>
+            <dt>Elapsed</dt>
             <dd>{durationPrecise(call.duration_ms)}</dd>
           </div>
           <div>
@@ -6151,7 +6262,12 @@ function ToolsView({
     void getJson<ToolCallPage>(`/api/tools/calls?${callQuery}`, {
       signal: controller.signal,
     })
-      .then((page) => setCallPage(page))
+      .then((page) =>
+        setCallPage((current) => ({
+          ...page,
+          summary: page.summary ?? current.summary,
+        })),
+      )
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
           setCallError(errorMessage(error));
@@ -6224,7 +6340,7 @@ function ToolsView({
         />
         <StatCard
           icon="clock"
-          label="p50 / p95"
+          label="Median / p95 elapsed"
           tone="info"
           value={
             aggregate.p50 == null || aggregate.p95 == null
@@ -6291,7 +6407,7 @@ function ToolsView({
                   {durationAvailable ? (
                     <SortableHeader
                       align="right"
-                      label="Median"
+                      label="Median elapsed"
                       onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
                       sort={mcpSort}
                       sortKey="p50"
@@ -6402,7 +6518,7 @@ function ToolsView({
                 {durationAvailable ? (
                   <SortableHeader
                     align="right"
-                    label="Median"
+                    label="Median elapsed"
                     onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
                     sort={toolSort}
                     sortKey="p50"
@@ -6475,7 +6591,7 @@ function ToolsView({
         <div className="panel-heading tool-calls-heading">
           <div>
             <h2>Calls</h2>
-            <p>Inspect individual tool activity, inputs, results, and latency</p>
+            <p>Inspect individual tool activity, inputs, results, and elapsed time</p>
           </div>
           <span className="muted">{formatInt(callPage.total)} matching</span>
         </div>
@@ -6509,12 +6625,12 @@ function ToolsView({
             </select>
           </label>
           <label>
-            <span>Minimum duration</span>
+            <span>Minimum elapsed</span>
             <select
               onChange={(event) => updateFilters({ minMs: Number(event.target.value) })}
               value={locationFilters.minMs}
             >
-              <option value={0}>Any duration</option>
+              <option value={0}>Any elapsed time</option>
               <option value={100}>100 ms+</option>
               <option value={1000}>1 s+</option>
               <option value={5000}>5 s+</option>
@@ -6569,7 +6685,7 @@ function ToolsView({
                     <th>Status</th>
                     <th>Tool</th>
                     <th>Input preview</th>
-                    {durationAvailable ? <th className="numeric">Duration</th> : null}
+                    {durationAvailable ? <th className="numeric">Elapsed</th> : null}
                     <th className="numeric">Output</th>
                     <th className="numeric">When</th>
                     <th>Session</th>
@@ -7627,6 +7743,7 @@ function SessionDetailView({
           <div className="thread-header-title-row">
             <h1>{sessionDisplayTitle(detail.summary)}</h1>
             <ReportExportButton
+              excluded={SESSION_REPORT_NEVER_INCLUDES}
               href={`/api/reports/session/${detail.summary.id}.html`}
               includes={SESSION_REPORT_INCLUDES}
               previewHref={`/reports/session/${detail.summary.id}`}
@@ -9831,6 +9948,10 @@ function navigate(
   setPath?: (path: string) => void,
 ) {
   event.preventDefault();
+  visit(href, setPath);
+}
+
+function visit(href: string, setPath?: (path: string) => void) {
   window.history.pushState(null, "", href);
   const next = locationPath();
   if (setPath != null) {

@@ -4,6 +4,8 @@ import { classifyTool } from "../tools.ts";
 export const TRANSCRIPT_COLLAPSE_LINES = 15;
 export const TRANSCRIPT_COLLAPSE_BYTES = 2 * 1024;
 export const TRANSCRIPT_PLAINTEXT_BYTES = 50 * 1024;
+export const TRANSCRIPT_DIFF_BYTES = 50 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 
 export const transcriptLanguages = [
   "bash",
@@ -281,7 +283,7 @@ export function languageForTool(
 }
 
 export function measureTranscriptContent(value: string): TranscriptContentMeasure {
-  const byteLength = new TextEncoder().encode(value).byteLength;
+  const byteLength = UTF8_ENCODER.encode(value).byteLength;
   const lineCount = transcriptLineCount(value);
   return {
     byteLength,
@@ -307,7 +309,7 @@ export function collapseTranscriptText(value: string): CollapsedTranscriptText {
     lines.slice(0, TRANSCRIPT_COLLAPSE_LINES).join("\n"),
     TRANSCRIPT_COLLAPSE_BYTES,
   );
-  const previewBytes = new TextEncoder().encode(preview).byteLength;
+  const previewBytes = UTF8_ENCODER.encode(preview).byteLength;
   return {
     ...measure,
     hiddenLineCount: Math.max(0, measure.lineCount - transcriptLineCount(preview)),
@@ -485,6 +487,12 @@ export function summarizeToolResult(
 }
 
 export function createToolDiff(oldText: string, newText: string): ToolDiffLine[] {
+  if (
+    UTF8_ENCODER.encode(oldText).byteLength + UTF8_ENCODER.encode(newText).byteLength >
+    TRANSCRIPT_DIFF_BYTES
+  ) {
+    return [];
+  }
   const changes = diffLines(oldText, newText);
   const rows: ToolDiffLine[] = [];
   let oldLine = 1;
@@ -610,13 +618,13 @@ function contentLines(value: string): string[] {
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
-  if (new TextEncoder().encode(value).byteLength <= maxBytes) {
+  if (UTF8_ENCODER.encode(value).byteLength <= maxBytes) {
     return value;
   }
   let result = "";
   let bytes = 0;
   for (const character of value) {
-    const characterBytes = new TextEncoder().encode(character).byteLength;
+    const characterBytes = UTF8_ENCODER.encode(character).byteLength;
     if (bytes + characterBytes > maxBytes) {
       break;
     }

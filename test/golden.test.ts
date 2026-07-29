@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-// These frozen golden files came from the pre-TypeScript implementation and now
-// pin the synthetic fixture contract: the goldens exist, parse, cover every
-// fixture, and are internally consistent.
+// These mechanically generated files pin the synthetic fixture contract: the
+// goldens exist, parse, cover every fixture, and are internally consistent.
 const goldenDir = join(import.meta.dir, "golden");
 const keySeparator = "\0";
 
@@ -26,7 +25,8 @@ function listGoldenFiles(dir = goldenDir, prefix = ""): string[] {
 type SessionKey = { tool: string; source_session_id: string };
 type GoldenMeta = {
   fixtures: string[];
-  baseline_rev: string;
+  generator: string;
+  regeneration: string;
   row_dumps: string[];
 };
 
@@ -35,7 +35,8 @@ describe("golden harness", () => {
     const meta = await loadGolden<GoldenMeta>("meta.json");
     const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
     expect(sessions).toHaveLength(meta.fixtures.length);
-    expect(meta.baseline_rev).toMatch(/^[0-9a-f]{40}(-dirty)?$/);
+    expect(meta.generator).toBe("synthetic TypeScript golden snapshot");
+    expect(meta.regeneration).toContain("synthetic fixtures");
     const tools = new Set(sessions.map((s) => s.tool));
     expect(tools).toEqual(new Set(["claude_code", "codex"]));
   });

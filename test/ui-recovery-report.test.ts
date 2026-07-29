@@ -33,7 +33,7 @@ describe("coded UI recovery", () => {
     );
     expect(schemaTooOld).not.toContain('actionHref: "/settings"');
     expect(main).toContain('typeof error.extras.command === "string"');
-    expect(main).toContain("navigator.clipboard?.writeText(recovery.command");
+    expect(main).toContain('copyTextToClipboard(recovery.command ?? "")');
     expect(main).toContain('{commandCopied ? "Copied" : "Copy"}');
   });
 
@@ -87,6 +87,11 @@ describe("report preview routes", () => {
     expect(main).toContain('className="primary-button report-action-button"');
     expect(main).toContain("report-route-toolbar");
     expect(main).toContain("srcDoc={documentHtml}");
+    expect(main).toContain(
+      'sandbox="allow-same-origin allow-modals allow-popups allow-popups-to-escape-sandbox"',
+    );
+    expect(main).toContain("first user-prompt preview (up to 180 characters)");
+    expect(main).toContain("Transcript messages beyond the disclosed prompt preview");
     expect(server).toContain('"/reports/analytics": uiBundle');
     expect(server).toContain('"/reports/session/:id": uiBundle');
   });

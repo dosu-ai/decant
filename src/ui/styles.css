@@ -1864,6 +1864,10 @@ select {
   color: var(--danger);
 }
 
+.inline-notice {
+  margin: 12px 0;
+}
+
 .search-page,
 .settings-page {
   width: min(100%, 58rem);

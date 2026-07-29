@@ -7,6 +7,7 @@ import { type IngestConfig, sync } from "../src/ingest.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
 import { ROW_QUERIES } from "../test/golden-rows.ts";
+import { stripGoldenVolatility } from "./golden-normalize.ts";
 
 const reviewFlag = "--i-reviewed-the-diff";
 const repoRoot = join(import.meta.dir, "..");
@@ -49,24 +50,8 @@ function canonicalizeRows(value: unknown, caseDir: string): unknown {
   return JSON.parse(JSON.stringify(value).replaceAll(caseDir, "<TMP>")) as unknown;
 }
 
-function stripVolatileIds(value: unknown): unknown {
-  if (typeof value === "string") {
-    return value.replaceAll(DECANT_VERSION, "0.0.0-dev");
-  }
-  if (Array.isArray(value)) return value.map(stripVolatileIds);
-  if (value != null && typeof value === "object") {
-    const volatileKeys = new Set(["id", "session_id", "block_id"]);
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => !volatileKeys.has(key))
-        .map(([key, child]) => [key, stripVolatileIds(child)]),
-    );
-  }
-  return value;
-}
-
 function normalizeCliGolden(name: string, value: unknown): unknown {
-  const normalized = stripVolatileIds(value);
+  const normalized = stripGoldenVolatility(value, DECANT_VERSION);
   if (name !== "ls" || !Array.isArray(normalized)) return normalized;
   return [...normalized].sort((left, right) => {
     const a = left as Record<string, unknown>;

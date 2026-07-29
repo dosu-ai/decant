@@ -151,7 +151,7 @@ th {
   text-align: left;
   text-transform: uppercase;
 }
-td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td { padding: 8px 8px 8px 0; vertical-align: top; }
 th:last-child, td:last-child { padding-right: 0; }
 .number { text-align: right; white-space: nowrap; }
 .path { max-width: 42ch; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.72rem; }
@@ -208,7 +208,7 @@ th:last-child, td:last-child { padding-right: 0; }
   table.compact { break-inside: avoid; }
 }
 
-@media (max-width: 720px) {
+@media screen and (max-width: 720px) {
   .report { width: 100%; margin: 0; padding: 32px 22px; box-shadow: none; }
   .stat-grid, .figure-grid { grid-template-columns: 1fr; }
   table.compact { table-layout: fixed; font-size: 0.68rem; }

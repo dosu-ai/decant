@@ -63,7 +63,13 @@ export type SyncRunner = (
   status: SyncStatusStore,
   cancel: { aborted: boolean },
   onProgress: (progress: SyncProgress) => void,
-) => Promise<SyncReport>;
+) => Promise<SyncReport | SyncRunnerResult>;
+
+export interface SyncRunnerResult {
+  report: SyncReport;
+  /** False when this watcher joined a run whose terminal events have another owner. */
+  emitTerminal: boolean;
+}
 
 export interface WatchOptions {
   config: Config;
@@ -240,10 +246,14 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = await runner(options.config, status, cancel, (progress) => {
+          const result = await runner(options.config, status, cancel, (progress) => {
             emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
           });
-          emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          const { report, emitTerminal } =
+            "report" in result ? result : { report: result, emitTerminal: true };
+          if (emitTerminal) {
+            emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          }
         } catch (error) {
           emit({
             type: "error",

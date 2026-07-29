@@ -227,6 +227,21 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("a real user prompt takes precedence over a stored summary title", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent)
+      VALUES (1, 'codex', 'summary-first', 'Stored parser summary', '2026-07-05T00:00:00Z', 0);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES (1, 1, 0, 'user', '{"type":"response_item","payload":{"type":"message","role":"user"}}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES (1, 1, 0, 'text', 'The actual first user request');
+    `);
+
+    expect(listSessions(db)[0]?.title).toBe("The actual first user request");
+    db.close();
+  });
+
   test("session summaries hide local-command-only artifacts and reject generated titles", () => {
     const db = freshDb();
     db.exec(`
@@ -589,6 +604,7 @@ describe("query reads", () => {
     expect(page.total).toBeGreaterThan(1);
     expect(page.results).toHaveLength(1);
     expect(page.elapsed_ms).toBeGreaterThanOrEqual(0);
+    expect(page.total_is_capped).toBe(false);
     expect(page.results[0]).toMatchObject({
       session_title: "Fix the failing auth test",
       tool: "claude_code",
@@ -633,6 +649,14 @@ describe("query reads", () => {
     });
     expect(searchPage(db, "bulkneedle", { limit: 10_000 }).results).toHaveLength(100);
     expect(searchPage(db, "bulkneedle", { limit: 100, offset: 100 }).results).toHaveLength(10);
+    expect(search(db, "bulkneedle", 500)).toHaveLength(110);
+    for (let index = 0; index < 1_001; index += 1) {
+      insertBlock.run(visibleMessageId, visibleSessionId, 2_000 + index, `capneedle ${index}`);
+    }
+    expect(searchPage(db, "capneedle")).toMatchObject({
+      total: 1_000,
+      total_is_capped: true,
+    });
 
     db.exec(`
       INSERT INTO session(id, tool, source_session_id, title, started_at, is_subagent)
@@ -651,6 +675,7 @@ describe("query reads", () => {
     insertBlock.run(visibleMessageId, visibleSessionId, 999, "visibilityneedle");
 
     expect(searchPage(db, "visibilityneedle").total).toBe(1);
+    expect(searchPage(db, "visibilityneedle", { includeSubagents: true }).total).toBe(2);
     expect(searchPage(db, "auth", { tool: "codex" }).total).toBe(0);
     expect(searchPage(db, "auth", { project: "/Users/dev/proj" }).total).toBeGreaterThan(0);
     expect(searchPage(db, "auth", { project: "/elsewhere" }).total).toBe(0);
@@ -740,6 +765,7 @@ describe("query reads", () => {
       limit: 1,
       offset: 1,
       calls: [expect.objectContaining({ mcp_server: "legacy-server" })],
+      summary: null,
     });
     db.close();
   });
@@ -772,7 +798,8 @@ describe("query reads", () => {
       p50_ms: 50,
       p95_ms: 95,
     });
-    expect(page.total).toBe(page.summary.calls);
+    expect(page.summary).not.toBeNull();
+    expect(page.total).toBe(page.summary?.calls ?? 0);
     db.close();
   });
 

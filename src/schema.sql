@@ -184,6 +184,8 @@ CREATE TABLE recommendation (
   link_label     TEXT,
   icon           TEXT,
   tone           TEXT,
+  impact_label   TEXT,
+  impact_label_checked INTEGER NOT NULL DEFAULT 1,
   score          REAL,
   status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
   status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
@@ -203,6 +205,7 @@ CREATE INDEX idx_block_session ON block(session_id);
 CREATE INDEX idx_block_message ON block(message_id, ordinal);
 CREATE INDEX idx_block_type ON block(type);
 CREATE INDEX idx_block_tool ON block(tool_name);
+CREATE INDEX idx_block_tool_use ON block(session_id, tool_use_id);
 CREATE INDEX idx_toolcall_session ON tool_call(session_id);
 CREATE INDEX idx_toolcall_kind ON tool_call(tool_kind);
 CREATE INDEX idx_toolcall_server ON tool_call(mcp_server);

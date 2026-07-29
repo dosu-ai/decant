@@ -42,7 +42,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 25;
+const BASELINE_INDEX_COUNT = 26;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -86,6 +86,16 @@ describe("openDb", () => {
       db.query("SELECT name FROM pragma_table_info('tool_call')").all() as { name: string }[]
     ).map((column) => column.name);
     expect(toolCallColumns).toEqual(expect.arrayContaining(["input_bytes", "has_result"]));
+    expect(
+      db
+        .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_block_tool_use'")
+        .get(),
+    ).not.toBeNull();
+    expect(
+      (
+        db.query("SELECT name FROM pragma_table_info('recommendation')").all() as { name: string }[]
+      ).map((column) => column.name),
+    ).toEqual(expect.arrayContaining(["impact_label", "impact_label_checked"]));
     const ftsSql = (
       db
         .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'block_fts'")
@@ -649,7 +659,7 @@ describe("openDb", () => {
         input, output_preview, output_bytes, duration_ms, ordinal, timestamp
       )
       VALUES (
-        1, 10, 100, 101, 'Read', 'toolu_1',
+        1, NULL, 100, 101, 'Read', 'toolu_1',
         '{"file_path":"README.md"}', 'done', 4, NULL, 0, '2026-07-28T10:00:00.000Z'
       );
 
@@ -679,6 +689,8 @@ describe("openDb", () => {
 
       ALTER TABLE tool_call DROP COLUMN input_bytes;
       ALTER TABLE tool_call DROP COLUMN has_result;
+      ALTER TABLE recommendation DROP COLUMN impact_label;
+      DROP INDEX idx_block_tool_use;
       DELETE FROM schema_migrations WHERE version >= 18;
     `);
     db.close();
@@ -705,6 +717,23 @@ describe("openDb", () => {
         .get() as { sql: string }
     ).sql;
     expect(ftsSql).toContain("prefix='2 3'");
+    expect(
+      db
+        .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_block_tool_use'")
+        .get(),
+    ).not.toBeNull();
+    expect(
+      db
+        .query("SELECT 1 FROM pragma_table_info('recommendation') WHERE name = 'impact_label'")
+        .get(),
+    ).not.toBeNull();
+    expect(
+      db
+        .query(
+          "SELECT 1 FROM pragma_table_info('recommendation') WHERE name = 'impact_label_checked'",
+        )
+        .get(),
+    ).not.toBeNull();
     expect(
       (
         db.query("SELECT COUNT(*) AS n FROM block_fts WHERE block_fts MATCH 'por*'").get() as {

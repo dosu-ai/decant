@@ -8,7 +8,7 @@
     "project": "/Users/dev/proj",
     "role": "user",
     "block_type": "text",
-    "href": "/sessions/2#message-0"
+    "href": "/sessions/<ID>#message-0"
   },
   {
     "session_title": "Refactor the auth module",
@@ -19,7 +19,7 @@
     "project": "/Users/dev/proj",
     "role": "user",
     "block_type": "text",
-    "href": "/sessions/2#message-8"
+    "href": "/sessions/<ID>#message-8"
   },
   {
     "session_title": "Fix the failing auth test",
@@ -30,7 +30,7 @@
     "project": "/Users/dev/proj",
     "role": "user",
     "block_type": "text",
-    "href": "/sessions/4#message-0"
+    "href": "/sessions/<ID>#message-0"
   },
   {
     "session_title": "Refactor the auth module",
@@ -41,7 +41,7 @@
     "project": "/Users/dev/proj",
     "role": "assistant",
     "block_type": "tool_use",
-    "href": "/sessions/2#message-1"
+    "href": "/sessions/<ID>#message-1"
   },
   {
     "session_title": "Refactor the auth module",
@@ -52,6 +52,6 @@
     "project": "/Users/dev/proj",
     "role": "assistant",
     "block_type": "tool_use",
-    "href": "/sessions/2#message-3"
+    "href": "/sessions/<ID>#message-3"
   }
 ]

@@ -257,6 +257,17 @@ export function sync(
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
+  }
+  const uncheckedRecommendationImpactLabels =
+    db
+      .query(
+        `SELECT 1
+           FROM recommendation
+          WHERE kind = 'signal' AND impact_label_checked = 0
+          LIMIT 1`,
+      )
+      .get() != null;
+  if (report.ingested > 0 || uncheckedRecommendationImpactLabels) {
     regenerateRecommendations(db);
   }
   if (

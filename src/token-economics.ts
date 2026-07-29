@@ -354,33 +354,45 @@ export function materializeSessionEconomics(db: Database, sessionId: number): bo
 /** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
  * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
 export function materializeMissingSessionEconomics(db: Database): number {
-  const vectors = vectorsForScope(
+  const rows = economicsRows<{
+    id: number;
+    format_version: number | null;
+    vector_json: string | null;
+  }>(
     db,
-    `WITH scoped_session AS (
-       SELECT s.id
+    `SELECT s.id, e.format_version, e.vector_json
        FROM session s
        LEFT JOIN session_economics e ON e.session_id = s.id
-       WHERE e.session_id IS NULL
-          OR e.format_version != ?1
-          OR NOT json_valid(e.vector_json)
-          OR CASE WHEN json_valid(e.vector_json) THEN
-               COALESCE(json_type(e.vector_json, '$.id'), '') != 'integer'
-               OR COALESCE(json_type(e.vector_json, '$.billed_input_tokens'), '') NOT IN ('integer', 'real')
-               OR COALESCE(json_type(e.vector_json, '$.waiting_on_user_ms'), '') NOT IN ('integer', 'real')
-               OR COALESCE(json_type(e.vector_json, '$.buckets'), '') != 'object'
-             ELSE 0 END
-     )`,
-    [SESSION_ECONOMICS_FORMAT_VERSION],
+      ORDER BY s.id`,
   );
-  if (vectors.length === 0) {
+  const staleIds = rows.flatMap((row) => {
+    if (row.format_version !== SESSION_ECONOMICS_FORMAT_VERSION || row.vector_json == null) {
+      return [row.id];
+    }
+    const vector = parseEconomicsVector(row.vector_json);
+    return vector == null || vector.id !== row.id ? [row.id] : [];
+  });
+  if (staleIds.length === 0) {
     return 0;
   }
+
   withImmediateTransaction(db, () => {
-    for (const vector of vectors) {
-      storeEconomicsVector(db, vector);
+    for (let offset = 0; offset < staleIds.length; offset += 250) {
+      const sessionIds = staleIds.slice(offset, offset + 250);
+      const placeholders = sessionIds.map((_, index) => `?${index + 1}`).join(", ");
+      const vectors = vectorsForScope(
+        db,
+        `WITH scoped_session AS (
+           SELECT id FROM session WHERE id IN (${placeholders})
+         )`,
+        sessionIds,
+      );
+      for (const vector of vectors) {
+        storeEconomicsVector(db, vector);
+      }
     }
   });
-  return vectors.length;
+  return staleIds.length;
 }
 
 function vectorsForScopeWithCache(

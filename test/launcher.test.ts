@@ -61,6 +61,7 @@ describe("launcher", () => {
     const uri = warpLaunchUri("claude 'ship it'", { DECANT_SKILLS_DIR: "/tmp/skills" });
     expect(uri).toStartWith("warp://launch/");
     const configPath = decodeURIComponent(uri.slice("warp://launch/".length));
+    expect(configPath).toStartWith(tmpdir());
     const config = Bun.file(configPath);
     expect(config.size).toBeGreaterThan(0);
     return config.text().then((body) => {
@@ -115,8 +116,37 @@ describe("launcher", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("opened the project directory");
+    expect(result.error).toContain("did not confirm");
     expect(result.command).toBe("claude 'ship it'");
+  });
+
+  test("Warp reports success only after the private launch config is consumed", () => {
+    let configDir = "";
+    const result = launchAgent(
+      "claude",
+      "ship it",
+      null,
+      { ...settings, terminal: "warp" },
+      {
+        platform: "darwin",
+        env: { DECANT_SKILLS_DIR: "/tmp/skills" },
+        run: (_bin, args) => {
+          const uri = args[0] ?? "";
+          if (uri.startsWith("warp://launch/")) {
+            configDir = dirname(decodeURIComponent(uri.slice("warp://launch/".length)));
+          }
+          return { ok: true };
+        },
+        warpConsumed: (path) => {
+          rmSync(path, { recursive: true, force: true });
+          return !existsSync(path);
+        },
+      },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(configDir).not.toBe("");
+    expect(existsSync(configDir)).toBe(false);
   });
 
   test("openIde validates platform and directory before running open", () => {

@@ -30,6 +30,8 @@ export interface EconomicsCacheOptions {
     options: ComputeVectorsOptions,
   ) => Promise<SessionEconomicsVector[]>;
   onRebuilt?: () => void;
+  /** Maximum shutdown wait for a provider that ignores cancellation. */
+  settleTimeoutMs?: number;
 }
 
 export class EconomicsCache {
@@ -72,7 +74,25 @@ export class EconomicsCache {
    * finished (success or failure). */
   async settled(): Promise<void> {
     while (this.#building != null) {
-      await this.#building;
+      const building = this.#building;
+      if (!this.#disposed) {
+        await building;
+        continue;
+      }
+      const timeoutMs = Math.max(0, this.#options.settleTimeoutMs ?? 5_000);
+      let timer: Timer | null = null;
+      await Promise.race([
+        building,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+        }),
+      ]);
+      if (timer != null) {
+        clearTimeout(timer);
+      }
+      if (this.#building === building) {
+        return;
+      }
     }
   }
 

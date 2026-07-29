@@ -157,7 +157,20 @@ export interface SearchHit {
 }
 
 export function search(db: Database, query: string, limitValue = 30): SearchHit[] {
-  return searchPage(db, query, { limit: limitValue }).results.map((hit) => ({
+  const limit = normalizeLimit(limitValue, 30, 1000);
+  const results: SearchHit[] = [];
+  while (results.length < limit) {
+    const page = searchPage(db, query, {
+      includeSubagents: true,
+      limit: Math.min(100, limit - results.length),
+      offset: results.length,
+    });
+    results.push(...page.results);
+    if (page.results.length === 0 || results.length >= page.total) {
+      break;
+    }
+  }
+  return results.map((hit) => ({
     ...hit,
     snippet: bracketSearchMatches(hit.snippet),
   }));
@@ -166,6 +179,7 @@ export function search(db: Database, query: string, limitValue = 30): SearchHit[
 export interface SearchFilter {
   tool?: string | null;
   project?: string | null;
+  includeSubagents?: boolean;
   limit?: number | null;
   offset?: number | null;
   from?: string | null;
@@ -175,6 +189,7 @@ export interface SearchFilter {
 export interface SearchPage {
   results: SearchHit[];
   total: number;
+  total_is_capped: boolean;
   elapsed_ms: number;
 }
 
@@ -192,8 +207,11 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
   const ftsQuery = buildFtsQuery(query);
   const limit = normalizeLimit(filter.limit, 30, 100);
   const offset = normalizeOffset(filter.offset);
-  const clauses = ["block_fts MATCH ?", "s.is_subagent = 0", visibleSessionPredicate("s")];
+  const clauses = ["block_fts MATCH ?", visibleSessionPredicate("s")];
   const params: (string | number)[] = [ftsQuery];
+  if (filter.includeSubagents !== true) {
+    clauses.push("s.is_subagent = 0");
+  }
   if (filter.tool != null) {
     clauses.push("s.tool = ?");
     params.push(filter.tool);
@@ -214,9 +232,13 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
     JOIN session s ON s.id = b.session_id
     LEFT JOIN project p ON p.id = s.project_id`;
   const where = `WHERE ${clauses.join(" AND ")}`;
-  const total = (
-    db.query(`SELECT COUNT(*) AS count ${joins} ${where}`).get(...params) as { count: number }
+  const cappedCount = (
+    db
+      .query(`SELECT COUNT(*) AS count FROM (SELECT 1 ${joins} ${where} LIMIT 1001)`)
+      .get(...params) as { count: number }
   ).count;
+  const totalIsCapped = cappedCount > 1000;
+  const total = Math.min(cappedCount, 1000);
   const rows = db
     .query(
       `SELECT b.session_id, s.title AS session_title, s.tool, b.id AS block_id,
@@ -249,6 +271,7 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
       href: `/sessions/${row.session_id}#message-${row.message_seq}`,
     })),
     total,
+    total_is_capped: totalIsCapped,
     elapsed_ms: Math.round((performance.now() - startedAt) * 100) / 100,
   };
 }
@@ -299,7 +322,7 @@ export interface ToolCallPage {
   total: number;
   limit: number;
   offset: number;
-  summary: ToolCallSummary;
+  summary: ToolCallSummary | null;
 }
 
 export interface ToolCallSummary {
@@ -357,9 +380,11 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     LEFT JOIN project p ON p.id = s.project_id
     LEFT JOIN message m ON m.id = t.message_id`;
   const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
-  const summary = db
-    .query(
-      `WITH filtered AS (
+  const summary =
+    offset === 0
+      ? (db
+          .query(
+            `WITH filtered AS (
          SELECT t.is_error, t.duration_ms
          ${joins}
          ${where}
@@ -384,8 +409,16 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
            THEN duration_ms
          END) AS p95_ms
        FROM ranked`,
-    )
-    .get(...params) as ToolCallSummary;
+          )
+          .get(...params) as ToolCallSummary)
+      : null;
+  const total =
+    summary?.calls ??
+    (
+      db.query(`SELECT COUNT(*) AS calls ${joins} ${where}`).get(...params) as {
+        calls: number;
+      }
+    ).calls;
   const rows = db
     .query(
       `SELECT t.id, t.session_id, s.title AS session_title, p.path AS project,
@@ -405,7 +438,7 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
       is_error: is_error == null ? null : is_error === 1,
       has_result: has_result == null ? null : has_result === 1,
     })),
-    total: summary.calls,
+    total,
     limit,
     offset,
     summary,

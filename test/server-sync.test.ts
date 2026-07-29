@@ -106,6 +106,12 @@ describe("server sync coordination", () => {
     const coordinator = createSyncCoordinator(runner);
     const watcher = coordinator.run(config, { aborted: false }, () => {});
     await entered.promise;
+    const joinedProgress: number[] = [];
+    const joined = coordinator.runWithOwnership(config, undefined, (progress) =>
+      joinedProgress.push(progress.scanned),
+    );
+    expect(joined.owned).toBe(false);
+    expect(joined.promise).toBe(watcher);
     const manual = handleRequest(
       new Request("http://127.0.0.1:3000/api/sync", {
         method: "POST",
@@ -113,7 +119,7 @@ describe("server sync coordination", () => {
         body: "{}",
       }),
       config,
-      { runSync: coordinator.run },
+      { runSync: coordinator.run, syncCoordinator: coordinator },
     );
     release.resolve();
 
@@ -122,6 +128,40 @@ describe("server sync coordination", () => {
     expect(await response.json()).toMatchObject({ scanned: 0, failed: 0 });
     expect(calls).toBe(1);
     expect(maxActive).toBe(1);
+    expect(joinedProgress).toEqual([]);
+  });
+
+  test("watcher joins a manual-owned physical sync without taking terminal ownership", async () => {
+    const config = freshConfig();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let calls = 0;
+    const runner: SyncWorkerRunner = async () => {
+      calls += 1;
+      entered.resolve();
+      await release.promise;
+      return {
+        scanned: 1,
+        ingested: 1,
+        skipped: 0,
+        issues: 0,
+        issuesByCode: {},
+        failed: 0,
+        cancelled: false,
+      };
+    };
+    const coordinator = createSyncCoordinator(runner);
+    const manual = coordinator.runWithOwnership(config);
+    expect(manual.owned).toBe(true);
+    await entered.promise;
+
+    const watcher = coordinator.runWithOwnership(config, { aborted: false }, () => {});
+    expect(watcher.owned).toBe(false);
+    expect(watcher.promise).toBe(manual.promise);
+    release.resolve();
+
+    expect(await watcher.promise).toMatchObject({ ingested: 1 });
+    expect(calls).toBe(1);
   });
 
   test("coordinator close cancels and awaits a manual sync without a watcher cancel source", async () => {

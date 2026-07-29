@@ -185,16 +185,23 @@ export function parseCodexSession(
 }
 
 function usageFrom(source: Json | undefined): TokenUsage {
+  const totalInput = getInteger(source, "input_tokens");
   const cached = getInteger(source, "cached_input_tokens");
   const cacheWrite = getInteger(source, "cache_write_input_tokens");
+  // Current Codex logs, when they carry cache_write_input_tokens at all, report
+  // cached and cache-write input as subsets of input_tokens. Gate that contract:
+  // if a future producer emits an incompatible breakdown, preserve the inclusive
+  // total and cached portion instead of silently zeroing uncached input or
+  // double-counting the write bucket.
+  const disjointBreakdown = cached + cacheWrite <= totalInput;
   return {
     // Codex reports input_tokens as the inclusive prompt total. Cached and
     // cache-write tokens are component breakdowns, so normalize them into
     // disjoint buckets before the rest of Decant adds the buckets together.
-    input: Math.max(0, getInteger(source, "input_tokens") - cached - cacheWrite),
+    input: Math.max(0, totalInput - cached - (disjointBreakdown ? cacheWrite : 0)),
     output: getInteger(source, "output_tokens"),
     cacheRead: cached,
-    cacheCreation: cacheWrite,
+    cacheCreation: disjointBreakdown ? cacheWrite : 0,
     cacheCreation1h: 0,
     reasoning: getInteger(source, "reasoning_output_tokens"),
   };

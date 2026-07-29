@@ -168,6 +168,48 @@ describe("parseCodexSession", () => {
     expect(rawMeta.model_context_window).toBe(258_400);
   });
 
+  test("preserves inclusive input when a future cache-write breakdown is inconsistent", () => {
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-06-01T09:00:00Z",
+        payload: { id: "sess-cache-breakdown", cwd: "/tmp/proj" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:01Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T09:00:02Z",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 90,
+              cache_write_input_tokens: 50,
+              output_tokens: 1,
+            },
+          },
+        },
+      }),
+    ].join("\n");
+
+    expect(
+      parseCodexSession("sess-cache-breakdown", content, new Map()).session.messages[0]?.usage,
+    ).toMatchObject({
+      input: 10,
+      cacheRead: 90,
+      cacheCreation: 0,
+    });
+  });
+
   test("token_count before any assistant output is dropped", () => {
     const content = [
       JSON.stringify({

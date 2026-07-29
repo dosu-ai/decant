@@ -103,9 +103,10 @@ backfills vectors for unchanged sessions.
 
 The tool-call browse route returns
 `{ calls: ToolCallRow[], total, limit, offset, summary }`, ordered newest first.
-`summary` reports calls, confirmed errors, and nearest-rank `p50_ms`/`p95_ms`
-over the complete filtered result, not only the current page. `limit` defaults
-to 50 and is capped at 100. `tool`, `server`, `session`, and `project` are
+On the first page, `summary` reports calls, confirmed errors, and nearest-rank
+`p50_ms`/`p95_ms` over the complete filtered result, not only the current page;
+later pages return `summary: null` to avoid repeating the percentile scan.
+`limit` defaults to 50 and is capped at 100. `tool`, `server`, `session`, and `project` are
 exact-match filters; `errors_only=true` includes only confirmed errors; `from`
 and `to` filter call timestamps by inclusive UTC date; and `min_ms` filters
 measured durations. A legacy or provider-opaque value stays JSON `null`: in
@@ -178,6 +179,7 @@ Current event names:
 - `hello`
 - `ping` (heartbeat, emitted every 5 seconds)
 - `ready`
+- `sync_progress`
 - `sync`
 - `archive_updated`
 - `error`

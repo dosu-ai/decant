@@ -22,6 +22,19 @@ describe("UI interaction contracts", () => {
     expect(search).toContain("loadMoreControllerRef.current === controller");
   });
 
+  test("does not activate stale search results and exposes arrow selection to assistive tech", () => {
+    const search = sourceBetween("function SearchView(", "function groupSearchHits(");
+
+    expect(search).toContain("resultsQueryRef.current = null");
+    expect(search).toContain("setHits([])");
+    expect(search).toContain("resultsQueryRef.current === query.trim()");
+    expect(search).toContain('role="combobox"');
+    expect(search).toContain('role="listbox"');
+    expect(search).toContain('role="option"');
+    expect(search).toContain("aria-activedescendant={activeHitId}");
+    expect(search).toContain("aria-selected={index === activeIndex}");
+  });
+
   test("exposes tool-call details as a focus-managed modal with a keyboard entry point", () => {
     const detail = sourceBetween("function ToolCallDetail(", "function ToolsView(");
     const tools = sourceBetween("function ToolsView(", "function FilesView(");

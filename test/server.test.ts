@@ -85,7 +85,12 @@ async function route(
   config: Config,
   path: string,
   init: RequestInit = {},
-): Promise<{ status: number; body: unknown; contentType: string | null }> {
+): Promise<{
+  status: number;
+  body: unknown;
+  contentType: string | null;
+  headers: Headers;
+}> {
   const headers = new Headers(init.headers);
   if (init.body != null && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
@@ -96,7 +101,7 @@ async function route(
   const body = contentType?.startsWith("application/json")
     ? await response.json()
     : await response.text();
-  return { status: response.status, body, contentType };
+  return { status: response.status, body, contentType, headers: response.headers };
 }
 
 describe("server routes", () => {
@@ -479,6 +484,7 @@ describe("server routes", () => {
         }),
       ]),
       total: expect.any(Number),
+      total_is_capped: false,
       elapsed_ms: expect.any(Number),
     });
     const firstSearchPage = await route(config, "/api/search", {
@@ -694,6 +700,12 @@ describe("server routes", () => {
     expect(analyticsReport.body).toContain("<!doctype html>");
     expect(analyticsReport.body).toContain("Agent activity report");
     expect(analyticsReport.body).toContain(">Optimized<");
+    expect(analyticsReport.headers.get("content-disposition")).toBe(
+      'attachment; filename="decant-analytics-report.html"',
+    );
+    expect(analyticsReport.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'none'",
+    );
 
     const sessionId = ((await route(config, "/api/sessions?limit=1")).body as { id: number }[])[0]
       ?.id;
@@ -703,6 +715,9 @@ describe("server routes", () => {
     expect(sessionReport.contentType).toBe("text/html; charset=utf-8");
     expect(sessionReport.body).toContain("Session analysis");
     expect(sessionReport.body).not.toContain("<script");
+    expect(sessionReport.headers.get("content-disposition")).toMatch(
+      /^attachment; filename="decant-session-\d+-[^"]+\.html"$/,
+    );
   });
 
   test("returns metadata and extended analytics routes", async () => {
@@ -801,6 +816,10 @@ describe("server routes", () => {
       },
     });
     expect(await route(config, "/api/sessions/abc")).toMatchObject({
+      status: 400,
+      body: { error: "invalid session id", code: "invalid_session_id" },
+    });
+    expect(await route(config, "/api/reports/session/abc.html")).toMatchObject({
       status: 400,
       body: { error: "invalid session id", code: "invalid_session_id" },
     });

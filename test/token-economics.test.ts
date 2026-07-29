@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
+import { refreshDerivedMetadata } from "../src/derived.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
@@ -243,6 +244,10 @@ describe("token economics", () => {
 
     expect(computeSessionEconomicsVectors(db)).toEqual([]);
     expect(tokenEconomics(db).totals.generation_tokens).toBeGreaterThan(0);
+    refreshDerivedMetadata(db);
+    expect(
+      aggregateEconomicsVectors(computeSessionEconomicsVectors(db)).totals.generation_tokens,
+    ).toBeGreaterThan(0);
     db.close();
   });
 
@@ -288,6 +293,21 @@ describe("token economics", () => {
     ).run(sessionId);
     expect(materializeMissingSessionEconomics(db)).toBe(1);
     expect(tokenEconomicsForSession(db, sessionId)).not.toBeNull();
+
+    db.query(
+      "UPDATE session_economics SET vector_json = json_remove(vector_json, '$.buckets.context.generation') WHERE session_id = ?1",
+    ).run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    const repaired = db
+      .query("SELECT vector_json FROM session_economics WHERE session_id = ?1")
+      .get(sessionId) as { vector_json: string };
+    expect(
+      (
+        JSON.parse(repaired.vector_json) as {
+          buckets: { context: { generation: number } };
+        }
+      ).buckets.context.generation,
+    ).toBeNumber();
     db.close();
   });
 

@@ -170,6 +170,40 @@ describe("watch mode", () => {
     await handle.stop();
   });
 
+  test("a watcher that joins another owner does not emit duplicate terminal events", async () => {
+    const config = freshConfig();
+    const events: WatchEvent[] = [];
+    const handle = startWatch({
+      config,
+      enableWatch: false,
+      intervalMs: 0,
+      syncOnStart: false,
+      onEvent: (event) => events.push(event),
+      runner: async (_runnerConfig, status) => {
+        status.start();
+        const report = {
+          scanned: 1,
+          ingested: 1,
+          skipped: 0,
+          issues: 0,
+          issuesByCode: {},
+          failed: 0,
+          cancelled: false,
+        };
+        status.finishOk(report);
+        return { report, emitTerminal: false };
+      },
+    });
+
+    handle.trigger("watch");
+    for (let attempt = 0; attempt < 100 && handle.status.snapshot().runs === 0; attempt += 1) {
+      await Bun.sleep(2);
+    }
+    expect(handle.status.snapshot().runs).toBe(1);
+    expect(events.some((event) => event.type === "sync")).toBe(false);
+    await handle.stop();
+  });
+
   test("periodic sweep is enough to ingest when native watch is disabled", async () => {
     const config = freshConfig();
     seedClaude(config);

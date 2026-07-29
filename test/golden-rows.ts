@@ -41,7 +41,7 @@ export const ROW_QUERIES = {
     ORDER BY s.tool, s.source_session_id, m.seq, f.path, f.operation`,
   recommendations: `
     SELECT key, kind, category, title, detail, suggestion, prompt, url,
-           link_label, icon, tone, score, status, status_source, note
+           link_label, icon, tone, impact_label, score, status, status_source, note
     FROM recommendation
     ORDER BY key`,
 } as const;

@@ -675,7 +675,18 @@ function migrate(db: Database, current: number): void {
             WHERE result_block.id = tool_call.result_block_id
           )
           WHERE duration_ms IS NULL
-            AND result_block_id IS NOT NULL;
+            AND result_block_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM block AS result_block
+              JOIN message AS result_message ON result_message.id = result_block.message_id
+              LEFT JOIN message AS call_message ON call_message.id = tool_call.message_id
+              WHERE result_block.id = tool_call.result_block_id
+                AND result_message.timestamp IS NOT NULL
+                AND COALESCE(call_message.timestamp, tool_call.timestamp) IS NOT NULL
+                AND julianday(result_message.timestamp) >=
+                  julianday(COALESCE(call_message.timestamp, tool_call.timestamp))
+            );
         `);
       }
       db.query(
@@ -686,7 +697,12 @@ function migrate(db: Database, current: number): void {
     assertContiguousMigrationHistory(db, LATEST_SCHEMA_VERSION);
     db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // Preserve the migration failure if SQLite already aborted or closed
+      // the transaction, or if rollback itself encounters a secondary error.
+    }
     throw error;
   }
 }
@@ -740,14 +756,31 @@ function assertContiguousMigrationHistory(db: Database, current: number): void {
 function assertSchemaMatchesBaseline(db: Database): void {
   const expected = getExpectedSchemaManifest();
   const actual = buildSchemaManifest(db);
-  if (actual.fingerprint !== expected.fingerprint) {
-    throwSchemaDrift(
-      db,
-      `owned schema objects differ from the v${LATEST_SCHEMA_VERSION} baseline`,
-      expected,
-      actual,
-    );
+  if (actual.fingerprint === expected.fingerprint) {
+    return;
   }
+  const differences = compareSchemaManifests(expected, actual);
+  const hasFatalDifference =
+    differences.missingObjects.length > 0 ||
+    differences.changedObjects.length > 0 ||
+    differences.missingColumns.length > 0 ||
+    differences.unexpectedColumns.length > 0;
+  if (!hasFatalDifference && differences.unexpectedObjects.length > 0) {
+    logger.warning("Archive includes additive operator-owned schema objects.", {
+      "event.name": "decant.schema.additive_drift",
+      "schema.version": LATEST_SCHEMA_VERSION,
+      "schema.fingerprint.expected": expected.fingerprint,
+      "schema.fingerprint.actual": actual.fingerprint,
+      "schema.drift.unexpected_objects": summarize(differences.unexpectedObjects),
+    });
+    return;
+  }
+  throwSchemaDrift(
+    db,
+    `owned schema objects differ from the v${LATEST_SCHEMA_VERSION} baseline`,
+    expected,
+    actual,
+  );
 }
 
 function getExpectedSchemaManifest(): SchemaManifest {

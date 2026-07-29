@@ -828,6 +828,128 @@ describe("openDb", () => {
     expect(() => openDb(path).close()).not.toThrow();
   });
 
+  test("v19 does not rewrite duration rows when the backfill still resolves to NULL", () => {
+    const path = freshPath();
+    let db = openDb(path);
+    db.exec(`
+      INSERT INTO session (id, tool, source_session_id)
+      VALUES (1, 'claude_code', 'v19-null-duration');
+      INSERT INTO message (id, session_id, seq, timestamp, raw)
+      VALUES
+        (10, 1, 0, '2026-07-29T00:00:01.000Z', '{}'),
+        (11, 1, 1, '2026-07-29T00:00:00.000Z', '{}');
+      INSERT INTO block (
+        id, message_id, session_id, ordinal, type, tool_name, tool_use_id, tool_result
+      )
+      VALUES
+        (100, 10, 1, 0, 'tool_use', 'Read', 'toolu_invalid_duration', NULL),
+        (101, 11, 1, 0, 'tool_result', NULL, 'toolu_invalid_duration', 'done');
+      INSERT INTO tool_call (
+        id, session_id, message_id, call_block_id, result_block_id,
+        tool_name, tool_use_id, duration_ms, ordinal, timestamp
+      )
+      VALUES (
+        1000, 1, 10, 100, 101,
+        'Read', 'toolu_invalid_duration', NULL, 0, '2026-07-29T00:00:01.000Z'
+      );
+      CREATE TABLE operator_update_audit(tool_call_id INTEGER NOT NULL);
+      CREATE TRIGGER operator_duration_update
+      AFTER UPDATE OF duration_ms ON tool_call
+      BEGIN
+        INSERT INTO operator_update_audit(tool_call_id) VALUES (new.id);
+      END;
+      DELETE FROM schema_migrations WHERE version = 19;
+    `);
+    db.close();
+
+    db = openDb(path);
+    expect(db.query("SELECT duration_ms FROM tool_call WHERE id = 1000").get()).toEqual({
+      duration_ms: null,
+    });
+    expect(
+      (db.query("SELECT COUNT(*) AS n FROM operator_update_audit").get() as { n: number }).n,
+    ).toBe(0);
+    db.close();
+  });
+
+  test("allows additive operator indexes with one bounded warning", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    for (let index = 0; index < 12; index += 1) {
+      db.exec(`CREATE INDEX operator_extra_${index} ON session(id)`);
+    }
+    db.close();
+
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    try {
+      expect(() => openDb(path).close()).not.toThrow();
+    } finally {
+      resetSync();
+    }
+
+    expect(lines).toHaveLength(1);
+    expect([...(lines[0] ?? "")].length).toBeLessThan(2_048);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      level: "WARN",
+      "event.name": "decant.schema.additive_drift",
+      "schema.version": 19,
+      "schema.drift.unexpected_objects":
+        "index:operator_extra_0, index:operator_extra_1, index:operator_extra_10, " +
+        "index:operator_extra_11, index:operator_extra_2, index:operator_extra_3, " +
+        "index:operator_extra_4, index:operator_extra_5, and 4 more",
+    });
+  });
+
+  test("keeps missing and changed owned objects fatal", () => {
+    const missingPath = freshPath();
+    const missing = openDb(missingPath);
+    missing.exec("DROP INDEX idx_session_project");
+    missing.close();
+    expect(() => openDb(missingPath)).toThrow(SchemaDriftError);
+
+    const changedPath = freshPath();
+    const changed = openDb(changedPath);
+    changed.exec(`
+      DROP INDEX idx_session_project;
+      CREATE INDEX idx_session_project ON session(tool);
+    `);
+    changed.close();
+    expect(() => openDb(changedPath)).toThrow(SchemaDriftError);
+  });
+
+  test("preserves a migration error when rollback also fails", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    db.exec(`
+      ALTER TABLE session ADD COLUMN unexpected_local_state TEXT;
+      DELETE FROM schema_migrations WHERE version = 19;
+    `);
+    db.close();
+
+    const originalExec = Database.prototype.exec;
+    Database.prototype.exec = function (this: Database, sql: string) {
+      if (sql.trim().toUpperCase() === "ROLLBACK;") {
+        throw new Error("simulated rollback failure");
+      }
+      return originalExec.call(this, sql);
+    } as Database["exec"];
+    let caught: unknown;
+    try {
+      openDb(path);
+    } catch (error) {
+      caught = error;
+    } finally {
+      Database.prototype.exec = originalExec;
+    }
+
+    expect(caught).toBeInstanceOf(SchemaDriftError);
+    expect((caught as Error).message).toContain(
+      "unexpected columns: session.unexpected_local_state",
+    );
+    expect((caught as Error).message).not.toContain("simulated rollback failure");
+  });
+
   test("fails fast on owned-schema drift with one actionable error record", () => {
     const path = freshPath();
     const db = openDb(path);

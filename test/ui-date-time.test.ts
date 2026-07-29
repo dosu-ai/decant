@@ -80,3 +80,53 @@ describe("sessionListDate", () => {
     expect(sessionListDate("not-a-date", UTC_OPTIONS)).toBeNull();
   });
 });
+
+describe("formatter reuse", () => {
+  test("reuses date-time and relative-time formatters for identical options", () => {
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+    const OriginalRelativeTimeFormat = Intl.RelativeTimeFormat;
+    let dateTimeConstructions = 0;
+    let relativeTimeConstructions = 0;
+    Object.defineProperty(Intl, "DateTimeFormat", {
+      configurable: true,
+      value: new Proxy(OriginalDateTimeFormat, {
+        construct(target, args, newTarget) {
+          dateTimeConstructions += 1;
+          return Reflect.construct(target, args, newTarget);
+        },
+      }),
+    });
+    Object.defineProperty(Intl, "RelativeTimeFormat", {
+      configurable: true,
+      value: new Proxy(OriginalRelativeTimeFormat, {
+        construct(target, args, newTarget) {
+          relativeTimeConstructions += 1;
+          return Reflect.construct(target, args, newTarget);
+        },
+      }),
+    });
+
+    const options = {
+      locale: "en-US-u-ca-gregory",
+      now: new Date("2026-07-18T12:00:00Z"),
+      timeZone: "UTC",
+    };
+    try {
+      expect(sessionListDate("2026-01-17T23:28:00Z", options)).toBe("Jan 17, 11:28 PM");
+      expect(sessionListDate("2026-01-17T23:28:00Z", options)).toBe("Jan 17, 11:28 PM");
+      expect(relativeTime("2026-07-18T10:00:00Z", options)).toBe("2 hours ago");
+      expect(relativeTime("2026-07-18T10:00:00Z", options)).toBe("2 hours ago");
+      expect(dateTimeConstructions).toBe(2);
+      expect(relativeTimeConstructions).toBe(1);
+    } finally {
+      Object.defineProperty(Intl, "DateTimeFormat", {
+        configurable: true,
+        value: OriginalDateTimeFormat,
+      });
+      Object.defineProperty(Intl, "RelativeTimeFormat", {
+        configurable: true,
+        value: OriginalRelativeTimeFormat,
+      });
+    }
+  });
+});

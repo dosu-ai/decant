@@ -6,6 +6,8 @@ export interface DateTimeFormatOptions {
 
 const DAY_MS = 86_400_000;
 const RECENT_SESSION_MS = 7 * DAY_MS;
+const dateTimeFormatCache = new Map<string, Intl.DateTimeFormat>();
+const relativeTimeFormatCache = new Map<string, Intl.RelativeTimeFormat>();
 
 export function compactDateTime(
   value: string | null | undefined,
@@ -19,7 +21,7 @@ export function compactDateTime(
   const includeYear =
     calendarYear(date, options.locale, options.timeZone) !==
     calendarYear(now, options.locale, options.timeZone);
-  return new Intl.DateTimeFormat(options.locale, {
+  return getDateTimeFormatter(options.locale, {
     year: includeYear ? "2-digit" : undefined,
     month: "numeric",
     day: "numeric",
@@ -51,7 +53,7 @@ export function relativeTime(
     ["hour", 3_600],
     ["minute", 60],
   ];
-  const formatter = new Intl.RelativeTimeFormat(options.locale, { numeric: "auto" });
+  const formatter = getRelativeTimeFormatter(options.locale, { numeric: "auto" });
   for (const [unit, seconds] of units) {
     if (abs >= seconds) {
       return formatter.format(Math.round(-deltaSeconds / seconds), unit);
@@ -76,7 +78,7 @@ export function sessionListDate(
   const includeYear =
     calendarYear(date, options.locale, options.timeZone) !==
     calendarYear(now, options.locale, options.timeZone);
-  return new Intl.DateTimeFormat(options.locale, {
+  return getDateTimeFormatter(options.locale, {
     year: includeYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
@@ -96,7 +98,7 @@ export function fullDateTime(
   if (date == null) {
     return null;
   }
-  return new Intl.DateTimeFormat(options.locale, {
+  return getDateTimeFormatter(options.locale, {
     dateStyle: "medium",
     timeStyle: "long",
     timeZone: options.timeZone,
@@ -125,7 +127,7 @@ function calendarYear(
   locale: string | undefined,
   timeZone: string | undefined,
 ): string {
-  return new Intl.DateTimeFormat(locale, { year: "numeric", timeZone }).format(date);
+  return getDateTimeFormatter(locale, { year: "numeric", timeZone }).format(date);
 }
 
 function parsedDate(value: string | null | undefined): Date | null {
@@ -134,4 +136,30 @@ function parsedDate(value: string | null | undefined): Date | null {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getDateTimeFormatter(
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale ?? null, options]);
+  let formatter = dateTimeFormatCache.get(key);
+  if (formatter == null) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    dateTimeFormatCache.set(key, formatter);
+  }
+  return formatter;
+}
+
+function getRelativeTimeFormatter(
+  locale: string | undefined,
+  options: Intl.RelativeTimeFormatOptions,
+): Intl.RelativeTimeFormat {
+  const key = JSON.stringify([locale ?? null, options]);
+  let formatter = relativeTimeFormatCache.get(key);
+  if (formatter == null) {
+    formatter = new Intl.RelativeTimeFormat(locale, options);
+    relativeTimeFormatCache.set(key, formatter);
+  }
+  return formatter;
 }

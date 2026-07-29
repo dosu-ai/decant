@@ -840,15 +840,19 @@ table {
 }
 
 .mcp-table {
-  min-width: 680px;
+  min-width: 720px;
 }
 
 .tools-table {
-  min-width: 1080px;
+  min-width: 900px;
 }
 
 .tool-calls-table {
-  min-width: 980px;
+  min-width: 960px;
+}
+
+.tool-stat-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .tool-stat-grid .stat-card strong {
@@ -928,27 +932,8 @@ table {
 }
 
 .tool-call-status {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: var(--faint);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--faint) 16%, transparent);
-}
-
-.tool-call-status.is-success {
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 16%, transparent);
-}
-
-.tool-call-status.is-error {
-  background: var(--danger);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--danger) 16%, transparent);
-}
-
-.tool-call-status.is-pending {
-  background: var(--warning);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warning) 16%, transparent);
+  min-width: 64px;
+  justify-content: center;
 }
 
 .tool-call-pagination {
@@ -961,6 +946,9 @@ table {
 }
 
 .tool-call-detail-button {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
   border: 0;
   background: transparent;
   color: inherit;
@@ -968,6 +956,8 @@ table {
   font: inherit;
   padding: 0;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-call-detail-button:hover,
@@ -1180,24 +1170,8 @@ table {
   height: 12px;
 }
 
-.col-wide {
-  width: 58%;
-}
-
 .col-number {
   width: 14%;
-}
-
-.col-tool {
-  width: 30%;
-}
-
-.col-kind {
-  width: 12%;
-}
-
-.col-server {
-  width: 30%;
 }
 
 .col-file {
@@ -1274,6 +1248,12 @@ tbody tr:hover {
 
 .tool-calls-table tbody tr {
   cursor: pointer;
+}
+
+.tool-calls-table th:first-child,
+.tool-calls-table td:first-child {
+  padding-right: 12px;
+  padding-left: 12px;
 }
 
 th {
@@ -1373,6 +1353,10 @@ td a:hover {
 
 .table-skeleton-line.title {
   width: min(420px, 72%);
+}
+
+.table-skeleton-line.project {
+  width: min(180px, 72%);
 }
 
 .table-skeleton-line.model {
@@ -4662,6 +4646,10 @@ pre {
   }
 
   .stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-stat-grid {
     grid-template-columns: 1fr;
   }
 

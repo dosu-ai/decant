@@ -47,6 +47,26 @@ describe("UI interaction contracts", () => {
     expect(tools).toContain("Inspect ${call.tool_name");
   });
 
+  test("closes report and share reviews only from direct backdrop presses", () => {
+    const reportReview = sourceBetween(
+      "function ExportReviewSheet(",
+      "function ReportExportButton(",
+    );
+    const shareReview = sourceBetween(
+      "function ShareChartButton(",
+      "async function renderShareCardPng(",
+    );
+
+    expect(reportReview).toContain('className="report-review-backdrop"');
+    expect(reportReview).toMatch(
+      /onMouseDown=\{\(event\) => \{\s*if \(event\.target === event\.currentTarget\) \{\s*onClose\(\);/,
+    );
+    expect(shareReview).toContain('className="share-review-backdrop"');
+    expect(shareReview).toMatch(
+      /onMouseDown=\{\(event\) => \{\s*if \(event\.target === event\.currentTarget\) \{\s*closeShareReview\(\);/,
+    );
+  });
+
   test("keeps compaction anchors exposed in the accessibility tree", () => {
     const chart = sourceBetween("function ContextWindowStrip(", "function compactionTokenRange(");
 

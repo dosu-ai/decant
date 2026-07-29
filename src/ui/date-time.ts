@@ -4,6 +4,9 @@ export interface DateTimeFormatOptions {
   timeZone?: string;
 }
 
+const DAY_MS = 86_400_000;
+const RECENT_SESSION_MS = 7 * DAY_MS;
+
 export function compactDateTime(
   value: string | null | undefined,
   options: DateTimeFormatOptions = {},
@@ -28,6 +31,63 @@ export function compactDateTime(
     .replace(/,\s*/g, " ");
 }
 
+export function relativeTime(
+  value: string | null | undefined,
+  options: DateTimeFormatOptions = {},
+): string {
+  if (value == null || value === "") {
+    return "-";
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return value;
+  }
+  const deltaSeconds = Math.round(((options.now ?? new Date()).getTime() - timestamp) / 1000);
+  const abs = Math.abs(deltaSeconds);
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 31_536_000],
+    ["month", 2_592_000],
+    ["day", 86_400],
+    ["hour", 3_600],
+    ["minute", 60],
+  ];
+  const formatter = new Intl.RelativeTimeFormat(options.locale, { numeric: "auto" });
+  for (const [unit, seconds] of units) {
+    if (abs >= seconds) {
+      return formatter.format(Math.round(-deltaSeconds / seconds), unit);
+    }
+  }
+  return "just now";
+}
+
+export function sessionListDate(
+  value: string | null | undefined,
+  options: DateTimeFormatOptions = {},
+): string | null {
+  const date = parsedDate(value);
+  if (date == null) {
+    return null;
+  }
+  const now = options.now ?? new Date();
+  const deltaMs = now.getTime() - date.getTime();
+  if (Math.abs(deltaMs) < RECENT_SESSION_MS) {
+    return compactRelativeTime(deltaMs);
+  }
+  const includeYear =
+    calendarYear(date, options.locale, options.timeZone) !==
+    calendarYear(now, options.locale, options.timeZone);
+  return new Intl.DateTimeFormat(options.locale, {
+    year: includeYear ? "numeric" : undefined,
+    month: "short",
+    day: "numeric",
+    hour: includeYear ? undefined : "numeric",
+    minute: includeYear ? undefined : "2-digit",
+    timeZone: options.timeZone,
+  })
+    .format(date)
+    .replace(/\s+at\s+/, ", ");
+}
+
 export function fullDateTime(
   value: string | null | undefined,
   options: Omit<DateTimeFormatOptions, "now"> = {},
@@ -41,6 +101,23 @@ export function fullDateTime(
     timeStyle: "long",
     timeZone: options.timeZone,
   }).format(date);
+}
+
+function compactRelativeTime(deltaMs: number): string {
+  const deltaSeconds = Math.round(deltaMs / 1000);
+  const abs = Math.abs(deltaSeconds);
+  const units: [suffix: string, seconds: number][] = [
+    ["d", 86_400],
+    ["h", 3_600],
+    ["m", 60],
+  ];
+  for (const [suffix, seconds] of units) {
+    if (abs >= seconds) {
+      const amount = Math.round(abs / seconds);
+      return deltaSeconds < 0 ? `in ${amount}${suffix}` : `${amount}${suffix} ago`;
+    }
+  }
+  return "just now";
 }
 
 function calendarYear(

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { compactDateTime, fullDateTime } from "../src/ui/date-time.ts";
+import {
+  compactDateTime,
+  fullDateTime,
+  relativeTime,
+  sessionListDate,
+} from "../src/ui/date-time.ts";
 
 const UTC_OPTIONS = {
   locale: "en-US",
@@ -31,5 +36,47 @@ describe("fullDateTime", () => {
     expect(formatted).toContain("Jul 17, 2026");
     expect(formatted).toContain("11:28:00 PM");
     expect(formatted).toEndWith("UTC");
+  });
+});
+
+describe("relativeTime", () => {
+  test("preserves the existing long-form relative copy", () => {
+    expect(relativeTime("2026-07-18T10:00:00Z", UTC_OPTIONS)).toBe("2 hours ago");
+    expect(relativeTime("2026-07-15T12:00:00Z", UTC_OPTIONS)).toBe("3 days ago");
+    expect(relativeTime("2026-07-18T14:00:00Z", UTC_OPTIONS)).toBe("in 2 hours");
+  });
+
+  test("preserves missing and invalid timestamp behavior", () => {
+    expect(relativeTime(null, UTC_OPTIONS)).toBe("-");
+    expect(relativeTime("not-a-date", UTC_OPTIONS)).toBe("not-a-date");
+  });
+});
+
+describe("sessionListDate", () => {
+  test("uses compact relative copy strictly within seven days", () => {
+    expect(sessionListDate("2026-07-18T10:00:00Z", UTC_OPTIONS)).toBe("2h ago");
+    expect(sessionListDate("2026-07-15T12:00:00Z", UTC_OPTIONS)).toBe("3d ago");
+    expect(sessionListDate("2026-07-18T14:00:00Z", UTC_OPTIONS)).toBe("in 2h");
+    expect(sessionListDate("2026-07-11T12:00:01Z", UTC_OPTIONS)).toBe("7d ago");
+    expect(sessionListDate("2026-07-11T12:00:00Z", UTC_OPTIONS)).toBe("Jul 11, 12:00 PM");
+  });
+
+  test("uses the selected timezone to choose current-year and older formats", () => {
+    expect(sessionListDate("2026-01-17T23:28:00Z", UTC_OPTIONS)).toBe("Jan 17, 11:28 PM");
+    const boundaryNow = new Date("2027-01-01T00:30:00Z");
+    const losAngeles = {
+      locale: "en-US",
+      now: boundaryNow,
+      timeZone: "America/Los_Angeles",
+    };
+    const utc = { locale: "en-US", now: boundaryNow, timeZone: "UTC" };
+    expect(sessionListDate("2026-07-17T23:28:00Z", losAngeles)).toBe("Jul 17, 4:28 PM");
+    expect(sessionListDate("2026-07-17T23:28:00Z", utc)).toBe("Jul 17, 2026");
+    expect(sessionListDate("2025-07-17T23:28:00Z", UTC_OPTIONS)).toBe("Jul 17, 2025");
+  });
+
+  test("returns null for missing or invalid timestamps", () => {
+    expect(sessionListDate(null, UTC_OPTIONS)).toBeNull();
+    expect(sessionListDate("not-a-date", UTC_OPTIONS)).toBeNull();
   });
 });

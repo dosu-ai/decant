@@ -75,7 +75,7 @@ import {
   layoutContextTooltip,
 } from "./context-window-layout.ts";
 import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
-import { compactDateTime, fullDateTime } from "./date-time.ts";
+import { fullDateTime, relativeTime, sessionListDate } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
@@ -112,6 +112,7 @@ import {
   shareCardTitle,
 } from "./share-card.ts";
 import { collectSliceResults } from "./slice-loading.ts";
+import { toolCallStatus } from "./tool-call-status.ts";
 import {
   isDrilldownActivationKey,
   type ToolFilters,
@@ -120,6 +121,7 @@ import {
   toolFiltersHref,
   withToolDateRange,
 } from "./tool-filters.ts";
+import { toolTableColumns } from "./tool-table-layout.ts";
 import { TranscriptCodeBlock, TranscriptMarkdown } from "./transcript-markdown.tsx";
 import {
   hasOpenModal,
@@ -1596,7 +1598,7 @@ function SessionTableSkeletonRows() {
         <span className="skeleton-line table-skeleton-line title" />
       </td>
       <td>
-        <span className="skeleton-line table-skeleton-line model" />
+        <span className="skeleton-line table-skeleton-line project" />
       </td>
       <td>
         <span className="skeleton-line table-skeleton-line model" />
@@ -2003,13 +2005,13 @@ function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
 }
 
 function SessionStartedAt({ value }: { value: string | null }) {
-  const compact = compactDateTime(value);
-  if (compact == null || value == null) {
+  const display = sessionListDate(value);
+  if (display == null || value == null) {
     return <span>-</span>;
   }
   return (
-    <time dateTime={value} title={fullDateTime(value) ?? compact}>
-      {compact}
+    <time dateTime={value} title={fullDateTime(value) ?? display}>
+      {display}
     </time>
   );
 }
@@ -2841,7 +2843,15 @@ function ExportReviewSheet({
     return null;
   }
   return createPortal(
-    <div className="report-review-backdrop">
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
+    <div
+      className="report-review-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <section
         aria-labelledby={titleId}
         aria-modal="true"
@@ -4122,7 +4132,15 @@ function ShareChartButton({
       </button>
       {open
         ? createPortal(
-            <div className="share-review-backdrop">
+            // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
+            <div
+              className="share-review-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  closeShareReview();
+                }
+              }}
+            >
               <section
                 aria-labelledby={`share-title-${input.kind}`}
                 aria-modal="true"
@@ -5657,32 +5675,6 @@ function duration(ms: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function relativeTime(value: string | null | undefined): string {
-  if (value == null || value === "") {
-    return "-";
-  }
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return value;
-  }
-  const deltaSeconds = Math.round((Date.now() - timestamp) / 1000);
-  const abs = Math.abs(deltaSeconds);
-  const units: [Intl.RelativeTimeFormatUnit, number][] = [
-    ["year", 31_536_000],
-    ["month", 2_592_000],
-    ["day", 86_400],
-    ["hour", 3_600],
-    ["minute", 60],
-  ];
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  for (const [unit, seconds] of units) {
-    if (abs >= seconds) {
-      return formatter.format(Math.round(-deltaSeconds / seconds), unit);
-    }
-  }
-  return "just now";
-}
-
 function capitalize(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
@@ -6055,21 +6047,12 @@ function prettyToolValue(value: string | null): string {
 }
 
 function ToolCallStatus({ call }: { call: ToolCallRow }) {
-  const status =
-    call.is_error === true
-      ? { className: "is-error", label: "Error" }
-      : call.is_error === false
-        ? { className: "is-success", label: "Succeeded" }
-        : call.has_result === false
-          ? { className: "is-pending", label: "No result" }
-          : { className: "is-unknown", label: "Unknown" };
+  const status = toolCallStatus(call.is_error);
   return (
-    <span
-      aria-label={status.label}
-      className={`tool-call-status ${status.className}`}
-      role="img"
-      title={status.label}
-    />
+    <Badge className="tool-call-status" title={status.title ?? undefined} tone={status.tone}>
+      <Icon name={status.icon} />
+      {status.label}
+    </Badge>
   );
 }
 
@@ -6291,6 +6274,9 @@ function ToolsView({
   const durationAvailable =
     data.tools.some((row) => row.p50_ms != null) ||
     callPage.calls.some((row) => row.duration_ms != null);
+  const mcpColumns = toolTableColumns("mcp", durationAvailable);
+  const toolColumns = toolTableColumns("tools", durationAvailable);
+  const callColumns = toolTableColumns("calls", durationAvailable);
 
   useEffect(() => {
     const restored = toolDateRangeFromFilters({
@@ -6414,14 +6400,15 @@ function ToolsView({
           />
         ) : (
           <div className="table-scroll">
-            <table className="data-table mcp-table">
+            <table className={`data-table mcp-table${durationAvailable ? " has-duration" : ""}`}>
               <colgroup>
-                <col className="col-wide" />
-                <col className="col-number" />
-                <col className="col-number" />
-                <col className="col-number" />
-                {durationAvailable ? <col className="col-number" /> : null}
-                <col className="col-number" />
+                {mcpColumns.map((column) => (
+                  <col
+                    className={column.className}
+                    key={column.className}
+                    style={{ width: `${column.width}%` }}
+                  />
+                ))}
               </colgroup>
               <thead>
                 <tr>
@@ -6519,15 +6506,15 @@ function ToolsView({
           </div>
         </div>
         <div className="table-scroll">
-          <table className="data-table tools-table">
+          <table className={`data-table tools-table${durationAvailable ? " has-duration" : ""}`}>
             <colgroup>
-              <col className="col-tool" />
-              <col className="col-kind" />
-              <col className="col-server" />
-              <col className="col-number" />
-              <col className="col-number" />
-              {durationAvailable ? <col className="col-number" /> : null}
-              <col className="col-number" />
+              {toolColumns.map((column) => (
+                <col
+                  className={column.className}
+                  key={column.className}
+                  style={{ width: `${column.width}%` }}
+                />
+              ))}
             </colgroup>
             <thead>
               <tr>
@@ -6609,7 +6596,7 @@ function ToolsView({
                       {row.mcp_server != null && row.mcp_server !== "" ? (
                         <span className="icon-cell">
                           <Icon name="cpu" />
-                          {row.mcp_server}
+                          <span>{row.mcp_server}</span>
                         </span>
                       ) : (
                         <span className="faint">-</span>
@@ -6727,7 +6714,18 @@ function ToolsView({
         ) : (
           <>
             <div className="table-scroll">
-              <table className="data-table tool-calls-table">
+              <table
+                className={`data-table tool-calls-table${durationAvailable ? " has-duration" : ""}`}
+              >
+                <colgroup>
+                  {callColumns.map((column) => (
+                    <col
+                      className={column.className}
+                      key={column.className}
+                      style={{ width: `${column.width}%` }}
+                    />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Status</th>

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
 function sourceBetween(start: string, end: string): string {
   const startIndex = main.indexOf(start);
@@ -58,6 +59,10 @@ describe("UI interaction contracts", () => {
       "function CommandPalette(",
       "function commandPaletteTextMatches(",
     );
+    const paletteGroups = palette.slice(
+      palette.indexOf("{groups.map("),
+      palette.indexOf('<footer className="command-palette-footer">'),
+    );
 
     expect(app).toContain("shouldOpenCommandPalette({");
     expect(app).toContain("setCommandPaletteOpen(true)");
@@ -71,16 +76,27 @@ describe("UI interaction contracts", () => {
     expect(palette).toContain('role="combobox"');
     expect(palette).toContain('role="listbox"');
     expect(palette).toContain('role="option"');
-    expect(palette).toContain("<fieldset");
-    expect(palette).toContain("<legend");
+    expect(paletteGroups).toContain('role="group"');
+    expect(paletteGroups).toContain("aria-labelledby={labelId}");
+    expect(paletteGroups).toContain('"command-palette-group-label"');
+    expect(paletteGroups).not.toContain("<fieldset");
+    expect(paletteGroups).not.toContain("<legend");
     expect(palette).toContain('group.label ?? "Transcript search"');
     expect(palette).toContain("aria-activedescendant={activeDescendant}");
     expect(palette).toContain("flattenCommandPaletteItems(groups)");
-    expect(palette).toContain("onPointerMove");
+    expect(palette).toContain("searchRouteHref(recent, locationPath())");
+    expect(palette).toContain("searchRouteHref(normalizedQuery, locationPath())");
+    expect(palette).toContain("dialogRef.current");
+    expect(palette).not.toContain("document\n      .querySelector<HTMLElement>");
+    expect(paletteGroups).toContain("onPointerEnter");
+    expect(paletteGroups).not.toContain("onPointerMove");
+    expect(paletteGroups).not.toContain("onKeyDown");
     expect(palette).toContain("setActiveIndex(index)");
     expect(palette).toContain("setActiveIndex(0)");
     expect(palette).toContain("item.highlights?.started_at");
     expect(palette).not.toContain("dangerouslySetInnerHTML");
+    expect(styles).toContain(".command-palette-group-label {");
+    expect(styles).not.toContain(".command-palette-group legend {");
     expect(app).toContain('aria-haspopup="dialog"');
     expect(app).toContain("aria-expanded={commandPaletteOpen}");
   });

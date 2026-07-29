@@ -493,7 +493,7 @@ nav a[aria-current="page"] svg {
   padding-top: 10px;
 }
 
-.command-palette-group legend {
+.command-palette-group-label {
   width: 100%;
   margin: 0;
   color: var(--faint);

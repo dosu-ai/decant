@@ -2395,7 +2395,7 @@ function CommandPalette({
     kind: "recent",
     activate: () => {
       rememberSearch(recent);
-      onNavigate(`/search?q=${encodeURIComponent(recent)}`);
+      onNavigate(searchRouteHref(recent, locationPath()));
     },
   }));
   const sessionMatches =
@@ -2486,7 +2486,7 @@ function CommandPalette({
           activate: () => {
             const remembered = rememberSearch(normalizedQuery);
             setRecentSearches(remembered);
-            onNavigate(`/search?q=${encodeURIComponent(normalizedQuery)}`);
+            onNavigate(searchRouteHref(normalizedQuery, locationPath()));
           },
         };
   const groups = buildCommandPaletteGroups({
@@ -2509,8 +2509,8 @@ function CommandPalette({
     if (activeIndex == null) {
       return;
     }
-    document
-      .querySelector<HTMLElement>(`[data-palette-index="${activeIndex}"]`)
+    dialogRef.current
+      ?.querySelector<HTMLElement>(`[data-palette-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
@@ -2608,68 +2608,78 @@ function CommandPalette({
           ) : null}
         </div>
         <div className="command-palette-results" id={listboxId} role="listbox">
-          {groups.map((group) => (
-            <fieldset className={`command-palette-group is-${group.id}`} key={group.id}>
-              <legend className={group.label == null ? "sr-only" : undefined}>
-                {group.label ?? "Transcript search"}
-              </legend>
-              {group.items.map((item) => {
-                const index = items.indexOf(item);
-                return (
-                  <div
-                    aria-selected={index === activeIndex}
-                    className={`command-palette-item is-${item.kind}${
-                      index === activeIndex ? " is-active" : ""
-                    }`}
-                    data-palette-index={index}
-                    id={`command-palette-item-${index}`}
-                    key={item.id}
-                    onClick={() => item.activate()}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onPointerMove={() => {
-                      setActiveIndex(index);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        item.activate();
-                      }
-                    }}
-                    role="option"
-                    tabIndex={-1}
-                  >
-                    <span className="command-palette-item-icon">
-                      <Icon name={item.icon} />
-                    </span>
-                    <span className="command-palette-item-copy">
-                      <strong>
-                        <PaletteHighlightedText ranges={item.highlights?.title} text={item.label} />
-                      </strong>
-                      {item.kind === "session" && item.row != null ? (
-                        <PaletteSessionMeta highlights={item.highlights} row={item.row} />
-                      ) : item.detail == null ? null : (
-                        <span>{item.detail}</span>
-                      )}
-                    </span>
-                    {item.kind === "session" && item.row?.started_at != null ? (
-                      <time
-                        className="command-palette-item-date"
-                        dateTime={item.row.started_at}
-                        title={fullDateTime(item.row.started_at) ?? item.row.started_at}
-                      >
-                        <PaletteHighlightedText
-                          ranges={item.highlights?.started_at}
-                          text={item.row.started_at.slice(0, 10)}
-                        />
-                      </time>
-                    ) : item.kind === "content-search" ? (
-                      <kbd>↵</kbd>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </fieldset>
-          ))}
+          {groups.map((group) => {
+            const labelId = `${listboxId}-${group.id}-label`;
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: fieldset is not a valid listbox child; this div is an explicit ARIA group.
+              <div
+                aria-labelledby={labelId}
+                className={`command-palette-group is-${group.id}`}
+                key={group.id}
+                role="group"
+              >
+                <div
+                  className={group.label == null ? "sr-only" : "command-palette-group-label"}
+                  id={labelId}
+                >
+                  {group.label ?? "Transcript search"}
+                </div>
+                {group.items.map((item) => {
+                  const index = items.indexOf(item);
+                  return (
+                    // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard activation is owned by the combobox through aria-activedescendant.
+                    <div
+                      aria-selected={index === activeIndex}
+                      className={`command-palette-item is-${item.kind}${
+                        index === activeIndex ? " is-active" : ""
+                      }`}
+                      data-palette-index={index}
+                      id={`command-palette-item-${index}`}
+                      key={item.id}
+                      onClick={() => item.activate()}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onPointerEnter={() => {
+                        setActiveIndex(index);
+                      }}
+                      role="option"
+                      tabIndex={-1}
+                    >
+                      <span className="command-palette-item-icon">
+                        <Icon name={item.icon} />
+                      </span>
+                      <span className="command-palette-item-copy">
+                        <strong>
+                          <PaletteHighlightedText
+                            ranges={item.highlights?.title}
+                            text={item.label}
+                          />
+                        </strong>
+                        {item.kind === "session" && item.row != null ? (
+                          <PaletteSessionMeta highlights={item.highlights} row={item.row} />
+                        ) : item.detail == null ? null : (
+                          <span>{item.detail}</span>
+                        )}
+                      </span>
+                      {item.kind === "session" && item.row?.started_at != null ? (
+                        <time
+                          className="command-palette-item-date"
+                          dateTime={item.row.started_at}
+                          title={fullDateTime(item.row.started_at) ?? item.row.started_at}
+                        >
+                          <PaletteHighlightedText
+                            ranges={item.highlights?.started_at}
+                            text={item.row.started_at.slice(0, 10)}
+                          />
+                        </time>
+                      ) : item.kind === "content-search" ? (
+                        <kbd>↵</kbd>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
         <footer className="command-palette-footer">
           <span>

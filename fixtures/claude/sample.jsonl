@@ -4,3 +4,8 @@
 {"type":"assistant","uuid":"a2","parentUuid":"u2","sessionId":"sess-claude-1","timestamp":"2026-05-01T10:00:10.000Z","cwd":"/Users/dev/proj","gitBranch":"main","version":"2.1.0","message":{"role":"assistant","model":"claude-opus-4-7","stop_reason":"end_turn","usage":{"input_tokens":1500,"output_tokens":120,"cache_read_input_tokens":6000,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"Done — the test passes now."}]}}
 {"type":"mode","mode":"normal","sessionId":"sess-claude-1"}
 {"type":"file-history-delta","messageId":"a2","trackingPath":"/Users/dev/proj/auth_test.py","backup":{"version":1}}
+{"type":"agent-name","name":"synthetic-helper","sessionId":"sess-claude-1"}
+{"type":"frame-link","frameId":"frame-synthetic","sessionId":"sess-claude-1"}
+{"type":"pr-link","prNumber":123,"sessionId":"sess-claude-1"}
+{"type":"inter_agent_communication_metadata","event":"synthetic-handoff","sessionId":"sess-claude-1"}
+{"type":"world_state","state":{"phase":"synthetic"},"sessionId":"sess-claude-1"}

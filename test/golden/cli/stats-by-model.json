@@ -1,14 +1,5 @@
 [
   {
-    "key": "gpt-5.4",
-    "sessions": 4,
-    "input_tokens": 1500,
-    "output_tokens": 390,
-    "reasoning_tokens": 140,
-    "est_reasoning_tokens": 0,
-    "estimated_cost_usd": 0.00985
-  },
-  {
     "key": "claude-opus-4-7",
     "sessions": 4,
     "input_tokens": 10320,
@@ -16,5 +7,14 @@
     "reasoning_tokens": 0,
     "est_reasoning_tokens": 494,
     "estimated_cost_usd": 0.09885
+  },
+  {
+    "key": "gpt-5.4",
+    "sessions": 4,
+    "input_tokens": 1500,
+    "output_tokens": 390,
+    "reasoning_tokens": 140,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0.00985
   }
 ]

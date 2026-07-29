@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { withImmediateTransaction } from "./db.ts";
+import { compareCodePoints } from "./order.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
 
 export interface Recommendation {
@@ -61,6 +62,7 @@ const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
+const WINDOW_DAYS = 30;
 const WINDOW = "s.started_at >= date('now','-30 days')";
 
 function queryOne<T>(db: Database, sql: string): T {
@@ -86,10 +88,12 @@ export function parseStatusFilter(value: string): StatusFilter | null {
 }
 
 export function signals(db: Database): Recommendation[] {
-  const tools = toolUsage(db, false, 500);
-  const mcp = mcpUsage(db, 500);
-  const models = byDimension(db, "model").sort(
-    (left, right) => right.estimated_cost_usd - left.estimated_cost_usd,
+  const recent = { from: recentWindowStart() };
+  const tools = toolUsage(db, false, 500, recent);
+  const mcp = mcpUsage(db, 500, recent);
+  const models = byDimension(db, "model", recent).sort(
+    (left, right) =>
+      right.estimated_cost_usd - left.estimated_cost_usd || compareCodePoints(left.key, right.key),
   );
   const out = [
     ...errorHotspots(tools),
@@ -102,8 +106,12 @@ export function signals(db: Database): Recommendation[] {
     ...abandonedRate(db),
     ...ingestHealth(db),
   ];
-  out.sort((left, right) => right.score - left.score);
+  out.sort((left, right) => right.score - left.score || compareCodePoints(left.key, right.key));
   return out.slice(0, 12);
+}
+
+function recentWindowStart(): string {
+  return new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
 }
 
 export function catalog(): Recommendation[] {
@@ -247,6 +255,24 @@ export function regenerate(db: Database): void {
          impact_label = excluded.impact_label,
          impact_label_checked = 1,
          score = excluded.score,
+         status = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN 'open'
+           ELSE recommendation.status
+         END,
+         status_source = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN NULL
+           ELSE recommendation.status_source
+         END,
+         implemented_at = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN NULL
+           ELSE recommendation.implemented_at
+         END,
          updated_at = excluded.updated_at`,
     );
     try {
@@ -530,7 +556,7 @@ function hotContextFiles(db: Database): Recommendation[] {
        WHERE ${WINDOW} AND f.rel_path IS NOT NULL
        GROUP BY key
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
-       ORDER BY readers DESC
+       ORDER BY readers DESC, key ASC
        LIMIT 2`,
   );
   return rows.map(({ key: relPath, readers }) => {
@@ -561,7 +587,7 @@ function churnFiles(db: Database): Recommendation[] {
        WHERE ${WINDOW} AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
        GROUP BY key
        HAVING editors >= ${CHURN_MIN_SESSIONS}
-       ORDER BY editors DESC
+       ORDER BY editors DESC, key ASC
        LIMIT 2`,
   );
   return rows.map(({ key: relPath, editors }) => {

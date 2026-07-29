@@ -60,4 +60,20 @@ describe("Insights information hierarchy", () => {
     expect(main).toContain('role={copyFeedback.kind === "error" ? "alert" : "status"}');
     expect(main).not.toContain("void navigator.clipboard?.writeText(handoffPrompt(row))");
   });
+
+  test("shows a skeleton instead of an empty state while recommendations load", () => {
+    expect(main).toContain("const [recommendationsLoading, setRecommendationsLoading]");
+    expect(main).toContain("function InsightsSignalsSkeleton()");
+    expect(main).toContain("loading={actions.recommendationsLoading}");
+    expect(main).toContain("loadFailed={actions.failedSlices.includes");
+    expect(insightsView).toContain("loading: boolean");
+    expect(insightsView).toContain("loadFailed: boolean");
+    expect(insightsView).toMatch(
+      /loading && signals\.length === 0 \? <InsightsSignalsSkeleton \/>/,
+    );
+    expect(insightsView).toMatch(
+      /!loading && !loadFailed && signals\.length === 0 \? \(\s*<EmptyState/,
+    );
+    expect(styles).toContain(".insights-signals-skeleton");
+  });
 });

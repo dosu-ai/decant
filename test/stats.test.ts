@@ -277,6 +277,53 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("ranked stat ties use stable key and name ordering", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO project(id, path) VALUES (1, '/p');
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, model, started_at
+      )
+      VALUES
+        (1, 'claude_code', 'z-session', 1, 'z-model', datetime('now')),
+        (2, 'codex', 'a-session', 1, 'a-model', datetime('now'));
+      INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server)
+      VALUES
+        (1, 'builtin', 'z-tool', NULL),
+        (2, 'builtin', 'a-tool', NULL),
+        (1, 'mcp', 'z-call', 'z-server'),
+        (2, 'mcp', 'a-call', 'a-server'),
+        (1, 'mcp', 'same', NULL),
+        (1, 'builtin', 'same', ''),
+        (1, 'builtin', 'same', 'z-server'),
+        (2, 'builtin', 'same', NULL);
+    `);
+
+    expect(byDimension(db, "model").map((row) => row.key)).toEqual(["a-model", "z-model"]);
+    expect(toolUsage(db, false, 10).map((row) => row.tool_name)).toEqual([
+      "a-call",
+      "a-tool",
+      "same",
+      "same",
+      "same",
+      "same",
+      "z-call",
+      "z-tool",
+    ]);
+    expect(
+      toolUsage(db, false, 10)
+        .filter((row) => row.tool_name === "same")
+        .map((row) => [row.tool_kind, row.mcp_server]),
+    ).toEqual([
+      ["builtin", null],
+      ["builtin", ""],
+      ["builtin", "z-server"],
+      ["mcp", null],
+    ]);
+    expect(mcpUsage(db, 10).map((row) => row.mcp_server)).toEqual(["a-server", "z-server"]);
+    db.close();
+  });
+
   test("session facets return a known row or null", () => {
     const db = seededEnriched();
     const id = (

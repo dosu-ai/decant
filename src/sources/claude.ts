@@ -17,16 +17,23 @@ import {
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
 
-const KNOWN_META = new Set([
-  "summary",
-  "ai-title",
+const TITLE_META = new Set(["summary", "ai-title"]);
+
+// Operational journal records are neither conversation messages nor title
+// sources. Keep their payloads opaque until Claude documents stable semantics.
+const IGNORED_JOURNAL_META = new Set([
+  "agent-name",
   "last-prompt",
   "permission-mode",
   "attachment",
   "file-history-delta",
   "file-history-snapshot",
+  "frame-link",
+  "inter_agent_communication_metadata",
   "mode",
+  "pr-link",
   "queue-operation",
+  "world_state",
 ]);
 
 const CHARS_PER_TOKEN = 4;
@@ -140,14 +147,14 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "result") {
       resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
-    } else if (KNOWN_META.has(typ)) {
+    } else if (TITLE_META.has(typ)) {
       if (metadataTitle == null) {
         const metaTitle = stringAt(value, "summary", "title");
         if (metaTitle != null) {
           metadataTitle = truncate(metaTitle, 120);
         }
       }
-    } else {
+    } else if (!IGNORED_JOURNAL_META.has(typ)) {
       const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
       seen.count += 1;
       unknownTypes.set(typ, seen);

@@ -27,8 +27,12 @@ function base(): Database {
   const db = freshDb();
   db.exec(`
     INSERT INTO project(id, path) VALUES (1, '/p');
-    INSERT INTO session(id, tool, source_session_id, project_id, model, estimated_cost_usd)
-      VALUES (1, 'claude_code', 's1', 1, 'claude-opus-4-7', 10.0);
+    INSERT INTO session(
+      id, tool, source_session_id, project_id, model, estimated_cost_usd, started_at
+    )
+      VALUES (
+        1, 'claude_code', 's1', 1, 'claude-opus-4-7', 10.0, datetime('now')
+      );
   `);
   return db;
 }
@@ -40,13 +44,14 @@ function seedTool(
   server: string | null,
   calls: number,
   errors: number,
+  sessionId = 1,
 ): void {
   const insert = db.prepare(
     `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error)
-     VALUES (1, ?1, ?2, ?3, ?4)`,
+     VALUES (?1, ?2, ?3, ?4, ?5)`,
   );
   for (let index = 0; index < calls; index += 1) {
-    insert.run(kind, name, server, index < errors ? 1 : 0);
+    insert.run(sessionId, kind, name, server, index < errors ? 1 : 0);
   }
 }
 
@@ -106,8 +111,10 @@ describe("recommendations", () => {
     seedTool(db, "mcp__svc__a", "mcp", "svc", 60, 0);
     seedTool(db, "Bash", "builtin", null, 250, 0);
     db.exec(`
-      INSERT INTO session(id, tool, source_session_id, project_id, model, estimated_cost_usd)
-      VALUES (2, 'claude_code', 's2', 1, 'claude-haiku', 2.0);
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, model, estimated_cost_usd, started_at
+      )
+      VALUES (2, 'claude_code', 's2', 1, 'claude-haiku', 2.0, datetime('now'));
     `);
 
     const rows = signals(db);
@@ -151,6 +158,79 @@ describe("recommendations", () => {
     expect(keys(rows)).not.toContain("signal:error:fetch-00");
     expect(rows.map((row) => row.score)).toEqual(
       [...rows].map((row) => row.score).sort((a, b) => b - a),
+    );
+    db.close();
+  });
+
+  test("equal-score signals use key order at the twelve-row boundary", () => {
+    const db = base();
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    for (let index = 12; index >= 0; index -= 1) {
+      seedTool(db, `fetch-${index.toString().padStart(2, "0")}`, "builtin", null, 50, 10);
+    }
+
+    expect(keys(signals(db))).toEqual(
+      Array.from(
+        { length: 12 },
+        (_, index) => `signal:error:fetch-${String(index).padStart(2, "0")}`,
+      ),
+    );
+    db.close();
+  });
+
+  test("exact ties use stable keys for ranking and limited file selections", () => {
+    const db = base();
+    seedTool(db, "fetch", "builtin", null, 25, 5);
+    db.exec(`
+      UPDATE session SET model = 'z-model', estimated_cost_usd = 10 WHERE id = 1;
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, model, estimated_cost_usd, started_at
+      )
+      VALUES (2, 'codex', 'model-tie', 1, 'a-model', 10, datetime('now'));
+    `);
+    for (const [index, path] of ["c-hot.md", "b-hot.md", "a-hot.md"].entries()) {
+      seedFileSessions(db, 100 + index * 20, 8, path, "read");
+    }
+    for (const [index, path] of ["c-churn.ts", "b-churn.ts", "a-churn.ts"].entries()) {
+      seedFileSessions(db, 200 + index * 20, 6, path, "edit");
+    }
+
+    const rows = signals(db);
+    expect(rows.filter((row) => row.score === 5).map((row) => row.key)).toEqual([
+      "signal:cost-concentration",
+      "signal:error:fetch",
+    ]);
+    expect(
+      rows.filter((row) => row.key.startsWith("signal:hot-context:")).map((row) => row.key),
+    ).toEqual(["signal:hot-context:a-hot.md", "signal:hot-context:b-hot.md"]);
+    expect(rows.filter((row) => row.key.startsWith("signal:churn:")).map((row) => row.key)).toEqual(
+      ["signal:churn:a-churn.ts", "signal:churn:b-churn.ts"],
+    );
+    expect(rows.find((row) => row.key === "signal:cost-concentration")?.title).toContain(
+      '"a-model"',
+    );
+    db.close();
+  });
+
+  test("tool and model signals use the same rolling 30-day window", () => {
+    const db = base();
+    db.exec(`
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, model, estimated_cost_usd, started_at
+      )
+      VALUES
+        (2, 'codex', 'recent', 1, 'claude-haiku', 2, datetime('now')),
+        (3, 'claude_code', 'old', 1, 'old-expensive-model', 100, datetime('now','-31 days'));
+    `);
+    seedTool(db, "old-fetch", "mcp", "old-svc", 60, 15, 3);
+    seedTool(db, "OldBuiltin", "builtin", null, 250, 0, 3);
+
+    const rows = signals(db);
+    expect(keys(rows)).not.toContain("signal:error:old-fetch");
+    expect(keys(rows)).not.toContain("signal:heavy-server:old-svc");
+    expect(keys(rows)).not.toContain("signal:heavy-tool:OldBuiltin");
+    expect(rows.find((row) => row.key === "signal:cost-concentration")?.title).toBe(
+      '83% of spend is on "claude-opus-4-7"',
     );
     db.close();
   });
@@ -207,7 +287,7 @@ describe("recommendations", () => {
         `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
          VALUES (?1, 'claude_code', 'sh' || ?1, 1, datetime('now'), ?2)`,
       ).run(id, index < 7 ? "abandoned" : "completed");
-      for (let call = 0; call < 9; call += 1) {
+      for (let call = 0; call < 10; call += 1) {
         db.query(
           `INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
            VALUES (?1, 'builtin', 'Grep', datetime('now'))`,
@@ -387,13 +467,21 @@ describe("recommendations", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);
     regenerate(db);
+    const firstSeenAt = (
+      db
+        .query("SELECT first_seen_at FROM recommendation WHERE key = 'signal:error:fetch'")
+        .get() as { first_seen_at: string }
+    ).first_seen_at;
     db.query("DELETE FROM tool_call").run();
     seedTool(db, "fetch", "mcp", "svc", 100, 2);
     regenerate(db);
 
     expect(
       db
-        .query("SELECT status, status_source FROM recommendation WHERE key = 'signal:error:fetch'")
+        .query(
+          `SELECT status, status_source, implemented_at
+           FROM recommendation WHERE key = 'signal:error:fetch'`,
+        )
         .get(),
     ).toMatchObject({ status: "implemented", status_source: "activity" });
     expect(
@@ -405,7 +493,48 @@ describe("recommendations", () => {
           .get() as { n: number }
       ).n,
     ).toBe(0);
+
+    db.query("DELETE FROM tool_call").run();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    regenerate(db);
+    expect(
+      db
+        .query(
+          `SELECT status, status_source, implemented_at, first_seen_at
+           FROM recommendation WHERE key = 'signal:error:fetch'`,
+        )
+        .get(),
+    ).toEqual({
+      status: "open",
+      status_source: null,
+      implemented_at: null,
+      first_seen_at: firstSeenAt,
+    });
     db.close();
+  });
+
+  test("manual, agent, and UI completion stay sticky when a signal reappears", () => {
+    for (const source of ["manual", "agent", "ui"]) {
+      const db = base();
+      seedTool(db, "fetch", "mcp", "svc", 25, 5);
+      regenerate(db);
+      expect(markImplemented(db, "signal:error:fetch", source, "accepted")).toBe(true);
+      db.query("DELETE FROM tool_call").run();
+      seedTool(db, "fetch", "mcp", "svc", 100, 2);
+      regenerate(db);
+      db.query("DELETE FROM tool_call").run();
+      seedTool(db, "fetch", "mcp", "svc", 25, 5);
+      regenerate(db);
+      expect(
+        db
+          .query(
+            `SELECT status, status_source, note
+             FROM recommendation WHERE key = 'signal:error:fetch'`,
+          )
+          .get(),
+      ).toEqual({ status: "implemented", status_source: source, note: "accepted" });
+      db.close();
+    }
   });
 
   test("list filters and adds promotion card fields", () => {

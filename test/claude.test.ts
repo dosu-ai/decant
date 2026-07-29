@@ -232,16 +232,46 @@ describe("parseClaudeSession", () => {
     expect(parsed.issues).toEqual([]);
   });
 
-  test("treats mode and file history deltas as metadata only", () => {
+  test("ignored journal metadata cannot supply titles or alter conversation sequencing", () => {
+    const ignoredRecordTypes = [
+      "agent-name",
+      "last-prompt",
+      "permission-mode",
+      "attachment",
+      "file-history-delta",
+      "file-history-snapshot",
+      "frame-link",
+      "inter_agent_communication_metadata",
+      "mode",
+      "pr-link",
+      "queue-operation",
+      "world_state",
+    ];
+    const ignoredRecords = ignoredRecordTypes.map((type) =>
+      JSON.stringify({
+        type,
+        title: `Not a session title: ${type}`,
+        summary: `Not a session summary: ${type}`,
+      }),
+    );
+
+    const metadataOnly = parseClaudeSession("metadata-only", ignoredRecords.join("\n"));
+    expect(metadataOnly.issues).toEqual([]);
+    expect(metadataOnly.session.title).toBeNull();
+    expect(metadataOnly.session.messages).toEqual([]);
+
     const content = [
-      '{"type":"mode","mode":"normal"}',
-      '{"type":"file-history-delta","messageId":"m1","trackingPath":"/repo/a.ts","backup":{}}',
-      '{"type":"user","message":{"role":"user","content":"Keep this prompt"}}',
+      ...ignoredRecords,
+      '{"type":"user","uuid":"u1","message":{"role":"user","content":"Keep this human prompt"}}',
+      '{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[]}}',
     ].join("\n");
-    const parsed = parseClaudeSession("s", content);
+    const parsed = parseClaudeSession("conversation", content);
     expect(parsed.issues).toEqual([]);
-    expect(parsed.session.messages).toHaveLength(1);
-    expect(parsed.session.messages[0]?.role).toBe("user");
+    expect(parsed.session.title).toBe("Keep this human prompt");
+    expect(parsed.session.messages.map(({ seq, role }) => ({ seq, role }))).toEqual([
+      { seq: 0, role: "user" },
+      { seq: 1, role: "assistant" },
+    ]);
   });
 
   test("unknown blocks and tool result arrays parse", () => {

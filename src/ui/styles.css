@@ -1864,6 +1864,17 @@ select {
   color: var(--danger);
 }
 
+.slice-load-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.slice-load-notice .secondary-button {
+  flex: 0 0 auto;
+}
+
 .inline-notice {
   margin: 12px 0;
 }
@@ -2769,6 +2780,35 @@ mark {
 
 .insights-section {
   gap: 16px;
+}
+
+.insights-signals-skeleton {
+  display: grid;
+  gap: 10px;
+}
+
+.insights-skeleton-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: 16px;
+}
+
+.insights-skeleton-kicker {
+  width: 7rem;
+  height: 11px;
+}
+
+.insights-skeleton-title {
+  width: min(30rem, 70%);
+  height: 17px;
+}
+
+.insights-skeleton-detail {
+  width: min(44rem, 92%);
+  height: 13px;
 }
 
 .insights-section-heading {

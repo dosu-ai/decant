@@ -92,7 +92,7 @@ export function byDimension(
               COALESCE(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
        FROM filtered_session s ${join}
        GROUP BY key
-       ORDER BY sessions DESC`,
+       ORDER BY sessions DESC, key ASC`,
   );
   let rows: DimRowDb[];
   try {
@@ -182,7 +182,8 @@ export function toolUsage(
         AND l.tool_kind IS a.tool_kind
         AND l.mcp_server IS a.mcp_server
        ${errorFilter}
-       ORDER BY a.calls DESC
+       ORDER BY a.calls DESC, a.tool_name ASC, a.tool_kind ASC,
+                (a.mcp_server IS NOT NULL) ASC, COALESCE(a.mcp_server, '') ASC
        LIMIT ${limit}`,
   );
   let rows: ToolStatDb[];
@@ -267,7 +268,7 @@ export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | nu
               l.p50_ms, l.p95_ms, a.last_used_at
        FROM aggregate a
        LEFT JOIN latency l ON l.mcp_server = a.mcp_server
-       ORDER BY a.calls DESC
+       ORDER BY a.calls DESC, a.mcp_server ASC
        LIMIT ?`,
   );
   let rows: McpStatDb[];

@@ -111,6 +111,7 @@ import {
   shareCardTakeaway,
   shareCardTitle,
 } from "./share-card.ts";
+import { collectSliceResults } from "./slice-loading.ts";
 import {
   isDrilldownActivationKey,
   type ToolFilters,
@@ -587,6 +588,10 @@ const ROUTE_SLICES: Record<string, DataSlice[]> = {
   Settings: ["config", "settings"],
 };
 
+function slicesForView(activeView: string): DataSlice[] {
+  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+}
+
 type NavItem = {
   key: string;
   href: string;
@@ -659,9 +664,13 @@ const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null
 function App() {
   const [path, setPath] = useState(locationPath);
   const [data, setData] = useState<DashboardData>(emptyData);
-  const [error, setError] = useState<unknown>(null);
+  const [sessionsError, setSessionsError] = useState<unknown>(null);
+  const [failedSlices, setFailedSlices] = useState<DataSlice[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const [loadedSessionKey, setLoadedSessionKey] = useState<string | null>(null);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(
+    () => resolveActiveRoute(locationPath(), navItems) === "Insights",
+  );
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
@@ -674,6 +683,7 @@ function App() {
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
   const syncCompleteTimerRef = useRef<number | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
+  const liveDroppedRef = useRef(false);
   const headerSearchRef = useRef<HTMLInputElement | null>(null);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
@@ -727,6 +737,13 @@ function App() {
     window.dispatchEvent(new CustomEvent("decant:set-theme"));
   }, [theme]);
 
+  useLayoutEffect(() => {
+    setRecommendationsLoading(
+      activeView === "Insights" &&
+        loadedSlicesRef.current.get("recommendations") !== `${reloadKey}`,
+    );
+  }, [activeView, reloadKey]);
+
   useEffect(() => {
     void dateQuery;
     void sessionProject;
@@ -738,7 +755,8 @@ function App() {
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
       SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
-    const needed = [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+    const needed = slicesForView(activeView);
+    setFailedSlices((current) => current.filter((slice) => needed.includes(slice)));
     const missing = needed.filter(
       (slice) => loadedSlicesRef.current.get(slice) !== sliceKey(slice),
     );
@@ -746,21 +764,21 @@ function App() {
       return;
     }
     let cancelled = false;
-    Promise.all(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
-      .then((parts) => {
+    void Promise.allSettled(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
+      .then((results) => {
         if (cancelled) {
           return;
         }
-        const merged = Object.assign({}, ...parts) as Partial<DashboardData>;
-        setData((current) => ({ ...current, ...merged }));
-        for (const slice of missing) {
+        const settled = collectSliceResults<DataSlice, DashboardData>(missing, results);
+        setData((current) => ({ ...current, ...settled.data }));
+        for (const slice of settled.loaded) {
           loadedSlicesRef.current.set(slice, sliceKey(slice));
         }
-        setError(null);
+        setFailedSlices(settled.failures.map((failure) => failure.slice));
       })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err);
+      .finally(() => {
+        if (!cancelled && missing.includes("recommendations")) {
+          setRecommendationsLoading(false);
         }
       });
     return () => {
@@ -801,11 +819,11 @@ function App() {
           sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
         }));
         setLoadedSessionKey(sessionLoadKey);
-        setError(null);
+        setSessionsError(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err);
+          setSessionsError(err);
         }
       })
       .finally(() => {
@@ -832,6 +850,10 @@ function App() {
     void liveConnectionKey;
     const events = new EventSource("/api/events");
     const markConnected = () => {
+      if (liveDroppedRef.current) {
+        liveDroppedRef.current = false;
+        requestRefresh();
+      }
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
         liveDisconnectTimerRef.current = null;
@@ -891,6 +913,7 @@ function App() {
     };
     const handleOpen = () => markConnected();
     const handleError = () => {
+      liveDroppedRef.current = true;
       if (liveDisconnectTimerRef.current != null) {
         return;
       }
@@ -959,6 +982,9 @@ function App() {
 
   const active = activeView;
   const activeKey = resolveActiveRouteKey(path, navItems);
+  const activeFailedSlices = failedSlices.filter((slice) =>
+    slicesForView(activeView).includes(slice),
+  );
   const metrics = data.summary;
   // Prefer the loaded (date-filtered) session list, matching the sidebar's
   // other stats; dateBounds is archive-wide and only a fallback for routes
@@ -993,6 +1019,7 @@ function App() {
       });
   };
   const reconnectLiveUpdates = () => {
+    liveDroppedRef.current = false;
     setLiveDisconnected(false);
     setLiveConnectionKey((key) => key + 1);
     requestRefresh();
@@ -1221,8 +1248,19 @@ function App() {
                 <ApiFailureState error={syncError} onRetry={runSync} />
               </div>
             ) : null}
-            {error != null ? (
-              <ApiFailureState error={error} onRetry={requestRefresh} onSync={runSync} />
+            {activeFailedSlices.length > 0 ? (
+              <div className="notice danger slice-load-notice" role="alert">
+                <span>
+                  Some dashboard data could not be loaded. Available data is still shown. Failed:{" "}
+                  {activeFailedSlices.join(", ")}.
+                </span>
+                <button className="secondary-button" onClick={requestRefresh} type="button">
+                  Retry
+                </button>
+              </div>
+            ) : null}
+            {active === "Sessions" && sessionsError != null ? (
+              <ApiFailureState error={sessionsError} onRetry={requestRefresh} onSync={runSync} />
             ) : (
               renderView(active, path, data, {
                 dateRange: dateRangeSelection,
@@ -1232,6 +1270,8 @@ function App() {
                 },
                 refresh: requestRefresh,
                 runSync,
+                failedSlices,
+                recommendationsLoading,
                 sessionLimit,
                 sessionsLoading,
                 setSessionLimit,
@@ -1254,6 +1294,8 @@ function renderView(
     onDateRangeChange: (range: DateRangeSelection) => void;
     refresh: () => void;
     runSync: () => void;
+    failedSlices: DataSlice[];
+    recommendationsLoading: boolean;
     sessionLimit: number;
     sessionsLoading: boolean;
     setSessionLimit: (limit: number) => void;
@@ -1305,6 +1347,8 @@ function renderView(
     case "Insights":
       return (
         <InsightsView
+          loading={actions.recommendationsLoading}
+          loadFailed={actions.failedSlices.includes("recommendations")}
           rows={data.recommendations}
           settingsInfo={data.settings}
           onMarked={actions.refresh}
@@ -5658,10 +5702,14 @@ function formatDay(value: string | null): string | null {
 }
 
 function InsightsView({
+  loading,
+  loadFailed,
   rows,
   settingsInfo,
   onMarked,
 }: {
+  loading: boolean;
+  loadFailed: boolean;
   rows: Recommendation[];
   settingsInfo: SettingsInfo | null;
   onMarked: () => void;
@@ -5779,7 +5827,9 @@ function InsightsView({
           ) : null}
         </div>
 
-        {signals.length === 0 ? (
+        {loading && signals.length === 0 ? <InsightsSignalsSkeleton /> : null}
+
+        {!loading && !loadFailed && signals.length === 0 ? (
           <EmptyState
             icon="lightbulb"
             message="More session history will surface patterns."
@@ -5860,6 +5910,20 @@ function InsightsView({
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function InsightsSignalsSkeleton() {
+  return (
+    <div aria-label="Loading insights" className="insights-signals-skeleton" role="status">
+      {["primary", "secondary", "tertiary"].map((key) => (
+        <div className="insights-skeleton-card" key={key}>
+          <span className="skeleton-line insights-skeleton-kicker" />
+          <span className="skeleton-line insights-skeleton-title" />
+          <span className="skeleton-line insights-skeleton-detail" />
+        </div>
+      ))}
     </div>
   );
 }

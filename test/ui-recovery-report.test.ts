@@ -45,6 +45,31 @@ describe("coded UI recovery", () => {
     expect(main).toContain("Reconnect");
   });
 
+  test("keeps successful dashboard slices visible when a sibling request fails", () => {
+    expect(main).toContain("Promise.allSettled");
+    expect(main).not.toContain("Promise.all(missing.map");
+    expect(main).toContain("collectSliceResults");
+    expect(main).toContain("const [failedSlices, setFailedSlices]");
+    expect(main).toContain(
+      "Some dashboard data could not be loaded. Available data is still shown.",
+    );
+    expect(main).toContain("activeFailedSlices.join");
+    expect(main).toContain("slicesForView(activeView).includes(slice)");
+    expect(main).toContain(
+      "setFailedSlices((current) => current.filter((slice) => needed.includes(slice)))",
+    );
+    expect(main).toContain("const [sessionsError, setSessionsError]");
+    expect(main).toContain('active === "Sessions" && sessionsError != null');
+  });
+
+  test("refreshes dashboard slices after a dropped live connection recovers", () => {
+    expect(main).toContain("const liveDroppedRef = useRef(false)");
+    expect(main).toMatch(
+      /if \(liveDroppedRef\.current\) \{\s*liveDroppedRef\.current = false;\s*requestRefresh\(\);/,
+    );
+    expect(main).toContain("liveDroppedRef.current = true");
+  });
+
   test("adds recovery actions to empty Projects and Analytics states", () => {
     expect(main).toMatch(/function ProjectsView[\s\S]*?Sync now/);
     expect(main).toMatch(/function DailyPanel[\s\S]*?All time[\s\S]*?title="No data in range"/);

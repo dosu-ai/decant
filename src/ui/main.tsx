@@ -6048,11 +6048,24 @@ function prettyToolValue(value: string | null): string {
 
 function ToolCallStatus({ call }: { call: ToolCallRow }) {
   const status = toolCallStatus(call.is_error);
-  return (
-    <Badge className="tool-call-status" title={status.title ?? undefined} tone={status.tone}>
+  const badge = (
+    <Badge className="tool-call-status" tone={status.tone}>
       <Icon name={status.icon} />
       {status.label}
     </Badge>
+  );
+  if (status.title == null) {
+    return badge;
+  }
+  return (
+    <Tooltip content={status.title}>
+      {(tooltipProps) => (
+        <span {...tooltipProps}>
+          {badge}
+          <span className="sr-only">{status.title}</span>
+        </span>
+      )}
+    </Tooltip>
   );
 }
 
@@ -6400,7 +6413,7 @@ function ToolsView({
           />
         ) : (
           <div className="table-scroll">
-            <table className={`data-table mcp-table${durationAvailable ? " has-duration" : ""}`}>
+            <table className="data-table mcp-table">
               <colgroup>
                 {mcpColumns.map((column) => (
                   <col
@@ -6506,7 +6519,7 @@ function ToolsView({
           </div>
         </div>
         <div className="table-scroll">
-          <table className={`data-table tools-table${durationAvailable ? " has-duration" : ""}`}>
+          <table className="data-table tools-table">
             <colgroup>
               {toolColumns.map((column) => (
                 <col
@@ -6714,9 +6727,7 @@ function ToolsView({
         ) : (
           <>
             <div className="table-scroll">
-              <table
-                className={`data-table tool-calls-table${durationAvailable ? " has-duration" : ""}`}
-              >
+              <table className="data-table tool-calls-table">
                 <colgroup>
                   {callColumns.map((column) => (
                     <col

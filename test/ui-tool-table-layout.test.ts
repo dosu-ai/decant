@@ -68,9 +68,11 @@ describe("tool table column layouts", () => {
   }
 
   test("reserves enough minimum-width space for the full Unknown status badge", () => {
-    const status = toolTableColumns("calls", true).find(
-      (column) => column.className === "col-call-status",
-    );
-    expect(status?.width).toBeGreaterThanOrEqual(12);
+    for (const durationAvailable of [false, true]) {
+      const status = toolTableColumns("calls", durationAvailable).find(
+        (column) => column.className === "col-call-status",
+      );
+      expect(status?.width).toBeGreaterThanOrEqual(12);
+    }
   });
 });

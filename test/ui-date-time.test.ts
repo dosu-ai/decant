@@ -55,8 +55,10 @@ describe("relativeTime", () => {
 describe("sessionListDate", () => {
   test("uses compact relative copy strictly within seven days", () => {
     expect(sessionListDate("2026-07-18T10:00:00Z", UTC_OPTIONS)).toBe("2h ago");
+    expect(sessionListDate("2026-07-17T12:20:00Z", UTC_OPTIONS)).toBe("1d ago");
     expect(sessionListDate("2026-07-15T12:00:00Z", UTC_OPTIONS)).toBe("3d ago");
     expect(sessionListDate("2026-07-18T14:00:00Z", UTC_OPTIONS)).toBe("in 2h");
+    expect(sessionListDate("2026-07-19T11:40:00Z", UTC_OPTIONS)).toBe("in 1d");
     expect(sessionListDate("2026-07-11T12:00:01Z", UTC_OPTIONS)).toBe("7d ago");
     expect(sessionListDate("2026-07-11T12:00:00Z", UTC_OPTIONS)).toBe("Jul 11, 12:00 PM");
   });

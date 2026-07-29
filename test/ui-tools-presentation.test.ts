@@ -24,7 +24,10 @@ describe("Tools and MCP presentation", () => {
     expect(status).toContain("<Badge");
     expect(status).toContain("<Icon name={status.icon} />");
     expect(status).toContain("{status.label}");
-    expect(status).toContain("title={status.title ?? undefined}");
+    expect(status).toContain("<Tooltip content={status.title}>");
+    expect(status).toContain("{(tooltipProps) =>");
+    expect(status).toContain('<span className="sr-only">{status.title}</span>');
+    expect(status).not.toContain("title={status.title ?? undefined}");
     expect(detail).toContain("<ToolCallStatus call={call} />");
     expect(tools).toContain("<ToolCallStatus call={call} />");
   });
@@ -37,9 +40,10 @@ describe("Tools and MCP presentation", () => {
     expect(tools).toContain('toolTableColumns("calls", durationAvailable)');
     expect(tools.match(/<colgroup>/g)).toHaveLength(3);
     expect(tools.match(/style=\{\{ width: `\$\{column\.width\}%` \}\}/g)).toHaveLength(3);
-    expect(tools).toMatch(
-      /className=\{`data-table tool-calls-table\$\{durationAvailable \? " has-duration" : ""\}`\}/,
-    );
+    expect(tools).toContain('<table className="data-table mcp-table">');
+    expect(tools).toContain('<table className="data-table tools-table">');
+    expect(tools).toContain('<table className="data-table tool-calls-table">');
+    expect(tools).not.toContain("has-duration");
     expect(tools).toMatch(
       /<span className="icon-cell">\s*<Icon name="cpu" \/>\s*<span>\{row\.mcp_server\}<\/span>/,
     );

@@ -47,9 +47,9 @@ const TABLE_COLUMNS: Record<
   },
   calls: {
     withoutDuration: [
-      { className: "col-call-status", width: 11 },
+      { className: "col-call-status", width: 12 },
       { className: "col-call-tool", width: 22 },
-      { className: "col-call-input", width: 28 },
+      { className: "col-call-input", width: 27 },
       { className: "col-call-output", width: 11 },
       { className: "col-call-when", width: 12 },
       { className: "col-call-session", width: 16 },

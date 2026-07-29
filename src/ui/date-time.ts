@@ -108,6 +108,10 @@ export function fullDateTime(
 function compactRelativeTime(deltaMs: number): string {
   const deltaSeconds = Math.round(deltaMs / 1000);
   const abs = Math.abs(deltaSeconds);
+  const roundedHours = Math.round(abs / 3_600);
+  if (abs < 86_400 && roundedHours >= 24) {
+    return deltaSeconds < 0 ? "in 1d" : "1d ago";
+  }
   const units: [suffix: string, seconds: number][] = [
     ["d", 86_400],
     ["h", 3_600],

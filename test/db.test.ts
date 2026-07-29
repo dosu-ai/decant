@@ -206,6 +206,42 @@ describe("openDb", () => {
     db.close();
   });
 
+  test("does not renegotiate journal mode when reopening an already-WAL archive", () => {
+    const path = freshPath();
+    openDb(path).close();
+    const originalExec = Database.prototype.exec;
+    const journalModeWrites: string[] = [];
+    Database.prototype.exec = function (this: Database, sql: string) {
+      if (/^\s*PRAGMA\s+journal_mode\s*=/i.test(sql)) {
+        journalModeWrites.push(sql);
+      }
+      return originalExec.call(this, sql);
+    } as Database["exec"];
+    try {
+      openDb(path).close();
+    } finally {
+      Database.prototype.exec = originalExec;
+    }
+    expect(journalModeWrites).toEqual([]);
+  });
+
+  test("reopens an already-WAL archive while another connection holds the write lock", () => {
+    const path = freshPath();
+    openDb(path).close();
+    const writer = new Database(path, { strict: true });
+    writer.exec("BEGIN IMMEDIATE;");
+    try {
+      const reopened = openDb(path);
+      expect(
+        (reopened.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
+      ).toBe("wal");
+      reopened.close();
+    } finally {
+      writer.exec("ROLLBACK;");
+      writer.close();
+    }
+  });
+
   test("serializes two processes creating the same fresh archive", async () => {
     const dbModule = pathToFileURL(join(import.meta.dir, "..", "src", "db.ts")).href;
     const script = `
@@ -951,6 +987,55 @@ describe("schema manifest", () => {
     expect(manifest('a  b "name" if not exists', "x, y").fingerprint).not.toBe(
       baseline.fingerprint,
     );
+  });
+
+  test("orders foreign keys directly by their typed fields", () => {
+    const db = new Database(":memory:", { strict: true });
+    db.exec(`
+      CREATE TABLE alpha_parent(
+        first_id INTEGER NOT NULL,
+        second_id INTEGER NOT NULL,
+        UNIQUE(first_id, second_id)
+      );
+      CREATE TABLE zulu_parent(id INTEGER PRIMARY KEY);
+      CREATE TABLE child(
+        alpha_first INTEGER,
+        alpha_second INTEGER,
+        zulu_id INTEGER REFERENCES zulu_parent(id),
+        FOREIGN KEY(alpha_first, alpha_second)
+          REFERENCES alpha_parent(first_id, second_id)
+      );
+    `);
+    const child = buildSchemaManifest(db).objects.find((object) => object.name === "child");
+    db.close();
+
+    expect(
+      child?.foreign_keys.map(({ table, from, to, sequence }) => ({
+        table,
+        from,
+        to,
+        sequence,
+      })),
+    ).toEqual([
+      {
+        table: "alpha_parent",
+        from: "alpha_first",
+        to: "first_id",
+        sequence: 0,
+      },
+      {
+        table: "alpha_parent",
+        from: "alpha_second",
+        to: "second_id",
+        sequence: 1,
+      },
+      {
+        table: "zulu_parent",
+        from: "zulu_id",
+        to: "id",
+        sequence: 0,
+      },
+    ]);
   });
 });
 

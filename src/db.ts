@@ -219,6 +219,18 @@ export function openDb(path: string): Database {
 }
 
 function negotiateWalMode(db: Database): void {
+  try {
+    const current = db.query("PRAGMA journal_mode;").get() as {
+      journal_mode?: unknown;
+    } | null;
+    if (typeof current?.journal_mode === "string" && current.journal_mode.toLowerCase() === "wal") {
+      return;
+    }
+  } catch {
+    // Fall through to the write pragma, which retains the bounded contention
+    // retry and surfaces any persistent failure.
+  }
+
   const deadline = Date.now() + 5_000;
   while (true) {
     try {

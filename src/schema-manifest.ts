@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { compareCodePoints } from "./order.ts";
 
 interface SchemaColumn {
   name: string;
@@ -139,7 +140,7 @@ export function buildSchemaManifest(db: Database): SchemaManifest {
             on_delete: foreignKey.on_delete.toUpperCase(),
             match: foreignKey.match.toUpperCase(),
           }))
-          .sort(compareJson)
+          .sort(compareForeignKeys)
       : [];
     const indexKeys =
       row.type === "index"
@@ -495,6 +496,27 @@ function splitTopLevel(value: string): string[] {
   return parts;
 }
 
-function compareJson(left: object, right: object): number {
-  return JSON.stringify(left).localeCompare(JSON.stringify(right));
+function compareForeignKeys(left: SchemaForeignKey, right: SchemaForeignKey): number {
+  return (
+    compareCodePoints(left.table, right.table) ||
+    compareCodePoints(left.from, right.from) ||
+    compareNullableStrings(left.to, right.to) ||
+    left.sequence - right.sequence ||
+    compareCodePoints(left.on_update, right.on_update) ||
+    compareCodePoints(left.on_delete, right.on_delete) ||
+    compareCodePoints(left.match, right.match)
+  );
+}
+
+function compareNullableStrings(left: string | null, right: string | null): number {
+  if (left === right) {
+    return 0;
+  }
+  if (left == null) {
+    return -1;
+  }
+  if (right == null) {
+    return 1;
+  }
+  return compareCodePoints(left, right);
 }

@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { listSessions } from "../src/query.ts";
 import { regenerate } from "../src/recommendations.ts";
 import {
   handleRequest,
@@ -179,6 +180,31 @@ describe("server routes", () => {
     ]);
   });
 
+  test("caps session-list API pages without limiting core list consumers", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    db.exec(`
+      WITH RECURSIVE numbered(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM numbered WHERE value < 110
+      )
+      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent)
+      SELECT
+        'codex',
+        'limit-cap-' || value,
+        'Session ' || value,
+        '2026-07-29T12:00:00Z',
+        0
+      FROM numbered;
+    `);
+    expect(listSessions(db, { limit: 10_000 })).toHaveLength(110);
+    db.close();
+
+    expect((await route(config, "/api/sessions?limit=10000")).body).toBeArrayOfSize(100);
+    expect((await route(config, "/api/sessions?limit=10000&offset=100")).body).toBeArrayOfSize(10);
+  });
+
   test("app routes fall back to the React shell and config is exposed locally", async () => {
     const config = freshConfig();
 
@@ -233,6 +259,38 @@ describe("server routes", () => {
     expect(frame).toContain("event: sync_progress");
     expect(frame).toContain('"scanned":0');
     expect(frame).toContain('"total":0');
+  });
+
+  test("events route terminates a failed manual sync with an error event", async () => {
+    const config = freshConfig();
+    const stream = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);
+    const reader = stream.body?.getReader();
+    if (reader == null) {
+      throw new Error("missing SSE body");
+    }
+    await reader.read();
+
+    const response = handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      config,
+      {
+        runSync: async () => {
+          throw new Error("fixture sync failed");
+        },
+      },
+    );
+    const update = await reader.read();
+    expect((await response).status).toBe(500);
+    await reader.cancel();
+
+    const frame = new TextDecoder().decode(update.value);
+    expect(frame).toContain("event: error");
+    expect(frame).toContain('"reason":"manual"');
+    expect(frame).toContain('"error":"fixture sync failed"');
   });
 
   test("rejects non-loopback API hosts", async () => {
@@ -358,6 +416,56 @@ describe("server routes", () => {
         code: "malformed_body",
       },
     });
+
+    const malformedSync = await route(config, "/api/sync", {
+      method: "POST",
+      body: "{",
+    });
+    expect(malformedSync).toMatchObject({
+      status: 400,
+      body: {
+        error: "request body must be valid JSON",
+        code: "malformed_body",
+      },
+    });
+
+    expect(
+      await route(config, "/api/sync", {
+        method: "POST",
+        body: "null",
+      }),
+    ).toMatchObject({
+      status: 400,
+      body: { code: "invalid_request" },
+    });
+  });
+
+  test("rejects well-formed JSON with invalid mutation bodies without server errors", async () => {
+    const config = freshConfig();
+    const cases = [
+      ["/api/launch/agent", null],
+      ["/api/launch/agent", { agent: "codex", prompt: {} }],
+      ["/api/launch/agent", { agent: {}, prompt: "review this session" }],
+      ["/api/launch/agent", { agent: "codex", prompt: "review this session", key: {} }],
+      ["/api/launch/ide", null],
+      ["/api/launch/ide", { dir: {} }],
+      ["/api/recommendations/mark", null],
+      ["/api/recommendations/mark", { key: {} }],
+      ["/api/recommendations/mark", { key: "catalog:agents-md", source: {} }],
+      ["/api/recommendations/mark", { key: "catalog:agents-md", note: {} }],
+    ] as const;
+
+    for (const [path, body] of cases) {
+      expect(
+        await route(config, path, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: { code: "invalid_request" },
+      });
+    }
   });
 
   test("settings routes read options and persist sanitized choices", async () => {

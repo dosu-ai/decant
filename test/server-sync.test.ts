@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
-import { createSyncCoordinator, handleRequest, type SyncWorkerRunner } from "../src/server.ts";
+import {
+  createSyncCoordinator,
+  handleRequest,
+  type SyncWorkerRunner,
+  workerSyncRunner,
+} from "../src/server.ts";
+import { SyncStatusStore } from "../src/watch.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-server-sync-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -161,6 +167,44 @@ describe("server sync coordination", () => {
     release.resolve();
 
     expect(await watcher.promise).toMatchObject({ ingested: 1 });
+    expect(calls).toBe(1);
+  });
+
+  test("watcher joining a failed manual-owned sync leaves terminal error ownership to manual", async () => {
+    const config = freshConfig();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let calls = 0;
+    const runner: SyncWorkerRunner = async () => {
+      calls += 1;
+      entered.resolve();
+      await release.promise;
+      throw new Error("fixture sync failed");
+    };
+    const coordinator = createSyncCoordinator(runner);
+    const manual = coordinator.runWithOwnership(config);
+    expect(manual.owned).toBe(true);
+    await entered.promise;
+
+    const status = new SyncStatusStore();
+    const watcher = workerSyncRunner(
+      config,
+      status,
+      { aborted: false },
+      () => {},
+      coordinator.runWithOwnership,
+    );
+    release.resolve();
+
+    await expect(manual.promise).rejects.toThrow("fixture sync failed");
+    const result = await watcher;
+    expect(result).toMatchObject({ emitTerminal: false });
+    expect("error" in result && result.error).toEqual(new Error("fixture sync failed"));
+    expect(status.snapshot()).toMatchObject({
+      in_progress: false,
+      last_error: "fixture sync failed",
+      runs: 1,
+    });
     expect(calls).toBe(1);
   });
 

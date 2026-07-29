@@ -139,6 +139,36 @@ describe("structured logging", () => {
     expect(lines.join("")).not.toContain("do-not-log");
   });
 
+  test("normalizes dynamic session and report routes", () => {
+    const lines: string[] = [];
+    configureLogging({
+      level: "info",
+      write: (line) => lines.push(line),
+    });
+    const logger = getDecantLogger("server");
+    const routes = [
+      ["/api/sessions/42", "/api/sessions/{id}"],
+      ["/api/sessions/42/token-economics", "/api/sessions/{id}/token-economics"],
+      ["/api/sessions/not-a-number/context-window", "/api/sessions/{id}/context-window"],
+      ["/api/sessions/42/outline", "/api/sessions/{id}/outline"],
+      ["/api/sessions/42/issues", "/api/sessions/{id}/issues"],
+      ["/api/sessions/42/state", "/api/sessions/{id}/state"],
+      ["/api/reports/session/not-a-number.html", "/api/reports/session/{id}.html"],
+      ["/sessions/not-a-number", "/sessions/{id}"],
+      ["/reports/session/not-a-number", "/reports/session/{id}"],
+      ["/api/sessions/search-index", "/api/sessions/search-index"],
+    ] as const;
+
+    for (const [pathname] of routes) {
+      logHttpRequest(logger, new Request(`http://127.0.0.1:3000${pathname}`), new Response(), 1);
+    }
+
+    const records = lines.map((line) => JSON.parse(line) as StructuredLogRecord);
+    expect(records.map((record) => record["http.route"])).toEqual(
+      routes.map(([, normalized]) => normalized),
+    );
+  });
+
   test("records standard ports when an HTTP URL omits an explicit port", () => {
     const lines: string[] = [];
     configureLogging({

@@ -63,10 +63,16 @@ export type SyncRunner = (
   status: SyncStatusStore,
   cancel: { aborted: boolean },
   onProgress: (progress: SyncProgress) => void,
-) => Promise<SyncReport | SyncRunnerResult>;
+) => Promise<SyncReport | SyncRunnerResult | SyncRunnerFailure>;
 
 export interface SyncRunnerResult {
   report: SyncReport;
+  /** False when this watcher joined a run whose terminal events have another owner. */
+  emitTerminal: boolean;
+}
+
+export interface SyncRunnerFailure {
+  error: unknown;
   /** False when this watcher joined a run whose terminal events have another owner. */
   emitTerminal: boolean;
 }
@@ -249,10 +255,21 @@ export function startWatch(options: WatchOptions): WatchHandle {
           const result = await runner(options.config, status, cancel, (progress) => {
             emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
           });
-          const { report, emitTerminal } =
-            "report" in result ? result : { report: result, emitTerminal: true };
-          if (emitTerminal) {
-            emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          if ("error" in result) {
+            if (result.emitTerminal) {
+              emit({
+                type: "error",
+                reason: current,
+                error: result.error instanceof Error ? result.error.message : String(result.error),
+                status: status.snapshot(),
+              });
+            }
+          } else {
+            const { report, emitTerminal } =
+              "report" in result ? result : { report: result, emitTerminal: true };
+            if (emitTerminal) {
+              emit({ type: "sync", reason: current, report, status: status.snapshot() });
+            }
           }
         } catch (error) {
           emit({

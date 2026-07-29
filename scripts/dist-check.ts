@@ -36,6 +36,7 @@ if (target == null) {
 
 const binary = buildTarget(target, { outDir: binaryDir, version });
 assertVersion(binary, ["--version"], {}, version);
+await assertOpenApi(binary, version);
 
 stageNpmPackages({
   outDir: npmDir,
@@ -94,6 +95,84 @@ function assertVersion(
   const result = runCommand(command, args, { env });
   if (!result.stdout.includes(expected)) {
     throw new Error(`expected ${expected} in version output, got: ${result.stdout.trim()}`);
+  }
+}
+
+async function assertOpenApi(binary: string, expectedVersion: string): Promise<void> {
+  const serveDir = mkdtempSync(join(outRoot, "serve-"));
+  const proc = Bun.spawn(
+    [
+      binary,
+      "--db",
+      join(serveDir, "decant.db"),
+      "--no-sync",
+      "serve",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+    ],
+    {
+      env: {
+        ...process.env,
+        DECANT_CONFIG_DIR: join(serveDir, "config"),
+        DECANT_LOG_LEVEL: "info",
+      },
+      stderr: "pipe",
+      stdout: "ignore",
+    },
+  );
+  let startupTimeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const port = await Promise.race([
+      readServePort(proc),
+      new Promise<never>(
+        (_resolve, reject) =>
+          (startupTimeout = setTimeout(
+            () => reject(new Error("compiled binary did not start within 10s")),
+            10_000,
+          )),
+      ),
+    ]);
+    const response = await fetch(`http://127.0.0.1:${port}/api/openapi.json`);
+    if (!response.ok) {
+      throw new Error(`compiled binary returned ${response.status} for /api/openapi.json`);
+    }
+    const document = (await response.json()) as {
+      info?: { version?: unknown };
+      paths?: Record<string, unknown>;
+    };
+    if (document.info?.version !== expectedVersion) {
+      throw new Error(
+        `compiled OpenAPI version was ${String(document.info?.version)}, expected ${expectedVersion}`,
+      );
+    }
+    if (document.paths?.["/api/health"] == null) {
+      throw new Error("compiled OpenAPI document is missing /api/health");
+    }
+  } finally {
+    if (startupTimeout != null) {
+      clearTimeout(startupTimeout);
+    }
+    proc.kill();
+    await proc.exited;
+  }
+}
+
+async function readServePort(proc: Bun.Subprocess<"ignore", "ignore", "pipe">): Promise<number> {
+  const reader = proc.stderr.getReader();
+  const decoder = new TextDecoder();
+  let log = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      throw new Error(`compiled binary stopped before reporting a port: ${log.slice(0, 500)}`);
+    }
+    log += decoder.decode(value, { stream: true });
+    const match = log.match(/"server\.port":\s*(\d+)/);
+    if (match?.[1] != null) {
+      return Number(match[1]);
+    }
   }
 }
 

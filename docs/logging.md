@@ -26,14 +26,16 @@ The current event names are:
 | `decant.server.stopped` | Local HTTP server stopped. |
 | `http.server.request` | HTTP request completed with method, route, status, and duration. |
 | `http.server.request.exception` | Request handling raised an exception. |
+| `http.server.request.rejected` | Request handling mapped a rejected operation to a non-5xx API response. |
 
 Set `DECANT_LOG_LEVEL` to `trace`, `debug`, `info`, `warn` (or `warning`),
 `error`, `fatal`, or `off` (or `silent`). The default is `info`. HTTP 4xx
 outcomes use `WARN`; 5xx outcomes and exceptions use `ERROR`.
 
-Logging is local and has no network transport. Request logs use route templates
-and deliberately omit query strings, headers, bodies, source-directory paths,
-and transcript content. Exception records include the runtime error message and
-stack trace, which can contain local code or database paths. Redirect or pipe
-stderr to an external processor if retention, rotation, or shipping is needed;
-those policies stay outside the application process.
+Logging is local and has no network transport. Completed `http.server.request`
+records use route templates. Rejection and exception diagnostics use the URL
+path, but no request record includes query strings, headers, bodies,
+source-directory paths, or transcript content. Exception records include the
+runtime error message and stack trace, which can contain local code or database
+paths. Redirect or pipe stderr to an external processor if retention, rotation,
+or shipping is needed; those policies stay outside the application process.

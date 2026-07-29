@@ -169,11 +169,33 @@ means no gateway is derived.
 deliberately want other hosts in: the `Host` header check is not an access
 control for non-browser clients, which can send `Host: localhost` freely.
 
-Archives older than schema v8 are rebuild-only. v8 through v14 archives migrate
-forward to v15 on open; the next `decant sync` backfills persisted economics
+Archives older than schema v8 are rebuild-only. v8 through v19 archives migrate
+forward to v20 on open; the next `decant sync` backfills persisted economics
 vectors and context-window rollups for unchanged sessions. Older archives should
 be deleted and rebuilt with `decant sync`. Source logs remain the source of
 truth, so nothing is lost by rebuilding.
+
+## Integrating with Decant
+
+`decant serve` exposes a documented local API at
+`http://127.0.0.1:3000/api`. It has no authentication on the default loopback
+listener, so any local process can read or mutate the archive. Keep the listener
+on loopback unless you have deliberately configured the trusted-peer boundary
+described under [Configuration](#configuration).
+
+The source OpenAPI 3.1 contract is
+[docs/api/openapi.yaml](docs/api/openapi.yaml). A running server exposes the
+same contract as JSON at `http://127.0.0.1:3000/api/openapi.json`.
+
+For example, read the archive summary:
+
+```bash
+curl --fail --silent --show-error \
+  http://127.0.0.1:3000/api/stats/summary
+```
+
+See [docs/api/routes.md](docs/api/routes.md) for local access-control semantics,
+write-request requirements, and Server-Sent Event names.
 
 ## How It Works
 
@@ -188,11 +210,13 @@ truth, so nothing is lost by rebuilding.
         +--> local React UI + JSON routes + SSE
 ```
 
-There is no background daemon and no cross-process API contract. The old
+There is no background daemon or separate service process. The old
 Rust/Phoenix/Swift implementation is preserved in the signed `pre-typescript`
 tag.
 
-Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
+The local API contract lives in
+[docs/api/openapi.yaml](docs/api/openapi.yaml), with operational semantics in
+[docs/api/routes.md](docs/api/routes.md).
 Operational log fields and privacy rules live in [docs/logging.md](docs/logging.md).
 Distribution notes live in [docs/distribution.md](docs/distribution.md), and the
 tag-driven release pipeline is documented in

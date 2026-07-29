@@ -8,6 +8,7 @@ COPY package.json bun.lock tsconfig.json ./
 COPY npm ./npm
 COPY scripts ./scripts
 COPY src ./src
+COPY docs/api/openapi.yaml ./docs/api/openapi.yaml
 
 RUN bun install --frozen-lockfile
 

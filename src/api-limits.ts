@@ -1,0 +1,1 @@
+export const SESSION_LIST_MAX_LIMIT = 100;

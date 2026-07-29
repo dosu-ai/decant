@@ -22,7 +22,7 @@ describe("session loading state", () => {
     ).toEqual({ limit: 100, offset: 0, replace: true });
   });
 
-  test("preserves expanded load depth when refreshing in the background", () => {
+  test("preserves expanded refresh depth through successive bounded pages", () => {
     expect(
       planSessionLoad({
         loadedRequestKey: "all:1",
@@ -31,7 +31,34 @@ describe("session loading state", () => {
         requestKey: "all:2",
         sessionLimit: 300,
       }),
-    ).toEqual({ limit: 300, offset: 0, replace: true });
+    ).toEqual({ limit: 100, offset: 0, replace: true });
+    expect(
+      planSessionLoad({
+        loadedRequestKey: "all:2",
+        loadedRows: 100,
+        pageSize: 100,
+        requestKey: "all:2",
+        sessionLimit: 300,
+      }),
+    ).toEqual({ limit: 100, offset: 100, replace: false });
+    expect(
+      planSessionLoad({
+        loadedRequestKey: "all:2",
+        loadedRows: 200,
+        pageSize: 100,
+        requestKey: "all:2",
+        sessionLimit: 300,
+      }),
+    ).toEqual({ limit: 100, offset: 200, replace: false });
+    expect(
+      planSessionLoad({
+        loadedRequestKey: "all:2",
+        loadedRows: 300,
+        pageSize: 100,
+        requestKey: "all:2",
+        sessionLimit: 300,
+      }),
+    ).toBeNull();
   });
 
   test("loads the next page only after the active request key is current", () => {

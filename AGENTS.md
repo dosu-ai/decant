@@ -13,13 +13,16 @@ full-text-searchable SQLite archive (WAL + FTS5).
 The repo is now a single Bun + TypeScript app. The same `decant` CLI owns
 parsing, ingest, reads, distillation, recommendations, watch mode, and the local
 React web UI served by `decant serve`. There is no Rust daemon, Phoenix app,
-Swift menu bar app, bearer token, or cross-process OpenAPI contract on mainline.
-The pre-cutover tree is preserved in the signed `pre-typescript` tag.
+Swift menu bar app, bearer token, hosted service, or separate API process on
+mainline. The local serve API is documented with OpenAPI but remains part of the
+one Decant process. The pre-cutover tree is preserved in the signed
+`pre-typescript` tag.
 
 ## Layout
 
 Start from `src/cli.ts`; parsers live in `src/sources/` (the extension
-point). Docs: `docs/api/routes.md` (serve routes), `docs/distribution.md`
+point). Docs: `docs/api/openapi.yaml` (local API contract),
+`docs/api/routes.md` (serve semantics), `docs/distribution.md`
 (npm/installer/Docker/source), and `docs/releasing.md` (release operations).
 
 ## Setup
@@ -94,23 +97,27 @@ A change is ready when:
    background daemon, token/lock file, or second app that opens the DB behind a
    separate contract.
 3. **Local-first only.** No outbound network calls, no hosted service dependency,
-   and no LLM calls. The only networking is the loopback UI/API served by
-   `decant serve`.
+   and no LLM calls. The only networking is the local UI/API served by
+   `decant serve`, bound to loopback by default; non-loopback exposure requires
+   an explicit host bind and trusted-peer configuration.
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v19.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v20.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow
-   v8-to-v19 migrations preserve existing TypeScript-cutover archives. A
+   v8-to-v20 migrations preserve existing TypeScript-cutover archives. A
    migration is frozen as soon as it is committed to a branch because a
    dogfooding archive may already have run it. During review, put any schema
    adjustment in a new version; never edit a committed migration.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
    and golden updates.
-7. **Serve routes are internal app routes.** `docs/api/routes.md` is a reference,
-   not a versioned public contract.
+7. **Serve routes are a documented local API.** `docs/api/openapi.yaml` is the
+   reference contract and `/api/openapi.json` is its runtime representation.
+   Keep the spec, route behavior, and contract tests in sync. This remains a
+   local-first API inside the one Decant process, not a hosted service, daemon,
+   bearer-token boundary, or separate cross-process server.
 
 ## Security and data privacy
 

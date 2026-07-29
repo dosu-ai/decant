@@ -1,3 +1,5 @@
+import { SESSION_LIST_MAX_LIMIT } from "../api-limits.ts";
+
 export type SessionLoadPlan = {
   limit: number;
   offset: number;
@@ -19,14 +21,13 @@ export function planSessionLoad({
 }): SessionLoadPlan | null {
   const refreshFirstPage = loadedRequestKey !== requestKey;
   const offset = refreshFirstPage ? 0 : loadedRows;
-  const desiredLimit = refreshFirstPage
-    ? Math.max(sessionLimit, pageSize)
-    : sessionLimit - loadedRows;
-  const limit = Math.max(0, desiredLimit);
+  const desiredRows = Math.max(sessionLimit, pageSize);
+  const remainingRows = desiredRows - offset;
+  const limit = Math.min(SESSION_LIST_MAX_LIMIT, Math.max(0, remainingRows));
   if (limit <= 0) {
     return null;
   }
-  return { limit, offset, replace: offset === 0 };
+  return { limit, offset, replace: refreshFirstPage };
 }
 
 export function shouldShowSessionSkeleton({

@@ -1,0 +1,2832 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Decant Local API
+  version: 0.0.0-dev
+  description: |
+    The local API served by `decant serve`. Decant does not provide a hosted
+    service and this API has no authentication layer: any process or trusted
+    peer that can reach the listener can read or mutate the local archive.
+
+    The default listener is loopback-only. When Decant is bound to a
+    non-loopback host, requests are admitted only from loopback or from peers
+    selected by the trusted-peer precedence documented in `docs/api/routes.md`.
+    Browser-origin checks protect mutating routes from cross-site requests but
+    are not authentication for non-browser clients.
+servers:
+  - url: http://127.0.0.1:3000
+    description: Default loopback listener
+security: []
+x-access-control:
+  authentication: none
+  default_bind: 127.0.0.1
+  trusted_peer_precedence:
+    - serve --trusted-peer
+    - DECANT_TRUSTED_PEERS
+    - DECANT_TRUST_DEFAULT_GATEWAY=1
+  precedence_mode: replace
+  host_header: The request URL hostname must be loopback, even on a non-loopback bind.
+  non_loopback_writes: |
+    A trusted non-loopback peer must also send a loopback Origin or acceptable
+    Sec-Fetch-Site value; writes with neither header are rejected.
+  cidr_support: IPv4 CIDRs and exact IPv4 or IPv6 peer addresses.
+  warning: Any admitted client can read or mutate the entire local archive.
+tags:
+  - name: System
+  - name: Settings
+  - name: Launch
+  - name: Sync
+  - name: Sessions
+  - name: Search
+  - name: Statistics
+  - name: Analytics
+  - name: Reports
+  - name: Files
+  - name: Tools
+  - name: Recommendations
+
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Check whether the local HTTP handler is available
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/events:
+    get:
+      tags: [System]
+      operationId: streamEvents
+      summary: Stream archive, watcher, and sync events
+      description: |
+        Server-Sent Events. Each frame uses its event name in the `event:`
+        field and a JSON object matching the corresponding schema in `data:`.
+        The connection begins with `hello`; `ping` is normally emitted every
+        five seconds.
+      x-sse-events:
+        hello:
+          $ref: "#/components/schemas/HelloEvent"
+        ping:
+          $ref: "#/components/schemas/PingEvent"
+        ready:
+          $ref: "#/components/schemas/WatchReadyEvent"
+        sync_progress:
+          $ref: "#/components/schemas/SyncProgressEvent"
+        sync:
+          $ref: "#/components/schemas/SyncEvent"
+        archive_updated:
+          $ref: "#/components/schemas/ArchiveUpdatedEvent"
+        error:
+          $ref: "#/components/schemas/SyncErrorEvent"
+        stopped:
+          $ref: "#/components/schemas/WatchStoppedEvent"
+      responses:
+        "200":
+          description: Open SSE stream
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-cache
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/openapi.json:
+    get:
+      tags: [System]
+      operationId: getOpenApiDocument
+      summary: Read this API description as JSON
+      responses:
+        "200":
+          description: OpenAPI 3.1 document with the running Decant version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenApiDocument"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/config:
+    get:
+      tags: [System]
+      operationId: getConfig
+      summary: Read resolved local archive and source paths
+      description: The returned paths are local filesystem metadata and may be sensitive.
+      responses:
+        "200":
+          description: Resolved runtime configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/settings:
+    get:
+      tags: [Settings]
+      operationId: getSettings
+      summary: Read sanitized user settings and available choices
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags: [Settings]
+      operationId: updateSettings
+      summary: Persist recognized user settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSettingsPatch"
+      responses:
+        "200":
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsSavedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/launch/agent:
+    post:
+      tags: [Launch]
+      operationId: launchAgent
+      summary: Open a configured terminal agent with a prompt
+      description: Launching is supported only on macOS; failures include a copyable command when possible.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentLaunchRequest"
+      responses:
+        "200":
+          description: Launch accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchResult"
+        "400":
+          description: Invalid request, unsupported platform, or launch failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/launch/ide:
+    post:
+      tags: [Launch]
+      operationId: launchIde
+      summary: Open a local project directory in the configured IDE
+      description: Launching is supported only on macOS.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IdeLaunchRequest"
+      responses:
+        "200":
+          description: Launch accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchResult"
+        "400":
+          description: Invalid request, unsupported platform, missing directory, or launch failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sync-status:
+    get:
+      tags: [Sync]
+      operationId: getSyncStatus
+      summary: Read current sync status
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/metadata/sync-status:
+    get:
+      tags: [Sync]
+      operationId: getMetadataSyncStatus
+      summary: Read current sync status through the metadata alias
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sync:
+    post:
+      tags: [Sync]
+      operationId: runSync
+      summary: Scan configured sources and ingest changes
+      description: "Works even when the server was started with `--no-sync`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Completed or joined sync report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncReport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List visible sessions newest first
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/IncludeSubagents"
+        - $ref: "#/components/parameters/WithSubagents"
+        - $ref: "#/components/parameters/IncludeArchived"
+        - $ref: "#/components/parameters/SessionLimit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Session summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionSummary"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/search-index:
+    get:
+      tags: [Sessions]
+      operationId: getSessionSearchIndex
+      summary: Read lightweight metadata for client-side fuzzy search
+      description: Returns every visible non-archived session, including subagents, without message data.
+      responses:
+        "200":
+          description: Stable newest-first search index
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionSearchIndexRow"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Read one session, transcript page, and nested subagent structure
+      parameters:
+        - $ref: "#/components/parameters/MessageLimit"
+        - $ref: "#/components/parameters/MessageOffset"
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}/state:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      operationId: updateSessionState
+      summary: Archive, delete, or restore one session identity
+      description: |
+        `deleted` persists a tombstone so future syncs cannot resurrect the
+        session. `visible` clears a direct archived/deleted override.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionStateRequest"
+      responses:
+        "200":
+          description: Updated session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStateResponse"
+        "400":
+          description: Invalid session id or state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}/outline:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      operationId: getSessionOutline
+      summary: Read lightweight prompt and verified Dosu-call anchors
+      responses:
+        "200":
+          description: Ordered outline
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionOutlineItem"
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}/issues:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      operationId: getSessionIssues
+      summary: Read ingest diagnostics for a session source
+      description: "`raw_line` may contain private transcript content and must remain local."
+      responses:
+        "200":
+          description: Ingest diagnostics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionIngestIssue"
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}/token-economics:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      operationId: getSessionTokenEconomics
+      summary: Read token, cost, and activity economics for one session
+      responses:
+        "200":
+          description: Session economics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenEconomics"
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/sessions/{id}/context-window:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      operationId: getSessionContextWindow
+      summary: Read context occupancy and compaction events for one session
+      responses:
+        "200":
+          description: Context-window timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextWindowTimeline"
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/projects:
+    get:
+      tags: [Sessions]
+      operationId: listProjects
+      summary: List project and worktree rollups
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectSummary"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/search:
+    post:
+      tags: [Search]
+      operationId: searchTranscriptContent
+      summary: Search message and tool-call content with SQLite FTS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Ranked search page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchPage"
+        "400":
+          description: Missing query, malformed JSON, or invalid field type/range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/stats/summary:
+    get:
+      tags: [Statistics]
+      operationId: getStatsSummary
+      summary: Read archive totals
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200":
+          description: Totals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Totals"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/stats/by-dimension:
+    get:
+      tags: [Statistics]
+      operationId: getStatsByDimension
+      summary: Group archive totals by one dimension
+      parameters:
+        - $ref: "#/components/parameters/Dimension"
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200":
+          description: Dimension rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DimensionRow"
+        "400":
+          description: Unknown dimension
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/analytics/activity:
+    get:
+      tags: [Analytics]
+      operationId: getActivityAnalytics
+      summary: Read local-time activity distributions
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+      responses:
+        "200":
+          description: Activity distribution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Activity"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/analytics/model-sparklines:
+    get:
+      tags: [Analytics]
+      operationId: getModelSparklines
+      summary: Read daily session counts by model
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+      responses:
+        "200":
+          description: Model sparkline series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelSparklines"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/analytics/token-economics:
+    get:
+      tags: [Analytics]
+      operationId: getTokenEconomics
+      summary: Read archive token, cost, and activity economics
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+      responses:
+        "200":
+          description: Archive economics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenEconomics"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/analytics/now:
+    get:
+      tags: [Analytics]
+      operationId: getNowAnalytics
+      summary: Read today's totals and live sync state
+      responses:
+        "200":
+          description: Current local activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NowAnalytics"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/reports/analytics.html:
+    get:
+      tags: [Reports]
+      operationId: downloadAnalyticsReport
+      summary: Download a self-contained analytics report
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+      responses:
+        "200":
+          description: Zero-JavaScript HTML report with inline styles and SVG
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: attachment; filename="decant-analytics-report.html"
+          content:
+            text/html:
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/reports/session/{id}.html:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Reports]
+      operationId: downloadSessionReport
+      summary: Download a self-contained session report without transcript content
+      responses:
+        "200":
+          description: Zero-JavaScript HTML report with inline styles and SVG
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/InvalidSessionId"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/date-bounds:
+    get:
+      tags: [Statistics]
+      operationId: getDateBounds
+      summary: Read the first and last visible session dates
+      responses:
+        "200":
+          description: Archive date bounds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DateBounds"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/metadata/date-bounds:
+    get:
+      tags: [Statistics]
+      operationId: getMetadataDateBounds
+      summary: Read archive date bounds through the metadata alias
+      responses:
+        "200":
+          description: Archive date bounds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DateBounds"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/files:
+    get:
+      tags: [Files]
+      operationId: listFileHotspots
+      summary: List file activity grouped by path or extension
+      parameters:
+        - $ref: "#/components/parameters/FileGroup"
+        - $ref: "#/components/parameters/FileOperation"
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/FileLimit"
+      responses:
+        "200":
+          description: File activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileStatRow"
+        "400":
+          description: Invalid group or operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/tools/calls:
+    get:
+      tags: [Tools]
+      operationId: listToolCalls
+      summary: Browse individual tool calls newest first
+      parameters:
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/McpServer"
+        - $ref: "#/components/parameters/ErrorsOnly"
+        - $ref: "#/components/parameters/ToolCallSession"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/MinimumDuration"
+        - $ref: "#/components/parameters/ToolCallLimit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Tool-call page; summary is present only on the first page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallPage"
+        "400":
+          description: Invalid session, duration, or boolean filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/tools/usage:
+    get:
+      tags: [Tools]
+      operationId: getToolUsage
+      summary: Aggregate tool usage and latency by tool identity
+      parameters:
+        - $ref: "#/components/parameters/ErrorsOnly"
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/UsageLimit"
+      responses:
+        "200":
+          description: Tool usage rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ToolStatRow"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/tools/mcp-usage:
+    get:
+      tags: [Tools]
+      operationId: getMcpUsage
+      summary: Aggregate MCP usage and latency by server
+      parameters:
+        - $ref: "#/components/parameters/FromDate"
+        - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/UsageLimit"
+      responses:
+        "200":
+          description: MCP server usage rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/McpStatRow"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/recommendations:
+    get:
+      tags: [Recommendations]
+      operationId: listRecommendations
+      summary: List open, implemented, or all recommendations
+      parameters:
+        - $ref: "#/components/parameters/RecommendationStatus"
+      responses:
+        "200":
+          description: Recommendations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Recommendation"
+        "400":
+          description: Unknown status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/recommendations/mark:
+    post:
+      tags: [Recommendations]
+      operationId: markRecommendationImplemented
+      summary: Mark a recommendation implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationMarkRequest"
+      responses:
+        "200":
+          description: Recommendation updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationMarkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Recommendation key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationNotFoundError"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: Positive, JavaScript-safe session row id
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 9007199254740991
+    FromDate:
+      name: from
+      in: query
+      description: Inclusive UTC calendar date; invalid dates are ignored.
+      schema:
+        type: string
+        format: date
+    ToDate:
+      name: to
+      in: query
+      description: Inclusive UTC calendar date; invalid dates are ignored.
+      schema:
+        type: string
+        format: date
+    Tool:
+      name: tool
+      in: query
+      description: Exact tool or tool-name filter, depending on the route
+      schema:
+        type: string
+    Model:
+      name: model
+      in: query
+      description: Exact session model filter
+      schema:
+        type: string
+    Project:
+      name: project
+      in: query
+      description: Exact project path filter
+      schema:
+        type: string
+    IncludeSubagents:
+      name: include_subagents
+      in: query
+      description: Include subagents as top-level list rows
+      schema:
+        type: boolean
+        default: false
+    WithSubagents:
+      name: with_subagents
+      in: query
+      description: Attach nested subagent summaries to returned rows
+      schema:
+        type: boolean
+        default: false
+    IncludeArchived:
+      name: include_archived
+      in: query
+      description: Include user-archived sessions; deleted sessions remain excluded
+      schema:
+        type: boolean
+        default: false
+    SessionLimit:
+      name: limit
+      in: query
+      description: Page size; defaults to 50 and is capped by the server at 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    MessageLimit:
+      name: message_limit
+      in: query
+      description: Number of messages to return; zero or omission loads the complete transcript.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    MessageOffset:
+      name: message_offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Dimension:
+      name: dim
+      in: query
+      required: true
+      schema:
+        type: string
+        enum: [tool, model, project, day]
+    FileGroup:
+      name: group
+      in: query
+      schema:
+        type: string
+        enum: [path, ext]
+        default: path
+    FileOperation:
+      name: op
+      in: query
+      schema:
+        type: string
+        enum: [read, edit, write, delete]
+    FileLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 25
+    McpServer:
+      name: server
+      in: query
+      description: Exact MCP server filter
+      schema:
+        type: string
+    ErrorsOnly:
+      name: errors_only
+      in: query
+      schema:
+        type: boolean
+        default: false
+    ToolCallSession:
+      name: session
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 9007199254740991
+    MinimumDuration:
+      name: min_ms
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    ToolCallLimit:
+      name: limit
+      in: query
+      description: Page size, capped by the server at 100
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    UsageLimit:
+      name: limit
+      in: query
+      description: Maximum aggregate rows; defaults to 50
+      schema:
+        type: integer
+        minimum: 1
+        default: 50
+    RecommendationStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [open, implemented, all]
+        default: open
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InvalidSessionId:
+      description: Session id is not a positive safe integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    SessionNotFound:
+      description: Session does not exist in the archive
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SessionNotFoundError"
+    Forbidden:
+      description: Host, peer, or browser-origin guard rejected the request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    SchemaConflict:
+      description: Archive schema is newer, older, or structurally different from this build
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    UnsupportedMediaType:
+      description: Mutating requests require Content-Type application/json
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InternalError:
+      description: Unexpected error; private details are retained only in local structured logs
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    ServiceUnavailable:
+      description: Service is starting or the SQLite archive is temporarily busy
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+
+  schemas:
+    ErrorCode:
+      type: string
+      enum:
+        - archive_locked
+        - cross_origin_write
+        - forbidden_host
+        - forbidden_remote
+        - internal_error
+        - invalid_files_query
+        - invalid_request
+        - invalid_session_id
+        - launch_failed
+        - launch_unsupported_platform
+        - malformed_body
+        - not_found
+        - query_required
+        - recommendation_not_found
+        - schema_drift
+        - schema_too_new
+        - schema_too_old
+        - service_starting
+        - session_not_found
+        - unknown_dimension
+        - unknown_status
+        - unsupported_media_type
+    ApiError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        retryable:
+          type: boolean
+        archive_empty:
+          type: boolean
+        allowed:
+          type: array
+          items:
+            type: string
+        ok:
+          type: boolean
+        key:
+          type: string
+        command:
+          type: string
+      additionalProperties: true
+    SessionNotFoundError:
+      allOf:
+        - $ref: "#/components/schemas/ApiError"
+        - type: object
+          required: [archive_empty]
+          properties:
+            code:
+              const: session_not_found
+            archive_empty:
+              type: boolean
+    RecommendationNotFoundError:
+      allOf:
+        - $ref: "#/components/schemas/ApiError"
+        - type: object
+          required: [ok, key]
+          properties:
+            code:
+              const: recommendation_not_found
+            ok:
+              const: false
+            key:
+              type: string
+    Health:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          const: true
+      additionalProperties: false
+    OpenApiDocument:
+      type: object
+      required: [openapi, info, paths]
+      properties:
+        openapi:
+          type: string
+          pattern: '^3\.1(?:\.\d+)?$'
+        info:
+          type: object
+          required: [title, version]
+          properties:
+            title:
+              type: string
+            version:
+              type: string
+          additionalProperties: true
+        paths:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+    Config:
+      type: object
+      required: [dbPath, claudeDir, codexDir, version]
+      properties:
+        dbPath:
+          type: string
+        claudeDir:
+          type: string
+        codexDir:
+          type: string
+        version:
+          type: string
+      additionalProperties: false
+    UserSettings:
+      type: object
+      required: [agent, terminal, ide]
+      properties:
+        agent:
+          type: string
+          enum: [claude, codex]
+        terminal:
+          type: string
+          enum: [terminal, iterm, ghostty, warp, wezterm, kitty, alacritty]
+        ide:
+          type: string
+          enum: [vscode, cursor, zed, sublime, intellij]
+        dosuSuggestions:
+          type: string
+          enum: [show, hide]
+          deprecated: true
+          description: Deprecated transitional field; clients should not depend on it.
+      additionalProperties: false
+    UserSettingsPatch:
+      type: object
+      properties:
+        agent:
+          type: string
+          enum: [claude, codex]
+        terminal:
+          type: string
+          enum: [terminal, iterm, ghostty, warp, wezterm, kitty, alacritty]
+        ide:
+          type: string
+          enum: [vscode, cursor, zed, sublime, intellij]
+        dosuSuggestions:
+          type: string
+          enum: [show, hide]
+          deprecated: true
+          description: Deprecated transitional input; clients should omit it.
+      additionalProperties: false
+    LabeledOption:
+      type: array
+      minItems: 2
+      maxItems: 2
+      prefixItems:
+        - type: string
+        - type: string
+    SettingsResponse:
+      type: object
+      required: [settings, path, can_launch, options]
+      properties:
+        settings:
+          $ref: "#/components/schemas/UserSettings"
+        path:
+          type: string
+        can_launch:
+          type: boolean
+        saved:
+          type: boolean
+        options:
+          type: object
+          required: [agents, terminals, ides]
+          properties:
+            agents:
+              type: array
+              items:
+                $ref: "#/components/schemas/LabeledOption"
+            terminals:
+              type: array
+              items:
+                $ref: "#/components/schemas/LabeledOption"
+            ides:
+              type: array
+              items:
+                $ref: "#/components/schemas/LabeledOption"
+            dosuSuggestions:
+              type: array
+              deprecated: true
+              description: Deprecated transitional option list.
+              items:
+                $ref: "#/components/schemas/LabeledOption"
+          additionalProperties: false
+      additionalProperties: false
+    SettingsSavedResponse:
+      allOf:
+        - $ref: "#/components/schemas/SettingsResponse"
+        - type: object
+          required: [saved]
+          properties:
+            saved:
+              const: true
+    AgentLaunchRequest:
+      type: object
+      required: [agent, prompt]
+      properties:
+        agent:
+          type: string
+          enum: [claude, codex]
+        prompt:
+          type: string
+          minLength: 1
+        key:
+          type: string
+      additionalProperties: false
+    IdeLaunchRequest:
+      type: object
+      required: [dir]
+      properties:
+        dir:
+          type: string
+          minLength: 1
+      additionalProperties: false
+    LaunchResult:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+        command:
+          type: string
+      additionalProperties: false
+    LaunchError:
+      allOf:
+        - $ref: "#/components/schemas/ApiError"
+        - type: object
+          required: [ok]
+          properties:
+            ok:
+              const: false
+    SyncReport:
+      type: object
+      required: [scanned, ingested, skipped, issues, issuesByCode, failed, cancelled]
+      properties:
+        scanned:
+          type: integer
+          minimum: 0
+        ingested:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        issues:
+          type: integer
+          minimum: 0
+        issuesByCode:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        cancelled:
+          type: boolean
+      additionalProperties: false
+    SyncProgress:
+      type: object
+      required: [scanned, ingested, skipped, failed, total]
+      properties:
+        scanned:
+          type: integer
+          minimum: 0
+        ingested:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    SyncStatus:
+      type: object
+      required: [last_sync_at, in_progress, last_report, last_error, ingested_count]
+      properties:
+        last_sync_at:
+          type: [string, "null"]
+        in_progress:
+          type: boolean
+        last_report:
+          type: [string, "null"]
+        last_error:
+          type: [string, "null"]
+        ingested_count:
+          type: [integer, "null"]
+          minimum: 0
+        runs:
+          type: integer
+          minimum: 0
+        timestamp:
+          type: string
+      additionalProperties: false
+    SyncStatusResponse:
+      allOf:
+        - $ref: "#/components/schemas/SyncStatus"
+        - type: object
+          required: [timestamp]
+          properties:
+            timestamp:
+              type: string
+    SyncReason:
+      type: string
+      enum: [startup, watch, sweep, manual]
+    HelloEvent:
+      type: object
+      required: [type, timestamp]
+      properties:
+        type:
+          const: hello
+        timestamp:
+          type: string
+      additionalProperties: false
+    PingEvent:
+      type: object
+      required: [type, timestamp]
+      properties:
+        type:
+          const: ping
+        timestamp:
+          type: string
+      additionalProperties: false
+    WatchReadyEvent:
+      type: object
+      required: [type, dirs, status]
+      properties:
+        type:
+          const: ready
+        dirs:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: "#/components/schemas/SyncStatus"
+      additionalProperties: false
+    SyncProgressEvent:
+      type: object
+      required: [type, reason, progress, status]
+      properties:
+        type:
+          const: sync_progress
+        reason:
+          $ref: "#/components/schemas/SyncReason"
+        progress:
+          $ref: "#/components/schemas/SyncProgress"
+        status:
+          $ref: "#/components/schemas/SyncStatus"
+      additionalProperties: false
+    SyncEvent:
+      type: object
+      required: [type, reason, report, status]
+      properties:
+        type:
+          const: sync
+        reason:
+          $ref: "#/components/schemas/SyncReason"
+        report:
+          $ref: "#/components/schemas/SyncReport"
+        status:
+          $ref: "#/components/schemas/SyncStatus"
+      additionalProperties: false
+    ArchiveUpdatedEvent:
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: archive_updated
+        reason:
+          type: string
+          enum: [stats, session_state]
+        ingested:
+          type: integer
+          minimum: 0
+        last_sync_at:
+          type: [string, "null"]
+      additionalProperties: true
+    SyncErrorEvent:
+      type: object
+      required: [type, reason, error, status]
+      properties:
+        type:
+          const: error
+        reason:
+          type: string
+          enum: [startup, watch, sweep, manual]
+        error:
+          type: string
+        status:
+          $ref: "#/components/schemas/SyncStatus"
+      additionalProperties: false
+    WatchStoppedEvent:
+      type: object
+      required: [type, status]
+      properties:
+        type:
+          const: stopped
+        status:
+          $ref: "#/components/schemas/SyncStatus"
+      additionalProperties: false
+    SessionSummary:
+      type: object
+      required:
+        - id
+        - tool
+        - source_session_id
+        - title
+        - project_path
+        - model
+        - reasoning_effort
+        - reasoning_effort_levels
+        - started_at
+        - ended_at
+        - message_count
+        - total_input_tokens
+        - total_output_tokens
+        - estimated_cost_usd
+        - user_state
+        - is_user_archived
+        - is_archived
+        - is_subagent
+        - parent_session_id
+        - spawn_tool_use_id
+        - agent_id
+        - agent_type
+        - spawn_depth
+        - context_window_tokens
+        - peak_context_tokens
+        - compaction_count
+        - subagent_count
+        - subagent_estimated_cost_usd
+        - ingest_issue_count
+        - informational_ingest_issue_count
+        - dosu_mcp_direct_calls
+        - dosu_mcp_tree_calls
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        tool:
+          type: string
+        source_session_id:
+          type: string
+        title:
+          type: [string, "null"]
+        project_path:
+          type: [string, "null"]
+        model:
+          type: [string, "null"]
+        reasoning_effort:
+          type: [string, "null"]
+        reasoning_effort_levels:
+          type: array
+          items:
+            type: string
+        started_at:
+          type: [string, "null"]
+        ended_at:
+          type: [string, "null"]
+        message_count:
+          type: integer
+          minimum: 0
+        total_input_tokens:
+          type: integer
+          minimum: 0
+        total_output_tokens:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        user_state:
+          type: [string, "null"]
+          enum: [archived, deleted, null]
+        is_user_archived:
+          type: boolean
+        is_archived:
+          type: boolean
+        is_subagent:
+          type: boolean
+        parent_session_id:
+          type: [integer, "null"]
+          minimum: 1
+        spawn_tool_use_id:
+          type: [string, "null"]
+        agent_id:
+          type: [string, "null"]
+        agent_type:
+          type: [string, "null"]
+        spawn_depth:
+          type: [integer, "null"]
+          minimum: 0
+        context_window_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        peak_context_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        compaction_count:
+          type: integer
+          minimum: 0
+        subagent_count:
+          type: integer
+          minimum: 0
+        subagent_estimated_cost_usd:
+          type: number
+          minimum: 0
+        ingest_issue_count:
+          type: integer
+          minimum: 0
+        informational_ingest_issue_count:
+          type: integer
+          minimum: 0
+        dosu_mcp_direct_calls:
+          type: integer
+          minimum: 0
+        dosu_mcp_tree_calls:
+          type: integer
+          minimum: 0
+        subagents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionSummary"
+      additionalProperties: true
+    SessionSearchIndexRow:
+      type: object
+      required: [id, title, project, tool, model, started_at]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        title:
+          type: [string, "null"]
+        project:
+          type: [string, "null"]
+        tool:
+          type: string
+        model:
+          type: [string, "null"]
+        started_at:
+          type: [string, "null"]
+      additionalProperties: false
+    SessionStateRequest:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [archived, deleted, visible]
+      additionalProperties: false
+    SessionStateResponse:
+      type: object
+      required: [ok, id, state]
+      properties:
+        ok:
+          const: true
+        id:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum: [archived, deleted, visible]
+        user_state:
+          type: [string, "null"]
+          enum: [archived, deleted, null]
+        is_user_archived:
+          type: boolean
+      additionalProperties: false
+    SessionBlock:
+      type: object
+      required: [ordinal, block_type, text, tool_name, tool_use_id, tool_input, tool_result]
+      properties:
+        ordinal:
+          type: integer
+          minimum: 0
+        block_type:
+          type: string
+        text:
+          type: [string, "null"]
+        tool_name:
+          type: [string, "null"]
+        tool_use_id:
+          type: [string, "null"]
+        tool_input:
+          type: [string, "null"]
+        tool_result:
+          type: [string, "null"]
+      additionalProperties: true
+    SessionMessage:
+      type: object
+      required:
+        - seq
+        - role
+        - timestamp
+        - model
+        - context_tokens
+        - output_tokens
+        - is_sidechain
+        - is_compact_boundary
+        - compact_trigger
+        - compact_pre_tokens
+        - is_compact_summary
+        - blocks
+      properties:
+        seq:
+          type: integer
+          minimum: 0
+        role:
+          type: string
+        timestamp:
+          type: [string, "null"]
+        model:
+          type: [string, "null"]
+        context_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        output_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        is_sidechain:
+          type: boolean
+        is_compact_boundary:
+          type: boolean
+        compact_trigger:
+          type: [string, "null"]
+        compact_pre_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        is_compact_summary:
+          type: boolean
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionBlock"
+      additionalProperties: true
+    SessionTotals:
+      type: object
+      required: [reply_count, tool_call_count]
+      properties:
+        reply_count:
+          type: integer
+          minimum: 0
+        tool_call_count:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    SubagentDetail:
+      type: object
+      required:
+        - summary
+        - messages
+        - subagents
+        - spawn_tool_use_id
+        - agent_id
+        - agent_type
+        - spawn_depth
+      properties:
+        summary:
+          $ref: "#/components/schemas/SessionSummary"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionMessage"
+        subagents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubagentDetail"
+        spawn_tool_use_id:
+          type: [string, "null"]
+        agent_id:
+          type: [string, "null"]
+        agent_type:
+          type: [string, "null"]
+        spawn_depth:
+          type: [integer, "null"]
+          minimum: 0
+      additionalProperties: true
+    SessionDetail:
+      type: object
+      required: [summary, messages, subagents, totals, message_limit]
+      properties:
+        summary:
+          $ref: "#/components/schemas/SessionSummary"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionMessage"
+        subagents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubagentDetail"
+        totals:
+          $ref: "#/components/schemas/SessionTotals"
+        message_offset:
+          type: integer
+          minimum: 0
+        message_limit:
+          type: [integer, "null"]
+          minimum: 1
+        has_more_messages:
+          type: boolean
+      additionalProperties: true
+    SessionOutlineItem:
+      type: object
+      required: [seq, text, kind, ordinal]
+      properties:
+        seq:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+        kind:
+          type: string
+          enum: [prompt, dosu]
+        ordinal:
+          type: integer
+          minimum: -1
+      additionalProperties: false
+    SessionIngestIssue:
+      type: object
+      required: [code, line_no, error, raw_line, created_at]
+      properties:
+        code:
+          type: string
+        line_no:
+          type: [integer, "null"]
+          minimum: 1
+        error:
+          type: string
+        raw_line:
+          type: [string, "null"]
+        created_at:
+          type: [string, "null"]
+      additionalProperties: false
+    ProjectSummary:
+      type: object
+      required:
+        - id
+        - path
+        - name
+        - sessions
+        - estimated_cost_usd
+        - last_seen_at
+        - is_worktree
+        - root_path
+        - worktree_label
+        - worktree_tool
+        - root_source
+        - worktree_count
+        - session_tools
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        path:
+          type: string
+        name:
+          type: [string, "null"]
+        sessions:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        last_seen_at:
+          type: [string, "null"]
+        is_worktree:
+          type: boolean
+        root_path:
+          type: [string, "null"]
+        worktree_label:
+          type: [string, "null"]
+        worktree_tool:
+          type: [string, "null"]
+        root_source:
+          type: [string, "null"]
+        worktree_count:
+          type: integer
+          minimum: 0
+        session_tools:
+          type: array
+          items:
+            type: string
+      additionalProperties: true
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+        tool:
+          type: [string, "null"]
+        project:
+          type: [string, "null"]
+        include_subagents:
+          type: boolean
+          default: false
+        include_total:
+          type: boolean
+          default: true
+          description: "When false, `total` is null and the capped count query is skipped."
+        from:
+          type: [string, "null"]
+          format: date
+        to:
+          type: [string, "null"]
+          format: date
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 30
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+      additionalProperties: false
+    SearchHit:
+      type: object
+      required:
+        - session_id
+        - session_title
+        - tool
+        - block_id
+        - snippet
+        - message_seq
+        - timestamp
+        - project
+        - role
+        - block_type
+        - href
+      properties:
+        session_id:
+          type: integer
+          minimum: 1
+        session_title:
+          type: [string, "null"]
+        tool:
+          type: string
+        block_id:
+          type: integer
+          minimum: 1
+        snippet:
+          type: string
+        message_seq:
+          type: integer
+          minimum: 0
+        timestamp:
+          type: [string, "null"]
+        project:
+          type: [string, "null"]
+        role:
+          type: string
+        block_type:
+          type: string
+        href:
+          type: string
+      additionalProperties: false
+    SearchPage:
+      type: object
+      required: [results, total, total_is_capped, elapsed_ms]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+        total:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 1000
+        total_is_capped:
+          type: boolean
+        elapsed_ms:
+          type: number
+          minimum: 0
+      additionalProperties: false
+    Totals:
+      type: object
+      required:
+        - sessions
+        - messages
+        - tool_calls
+        - input_tokens
+        - output_tokens
+        - cache_read_tokens
+        - cache_creation_tokens
+        - reasoning_tokens
+        - est_reasoning_tokens
+        - estimated_cost_usd
+      properties:
+        sessions:
+          type: integer
+          minimum: 0
+        messages:
+          type: integer
+          minimum: 0
+        tool_calls:
+          type: integer
+          minimum: 0
+        input_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        cache_read_tokens:
+          type: integer
+          minimum: 0
+        cache_creation_tokens:
+          type: integer
+          minimum: 0
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+        est_reasoning_tokens:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+      additionalProperties: false
+    DimensionRow:
+      type: object
+      required:
+        - key
+        - sessions
+        - input_tokens
+        - output_tokens
+        - reasoning_tokens
+        - est_reasoning_tokens
+        - estimated_cost_usd
+      properties:
+        key:
+          type: string
+        sessions:
+          type: integer
+          minimum: 0
+        input_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+        est_reasoning_tokens:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+      additionalProperties: false
+    Activity:
+      type: object
+      required: [by_hour, by_weekday, timezone, peak_hour, peak_weekday]
+      properties:
+        by_hour:
+          type: array
+          minItems: 24
+          maxItems: 24
+          items:
+            type: integer
+            minimum: 0
+        by_weekday:
+          type: array
+          minItems: 7
+          maxItems: 7
+          items:
+            type: integer
+            minimum: 0
+        timezone:
+          type: string
+        peak_hour:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 23
+        peak_weekday:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 6
+      additionalProperties: false
+    ModelSparklines:
+      type: object
+      required: [models, days]
+      properties:
+        models:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: integer
+              minimum: 0
+        days:
+          type: array
+          items:
+            type: string
+            format: date
+      additionalProperties: false
+    PhaseAmounts:
+      type: object
+      required: [generation_tokens, context_window_tokens, estimated_cost_usd, active_ms]
+      properties:
+        generation_tokens:
+          type: number
+          minimum: 0
+        context_window_tokens:
+          type: number
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        active_ms:
+          type: number
+          minimum: 0
+      additionalProperties: false
+    PhaseMap:
+      type: object
+      properties:
+        orientation:
+          $ref: "#/components/schemas/PhaseAmounts"
+        implementation:
+          $ref: "#/components/schemas/PhaseAmounts"
+      additionalProperties: false
+    TokenEconomicsBucket:
+      type: object
+      required:
+        - bucket
+        - generation_tokens
+        - context_window_tokens
+        - estimated_cost_usd
+        - tool_calls
+        - sessions
+        - cost_share
+        - active_ms
+      properties:
+        bucket:
+          type: string
+        generation_tokens:
+          type: number
+          minimum: 0
+        context_window_tokens:
+          type: number
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        tool_calls:
+          type: integer
+          minimum: 0
+        sessions:
+          type: integer
+          minimum: 0
+        cost_share:
+          type: number
+          minimum: 0
+        active_ms:
+          type: number
+          minimum: 0
+        phases:
+          $ref: "#/components/schemas/PhaseMap"
+      additionalProperties: true
+    TokenEconomics:
+      type: object
+      required: [buckets, totals]
+      properties:
+        buckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenEconomicsBucket"
+        totals:
+          type: object
+          required:
+            - generation_tokens
+            - context_window_tokens
+            - estimated_cost_usd
+            - input_cost_usd
+            - output_cost_usd
+            - active_ms
+            - waiting_on_user_ms
+            - attributed_ms
+          properties:
+            generation_tokens:
+              type: number
+              minimum: 0
+            context_window_tokens:
+              type: number
+              minimum: 0
+            estimated_cost_usd:
+              type: number
+              minimum: 0
+            input_cost_usd:
+              type: number
+              minimum: 0
+            output_cost_usd:
+              type: number
+              minimum: 0
+            active_ms:
+              type: number
+              minimum: 0
+            waiting_on_user_ms:
+              type: number
+              minimum: 0
+            attributed_ms:
+              type: number
+              minimum: 0
+            phases:
+              $ref: "#/components/schemas/PhaseMap"
+          additionalProperties: true
+      additionalProperties: true
+    NowAnalytics:
+      type: object
+      required: [today, active_sessions, last_sync_at, sync_in_progress]
+      properties:
+        today:
+          $ref: "#/components/schemas/Totals"
+        active_sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionSummary"
+        last_sync_at:
+          type: [string, "null"]
+        sync_in_progress:
+          type: boolean
+      additionalProperties: true
+    ContextWindowPoint:
+      type: object
+      required:
+        - seq
+        - timestamp
+        - turn
+        - context_tokens
+        - input_tokens
+        - cache_read_tokens
+        - cache_creation_tokens
+        - output_tokens
+      properties:
+        seq:
+          type: integer
+          minimum: 0
+        timestamp:
+          type: [string, "null"]
+        turn:
+          type: integer
+          minimum: 0
+        context_tokens:
+          type: integer
+          minimum: 0
+        input_tokens:
+          type: integer
+          minimum: 0
+        cache_read_tokens:
+          type: integer
+          minimum: 0
+        cache_creation_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    ContextWindowCompaction:
+      type: object
+      required: [seq, timestamp, trigger, pre_tokens, post_tokens]
+      properties:
+        seq:
+          type: integer
+          minimum: 0
+        timestamp:
+          type: [string, "null"]
+        trigger:
+          type: [string, "null"]
+        pre_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        post_tokens:
+          type: [integer, "null"]
+          minimum: 0
+      additionalProperties: false
+    ContextWindowTimeline:
+      type: object
+      required:
+        - session_id
+        - tool
+        - window_tokens
+        - window_inferred
+        - peak_tokens
+        - peak_pct
+        - turn_count
+        - points
+        - compactions
+      properties:
+        session_id:
+          type: integer
+          minimum: 1
+        tool:
+          type: string
+        window_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        window_inferred:
+          type: boolean
+        peak_tokens:
+          type: integer
+          minimum: 0
+        peak_pct:
+          type: [number, "null"]
+          minimum: 0
+        turn_count:
+          type: integer
+          minimum: 0
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextWindowPoint"
+        compactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContextWindowCompaction"
+      additionalProperties: true
+    DateBounds:
+      type: object
+      required: [min, max]
+      properties:
+        min:
+          type: [string, "null"]
+          format: date
+        max:
+          type: [string, "null"]
+          format: date
+      additionalProperties: false
+    FileStatRow:
+      type: object
+      required: [key, project, reads, edits, writes, deletes, sessions, last_touched_at]
+      properties:
+        key:
+          type: string
+        project:
+          type: [string, "null"]
+        reads:
+          type: integer
+          minimum: 0
+        edits:
+          type: integer
+          minimum: 0
+        writes:
+          type: integer
+          minimum: 0
+        deletes:
+          type: integer
+          minimum: 0
+        sessions:
+          type: integer
+          minimum: 0
+        last_touched_at:
+          type: [string, "null"]
+      additionalProperties: false
+    ToolCallRow:
+      type: object
+      required:
+        - id
+        - session_id
+        - session_title
+        - project
+        - tool_name
+        - tool_kind
+        - mcp_server
+        - input_preview
+        - input_bytes
+        - output_preview
+        - output_bytes
+        - is_error
+        - has_result
+        - duration_ms
+        - timestamp
+        - seq
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        session_id:
+          type: integer
+          minimum: 1
+        session_title:
+          type: [string, "null"]
+        project:
+          type: [string, "null"]
+        tool_name:
+          type: [string, "null"]
+        tool_kind:
+          type: [string, "null"]
+        mcp_server:
+          type: [string, "null"]
+        input_preview:
+          type: [string, "null"]
+        input_bytes:
+          type: [integer, "null"]
+          minimum: 0
+        output_preview:
+          type: [string, "null"]
+        output_bytes:
+          type: [integer, "null"]
+          minimum: 0
+        is_error:
+          type: [boolean, "null"]
+        has_result:
+          type: [boolean, "null"]
+        duration_ms:
+          type: [integer, "null"]
+          minimum: 0
+        timestamp:
+          type: [string, "null"]
+        seq:
+          type: [integer, "null"]
+          minimum: 0
+      additionalProperties: false
+    ToolCallSummary:
+      type: object
+      required: [calls, errors, p50_ms, p95_ms]
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
+        p50_ms:
+          type: [integer, "null"]
+          minimum: 0
+        p95_ms:
+          type: [integer, "null"]
+          minimum: 0
+      additionalProperties: false
+    ToolCallPage:
+      type: object
+      required: [calls, total, limit, offset, summary]
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCallRow"
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        offset:
+          type: integer
+          minimum: 0
+        summary:
+          oneOf:
+            - $ref: "#/components/schemas/ToolCallSummary"
+            - type: "null"
+      additionalProperties: false
+    ToolStatRow:
+      type: object
+      required:
+        - tool_name
+        - tool_kind
+        - mcp_server
+        - calls
+        - errors
+        - p50_ms
+        - p95_ms
+        - last_used_at
+      properties:
+        tool_name:
+          type: string
+        tool_kind:
+          type: string
+        mcp_server:
+          type: [string, "null"]
+        calls:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
+        p50_ms:
+          type: [integer, "null"]
+          minimum: 0
+        p95_ms:
+          type: [integer, "null"]
+          minimum: 0
+        last_used_at:
+          type: [string, "null"]
+      additionalProperties: false
+    McpStatRow:
+      type: object
+      required: [mcp_server, tools, calls, errors, p50_ms, p95_ms, last_used_at]
+      properties:
+        mcp_server:
+          type: string
+        tools:
+          type: integer
+          minimum: 0
+        calls:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
+        p50_ms:
+          type: [integer, "null"]
+          minimum: 0
+        p95_ms:
+          type: [integer, "null"]
+          minimum: 0
+        last_used_at:
+          type: [string, "null"]
+      additionalProperties: false
+    Recommendation:
+      type: object
+      required:
+        - key
+        - kind
+        - category
+        - title
+        - detail
+        - suggestion
+        - prompt
+        - url
+        - link_label
+        - icon
+        - tone
+        - impact_label
+        - score
+        - status
+        - status_source
+        - note
+        - first_seen_at
+        - updated_at
+        - implemented_at
+        - memory_layer
+        - promotion_target
+        - trigger
+        - evidence
+        - action
+        - success_metric
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+          enum: [signal, catalog]
+        category:
+          type: [string, "null"]
+        title:
+          type: string
+        detail:
+          type: [string, "null"]
+        suggestion:
+          type: [string, "null"]
+        prompt:
+          type: [string, "null"]
+        url:
+          type: [string, "null"]
+        link_label:
+          type: [string, "null"]
+        icon:
+          type: [string, "null"]
+        tone:
+          type: [string, "null"]
+        impact_label:
+          type: [string, "null"]
+        score:
+          type: [number, "null"]
+        status:
+          type: string
+        status_source:
+          type: [string, "null"]
+        note:
+          type: [string, "null"]
+        first_seen_at:
+          type: [string, "null"]
+        updated_at:
+          type: [string, "null"]
+        implemented_at:
+          type: [string, "null"]
+        memory_layer:
+          type: [string, "null"]
+        promotion_target:
+          type: [string, "null"]
+        trigger:
+          type: [string, "null"]
+        evidence:
+          type: [string, "null"]
+        action:
+          type: [string, "null"]
+        success_metric:
+          type: [string, "null"]
+      additionalProperties: true
+    RecommendationMarkRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          default: agent
+        note:
+          type: string
+      additionalProperties: false
+    RecommendationMarkResponse:
+      type: object
+      required: [ok, key, status]
+      properties:
+        ok:
+          const: true
+        key:
+          type: string
+        status:
+          const: implemented
+      additionalProperties: false

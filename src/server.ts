@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { SESSION_LIST_MAX_LIMIT } from "./api-limits.ts";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
@@ -11,6 +12,7 @@ import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
+import { openApiDocument } from "./openapi.ts";
 import {
   getSession,
   getSessionOutline,
@@ -62,6 +64,7 @@ import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
 import {
+  type SyncRunnerFailure,
   type SyncRunnerResult,
   type SyncStatusStore,
   startWatch,
@@ -220,6 +223,9 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
     }
+    if (request.method === "GET" && url.pathname === "/api/openapi.json") {
+      return json(openApiDocument(DECANT_VERSION));
+    }
     if (request.method === "GET" && url.pathname === "/api/events") {
       return eventStream();
     }
@@ -247,8 +253,19 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      const body = await readJson<{ agent?: string; prompt?: string; key?: string }>(request);
-      if (body.agent == null || body.prompt == null || body.prompt.trim() === "") {
+      const body = await readJson<unknown>(request);
+      if (!isJsonObject(body)) {
+        return errorResponse("invalid_request", "request body must be a JSON object", {
+          ok: false,
+        });
+      }
+      const { agent, prompt, key } = body;
+      if (
+        typeof agent !== "string" ||
+        agent.trim() === "" ||
+        typeof prompt !== "string" ||
+        prompt.trim() === ""
+      ) {
         return errorResponse(
           "invalid_request",
           "agent and prompt are required",
@@ -256,13 +273,16 @@ export async function handleRequest(
           400,
         );
       }
-      const result = launchAgent(body.agent, body.prompt, body.key ?? null, getSettings(), {
+      if (key != null && typeof key !== "string") {
+        return errorResponse("invalid_request", "key must be a string or null", { ok: false }, 400);
+      }
+      const result = launchAgent(agent, prompt, key ?? null, getSettings(), {
         platform: context.launchPlatform,
       });
       if (result.ok) {
         return json(result);
       }
-      const command = result.command ?? launchCommand(body.agent, body.prompt);
+      const command = result.command ?? launchCommand(agent, prompt);
       return errorResponse(
         isUnsupportedLaunchError(result.error) ? "launch_unsupported_platform" : "launch_failed",
         result.error ?? "launch failed",
@@ -275,11 +295,17 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      const body = await readJson<{ dir?: string }>(request);
-      if (body.dir == null || body.dir.trim() === "") {
+      const body = await readJson<unknown>(request);
+      if (!isJsonObject(body)) {
+        return errorResponse("invalid_request", "request body must be a JSON object", {
+          ok: false,
+        });
+      }
+      const { dir } = body;
+      if (typeof dir !== "string" || dir.trim() === "") {
         return errorResponse("invalid_request", "dir is required", { ok: false }, 400);
       }
-      const result = openIde(body.dir, getSettings(), { platform: context.launchPlatform });
+      const result = openIde(dir, getSettings(), { platform: context.launchPlatform });
       return result.ok
         ? json(result)
         : errorResponse(
@@ -305,6 +331,10 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
+      const body = await readJson<unknown>(request);
+      if (!isJsonObject(body)) {
+        return errorResponse("invalid_request", "request body must be a JSON object", {}, 400);
+      }
       return await syncNow(
         config,
         context.economics,
@@ -322,7 +352,7 @@ export async function handleRequest(
             includeSubagents: url.searchParams.get("include_subagents") === "true",
             includeNestedSubagents: url.searchParams.get("with_subagents") === "true",
             includeArchived: url.searchParams.get("include_archived") === "true",
-            limit: integerParam(url, "limit", 50),
+            limit: Math.min(integerParam(url, "limit", 50), SESSION_LIST_MAX_LIMIT),
             offset: integerParam(url, "offset", 0, true),
             ...dateFilter,
           }),
@@ -652,18 +682,28 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      const body = await readJson<{ key?: string; source?: string; note?: string }>(request);
-      if (body.key == null || body.key.trim() === "") {
+      const body = await readJson<unknown>(request);
+      if (!isJsonObject(body)) {
+        return errorResponse("invalid_request", "request body must be a JSON object", {}, 400);
+      }
+      const { key, source, note } = body;
+      if (typeof key !== "string" || key.trim() === "") {
         return errorResponse("invalid_request", "key is required", {}, 400);
       }
+      if (source != null && typeof source !== "string") {
+        return errorResponse("invalid_request", "source must be a string or null", {}, 400);
+      }
+      if (note != null && typeof note !== "string") {
+        return errorResponse("invalid_request", "note must be a string or null", {}, 400);
+      }
       return withDb(config, context, (db) => {
-        const ok = markImplemented(db, body.key as string, body.source ?? "agent", body.note);
+        const ok = markImplemented(db, key, source ?? "agent", note);
         return ok
-          ? json({ ok: true, key: body.key, status: "implemented" })
+          ? json({ ok: true, key, status: "implemented" })
           : errorResponse(
               "recommendation_not_found",
               "recommendation not found",
-              { ok: false, key: body.key },
+              { ok: false, key },
               404,
             );
       });
@@ -753,6 +793,12 @@ async function syncNow(
       syncStatus.in_progress = false;
       syncStatus.last_sync_at = new Date().toISOString();
       syncStatus.last_error = error instanceof Error ? error.message : String(error);
+      publishServerEvent({
+        type: "error",
+        reason: "manual",
+        error: syncStatus.last_error,
+        status: { ...syncStatus },
+      });
     }
     throw error;
   }
@@ -1157,7 +1203,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
 
 /** Runs one watcher-triggered sync in a worker thread, keeping request
  * handling responsive while multi-second ingests run. */
-async function workerSyncRunner(
+export async function workerSyncRunner(
   config: Config,
   status: SyncStatusStore,
   cancel: { aborted: boolean },
@@ -1166,16 +1212,16 @@ async function workerSyncRunner(
     promise: runSyncWorker(workerConfig, workerCancel, workerProgress),
     owned: true,
   }),
-): Promise<SyncRunnerResult> {
+): Promise<SyncRunnerResult | SyncRunnerFailure> {
   status.start();
+  const handle = runSync(config, cancel, onProgress);
   try {
-    const handle = runSync(config, cancel, onProgress);
     const report = await handle.promise;
     status.finishOk(report);
     return { report, emitTerminal: handle.owned };
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
-    throw error;
+    return { error, emitTerminal: handle.owned };
   }
 }
 
@@ -1760,6 +1806,10 @@ async function readJson<T>(request: Request): Promise<T> {
   } catch {
     throw new RequestBodyError();
   }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function integerParam(url: URL, name: string, fallback: number, allowZero = false): number {

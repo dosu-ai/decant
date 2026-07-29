@@ -144,14 +144,23 @@ export function exceptionAttributes(error: unknown): Record<string, string> {
 }
 
 function httpRoute(pathname: string): string {
-  if (/^\/api\/sessions\/\d+\/token-economics$/.test(pathname)) {
-    return "/api/sessions/{id}/token-economics";
+  const sessionDetail = pathname.match(
+    /^\/api\/sessions\/[^/]+\/(token-economics|context-window|outline|issues|state)$/,
+  );
+  if (sessionDetail != null) {
+    return `/api/sessions/{id}/${sessionDetail[1]}`;
   }
-  if (/^\/api\/sessions\/\d+$/.test(pathname)) {
+  if (pathname !== "/api/sessions/search-index" && /^\/api\/sessions\/[^/]+$/.test(pathname)) {
     return "/api/sessions/{id}";
+  }
+  if (/^\/api\/reports\/session\/[^/]+\.html$/.test(pathname)) {
+    return "/api/reports/session/{id}.html";
   }
   if (/^\/sessions\/[^/]+$/.test(pathname)) {
     return "/sessions/{id}";
+  }
+  if (/^\/reports\/session\/[^/]+$/.test(pathname)) {
+    return "/reports/session/{id}";
   }
   if (pathname.startsWith("/src/ui/")) {
     return "/src/ui/*";

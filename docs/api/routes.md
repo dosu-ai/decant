@@ -1,188 +1,89 @@
-# Local Serve Routes
+# Local Serve API
 
-`decant serve` runs the CLI, watcher, JSON routes, SSE stream, and React UI in
-one Bun process. These routes are internal app routes, not a versioned public
-contract. By default, the server listens on `http://127.0.0.1:3000`.
+`decant serve` runs the archive owner, source watcher, local HTTP API,
+Server-Sent Events stream, and React UI in one Bun process. It listens on
+`http://127.0.0.1:3000` by default.
+
+The reference contract is [openapi.yaml](openapi.yaml). It describes every
+`/api/*` operation, parameter, request body, response schema, and stable error
+code. A running server exposes the same OpenAPI 3.1 document as JSON at
+`GET /api/openapi.json`; its `info.version` is the running Decant version.
+
+This page records the operational semantics around that contract.
 
 ## Access control
 
-Every route is unauthenticated: anything that reaches the port and passes the
-guard reads or writes the whole archive.
+The API has no authentication. Any request that reaches the listener and passes
+the local guard can read or mutate the whole archive.
 
-- Bound to loopback (the default), only local processes can connect.
-- Bound to a non-loopback host (`--host 0.0.0.0`, as the container image does),
-  the peer's source address is the boundary. Loopback peers pass, and so do the
-  trusted peers resolved at startup. Everything else gets `403 forbidden
-  remote`.
-- Trusted peers come from exactly one source, highest first, each replacing the
-  ones below rather than adding to them: `--trusted-peer`, then
-  `DECANT_TRUSTED_PEERS` whenever that variable is set at all, then
-  `DECANT_TRUST_DEFAULT_GATEWAY=1`. All are unset by default outside the
-  container image, so nothing beyond loopback is trusted until an operator opts
-  in.
-- `DECANT_TRUST_DEFAULT_GATEWAY=1` contributes a single address, the container's
-  own bridge gateway, and only when the default route is a container veth
-  pointing at an on-link gateway inside `172.16.0.0/12`; see
-  `docs/distribution.md`. Every other shape, including `--network host` and
-  macvlan, contributes nothing.
-- The `Host` check that returns `403 forbidden host` is not an access control
-  for non-browser clients: `curl -H 'Host: localhost'` satisfies it. Neither are
-  the `Origin`/`Sec-Fetch-Site` checks on mutating routes, which only stop a
-  browser on another site from driving this API.
+- The default loopback bind admits local processes only.
+- On a non-loopback bind, loopback source addresses and the trusted peers
+  resolved at startup are admitted; every other source receives
+  `403 forbidden_remote`.
+- Trusted-peer sources use replacement precedence, not a union. The first
+  present source wins: `--trusted-peer`, then `DECANT_TRUSTED_PEERS` whenever
+  the variable is set, then `DECANT_TRUST_DEFAULT_GATEWAY=1`.
+  `DECANT_TRUSTED_PEERS=` therefore means “trust nobody,” not “fall through.”
+- The gateway option contributes one address only when Decant proves the
+  default route is a container veth to an on-link gateway inside
+  `172.16.0.0/12`. It fails closed for host networking, macvlan/ipvlan,
+  multi-homed hosts, and other unproven shapes. See
+  [distribution.md](../distribution.md#docker).
+- The `Host` check is not authentication: a non-browser client can send
+  `Host: localhost`. The `Origin` and `Sec-Fetch-Site` checks on writes are
+  browser-drive protections, not credentials.
 
-## UI
+On a loopback bind, a command-line write may omit `Origin`. On a non-loopback
+bind, a write that supplies neither `Origin` nor `Sec-Fetch-Site` is rejected
+even when the source is trusted. Supply a loopback `Origin` for an explicit
+command-line write; for example:
 
-- `GET /` (Analytics; the sidebar groups this under Overview)
-- `GET /projects`
-- `GET /sessions`
-- `GET /sessions/:id`
-- `GET /search`
-- `GET /analytics`
-- `GET /insights`
-- `GET /tools`
-- `GET /files`
-- `GET /settings`
-- `GET /reports/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /reports/session/:id`
+```bash
+curl --fail --silent --show-error \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --header 'Origin: http://127.0.0.1:3000' \
+  --data '{}' \
+  http://127.0.0.1:3000/api/sync
+```
 
-The report UI routes render a light, print-ready preview with Back, Download
-HTML, and Save as PDF controls. They read the same local-only report endpoints
-listed below; the session preview intentionally omits transcript content.
+If the client connects to a non-loopback address directly, it must also send a
+loopback `Host` header. Admission still depends on the actual source address;
+changing `Host` or `Origin` never makes an untrusted peer trusted.
 
-## JSON
+## Response and archive semantics
 
-- `GET /api/health`
-- `GET /api/config`
-- `GET /api/settings`
-- `POST /api/settings`
-- `GET /api/sync-status`
-- `GET /api/metadata/sync-status`
-- `POST /api/sync` (works even under `--no-sync`, which only stops the watcher)
-- `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/sessions/search-index` — lightweight, top-level, visible,
-  non-archived session metadata for the local command palette
-- `GET /api/sessions/:id`
-- `GET /api/sessions/:id/outline`
-- `GET /api/sessions/:id/issues` — ingest diagnostics recorded for the session's
-  source file
-- `GET /api/sessions/:id/token-economics`
-- `GET /api/sessions/:id/context-window`
-- `GET /api/projects`
-- `POST /api/search`
-- `GET /api/stats/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/stats/by-dimension?dim=tool|model|project|day&from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/analytics/activity?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/analytics/model-sparklines?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/analytics/token-economics?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/analytics/now`
-- `GET /api/reports/analytics.html?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/reports/session/:id.html`
-- `GET /api/date-bounds`
-- `GET /api/metadata/date-bounds`
-- `GET /api/files?group=path|ext&op=read|edit|write|delete&from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/tools/calls?tool=&server=&errors_only=&session=&project=&from=&to=&min_ms=&limit=&offset=`
-- `GET /api/tools/usage?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/tools/mcp-usage?from=YYYY-MM-DD&to=YYYY-MM-DD`
-- `GET /api/recommendations?status=open|implemented|all`
-- `POST /api/recommendations/mark`
-- `POST /api/launch/agent`
-- `POST /api/launch/ide`
+JSON errors use the stable envelope `{ "error": string, "code": string, ... }`.
+Expected recovery cases retain specific codes, including `archive_locked`,
+`schema_drift`, `schema_too_new`, `schema_too_old`, `session_not_found`, and
+validation failures. Unexpected failures return generic `internal_error` prose;
+the structured stderr log retains the diagnostic.
 
-Report routes download self-contained, zero-JavaScript HTML documents with
-inline styles and SVG charts. Analytics reports honor the inclusive date
-filter. Session reports omit transcript content by design and return the same
-coded `session_not_found` response as session detail when the id is absent.
+`DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and
+sweep syncs. They do not disable `POST /api/sync`.
 
-Errors use stable codes so the UI can offer recovery without exposing private
-exception text. In particular, an unexpected `500` returns `internal_error`
-with generic prose while the structured server log retains the diagnostic.
-`archive_locked` is retryable, schema conflicts distinguish `schema_too_new`
-from `schema_too_old`, and missing sessions include `archive_empty`.
+Session archive/delete state is local metadata. Archiving hides a session from
+default lists, searches, and aggregate statistics. The `include_archived`
+parameter on session-list and statistics operations opts it back into those
+operations; full-text and command-palette search remain limited to visible
+sessions. Deletion creates a tombstone keyed to source identity, so a later sync
+does not restore the session. Neither operation modifies the source JSONL file.
 
-Session and archive token-economics routes aggregate versioned per-session
-vectors persisted during ingest. The first sync after a schema upgrade
-backfills vectors for unchanged sessions.
+Report operations return self-contained, zero-JavaScript HTML. Session reports
+omit transcript content by design.
 
-The tool-call browse route returns
-`{ calls: ToolCallRow[], total, limit, offset, summary }`, ordered newest first.
-On the first page, `summary` reports calls, confirmed errors, and nearest-rank
-`p50_ms`/`p95_ms` over the complete filtered result, not only the current page;
-later pages return `summary: null` to avoid repeating the percentile scan.
-`limit` defaults to 50 and is capped at 100. `tool`, `server`, `session`, and `project` are
-exact-match filters; `errors_only=true` includes only confirmed errors; `from`
-and `to` filter call timestamps by inclusive UTC date; and `min_ms` filters
-measured durations. A legacy or provider-opaque value stays JSON `null`: in
-particular, `is_error: null` means the archive cannot determine whether the
-call failed, not success. The per-tool and per-MCP-server usage routes also
-return nearest-rank `p50_ms`/`p95_ms` plus `last_used_at`; each is `null` when
-the underlying rows do not contain the relevant source metadata.
+## Server-Sent Events
 
-Session detail accepts `message_limit` and `message_offset` for transcript
-pagination. The outline route returns lightweight entries for each human/prompt
-turn and verified Dosu MCP call: sequence number, kind, ordinal, and either a
-short prompt excerpt or normalized tool name. This lets sticky thread
-navigation cover the whole session and point to Dosu optimizations without
-loading every rich transcript block up front.
+`GET /api/events` returns `text/event-stream`. The current event names are:
 
-Session detail also returns `totals`, holding `reply_count` and
-`tool_call_count` aggregated across the whole session rather than the requested
-page, so a client can report them without loading every message. A reply is an
-assistant message carrying at least one renderable block, matching what the UI
-draws. The nested `subagents` entries carry structure and a summary but no
-messages, so they omit `totals` along with the paging fields.
+- `hello` — connection acknowledgement
+- `ping` — heartbeat, normally every five seconds
+- `ready` — source watcher initialized
+- `sync_progress` — bounded progress snapshot for a running sync
+- `sync` — terminal successful sync report
+- `archive_updated` — archive-derived UI data changed
+- `error` — watcher or sync failure
+- `stopped` — source watcher stopped
 
-Session summaries returned by the list and detail routes include
-`reasoning_effort` and `reasoning_effort_levels`. The first is the normalized
-provider effort label, `mixed` when the setting changes between turns, or
-`null` when the source did not record one. The levels array preserves the
-unique labels represented by `mixed`. Provider labels retain their meaning
-after whitespace trimming and canonicalization of known labels: Claude Code's
-`max` remains `max`, while Codex's distinct `max` and `ultra` values also
-remain unchanged. The current known values are:
-
-- Claude Code: `low`, `medium`, `high`, `xhigh`, and `max`. Its `auto`
-  selector resolves to the model default, while `ultracode` reports `xhigh`
-  because it is workflow orchestration layered on that effort level. Numeric
-  Agent SDK per-agent token budgets are preserved and displayed as token
-  budgets.
-- Codex: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and
-  `ultra`. Unknown future custom values preserve their original spelling
-  rather than being discarded or rewritten.
-
-Availability remains model-dependent for both providers.
-
-Claude Code began recording the active effort on every assistant transcript
-message in v2.1.219. Earlier transcripts do not contain enough information to
-distinguish the model default from a session override, so the UI keeps the
-placeholder `-` and explains the missing source data in a tooltip instead of
-guessing a historical effort level.
-
-The context-window route derives per-API-call window occupancy and compaction
-events at read time from persisted per-message token columns and raw records.
-Claude logs do not state the size, so it is inferred from the recorded model:
-Opus 5, Opus 4.6-4.8, Sonnet 5, Sonnet 4.6, Fable 5, and Mythos 5/Preview use
-1M; other Claude models use 200k unless observed usage proves a historical 1M
-session. Codex rollouts carry an explicit `model_context_window`, persisted on
-the session's `raw_meta`, and that runtime value takes precedence over a
-model's general API limit. Session rows also carry materialized rollups
-(`context_window_tokens`, `peak_context_tokens`, plus the existing
-`compaction_count`) computed at ingest; the first sync after a schema upgrade
-backfills them, like the economics vectors.
-Codex sessions ingested by older Decant builds, as well as source rollouts
-predating `last_token_usage`, return empty `points` until the source changes
-and is re-ingested or the archive is rebuilt.
-
-## Events
-
-- `GET /api/events` returns an SSE stream.
-
-Current event names:
-
-- `hello`
-- `ping` (heartbeat, emitted every 5 seconds)
-- `ready`
-- `sync_progress`
-- `sync`
-- `archive_updated`
-- `error`
-- `stopped`
+Each `data` field is JSON and includes a matching `type`. The OpenAPI operation's
+`x-sse-events` extension defines the payload schema for each name.

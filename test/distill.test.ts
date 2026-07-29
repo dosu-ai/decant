@@ -23,6 +23,7 @@ import {
   writeBlock,
 } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -248,6 +249,34 @@ describe("distill timeline and renderers", () => {
     db.close();
   });
 
+  test("timeline hides effectively archived trees but exact replay remains available", () => {
+    const db = seededN(3);
+    const ids = (db.query("SELECT id FROM session ORDER BY id").all() as { id: number }[]).map(
+      (row) => row.id,
+    );
+    const rootId = ids[0] as number;
+    const childId = ids[1] as number;
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+
+    expect(
+      timeline(db).ops.find((op) => op.normalized === "cargo build --workspace"),
+    ).toMatchObject({ sessions_seen: 3 });
+    expect(setSessionUserState(db, rootId, "archived")).toBe(true);
+
+    const visible = timeline(db);
+    expect(visible.session_count).toBe(1);
+    expect(visible.ops.find((op) => op.normalized === "cargo build --workspace")).toMatchObject({
+      sessions_seen: 1,
+    });
+    expect(renderReplay(db, rootId, false)).not.toBeNull();
+    expect(renderReplay(db, childId, false)).not.toBeNull();
+    db.close();
+  });
+
   test("replay reproduces commands, writes, edits, and patches", () => {
     const db = seededN(1);
     const id = firstSessionId(db);
@@ -310,6 +339,26 @@ describe("distill timeline and renderers", () => {
     const skill = renderSkill(d, hot, "skill", "proj");
     expect(skill).toStartWith("---\nname: proj-workflow");
     expect(skill).toBe(renderSkill(d, hot, "skill", "proj"));
+    db.close();
+  });
+
+  test("hot context excludes file evidence inherited from an archived parent", () => {
+    const db = freshDb();
+    seedEnrichedClaude(db, 3);
+    const ids = (db.query("SELECT id FROM session ORDER BY id").all() as { id: number }[]).map(
+      (row) => row.id,
+    );
+    const rootId = ids[0] as number;
+    const childId = ids[1] as number;
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+
+    expect(hotContext(db, {}, 10).find((row) => row.rel_path === "src/main.rs")?.sessions).toBe(3);
+    expect(setSessionUserState(db, rootId, "archived")).toBe(true);
+    expect(hotContext(db, {}, 10).find((row) => row.rel_path === "src/main.rs")?.sessions).toBe(1);
     db.close();
   });
 

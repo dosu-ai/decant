@@ -1,6 +1,7 @@
 import * as echarts from "echarts";
 import type { LucideIcon } from "lucide-react";
 import {
+  Archive,
   ArrowLeft,
   BarChart3,
   ChartNoAxesCombined,
@@ -37,6 +38,7 @@ import {
   Share2,
   ShieldCheck,
   Sun,
+  Trash2,
   Upload,
   Wrench,
   X,
@@ -83,7 +85,11 @@ import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
-import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
+import {
+  planSessionLoad,
+  sessionPageExhausted,
+  shouldShowSessionSkeleton,
+} from "./loading-state.ts";
 import {
   documentTitleFor,
   isKnownRoute,
@@ -91,10 +97,19 @@ import {
   projectSessionsHref,
   activeRoute as resolveActiveRoute,
   activeRouteKey as resolveActiveRouteKey,
+  sessionIncludesArchived,
   sessionProjectFilter,
+  sessionsArchivedHref,
   titleFor,
 } from "./navigation.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
+import {
+  archiveActionFor,
+  DELETE_SESSION_EXPLANATION,
+  type SessionStateUpdate,
+  sessionStateRequest,
+} from "./session-state.ts";
+import { sessionCardMetrics, sessionSummaryPath, sessionThreadCost } from "./session-summary.ts";
 import {
   hasShareCardValues,
   SHARE_CARD_HEIGHT,
@@ -178,6 +193,8 @@ type SessionSummary = {
   total_input_tokens: number;
   total_output_tokens: number;
   estimated_cost_usd: number;
+  user_state: "archived" | null;
+  is_user_archived: boolean;
   is_subagent: boolean;
   parent_session_id: number | null;
   spawn_tool_use_id: string | null;
@@ -676,6 +693,7 @@ function App() {
     () => resolveActiveRoute(locationPath(), navItems) === "Insights",
   );
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionListExhausted, setSessionListExhausted] = useState(false);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -691,7 +709,8 @@ function App() {
   const headerSearchRef = useRef<HTMLInputElement | null>(null);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
-  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${reloadKey}`;
+  const includeArchivedSessions = sessionIncludesArchived(path);
+  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${includeArchivedSessions}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRoute(path, navItems);
@@ -751,10 +770,12 @@ function App() {
   useEffect(() => {
     void dateQuery;
     void sessionProject;
+    void includeArchivedSessions;
     setData((current) => ({ ...current, sessions: [] }));
     setLoadedSessionKey(null);
+    setSessionListExhausted(false);
     setSessionLimit(SESSION_PAGE_SIZE);
-  }, [dateQuery, sessionProject]);
+  }, [dateQuery, includeArchivedSessions, sessionProject]);
 
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
@@ -808,9 +829,11 @@ function App() {
     setSessionsLoading(true);
     const projectParam =
       sessionProject == null ? "" : `&project=${encodeURIComponent(sessionProject)}`;
+    const archivedParam = includeArchivedSessions ? "&include_archived=true" : "";
     void getJson<SessionSummary[]>(
       withDateQuery(
-        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true${projectParam}`,
+        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}` +
+          `&with_subagents=true${projectParam}${archivedParam}`,
         dateQuery,
       ),
     )
@@ -822,6 +845,9 @@ function App() {
           ...current,
           sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
         }));
+        setSessionListExhausted(
+          sessionPageExhausted({ receivedRows: sessions.length, requestedRows: plan.limit }),
+        );
         setLoadedSessionKey(sessionLoadKey);
         setSessionsError(null);
       })
@@ -841,6 +867,7 @@ function App() {
   }, [
     data.sessions.length,
     dateQuery,
+    includeArchivedSessions,
     loadedSessionKey,
     sessionLimit,
     sessionLoadKey,
@@ -1276,6 +1303,7 @@ function App() {
                 runSync,
                 failedSlices,
                 recommendationsLoading,
+                sessionListExhausted,
                 sessionLimit,
                 sessionsLoading,
                 setSessionLimit,
@@ -1300,6 +1328,7 @@ function renderView(
     runSync: () => void;
     failedSlices: DataSlice[];
     recommendationsLoading: boolean;
+    sessionListExhausted: boolean;
     sessionLimit: number;
     sessionsLoading: boolean;
     setSessionLimit: (limit: number) => void;
@@ -1330,6 +1359,7 @@ function renderView(
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
           path={path}
+          sessionListExhausted={actions.sessionListExhausted}
         />
       );
     case "Projects":
@@ -1407,6 +1437,7 @@ function SessionsView({
   onDateRangeChange,
   onLimitChange,
   path,
+  sessionListExhausted,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
@@ -1415,20 +1446,72 @@ function SessionsView({
   onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
   path: string;
+  sessionListExhausted: boolean;
 }) {
   const [query, setQuery] = useState("");
+  const [scopedSummary, setScopedSummary] = useState<{
+    request: string;
+    value: Summary;
+  } | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const project = sessionProjectFilter(path);
+  const includeArchived = sessionIncludesArchived(path);
+  const sessionFilterKey = `${project ?? ""}:${includeArchived}`;
+  const dateQuery = dateRangeQuery(dateRange);
+  const scopedSummaryRequest =
+    project == null && !includeArchived
+      ? null
+      : sessionSummaryPath(project, dateQuery, includeArchived);
+  const currentScopedSummary =
+    scopedSummary?.request === scopedSummaryRequest ? scopedSummary.value : null;
+  const cardSummary = sessionCardMetrics(
+    scopedSummaryRequest == null ? data.summary : currentScopedSummary,
+    filtered,
+    query,
+  );
+  const visibleTotal =
+    project == null ? total : (currentScopedSummary?.sessions ?? data.sessions.length);
+  const listTotal = includeArchived ? null : visibleTotal;
   const hasMore =
-    !loading && (project == null ? data.sessions.length < total : data.sessions.length >= limit);
+    !loading &&
+    !sessionListExhausted &&
+    (project == null && !includeArchived ? data.sessions.length < visibleTotal : true);
   const waitingForSessions = shouldShowSessionSkeleton({
     isLoading: loading,
     loadedRows: data.sessions.length,
     query,
   });
+
+  useEffect(() => {
+    if (scopedSummaryRequest == null) {
+      setScopedSummary(null);
+      return;
+    }
+    let cancelled = false;
+    setScopedSummary(null);
+    void getJson<Summary>(scopedSummaryRequest)
+      .then((summary) => {
+        if (!cancelled) {
+          setScopedSummary({ request: scopedSummaryRequest, value: summary });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScopedSummary(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopedSummaryRequest]);
+
+  useEffect(() => {
+    void sessionFilterKey;
+    setExpandedSessions(new Set());
+  }, [sessionFilterKey]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -1438,14 +1521,18 @@ function SessionsView({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting === true) {
-          onLimitChange(Math.min(total, limit + SESSION_PAGE_SIZE));
+          onLimitChange(
+            listTotal == null
+              ? limit + SESSION_PAGE_SIZE
+              : Math.min(listTotal, limit + SESSION_PAGE_SIZE),
+          );
         }
       },
       { rootMargin: "320px 0px" },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, limit, onLimitChange, total]);
+  }, [hasMore, limit, listTotal, onLimitChange]);
 
   const toggleSession = (id: number) => {
     setExpandedSessions((current) => {
@@ -1493,19 +1580,19 @@ function SessionsView({
           icon="sessions"
           label="Sessions"
           tone="accent"
-          value={formatInt(data.summary?.sessions ?? 0)}
+          value={formatInt(cardSummary.sessions)}
         />
         <StatCard
           icon="messages"
           label="Messages"
           tone="info"
-          value={formatInt(data.summary?.messages ?? 0)}
+          value={formatInt(cardSummary.messages)}
         />
         <StatCard
           icon="money"
           label="Est. cost"
           tone="success"
-          value={money(data.summary?.estimated_cost_usd ?? 0)}
+          value={money(cardSummary.estimated_cost_usd)}
         />
       </div>
 
@@ -1514,19 +1601,34 @@ function SessionsView({
           <div>
             <h2>Sessions</h2>
           </div>
-          <input
-            aria-label="Filter sessions"
-            className="session-filter"
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by title, model, or tool..."
-            value={query}
-          />
+          <div className="session-list-controls">
+            <label className="session-archive-toggle">
+              <input
+                checked={includeArchived}
+                onChange={(event) => {
+                  visit(sessionsArchivedHref(path, event.target.checked));
+                }}
+                type="checkbox"
+              />
+              <span>Show archived</span>
+            </label>
+            <input
+              aria-label="Filter sessions"
+              className="session-filter"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter by title, model, or tool..."
+              value={query}
+            />
+          </div>
         </div>
         {project != null ? (
           <div className="active-filter-row">
             <span className="filter-pill">
               Project: <strong>{basename(project)}</strong>
-              <a aria-label="Clear project filter" href="/sessions">
+              <a
+                aria-label="Clear project filter"
+                href={sessionsArchivedHref("/sessions", includeArchived)}
+              >
                 <Icon name="x" />
               </a>
             </span>
@@ -1579,7 +1681,14 @@ function SessionsView({
         </div>
         <div className="panel-footer">
           <span>
-            {sessionsCaption(query, filtered.length, data.sessions.length, total, loading)}
+            {sessionsCaption(
+              query,
+              filtered.length,
+              data.sessions.length,
+              listTotal,
+              loading,
+              includeArchived,
+            )}
           </span>
           <div aria-hidden="true" className="infinite-sentinel" ref={sentinelRef} />
         </div>
@@ -1871,19 +1980,25 @@ function sessionsCaption(
   query: string,
   visible: number,
   loaded: number,
-  total: number,
+  total: number | null,
   loading: boolean,
+  includeArchived: boolean,
 ): string {
   if (loading && query.trim() === "") {
     if (loaded === 0) {
-      return total > 0 ? `Loading ${formatInt(total)} sessions...` : "Loading sessions...";
+      return total != null && total > 0
+        ? `Loading ${formatInt(total)} sessions...`
+        : "Loading sessions...";
     }
-    return loaded < total
+    return total != null && loaded < total
       ? `Refreshing ${formatInt(loaded)} of ${formatInt(total)} sessions`
       : `Refreshing ${formatInt(loaded)} sessions`;
   }
   if (query.trim() !== "") {
     return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} available sessions`;
+  }
+  if (total == null) {
+    return `Showing ${formatInt(loaded)} sessions${includeArchived ? ", including archived" : ""}`;
   }
   return `Showing ${formatInt(loaded)} of ${formatInt(total)} sessions`;
 }
@@ -1935,6 +2050,7 @@ function SessionTableRow({
         <span className="session-title-stack" style={indentStyle}>
           <span className="session-title-line">
             <a href={`/sessions/${session.id}`}>{title}</a>
+            {session.is_user_archived ? <Badge tone="neutral">Archived</Badge> : null}
             <DosuProvenanceBadge session={session} />
           </span>
           {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
@@ -1961,7 +2077,7 @@ function SessionTableRow({
         <SubagentRollup session={session} />
       </td>
       <td className="numeric muted">{formatInt(session.message_count)}</td>
-      <td className="numeric">{money(threadCost(session))}</td>
+      <td className="numeric">{money(sessionThreadCost(session))}</td>
       <td className="numeric muted">
         <SessionStartedAt value={session.started_at} />
       </td>
@@ -2761,7 +2877,12 @@ function useDialogFocusTrap(
       const focusTargets = dialogFocusTargets(dialog);
       const first = focusTargets[0];
       const last = focusTargets.at(-1);
-      if (dialog == null || first == null || last == null) {
+      if (dialog == null) {
+        return;
+      }
+      if (first == null || last == null) {
+        event.preventDefault();
+        dialog.focus();
         return;
       }
       const active = document.activeElement;
@@ -4659,6 +4780,7 @@ type BadgeTone =
 type BrandIconName = "anthropic" | "claude" | "openai";
 
 type IconName =
+  | "archive"
   | "arrowLeft"
   | "beaker"
   | "bolt"
@@ -4696,6 +4818,7 @@ type IconName =
   | "shield"
   | "sun"
   | "trend"
+  | "trash"
   | "tools"
   | "upload"
   | "x";
@@ -5313,31 +5436,38 @@ function RecommendationActions({
         </button>
       ) : null}
       {row.url != null ? (
-        <RecommendationOverflow label={row.link_label ?? "Docs"} title={row.title} url={row.url} />
+        <OverflowMenu label={`More actions for ${row.title}`}>
+          <a href={row.url} rel="noreferrer" target="_blank">
+            <span>{row.link_label ?? "Docs"}</span>
+            <span aria-hidden="true">↗</span>
+          </a>
+        </OverflowMenu>
       ) : null}
     </div>
   );
 }
 
-function RecommendationOverflow({
-  label,
-  title,
-  url,
-}: {
-  label: string;
-  title: string;
-  url: string;
-}) {
+function OverflowMenu({ children, label }: { children: ReactNode; label: string }) {
   const menuRef = useRef<HTMLDetailsElement | null>(null);
   return (
     <details
-      className="recommendation-overflow"
+      className="overflow-menu"
       onBlur={(event) => {
         if (
           !(event.relatedTarget instanceof Node) ||
           !event.currentTarget.contains(event.relatedTarget)
         ) {
           event.currentTarget.open = false;
+        }
+      }}
+      onClick={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".overflow-menu-popover :is(a, button)") != null &&
+          menuRef.current != null
+        ) {
+          menuRef.current.open = false;
+          menuRef.current.querySelector("summary")?.focus();
         }
       }}
       onKeyDown={(event) => {
@@ -5352,24 +5482,10 @@ function RecommendationOverflow({
       }}
       ref={menuRef}
     >
-      <summary aria-label={`More actions for ${title}`} title="More actions">
+      <summary aria-label={label} title="More actions">
         <Icon name="ellipsis" />
       </summary>
-      <div className="recommendation-overflow-menu">
-        <a
-          href={url}
-          onClick={() => {
-            if (menuRef.current != null) {
-              menuRef.current.open = false;
-            }
-          }}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <span>{label}</span>
-          <span aria-hidden="true">↗</span>
-        </a>
-      </div>
+      <div className="overflow-menu-popover">{children}</div>
     </details>
   );
 }
@@ -5426,6 +5542,8 @@ function BrandMark({ name }: { name: BrandIconName }) {
 
 function iconComponent(name: IconName): LucideIcon {
   switch (name) {
+    case "archive":
+      return Archive;
     case "arrowLeft":
       return ArrowLeft;
     case "beaker":
@@ -5500,6 +5618,8 @@ function iconComponent(name: IconName): LucideIcon {
       return Sun;
     case "trend":
       return ChartNoAxesCombined;
+    case "trash":
+      return Trash2;
     case "tools":
       return Wrench;
     case "upload":
@@ -5622,16 +5742,6 @@ function toneName(tone: string | null | undefined): BadgeTone {
 
 function fileTotal(row: FileRow): number {
   return row.reads + row.edits + row.writes + row.deletes;
-}
-
-function threadCost(session: SessionSummary): number {
-  if ((session.subagents?.length ?? 0) > 0) {
-    return (
-      session.estimated_cost_usd +
-      (session.subagents ?? []).reduce((sum, subagent) => sum + threadCost(subagent), 0)
-    );
-  }
-  return session.estimated_cost_usd + session.subagent_estimated_cost_usd;
 }
 
 function isPresent(value: string | null | undefined): value is string {
@@ -7219,6 +7329,96 @@ function SettingSelect({
   );
 }
 
+function DeleteSessionDialog({
+  error,
+  onClose,
+  onConfirm,
+  open,
+  pending,
+  title,
+}: {
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void;
+  open: boolean;
+  pending: boolean;
+  title: string;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const titleId = useId();
+  const descriptionId = useId();
+  onCloseRef.current = onClose;
+  const requestClose = useCallback(() => onCloseRef.current(), []);
+  useDialogFocusTrap(open, dialogRef, requestClose);
+  if (!open) {
+    return null;
+  }
+  return createPortal(
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and explicit Cancel/close controls.
+    <div
+      className="report-review-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !pending) {
+          requestClose();
+        }
+      }}
+    >
+      <section
+        aria-describedby={descriptionId}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="report-review-sheet session-delete-dialog"
+        ref={dialogRef}
+        role="alertdialog"
+        tabIndex={-1}
+      >
+        <header>
+          <div>
+            <span className="section-eyebrow">Permanent action</span>
+            <h2 id={titleId}>Delete session?</h2>
+          </div>
+          <button
+            aria-label="Close delete confirmation"
+            className="icon-button"
+            disabled={pending}
+            onClick={requestClose}
+            type="button"
+          >
+            <Icon name="x" />
+          </button>
+        </header>
+        <div className="report-review-body">
+          <p className="session-delete-title">{title}</p>
+          <p className="session-delete-copy" id={descriptionId}>
+            {DELETE_SESSION_EXPLANATION}
+          </p>
+          {error != null ? (
+            <div className="notice danger" role="alert">
+              {error}
+            </div>
+          ) : null}
+        </div>
+        <footer>
+          <button
+            className="secondary-button"
+            disabled={pending}
+            onClick={requestClose}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button className="danger-button" disabled={pending} onClick={onConfirm} type="button">
+            <Icon name="trash" />
+            {pending ? "Deleting…" : "Delete from Decant"}
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function SessionDetailView({
   id,
   onSync,
@@ -7244,6 +7444,10 @@ function SessionDetailView({
   const [issues, setIssues] = useState<SessionIngestIssue[] | null>(null);
   const [issuesError, setIssuesError] = useState<unknown>(null);
   const [detailRetryKey, setDetailRetryKey] = useState(0);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sessionStatePending, setSessionStatePending] = useState<SessionStateUpdate | null>(null);
+  const [sessionStateError, setSessionStateError] = useState<string | null>(null);
+  const [sessionStateNotice, setSessionStateNotice] = useState<string | null>(null);
   const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
   const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
   const detailRef = useRef<SessionDetailData | null>(null);
@@ -7253,6 +7457,19 @@ function SessionDetailView({
   const loadMorePromiseRef = useRef<Promise<boolean> | null>(null);
   const sessionVersionRef = useRef(0);
   const jumpGenerationRef = useRef(0);
+  const sessionStateMutationGenerationRef = useRef(0);
+
+  useEffect(() => {
+    void id;
+    sessionStateMutationGenerationRef.current += 1;
+    setDeleteDialogOpen(false);
+    setSessionStatePending(null);
+    setSessionStateError(null);
+    setSessionStateNotice(null);
+    return () => {
+      sessionStateMutationGenerationRef.current += 1;
+    };
+  }, [id]);
 
   useEffect(() => {
     void detailRetryKey;
@@ -7743,6 +7960,44 @@ function SessionDetailView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigateTranscript]);
 
+  const mutateSessionState = useCallback(
+    (state: SessionStateUpdate) => {
+      const mutationGeneration = sessionStateMutationGenerationRef.current + 1;
+      sessionStateMutationGenerationRef.current = mutationGeneration;
+      setSessionStatePending(state);
+      setSessionStateError(null);
+      setSessionStateNotice(null);
+      const request = sessionStateRequest(id, state);
+      void getJson<{ ok: true }>(request.path, request.init)
+        .then(() => {
+          if (sessionStateMutationGenerationRef.current !== mutationGeneration) {
+            return;
+          }
+          if (state === "deleted") {
+            setDeleteDialogOpen(false);
+            visit("/sessions");
+            return;
+          }
+          setDeleteDialogOpen(false);
+          if (state === "visible") {
+            setSessionStateNotice("Session restored to the default views.");
+          }
+          setDetailRetryKey((key) => key + 1);
+        })
+        .catch((err: unknown) => {
+          if (sessionStateMutationGenerationRef.current === mutationGeneration) {
+            setSessionStateError(errorMessage(err));
+          }
+        })
+        .finally(() => {
+          if (sessionStateMutationGenerationRef.current === mutationGeneration) {
+            setSessionStatePending(null);
+          }
+        });
+    },
+    [id],
+  );
+
   // Hoisted above the early returns because hooks cannot run conditionally.
   // TranscriptTurn is memoized, and a Map rebuilt every render would defeat
   // that for every turn on the screen.
@@ -7780,20 +8035,53 @@ function SessionDetailView({
     (contextWindow?.compactions ?? []).map((compaction, index) => [compaction.seq, index + 1]),
   );
   const windowTokens = contextWindow?.window_tokens ?? null;
+  const detailTitle = sessionDisplayTitle(detail.summary);
+  const archiveAction = archiveActionFor(detail.summary);
+  const sessionsHref = detail.summary.is_user_archived
+    ? sessionsArchivedHref("/sessions", true)
+    : "/sessions";
 
   return (
     <div className="session-detail">
       <header className="thread-header">
         <div className="thread-header-inner">
           <div className="thread-header-title-row">
-            <h1>{sessionDisplayTitle(detail.summary)}</h1>
-            <ReportExportButton
-              excluded={SESSION_REPORT_NEVER_INCLUDES}
-              href={`/api/reports/session/${detail.summary.id}.html`}
-              includes={SESSION_REPORT_INCLUDES}
-              previewHref={`/reports/session/${detail.summary.id}`}
-              title="Review session report"
-            />
+            <h1>{detailTitle}</h1>
+            <div className="thread-header-actions">
+              <ReportExportButton
+                excluded={SESSION_REPORT_NEVER_INCLUDES}
+                href={`/api/reports/session/${detail.summary.id}.html`}
+                includes={SESSION_REPORT_INCLUDES}
+                previewHref={`/reports/session/${detail.summary.id}`}
+                title="Review session report"
+              />
+              <OverflowMenu label={`More actions for ${detailTitle}`}>
+                {archiveAction != null ? (
+                  <button
+                    disabled={sessionStatePending != null}
+                    onClick={() => mutateSessionState(archiveAction)}
+                    type="button"
+                  >
+                    <Icon name="archive" />
+                    <span>
+                      {archiveAction === "visible" ? "Unarchive session" : "Archive session"}
+                    </span>
+                  </button>
+                ) : null}
+                <button
+                  className="is-danger"
+                  disabled={sessionStatePending != null}
+                  onClick={() => {
+                    setSessionStateError(null);
+                    setDeleteDialogOpen(true);
+                  }}
+                  type="button"
+                >
+                  <Icon name="trash" />
+                  <span>Delete session…</span>
+                </button>
+              </OverflowMenu>
+            </div>
           </div>
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
@@ -7846,6 +8134,45 @@ function SessionDetailView({
         </div>
       </header>
 
+      {detail.summary.is_user_archived ? (
+        <div className="notice session-state-banner" role="status">
+          <span>
+            {detail.summary.user_state === "archived"
+              ? "This session is archived and hidden from default lists, search, and analytics."
+              : "This session is archived with a parent session."}
+          </span>
+          {detail.summary.user_state === "archived" ? (
+            <button
+              className="secondary-button"
+              disabled={sessionStatePending != null}
+              onClick={() => mutateSessionState("visible")}
+              type="button"
+            >
+              Unarchive
+            </button>
+          ) : null}
+        </div>
+      ) : sessionStateNotice != null ? (
+        <div className="notice session-state-banner" role="status">
+          {sessionStateNotice}
+        </div>
+      ) : null}
+      {sessionStateError != null && !deleteDialogOpen ? (
+        <div className="notice danger session-state-banner" role="alert">
+          <span>{sessionStateError}</span>
+          {archiveAction != null ? (
+            <button
+              className="secondary-button"
+              disabled={sessionStatePending != null}
+              onClick={() => mutateSessionState(archiveAction)}
+              type="button"
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {showIssues ? (
         <IngestIssuesPanel
           error={issuesError}
@@ -7856,10 +8183,28 @@ function SessionDetailView({
         />
       ) : null}
 
-      <a className="back-link" href="/sessions" onClick={(event) => navigate(event, "/sessions")}>
+      <a
+        className="back-link"
+        href={sessionsHref}
+        onClick={(event) => navigate(event, sessionsHref)}
+      >
         <Icon name="arrowLeft" />
         Sessions
       </a>
+
+      <DeleteSessionDialog
+        error={deleteDialogOpen ? sessionStateError : null}
+        onClose={() => {
+          if (sessionStatePending == null) {
+            setDeleteDialogOpen(false);
+            setSessionStateError(null);
+          }
+        }}
+        onConfirm={() => mutateSessionState("deleted")}
+        open={deleteDialogOpen}
+        pending={sessionStatePending === "deleted"}
+        title={detailTitle}
+      />
 
       {economics != null ? (
         <TokenEconomicsPanel

@@ -13,6 +13,7 @@ import {
   upsertSession,
 } from "../src/ingest.ts";
 import { getSession, listSessions } from "../src/query.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
@@ -268,6 +269,24 @@ describe("upsertSession", () => {
     db.close();
   });
 
+  test("preserves direct archive state when replacing the source session", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
+    const firstId = upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+
+    expect(setSessionUserState(db, firstId, "archived")).toBe(true);
+    expect(upsertSession(db, parsed, "/x/sample.jsonl", 3, 4, "b")).toBe(firstId);
+    expect(listSessions(db)).toEqual([]);
+    expect(listSessions(db, { includeArchived: true })[0]).toMatchObject({
+      id: firstId,
+      user_state: "archived",
+      is_user_archived: true,
+      is_archived: false,
+    });
+    db.close();
+  });
+
   test("writes a session without creating a project when no project path is present", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);
@@ -454,6 +473,107 @@ describe("upsertSession", () => {
 });
 
 describe("sync", () => {
+  test("deleted root and subagent identities stay tombstoned across source changes", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const rootPath = join(config.codexDir, "sessions", "2026", "07", "29", "rollout-root.jsonl");
+    const childPath = join(config.codexDir, "sessions", "2026", "07", "29", "rollout-child.jsonl");
+    write(
+      rootPath,
+      [
+        '{"type":"session_meta","payload":{"id":"deleted-root","cwd":"/repo"}}',
+        '{"type":"event_msg","payload":{"type":"user_message","message":"Root prompt"}}',
+      ].join("\n"),
+    );
+    write(
+      childPath,
+      [
+        '{"type":"session_meta","payload":{"id":"deleted-child","cwd":"/repo"}}',
+        '{"type":"event_msg","payload":{"type":"user_message","message":"Child prompt"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, skipped: 0 });
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'deleted-root'").get() as {
+        id: number;
+      }
+    ).id;
+    const childId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'deleted-child'").get() as {
+        id: number;
+      }
+    ).id;
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+    db.query(
+      `INSERT INTO tool_call(session_id, ordinal, tool_kind, tool_name)
+       VALUES (?1, 0, 'builtin', 'DeleteFixture')`,
+    ).run(childId);
+    db.query(
+      `INSERT INTO file_ref(session_id, path, operation)
+       VALUES (?1, '/repo/delete-fixture.ts', 'read')`,
+    ).run(rootId);
+
+    expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
+    expect(
+      db
+        .query(
+          `SELECT
+             (SELECT COUNT(*) FROM session) AS sessions,
+             (SELECT COUNT(*) FROM message) AS messages,
+             (SELECT COUNT(*) FROM block) AS blocks,
+             (SELECT COUNT(*) FROM tool_call) AS tool_calls,
+             (SELECT COUNT(*) FROM file_ref) AS file_refs`,
+        )
+        .get(),
+    ).toEqual({ sessions: 0, messages: 0, blocks: 0, tool_calls: 0, file_refs: 0 });
+    expect(
+      db
+        .query(
+          `SELECT tool, source_session_id, state
+           FROM session_user_state
+           ORDER BY source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      { tool: "codex", source_session_id: "deleted-child", state: "deleted" },
+      { tool: "codex", source_session_id: "deleted-root", state: "deleted" },
+    ]);
+
+    write(rootPath, `${readFileSync(rootPath, "utf8")}\n`);
+    write(childPath, `${readFileSync(childPath, "utf8")}\n`);
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 0, skipped: 2, failed: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM session").get()).toEqual({ n: 0 });
+    expect(
+      db
+        .query(
+          `SELECT path, session_id, status
+           FROM ingest_source
+           ORDER BY path`,
+        )
+        .all(),
+    ).toEqual([
+      { path: childPath, session_id: null, status: "skipped_deleted" },
+      { path: rootPath, session_id: null, status: "skipped_deleted" },
+    ]);
+    const directParsed = parseCodexSession(
+      "deleted-root",
+      readFileSync(rootPath, "utf8"),
+      new Map(),
+    );
+    expect(upsertSession(db, directParsed, rootPath, 99, 99, "direct-reingest")).toBe(0);
+    expect(db.query("SELECT COUNT(*) AS n FROM session").get()).toEqual({ n: 0 });
+    db.close();
+  });
+
   test("discovers Claude files plus Codex rollout files only", () => {
     const dir = freshCase();
     const config: IngestConfig = {

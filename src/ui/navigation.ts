@@ -42,14 +42,33 @@ export function sessionProjectFilter(path: string): string | null {
   if (pathOnly(path) !== "/sessions") {
     return null;
   }
-  const query = path.includes("?") ? (path.split("?", 2)[1] ?? "") : "";
-  const project = new URLSearchParams(query).get("project")?.trim();
+  const project = sessionParams(path).get("project")?.trim();
   return project == null || project === "" ? null : project;
 }
 
 export function projectSessionsHref(project: string): string {
   const params = new URLSearchParams({ project });
   return `/sessions?${params.toString()}`;
+}
+
+export function sessionIncludesArchived(path: string): boolean {
+  return pathOnly(path) === "/sessions" && sessionParams(path).get("include_archived") === "true";
+}
+
+export function sessionsArchivedHref(path: string, includeArchived: boolean): string {
+  const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
+  if (includeArchived) {
+    params.set("include_archived", "true");
+  } else {
+    params.delete("include_archived");
+  }
+  const query = params.toString();
+  return query === "" ? "/sessions" : `/sessions?${query}`;
+}
+
+function sessionParams(path: string): URLSearchParams {
+  const query = path.includes("?") ? (path.split("?", 2)[1] ?? "") : "";
+  return new URLSearchParams(query);
 }
 
 /**

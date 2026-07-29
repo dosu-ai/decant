@@ -44,12 +44,12 @@ describe("Insights information hierarchy", () => {
   });
 
   test("moves secondary links into an accessible compact overflow menu", () => {
-    expect(main).toContain("function RecommendationOverflow(");
-    expect(main).toContain('className="recommendation-overflow"');
-    expect(main).toMatch(/More actions for \$\{title\}/);
+    expect(main).toContain("function OverflowMenu(");
+    expect(main).toContain('className="overflow-menu"');
+    expect(main).toMatch(/More actions for \$\{row\.title\}/);
     expect(main).toContain('event.key !== "Escape"');
-    expect(styles).toContain(".recommendation-overflow-menu");
-    expect(styles).toContain(".recommendation-overflow > summary:focus-visible");
+    expect(styles).toContain(".overflow-menu-popover");
+    expect(styles).toContain(".overflow-menu > summary:focus-visible");
   });
 
   test("falls back when the clipboard API is unavailable and announces the result", () => {

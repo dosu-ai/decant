@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { planSessionLoad, shouldShowSessionSkeleton } from "../src/ui/loading-state.ts";
+import {
+  planSessionLoad,
+  sessionPageExhausted,
+  shouldShowSessionSkeleton,
+} from "../src/ui/loading-state.ts";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
 
@@ -48,6 +52,12 @@ describe("session loading state", () => {
       false,
     );
     expect(shouldShowSessionSkeleton({ isLoading: true, loadedRows: 0, query: "" })).toBe(true);
+  });
+
+  test("marks only short pages as exhausted so exact page multiples get one final probe", () => {
+    expect(sessionPageExhausted({ receivedRows: 49, requestedRows: 50 })).toBe(true);
+    expect(sessionPageExhausted({ receivedRows: 50, requestedRows: 50 })).toBe(false);
+    expect(sessionPageExhausted({ receivedRows: 0, requestedRows: 50 })).toBe(true);
   });
 });
 

@@ -21,7 +21,7 @@ import {
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 19;
+export const LATEST_SCHEMA_VERSION = 20;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -691,6 +691,20 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (19, datetime('now'))",
+      ).run();
+    }
+    if (current < 20) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_user_state (
+          tool TEXT NOT NULL,
+          source_session_id TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('archived', 'deleted')),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tool, source_session_id)
+        );
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (20, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

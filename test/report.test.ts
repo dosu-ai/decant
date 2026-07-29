@@ -146,6 +146,8 @@ const session: SessionReportData = {
     total_input_tokens: 2_000,
     total_output_tokens: 500,
     estimated_cost_usd: 0.15,
+    user_state: null,
+    is_user_archived: false,
     is_archived: false,
     is_subagent: false,
     parent_session_id: null,

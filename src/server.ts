@@ -24,6 +24,7 @@ import {
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
+  refreshForSessionStateChange,
   STATUS_FILTERS,
 } from "./recommendations.ts";
 import {
@@ -32,6 +33,7 @@ import {
   renderAnalyticsReport,
   renderSessionReport,
 } from "./report/index.ts";
+import { type SessionUserStateUpdate, setSessionUserState } from "./session-user-state.ts";
 import {
   agentOptions,
   getSettings,
@@ -318,6 +320,7 @@ export async function handleRequest(
             project: url.searchParams.get("project"),
             includeSubagents: url.searchParams.get("include_subagents") === "true",
             includeNestedSubagents: url.searchParams.get("with_subagents") === "true",
+            includeArchived: url.searchParams.get("include_archived") === "true",
             limit: integerParam(url, "limit", 50),
             offset: integerParam(url, "offset", 0, true),
             ...dateFilter,
@@ -329,14 +332,60 @@ export async function handleRequest(
       return withDb(config, context, (db) => json(listProjects(db)));
     }
     const possibleSessionRoute = url.pathname.match(
-      /^\/api\/sessions\/([^/]+)(?:\/(?:token-economics|context-window|outline|issues))?$/,
+      /^\/api\/sessions\/([^/]+)(?:\/(?:token-economics|context-window|outline|issues|state))?$/,
     );
     if (
-      request.method === "GET" &&
+      (request.method === "GET" || request.method === "POST") &&
       possibleSessionRoute != null &&
       !isValidSessionId(possibleSessionRoute[1] ?? "")
     ) {
       return errorResponse("invalid_session_id", "invalid session id", {}, 400);
+    }
+    const sessionStateMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/state$/);
+    if (request.method === "POST" && sessionStateMatch != null) {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
+      const body = await readJson<unknown>(request);
+      const state =
+        body != null && typeof body === "object" && !Array.isArray(body)
+          ? (body as { state?: unknown }).state
+          : undefined;
+      const allowed = ["archived", "deleted", "visible"] as const;
+      if (!allowed.includes(state as SessionUserStateUpdate)) {
+        return errorResponse(
+          "invalid_request",
+          "state must be archived, deleted, or visible",
+          { allowed },
+          400,
+        );
+      }
+      const id = Number(sessionStateMatch[1]);
+      return withDb(config, context, (db) => {
+        const changed = setSessionUserState(db, id, state as SessionUserStateUpdate, {
+          afterApply: () =>
+            refreshForSessionStateChange(db, {
+              alreadyInTransaction: true,
+            }),
+        });
+        if (!changed) {
+          return sessionNotFound(db);
+        }
+        context.economics?.invalidate();
+        publishServerEvent({ type: "archive_updated", reason: "session_state" });
+        if (state === "deleted") {
+          return json({ ok: true, id, state });
+        }
+        const summary = getSession(db, id)?.summary;
+        return json({
+          ok: true,
+          id,
+          state,
+          user_state: summary?.user_state ?? null,
+          is_user_archived: summary?.is_user_archived ?? false,
+        });
+      });
     }
     const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
     if (request.method === "GET" && sessionEconomicsMatch != null) {
@@ -411,7 +460,16 @@ export async function handleRequest(
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
-      return withDb(config, context, (db) => json(totals(db, dateFilter)));
+      return withDb(config, context, (db) =>
+        json(
+          totals(db, {
+            ...dateFilter,
+            includeArchived: url.searchParams.get("include_archived") === "true",
+            project: url.searchParams.get("project"),
+            tool: url.searchParams.get("tool"),
+          }),
+        ),
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
@@ -423,7 +481,16 @@ export async function handleRequest(
           400,
         );
       }
-      return withDb(config, context, (db) => json(byDimension(db, dimension, dateFilter)));
+      return withDb(config, context, (db) =>
+        json(
+          byDimension(db, dimension, {
+            ...dateFilter,
+            includeArchived: url.searchParams.get("include_archived") === "true",
+            project: url.searchParams.get("project"),
+            tool: url.searchParams.get("tool"),
+          }),
+        ),
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
       return withDb(config, context, (db) => json(activityStats(db, dateFilter)));

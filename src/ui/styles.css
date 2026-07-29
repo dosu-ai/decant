@@ -1629,6 +1629,29 @@ select {
   width: min(22rem, 44vw);
 }
 
+.session-list-controls,
+.session-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-archive-toggle {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.session-archive-toggle input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  padding: 0;
+}
+
 .infinite-sentinel {
   width: 1px;
   height: 1px;
@@ -1683,6 +1706,35 @@ select {
 .primary-button:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+.danger-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid color-mix(in oklab, var(--danger) 78%, var(--line));
+  border-radius: 9px;
+  background: var(--danger);
+  color: white;
+  font-size: 13px;
+  font-weight: 680;
+  padding: 0 14px;
+}
+
+.danger-button:hover {
+  background: color-mix(in oklab, var(--danger) 88%, black);
+}
+
+.danger-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.danger-button svg {
+  width: 16px;
+  height: 16px;
 }
 
 .primary-button svg {
@@ -3133,11 +3185,11 @@ mark {
   margin-top: 16px;
 }
 
-.recommendation-overflow {
+.overflow-menu {
   position: relative;
 }
 
-.recommendation-overflow > summary {
+.overflow-menu > summary {
   display: grid;
   width: 32px;
   height: 32px;
@@ -3150,24 +3202,24 @@ mark {
   color: var(--muted);
 }
 
-.recommendation-overflow > summary::-webkit-details-marker {
+.overflow-menu > summary::-webkit-details-marker {
   display: none;
 }
 
-.recommendation-overflow > summary:hover,
-.recommendation-overflow > summary:focus-visible,
-.recommendation-overflow[open] > summary {
+.overflow-menu > summary:hover,
+.overflow-menu > summary:focus-visible,
+.overflow-menu[open] > summary {
   border-color: var(--line-strong);
   background: var(--elevated);
   color: var(--fg);
 }
 
-.recommendation-overflow > summary svg {
+.overflow-menu > summary svg {
   width: 16px;
   height: 16px;
 }
 
-.recommendation-overflow-menu {
+.overflow-menu-popover {
   position: absolute;
   right: 0;
   bottom: calc(100% + 6px);
@@ -3181,23 +3233,39 @@ mark {
   padding: 4px;
 }
 
-.recommendation-overflow-menu a {
+.overflow-menu-popover :where(a, button) {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  cursor: pointer;
+  border: 0;
   border-radius: 6px;
+  background: transparent;
   color: var(--fg);
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
   padding: 8px 9px;
+  text-align: left;
   text-decoration: none;
 }
 
-.recommendation-overflow-menu a:hover,
-.recommendation-overflow-menu a:focus-visible {
+.overflow-menu-popover :where(a, button):hover,
+.overflow-menu-popover :where(a, button):focus-visible {
   background: var(--elevated);
   color: var(--fg);
+}
+
+.overflow-menu-popover :where(a, button).is-danger {
+  color: var(--danger);
+}
+
+.overflow-menu-popover button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
 .catalog-group {
@@ -3466,6 +3534,41 @@ mark {
 
 .thread-header-title-row .report-action-button {
   flex: 0 0 auto;
+}
+
+.thread-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-header-actions .overflow-menu-popover {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
+.session-state-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-delete-title {
+  overflow: hidden;
+  margin: 0;
+  color: var(--fg);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-delete-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .thread-badges,
@@ -4635,6 +4738,25 @@ pre {
     width: 100%;
   }
 
+  .session-list-controls {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .session-archive-toggle {
+    min-height: 34px;
+  }
+
+  .thread-header-title-row {
+    align-items: flex-start;
+  }
+
+  .thread-header-actions .overflow-menu-popover {
+    right: 0;
+    left: auto;
+  }
+
   .transcript-window-start {
     align-items: stretch;
     flex-direction: column;
@@ -4670,7 +4792,7 @@ pre {
     display: none;
   }
 
-  .recommendation-overflow-menu {
+  .overflow-menu-popover {
     right: auto;
     left: 0;
   }

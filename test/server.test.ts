@@ -755,6 +755,84 @@ describe("server routes", () => {
     );
   });
 
+  test("stats routes parse project and tool filters", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    db.exec(`
+      INSERT INTO project(id, path) VALUES (999, '/elsewhere');
+      INSERT INTO session(
+        tool, source_session_id, project_id, started_at, total_input_tokens,
+        total_output_tokens, estimated_cost_usd
+      ) VALUES (
+        'codex', 'elsewhere-codex', 999, '2026-05-04T12:00:00Z', 101, 202, 99.0
+      );
+      INSERT INTO message(session_id, seq, role, raw)
+      SELECT id, 0, 'user', '{}'
+      FROM session
+      WHERE source_session_id = 'elsewhere-codex';
+    `);
+    db.close();
+
+    const project = encodeURIComponent("/elsewhere");
+    expect(await route(config, `/api/stats/summary?project=${project}`)).toMatchObject({
+      status: 200,
+      body: {
+        sessions: 1,
+        messages: 1,
+        input_tokens: 101,
+        output_tokens: 202,
+        estimated_cost_usd: 99,
+      },
+    });
+    expect(
+      await route(config, `/api/stats/summary?project=${project}&tool=claude_code`),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        sessions: 0,
+        messages: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        estimated_cost_usd: 0,
+      },
+    });
+    expect(
+      await route(config, `/api/stats/by-dimension?dim=tool&project=${project}&tool=codex`),
+    ).toMatchObject({
+      status: 200,
+      body: [
+        {
+          key: "codex",
+          sessions: 1,
+          input_tokens: 101,
+          output_tokens: 202,
+          estimated_cost_usd: 99,
+        },
+      ],
+    });
+
+    const elsewhereSessions = await route(config, `/api/sessions?project=${project}`);
+    const elsewhereId = (elsewhereSessions.body as { id: number }[])[0]?.id;
+    expect(elsewhereId).toBeNumber();
+    expect(
+      await route(config, `/api/sessions/${elsewhereId}/state`, {
+        method: "POST",
+        body: JSON.stringify({ state: "archived" }),
+      }),
+    ).toMatchObject({ status: 200, body: { state: "archived" } });
+    expect(await route(config, `/api/stats/summary?project=${project}`)).toMatchObject({
+      status: 200,
+      body: { sessions: 0, messages: 0, estimated_cost_usd: 0 },
+    });
+    expect(
+      await route(config, `/api/stats/summary?project=${project}&include_archived=true`),
+    ).toMatchObject({
+      status: 200,
+      body: { sessions: 1, messages: 1, estimated_cost_usd: 99 },
+    });
+  });
+
   test("returns metadata and extended analytics routes", async () => {
     const config = freshConfig();
     seed(config);

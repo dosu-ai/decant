@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { withImmediateTransaction } from "./db.ts";
 import { compareCodePoints } from "./order.ts";
+import { sessionUserStatePredicate } from "./session-user-state.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
 
 export interface Recommendation {
@@ -64,6 +65,7 @@ const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
 const WINDOW_DAYS = 30;
 const WINDOW = "s.started_at >= date('now','-30 days')";
+const VISIBLE_SESSION = sessionUserStatePredicate("s");
 
 function queryOne<T>(db: Database, sql: string): T {
   const statement = db.prepare(sql);
@@ -406,6 +408,98 @@ export function regenerate(db: Database): void {
   });
 }
 
+/**
+ * Refresh derived signals after a user archive-state mutation.
+ *
+ * Hiding evidence is not proof that a recommendation was implemented, so this
+ * path removes stale, untouched open signals instead of applying regenerate's
+ * activity-driven implemented transition. Manual and implemented history, plus
+ * the catalog, remain intact. A later unarchive recreates a pruned signal as a
+ * normal open row.
+ */
+export function refreshForSessionStateChange(
+  db: Database,
+  options: { alreadyInTransaction?: boolean } = {},
+): void {
+  const recs = signals(db);
+  const now = nowRfc3339();
+  const apply = () => {
+    upsertRecommendations(db, recs, now);
+    const signalKeys = recs.map((rec) => rec.key);
+    let sql = `DELETE FROM recommendation
+               WHERE kind = 'signal'
+                 AND status = 'open'
+                 AND status_source IS NULL
+                 AND note IS NULL`;
+    const params: string[] = [];
+    if (signalKeys.length > 0) {
+      sql += ` AND key NOT IN (${signalKeys.map(() => "?").join(", ")})`;
+      params.push(...signalKeys);
+    }
+    const pruneStale = db.prepare(sql);
+    try {
+      pruneStale.run(...params);
+    } finally {
+      pruneStale.finalize();
+    }
+  };
+  if (options.alreadyInTransaction === true) {
+    apply();
+  } else {
+    withImmediateTransaction(db, apply);
+  }
+}
+
+function upsertRecommendations(db: Database, recs: Recommendation[], now: string): void {
+  const upsert = db.prepare(
+    `INSERT INTO recommendation
+       (key, kind, category, title, detail, suggestion, prompt, url,
+        link_label, icon, tone, impact_label, impact_label_checked, score,
+        status, status_source, note,
+        first_seen_at, updated_at, implemented_at)
+     VALUES
+       (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13,
+        'open', NULL, NULL, ?14, ?14, NULL)
+     ON CONFLICT(key) DO UPDATE SET
+       kind = excluded.kind,
+       category = excluded.category,
+       title = excluded.title,
+       detail = excluded.detail,
+       suggestion = excluded.suggestion,
+       prompt = excluded.prompt,
+       url = excluded.url,
+       link_label = excluded.link_label,
+       icon = excluded.icon,
+       tone = excluded.tone,
+       impact_label = excluded.impact_label,
+       impact_label_checked = 1,
+       score = excluded.score,
+       updated_at = excluded.updated_at`,
+  );
+  try {
+    for (const rec of recs) {
+      upsert.run(
+        rec.key,
+        rec.kind,
+        rec.category,
+        rec.title,
+        rec.detail,
+        rec.suggestion,
+        rec.prompt,
+        rec.url,
+        rec.link_label,
+        rec.icon,
+        rec.tone,
+        rec.impact_label,
+        rec.score,
+        now,
+      );
+    }
+  } finally {
+    upsert.finalize();
+  }
+}
+
 export function markImplemented(
   db: Database,
   key: string,
@@ -674,7 +768,7 @@ function hotContextFiles(db: Database): Recommendation[] {
               COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN f.session_id END) AS readers,
               COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN f.session_id END) AS editors
        FROM file_ref f JOIN session s ON s.id = f.session_id
-       WHERE ${WINDOW} AND f.rel_path IS NOT NULL
+       WHERE ${WINDOW} AND ${VISIBLE_SESSION} AND f.rel_path IS NOT NULL
        GROUP BY key
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
        ORDER BY readers DESC, key ASC
@@ -705,7 +799,8 @@ function churnFiles(db: Database): Recommendation[] {
     db,
     `SELECT f.rel_path AS key, COUNT(DISTINCT f.session_id) AS editors
        FROM file_ref f JOIN session s ON s.id = f.session_id
-       WHERE ${WINDOW} AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
+       WHERE ${WINDOW} AND ${VISIBLE_SESSION}
+         AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
        GROUP BY key
        HAVING editors >= ${CHURN_MIN_SESSIONS}
        ORDER BY editors DESC, key ASC
@@ -736,11 +831,12 @@ function searchHeavy(db: Database): Recommendation[] {
     db,
     `SELECT COUNT(*) AS searches, COUNT(DISTINCT s.id) AS sessions
        FROM tool_call tc JOIN session s ON s.id = tc.session_id
-       WHERE ${WINDOW} AND tc.tool_name IN ('Grep','Glob')`,
+       WHERE ${WINDOW} AND ${VISIBLE_SESSION}
+         AND tc.tool_name IN ('Grep','Glob')`,
   );
   const inWindow = queryOne<{ n: number }>(
     db,
-    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${VISIBLE_SESSION}`,
   ).n;
   if (inWindow < SEARCH_HEAVY_MIN_SESSIONS || counts.sessions === 0) {
     return [];
@@ -776,7 +872,7 @@ function abandonedRate(db: Database): Recommendation[] {
     `SELECT COUNT(*) AS classified,
               SUM(s.outcome = 'abandoned') AS abandoned
        FROM session s
-       WHERE ${WINDOW} AND s.outcome IS NOT NULL`,
+       WHERE ${WINDOW} AND ${VISIBLE_SESSION} AND s.outcome IS NOT NULL`,
   );
   const abandoned = row.abandoned ?? 0;
   if (row.classified < ABANDONED_MIN_CLASSIFIED) {
@@ -812,11 +908,11 @@ function ingestHealth(db: Database): Recommendation[] {
     db,
     `SELECT COUNT(DISTINCT s.id) AS affected
        FROM session s JOIN ingest_issue ii ON ii.source_path = s.source_path
-       WHERE ${WINDOW} AND ii.code != 'unparsed_line'`,
+       WHERE ${WINDOW} AND ${VISIBLE_SESSION} AND ii.code != 'unparsed_line'`,
   );
   const inWindow = queryOne<{ n: number }>(
     db,
-    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW}`,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${VISIBLE_SESSION}`,
   ).n;
   if (inWindow < INGEST_HEALTH_MIN_SESSIONS || counts.affected === 0) {
     return [];

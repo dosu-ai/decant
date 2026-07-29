@@ -7,7 +7,9 @@ import {
   type NavDestination,
   pathOnly,
   projectSessionsHref,
+  sessionIncludesArchived,
   sessionProjectFilter,
+  sessionsArchivedHref,
   titleFor,
 } from "../src/ui/navigation.ts";
 
@@ -108,6 +110,24 @@ describe("project session filters", () => {
     expect(sessionProjectFilter(href)).toBe(project);
     expect(sessionProjectFilter("/sessions")).toBeNull();
     expect(sessionProjectFilter(`/projects?project=${encodeURIComponent(project)}`)).toBeNull();
+  });
+});
+
+describe("archived session filters", () => {
+  test("round-trips the toggle while preserving the active project", () => {
+    const project = "/Users/dev/My Project";
+    const filtered = projectSessionsHref(project);
+    const withArchived = sessionsArchivedHref(filtered, true);
+
+    expect(sessionIncludesArchived(withArchived)).toBe(true);
+    expect(sessionProjectFilter(withArchived)).toBe(project);
+    expect(sessionsArchivedHref(withArchived, false)).toBe(filtered);
+  });
+
+  test("does not treat the same query parameter on another route as a session filter", () => {
+    expect(sessionIncludesArchived("/sessions?include_archived=true")).toBe(true);
+    expect(sessionIncludesArchived("/projects?include_archived=true")).toBe(false);
+    expect(sessionsArchivedHref("/sessions", false)).toBe("/sessions");
   });
 });
 

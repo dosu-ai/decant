@@ -40,3 +40,13 @@ export function shouldShowSessionSkeleton({
 }): boolean {
   return isLoading && loadedRows === 0 && query.trim() === "";
 }
+
+export function sessionPageExhausted({
+  receivedRows,
+  requestedRows,
+}: {
+  receivedRows: number;
+  requestedRows: number;
+}): boolean {
+  return requestedRows > 0 && receivedRows < requestedRows;
+}

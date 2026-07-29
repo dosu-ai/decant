@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { refreshDerivedMetadata } from "../src/derived.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
@@ -656,6 +657,58 @@ describe("token economics", () => {
     );
     expect(scoped?.buckets.some((row) => row.sessions > 1)).toBe(true);
     expect(tokenEconomicsForSession(db, 999_999)).toBeNull();
+    db.close();
+  });
+
+  test("archive-wide economics excludes archived trees while exact session reads remain available", () => {
+    const db = freshDb();
+    const rootId = upsertSession(
+      db,
+      parseClaudeSession("economics-archive-root", fixture("claude", "enriched.jsonl")),
+      "/x/economics-archive-root.jsonl",
+      1,
+      2,
+      "archive-root",
+    );
+    const childId = upsertSession(
+      db,
+      parseCodexSession("economics-archive-child", fixture("codex", "enriched.jsonl"), new Map()),
+      "/x/economics-archive-child.jsonl",
+      1,
+      2,
+      "archive-child",
+    );
+    const visibleId = upsertSession(
+      db,
+      parseClaudeSession("economics-visible", fixture("claude", "enriched.jsonl")),
+      "/x/economics-visible.jsonl",
+      1,
+      2,
+      "visible",
+    );
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+
+    const exactBeforeArchive = tokenEconomicsForSession(db, rootId);
+    const aggregateBeforeArchive = tokenEconomics(db);
+    expect(computeSessionEconomicsVectors(db).map((vector) => vector.id)).toEqual([
+      rootId,
+      childId,
+      visibleId,
+    ]);
+
+    expect(setSessionUserState(db, rootId, "archived")).toBe(true);
+
+    const visibleVectors = computeSessionEconomicsVectors(db);
+    expect(visibleVectors.map((vector) => vector.id)).toEqual([visibleId]);
+    expect(tokenEconomics(db)).toEqual(aggregateEconomicsVectors(visibleVectors));
+    expect(tokenEconomics(db).totals.estimated_cost_usd).toBeLessThan(
+      aggregateBeforeArchive.totals.estimated_cost_usd,
+    );
+    expect(tokenEconomicsForSession(db, rootId)).toEqual(exactBeforeArchive);
     db.close();
   });
 

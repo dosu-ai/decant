@@ -164,6 +164,131 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("every archive-wide rollup excludes user-hidden identities and descendants", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO project(id, path)
+      VALUES
+        (1, '/hidden'),
+        (2, '/visible');
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, model, started_at, is_subagent,
+        parent_session_id, total_input_tokens, total_output_tokens, estimated_cost_usd
+      )
+      VALUES
+        (1, 'claude_code', 'archived-root', 1, 'hidden-model', '2026-05-01T10:00:00Z',
+         0, NULL, 10, 20, 1.0),
+        (2, 'claude_code', 'archived-child', 1, 'hidden-model', '2026-05-01T10:01:00Z',
+         1, 1, 30, 40, 2.0),
+        (3, 'codex', 'deleted-root', 1, 'deleted-model', '2026-05-02T10:00:00Z',
+         0, NULL, 50, 60, 3.0),
+        (4, 'codex', 'visible-root', 2, 'visible-model', '2026-05-03T10:00:00Z',
+         0, NULL, 70, 80, 4.0);
+      INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
+      VALUES
+        ('claude_code', 'archived-root', 'archived', datetime('now')),
+        ('codex', 'deleted-root', 'deleted', datetime('now'));
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 2, 0, 'user', '{}'),
+        (3, 3, 0, 'user', '{}'),
+        (4, 4, 0, 'user', '{}');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, ordinal
+      )
+      VALUES
+        (1, 'builtin', 'HiddenRootTool', NULL, 0, 10, 0),
+        (2, 'mcp', 'HiddenChildTool', 'hidden', 0, 20, 0),
+        (3, 'builtin', 'DeletedTool', NULL, 0, 30, 0),
+        (4, 'mcp', 'VisibleTool', 'visible', 0, 40, 0);
+      INSERT INTO file_ref(session_id, path, rel_path, ext, operation)
+      VALUES
+        (1, '/hidden/root.ts', 'root.ts', 'ts', 'read'),
+        (2, '/hidden/child.ts', 'child.ts', 'ts', 'edit'),
+        (3, '/hidden/deleted.ts', 'deleted.ts', 'ts', 'write'),
+        (4, '/visible/visible.ts', 'visible.ts', 'ts', 'read');
+    `);
+
+    expect(totals(db)).toMatchObject({
+      sessions: 1,
+      messages: 1,
+      tool_calls: 1,
+      input_tokens: 70,
+      output_tokens: 80,
+      estimated_cost_usd: 4,
+    });
+    expect(totals(db, { includeArchived: true })).toMatchObject({
+      sessions: 2,
+      messages: 3,
+      tool_calls: 3,
+      input_tokens: 110,
+      output_tokens: 140,
+      estimated_cost_usd: 7,
+    });
+    expect(byDimension(db, "project", { includeArchived: true })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "/hidden", sessions: 1 }),
+        expect.objectContaining({ key: "/visible", sessions: 1 }),
+      ]),
+    );
+    for (const dimension of ["tool", "model", "project", "day"] as const) {
+      expect(byDimension(db, dimension)).toHaveLength(1);
+    }
+    expect(byDimension(db, "project")).toMatchObject([{ key: "/visible", sessions: 1 }]);
+    expect(toolUsage(db, false, 50)).toMatchObject([{ tool_name: "VisibleTool", calls: 1 }]);
+    expect(mcpUsage(db, 50)).toMatchObject([{ mcp_server: "visible", calls: 1 }]);
+    expect(fileHotspots(db, "path", null, 50)).toMatchObject([{ key: "visible.ts", sessions: 1 }]);
+    expect(activity(db).by_hour.reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(modelSparklines(db)).toEqual({
+      days: ["2026-05-03"],
+      models: { "visible-model": [1] },
+    });
+    expect(dateBounds(db)).toEqual({ min: "2026-05-03", max: "2026-05-03" });
+    db.close();
+  });
+
+  test("today totals exclude archived ancestors from every metric", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(
+        id, tool, source_session_id, model, started_at, is_subagent, parent_session_id,
+        total_input_tokens, total_output_tokens, estimated_cost_usd
+      )
+      VALUES
+        (1, 'claude_code', 'today-archived-root', 'hidden-model',
+         datetime('now', 'localtime'), 0, NULL, 10, 20, 1.0),
+        (2, 'claude_code', 'today-archived-child', 'hidden-model',
+         datetime('now', 'localtime'), 1, 1, 30, 40, 2.0),
+        (3, 'codex', 'today-visible-root', 'visible-model',
+         datetime('now', 'localtime'), 0, NULL, 50, 60, 3.0);
+      INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
+      VALUES ('claude_code', 'today-archived-root', 'archived', datetime('now'));
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 2, 0, 'user', '{}'),
+        (3, 3, 0, 'user', '{}');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, is_error, duration_ms, ordinal
+      )
+      VALUES
+        (1, 'builtin', 'HiddenRootTool', 0, 10, 0),
+        (2, 'builtin', 'HiddenChildTool', 0, 20, 0),
+        (3, 'builtin', 'VisibleTool', 0, 30, 0);
+    `);
+
+    expect(todayTotals(db)).toMatchObject({
+      sessions: 1,
+      messages: 1,
+      tool_calls: 1,
+      input_tokens: 50,
+      output_tokens: 60,
+      estimated_cost_usd: 3,
+    });
+    db.close();
+  });
+
   test("date filters scope analytics rollups", () => {
     const db = seededEnriched();
     const filter = { from: "2026-05-04", to: "2026-05-04" };
@@ -177,6 +302,99 @@ describe("stats rollups", () => {
       false,
     );
 
+    db.close();
+  });
+
+  test("project and tool filters preserve top-level session and all-session metric semantics", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO project(id, path)
+      VALUES
+        (1, '/alpha'),
+        (2, '/beta');
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, started_at, is_subagent, parent_session_id,
+        total_input_tokens, total_output_tokens, estimated_cost_usd
+      )
+      VALUES
+        (1, 'claude_code', 'alpha-root', 1, '2026-05-01T10:00:00Z', 0, NULL, 10, 20, 1.0),
+        (2, 'claude_code', 'alpha-subagent', 1, '2026-05-01T10:01:00Z', 1, 1, 4, 5, 0.25),
+        (3, 'codex', 'alpha-codex', 1, '2026-05-02T10:00:00Z', 0, NULL, 30, 40, 2.0),
+        (4, 'claude_code', 'beta-root', 2, '2026-05-03T10:00:00Z', 0, NULL, 50, 60, 4.0);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (1, 1, 0, 'user', '{}'),
+        (2, 1, 1, 'assistant', '{}'),
+        (3, 2, 0, 'user', '{}'),
+        (4, 2, 1, 'assistant', '{}'),
+        (5, 2, 2, 'assistant', '{}'),
+        (6, 3, 0, 'user', '{}'),
+        (7, 4, 0, 'user', '{}');
+    `);
+
+    expect(totals(db, { project: "/alpha" })).toMatchObject({
+      sessions: 2,
+      messages: 6,
+      input_tokens: 44,
+      output_tokens: 65,
+      estimated_cost_usd: 3.25,
+    });
+    expect(totals(db, { tool: "claude_code" })).toMatchObject({
+      sessions: 2,
+      messages: 6,
+      input_tokens: 64,
+      output_tokens: 85,
+      estimated_cost_usd: 5.25,
+    });
+    expect(totals(db, { project: "/alpha", tool: "claude_code" })).toMatchObject({
+      sessions: 1,
+      messages: 5,
+      input_tokens: 14,
+      output_tokens: 25,
+      estimated_cost_usd: 1.25,
+    });
+    expect(
+      totals(db, {
+        from: "2026-05-01",
+        to: "2026-05-01",
+        project: "/alpha",
+        tool: "claude_code",
+      }),
+    ).toMatchObject({
+      sessions: 1,
+      messages: 5,
+      input_tokens: 14,
+      output_tokens: 25,
+      estimated_cost_usd: 1.25,
+    });
+
+    const projectRows = byDimension(db, "tool", { project: "/alpha" });
+    expect(projectRows).toHaveLength(2);
+    expect(projectRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "claude_code",
+          sessions: 1,
+          input_tokens: 14,
+          output_tokens: 25,
+          estimated_cost_usd: 1.25,
+        }),
+        expect.objectContaining({
+          key: "codex",
+          sessions: 1,
+          input_tokens: 30,
+          output_tokens: 40,
+          estimated_cost_usd: 2,
+        }),
+      ]),
+    );
+    expect(byDimension(db, "project", { project: "/alpha", tool: "claude_code" })).toEqual([
+      expect.objectContaining({
+        key: "/alpha",
+        sessions: 1,
+        estimated_cost_usd: 1.25,
+      }),
+    ]);
     db.close();
   });
 

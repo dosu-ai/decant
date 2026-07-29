@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
+import { sessionUserStatePredicate } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 
 export interface Totals {
@@ -16,12 +17,14 @@ export interface Totals {
   estimated_cost_usd: number;
 }
 
-export function totals(db: Database, filter?: DateFilter | null): Totals {
-  const date = sessionDatePredicate("s", filter);
-  const visible = {
-    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
-    params: date.params,
-  };
+export interface StatsFilter extends DateFilter {
+  includeArchived?: boolean;
+  project?: string | null;
+  tool?: string | null;
+}
+
+export function totals(db: Database, filter?: StatsFilter | null): Totals {
+  const visible = statsScope("s", filter);
   return db
     .query(
       `WITH filtered_session AS (
@@ -71,14 +74,10 @@ interface DimRowDb extends Omit<DimRow, "key"> {
 export function byDimension(
   db: Database,
   dimension: Dimension,
-  filter?: DateFilter | null,
+  filter?: StatsFilter | null,
 ): DimRow[] {
   const { groupExpr, join } = dimensionSql(dimension);
-  const date = sessionDatePredicate("s", filter);
-  const visible = {
-    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
-    params: date.params,
-  };
+  const visible = statsScope("s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
          SELECT * FROM session s ${whereClause(visible)}
@@ -101,6 +100,35 @@ export function byDimension(
     statement.finalize();
   }
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
+}
+
+function statsScope(alias: string, filter?: StatsFilter | null): { sql: string; params: string[] } {
+  const date = sessionDatePredicate(alias, filter);
+  const clauses = [
+    visibleSessionPredicate(alias),
+    sessionUserStatePredicate(alias, filter?.includeArchived === true),
+    date.sql,
+  ];
+  const params = [...date.params];
+  if (filter?.project != null) {
+    clauses.push(
+      `EXISTS (
+         SELECT 1
+         FROM project stats_project
+         WHERE stats_project.id = ${alias}.project_id
+           AND stats_project.path = ?
+       )`,
+    );
+    params.push(filter.project);
+  }
+  if (filter?.tool != null) {
+    clauses.push(`${alias}.tool = ?`);
+    params.push(filter.tool);
+  }
+  return {
+    sql: clauses.filter((clause) => clause !== "").join(" AND "),
+    params,
+  };
 }
 
 export interface ToolStatRow {
@@ -126,12 +154,8 @@ export function toolUsage(
   filter?: DateFilter | null,
 ): ToolStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
-  const date = sessionDatePredicate("s", filter);
   const errorFilter = errorsOnly ? "WHERE a.errors > 0" : "";
-  const visible = {
-    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
-    params: date.params,
-  };
+  const visible = statsScope("s", filter);
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
   const statement = db.prepare(
@@ -217,11 +241,7 @@ interface McpStatDb extends Omit<McpStatRow, "mcp_server"> {
 
 export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | null): McpStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
-  const date = sessionDatePredicate("s", filter);
-  const visible = {
-    sql: [visibleSessionPredicate("s"), date.sql].filter((clause) => clause !== "").join(" AND "),
-    params: date.params,
-  };
+  const visible = statsScope("s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
          SELECT id, started_at FROM session s ${whereClause(visible)}
@@ -312,11 +332,11 @@ export function fileHotspots(
 ): FileStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const { keyExpr, projectExpr, join } = fileGroupSql(group);
-  const date = sessionDatePredicate("s", filter);
-  const clauses = [op == null ? null : "f.operation = ?", date.sql].filter(
+  const visible = statsScope("s", filter);
+  const clauses = [op == null ? null : "f.operation = ?", visible.sql].filter(
     (clause): clause is string => clause != null && clause !== "",
   );
-  const params = [...(op == null ? [] : [op]), ...date.params];
+  const params = [...(op == null ? [] : [op]), ...visible.params];
   const opFilter = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
   const sql = `SELECT ${keyExpr} AS key, ${projectExpr} AS project,
                       SUM(f.operation = 'read') AS reads,
@@ -387,7 +407,7 @@ export interface ModelSparklines {
 }
 
 export function modelSparklines(db: Database, filter?: DateFilter | null): ModelSparklines {
-  const date = sessionDatePredicate("s", filter);
+  const visible = statsScope("s", filter);
   const rows = db
     .query(
       `SELECT COALESCE(s.model, '(unknown)') AS model,
@@ -395,13 +415,13 @@ export function modelSparklines(db: Database, filter?: DateFilter | null): Model
               COUNT(*) AS count
        FROM session s
        ${whereClause({
-         sql: ["s.started_at IS NOT NULL", date.sql].filter(Boolean).join(" AND "),
-         params: date.params,
+         sql: ["s.started_at IS NOT NULL", visible.sql].filter(Boolean).join(" AND "),
+         params: visible.params,
        })}
        GROUP BY model, day
        ORDER BY model ASC, day ASC`,
     )
-    .all(...date.params) as { model: string; day: string; count: number }[];
+    .all(...visible.params) as { model: string; day: string; count: number }[];
   const days = [...new Set(rows.map((row) => row.day))].sort();
   const dayIndex = new Map(days.map((day, index) => [day, index]));
   const models: Record<string, number[]> = {};
@@ -424,25 +444,40 @@ export interface DateBounds {
 }
 
 export function dateBounds(db: Database): DateBounds {
+  const visible = statsScope("s");
   return db
     .query(
-      `SELECT MIN(substr(started_at, 1, 10)) AS min,
-              MAX(substr(started_at, 1, 10)) AS max
-       FROM session
-       WHERE started_at IS NOT NULL`,
+      `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
+              MAX(substr(s.started_at, 1, 10)) AS max
+       FROM session s
+       ${whereClause({
+         sql: ["s.started_at IS NOT NULL", visible.sql].join(" AND "),
+         params: visible.params,
+       })}`,
     )
     .get() as DateBounds;
 }
 
 export function todayTotals(db: Database): Totals {
+  const visible = statsScope("s");
   return db
     .query(
-      `SELECT
+      `WITH filtered_session AS (
+         SELECT *
+         FROM session s
+         ${whereClause({
+           sql: [visible.sql, "substr(s.started_at, 1, 10) = date('now', 'localtime')"].join(
+             " AND ",
+           ),
+           params: visible.params,
+         })}
+       )
+       SELECT
          COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
-         (SELECT COUNT(*) FROM message m JOIN session s2 ON s2.id = m.session_id
-          WHERE substr(s2.started_at, 1, 10) = date('now', 'localtime')) AS messages,
-         (SELECT COUNT(*) FROM tool_call t JOIN session s3 ON s3.id = t.session_id
-          WHERE substr(s3.started_at, 1, 10) = date('now', 'localtime')) AS tool_calls,
+         (SELECT COUNT(*) FROM message m
+          JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
+         (SELECT COUNT(*) FROM tool_call t
+          JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
          COALESCE(SUM(total_input_tokens), 0) AS input_tokens,
          COALESCE(SUM(total_output_tokens), 0) AS output_tokens,
          COALESCE(SUM(total_cache_read_tokens), 0) AS cache_read_tokens,
@@ -450,8 +485,7 @@ export function todayTotals(db: Database): Totals {
          COALESCE(SUM(total_reasoning_tokens), 0) AS reasoning_tokens,
          COALESCE(SUM(est_reasoning_tokens), 0) AS est_reasoning_tokens,
          COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-       FROM session
-       WHERE substr(started_at, 1, 10) = date('now', 'localtime')`,
+       FROM filtered_session`,
     )
     .get() as Totals;
 }
@@ -491,18 +525,18 @@ function fileGroupSql(group: FileGroup): { keyExpr: string; projectExpr: string;
 
 function bucket(db: Database, expr: string, size: number, filter?: DateFilter | null): number[] {
   const out = Array.from({ length: size }, () => 0);
-  const date = sessionDatePredicate("s", filter);
+  const visible = statsScope("s", filter);
   const rows = db
     .query(
       `SELECT ${expr} AS key, COUNT(*) AS count
        FROM session s
        ${whereClause({
-         sql: ["s.started_at IS NOT NULL", date.sql].filter(Boolean).join(" AND "),
-         params: date.params,
+         sql: ["s.started_at IS NOT NULL", visible.sql].filter(Boolean).join(" AND "),
+         params: visible.params,
        })}
        GROUP BY key`,
     )
-    .all(...date.params) as { key: string | null; count: number }[];
+    .all(...visible.params) as { key: string | null; count: number }[];
   for (const row of rows) {
     const key = row.key == null || row.key === "" ? Number.NaN : Number.parseInt(row.key, 10);
     if (Number.isInteger(key) && key >= 0 && key < size) {

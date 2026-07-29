@@ -9,6 +9,7 @@ import {
 import { defaultPricing, estimateCostParts } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { sessionUserStatePredicate } from "./session-user-state.ts";
 
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
@@ -189,13 +190,17 @@ export interface SessionEconomicsVector {
 
 export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenEconomics {
   const date = sessionDatePredicate("s", filter);
+  const visible = {
+    sql: [date.sql, sessionUserStatePredicate("s")].filter((clause) => clause !== "").join(" AND "),
+    params: date.params,
+  };
   return aggregateEconomicsVectors(
     vectorsForScopeWithCache(
       db,
       `WITH scoped_session AS (
-         SELECT s.id FROM session s ${whereClause(date)}
+         SELECT s.id FROM session s ${whereClause(visible)}
        )`,
-      date.params,
+      visible.params,
     ),
   );
 }
@@ -209,7 +214,11 @@ export function computeSessionEconomicsVectors(
 ): SessionEconomicsVector[] {
   return cachedVectorsForScope(
     db,
-    "WITH scoped_session AS (SELECT id FROM session)",
+    `WITH scoped_session AS (
+       SELECT s.id
+       FROM session s
+       WHERE ${sessionUserStatePredicate("s")}
+     )`,
     [],
     options.cancelled,
   );

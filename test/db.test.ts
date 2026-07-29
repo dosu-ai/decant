@@ -99,7 +99,7 @@ function historicalArchive(path: string, version: 8 | 9 | 12 | 13 | 14): Databas
   return db;
 }
 
-// Inventory of the frozen v19 baseline. Shadow tables
+// Inventory of the frozen v20 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -114,6 +114,7 @@ const BASELINE_TABLES = [
   "schema_migrations",
   "session",
   "session_economics",
+  "session_user_state",
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
@@ -177,6 +178,32 @@ describe("openDb", () => {
         .get() as { sql: string }
     ).sql;
     expect(ftsSql).toContain("prefix='2 3'");
+    db.close();
+  });
+
+  test("creates durable user state keyed by source identity", () => {
+    const db = openDb(freshPath());
+    const columns = db
+      .query(
+        `SELECT name, type, "notnull" AS is_not_null, pk
+         FROM pragma_table_info('session_user_state')
+         ORDER BY cid`,
+      )
+      .all();
+    expect(columns).toEqual([
+      { name: "tool", type: "TEXT", is_not_null: 1, pk: 1 },
+      { name: "source_session_id", type: "TEXT", is_not_null: 1, pk: 2 },
+      { name: "state", type: "TEXT", is_not_null: 1, pk: 0 },
+      { name: "updated_at", type: "TEXT", is_not_null: 1, pk: 0 },
+    ]);
+    expect(() =>
+      db
+        .query(
+          `INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
+           VALUES ('codex', 'invalid-state', 'visible', datetime('now'))`,
+        )
+        .run(),
+    ).toThrow();
     db.close();
   });
 
@@ -441,6 +468,36 @@ describe("openDb", () => {
 
     const migrated = openDb(path);
     expect(inventory(migrated, "table")).toContain("session_economics");
+    expect(
+      (
+        migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(LATEST_SCHEMA_VERSION);
+    migrated.close();
+  });
+
+  test("migrates v19 archives to durable session user state without changing sessions", () => {
+    const path = freshPath();
+    const old = openDb(path);
+    old.exec(`
+      INSERT INTO session(id, tool, source_session_id, title)
+      VALUES (1, 'codex', 'preserved-v19', 'Preserved');
+      DROP TABLE session_user_state;
+      DELETE FROM schema_migrations WHERE version = 20;
+    `);
+    old.close();
+
+    const migrated = openDb(path);
+    expect(
+      migrated.query("SELECT tool, source_session_id, title FROM session WHERE id = 1").get(),
+    ).toEqual({
+      tool: "codex",
+      source_session_id: "preserved-v19",
+      title: "Preserved",
+    });
+    expect(inventory(migrated, "table")).toContain("session_user_state");
     expect(
       (
         migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
@@ -796,7 +853,7 @@ describe("openDb", () => {
 
     db = openDb(path);
     expect(db.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 19,
+      version: LATEST_SCHEMA_VERSION,
     });
     expect(
       db
@@ -980,7 +1037,7 @@ describe("openDb", () => {
     expect(JSON.parse(lines[0] ?? "")).toMatchObject({
       level: "ERROR",
       "event.name": "decant.schema.drift",
-      "schema.version": 19,
+      "schema.version": LATEST_SCHEMA_VERSION,
       "schema.drift.missing_columns": "recommendation.impact_label",
       "schema.drift.unexpected_columns": "session.unexpected_local_state",
       "error.type": "SchemaDriftError",
@@ -995,7 +1052,7 @@ describe("openDb", () => {
       ALTER TABLE recommendation DROP COLUMN impact_label_checked;
       ALTER TABLE recommendation DROP COLUMN impact_label;
       ALTER TABLE session ADD COLUMN unexpected_local_state TEXT;
-      DELETE FROM schema_migrations WHERE version = 19;
+      DELETE FROM schema_migrations WHERE version >= 19;
     `);
     db.close();
 

@@ -30,6 +30,7 @@ import {
 } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
+import { isDeletedSessionIdentity } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
 import {
@@ -239,11 +240,15 @@ export function sync(
         hash: hashContent(content),
       };
 
-      writeIngestedFile(db, prepared, parsed);
-      report.ingested += 1;
-      report.issues += parsed.issues.length;
-      for (const issue of parsed.issues) {
-        report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+      const outcome = writeIngestedFile(db, prepared, parsed);
+      if (outcome === "tombstoned") {
+        report.skipped += 1;
+      } else {
+        report.ingested += 1;
+        report.issues += parsed.issues.length;
+        for (const issue of parsed.issues) {
+          report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+        }
       }
     } finally {
       inspected += 1;
@@ -284,6 +289,10 @@ export function sync(
   return report;
 }
 
+/**
+ * Insert or replace one parsed session. Returns 0 when the source identity has
+ * a durable deleted tombstone, leaving the archive unchanged.
+ */
 export function upsertSession(
   db: Database,
   parsed: ParsedSession,
@@ -292,8 +301,8 @@ export function upsertSession(
   size: number,
   hash: string,
 ): number {
-  return withImmediateTransaction(db, () =>
-    writeSession(db, parsed, sourcePath, mtime, size, hash),
+  return (
+    withImmediateTransaction(db, () => writeSession(db, parsed, sourcePath, mtime, size, hash)) ?? 0
   );
 }
 
@@ -644,11 +653,22 @@ function inferSubagent(row: {
   };
 }
 
-function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSession): void {
-  withImmediateTransaction(db, () => {
+function writeIngestedFile(
+  db: Database,
+  prepared: Prepared,
+  parsed: ParsedSession,
+): "ingested" | "tombstoned" {
+  return withImmediateTransaction(db, () => {
     runIngestStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
+    if (isDeletedSessionIdentity(db, parsed.session.tool, parsed.session.sourceSessionId)) {
+      runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [
+        prepared.file.path,
+      ]);
+      writeIngestSource(db, prepared, null, "skipped_deleted");
+      return "tombstoned";
+    }
     const sessionId = writeSession(
       db,
       parsed,
@@ -657,6 +677,13 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
       prepared.size,
       prepared.hash,
     );
+    if (sessionId == null) {
+      runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [
+        prepared.file.path,
+      ]);
+      writeIngestSource(db, prepared, null, "skipped_deleted");
+      return "tombstoned";
+    }
     runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
     const insertIssue = db.prepare(
       `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
@@ -670,27 +697,37 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
       insertIssue.finalize();
     }
     const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
-    runIngestStatement(
-      db,
-      `INSERT INTO ingest_source(
-         path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at
-       )
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
-       ON CONFLICT(path) DO UPDATE SET
-         size = ?3, mtime = ?4, hash = ?5, session_id = ?6,
-         line_count = ?7, status = ?8, last_ingested_at = datetime('now')`,
-      [
-        prepared.file.path,
-        prepared.file.tool,
-        prepared.size,
-        prepared.mtime,
-        prepared.hash,
-        sessionId,
-        prepared.lineCount,
-        status,
-      ],
-    );
+    writeIngestSource(db, prepared, sessionId, status);
+    return "ingested";
   });
+}
+
+function writeIngestSource(
+  db: Database,
+  prepared: Prepared,
+  sessionId: number | null,
+  status: string,
+): void {
+  runIngestStatement(
+    db,
+    `INSERT INTO ingest_source(
+       path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at
+     )
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+     ON CONFLICT(path) DO UPDATE SET
+       tool = ?2, size = ?3, mtime = ?4, hash = ?5, session_id = ?6,
+       line_count = ?7, status = ?8, error = NULL, last_ingested_at = datetime('now')`,
+    [
+      prepared.file.path,
+      prepared.file.tool,
+      prepared.size,
+      prepared.mtime,
+      prepared.hash,
+      sessionId,
+      prepared.lineCount,
+      status,
+    ],
+  );
 }
 
 function writeSession(
@@ -700,8 +737,11 @@ function writeSession(
   mtime: number,
   size: number,
   hash: string,
-): number {
+): number | null {
   const s = parsed.session;
+  if (isDeletedSessionIdentity(db, s.tool, s.sourceSessionId)) {
+    return null;
+  }
   let projectId: number | null = null;
   if (s.projectPath != null) {
     runIngestStatement(

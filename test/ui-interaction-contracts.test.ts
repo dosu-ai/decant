@@ -75,4 +75,49 @@ describe("UI interaction contracts", () => {
     expect(chart).toContain(" through ");
     expect(chart).toContain("href={`#message-");
   });
+
+  test("keeps archive visibility in session pagination and navigation state", () => {
+    const app = sourceBetween("function App()", "function renderView(");
+    const sessions = sourceBetween("function SessionsView(", "function SessionTableSkeletonRows(");
+    const row = sourceBetween("function SessionTableRow(", "function DosuProvenanceBadge(");
+
+    expect(app).toContain("sessionLoadKey");
+    expect(app).toContain("includeArchivedSessions");
+    expect(app).toContain("reloadKey");
+    expect(app).toContain('"&include_archived=true"');
+    expect(app).toContain("sessionPageExhausted({");
+    expect(sessions).toContain("<span>Show archived</span>");
+    expect(sessions).toContain("sessionsArchivedHref(path, event.target.checked)");
+    expect(row).toContain('session.is_user_archived ? <Badge tone="neutral">Archived</Badge>');
+  });
+
+  test("exposes session state actions through the shared accessible overflow menu", () => {
+    const overflow = sourceBetween("function OverflowMenu(", "function PromotionPanel(");
+    const session = sourceBetween("function SessionDetailView(", "function SessionDetailSkeleton(");
+
+    expect(overflow).toContain("event.currentTarget.open = false");
+    expect(overflow).toContain('event.key !== "Escape"');
+    expect(overflow).toContain("aria-label={label}");
+    expect(overflow).toContain('querySelector("summary")?.focus()');
+    expect(session).toContain("archiveActionFor(detail.summary)");
+    expect(session).toContain("Archive session");
+    expect(session).toContain("Unarchive session");
+    expect(session).toContain("Delete session…");
+    expect(session).toContain("sessionStateRequest(id, state)");
+    expect(session).toContain("sessionStateMutationGenerationRef.current !== mutationGeneration");
+  });
+
+  test("requires a focus-managed explicit confirmation before permanent deletion", () => {
+    const dialog = sourceBetween("function DeleteSessionDialog(", "function SessionDetailView(");
+
+    expect(dialog).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");
+    expect(dialog).toContain('aria-modal="true"');
+    expect(dialog).toContain('role="alertdialog"');
+    expect(dialog).toContain("aria-labelledby={titleId}");
+    expect(dialog).toContain("aria-describedby={descriptionId}");
+    expect(dialog).toContain("event.target === event.currentTarget && !pending");
+    expect(dialog).toContain("DELETE_SESSION_EXPLANATION");
+    expect(dialog).toContain("Delete from Decant");
+    expect(main).toContain("dialog.focus()");
+  });
 });

@@ -1,7 +1,7 @@
--- decant:schema_version=19
--- Effective decant schema (migrations 1..19 applied), frozen as the current
--- baseline. v19 repairs recommendation impact columns for archives that ran
--- the original v18 migration before those columns were added to it.
+-- decant:schema_version=20
+-- Effective decant schema (migrations 1..20 applied), frozen as the current
+-- baseline. v20 adds durable user archive/delete state keyed by source
+-- identity so synchronization cannot resurrect a deleted session.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -172,6 +172,13 @@ CREATE TABLE session_economics (
   format_version INTEGER NOT NULL,
   vector_json TEXT NOT NULL,
   computed_at TEXT NOT NULL
+);
+CREATE TABLE session_user_state (
+  tool TEXT NOT NULL,
+  source_session_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('archived', 'deleted')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tool, source_session_id)
 );
 CREATE TABLE recommendation (
   key            TEXT PRIMARY KEY,

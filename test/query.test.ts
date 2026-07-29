@@ -17,6 +17,7 @@ import {
   sessionIngestIssues,
 } from "../src/query.ts";
 import { SEARCH_MATCH_END, SEARCH_MATCH_START } from "../src/search-query.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { preview } from "../src/tools.ts";
 
@@ -41,6 +42,113 @@ function seeded(): Database {
 }
 
 describe("query reads", () => {
+  test("derives archive visibility through ancestry while preserving direct child state", () => {
+    const db = seeded();
+    const root = listSessions(db)[0];
+    if (root == null) {
+      throw new Error("seeded root must exist");
+    }
+    const archivedChildId = 0;
+    const inheritedChildId = root.id + 1;
+    db.exec(`
+      UPDATE session
+      SET is_archived = 1
+      WHERE id = ${root.id};
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, title, started_at,
+        is_subagent, parent_session_id, estimated_cost_usd
+      )
+      SELECT ${archivedChildId}, 'codex', 'archived-child', project_id, 'Archived child',
+             '2026-05-01T10:00:30.000Z', 1, id, 2.5
+      FROM session WHERE id = ${root.id}
+      UNION ALL
+      SELECT ${inheritedChildId}, 'codex', 'inherited-child', project_id, 'Inherited child',
+             '2026-05-01T10:00:31.000Z', 1, id, 3.5
+      FROM session WHERE id = ${root.id};
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES
+        (9001, ${archivedChildId}, 0, 'user', '{}'),
+        (9002, ${inheritedChildId}, 0, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES
+        (9001, ${archivedChildId}, 0, 'text', 'archivedtreeneedle'),
+        (9002, ${inheritedChildId}, 0, 'text', 'inheritedtreeneedle');
+      INSERT INTO tool_call(session_id, message_id, ordinal, tool_kind, tool_name)
+      VALUES
+        (${archivedChildId}, 9001, 0, 'builtin', 'ArchivedTreeTool'),
+        (${inheritedChildId}, 9002, 0, 'builtin', 'InheritedTreeTool');
+    `);
+
+    expect(setSessionUserState(db, archivedChildId, "archived")).toBe(true);
+    expect(listSessions(db, { includeNestedSubagents: true })[0]).toMatchObject({
+      id: root.id,
+      subagent_count: 1,
+      subagents: [expect.objectContaining({ id: inheritedChildId, user_state: null })],
+    });
+    expect(searchPage(db, "archivedtreeneedle", { includeSubagents: true }).total).toBe(0);
+    expect(listToolCalls(db, { tool: "ArchivedTreeTool" }).total).toBe(0);
+
+    expect(setSessionUserState(db, root.id, "archived")).toBe(true);
+    expect(listSessions(db)).toEqual([]);
+    expect(getSession(db, root.id)?.summary).toMatchObject({
+      user_state: "archived",
+      is_user_archived: true,
+      is_archived: true,
+    });
+    expect(listProjects(db)[0]).toMatchObject({
+      sessions: 0,
+      estimated_cost_usd: 0,
+      session_tools: [],
+    });
+
+    const archived = listSessions(db, {
+      includeArchived: true,
+      includeNestedSubagents: true,
+    });
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({
+      id: root.id,
+      is_archived: true,
+      user_state: "archived",
+      is_user_archived: true,
+      subagent_count: 2,
+    });
+    const archivedChildren = archived[0]?.subagents ?? [];
+    expect(archivedChildren.find((session) => session.id === archivedChildId)).toMatchObject({
+      user_state: "archived",
+      is_user_archived: true,
+    });
+    expect(archivedChildren.find((session) => session.id === inheritedChildId)).toMatchObject({
+      user_state: null,
+      is_user_archived: true,
+    });
+
+    expect(setSessionUserState(db, root.id, "visible")).toBe(true);
+    expect(listSessions(db, { includeNestedSubagents: true })[0]).toMatchObject({
+      id: root.id,
+      is_archived: true,
+      user_state: null,
+      is_user_archived: false,
+      subagent_count: 1,
+      subagents: [
+        expect.objectContaining({
+          id: inheritedChildId,
+          user_state: null,
+          is_user_archived: false,
+        }),
+      ],
+    });
+    expect(searchPage(db, "archivedtreeneedle", { includeSubagents: true }).total).toBe(0);
+    expect(searchPage(db, "inheritedtreeneedle", { includeSubagents: true }).total).toBe(1);
+    expect(listToolCalls(db, { tool: "ArchivedTreeTool" }).total).toBe(0);
+    expect(listToolCalls(db, { tool: "InheritedTreeTool" }).total).toBe(1);
+    expect(getSession(db, archivedChildId)?.summary).toMatchObject({
+      user_state: "archived",
+      is_user_archived: true,
+    });
+    db.close();
+  });
+
   test("lists, gets, and searches sessions", () => {
     const db = seeded();
 

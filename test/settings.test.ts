@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { detectedSettings, getSettings, saveSettings, settingsPath } from "../src/settings.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-settings-test-"));
@@ -20,7 +20,6 @@ describe("settings", () => {
       agent: "claude",
       terminal: "iterm",
       ide: "cursor",
-      dosuSuggestions: "show",
     });
   });
 
@@ -30,6 +29,26 @@ describe("settings", () => {
     expect(saveSettings({ terminal: "warp" }, { env }).terminal).toBe("warp");
   });
 
+  test("an unrelated save prunes a stale Dosu suggestions preference", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "stale") };
+    const path = settingsPath({ env });
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ agent: "codex", dosuSuggestions: "hide" }, null, 2)}\n`,
+    );
+
+    expect(saveSettings({ terminal: "wezterm" }, { env, appExists: () => false })).toEqual({
+      agent: "codex",
+      terminal: "wezterm",
+      ide: "vscode",
+    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      agent: "codex",
+      terminal: "wezterm",
+    });
+  });
+
   test("saveSettings persists sanitized values over detected defaults", () => {
     const env = { DECANT_CONFIG_DIR: join(workDir, "save"), TERM: "xterm-kitty" };
     const saved = saveSettings(
@@ -37,6 +56,7 @@ describe("settings", () => {
         agent: "codex",
         terminal: "ghostty",
         ide: "zed",
+        // Removed preferences from older settings files are pruned on save.
         dosuSuggestions: "hide",
         unknown: "ignored",
       },
@@ -46,24 +66,18 @@ describe("settings", () => {
       agent: "codex",
       terminal: "ghostty",
       ide: "zed",
-      dosuSuggestions: "hide",
     });
     expect(JSON.parse(readFileSync(settingsPath({ env }), "utf8"))).toEqual({
       agent: "codex",
       terminal: "ghostty",
       ide: "zed",
-      dosuSuggestions: "hide",
     });
 
-    const merged = saveSettings(
-      { agent: "nope", terminal: "wezterm", dosuSuggestions: "nope" },
-      { env },
-    );
+    const merged = saveSettings({ agent: "nope", terminal: "wezterm" }, { env });
     expect(merged).toMatchObject({
       agent: "codex",
       terminal: "wezterm",
       ide: "zed",
-      dosuSuggestions: "hide",
     });
     expect(getSettings({ env }).terminal).toBe("wezterm");
   });

@@ -34,7 +34,6 @@ import {
 } from "./report/index.ts";
 import {
   agentOptions,
-  dosuSuggestionOptions,
   getSettings,
   ideOptions,
   saveSettings,
@@ -451,9 +450,7 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
       return withDb(config, context, (db) =>
         reportHtmlResponse(
-          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter }), {
-            dosuSuggestions: getSettings().dosuSuggestions,
-          }),
+          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter })),
           "decant-analytics-report.html",
         ),
       );
@@ -476,9 +473,7 @@ export async function handleRequest(
           return sessionNotFound(db);
         }
         return reportHtmlResponse(
-          renderSessionReport(report, {
-            dosuSuggestions: getSettings().dosuSuggestions,
-          }),
+          renderSessionReport(report),
           `decant-session-${report.summary.id}-${reportFilenamePart(report.summary.title)}.html`,
         );
       });
@@ -607,7 +602,6 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
       agents: agentOptions,
       terminals: terminalOptions,
       ides: ideOptions,
-      dosuSuggestions: dosuSuggestionOptions,
     },
   };
 }

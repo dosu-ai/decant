@@ -336,15 +336,17 @@ describe("server routes", () => {
       const settings = await route(config, "/api/settings");
       expect(settings.status).toBe(200);
       expect(settings.body).toMatchObject({
-        settings: expect.objectContaining({ agent: "claude", dosuSuggestions: "show" }),
+        settings: expect.objectContaining({ agent: "claude" }),
         options: expect.objectContaining({
           agents: expect.any(Array),
-          dosuSuggestions: [
-            ["show", "Show"],
-            ["hide", "Hide"],
-          ],
         }),
       });
+      const settingsBody = settings.body as {
+        settings: Record<string, unknown>;
+        options: Record<string, unknown>;
+      };
+      expect(settingsBody.settings).not.toHaveProperty("dosuSuggestions");
+      expect(settingsBody.options).not.toHaveProperty("dosuSuggestions");
 
       const saved = await route(config, "/api/settings", {
         method: "POST",
@@ -352,6 +354,7 @@ describe("server routes", () => {
           agent: "codex",
           terminal: "wezterm",
           ide: "zed",
+          // Older clients may still send this removed preference.
           dosuSuggestions: "hide",
           extra: "no",
         }),
@@ -363,9 +366,41 @@ describe("server routes", () => {
           agent: "codex",
           terminal: "wezterm",
           ide: "zed",
-          dosuSuggestions: "hide",
         },
       });
+      const savedBody = saved.body as { settings: Record<string, unknown> };
+      expect(savedBody.settings).not.toHaveProperty("dosuSuggestions");
+    } finally {
+      if (prior == null) {
+        delete process.env.DECANT_CONFIG_DIR;
+      } else {
+        process.env.DECANT_CONFIG_DIR = prior;
+      }
+    }
+  });
+
+  test("legacy Dosu settings cannot hide report CTAs", async () => {
+    const config = freshConfig();
+    seed(config);
+    const prior = process.env.DECANT_CONFIG_DIR;
+    const configDir = join(workDir, "legacy-dosu-report-settings");
+    process.env.DECANT_CONFIG_DIR = configDir;
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "settings.json"),
+      `${JSON.stringify({ dosuSuggestions: "hide" }, null, 2)}\n`,
+    );
+    try {
+      const analyticsReport = await route(config, "/api/reports/analytics.html");
+      expect(analyticsReport.status).toBe(200);
+      expect(analyticsReport.body).toContain("utm_content=report_cta");
+
+      const sessionId = ((await route(config, "/api/sessions?limit=1")).body as { id: number }[])[0]
+        ?.id;
+      expect(sessionId).toBeNumber();
+      const sessionReport = await route(config, `/api/reports/session/${sessionId}.html`);
+      expect(sessionReport.status).toBe(200);
+      expect(sessionReport.body).toContain("utm_content=report_cta");
     } finally {
       if (prior == null) {
         delete process.env.DECANT_CONFIG_DIR;

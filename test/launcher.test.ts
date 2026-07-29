@@ -12,7 +12,6 @@ const settings: UserSettings = {
   agent: "claude",
   terminal: "ghostty",
   ide: "cursor",
-  dosuSuggestions: "show",
 };
 
 describe("launcher", () => {

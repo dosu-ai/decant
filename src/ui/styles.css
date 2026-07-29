@@ -3378,6 +3378,12 @@ mark {
   color: var(--fg);
 }
 
+.about-version {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .about-privacy {
   margin: 16px 0;
   border-left: 2px solid var(--success);

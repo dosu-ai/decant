@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
-import type { DosuSuggestions } from "../ui/dosu-cta.ts";
 import { DECANT_VERSION } from "../version.ts";
 import {
   renderContextWindowChart,
@@ -8,14 +7,13 @@ import {
   renderSessionsByDayChart,
 } from "./charts.ts";
 import type { AnalyticsReportData, SessionReportData, SessionToolReportRow } from "./data.ts";
-import { DosuOptimizedMark, reportDosuLink, shouldShowReportCta } from "./dosu.tsx";
+import { DosuOptimizedMark, reportDosuLink } from "./dosu.tsx";
 import { REPORT_FONT_CSS } from "./fonts.ts";
 import { REPORT_CSS } from "./styles.ts";
 
 export interface ReportRenderOptions {
   generatedAt?: Date;
   version?: string;
-  dosuSuggestions?: DosuSuggestions | null;
   /**
    * Trusted, inline-only @font-face CSS. The current fallback is system fonts;
    * route integration can pass bundled WOFF2 data URIs without a network fetch.
@@ -26,7 +24,6 @@ export interface ReportRenderOptions {
 interface NormalizedRenderOptions {
   generatedAt: Date;
   version: string;
-  dosuSuggestions: DosuSuggestions | null;
   fontCss: string;
 }
 
@@ -399,13 +396,11 @@ function ReportFooter({ options }: { options: NormalizedRenderOptions }) {
         <span aria-hidden="true">·</span>
         <DosuOptimizedMark />
       </div>
-      {shouldShowReportCta(options.dosuSuggestions) ? (
-        <p className="report-cta">
-          <a href={reportDosuLink("report_cta")} rel="noopener noreferrer" target="_blank">
-            Dosu keeps agent context fresh automatically →
-          </a>
-        </p>
-      ) : null}
+      <p className="report-cta">
+        <a href={reportDosuLink("report_cta")} rel="noopener noreferrer" target="_blank">
+          Dosu keeps agent context fresh automatically →
+        </a>
+      </p>
     </footer>
   );
 }
@@ -430,7 +425,6 @@ function normalizeOptions(options: ReportRenderOptions): NormalizedRenderOptions
   return {
     generatedAt: options.generatedAt ?? new Date(),
     version: options.version ?? DECANT_VERSION,
-    dosuSuggestions: options.dosuSuggestions ?? null,
     fontCss: options.fontCss ?? REPORT_FONT_CSS,
   };
 }

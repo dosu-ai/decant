@@ -4,6 +4,10 @@ import { join } from "node:path";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
+const insightsView = main.slice(
+  main.indexOf("function InsightsView("),
+  main.indexOf("function DosuInsightsRow()"),
+);
 
 describe("Insights information hierarchy", () => {
   test("explains how archive evidence becomes future-agent improvements", () => {
@@ -22,6 +26,14 @@ describe("Insights information hierarchy", () => {
     expect(main).toContain('dosuLink("insights_card")');
     expect(main).not.toContain("function DosuInsightsCard()");
     expect(styles).not.toContain(".dosu-insights-card");
+  });
+
+  test("always renders the Dosu suggestion without a settings gate", () => {
+    expect(insightsView).not.toContain("showDosuSuggestion");
+    expect(insightsView).not.toContain("dosuSuggestions");
+    expect(insightsView).toMatch(
+      /<div className="signal-list insights-dosu-list">\s*<DosuInsightsRow \/>\s*<\/div>/,
+    );
   });
 
   test("uses expandable comparison rows instead of featured catalog cards", () => {

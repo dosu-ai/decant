@@ -13,11 +13,7 @@ export {
   type SessionReportData,
   type SessionToolReportRow,
 } from "./data.ts";
-export {
-  type ReportDosuPlacement,
-  reportDosuLink,
-  shouldShowReportCta,
-} from "./dosu.tsx";
+export { type ReportDosuPlacement, reportDosuLink } from "./dosu.tsx";
 export {
   type ReportRenderOptions,
   renderAnalyticsReport,

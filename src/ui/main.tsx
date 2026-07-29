@@ -77,11 +77,7 @@ import {
 import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
-import {
-  DOSU_ANALYTICS_DISMISSAL_KEY,
-  type DosuSuggestions,
-  shouldShowDosuCta,
-} from "./dosu-cta.ts";
+import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
@@ -412,7 +408,6 @@ type UserSettings = {
   agent: string;
   terminal: string;
   ide: string;
-  dosuSuggestions: DosuSuggestions;
 };
 
 type SettingsInfo = {
@@ -423,7 +418,6 @@ type SettingsInfo = {
     agents: [string, string][];
     terminals: [string, string][];
     ides: [string, string][];
-    dosuSuggestions: [string, string][];
   };
 };
 
@@ -1305,7 +1299,6 @@ function renderView(
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
           onSync={actions.runSync}
-          suggestions={data.settings?.settings.dosuSuggestions}
           syncing={actions.syncing}
         />
       );
@@ -3164,14 +3157,12 @@ function AnalyticsView({
   dateRange,
   onDateRangeChange,
   onSync,
-  suggestions,
   syncing,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onSync: () => void;
-  suggestions: DosuSuggestions | undefined;
   syncing: boolean;
 }) {
   const [dosuDismissed, setDosuDismissed] = useState(
@@ -3296,7 +3287,6 @@ function AnalyticsView({
       {shouldShowDosuCta({
         dismissed: dosuDismissed,
         route: "analytics",
-        suggestions,
       }) ? (
         <aside className="dosu-callout">
           <img alt="" src={dosuOfficialUrl} />
@@ -5698,10 +5688,6 @@ function InsightsView({
   const [hero, ...rest] = signals;
   const catalogGroups = groupByCategory(openRows.filter((row) => row.kind === "catalog"));
   const canLaunch = settingsInfo?.can_launch === true;
-  const showDosuSuggestion = shouldShowDosuCta({
-    route: "insights",
-    suggestions: settingsInfo?.settings.dosuSuggestions,
-  });
   const completeRecommendation = (row: Recommendation) => {
     setError(null);
     setFailedAction(null);
@@ -5825,41 +5811,37 @@ function InsightsView({
         ) : null}
       </section>
 
-      {catalogGroups.length > 0 || showDosuSuggestion ? (
-        <section className="view-stack insights-section">
-          <div className="section-title-row insights-section-heading">
-            <div>
-              <span className="section-eyebrow">Reusable improvements</span>
-              <h2>Set up for future runs</h2>
-              <p>Project practices your coding agents can use in every session.</p>
+      <section className="view-stack insights-section">
+        <div className="section-title-row insights-section-heading">
+          <div>
+            <span className="section-eyebrow">Reusable improvements</span>
+            <h2>Set up for future runs</h2>
+            <p>Project practices your coding agents can use in every session.</p>
+          </div>
+        </div>
+        {catalogGroups.map(([category, items]) => (
+          <div className="catalog-group" key={category}>
+            <div className="catalog-group-heading">
+              <h3>{category}</h3>
+              <span>{formatInt(items.length)}</span>
+            </div>
+            <div className="signal-list">
+              {items.map((row) => (
+                <RecommendationRow
+                  key={row.key}
+                  pending={pending}
+                  row={row}
+                  onComplete={completeRecommendation}
+                  canLaunch={canLaunch}
+                />
+              ))}
             </div>
           </div>
-          {catalogGroups.map(([category, items]) => (
-            <div className="catalog-group" key={category}>
-              <div className="catalog-group-heading">
-                <h3>{category}</h3>
-                <span>{formatInt(items.length)}</span>
-              </div>
-              <div className="signal-list">
-                {items.map((row) => (
-                  <RecommendationRow
-                    key={row.key}
-                    pending={pending}
-                    row={row}
-                    onComplete={completeRecommendation}
-                    canLaunch={canLaunch}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-          {showDosuSuggestion ? (
-            <div className="signal-list insights-dosu-list">
-              <DosuInsightsRow />
-            </div>
-          ) : null}
-        </section>
-      ) : null}
+        ))}
+        <div className="signal-list insights-dosu-list">
+          <DosuInsightsRow />
+        </div>
+      </section>
 
       {implementedRows.length > 0 ? (
         <section className="view-stack insights-history-heading insights-section">
@@ -7006,6 +6988,7 @@ function FilesView({
 }
 
 function SettingsView({
+  config,
   onSaved,
   settingsInfo,
 }: {
@@ -7080,20 +7063,6 @@ function SettingsView({
             value={settings?.ide ?? "vscode"}
             onChange={(ide) => save({ ide })}
           />
-          <SettingSelect
-            help="Hiding removes contextual Dosu suggestions. Attribution and verified provenance badges remain."
-            label="Dosu suggestions"
-            options={
-              settingsInfo?.options.dosuSuggestions ?? [
-                ["show", "Show"],
-                ["hide", "Hide"],
-              ]
-            }
-            value={settings?.dosuSuggestions ?? "show"}
-            onChange={(dosuSuggestions) =>
-              save({ dosuSuggestions: dosuSuggestions as DosuSuggestions })
-            }
-          />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
         <p className="settings-note">
@@ -7132,8 +7101,9 @@ function SettingsView({
               Apache-2.0 license ↗
             </a>
           </div>
+          <p className="about-version">Version {versionLabel(config?.version)}</p>
           <p className="about-privacy">
-            Decant makes no outbound network calls; your session logs stay on this machine.
+            Decant makes no outbound network calls. Your session logs stay on this machine.
           </p>
         </div>
       </section>

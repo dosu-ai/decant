@@ -15,6 +15,13 @@ describe("Dosu product copy", () => {
     expect(main).toContain("Make these patterns available to every coding agent");
     expect(main).toContain("Your session logs show the pattern.");
     expect(main).toContain("Decant is an open source");
+    expect(main).toContain(
+      "Decant makes no outbound network calls. Your session logs stay on this machine.",
+    );
+    expect(main).toContain("Version {versionLabel(config?.version)}");
+    expect(main).not.toContain('label="Dosu suggestions"');
+    expect(main).toContain("localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY)");
+    expect(main).toContain('localStorage.setItem(DOSU_ANALYTICS_DISMISSAL_KEY, "1")');
     expect(badge).toContain('"Optimized"');
     expect(main).toContain('["summary", "now", "dateBounds", "config"]');
     expect(main).toContain("Decant {versionLabel(data.config?.version)}");

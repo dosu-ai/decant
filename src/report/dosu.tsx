@@ -1,18 +1,10 @@
 import type { ReactElement } from "react";
-import { type DosuSuggestions, shouldShowDosuCta } from "../ui/dosu-cta.ts";
 import { dosuLink } from "../ui/dosu-links.ts";
 
 export type ReportDosuPlacement = "report_footer" | "report_cta";
 
 export function reportDosuLink(placement: ReportDosuPlacement): string {
   return dosuLink(placement);
-}
-
-export function shouldShowReportCta(suggestions: DosuSuggestions | null | undefined): boolean {
-  return shouldShowDosuCta({
-    route: "insights",
-    suggestions,
-  });
 }
 
 export function DosuOptimizedMark(): ReactElement {

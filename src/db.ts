@@ -10,14 +10,38 @@ import {
 } from "node:fs";
 import { getDecantLogger } from "./logging.ts";
 import schemaSql from "./schema.sql" with { type: "text" };
+import {
+  buildSchemaManifest,
+  compareSchemaManifests,
+  type SchemaDifference,
+  type SchemaManifest,
+} from "./schema-manifest.ts";
 
 /// Highest schema version this build understands. src/schema.sql is the
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 18;
+export const LATEST_SCHEMA_VERSION = 19;
 
 const logger = getDecantLogger("db");
+let expectedSchemaManifest: SchemaManifest | null = null;
+const SQLITE_BUSY_RETRY_SIGNAL = new Int32Array(
+  new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+);
+
+export class SchemaDriftError extends Error {
+  readonly code = "schema_drift";
+
+  constructor(
+    message: string,
+    readonly expectedFingerprint: string,
+    readonly actualFingerprint: string,
+    readonly differences: SchemaDifference,
+  ) {
+    super(message);
+    this.name = "SchemaDriftError";
+  }
+}
 
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
@@ -178,20 +202,48 @@ export function openDb(path: string): Database {
   restrictArchiveFile(`${path}-wal`);
   restrictArchiveFile(`${path}-shm`);
   const db = new Database(path, { create: true, strict: true });
-  db.exec("PRAGMA busy_timeout = 5000;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec("PRAGMA journal_mode = WAL;");
-  // Memory-map reads: archives grow to multiple GB and large scans (FTS, block
-  // aggregation) measure 2-7x faster via mmap than via pread on such files.
-  db.exec("PRAGMA mmap_size = 1073741824;");
   try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec("PRAGMA synchronous = NORMAL;");
+    negotiateWalMode(db);
+    // Memory-map reads: archives grow to multiple GB and large scans (FTS, block
+    // aggregation) measure 2-7x faster via mmap than via pread on such files.
+    db.exec("PRAGMA mmap_size = 1073741824;");
     ensureSchema(db);
   } catch (error) {
     closeDb(db);
     throw error;
   }
   return db;
+}
+
+function negotiateWalMode(db: Database): void {
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL;");
+      return;
+    } catch (error) {
+      if (!isSqliteContention(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      Atomics.wait(
+        SQLITE_BUSY_RETRY_SIGNAL,
+        0,
+        0,
+        Math.min(10, Math.max(1, deadline - Date.now())),
+      );
+    }
+  }
+}
+
+function isSqliteContention(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error != null && "code" in error
+      ? String((error as { code?: unknown }).code).toUpperCase()
+      : "";
+  return code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED");
 }
 
 function ensureSchema(db: Database): void {
@@ -202,6 +254,44 @@ function ensureSchema(db: Database): void {
   if (!hasMigrations) {
     db.exec("BEGIN IMMEDIATE;");
     try {
+      // A second opener can observe the same empty schema before either takes
+      // the write lock. Re-check under the lock so only one creates the
+      // baseline; the waiter validates what won the race instead of replaying
+      // CREATE TABLE statements over it.
+      if (hasTable(db, "schema_migrations")) {
+        const versions = readMigrationHistory(db);
+        const current = versions.at(-1) ?? 0;
+        if (current > LATEST_SCHEMA_VERSION) {
+          throw new Error(
+            `archive schema version ${current} is newer than this build supports ` +
+              `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
+          );
+        }
+        if (current < 8) {
+          throw new Error(
+            `archive schema version ${current} predates this build's baseline ` +
+              "(8); back up or move the archive aside before rebuilding it because " +
+              "manual recommendation state and source-pruned sessions may exist only in the database; " +
+              "then re-ingest from the source directories",
+          );
+        }
+        assertVersionSequence(db, versions, current);
+        if (current === LATEST_SCHEMA_VERSION) {
+          assertSchemaMatchesBaseline(db);
+        }
+        db.exec("COMMIT;");
+        if (current < LATEST_SCHEMA_VERSION) {
+          migrate(db, current);
+        }
+        return;
+      }
+      const existingObjects = schemaObjectNames(db);
+      if (existingObjects.length > 0) {
+        throwSchemaDrift(
+          db,
+          `schema_migrations is missing from a non-empty database (${summarize(existingObjects)})`,
+        );
+      }
       db.exec(schemaSql);
       const mark = db.prepare(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
@@ -213,17 +303,24 @@ function ensureSchema(db: Database): void {
       } finally {
         mark.finalize();
       }
+      assertSchemaMatchesBaseline(db);
+      assertContiguousMigrationHistory(db, LATEST_SCHEMA_VERSION);
       db.exec("COMMIT;");
     } catch (error) {
-      db.exec("ROLLBACK;");
+      try {
+        db.exec("ROLLBACK;");
+      } catch {
+        // A concurrent initializer may have committed before handing a
+        // lower-version winner to migrate(); never mask that later error with
+        // "cannot rollback - no transaction is active".
+      }
       throw error;
     }
     return;
   }
 
-  const current =
-    (db.query("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number | null }).v ??
-    0;
+  const versions = readMigrationHistory(db);
+  const current = versions.at(-1) ?? 0;
   if (current > LATEST_SCHEMA_VERSION) {
     throw new Error(
       `archive schema version ${current} is newer than this build supports ` +
@@ -233,18 +330,43 @@ function ensureSchema(db: Database): void {
   if (current < 8) {
     throw new Error(
       `archive schema version ${current} predates this build's baseline ` +
-        "(8); rebuild the archive: delete it and re-ingest " +
-        "(ingest is idempotent over the source directories)",
+        "(8); back up or move the archive aside before rebuilding it because " +
+        "manual recommendation state and source-pruned sessions may exist only in the database; " +
+        "then re-ingest from the source directories",
     );
   }
+  assertVersionSequence(db, versions, current);
   if (current < LATEST_SCHEMA_VERSION) {
     migrate(db, current);
+    return;
   }
+  assertSchemaMatchesBaseline(db);
 }
 
 function migrate(db: Database, current: number): void {
   db.exec("BEGIN IMMEDIATE;");
   try {
+    // Another process may have completed the migration while this connection
+    // waited for SQLite's write lock. Re-read under the lock so each version is
+    // applied and stamped at most once.
+    const lockedVersions = readMigrationHistory(db);
+    const lockedCurrent = lockedVersions.at(-1) ?? 0;
+    if (lockedCurrent > LATEST_SCHEMA_VERSION) {
+      throw new Error(
+        `archive schema version ${lockedCurrent} is newer than this build supports ` +
+          `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
+      );
+    }
+    if (lockedCurrent < 8) {
+      throw new Error(
+        `archive schema version ${lockedCurrent} predates this build's baseline ` +
+          "(8); back up or move the archive aside before rebuilding it because " +
+          "manual recommendation state and source-pruned sessions may exist only in the database; " +
+          "then re-ingest from the source directories",
+      );
+    }
+    assertVersionSequence(db, lockedVersions, lockedCurrent);
+    current = lockedCurrent;
     if (current < 9) {
       db.exec(`
         ALTER TABLE session ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
@@ -496,6 +618,60 @@ function migrate(db: Database, current: number): void {
         "INSERT INTO schema_migrations (version, applied_at) VALUES (18, datetime('now'))",
       ).run();
     }
+    if (current < 19) {
+      if (hasTable(db, "block")) {
+        db.exec("CREATE INDEX IF NOT EXISTS idx_block_tool_use ON block(session_id, tool_use_id)");
+      }
+      if (hasTable(db, "recommendation") && !hasColumn(db, "recommendation", "impact_label")) {
+        db.exec("ALTER TABLE recommendation ADD COLUMN impact_label TEXT");
+      }
+      if (
+        hasTable(db, "recommendation") &&
+        !hasColumn(db, "recommendation", "impact_label_checked")
+      ) {
+        db.exec(
+          "ALTER TABLE recommendation ADD COLUMN impact_label_checked INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      if (
+        hasTable(db, "tool_call") &&
+        hasColumn(db, "tool_call", "duration_ms") &&
+        hasTable(db, "block") &&
+        hasTable(db, "message")
+      ) {
+        // The final v18 review also taught the duration backfill to fall back
+        // to tool_call.timestamp when old rows have no linked call message.
+        // Archives that stamped the earlier v18 need that repair replayed.
+        db.exec(`
+          UPDATE tool_call
+          SET duration_ms = (
+            SELECT CASE
+              WHEN result_message.timestamp IS NOT NULL
+                AND COALESCE(call_message.timestamp, tool_call.timestamp) IS NOT NULL
+                AND julianday(result_message.timestamp) >=
+                  julianday(COALESCE(call_message.timestamp, tool_call.timestamp))
+              THEN CAST(ROUND(
+                (julianday(result_message.timestamp) -
+                  julianday(COALESCE(call_message.timestamp, tool_call.timestamp)))
+                * 86400000
+              ) AS INTEGER)
+              ELSE NULL
+            END
+            FROM block AS result_block
+            JOIN message AS result_message ON result_message.id = result_block.message_id
+            LEFT JOIN message AS call_message ON call_message.id = tool_call.message_id
+            WHERE result_block.id = tool_call.result_block_id
+          )
+          WHERE duration_ms IS NULL
+            AND result_block_id IS NOT NULL;
+        `);
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (19, datetime('now'))",
+      ).run();
+    }
+    assertSchemaMatchesBaseline(db);
+    assertContiguousMigrationHistory(db, LATEST_SCHEMA_VERSION);
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
@@ -515,4 +691,144 @@ function hasColumn(db: Database, table: string, column: string): boolean {
     db.query("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1").get(table, column) !=
     null
   );
+}
+
+function readMigrationHistory(db: Database): number[] {
+  try {
+    return (
+      db.query("SELECT version, applied_at FROM schema_migrations ORDER BY version").all() as {
+        version: number;
+        applied_at: string;
+      }[]
+    ).map((row) => row.version);
+  } catch {
+    throwSchemaDrift(db, "schema_migrations is malformed or unreadable");
+  }
+}
+
+function assertVersionSequence(db: Database, versions: number[], current: number): void {
+  const expected = Array.from({ length: current }, (_, index) => index + 1);
+  if (
+    versions.length !== expected.length ||
+    versions.some((version, index) => version !== expected[index])
+  ) {
+    throwSchemaDrift(
+      db,
+      `schema_migrations is non-contiguous; expected versions 1..${current}, found ${summarize(
+        versions.map(String),
+      )}`,
+    );
+  }
+}
+
+function assertContiguousMigrationHistory(db: Database, current: number): void {
+  assertVersionSequence(db, readMigrationHistory(db), current);
+}
+
+function assertSchemaMatchesBaseline(db: Database): void {
+  const expected = getExpectedSchemaManifest();
+  const actual = buildSchemaManifest(db);
+  if (actual.fingerprint !== expected.fingerprint) {
+    throwSchemaDrift(
+      db,
+      `owned schema objects differ from the v${LATEST_SCHEMA_VERSION} baseline`,
+      expected,
+      actual,
+    );
+  }
+}
+
+function getExpectedSchemaManifest(): SchemaManifest {
+  if (expectedSchemaManifest != null) {
+    return expectedSchemaManifest;
+  }
+  const expectedDb = new Database(":memory:", { strict: true });
+  try {
+    expectedDb.exec(schemaSql);
+    expectedSchemaManifest = buildSchemaManifest(expectedDb);
+    return expectedSchemaManifest;
+  } finally {
+    expectedDb.close();
+  }
+}
+
+function throwSchemaDrift(
+  db: Database,
+  reason: string,
+  expected = getExpectedSchemaManifest(),
+  actual = buildSchemaManifest(db),
+): never {
+  const differences = compareSchemaManifests(expected, actual);
+  const detail = [
+    reason,
+    describeDifference("missing columns", differences.missingColumns),
+    describeDifference("unexpected columns", differences.unexpectedColumns),
+    describeDifference("missing objects", differences.missingObjects),
+    describeDifference("unexpected objects", differences.unexpectedObjects),
+    describeDifference("changed objects", differences.changedObjects),
+  ]
+    .filter((part): part is string => part != null)
+    .join("; ");
+  const recovery =
+    "Back up or move the archive aside before recovery because manual recommendation state and " +
+    "source-pruned sessions may exist only in the database. If the source transcripts are complete, " +
+    "rebuild by moving the archive aside and re-ingesting them.";
+  const message = `archive schema drift at version ${LATEST_SCHEMA_VERSION}: ${detail}. ${recovery}`;
+  const error = new SchemaDriftError(
+    message,
+    expected.fingerprint,
+    actual.fingerprint,
+    differences,
+  );
+  logger.error("Archive schema does not match this build.", {
+    "event.name": "decant.schema.drift",
+    "schema.version": LATEST_SCHEMA_VERSION,
+    "schema.fingerprint.expected": expected.fingerprint,
+    "schema.fingerprint.actual": actual.fingerprint,
+    "schema.drift.reason": reason,
+    "schema.drift.missing_columns": summarize(differences.missingColumns),
+    "schema.drift.unexpected_columns": summarize(differences.unexpectedColumns),
+    "schema.drift.missing_objects": summarize(differences.missingObjects),
+    "schema.drift.unexpected_objects": summarize(differences.unexpectedObjects),
+    "schema.drift.changed_objects": summarize(differences.changedObjects),
+    "error.type": error.name,
+    "error.message": error.message,
+    "recovery.action": "back_up_then_rebuild_from_complete_sources",
+  });
+  throw error;
+}
+
+function schemaObjectNames(db: Database): string[] {
+  return (
+    db
+      .query(
+        `SELECT type || ':' || name AS object
+         FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+         ORDER BY type, name`,
+      )
+      .all() as { object: string }[]
+  ).map((row) => row.object);
+}
+
+function describeDifference(label: string, values: string[]): string | null {
+  return values.length === 0 ? null : `${label}: ${summarize(values)}`;
+}
+
+function summarize(values: string[], limit = 8): string {
+  const shown = values.slice(0, limit).map(sanitizeDiagnosticItem);
+  const suffix = values.length > limit ? `, and ${values.length - limit} more` : "";
+  return truncateDiagnostic(`${shown.join(", ")}${suffix}`, 384);
+}
+
+function sanitizeDiagnosticItem(value: string): string {
+  return truncateDiagnostic(value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "�"), 96);
+}
+
+function truncateDiagnostic(value: string, limit: number): string {
+  const characters = [...value];
+  if (characters.length <= limit) {
+    return value;
+  }
+  return `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }

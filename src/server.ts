@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
-import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb, SchemaDriftError } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import { DECANT_VERSION } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
@@ -139,6 +139,7 @@ export type ApiErrorCode =
   | "not_found"
   | "query_required"
   | "recommendation_not_found"
+  | "schema_drift"
   | "schema_too_new"
   | "schema_too_old"
   | "service_starting"
@@ -1144,6 +1145,9 @@ function classifyError(error: unknown): ApiError {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof RequestBodyError) {
     return { code: "malformed_body", message, status: 400 };
+  }
+  if (error instanceof SchemaDriftError) {
+    return { code: "schema_drift", message, status: 409 };
   }
   const normalized = message.toLowerCase();
   if (normalized.includes("is newer than this build supports")) {

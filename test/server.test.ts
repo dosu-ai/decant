@@ -906,6 +906,23 @@ describe("server routes", () => {
     }
   });
 
+  test("maps schema drift to an actionable conflict", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    db.exec("ALTER TABLE recommendation DROP COLUMN impact_label");
+    db.close();
+
+    const response = await route(config, "/api/sessions");
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: "schema_drift" });
+    expect((response.body as { error: string }).error).toContain(
+      "missing columns: recommendation.impact_label",
+    );
+    expect((response.body as { error: string }).error).toContain(
+      "Back up or move the archive aside",
+    );
+  });
+
   test("keeps unexpected exception details in server logs, not 500 responses", async () => {
     const config = freshConfig();
     const closedDb = openDb(config.dbPath);

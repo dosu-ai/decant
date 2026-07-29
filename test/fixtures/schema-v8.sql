@@ -1,8 +1,6 @@
--- decant:schema_version=19
--- Effective decant schema (migrations 1..19 applied), frozen as the current
--- baseline. v19 repairs recommendation impact columns for archives that ran
--- the original v18 migration before those columns were added to it.
--- Do not edit without updating schema tests.
+-- decant:schema_version=8
+-- Effective decant schema (migrations 1..8 applied), frozen at the
+-- pre-typescript cutover. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -28,9 +26,6 @@ CREATE TABLE session (
   cwd TEXT,
   git_branch TEXT,
   model TEXT,
-  reasoning_effort TEXT,
-  reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
-  reasoning_effort_checked INTEGER NOT NULL DEFAULT 0,
   cli_version TEXT,
   started_at TEXT,
   ended_at TEXT,
@@ -39,18 +34,11 @@ CREATE TABLE session (
   total_output_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-  total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
   total_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   est_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_source TEXT,
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   is_archived INTEGER NOT NULL DEFAULT 0,
-  is_subagent INTEGER NOT NULL DEFAULT 0,
-  parent_session_id INTEGER REFERENCES session(id),
-  spawn_tool_use_id TEXT,
-  agent_id TEXT,
-  agent_type TEXT,
-  spawn_depth INTEGER,
   source_path TEXT,
   raw_meta TEXT,
   ingested_at TEXT,
@@ -70,10 +58,6 @@ CREATE TABLE session (
   active_seconds INTEGER NOT NULL DEFAULT 0,
   outcome TEXT,
   work_type TEXT,
-  -- Context-window rollups materialized from per-message usage at ingest;
-  -- peak_context_tokens IS NULL marks a session that still needs the backfill.
-  context_window_tokens INTEGER,
-  peak_context_tokens INTEGER,
   UNIQUE(tool, source_session_id)
 );
 CREATE TABLE message (
@@ -117,9 +101,7 @@ CREATE TABLE tool_call (
   tool_base_name TEXT,
   tool_use_id TEXT,
   input TEXT,
-  input_bytes INTEGER,
   is_error INTEGER,
-  has_result INTEGER,
   output_preview TEXT,
   output_bytes INTEGER,
   duration_ms INTEGER,
@@ -153,7 +135,6 @@ CREATE TABLE ingest_issue (
   source_path TEXT,
   line_no INTEGER,
   error TEXT,
-  code TEXT NOT NULL DEFAULT 'unparsed_line',
   raw_line TEXT,
   created_at TEXT
 );
@@ -163,15 +144,8 @@ CREATE TABLE model_pricing (
   output_per_mtok REAL,
   cache_read_per_mtok REAL,
   cache_write_per_mtok REAL,
-  cache_write_1h_per_mtok REAL,
   source TEXT,
   updated_at TEXT
-);
-CREATE TABLE session_economics (
-  session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
-  format_version INTEGER NOT NULL,
-  vector_json TEXT NOT NULL,
-  computed_at TEXT NOT NULL
 );
 CREATE TABLE recommendation (
   key            TEXT PRIMARY KEY,
@@ -185,8 +159,6 @@ CREATE TABLE recommendation (
   link_label     TEXT,
   icon           TEXT,
   tone           TEXT,
-  impact_label   TEXT,
-  impact_label_checked INTEGER NOT NULL DEFAULT 1,
   score          REAL,
   status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
   status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
@@ -199,14 +171,11 @@ CREATE INDEX idx_session_project ON session(project_id);
 CREATE INDEX idx_session_tool ON session(tool);
 CREATE INDEX idx_session_started ON session(started_at);
 CREATE INDEX idx_session_model ON session(model);
-CREATE INDEX idx_session_parent ON session(parent_session_id);
-CREATE INDEX idx_session_spawn_tooluse ON session(spawn_tool_use_id);
 CREATE INDEX idx_message_session ON message(session_id, seq);
 CREATE INDEX idx_block_session ON block(session_id);
 CREATE INDEX idx_block_message ON block(message_id, ordinal);
 CREATE INDEX idx_block_type ON block(type);
 CREATE INDEX idx_block_tool ON block(tool_name);
-CREATE INDEX idx_block_tool_use ON block(session_id, tool_use_id);
 CREATE INDEX idx_toolcall_session ON tool_call(session_id);
 CREATE INDEX idx_toolcall_kind ON tool_call(tool_kind);
 CREATE INDEX idx_toolcall_server ON tool_call(mcp_server);
@@ -220,11 +189,9 @@ CREATE INDEX idx_toolcall_call_block ON tool_call(call_block_id);
 CREATE INDEX idx_toolcall_result_block ON tool_call(result_block_id);
 CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
-CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
-  content='block', content_rowid='id',
-  prefix='2 3'
+  content='block', content_rowid='id'
 );
 CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

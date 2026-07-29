@@ -12,8 +12,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb, LATEST_SCHEMA_VERSION, openDb, restrictArchiveFile } from "../src/db.ts";
+import { pathToFileURL } from "node:url";
+import { resetSync } from "@logtape/logtape";
+import {
+  closeDb,
+  LATEST_SCHEMA_VERSION,
+  openDb,
+  restrictArchiveFile,
+  SchemaDriftError,
+} from "../src/db.ts";
+import { configureLogging } from "../src/logging.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
+import { buildSchemaManifest } from "../src/schema-manifest.ts";
+import schemaV8Sql from "./fixtures/schema-v8.sql" with { type: "text" };
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-db-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -24,7 +35,71 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v18 baseline. Shadow tables
+async function waitForFiles(paths: string[], timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!paths.every(existsSync)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${paths.join(", ")}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function historicalArchive(path: string, version: 8 | 9 | 12 | 13 | 14): Database {
+  const db = new Database(path, { create: true, strict: true });
+  db.exec(schemaV8Sql);
+  const mark = db.prepare(
+    "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
+  );
+  for (let applied = 1; applied <= 8; applied += 1) {
+    mark.run(applied);
+  }
+  if (version >= 9) {
+    db.exec(`
+      ALTER TABLE session ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE session ADD COLUMN parent_session_id INTEGER REFERENCES session(id);
+      ALTER TABLE session ADD COLUMN spawn_tool_use_id TEXT;
+      ALTER TABLE session ADD COLUMN agent_id TEXT;
+      ALTER TABLE session ADD COLUMN agent_type TEXT;
+      ALTER TABLE session ADD COLUMN spawn_depth INTEGER;
+      CREATE INDEX idx_session_parent ON session(parent_session_id);
+      CREATE INDEX idx_session_spawn_tooluse ON session(spawn_tool_use_id);
+    `);
+    mark.run(9);
+  }
+  if (version >= 12) {
+    db.exec(`
+      CREATE TABLE session_economics (
+        session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
+        format_version INTEGER NOT NULL,
+        vector_json TEXT NOT NULL,
+        computed_at TEXT NOT NULL
+      );
+      ALTER TABLE session ADD COLUMN context_window_tokens INTEGER;
+      ALTER TABLE session ADD COLUMN peak_context_tokens INTEGER;
+      ALTER TABLE session ADD COLUMN total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0;
+    `);
+    mark.run(10);
+    mark.run(11);
+    mark.run(12);
+  }
+  if (version >= 13) {
+    db.exec(`
+      ALTER TABLE session ADD COLUMN reasoning_effort TEXT;
+      ALTER TABLE session ADD COLUMN reasoning_effort_checked INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE model_pricing ADD COLUMN cache_write_1h_per_mtok REAL;
+    `);
+    mark.run(13);
+  }
+  if (version >= 14) {
+    db.exec("ALTER TABLE session ADD COLUMN reasoning_effort_levels TEXT NOT NULL DEFAULT '[]'");
+    mark.run(14);
+  }
+  mark.finalize();
+  return db;
+}
+
+// Inventory of the frozen v19 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -131,6 +206,57 @@ describe("openDb", () => {
     db.close();
   });
 
+  test("serializes two processes creating the same fresh archive", async () => {
+    const dbModule = pathToFileURL(join(import.meta.dir, "..", "src", "db.ts")).href;
+    const script = `
+      import { existsSync, writeFileSync } from "node:fs";
+      import { openDb } from ${JSON.stringify(dbModule)};
+      const path = process.env.DECANT_RACE_DB;
+      const ready = process.env.DECANT_RACE_READY;
+      const gate = process.env.DECANT_RACE_GATE;
+      if (path == null || ready == null || gate == null) throw new Error("missing race fixture");
+      writeFileSync(ready, "");
+      while (!existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 1));
+      openDb(path).close();
+    `;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const path = freshPath();
+      const gate = `${path}.go`;
+      const readyPaths = [`${path}.ready-1`, `${path}.ready-2`];
+      const children = readyPaths.map((ready) =>
+        Bun.spawn([process.execPath, "-e", script], {
+          cwd: join(import.meta.dir, ".."),
+          env: {
+            ...process.env,
+            DECANT_RACE_DB: path,
+            DECANT_RACE_READY: ready,
+            DECANT_RACE_GATE: gate,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      );
+      try {
+        await waitForFiles(readyPaths);
+      } finally {
+        writeFileSync(gate, "");
+      }
+      const exits = await Promise.all(children.map((child) => child.exited));
+      const errors = await Promise.all(children.map((child) => new Response(child.stderr).text()));
+      expect({ attempt, exits, errors }).toEqual({
+        attempt,
+        exits: [0, 0],
+        errors: ["", ""],
+      });
+
+      const db = openDb(path);
+      expect(db.query("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({
+        count: LATEST_SCHEMA_VERSION,
+      });
+      db.close();
+    }
+  });
+
   test("finalizes cached query statements before closing a worker-style connection", () => {
     const db = openDb(freshPath());
     const cached = db.query("SELECT 1 AS value");
@@ -194,47 +320,7 @@ describe("openDb", () => {
 
   test("migrates a v8 archive through the latest version", () => {
     const path = freshPath();
-    const db = new Database(path, { create: true, strict: true });
-    db.exec(`
-      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL, source_path TEXT);
-      CREATE TABLE model_pricing(
-        model TEXT PRIMARY KEY,
-        input_per_mtok REAL,
-        output_per_mtok REAL,
-        cache_read_per_mtok REAL,
-        cache_write_per_mtok REAL,
-        source TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE ingest_source (
-        path TEXT PRIMARY KEY,
-        tool TEXT,
-        size INTEGER,
-        mtime INTEGER,
-        hash TEXT,
-        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
-        line_count INTEGER,
-        status TEXT,
-        error TEXT,
-        last_ingested_at TEXT
-      );
-      CREATE TABLE ingest_issue (
-        id INTEGER PRIMARY KEY,
-        source_path TEXT,
-        line_no INTEGER,
-        error TEXT,
-        raw_line TEXT,
-        created_at TEXT
-      );
-    `);
-    const insert = db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
-    );
-    for (let version = 1; version <= 8; version += 1) {
-      insert.run(version);
-    }
-    db.close();
+    historicalArchive(path, 8).close();
 
     const migrated = openDb(path);
     expect(
@@ -265,55 +351,57 @@ describe("openDb", () => {
     migrated.close();
   });
 
+  test("replaying migrations from v8 is schema-equivalent to the latest baseline", () => {
+    const migratedPath = freshPath();
+    const legacy = historicalArchive(migratedPath, 8);
+    legacy.exec(`
+      INSERT INTO recommendation (
+        key, kind, title, score, status, note, first_seen_at, updated_at
+      ) VALUES (
+        'signal:v8-preserved', 'signal', 'Preserved from v8', 7, 'open',
+        'manual state', '2026-07-29T00:00:00Z', '2026-07-29T00:00:00Z'
+      )
+    `);
+    legacy.close();
+
+    const migrated = openDb(migratedPath);
+    const baseline = openDb(freshPath());
+    expect(buildSchemaManifest(migrated)).toEqual(buildSchemaManifest(baseline));
+    expect(
+      migrated
+        .query(
+          `SELECT dflt_value FROM pragma_table_info('recommendation')
+           WHERE name = 'impact_label_checked'`,
+        )
+        .get(),
+    ).toEqual({ dflt_value: "0" });
+    expect(
+      baseline
+        .query(
+          `SELECT dflt_value FROM pragma_table_info('recommendation')
+           WHERE name = 'impact_label_checked'`,
+        )
+        .get(),
+    ).toEqual({ dflt_value: "1" });
+    expect(
+      migrated
+        .query(
+          `SELECT note, impact_label, impact_label_checked
+           FROM recommendation WHERE key = 'signal:v8-preserved'`,
+        )
+        .get(),
+    ).toEqual({
+      note: "manual state",
+      impact_label: null,
+      impact_label_checked: 0,
+    });
+    migrated.close();
+    baseline.close();
+  });
+
   test("migrates a v9 archive to the persisted economics cache", () => {
     const path = freshPath();
-    const db = new Database(path, { create: true, strict: true });
-    db.exec(`
-      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(
-        id INTEGER PRIMARY KEY,
-        tool TEXT NOT NULL,
-        source_session_id TEXT NOT NULL,
-        source_path TEXT,
-        parent_session_id INTEGER REFERENCES session(id)
-      );
-      CREATE TABLE model_pricing(
-        model TEXT PRIMARY KEY,
-        input_per_mtok REAL,
-        output_per_mtok REAL,
-        cache_read_per_mtok REAL,
-        cache_write_per_mtok REAL,
-        source TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE ingest_source (
-        path TEXT PRIMARY KEY,
-        tool TEXT,
-        size INTEGER,
-        mtime INTEGER,
-        hash TEXT,
-        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
-        line_count INTEGER,
-        status TEXT,
-        error TEXT,
-        last_ingested_at TEXT
-      );
-      CREATE TABLE ingest_issue (
-        id INTEGER PRIMARY KEY,
-        source_path TEXT,
-        line_no INTEGER,
-        error TEXT,
-        raw_line TEXT,
-        created_at TEXT
-      );
-    `);
-    const insert = db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
-    );
-    for (let version = 1; version <= 9; version += 1) {
-      insert.run(version);
-    }
-    db.close();
+    historicalArchive(path, 9).close();
 
     const migrated = openDb(path);
     expect(inventory(migrated, "table")).toContain("session_economics");
@@ -329,60 +417,14 @@ describe("openDb", () => {
 
   test("migrates v12 archives and invalidates stale Claude context-window rollups", () => {
     const path = freshPath();
-    const db = new Database(path, { create: true, strict: true });
+    const db = historicalArchive(path, 12);
     db.exec(`
-      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(
-        id INTEGER PRIMARY KEY,
-        tool TEXT NOT NULL,
-        source_session_id TEXT NOT NULL,
-        source_path TEXT,
-        parent_session_id INTEGER REFERENCES session(id),
-        context_window_tokens INTEGER,
-        peak_context_tokens INTEGER,
-        total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE model_pricing(
-        model TEXT PRIMARY KEY,
-        input_per_mtok REAL,
-        output_per_mtok REAL,
-        cache_read_per_mtok REAL,
-        cache_write_per_mtok REAL,
-        source TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE ingest_source (
-        path TEXT PRIMARY KEY,
-        tool TEXT,
-        size INTEGER,
-        mtime INTEGER,
-        hash TEXT,
-        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
-        line_count INTEGER,
-        status TEXT,
-        error TEXT,
-        last_ingested_at TEXT
-      );
-      CREATE TABLE ingest_issue (
-        id INTEGER PRIMARY KEY,
-        source_path TEXT,
-        line_no INTEGER,
-        error TEXT,
-        raw_line TEXT,
-        created_at TEXT
-      );
       INSERT INTO session(
         id, tool, source_session_id, context_window_tokens, peak_context_tokens
       ) VALUES
         (1, 'claude_code', 'claude-old-rollup', 200000, 120000),
         (2, 'codex', 'codex-explicit-rollup', 258400, 120000);
     `);
-    const insert = db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
-    );
-    for (let version = 1; version <= 12; version += 1) {
-      insert.run(version);
-    }
     db.close();
 
     const migrated = openDb(path);
@@ -402,38 +444,8 @@ describe("openDb", () => {
 
   test("migrates v13 effort values without changing provider labels", () => {
     const path = freshPath();
-    const db = new Database(path, { create: true, strict: true });
+    const db = historicalArchive(path, 13);
     db.exec(`
-      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(
-        id INTEGER PRIMARY KEY,
-        tool TEXT NOT NULL,
-        source_session_id TEXT NOT NULL,
-        source_path TEXT,
-        parent_session_id INTEGER REFERENCES session(id),
-        reasoning_effort TEXT,
-        reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE ingest_source (
-        path TEXT PRIMARY KEY,
-        tool TEXT,
-        size INTEGER,
-        mtime INTEGER,
-        hash TEXT,
-        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
-        line_count INTEGER,
-        status TEXT,
-        error TEXT,
-        last_ingested_at TEXT
-      );
-      CREATE TABLE ingest_issue (
-        id INTEGER PRIMARY KEY,
-        source_path TEXT,
-        line_no INTEGER,
-        error TEXT,
-        raw_line TEXT,
-        created_at TEXT
-      );
       INSERT INTO session(
         id, tool, source_session_id, reasoning_effort, reasoning_effort_checked
       ) VALUES
@@ -442,12 +454,6 @@ describe("openDb", () => {
         (3, 'codex', 'codex-ultra', 'ultra', 1),
         (4, 'codex', 'codex-mixed', 'mixed', 1);
     `);
-    const insert = db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
-    );
-    for (let version = 1; version <= 13; version += 1) {
-      insert.run(version);
-    }
     db.close();
 
     const migrated = openDb(path);
@@ -489,39 +495,8 @@ describe("openDb", () => {
 
   test("repairs the v14 Claude max-to-ultra alias without changing Codex", () => {
     const path = freshPath();
-    const db = new Database(path, { create: true, strict: true });
+    const db = historicalArchive(path, 14);
     db.exec(`
-      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-      CREATE TABLE session(
-        id INTEGER PRIMARY KEY,
-        tool TEXT NOT NULL,
-        source_session_id TEXT NOT NULL,
-        source_path TEXT,
-        parent_session_id INTEGER REFERENCES session(id),
-        reasoning_effort TEXT,
-        reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
-        reasoning_effort_checked INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE ingest_source (
-        path TEXT PRIMARY KEY,
-        tool TEXT,
-        size INTEGER,
-        mtime INTEGER,
-        hash TEXT,
-        session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
-        line_count INTEGER,
-        status TEXT,
-        error TEXT,
-        last_ingested_at TEXT
-      );
-      CREATE TABLE ingest_issue (
-        id INTEGER PRIMARY KEY,
-        source_path TEXT,
-        line_no INTEGER,
-        error TEXT,
-        raw_line TEXT,
-        created_at TEXT
-      );
       INSERT INTO session(
         id, tool, source_session_id, reasoning_effort,
         reasoning_effort_levels, reasoning_effort_checked
@@ -531,12 +506,6 @@ describe("openDb", () => {
         (3, 'codex', 'codex-max', 'max', '["max"]', 1),
         (4, 'codex', 'codex-ultra', 'ultra', '["ultra"]', 1);
     `);
-    const insert = db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
-    );
-    for (let version = 1; version <= 14; version += 1) {
-      insert.run(version);
-    }
     db.close();
 
     const migrated = openDb(path);
@@ -752,12 +721,236 @@ describe("openDb", () => {
     db.close();
   });
 
+  test("v19 repairs an already-recorded pre-review v18 schema without losing rows", () => {
+    const path = join(workDir, "v19-recommendation-repair.db");
+    let db = openDb(path);
+    db.exec(`
+      INSERT INTO session (id, tool, source_session_id)
+      VALUES (1, 'claude_code', 'v18-pre-review');
+      INSERT INTO message (id, session_id, seq, timestamp, raw)
+      VALUES
+        (10, 1, 0, '2026-07-29T00:00:00.000Z', '{}'),
+        (11, 1, 1, '2026-07-29T00:00:01.250Z', '{}');
+      INSERT INTO block (
+        id, message_id, session_id, ordinal, type, tool_name, tool_use_id, tool_result
+      )
+      VALUES
+        (100, 10, 1, 0, 'tool_use', 'Read', 'toolu_v19', NULL),
+        (101, 11, 1, 0, 'tool_result', NULL, 'toolu_v19', 'done');
+      INSERT INTO tool_call (
+        id, session_id, message_id, call_block_id, result_block_id,
+        tool_name, tool_use_id, duration_ms, ordinal, timestamp
+      )
+      VALUES (
+        1000, 1, NULL, 100, 101,
+        'Read', 'toolu_v19', NULL, 0, '2026-07-29T00:00:00.000Z'
+      );
+      INSERT INTO recommendation (
+        key, kind, title, score, status, note, first_seen_at, updated_at
+      ) VALUES (
+        'signal:preserved', 'signal', 'Preserve me', 42, 'open', 'operator note',
+        '2026-07-29T00:00:00Z', '2026-07-29T00:00:00Z'
+      );
+      ALTER TABLE recommendation DROP COLUMN impact_label_checked;
+      ALTER TABLE recommendation DROP COLUMN impact_label;
+      DROP INDEX idx_block_tool_use;
+      DELETE FROM schema_migrations WHERE version = 19;
+    `);
+    db.close();
+
+    db = openDb(path);
+    expect(db.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+      version: 19,
+    });
+    expect(
+      db
+        .query(
+          `SELECT key, title, note, impact_label, impact_label_checked
+           FROM recommendation WHERE key = 'signal:preserved'`,
+        )
+        .get(),
+    ).toEqual({
+      key: "signal:preserved",
+      title: "Preserve me",
+      note: "operator note",
+      impact_label: null,
+      impact_label_checked: 0,
+    });
+    expect(
+      db
+        .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_block_tool_use'")
+        .get(),
+    ).not.toBeNull();
+    expect(db.query("SELECT message_id, duration_ms FROM tool_call WHERE id = 1000").get()).toEqual(
+      {
+        message_id: null,
+        duration_ms: 1_250,
+      },
+    );
+    db.close();
+
+    expect(() => openDb(path).close()).not.toThrow();
+  });
+
+  test("fails fast on owned-schema drift with one actionable error record", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    db.exec(`
+      ALTER TABLE recommendation DROP COLUMN impact_label;
+      ALTER TABLE session ADD COLUMN unexpected_local_state TEXT;
+    `);
+    db.close();
+
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    let caught: unknown;
+    try {
+      openDb(path);
+    } catch (error) {
+      caught = error;
+    } finally {
+      resetSync();
+    }
+
+    expect(caught).toBeInstanceOf(SchemaDriftError);
+    expect((caught as Error).message).toContain("missing columns: recommendation.impact_label");
+    expect((caught as Error).message).toContain(
+      "unexpected columns: session.unexpected_local_state",
+    );
+    expect((caught as Error).message).toContain("Back up or move the archive aside");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      level: "ERROR",
+      "event.name": "decant.schema.drift",
+      "schema.version": 19,
+      "schema.drift.missing_columns": "recommendation.impact_label",
+      "schema.drift.unexpected_columns": "session.unexpected_local_state",
+      "error.type": "SchemaDriftError",
+      "recovery.action": "back_up_then_rebuild_from_complete_sources",
+    });
+  });
+
+  test("rolls back a repair and its v19 stamp when unrelated drift remains", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    db.exec(`
+      ALTER TABLE recommendation DROP COLUMN impact_label_checked;
+      ALTER TABLE recommendation DROP COLUMN impact_label;
+      ALTER TABLE session ADD COLUMN unexpected_local_state TEXT;
+      DELETE FROM schema_migrations WHERE version = 19;
+    `);
+    db.close();
+
+    expect(() => openDb(path)).toThrow(SchemaDriftError);
+
+    const unchanged = new Database(path, { strict: true });
+    expect(unchanged.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+      version: 18,
+    });
+    expect(
+      (
+        unchanged.query("SELECT name FROM pragma_table_info('recommendation')").all() as {
+          name: string;
+        }[]
+      ).map((column) => column.name),
+    ).not.toContain("impact_label");
+    expect(
+      unchanged
+        .query("SELECT 1 FROM pragma_table_info('session') WHERE name = 'unexpected_local_state'")
+        .get(),
+    ).not.toBeNull();
+    unchanged.close();
+  });
+
+  test("does not initialize a non-empty database without schema_migrations", () => {
+    const path = freshPath();
+    const db = new Database(path, { create: true, strict: true });
+    db.exec("CREATE TABLE operator_data(id INTEGER PRIMARY KEY, note TEXT)");
+    db.close();
+
+    expect(() => openDb(path)).toThrow(SchemaDriftError);
+    const untouched = new Database(path, { strict: true });
+    expect(inventory(untouched, "table")).toEqual(["operator_data"]);
+    untouched.close();
+  });
+
+  test("bounds and sanitizes adversarial schema identifiers in errors and logs", () => {
+    const path = freshPath();
+    const unsafeName = `operator🚀\n\u0007${"x".repeat(20_000)}`;
+    const db = new Database(path, { create: true, strict: true });
+    db.exec(`CREATE TABLE "${unsafeName}"(id INTEGER PRIMARY KEY)`);
+    db.close();
+
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    let caught: unknown;
+    try {
+      openDb(path);
+    } catch (error) {
+      caught = error;
+    } finally {
+      resetSync();
+    }
+
+    expect(caught).toBeInstanceOf(SchemaDriftError);
+    const message = (caught as Error).message;
+    expect([...message].length).toBeLessThan(4_096);
+    expect(message).toContain("operator🚀��");
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain(String.fromCharCode(7));
+    expect(lines).toHaveLength(1);
+    expect([...(lines[0] ?? "")].length).toBeLessThan(8_192);
+    const record = JSON.parse(lines[0] ?? "") as Record<string, string>;
+    expect(record["schema.drift.reason"]).not.toContain("\n");
+    expect(record["schema.drift.reason"]).not.toContain(String.fromCharCode(7));
+    expect(record["error.message"]).toBe(message);
+  });
+
+  test("reports malformed and non-contiguous migration history as schema drift", () => {
+    const malformedPath = freshPath();
+    const malformed = new Database(malformedPath, { create: true, strict: true });
+    malformed.exec("CREATE TABLE schema_migrations(applied_at TEXT NOT NULL)");
+    malformed.close();
+    expect(() => openDb(malformedPath)).toThrow(/schema_migrations is malformed or unreadable/);
+
+    const gappedPath = freshPath();
+    const gapped = openDb(gappedPath);
+    gapped.exec("DELETE FROM schema_migrations WHERE version = 10");
+    gapped.close();
+    expect(() => openDb(gappedPath)).toThrow(/schema_migrations is non-contiguous/);
+  });
+
   test("rejects a pre-baseline archive and points at rebuilding it", () => {
     const path = freshPath();
     const db = openDb(path);
     db.exec("DELETE FROM schema_migrations WHERE version >= 8");
     db.close();
     expect(() => openDb(path)).toThrow(/rebuild/i);
+  });
+});
+
+describe("schema manifest", () => {
+  function manifest(defaultValue: string, triggerValue: string) {
+    const db = new Database(":memory:", { strict: true });
+    db.exec(`
+      CREATE TABLE literal_test(id INTEGER PRIMARY KEY, value TEXT DEFAULT '${defaultValue}');
+      CREATE TABLE audit(value TEXT);
+      CREATE TRIGGER literal_trigger AFTER INSERT ON literal_test BEGIN
+        INSERT INTO audit(value) VALUES ('${triggerValue}');
+      END;
+    `);
+    const result = buildSchemaManifest(db);
+    db.close();
+    return result;
+  }
+
+  test("preserves whitespace, punctuation, quotes, and keywords inside SQL literals", () => {
+    const baseline = manifest('a  b "Name" if not exists', "x, y");
+    expect(manifest('a b "Name" if not exists', "x, y").fingerprint).not.toBe(baseline.fingerprint);
+    expect(manifest('a  b "Name" if not exists', "x,y").fingerprint).not.toBe(baseline.fingerprint);
+    expect(manifest('a  b "name" if not exists', "x, y").fingerprint).not.toBe(
+      baseline.fingerprint,
+    );
   });
 });
 

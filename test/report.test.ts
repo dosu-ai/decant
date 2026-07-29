@@ -10,6 +10,7 @@ import {
   renderContextWindowChart,
   renderSessionsByDayChart,
   reportContextWindowGeometry,
+  sanitizeReportSvg,
 } from "../src/report/charts.ts";
 import {
   type AnalyticsReportData,
@@ -261,6 +262,15 @@ describe("report charts", () => {
     expect(svg).not.toContain("<style");
     expect(svg).toContain("IBM Plex Sans");
     expect(renderSessionsByDayChart(daily)).toContain("<svg");
+  });
+
+  test("removes safe ECharts style blocks without joining surrounding markup", () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[.chart{}]]></style><rect width="1" height="1"/></svg>';
+    const sanitized = sanitizeReportSvg(svg);
+    expect(sanitized).not.toContain("<style");
+    expect(sanitized).toHaveLength(svg.length);
+    expect(sanitized).toContain('<rect width="1" height="1"/>');
   });
 
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {

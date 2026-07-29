@@ -83,7 +83,7 @@ export function renderChartSvg(option: echarts.EChartsOption, size: ReportChartS
  * are not an HTML escaping boundary. Reject active markup before an SVG reaches
  * the report's intentionally inline render path.
  */
-function sanitizeReportSvg(svg: string): string {
+export function sanitizeReportSvg(svg: string): string {
   const styleElements = [...svg.matchAll(SVG_STYLE_ELEMENT)];
   if (styleElements.length > 1) {
     throw new Error("report chart contains injected style markup");
@@ -96,7 +96,11 @@ function sanitizeReportSvg(svg: string): string {
   ) {
     throw new Error("report chart contains active style markup");
   }
-  const sanitized = svg.replace(SVG_STYLE_ELEMENT, "");
+  const styleElement = styleElements[0];
+  const sanitized =
+    styleElement?.index == null
+      ? svg
+      : `${svg.slice(0, styleElement.index)}${" ".repeat(styleElement[0].length)}${svg.slice(styleElement.index + styleElement[0].length)}`;
   assertSafeReportSvg(sanitized);
   return sanitized;
 }

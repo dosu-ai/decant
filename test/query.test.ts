@@ -15,6 +15,7 @@ import {
   search,
   searchPage,
   sessionIngestIssues,
+  sessionSearchIndex,
 } from "../src/query.ts";
 import { SEARCH_MATCH_END, SEARCH_MATCH_START } from "../src/search-query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
@@ -706,6 +707,59 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("builds a lightweight search index from visible non-archived sessions", () => {
+    const db = seeded();
+    const root = listSessions(db)[0];
+    if (root == null) {
+      throw new Error("seeded root must exist");
+    }
+    db.exec(`
+      INSERT INTO session(
+        id, tool, source_session_id, project_id, title, model, started_at,
+        is_subagent, parent_session_id
+      )
+      SELECT 7000, 'codex', 'index-no-messages', project_id, 'Index without messages',
+             'gpt-5', '2026-05-04T00:00:00Z', 0, NULL
+      FROM session WHERE id = ${root.id}
+      UNION ALL
+      SELECT 7001, 'claude_code', 'index-generated-command', project_id,
+             '<local-command-caveat>generated</local-command-caveat>',
+             NULL, '2026-05-05T00:00:00Z', 0, NULL
+      FROM session WHERE id = ${root.id}
+      UNION ALL
+      SELECT 7002, 'codex', 'index-archived-parent', project_id, 'Archived parent',
+             'gpt-5', '2026-05-06T00:00:00Z', 0, NULL
+      FROM session WHERE id = ${root.id}
+      UNION ALL
+      SELECT 7003, 'codex', 'index-archived-child', project_id, 'Archived child',
+             'gpt-5', '2026-05-06T00:01:00Z', 1, 7002
+      FROM session WHERE id = ${root.id};
+    `);
+    expect(setSessionUserState(db, 7002, "archived")).toBe(true);
+
+    const index = sessionSearchIndex(db);
+    expect(index.find((row) => row.id === 7000)).toEqual({
+      id: 7000,
+      title: "Index without messages",
+      project: "/Users/dev/proj",
+      tool: "codex",
+      model: "gpt-5",
+      started_at: "2026-05-04T00:00:00Z",
+    });
+    expect(index.some((row) => row.id === 7001)).toBe(false);
+    expect(index.some((row) => row.id === 7002)).toBe(false);
+    expect(index.some((row) => row.id === 7003)).toBe(false);
+    expect(Object.keys(index[0] ?? {}).sort()).toEqual([
+      "id",
+      "model",
+      "project",
+      "started_at",
+      "title",
+      "tool",
+    ]);
+    db.close();
+  });
+
   test("search returns matching-column snippets, deep links, totals, and pagination", () => {
     const db = seeded();
     const page = searchPage(db, "auth", { limit: 1 });
@@ -734,6 +788,13 @@ describe("query reads", () => {
     );
     expect(toolInputHit?.snippet).toContain(`${SEARCH_MATCH_START}auth_test.py${SEARCH_MATCH_END}`);
     expect(toolInputHit?.snippet).not.toBe("Read");
+
+    expect(searchPage(db, "auth", { includeTotal: false, limit: 1 })).toMatchObject({
+      results: [expect.any(Object)],
+      total: null,
+      total_is_capped: false,
+      elapsed_ms: expect.any(Number),
+    });
     db.close();
   });
 

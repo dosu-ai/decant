@@ -56,6 +56,25 @@ describe("responsive session detail styles", () => {
   });
 });
 
+describe("responsive command palette", () => {
+  test("keeps one desktop trigger and exposes the mobile trigger below the breakpoint", () => {
+    expect(rule(".icon-button.topbar-search-mobile")).toContain("display: none");
+    const mobileStart = styles.indexOf("@media (max-width: 767px)");
+    const mobileEnd = styles.indexOf("@media (max-width: 640px)", mobileStart);
+    const mobileRules = styles.slice(mobileStart, mobileEnd);
+    expect(mobileRules).toContain(".topbar-search");
+    expect(mobileRules).toContain("display: none");
+    expect(mobileRules).toContain(".icon-button.topbar-search-mobile");
+    expect(mobileRules).toContain("display: inline-grid");
+  });
+
+  test("bounds the modal to the dynamic viewport and scrolls its results independently", () => {
+    expect(rule(".command-palette")).toContain("100dvh");
+    expect(rule(".command-palette")).toContain("overflow: hidden");
+    expect(rule(".command-palette-results")).toContain("overflow-y: auto");
+  });
+});
+
 describe("responsive Dosu surfaces", () => {
   test("aligns sidebar metadata and attribution to the same icon column", () => {
     expect(rule(".sidebar-stat")).toContain("grid-template-columns: 18px minmax(0, 1fr)");

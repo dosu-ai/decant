@@ -37,6 +37,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@leeoniya/ufuzzy": "^1.0.19",
     "@logtape/logtape": "^2.2.4",
     "@shikijs/langs": "^4.3.1",
     "@shikijs/themes": "^4.3.1",

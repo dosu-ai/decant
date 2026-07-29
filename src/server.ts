@@ -19,6 +19,7 @@ import {
   listToolCalls,
   searchPage,
   sessionIngestIssues,
+  sessionSearchIndex,
 } from "./query.ts";
 import {
   list as listRecommendations,
@@ -328,6 +329,9 @@ export async function handleRequest(
         ),
       );
     }
+    if (request.method === "GET" && url.pathname === "/api/sessions/search-index") {
+      return withDb(config, context, (db) => json(sessionSearchIndex(db)));
+    }
     if (request.method === "GET" && url.pathname === "/api/projects") {
       return withDb(config, context, (db) => json(listProjects(db)));
     }
@@ -431,30 +435,59 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      const body = await readJson<{
-        query?: string;
-        tool?: string | null;
-        project?: string | null;
-        include_subagents?: boolean;
-        from?: string | null;
-        to?: string | null;
-        limit?: number;
-        offset?: number;
-      }>(request);
+      const rawBody = await readJson<unknown>(request);
+      if (rawBody == null || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+        return errorResponse("invalid_request", "request body must be a JSON object", {}, 400);
+      }
+      const body = rawBody as Record<string, unknown>;
       if (typeof body.query !== "string" || body.query.trim() === "") {
         return errorResponse("query_required", "query is required", {}, 400);
       }
+      for (const field of ["tool", "project", "from", "to"] as const) {
+        const value = body[field];
+        if (value !== undefined && value !== null && typeof value !== "string") {
+          return errorResponse("invalid_request", `${field} must be a string or null`, {}, 400);
+        }
+      }
+      for (const field of ["include_subagents", "include_total"] as const) {
+        if (field in body && typeof body[field] !== "boolean") {
+          return errorResponse("invalid_request", `${field} must be a boolean`, {}, 400);
+        }
+      }
+      if (
+        body.limit !== undefined &&
+        (!Number.isSafeInteger(body.limit) ||
+          (body.limit as number) < 1 ||
+          (body.limit as number) > 100)
+      ) {
+        return errorResponse("invalid_request", "limit must be an integer from 1 to 100", {}, 400);
+      }
+      if (
+        body.offset !== undefined &&
+        (!Number.isSafeInteger(body.offset) || (body.offset as number) < 0)
+      ) {
+        return errorResponse("invalid_request", "offset must be a non-negative integer", {}, 400);
+      }
       const query = body.query;
+      const tool = body.tool as string | null | undefined;
+      const project = body.project as string | null | undefined;
+      const includeSubagents = body.include_subagents as boolean | undefined;
+      const includeTotal = body.include_total as boolean | undefined;
+      const from = body.from as string | null | undefined;
+      const to = body.to as string | null | undefined;
+      const limit = body.limit as number | undefined;
+      const offset = body.offset as number | undefined;
       return withDb(config, context, (db) => {
         return json(
           searchPage(db, query, {
-            tool: body.tool,
-            project: body.project,
-            includeSubagents: body.include_subagents === true,
-            from: body.from,
-            to: body.to,
-            limit: body.limit,
-            offset: body.offset,
+            tool,
+            project,
+            includeSubagents: includeSubagents === true,
+            includeTotal: includeTotal !== false,
+            from,
+            to,
+            limit,
+            offset,
           }),
         );
       });

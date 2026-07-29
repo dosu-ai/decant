@@ -21,6 +21,7 @@ import {
   serve,
   type TrustedPeerSources,
 } from "../src/server.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -145,6 +146,37 @@ describe("server routes", () => {
     const touchIcon = await route(config, "/apple-touch-icon.png");
     expect(touchIcon.status).toBe(200);
     expect(touchIcon.contentType).toBe("image/png");
+  });
+
+  test("serves a lightweight visible non-archived session search index", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    const archived = db
+      .query(
+        `SELECT id
+         FROM session
+         WHERE tool = 'codex'
+         ORDER BY id
+         LIMIT 1`,
+      )
+      .get() as { id: number };
+    expect(setSessionUserState(db, archived.id, "archived")).toBe(true);
+    db.close();
+
+    const response = await route(config, "/api/sessions/search-index");
+    expect(response.status).toBe(200);
+    const rows = response.body as Array<Record<string, unknown>>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((row) => row.id === archived.id)).toBe(false);
+    expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
+      "id",
+      "model",
+      "project",
+      "started_at",
+      "title",
+      "tool",
+    ]);
   });
 
   test("app routes fall back to the React shell and config is exposed locally", async () => {
@@ -522,6 +554,44 @@ describe("server routes", () => {
       total_is_capped: false,
       elapsed_ms: expect.any(Number),
     });
+    const fastSearch = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({ query: "auth", include_total: false, limit: 1 }),
+    });
+    expect(fastSearch).toMatchObject({
+      status: 200,
+      body: {
+        results: [expect.any(Object)],
+        total: null,
+        total_is_capped: false,
+        elapsed_ms: expect.any(Number),
+      },
+    });
+    const invalidSearchBodies: unknown[] = [
+      null,
+      { query: "auth", project: {} },
+      { query: "auth", tool: [] },
+      { query: "auth", from: 123 },
+      { query: "auth", include_subagents: "true" },
+      { query: "auth", include_total: null },
+      { query: "auth", limit: "1" },
+      { query: "auth", limit: 0 },
+      { query: "auth", limit: 101 },
+      { query: "auth", limit: 1.5 },
+      { query: "auth", offset: -4 },
+      { query: "auth", offset: 1.5 },
+    ];
+    for (const body of invalidSearchBodies) {
+      expect(
+        await route(config, "/api/search", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      ).toMatchObject({
+        status: 400,
+        body: { code: "invalid_request" },
+      });
+    }
     const firstSearchPage = await route(config, "/api/search", {
       method: "POST",
       body: JSON.stringify({ query: "auth", limit: 1 }),

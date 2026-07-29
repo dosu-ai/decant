@@ -78,6 +78,15 @@ export interface ListFilter {
   to?: string | null;
 }
 
+export interface SessionSearchIndexRow {
+  id: number;
+  title: string | null;
+  project: string | null;
+  tool: string;
+  model: string | null;
+  started_at: string | null;
+}
+
 interface SessionSummaryRow
   extends Omit<
     SessionSummary,
@@ -171,6 +180,23 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   return withDosuMcpEvidence(db, nested, includeArchived);
 }
 
+/**
+ * Return the complete client-side fuzzy-search haystack without loading
+ * messages, tool calls, title fallbacks, or session rollups.
+ */
+export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
+  return db
+    .query(
+      `SELECT s.id, s.title, p.path AS project, s.tool, s.model, s.started_at
+       FROM session s
+       LEFT JOIN project p ON p.id = s.project_id
+       WHERE ${visibleSessionPredicate("s")}
+         AND ${sessionUserStatePredicate("s")}
+       ORDER BY s.started_at DESC, s.id DESC`,
+    )
+    .all() as SessionSearchIndexRow[];
+}
+
 export interface SearchHit {
   session_id: number;
   session_title: string | null;
@@ -195,7 +221,7 @@ export function search(db: Database, query: string, limitValue = 30): SearchHit[
       offset: results.length,
     });
     results.push(...page.results);
-    if (page.results.length === 0 || results.length >= page.total) {
+    if (page.results.length === 0 || (page.total != null && results.length >= page.total)) {
       break;
     }
   }
@@ -209,6 +235,7 @@ export interface SearchFilter {
   tool?: string | null;
   project?: string | null;
   includeSubagents?: boolean;
+  includeTotal?: boolean;
   limit?: number | null;
   offset?: number | null;
   from?: string | null;
@@ -217,7 +244,7 @@ export interface SearchFilter {
 
 export interface SearchPage {
   results: SearchHit[];
-  total: number;
+  total: number | null;
   total_is_capped: boolean;
   elapsed_ms: number;
 }
@@ -265,13 +292,17 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
     JOIN session s ON s.id = b.session_id
     LEFT JOIN project p ON p.id = s.project_id`;
   const where = `WHERE ${clauses.join(" AND ")}`;
-  const cappedCount = (
-    db
-      .query(`SELECT COUNT(*) AS count FROM (SELECT 1 ${joins} ${where} LIMIT 1001)`)
-      .get(...params) as { count: number }
-  ).count;
-  const totalIsCapped = cappedCount > 1000;
-  const total = Math.min(cappedCount, 1000);
+  let total: number | null = null;
+  let totalIsCapped = false;
+  if (filter.includeTotal !== false) {
+    const cappedCount = (
+      db
+        .query(`SELECT COUNT(*) AS count FROM (SELECT 1 ${joins} ${where} LIMIT 1001)`)
+        .get(...params) as { count: number }
+    ).count;
+    totalIsCapped = cappedCount > 1000;
+    total = Math.min(cappedCount, 1000);
+  }
   const rows = db
     .query(
       `SELECT b.session_id, s.title AS session_title, s.tool, b.id AS block_id,

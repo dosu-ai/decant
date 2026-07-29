@@ -70,6 +70,15 @@ import {
   prepareAnalyticsChartState,
 } from "./chart-state.ts";
 import {
+  buildCommandPaletteGroups,
+  type CommandPaletteItem,
+  flattenCommandPaletteItems,
+  normalizeRecentSearches,
+  paletteShortcutLabel,
+  reduceCommandPaletteKey,
+  shouldOpenCommandPalette,
+} from "./command-palette.ts";
+import {
   contextCurveAreaPath,
   contextCurveLinePath,
   groupContextMarkers,
@@ -84,6 +93,13 @@ import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
+import {
+  createSessionSearchIndex,
+  type SessionHighlightRange,
+  type SessionHighlights,
+  type SessionSearchIndex,
+  type SessionSearchIndexRow,
+} from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import {
   planSessionLoad,
@@ -102,6 +118,7 @@ import {
   sessionsArchivedHref,
   titleFor,
 } from "./navigation.ts";
+import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
 import {
   archiveActionFor,
@@ -236,7 +253,7 @@ type SearchHit = {
 type SearchResponse = {
   elapsed_ms: number;
   results: SearchHit[];
-  total: number;
+  total: number | null;
   total_is_capped: boolean;
 };
 
@@ -701,6 +718,7 @@ function App() {
   const [sessionListExhausted, setSessionListExhausted] = useState(false);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [localSyncing, setLocalSyncing] = useState(false);
   const [syncError, setSyncError] = useState<unknown>(null);
@@ -711,7 +729,6 @@ function App() {
   const syncCompleteTimerRef = useRef<number | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
-  const headerSearchRef = useRef<HTMLInputElement | null>(null);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
@@ -988,32 +1005,27 @@ function App() {
   }, [liveConnectionKey, requestRefresh]);
 
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
+    const openSearch = (event: KeyboardEvent) => {
       const targetIsInteractive =
         isInteractiveTarget(event.target) || isInteractiveTarget(document.activeElement);
-      const slash =
-        event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-      const commandK =
-        event.key.toLowerCase() === "k" &&
-        event.metaKey !== event.ctrlKey &&
-        !event.altKey &&
-        !event.shiftKey;
-      const input = headerSearchRef.current;
       if (
-        (!slash && !commandK) ||
-        targetIsInteractive ||
-        hasOpenModal(document) ||
-        input == null ||
-        input.getClientRects().length === 0
+        !shouldOpenCommandPalette({
+          altKey: event.altKey,
+          ctrlKey: event.ctrlKey,
+          interactiveTarget: targetIsInteractive,
+          key: event.key,
+          metaKey: event.metaKey,
+          modalOpen: hasOpenModal(document),
+          shiftKey: event.shiftKey,
+        })
       ) {
         return;
       }
       event.preventDefault();
-      input.focus();
-      input.select();
+      setCommandPaletteOpen(true);
     };
-    window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
+    window.addEventListener("keydown", openSearch);
+    return () => window.removeEventListener("keydown", openSearch);
   }, []);
 
   const active = activeView;
@@ -1060,11 +1072,6 @@ function App() {
     setLiveConnectionKey((key) => key + 1);
     requestRefresh();
   };
-  const headerSearchQuery =
-    pathOnly(path) === "/search"
-      ? (new URLSearchParams(path.split("?", 2)[1] ?? "").get("q") ?? "")
-      : "";
-
   const analyticsReport = pathOnly(path) === "/reports/analytics";
   const sessionReportMatch = pathOnly(path).match(/^\/reports\/session\/(\d+)$/);
   if (analyticsReport) {
@@ -1202,27 +1209,29 @@ function App() {
             <Icon name="menu" />
           </button>
           <h1>{titleFor(active)}</h1>
-          <label className="topbar-search">
-            <Icon name="search" />
-            <input
-              aria-label="Search session logs"
-              autoComplete="off"
-              onChange={(event) => updateSearchRoute(event.target.value, setPath)}
-              placeholder="Search sessions, messages, and tools…"
-              ref={headerSearchRef}
-              value={headerSearchQuery}
-            />
-            <kbd>{navigator.platform.includes("Mac") ? "⌘K" : "Ctrl K"}</kbd>
-          </label>
-          <div className="topbar-spacer" />
-          <a
-            aria-label="Search"
-            className="icon-button topbar-search-mobile"
-            href="/search"
-            onClick={(event) => navigate(event, "/search", setPath)}
+          <button
+            aria-expanded={commandPaletteOpen}
+            aria-haspopup="dialog"
+            aria-label="Open command palette"
+            className="topbar-search"
+            onClick={() => setCommandPaletteOpen(true)}
+            type="button"
           >
             <Icon name="search" />
-          </a>
+            <span className="topbar-search-label">Search sessions, messages, and tools…</span>
+            <kbd>{paletteShortcutLabel(navigator.userAgent)}</kbd>
+          </button>
+          <div className="topbar-spacer" />
+          <button
+            aria-expanded={commandPaletteOpen}
+            aria-haspopup="dialog"
+            aria-label="Search"
+            className="icon-button topbar-search-mobile"
+            onClick={() => setCommandPaletteOpen(true)}
+            type="button"
+          >
+            <Icon name="search" />
+          </button>
           <button
             aria-label="Sync session logs"
             aria-busy={syncInProgress}
@@ -1319,6 +1328,26 @@ function App() {
           </div>
         </main>
       </div>
+      <CommandPalette
+        analyticsReportHref={withDateQuery("/reports/analytics", dateQuery)}
+        onClose={() => setCommandPaletteOpen(false)}
+        onNavigate={(href) => {
+          setCommandPaletteOpen(false);
+          visit(href, setPath);
+        }}
+        onRunSync={() => {
+          setCommandPaletteOpen(false);
+          runSync();
+        }}
+        onToggleTheme={() => {
+          setTheme((current) =>
+            current === "system" ? "light" : current === "light" ? "dark" : "system",
+          );
+        }}
+        open={commandPaletteOpen}
+        refreshKey={reloadKey}
+        syncing={syncInProgress}
+      />
     </div>
   );
 }
@@ -1375,7 +1404,7 @@ function renderView(
         <ProjectsView onSync={actions.runSync} projects={data.projects} syncing={actions.syncing} />
       );
     case "Search":
-      return <SearchView path={path} />;
+      return <SearchView dateRange={actions.dateRange} path={path} />;
     case "Analytics":
       return (
         <AnalyticsView
@@ -2266,13 +2295,477 @@ function subagentDescriptor(session: SessionSummary): string {
   return session.agent_id != null ? `${kind} · ${session.agent_id}` : kind;
 }
 
-function SearchView({ path }: { path: string }) {
+type PaletteItemKind = "recent" | "session" | "page" | "action" | "content-search";
+
+interface PaletteItem extends CommandPaletteItem {
+  activate: () => void;
+  detail?: string;
+  highlights?: SessionHighlights;
+  icon: IconName;
+  kind: PaletteItemKind;
+  row?: SessionSearchIndexRow;
+}
+
+function CommandPalette({
+  analyticsReportHref,
+  onClose,
+  onNavigate,
+  onRunSync,
+  onToggleTheme,
+  open,
+  refreshKey,
+  syncing,
+}: {
+  analyticsReportHref: string;
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+  onRunSync: () => void;
+  onToggleTheme: () => void;
+  open: boolean;
+  refreshKey: number;
+  syncing: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [rows, setRows] = useState<SessionSearchIndexRow[]>([]);
+  const [loadedRefreshKey, setLoadedRefreshKey] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [indexError, setIndexError] = useState<unknown>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  const titleId = useId();
+  const listboxId = useId();
+  closeRef.current = onClose;
+  const requestClose = useCallback(() => closeRef.current(), []);
+  useDialogFocusTrap(open, dialogRef, requestClose);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setQuery("");
+    setRecentSearches(readRecentSearches());
+    setActiveIndex(0);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || loadedRefreshKey === refreshKey) {
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setIndexError(null);
+    void getJson<SessionSearchIndexRow[]>("/api/sessions/search-index", {
+      signal: controller.signal,
+    })
+      .then((nextRows) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setRows(nextRows);
+        setLoadedRefreshKey(refreshKey);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setIndexError(error);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [loadedRefreshKey, open, refreshKey]);
+
+  const fuzzyIndex: SessionSearchIndex = useMemo(() => createSessionSearchIndex(rows), [rows]);
+  const normalizedQuery = query.trim();
+  const matches = useMemo(
+    () => (normalizedQuery === "" ? [] : fuzzyIndex.search(normalizedQuery, 10)),
+    [fuzzyIndex, normalizedQuery],
+  );
+  const rowById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
+
+  const recentItems: PaletteItem[] = recentSearches.map((recent) => ({
+    id: `recent:${recent}`,
+    label: recent,
+    detail: "Search transcript content",
+    icon: "clock",
+    kind: "recent",
+    activate: () => {
+      rememberSearch(recent);
+      onNavigate(`/search?q=${encodeURIComponent(recent)}`);
+    },
+  }));
+  const sessionMatches =
+    normalizedQuery === ""
+      ? rows.slice(0, 6).map((row) => ({ id: row.id, highlights: {} }))
+      : matches;
+  const sessionItems: PaletteItem[] = sessionMatches.flatMap((match) => {
+    const row = rowById.get(match.id);
+    if (row == null) {
+      return [];
+    }
+    return [
+      {
+        id: `session:${row.id}`,
+        label: row.title?.trim() || `Session ${row.id}`,
+        detail: paletteSessionDetail(row),
+        highlights: match.highlights,
+        icon: "sessions",
+        kind: "session",
+        row,
+        activate: () => onNavigate(`/sessions/${row.id}`),
+      },
+    ];
+  });
+  const pageItems: PaletteItem[] = navItems
+    .filter((item) => commandPaletteTextMatches(normalizedQuery, item.label))
+    .map((item) => ({
+      id: `page:${item.key}`,
+      label: item.label,
+      detail: item.href,
+      icon: item.icon,
+      kind: "page",
+      activate: () => onNavigate(item.href),
+    }));
+  const availableActions: PaletteItem[] = [
+    ...(syncing
+      ? []
+      : [
+          {
+            id: "action:sync",
+            label: "Run sync",
+            detail: "Ingest changed local session logs",
+            icon: "refresh" as const,
+            kind: "action" as const,
+            activate: onRunSync,
+          },
+        ]),
+    {
+      id: "action:theme",
+      label: "Toggle theme",
+      detail: "Cycle system, light, and dark",
+      icon: "sun",
+      kind: "action",
+      activate: () => {
+        onToggleTheme();
+        requestClose();
+      },
+    },
+    {
+      id: "action:report",
+      label: "Analytics report",
+      detail: "Review and export the active date range",
+      icon: "chart",
+      kind: "action",
+      activate: () => onNavigate(analyticsReportHref),
+    },
+    {
+      id: "action:settings",
+      label: "Settings",
+      detail: "Agent, terminal, and editor preferences",
+      icon: "settings",
+      kind: "action",
+      activate: () => onNavigate("/settings"),
+    },
+  ];
+  const actionItems = availableActions.filter((item) =>
+    commandPaletteTextMatches(normalizedQuery, `${item.label} ${item.detail ?? ""}`),
+  );
+  const contentSearch: PaletteItem | null =
+    normalizedQuery === ""
+      ? null
+      : {
+          id: "content-search",
+          label: `Search transcript content for “${normalizedQuery}”`,
+          detail: "Messages, tool calls, and results",
+          icon: "search",
+          kind: "content-search",
+          activate: () => {
+            const remembered = rememberSearch(normalizedQuery);
+            setRecentSearches(remembered);
+            onNavigate(`/search?q=${encodeURIComponent(normalizedQuery)}`);
+          },
+        };
+  const groups = buildCommandPaletteGroups({
+    query,
+    recent: recentItems,
+    sessions: sessionItems,
+    pages: pageItems,
+    actions: actionItems,
+    contentSearch,
+  });
+  const items = flattenCommandPaletteItems(groups);
+  const renderedItemKey = items.map((item) => item.id).join("\u0000");
+
+  useEffect(() => {
+    void renderedItemKey;
+    setActiveIndex(items.length === 0 ? null : 0);
+  }, [items.length, renderedItemKey]);
+
+  useEffect(() => {
+    if (activeIndex == null) {
+      return;
+    }
+    document
+      .querySelector<HTMLElement>(`[data-palette-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  if (!open) {
+    return null;
+  }
+
+  const renderedActiveIndex =
+    activeIndex != null && items[activeIndex] != null ? activeIndex : null;
+  const activeItem = renderedActiveIndex == null ? null : (items[renderedActiveIndex] ?? null);
+  const activeDescendant =
+    renderedActiveIndex == null ? undefined : `command-palette-item-${renderedActiveIndex}`;
+  const quickMatchCount = sessionItems.length + pageItems.length + actionItems.length;
+  return createPortal(
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
+    <div
+      className="command-palette-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          requestClose();
+        }
+      }}
+    >
+      <div
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="command-palette"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <h2 className="sr-only" id={titleId}>
+          Search and commands
+        </h2>
+        <div className="command-palette-input-row">
+          <Icon name="search" />
+          <input
+            aria-activedescendant={activeDescendant}
+            aria-autocomplete="list"
+            aria-controls={listboxId}
+            aria-expanded={true}
+            aria-label="Search sessions and commands"
+            autoComplete="off"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              const result = reduceCommandPaletteKey(
+                { activeIndex },
+                {
+                  key: event.key,
+                  itemCount: items.length,
+                  isComposing: event.nativeEvent.isComposing,
+                },
+              );
+              if (!result.handled) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              if (result.effect === "close") {
+                requestClose();
+                return;
+              }
+              if (result.effect === "activate") {
+                activeItem?.activate();
+                return;
+              }
+              setActiveIndex(result.activeIndex);
+            }}
+            placeholder="Search sessions or run a command…"
+            role="combobox"
+            value={query}
+          />
+          <button
+            aria-label="Close command palette"
+            className="icon-button command-palette-close"
+            onClick={requestClose}
+            type="button"
+          >
+            <Icon name="x" />
+          </button>
+        </div>
+        <div aria-live="polite" className="command-palette-state-region">
+          {loading && rows.length === 0 ? (
+            <p className="command-palette-state" role="status">
+              Loading session index…
+            </p>
+          ) : null}
+          {indexError != null && rows.length === 0 ? (
+            <p className="command-palette-state is-error" role="status">
+              Session shortcuts are unavailable. Pages and actions still work.
+            </p>
+          ) : null}
+          {normalizedQuery !== "" && quickMatchCount === 0 && !loading && indexError == null ? (
+            <p className="command-palette-state">No quick matches. Try transcript search below.</p>
+          ) : null}
+        </div>
+        <div className="command-palette-results" id={listboxId} role="listbox">
+          {groups.map((group) => (
+            <fieldset className={`command-palette-group is-${group.id}`} key={group.id}>
+              <legend className={group.label == null ? "sr-only" : undefined}>
+                {group.label ?? "Transcript search"}
+              </legend>
+              {group.items.map((item) => {
+                const index = items.indexOf(item);
+                return (
+                  <div
+                    aria-selected={index === activeIndex}
+                    className={`command-palette-item is-${item.kind}${
+                      index === activeIndex ? " is-active" : ""
+                    }`}
+                    data-palette-index={index}
+                    id={`command-palette-item-${index}`}
+                    key={item.id}
+                    onClick={() => item.activate()}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onPointerMove={() => {
+                      setActiveIndex(index);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        item.activate();
+                      }
+                    }}
+                    role="option"
+                    tabIndex={-1}
+                  >
+                    <span className="command-palette-item-icon">
+                      <Icon name={item.icon} />
+                    </span>
+                    <span className="command-palette-item-copy">
+                      <strong>
+                        <PaletteHighlightedText ranges={item.highlights?.title} text={item.label} />
+                      </strong>
+                      {item.kind === "session" && item.row != null ? (
+                        <PaletteSessionMeta highlights={item.highlights} row={item.row} />
+                      ) : item.detail == null ? null : (
+                        <span>{item.detail}</span>
+                      )}
+                    </span>
+                    {item.kind === "session" && item.row?.started_at != null ? (
+                      <time
+                        className="command-palette-item-date"
+                        dateTime={item.row.started_at}
+                        title={fullDateTime(item.row.started_at) ?? item.row.started_at}
+                      >
+                        <PaletteHighlightedText
+                          ranges={item.highlights?.started_at}
+                          text={item.row.started_at.slice(0, 10)}
+                        />
+                      </time>
+                    ) : item.kind === "content-search" ? (
+                      <kbd>↵</kbd>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </fieldset>
+          ))}
+        </div>
+        <footer className="command-palette-footer">
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> navigate
+          </span>
+          <span>
+            <kbd>↵</kbd> open
+          </span>
+          <span>
+            <kbd>esc</kbd> close
+          </span>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function commandPaletteTextMatches(query: string, text: string): boolean {
+  if (query === "") {
+    return true;
+  }
+  const lower = text.toLocaleLowerCase();
+  return query
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .every((term) => lower.includes(term));
+}
+
+function paletteSessionDetail(row: SessionSearchIndexRow): string {
+  return [row.project, row.tool, row.model]
+    .filter((value) => value != null && value !== "")
+    .join(" · ");
+}
+
+function PaletteSessionMeta({
+  highlights,
+  row,
+}: {
+  highlights: SessionHighlights | undefined;
+  row: SessionSearchIndexRow;
+}) {
+  const values = [
+    { field: "project" as const, value: row.project },
+    { field: "tool" as const, value: row.tool },
+    { field: "model" as const, value: row.model },
+  ].filter(
+    (entry): entry is { field: "project" | "tool" | "model"; value: string } =>
+      entry.value != null && entry.value !== "",
+  );
+  return (
+    <span>
+      {values.map((entry, index) => (
+        <span key={entry.field}>
+          {index > 0 ? " · " : null}
+          <PaletteHighlightedText ranges={highlights?.[entry.field]} text={entry.value} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function PaletteHighlightedText({
+  ranges,
+  text,
+}: {
+  ranges: readonly SessionHighlightRange[] | undefined;
+  text: string;
+}) {
+  if (ranges == null || ranges.length === 0) {
+    return text;
+  }
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const [index, range] of ranges.entries()) {
+    const [start, end] = range;
+    if (start > cursor) {
+      parts.push(<span key={`text-${index}`}>{text.slice(cursor, start)}</span>);
+    }
+    parts.push(<mark key={`match-${index}`}>{text.slice(start, end)}</mark>);
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    parts.push(<span key="text-tail">{text.slice(cursor)}</span>);
+  }
+  return <>{parts}</>;
+}
+
+function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: string }) {
   const initialQuery = new URLSearchParams(path.split("?")[1] ?? "").get("q") ?? "";
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState<number | null>(null);
   const [totalIsCapped, setTotalIsCapped] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -2281,14 +2774,22 @@ function SearchView({ path }: { path: string }) {
   const searchEpochRef = useRef(0);
   const resultsQueryRef = useRef<string | null>(null);
   const loadMoreControllerRef = useRef<AbortController | null>(null);
+  const rangeFrom = dateRange.from;
+  const rangeTo = dateRange.to;
+  const requestScope = useMemo(
+    () => searchRequestScope(path, { from: rangeFrom, to: rangeTo }),
+    [path, rangeFrom, rangeTo],
+  );
+  const requestScopeKey = JSON.stringify(requestScope);
 
   useLayoutEffect(() => {
+    void requestScopeKey;
     searchEpochRef.current += 1;
     resultsQueryRef.current = null;
     loadMoreControllerRef.current?.abort();
     loadMoreControllerRef.current = null;
     setHits([]);
-    setTotal(0);
+    setTotal(null);
     setTotalIsCapped(false);
     setElapsedMs(0);
     setActiveIndex(-1);
@@ -2296,7 +2797,7 @@ function SearchView({ path }: { path: string }) {
     return () => {
       loadMoreControllerRef.current?.abort();
     };
-  }, [initialQuery]);
+  }, [initialQuery, requestScopeKey]);
 
   useEffect(() => {
     const epoch = searchEpochRef.current + 1;
@@ -2308,7 +2809,7 @@ function SearchView({ path }: { path: string }) {
     if (trimmed.length < 2) {
       resultsQueryRef.current = null;
       setHits([]);
-      setTotal(0);
+      setTotal(null);
       setTotalIsCapped(false);
       setElapsedMs(0);
       setSearching(false);
@@ -2324,8 +2825,10 @@ function SearchView({ path }: { path: string }) {
         body: JSON.stringify({
           query: trimmed,
           include_subagents: true,
+          include_total: false,
           limit: 25,
           offset: 0,
+          ...requestScope,
         }),
         signal: controller.signal,
       })
@@ -2334,8 +2837,6 @@ function SearchView({ path }: { path: string }) {
             return;
           }
           setHits(response.results);
-          setTotal(response.total);
-          setTotalIsCapped(response.total_is_capped);
           setElapsedMs(response.elapsed_ms);
           setActiveIndex(response.results.length > 0 ? 0 : -1);
           resultsQueryRef.current = trimmed;
@@ -2356,7 +2857,46 @@ function SearchView({ path }: { path: string }) {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, retryKey]);
+  }, [query, requestScope, retryKey]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    void retryKey;
+    if (trimmed.length < 2) {
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const epoch = searchEpochRef.current;
+      void getJson<SearchResponse>("/api/search", {
+        method: "POST",
+        body: JSON.stringify({
+          query: trimmed,
+          include_subagents: true,
+          include_total: true,
+          limit: 1,
+          offset: 0,
+          ...requestScope,
+        }),
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (controller.signal.aborted || searchEpochRef.current !== epoch) {
+            return;
+          }
+          setTotal(response.total);
+          setTotalIsCapped(response.total_is_capped);
+        })
+        .catch(() => {
+          // A count is supplementary; keep the fast ranked results usable when
+          // the slower total request is interrupted or unavailable.
+        });
+    }, 500);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, requestScope, retryKey]);
 
   const orderedHits = visuallyOrderedSearchHits(hits);
   const groups = groupSearchHits(orderedHits);
@@ -2372,7 +2912,7 @@ function SearchView({ path }: { path: string }) {
   }, [activeIndex]);
   const loadMore = () => {
     const trimmed = query.trim();
-    if (searching || hits.length >= total || trimmed.length < 2) {
+    if (searching || total == null || hits.length >= total || trimmed.length < 2) {
       return;
     }
     setSearching(true);
@@ -2386,8 +2926,10 @@ function SearchView({ path }: { path: string }) {
       body: JSON.stringify({
         query: trimmed,
         include_subagents: true,
+        include_total: false,
         limit: 25,
         offset: hits.length,
+        ...requestScope,
       }),
       signal: controller.signal,
     })
@@ -2396,8 +2938,6 @@ function SearchView({ path }: { path: string }) {
           return;
         }
         setHits((current) => [...current, ...response.results]);
-        setTotal(response.total);
-        setTotalIsCapped(response.total_is_capped);
         setElapsedMs(response.elapsed_ms);
       })
       .catch((err: unknown) => {
@@ -2437,7 +2977,7 @@ function SearchView({ path }: { path: string }) {
             loadMoreControllerRef.current?.abort();
             loadMoreControllerRef.current = null;
             setHits([]);
-            setTotal(0);
+            setTotal(null);
             setTotalIsCapped(false);
             setElapsedMs(0);
             setActiveIndex(-1);
@@ -2470,11 +3010,16 @@ function SearchView({ path }: { path: string }) {
         />
       </form>
 
-      {query.trim().length >= 2 ? (
+      {query.trim().length >= 2 && (searching || hits.length > 0 || total != null) ? (
         <p className="result-caption">
-          {formatInt(total)}
-          {totalIsCapped ? "+" : ""} {total === 1 ? "result" : "results"} ·{" "}
-          {formatSearchTime(elapsedMs)}
+          {total == null
+            ? hits.length === 0
+              ? "Finding matches"
+              : `Showing ${formatInt(hits.length)} matches`
+            : `${formatInt(total)}${totalIsCapped ? "+" : ""} ${
+                total === 1 ? "result" : "results"
+              }`}{" "}
+          · {formatSearchTime(elapsedMs)}
         </p>
       ) : null}
       {error != null ? (
@@ -2562,7 +3107,7 @@ function SearchView({ path }: { path: string }) {
             </section>
           ))}
         </div>
-        {hits.length < total ? (
+        {total != null && hits.length < total ? (
           <button
             className="secondary-button search-load-more"
             disabled={searching}
@@ -2620,16 +3165,14 @@ function readRecentSearches(): string[] {
   try {
     const key = "decant-recent-searches";
     const current = JSON.parse(localStorage.getItem(key) ?? "[]") as unknown;
-    return Array.isArray(current)
-      ? current.filter((value): value is string => typeof value === "string")
-      : [];
+    return normalizeRecentSearches(current);
   } catch {
     return [];
   }
 }
 
 function rememberSearch(query: string): string[] {
-  const values = [query, ...readRecentSearches().filter((value) => value !== query)].slice(0, 8);
+  const values = normalizeRecentSearches(readRecentSearches(), query);
   try {
     localStorage.setItem("decant-recent-searches", JSON.stringify(values));
   } catch {
@@ -10332,8 +10875,7 @@ function locationPath(): string {
 }
 
 function updateSearchRoute(query: string, setPath?: (path: string) => void) {
-  const trimmed = query.trimStart();
-  const href = trimmed === "" ? "/search" : `/search?q=${encodeURIComponent(trimmed)}`;
+  const href = searchRouteHref(query, locationPath());
   if (pathOnly(locationPath()) === "/search") {
     window.history.replaceState(null, "", href);
   } else {

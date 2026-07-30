@@ -192,7 +192,7 @@ export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
        LEFT JOIN project p ON p.id = s.project_id
        WHERE ${visibleSessionPredicate("s")}
          AND s.is_subagent = 0
-         AND ${sessionUserStatePredicate("s")}
+         AND ${sessionUserStatePredicateForDatabase(db, "s")}
        ORDER BY s.started_at DESC, s.id DESC`,
     )
     .all() as SessionSearchIndexRow[];

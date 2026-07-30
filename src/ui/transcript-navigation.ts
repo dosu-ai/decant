@@ -109,8 +109,8 @@ export function revealTranscriptMessage(
 
 /**
  * Selector for anything modal enough that arrow keys should not reach the
- * transcript underneath it. Nothing in the UI matches today; this is a guard
- * against a modal added later silently scrolling the page behind itself.
+ * transcript underneath it. The command palette and detail dialogs match this
+ * guard so they cannot silently scroll the page behind themselves.
  *
  * `[role='dialog']` alone missed both of the other ways a modal is normally
  * expressed, so all three are covered: the native element (only while open,

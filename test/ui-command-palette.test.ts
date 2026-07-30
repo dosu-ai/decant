@@ -5,6 +5,8 @@ import {
   flattenCommandPaletteItems,
   normalizeRecentSearches,
   paletteShortcutLabel,
+  pointerMovementChangesSelection,
+  reconcileCommandPaletteActiveIndex,
   reduceCommandPaletteKey,
   shouldOpenCommandPalette,
 } from "../src/ui/command-palette.ts";
@@ -137,6 +139,29 @@ describe("command palette key reducer", () => {
       effect: "none",
       handled: false,
     });
+  });
+});
+
+describe("command palette selection reconciliation", () => {
+  test("preserves the selected action when asynchronously loaded sessions prepend matches", () => {
+    expect(
+      reconcileCommandPaletteActiveIndex("content-search", [
+        item("session:1"),
+        item("session:2"),
+        item("content-search"),
+      ]),
+    ).toBe(2);
+  });
+
+  test("falls back to the first item only when the prior selection disappeared", () => {
+    expect(reconcileCommandPaletteActiveIndex("session:1", [item("session:2")])).toBe(0);
+    expect(reconcileCommandPaletteActiveIndex(null, [])).toBeNull();
+  });
+
+  test("ignores stationary pointer events caused by keyboard scrolling", () => {
+    expect(pointerMovementChangesSelection({ movementX: 0, movementY: 0 })).toBe(false);
+    expect(pointerMovementChangesSelection({ movementX: 1, movementY: 0 })).toBe(true);
+    expect(pointerMovementChangesSelection({ movementX: 0, movementY: -1 })).toBe(true);
   });
 });
 

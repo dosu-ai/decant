@@ -96,6 +96,41 @@ export function flattenCommandPaletteItems<TItem extends CommandPaletteItem>(
   return groups.flatMap((group) => group.items);
 }
 
+/**
+ * Keep the user's current choice stable when an async session index changes the
+ * rendered order. This is especially important for transcript search: rows
+ * arriving after the user typed must not silently replace that action with the
+ * first session match.
+ */
+export function reconcileCommandPaletteActiveIndex(
+  activeItemId: string | null,
+  items: readonly CommandPaletteItem[],
+): number | null {
+  if (items.length === 0) {
+    return null;
+  }
+  if (activeItemId != null) {
+    const preservedIndex = items.findIndex((item) => item.id === activeItemId);
+    if (preservedIndex >= 0) {
+      return preservedIndex;
+    }
+  }
+  return 0;
+}
+
+export interface PointerMovement {
+  movementX: number;
+  movementY: number;
+}
+
+/**
+ * Programmatic scrollIntoView calls can move an option underneath a stationary
+ * pointer. Only real pointer movement may replace a keyboard selection.
+ */
+export function pointerMovementChangesSelection(event: PointerMovement): boolean {
+  return event.movementX !== 0 || event.movementY !== 0;
+}
+
 export interface CommandPaletteKeyState {
   activeIndex: number | null;
 }

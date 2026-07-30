@@ -59,6 +59,8 @@ listed below; the session preview intentionally omits transcript content.
 - `GET /api/metadata/sync-status`
 - `POST /api/sync` (works even under `--no-sync`, which only stops the watcher)
 - `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /api/sessions/search-index` — lightweight, top-level, visible,
+  non-archived session metadata for the local command palette
 - `GET /api/sessions/:id`
 - `GET /api/sessions/:id/outline`
 - `GET /api/sessions/:id/issues` — ingest diagnostics recorded for the session's

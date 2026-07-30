@@ -50,7 +50,10 @@ describe("UI interaction contracts", () => {
     expect(fastRequest).not.toContain("setTotal(response.total)");
     expect(fastRequest).not.toContain("setTotalIsCapped(response.total_is_capped)");
     expect(search).toContain("A count is supplementary");
-    expect(search).toContain("total == null");
+    expect(search).toContain("searchPageMayHaveMore");
+    expect(search).toContain("total: totalRef.current");
+    expect(search).toContain("exactSearchRemaining(total, hits.length, totalIsCapped)");
+    expect(search).not.toContain("total == null || hits.length >= total");
   });
 
   test("opens one focus-managed palette from desktop, mobile, and global shortcuts", () => {
@@ -88,11 +91,13 @@ describe("UI interaction contracts", () => {
     expect(palette).toContain("searchRouteHref(normalizedQuery, locationPath())");
     expect(palette).toContain("dialogRef.current");
     expect(palette).not.toContain("document\n      .querySelector<HTMLElement>");
-    expect(paletteGroups).toContain("onPointerEnter");
-    expect(paletteGroups).not.toContain("onPointerMove");
+    expect(paletteGroups).not.toContain("onPointerEnter");
+    expect(paletteGroups).toContain("onPointerMove");
+    expect(paletteGroups).toContain("pointerMovementChangesSelection(event)");
     expect(paletteGroups).not.toContain("onKeyDown");
-    expect(palette).toContain("setActiveIndex(index)");
-    expect(palette).toContain("setActiveIndex(0)");
+    expect(palette).toContain("selectPaletteIndex(index)");
+    expect(palette).toContain("reconcileCommandPaletteActiveIndex");
+    expect(palette).toContain("useLayoutEffect(() =>");
     expect(palette).toContain("item.highlights?.started_at");
     expect(palette).not.toContain("dangerouslySetInnerHTML");
     expect(styles).toContain(".command-palette-group-label {");

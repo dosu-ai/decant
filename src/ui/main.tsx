@@ -75,6 +75,8 @@ import {
   flattenCommandPaletteItems,
   normalizeRecentSearches,
   paletteShortcutLabel,
+  pointerMovementChangesSelection,
+  reconcileCommandPaletteActiveIndex,
   reduceCommandPaletteKey,
   shouldOpenCommandPalette,
 } from "./command-palette.ts";
@@ -118,6 +120,7 @@ import {
   sessionsArchivedHref,
   titleFor,
 } from "./navigation.ts";
+import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
 import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
 import {
@@ -2332,6 +2335,7 @@ function CommandPalette({
   const [indexError, setIndexError] = useState<unknown>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const activeItemIdRef = useRef<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef(onClose);
   const titleId = useId();
@@ -2346,7 +2350,8 @@ function CommandPalette({
     }
     setQuery("");
     setRecentSearches(readRecentSearches());
-    setActiveIndex(0);
+    activeItemIdRef.current = null;
+    setActiveIndex(null);
   }, [open]);
 
   useEffect(() => {
@@ -2500,10 +2505,21 @@ function CommandPalette({
   const items = flattenCommandPaletteItems(groups);
   const renderedItemKey = items.map((item) => item.id).join("\u0000");
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
     void renderedItemKey;
-    setActiveIndex(items.length === 0 ? null : 0);
-  }, [items.length, renderedItemKey]);
+    const nextIndex = reconcileCommandPaletteActiveIndex(activeItemIdRef.current, items);
+    activeItemIdRef.current = nextIndex == null ? null : (items[nextIndex]?.id ?? null);
+    setActiveIndex(nextIndex);
+  }, [items, open, renderedItemKey]);
+
+  const selectPaletteIndex = (index: number | null) => {
+    const nextIndex = index != null && items[index] != null ? index : null;
+    activeItemIdRef.current = nextIndex == null ? null : (items[nextIndex]?.id ?? null);
+    setActiveIndex(nextIndex);
+  };
 
   useEffect(() => {
     if (activeIndex == null) {
@@ -2577,7 +2593,7 @@ function CommandPalette({
                 activeItem?.activate();
                 return;
               }
-              setActiveIndex(result.activeIndex);
+              selectPaletteIndex(result.activeIndex);
             }}
             placeholder="Search sessions or run a command…"
             role="combobox"
@@ -2638,8 +2654,10 @@ function CommandPalette({
                       key={item.id}
                       onClick={() => item.activate()}
                       onMouseDown={(event) => event.preventDefault()}
-                      onPointerEnter={() => {
-                        setActiveIndex(index);
+                      onPointerMove={(event) => {
+                        if (pointerMovementChangesSelection(event)) {
+                          selectPaletteIndex(index);
+                        }
                       }}
                       role="option"
                       tabIndex={-1}
@@ -2770,6 +2788,7 @@ function PaletteHighlightedText({
 }
 
 function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: string }) {
+  const pageSize = 25;
   const initialQuery = new URLSearchParams(path.split("?")[1] ?? "").get("q") ?? "";
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -2777,6 +2796,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
   const [error, setError] = useState<unknown>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [totalIsCapped, setTotalIsCapped] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [retryKey, setRetryKey] = useState(0);
@@ -2784,6 +2804,12 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
   const searchEpochRef = useRef(0);
   const resultsQueryRef = useRef<string | null>(null);
   const loadMoreControllerRef = useRef<AbortController | null>(null);
+  const hitsLengthRef = useRef(0);
+  const totalRef = useRef<number | null>(null);
+  const totalIsCappedRef = useRef(false);
+  hitsLengthRef.current = hits.length;
+  totalRef.current = total;
+  totalIsCappedRef.current = totalIsCapped;
   const rangeFrom = dateRange.from;
   const rangeTo = dateRange.to;
   const requestScope = useMemo(
@@ -2800,7 +2826,10 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
     loadMoreControllerRef.current = null;
     setHits([]);
     setTotal(null);
+    totalRef.current = null;
     setTotalIsCapped(false);
+    totalIsCappedRef.current = false;
+    setHasMore(false);
     setElapsedMs(0);
     setActiveIndex(-1);
     setQuery(initialQuery);
@@ -2820,7 +2849,10 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
       resultsQueryRef.current = null;
       setHits([]);
       setTotal(null);
+      totalRef.current = null;
       setTotalIsCapped(false);
+      totalIsCappedRef.current = false;
+      setHasMore(false);
       setElapsedMs(0);
       setSearching(false);
       setError(null);
@@ -2836,7 +2868,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
           query: trimmed,
           include_subagents: true,
           include_total: false,
-          limit: 25,
+          limit: pageSize,
           offset: 0,
           ...requestScope,
         }),
@@ -2847,6 +2879,15 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
             return;
           }
           setHits(response.results);
+          setHasMore(
+            searchPageMayHaveMore({
+              lastPageSize: response.results.length,
+              loaded: response.results.length,
+              pageSize,
+              total: totalRef.current,
+              totalIsCapped: totalIsCappedRef.current,
+            }),
+          );
           setElapsedMs(response.elapsed_ms);
           setActiveIndex(response.results.length > 0 ? 0 : -1);
           resultsQueryRef.current = trimmed;
@@ -2894,8 +2935,19 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
           if (controller.signal.aborted || searchEpochRef.current !== epoch) {
             return;
           }
+          totalRef.current = response.total;
+          totalIsCappedRef.current = response.total_is_capped;
           setTotal(response.total);
           setTotalIsCapped(response.total_is_capped);
+          setHasMore(
+            searchPageMayHaveMore({
+              lastPageSize: 0,
+              loaded: hitsLengthRef.current,
+              pageSize,
+              total: response.total,
+              totalIsCapped: response.total_is_capped,
+            }),
+          );
         })
         .catch(() => {
           // A count is supplementary; keep the fast ranked results usable when
@@ -2910,6 +2962,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
 
   const orderedHits = visuallyOrderedSearchHits(hits);
   const groups = groupSearchHits(orderedHits);
+  const exactRemaining = exactSearchRemaining(total, hits.length, totalIsCapped);
   const activeHit = activeIndex < 0 ? null : (orderedHits[activeIndex] ?? null);
   const activeHitId = activeHit == null ? undefined : `search-hit-${activeHit.block_id}`;
   useEffect(() => {
@@ -2922,7 +2975,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
   }, [activeIndex]);
   const loadMore = () => {
     const trimmed = query.trim();
-    if (searching || total == null || hits.length >= total || trimmed.length < 2) {
+    if (searching || !hasMore || trimmed.length < 2) {
       return;
     }
     setSearching(true);
@@ -2937,7 +2990,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
         query: trimmed,
         include_subagents: true,
         include_total: false,
-        limit: 25,
+        limit: pageSize,
         offset: hits.length,
         ...requestScope,
       }),
@@ -2947,7 +3000,17 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
         if (controller.signal.aborted || searchEpochRef.current !== epoch) {
           return;
         }
+        const loaded = hits.length + response.results.length;
         setHits((current) => [...current, ...response.results]);
+        setHasMore(
+          searchPageMayHaveMore({
+            lastPageSize: response.results.length,
+            loaded,
+            pageSize,
+            total: totalRef.current,
+            totalIsCapped: totalIsCappedRef.current,
+          }),
+        );
         setElapsedMs(response.elapsed_ms);
       })
       .catch((err: unknown) => {
@@ -2988,7 +3051,10 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
             loadMoreControllerRef.current = null;
             setHits([]);
             setTotal(null);
+            totalRef.current = null;
             setTotalIsCapped(false);
+            totalIsCappedRef.current = false;
+            setHasMore(false);
             setElapsedMs(0);
             setActiveIndex(-1);
             setSearching(event.target.value.trim().length >= 2);
@@ -3117,14 +3183,18 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
             </section>
           ))}
         </div>
-        {total != null && hits.length < total ? (
+        {hasMore ? (
           <button
             className="secondary-button search-load-more"
             disabled={searching}
             onClick={loadMore}
             type="button"
           >
-            {searching ? "Loading…" : `Load more · ${formatInt(total - hits.length)} remaining`}
+            {searching
+              ? "Loading…"
+              : exactRemaining == null
+                ? "Load more"
+                : `Load more · ${formatInt(exactRemaining)} remaining`}
           </button>
         ) : null}
       </div>

@@ -733,6 +733,10 @@ describe("query reads", () => {
       UNION ALL
       SELECT 7003, 'codex', 'index-archived-child', project_id, 'Archived child',
              'gpt-5', '2026-05-06T00:01:00Z', 1, 7002
+      FROM session WHERE id = ${root.id}
+      UNION ALL
+      SELECT 7004, 'codex', 'index-visible-child', project_id, 'Visible child',
+             'gpt-5', '2026-05-06T00:02:00Z', 1, 7000
       FROM session WHERE id = ${root.id};
     `);
     expect(setSessionUserState(db, 7002, "archived")).toBe(true);
@@ -749,6 +753,7 @@ describe("query reads", () => {
     expect(index.some((row) => row.id === 7001)).toBe(false);
     expect(index.some((row) => row.id === 7002)).toBe(false);
     expect(index.some((row) => row.id === 7003)).toBe(false);
+    expect(index.some((row) => row.id === 7004)).toBe(false);
     expect(Object.keys(index[0] ?? {}).sort()).toEqual([
       "id",
       "model",

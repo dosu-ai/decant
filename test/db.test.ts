@@ -790,7 +790,7 @@ describe("openDb", () => {
       ALTER TABLE recommendation DROP COLUMN impact_label_checked;
       ALTER TABLE recommendation DROP COLUMN impact_label;
       DROP INDEX idx_block_tool_use;
-      DELETE FROM schema_migrations WHERE version = 19;
+      DELETE FROM schema_migrations WHERE version >= 19;
     `);
     db.close();
 
@@ -893,7 +893,7 @@ describe("openDb", () => {
     expect(JSON.parse(lines[0] ?? "")).toMatchObject({
       level: "WARN",
       "event.name": "decant.schema.additive_drift",
-      "schema.version": 19,
+      "schema.version": LATEST_SCHEMA_VERSION,
       "schema.drift.unexpected_objects":
         "index:operator_extra_0, index:operator_extra_1, index:operator_extra_10, " +
         "index:operator_extra_11, index:operator_extra_2, index:operator_extra_3, " +

@@ -6,6 +6,8 @@
 ## with plain `sed s///g` (values are semver strings and lowercase-hex digests,
 ## so no sed escaping is ever needed), and `##` doc lines like this one are
 ## stripped from the rendered formula (`/^##/d`).
+## Homebrew infers the formula version from the release URLs; an explicit
+## `version` stanza is redundant and fails the tap-wide audit.
 ##
 ##   __VERSION__             release version without the leading v (e.g. 0.1.0)
 ##   __SHA256_DARWIN_ARM64__ sha256 of decant-darwin-arm64.tar.gz (from SHA256SUMS)
@@ -15,7 +17,6 @@
 class Decant < Formula
   desc "Analyze Claude Code and Codex sessions: tokens, context windows, and cost"
   homepage "https://github.com/dosu-ai/decant"
-  version "__VERSION__"
   license "Apache-2.0"
 
   on_macos do

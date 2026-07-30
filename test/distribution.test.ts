@@ -100,6 +100,16 @@ describe("distribution helpers", () => {
     ]);
   });
 
+  test("lets Homebrew infer the formula version from release URLs", () => {
+    const template = readFileSync(
+      join(import.meta.dir, "..", "packaging", "homebrew", "decant.rb.template"),
+      "utf8",
+    );
+
+    expect(template).toContain("https://github.com/dosu-ai/decant/releases/download/v__VERSION__/");
+    expect(template).not.toMatch(/^\s*version\s+/m);
+  });
+
   test("stamps staged npm packages to one release version", async () => {
     const root = mkdtempSync(join(tmpdir(), "decant-npm-stage-test-"));
     try {

@@ -109,7 +109,12 @@ import {
   type SessionStateUpdate,
   sessionStateRequest,
 } from "./session-state.ts";
-import { sessionCardMetrics, sessionSummaryPath, sessionThreadCost } from "./session-summary.ts";
+import {
+  scopedSessionSummaryKey,
+  sessionCardMetrics,
+  sessionSummaryPath,
+  sessionThreadCost,
+} from "./session-summary.ts";
 import {
   hasShareCardValues,
   SHARE_CARD_HEIGHT,
@@ -1300,6 +1305,7 @@ function App() {
                   setDateRangeSelection(next);
                 },
                 refresh: requestRefresh,
+                reloadKey,
                 runSync,
                 failedSlices,
                 recommendationsLoading,
@@ -1325,6 +1331,7 @@ function renderView(
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
     refresh: () => void;
+    reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
     recommendationsLoading: boolean;
@@ -1359,6 +1366,7 @@ function renderView(
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
           path={path}
+          reloadKey={actions.reloadKey}
           sessionListExhausted={actions.sessionListExhausted}
         />
       );
@@ -1437,6 +1445,7 @@ function SessionsView({
   onDateRangeChange,
   onLimitChange,
   path,
+  reloadKey,
   sessionListExhausted,
 }: {
   data: DashboardData;
@@ -1446,11 +1455,12 @@ function SessionsView({
   onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
   path: string;
+  reloadKey: number;
   sessionListExhausted: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [scopedSummary, setScopedSummary] = useState<{
-    request: string;
+    key: string;
     value: Summary;
   } | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
@@ -1465,8 +1475,10 @@ function SessionsView({
     project == null && !includeArchived
       ? null
       : sessionSummaryPath(project, dateQuery, includeArchived);
+  const scopedSummaryRequestKey =
+    scopedSummaryRequest == null ? null : scopedSessionSummaryKey(scopedSummaryRequest, reloadKey);
   const currentScopedSummary =
-    scopedSummary?.request === scopedSummaryRequest ? scopedSummary.value : null;
+    scopedSummary?.key === scopedSummaryRequestKey ? scopedSummary.value : null;
   const cardSummary = sessionCardMetrics(
     scopedSummaryRequest == null ? data.summary : currentScopedSummary,
     filtered,
@@ -1495,7 +1507,10 @@ function SessionsView({
     void getJson<Summary>(scopedSummaryRequest)
       .then((summary) => {
         if (!cancelled) {
-          setScopedSummary({ request: scopedSummaryRequest, value: summary });
+          setScopedSummary({
+            key: scopedSessionSummaryKey(scopedSummaryRequest, reloadKey),
+            value: summary,
+          });
         }
       })
       .catch(() => {
@@ -1506,7 +1521,7 @@ function SessionsView({
     return () => {
       cancelled = true;
     };
-  }, [scopedSummaryRequest]);
+  }, [reloadKey, scopedSummaryRequest]);
 
   useEffect(() => {
     void sessionFilterKey;

@@ -30,7 +30,7 @@ import {
 } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
-import { isDeletedSessionIdentity } from "./session-user-state.ts";
+import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
 import {
@@ -290,8 +290,9 @@ export function sync(
 }
 
 /**
- * Insert or replace one parsed session. Returns 0 when the source identity has
- * a durable deleted tombstone, leaving the archive unchanged.
+ * Insert or replace one parsed session. Returns 0 when the source identity or
+ * its provider-recorded parent has a durable deleted tombstone, leaving the
+ * archive unchanged and extending that tombstone through the lineage.
  */
 export function upsertSession(
   db: Database,
@@ -732,7 +733,19 @@ function writeSession(
   hash: string,
 ): number | null {
   const s = parsed.session;
-  if (isDeletedSessionIdentity(db, s.tool, s.sourceSessionId)) {
+  if (
+    inheritDeletedSessionTombstone(
+      db,
+      s.tool,
+      s.sourceSessionId,
+      s.isSubagent ? s.rootSourceSessionId : null,
+      {
+        rootSourceSessionId: s.rootSourceSessionId,
+        spawnToolUseId: s.spawnToolUseId,
+        ownedSpawnToolUseIds: claudeSpawnToolUseIds(parsed),
+      },
+    )
+  ) {
     return null;
   }
   let projectId: number | null = null;
@@ -994,6 +1007,25 @@ function writeSession(
   materializeContextWindow(db, sessionId);
 
   return sessionId;
+}
+
+function claudeSpawnToolUseIds(parsed: ParsedSession): string[] {
+  if (parsed.session.tool !== "claude_code") {
+    return [];
+  }
+  const spawnToolUseIds = new Set<string>();
+  for (const message of parsed.session.messages) {
+    for (const block of message.blocks) {
+      if (
+        block.blockType === "tool_use" &&
+        (block.toolName === "Task" || block.toolName === "Agent") &&
+        block.toolUseId != null
+      ) {
+        spawnToolUseIds.add(block.toolUseId);
+      }
+    }
+  }
+  return [...spawnToolUseIds];
 }
 
 function collect(

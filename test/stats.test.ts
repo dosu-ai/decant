@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import type { Operation } from "../src/enrich.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
@@ -71,6 +72,53 @@ function seededEnriched(): Database {
 }
 
 describe("stats rollups", () => {
+  test("all archive rollup modules use the database-aware visibility shortcut", () => {
+    for (const file of ["token-economics.ts", "recommendations.ts", "distill.ts", "query.ts"]) {
+      const source = readFileSync(join(import.meta.dir, "..", "src", file), "utf8");
+      expect(source).toContain("sessionUserStatePredicateForDatabase");
+      expect(source).not.toContain('sessionUserStatePredicate("s")');
+    }
+
+    const query = readFileSync(join(import.meta.dir, "..", "src", "query.ts"), "utf8");
+    const projectsStart = query.indexOf("export function listProjects(");
+    const projects = query.slice(
+      projectsStart,
+      query.indexOf("function mapSessionSummary(", projectsStart),
+    );
+    expect(projects).toContain('sessionUserStatePredicateForDatabase(db, "s")');
+    expect(projects).not.toContain('sessionUserStatePredicate("s")');
+  });
+
+  test("elides recursive visibility work while session user state is empty", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at)
+      VALUES (1, 'codex', 'visible-root', '2026-05-01T10:00:00Z');
+    `);
+
+    const emptyStatePredicate = sessionUserStatePredicateForDatabase(db, "s");
+    expect(emptyStatePredicate).toBe("1");
+    expect(
+      JSON.stringify(
+        db
+          .query(`EXPLAIN QUERY PLAN SELECT s.id FROM session s WHERE ${emptyStatePredicate}`)
+          .all(),
+      ),
+    ).not.toContain("session_user_state");
+    expect(totals(db).sessions).toBe(1);
+
+    db.exec(`
+      INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
+      VALUES ('codex', 'visible-root', 'archived', datetime('now'));
+    `);
+    const populatedStatePredicate = sessionUserStatePredicateForDatabase(db, "s");
+    expect(populatedStatePredicate).toContain("session_user_state");
+    expect(sessionUserStatePredicateForDatabase(db, "s", true)).toBe("1");
+    expect(totals(db).sessions).toBe(0);
+    expect(totals(db, { includeArchived: true }).sessions).toBe(1);
+    db.close();
+  });
+
   test("file hotspots by path order by total operations", () => {
     const db = seededEnriched();
     const rows = fileHotspots(db, "path", null, 50);

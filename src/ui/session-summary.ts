@@ -11,6 +11,10 @@ export interface SessionCardRow {
   subagents?: readonly SessionCardRow[];
 }
 
+export function scopedSessionSummaryKey(request: string, reloadKey: number): string {
+  return `${reloadKey}\0${request}`;
+}
+
 export function sessionCardMetrics(
   summary: SessionCardSummary | null,
   visibleRows: readonly SessionCardRow[],

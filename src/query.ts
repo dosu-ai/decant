@@ -17,7 +17,7 @@ import {
   directSessionUserStateExpression,
   type SessionUserState,
   sessionIsUserArchivedExpression,
-  sessionUserStatePredicate,
+  sessionUserStatePredicateForDatabase,
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { preview, previewHeadTail } from "./tools.ts";
@@ -89,7 +89,7 @@ interface SessionSummaryRow
   reasoning_effort_levels_json: string | null;
 }
 
-function sessionSummarySelect(includeArchived = false): string {
+function sessionSummarySelect(subagentVisibility: string): string {
   return `
   SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
          s.model, s.reasoning_effort,
@@ -121,7 +121,7 @@ function sessionSummarySelect(includeArchived = false): string {
     WHERE summary_child.is_subagent = 1
       AND summary_child.parent_session_id IS NOT NULL
       AND ${visibleSessionPredicate("summary_child")}
-      AND ${sessionUserStatePredicate("summary_child", includeArchived)}
+      AND ${subagentVisibility}
     GROUP BY summary_child.parent_session_id
   ) sa ON sa.parent_session_id = s.id`;
 }
@@ -129,6 +129,7 @@ function sessionSummarySelect(includeArchived = false): string {
 export function listSessions(db: Database, filter: ListFilter = {}): SessionSummary[] {
   const limit = normalizeLimit(filter.limit, 50);
   const offset = normalizeOffset(filter.offset);
+  const includeArchived = filter.includeArchived === true;
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (filter.tool != null) {
@@ -147,7 +148,7 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
     clauses.push("s.is_subagent = 0");
   }
   clauses.push(visibleSessionPredicate("s"));
-  clauses.push(sessionUserStatePredicate("s", filter.includeArchived === true));
+  clauses.push(sessionUserStatePredicateForDatabase(db, "s", includeArchived));
   const date = sessionDatePredicate("s", filter);
   if (date.sql !== "") {
     clauses.push(date.sql);
@@ -156,16 +157,18 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
   const rows = db
     .query(
-      `${sessionSummarySelect(filter.includeArchived === true)}${where}
+      `${sessionSummarySelect(
+        sessionUserStatePredicateForDatabase(db, "summary_child", includeArchived),
+      )}${where}
        ORDER BY s.started_at DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, limit, offset) as SessionSummaryRow[];
   const summaries = withDisplayTitles(db, rows.map(mapSessionSummary));
   const nested =
     filter.includeNestedSubagents === true
-      ? withNestedSubagents(db, summaries, filter.includeArchived === true)
+      ? withNestedSubagents(db, summaries, includeArchived)
       : summaries;
-  return withDosuMcpEvidence(db, nested, filter.includeArchived === true);
+  return withDosuMcpEvidence(db, nested, includeArchived);
 }
 
 export interface SearchHit {
@@ -236,7 +239,7 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
   const clauses = [
     "block_fts MATCH ?",
     visibleSessionPredicate("s"),
-    sessionUserStatePredicate("s"),
+    sessionUserStatePredicateForDatabase(db, "s"),
   ];
   const params: (string | number)[] = [ftsQuery];
   if (filter.includeSubagents !== true) {
@@ -371,7 +374,10 @@ interface ToolCallDbRow extends Omit<ToolCallRow, "input_preview" | "is_error" |
 export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCallPage {
   const limit = normalizeLimit(filter.limit, 50, 100);
   const offset = normalizeOffset(filter.offset);
-  const clauses: string[] = [visibleSessionPredicate("s"), sessionUserStatePredicate("s")];
+  const clauses: string[] = [
+    visibleSessionPredicate("s"),
+    sessionUserStatePredicateForDatabase(db, "s"),
+  ];
   const params: (string | number)[] = [];
   if (filter.tool != null) {
     clauses.push("t.tool_name = ?");
@@ -599,7 +605,11 @@ export function getSession(
   options: SessionReadOptions = {},
 ): SessionDetail | null {
   const summaryRow = db
-    .query(`${sessionSummarySelect(true)} WHERE s.id = ?1`)
+    .query(
+      `${sessionSummarySelect(
+        sessionUserStatePredicateForDatabase(db, "summary_child", true),
+      )} WHERE s.id = ?1`,
+    )
     .get(id) as SessionSummaryRow | null;
   if (summaryRow == null) {
     return null;
@@ -684,21 +694,21 @@ export function getSession(
   // session with many subagents costs two queries, not two per subagent.
   const descendantRows = db
     .query(
-      `${sessionSummarySelect(true)}
+      `${sessionSummarySelect(sessionUserStatePredicateForDatabase(db, "summary_child", true))}
        WHERE s.id IN (
          WITH RECURSIVE subtree(id, depth) AS (
            SELECT detail_child.id, 1
            FROM session detail_child
            WHERE detail_child.parent_session_id = ?1
              AND ${visibleSessionPredicate("detail_child")}
-             AND ${sessionUserStatePredicate("detail_child", true)}
+             AND ${sessionUserStatePredicateForDatabase(db, "detail_child", true)}
            UNION ALL
            SELECT child.id, subtree.depth + 1
            FROM session child
            JOIN subtree ON subtree.id = child.parent_session_id
            WHERE subtree.depth < 5
              AND ${visibleSessionPredicate("child")}
-             AND ${sessionUserStatePredicate("child", true)}
+             AND ${sessionUserStatePredicateForDatabase(db, "child", true)}
          )
          SELECT id FROM subtree
        )
@@ -908,6 +918,7 @@ interface ProjectSummaryRow extends Omit<ProjectSummary, "is_worktree" | "sessio
 }
 
 export function listProjects(db: Database): ProjectSummary[] {
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   const rows = db
     .query(
       `SELECT p.id, p.path, p.name,
@@ -923,7 +934,7 @@ export function listProjects(db: Database): ProjectSummary[] {
        LEFT JOIN session s
          ON s.project_id = p.id
         AND ${visibleSessionPredicate("s")}
-        AND ${sessionUserStatePredicate("s")}
+        AND ${visibleSession}
        GROUP BY p.id, p.path, p.name
        ORDER BY sessions DESC, p.path ASC`,
     )
@@ -973,6 +984,8 @@ function withDosuMcpEvidence(
   }
   const ids = [...new Set(flattened.map((session) => session.id))];
   const serverPlaceholders = CONFIRMED_DOSU_SERVER_IDS.map(() => "?").join(", ");
+  const rootVisibility = sessionUserStatePredicateForDatabase(db, "s", includeArchived);
+  const childVisibility = sessionUserStatePredicateForDatabase(db, "child", includeArchived);
   const rows = db
     .query(
       `WITH RECURSIVE subtree(root_id, session_id, depth) AS (
@@ -980,14 +993,14 @@ function withDosuMcpEvidence(
          FROM session s
          WHERE s.id IN (SELECT value FROM json_each(?))
            AND ${visibleSessionPredicate("s")}
-           AND ${sessionUserStatePredicate("s", includeArchived)}
+           AND ${rootVisibility}
          UNION ALL
          SELECT subtree.root_id, child.id, subtree.depth + 1
          FROM session child
          JOIN subtree ON child.parent_session_id = subtree.session_id
          WHERE subtree.depth < 5
            AND ${visibleSessionPredicate("child")}
-           AND ${sessionUserStatePredicate("child", includeArchived)}
+           AND ${childVisibility}
        ),
        evidence AS (
          SELECT subtree.root_id, subtree.depth
@@ -1249,9 +1262,20 @@ function withNestedSubagents(
     return sessions;
   }
   const placeholders = sessions.map(() => "?").join(", ");
+  const summaryVisibility = sessionUserStatePredicateForDatabase(
+    db,
+    "summary_child",
+    includeArchived,
+  );
+  const nestedVisibility = sessionUserStatePredicateForDatabase(
+    db,
+    "nested_child",
+    includeArchived,
+  );
+  const childVisibility = sessionUserStatePredicateForDatabase(db, "child", includeArchived);
   const rows = db
     .query(
-      `${sessionSummarySelect(includeArchived)}
+      `${sessionSummarySelect(summaryVisibility)}
        WHERE s.id IN (
          WITH RECURSIVE subtree(id) AS (
            SELECT nested_child.id
@@ -1259,14 +1283,14 @@ function withNestedSubagents(
            WHERE nested_child.is_subagent = 1
              AND nested_child.parent_session_id IN (${placeholders})
              AND ${visibleSessionPredicate("nested_child")}
-             AND ${sessionUserStatePredicate("nested_child", includeArchived)}
+             AND ${nestedVisibility}
            UNION ALL
            SELECT child.id
            FROM session child
            JOIN subtree parent ON parent.id = child.parent_session_id
            WHERE child.is_subagent = 1
              AND ${visibleSessionPredicate("child")}
-             AND ${sessionUserStatePredicate("child", includeArchived)}
+             AND ${childVisibility}
          )
          SELECT id FROM subtree
        )

@@ -78,17 +78,35 @@ describe("UI interaction contracts", () => {
 
   test("keeps archive visibility in session pagination and navigation state", () => {
     const app = sourceBetween("function App()", "function renderView(");
+    const render = sourceBetween("function renderView(", "function NotFoundView(");
     const sessions = sourceBetween("function SessionsView(", "function SessionTableSkeletonRows(");
     const row = sourceBetween("function SessionTableRow(", "function DosuProvenanceBadge(");
 
     expect(app).toContain("sessionLoadKey");
     expect(app).toContain("includeArchivedSessions");
     expect(app).toContain("reloadKey");
+    expect(app).toContain("reloadKey,");
+    expect(render).toContain("reloadKey={actions.reloadKey}");
     expect(app).toContain('"&include_archived=true"');
     expect(app).toContain("sessionPageExhausted({");
+    expect(sessions).toContain("scopedSessionSummaryKey(scopedSummaryRequest, reloadKey)");
     expect(sessions).toContain("<span>Show archived</span>");
     expect(sessions).toContain("sessionsArchivedHref(path, event.target.checked)");
     expect(row).toContain('session.is_user_archived ? <Badge tone="neutral">Archived</Badge>');
+  });
+
+  test("keeps the shell summary archive-wide while scoped session cards reload independently", () => {
+    const loaders = sourceBetween("const SLICE_LOADERS:", "const SHELL_SLICES:");
+    const summaryStart = loaders.indexOf("  summary: {");
+    const summaryEnd = loaders.indexOf("  byModel: {", summaryStart);
+    expect(summaryStart).toBeGreaterThanOrEqual(0);
+    expect(summaryEnd).toBeGreaterThan(summaryStart);
+    const summaryLoader = loaders.slice(summaryStart, summaryEnd);
+
+    expect(summaryLoader).toContain('withDateQuery("/api/stats/summary", q)');
+    expect(summaryLoader).not.toContain("project");
+    expect(summaryLoader).not.toContain("include_archived");
+    expect(summaryLoader).not.toContain("sessionSummaryPath");
   });
 
   test("exposes session state actions through the shared accessible overflow menu", () => {

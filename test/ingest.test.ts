@@ -16,6 +16,7 @@ import { getSession, listSessions } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { totals } from "../src/stats.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -473,6 +474,358 @@ describe("upsertSession", () => {
 });
 
 describe("sync", () => {
+  test("tombstones a subagent first discovered after its deleted parent", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const rootPath = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "07",
+      "29",
+      "rollout-deleted-root.jsonl",
+    );
+    const childPath = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "07",
+      "29",
+      "rollout-late-child.jsonl",
+    );
+    write(
+      rootPath,
+      [
+        '{"type":"session_meta","payload":{"id":"deleted-root","cwd":"/repo"}}',
+        '{"type":"event_msg","payload":{"type":"user_message","message":"Root prompt"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, skipped: 0 });
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'deleted-root'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
+
+    write(
+      childPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "late-child",
+            cwd: "/repo",
+            parent_thread_id: "deleted-root",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: "deleted-root",
+                  depth: 1,
+                },
+              },
+            },
+          },
+        }),
+        '{"type":"event_msg","payload":{"type":"user_message","message":"Late child"}}',
+      ].join("\n"),
+    );
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 0, skipped: 2, failed: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM session").get()).toEqual({ n: 0 });
+    expect(
+      db
+        .query(
+          `SELECT source_session_id, state
+           FROM session_user_state
+           ORDER BY source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      { source_session_id: "deleted-root", state: "deleted" },
+      { source_session_id: "late-child", state: "deleted" },
+    ]);
+    expect(listSessions(db, { includeSubagents: true, limit: 10 })).toEqual([]);
+    expect(
+      listSessions(db, {
+        includeArchived: true,
+        includeSubagents: true,
+        limit: 10,
+      }),
+    ).toEqual([]);
+    expect(totals(db, { includeArchived: true })).toMatchObject({
+      sessions: 0,
+      messages: 0,
+      tool_calls: 0,
+    });
+    db.close();
+  });
+
+  test("tombstones reversed late nested lineage without leaving an orphan", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const rootPath = join(dir, "rollout-root.jsonl");
+    const childPath = join(dir, "rollout-child.jsonl");
+    const grandchildPath = join(dir, "rollout-grandchild.jsonl");
+    const codexSession = (id: string, parent: string | null, depth: number): string =>
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id,
+            cwd: "/repo",
+            ...(parent == null
+              ? {}
+              : {
+                  parent_thread_id: parent,
+                  source: {
+                    subagent: {
+                      thread_spawn: {
+                        parent_thread_id: parent,
+                        depth,
+                      },
+                    },
+                  },
+                }),
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 100,
+                output_tokens: 50,
+              },
+            },
+          },
+        }),
+      ].join("\n");
+
+    write(rootPath, codexSession("deleted-root", null, 0));
+    const db = openFreshDb(dir);
+    expect(sync(db, { ...config, sourcePaths: [rootPath] })).toMatchObject({
+      scanned: 1,
+      ingested: 1,
+      skipped: 0,
+    });
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'deleted-root'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
+
+    write(childPath, codexSession("late-child", "deleted-root", 1));
+    write(grandchildPath, codexSession("late-grandchild", "late-child", 2));
+    expect(sync(db, { ...config, sourcePaths: [grandchildPath, childPath] })).toMatchObject({
+      scanned: 2,
+      failed: 0,
+    });
+
+    expect(db.query("SELECT COUNT(*) AS n FROM session").get()).toEqual({ n: 0 });
+    expect(
+      db
+        .query(
+          `SELECT source_session_id
+           FROM session_user_state
+           WHERE state = 'deleted'
+           ORDER BY source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      { source_session_id: "deleted-root" },
+      { source_session_id: "late-child" },
+      { source_session_id: "late-grandchild" },
+    ]);
+    expect(listSessions(db, { includeSubagents: true, limit: 10 })).toEqual([]);
+    expect(totals(db, { includeArchived: true })).toEqual({
+      sessions: 0,
+      messages: 0,
+      tool_calls: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      reasoning_tokens: 0,
+      est_reasoning_tokens: 0,
+      estimated_cost_usd: 0,
+    });
+    db.close();
+  });
+
+  test("preserves a deleted Claude child boundary across reversed nested arrivals", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const rootPath = join(config.claudeDir, "proj", "root.jsonl");
+    const childPath = join(config.claudeDir, "proj", "subagents", "agent-child.jsonl");
+    const siblingPath = join(config.claudeDir, "proj", "subagents", "agent-sibling.jsonl");
+    const grandchildPath = join(config.claudeDir, "proj", "subagents", "agent-grandchild.jsonl");
+    const greatGrandchildPath = join(
+      config.claudeDir,
+      "proj",
+      "subagents",
+      "agent-great-grandchild.jsonl",
+    );
+    const sidecarPath = (path: string): string => path.replace(/\.jsonl$/, ".meta.json");
+    const claudeSession = (
+      agentId: string | null,
+      prompt: string,
+      startedAt: string,
+      spawnIds: readonly string[] = [],
+    ): string =>
+      [
+        {
+          type: "user",
+          uuid: `${agentId ?? "root"}-user`,
+          parentUuid: null,
+          sessionId: "shared-root-session",
+          ...(agentId == null ? {} : { isSidechain: true, agentId }),
+          timestamp: startedAt,
+          cwd: "/repo",
+          message: { role: "user", content: prompt },
+        },
+        {
+          type: "assistant",
+          uuid: `${agentId ?? "root"}-assistant`,
+          parentUuid: `${agentId ?? "root"}-user`,
+          sessionId: "shared-root-session",
+          ...(agentId == null ? {} : { isSidechain: true, agentId }),
+          timestamp: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+          cwd: "/repo",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            usage: { input_tokens: 100, output_tokens: 50 },
+            content:
+              spawnIds.length === 0
+                ? [{ type: "text", text: "done" }]
+                : spawnIds.map((id) => ({
+                    type: "tool_use",
+                    id,
+                    name: "Task",
+                    input: { prompt: `spawn ${id}` },
+                  })),
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n");
+
+    write(
+      rootPath,
+      claudeSession(null, "root prompt", "2026-07-29T10:00:00.000Z", [
+        "spawn-child",
+        "spawn-sibling",
+      ]),
+    );
+    write(
+      childPath,
+      claudeSession("child", "child prompt", "2026-07-29T10:01:00.000Z", ["spawn-grandchild"]),
+    );
+    write(sidecarPath(childPath), JSON.stringify({ toolUseId: "spawn-child", spawnDepth: 1 }));
+    write(siblingPath, claudeSession("sibling", "sibling prompt", "2026-07-29T10:02:00.000Z"));
+    write(sidecarPath(siblingPath), JSON.stringify({ toolUseId: "spawn-sibling", spawnDepth: 1 }));
+
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
+    const childId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'agent-child'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(setSessionUserState(db, childId, "deleted")).toBe(true);
+    const totalsAfterDelete = totals(db);
+    expect(
+      listSessions(db, { includeSubagents: true, limit: 10 })
+        .map((session) => session.source_session_id)
+        .sort(),
+    ).toEqual(["agent-sibling", "root"]);
+
+    write(
+      grandchildPath,
+      claudeSession("grandchild", "grandchild prompt", "2026-07-29T10:03:00.000Z", [
+        "spawn-great-grandchild",
+      ]),
+    );
+    write(
+      sidecarPath(grandchildPath),
+      JSON.stringify({ toolUseId: "spawn-grandchild", spawnDepth: 2 }),
+    );
+    write(
+      greatGrandchildPath,
+      claudeSession("great-grandchild", "great-grandchild prompt", "2026-07-29T10:04:00.000Z"),
+    );
+    write(
+      sidecarPath(greatGrandchildPath),
+      JSON.stringify({ toolUseId: "spawn-great-grandchild", spawnDepth: 3 }),
+    );
+    expect(
+      sync(db, {
+        ...config,
+        sourcePaths: [greatGrandchildPath, grandchildPath],
+      }),
+    ).toMatchObject({ scanned: 2, failed: 0 });
+
+    expect(
+      listSessions(db, { includeSubagents: true, limit: 10 })
+        .map((session) => session.source_session_id)
+        .sort(),
+    ).toEqual(["agent-sibling", "root"]);
+    expect(totals(db)).toEqual(totalsAfterDelete);
+    expect(
+      db
+        .query(
+          `SELECT source_session_id, state
+           FROM session_user_state
+           WHERE tool = 'claude_code'
+             AND source_session_id IN ('agent-grandchild', 'agent-great-grandchild')
+           ORDER BY source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      { source_session_id: "agent-grandchild", state: "deleted" },
+      { source_session_id: "agent-great-grandchild", state: "deleted" },
+    ]);
+    expect(
+      db
+        .query(
+          `SELECT path, status
+           FROM ingest_source
+           WHERE path IN (?1, ?2)
+           ORDER BY path`,
+        )
+        .all(grandchildPath, greatGrandchildPath),
+    ).toEqual(
+      [grandchildPath, greatGrandchildPath]
+        .sort()
+        .map((path) => ({ path, status: "skipped_deleted" })),
+    );
+    expect(
+      db
+        .query(
+          `SELECT parent.source_session_id AS parent_key
+           FROM session child
+           JOIN session parent ON parent.id = child.parent_session_id
+           WHERE child.source_session_id = 'agent-sibling'`,
+        )
+        .get(),
+    ).toEqual({ parent_key: "root" });
+    db.close();
+  });
+
   test("deleted root and subagent identities stay tombstoned across source changes", () => {
     const dir = freshCase();
     const config: IngestConfig = {

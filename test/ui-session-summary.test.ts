@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { sessionCardMetrics, sessionSummaryPath } from "../src/ui/session-summary.ts";
+import {
+  scopedSessionSummaryKey,
+  sessionCardMetrics,
+  sessionSummaryPath,
+} from "../src/ui/session-summary.ts";
 
 describe("session summary cards", () => {
   const archiveSummary = {
@@ -63,5 +67,12 @@ describe("session summary cards", () => {
     expect(sessionSummaryPath(null, "from=2026-05-01", true)).toBe(
       "/api/stats/summary?from=2026-05-01&include_archived=true",
     );
+  });
+
+  test("keys a scoped summary by its archive reload generation", () => {
+    const request = sessionSummaryPath("/Users/dev/a repo", "from=2026-05-01", true);
+
+    expect(scopedSessionSummaryKey(request, 3)).toBe(scopedSessionSummaryKey(request, 3));
+    expect(scopedSessionSummaryKey(request, 4)).not.toBe(scopedSessionSummaryKey(request, 3));
   });
 });

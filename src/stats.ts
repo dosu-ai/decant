@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
-import { sessionUserStatePredicate } from "./session-user-state.ts";
+import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 
 export interface Totals {
@@ -24,7 +24,7 @@ export interface StatsFilter extends DateFilter {
 }
 
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   return db
     .query(
       `WITH filtered_session AS (
@@ -77,7 +77,7 @@ export function byDimension(
   filter?: StatsFilter | null,
 ): DimRow[] {
   const { groupExpr, join } = dimensionSql(dimension);
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
          SELECT * FROM session s ${whereClause(visible)}
@@ -102,11 +102,15 @@ export function byDimension(
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
-function statsScope(alias: string, filter?: StatsFilter | null): { sql: string; params: string[] } {
+function statsScope(
+  db: Database,
+  alias: string,
+  filter?: StatsFilter | null,
+): { sql: string; params: string[] } {
   const date = sessionDatePredicate(alias, filter);
   const clauses = [
     visibleSessionPredicate(alias),
-    sessionUserStatePredicate(alias, filter?.includeArchived === true),
+    sessionUserStatePredicateForDatabase(db, alias, filter?.includeArchived === true),
     date.sql,
   ];
   const params = [...date.params];
@@ -155,7 +159,7 @@ export function toolUsage(
 ): ToolStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const errorFilter = errorsOnly ? "WHERE a.errors > 0" : "";
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
   const statement = db.prepare(
@@ -241,7 +245,7 @@ interface McpStatDb extends Omit<McpStatRow, "mcp_server"> {
 
 export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | null): McpStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
          SELECT id, started_at FROM session s ${whereClause(visible)}
@@ -332,7 +336,7 @@ export function fileHotspots(
 ): FileStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const { keyExpr, projectExpr, join } = fileGroupSql(group);
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const clauses = [op == null ? null : "f.operation = ?", visible.sql].filter(
     (clause): clause is string => clause != null && clause !== "",
   );
@@ -407,7 +411,7 @@ export interface ModelSparklines {
 }
 
 export function modelSparklines(db: Database, filter?: DateFilter | null): ModelSparklines {
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const rows = db
     .query(
       `SELECT COALESCE(s.model, '(unknown)') AS model,
@@ -444,7 +448,7 @@ export interface DateBounds {
 }
 
 export function dateBounds(db: Database): DateBounds {
-  const visible = statsScope("s");
+  const visible = statsScope(db, "s");
   return db
     .query(
       `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
@@ -459,7 +463,7 @@ export function dateBounds(db: Database): DateBounds {
 }
 
 export function todayTotals(db: Database): Totals {
-  const visible = statsScope("s");
+  const visible = statsScope(db, "s");
   return db
     .query(
       `WITH filtered_session AS (
@@ -525,7 +529,7 @@ function fileGroupSql(group: FileGroup): { keyExpr: string; projectExpr: string;
 
 function bucket(db: Database, expr: string, size: number, filter?: DateFilter | null): number[] {
   const out = Array.from({ length: size }, () => 0);
-  const visible = statsScope("s", filter);
+  const visible = statsScope(db, "s", filter);
   const rows = db
     .query(
       `SELECT ${expr} AS key, COUNT(*) AS count

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { compareCodePoints } from "./order.ts";
-import { sessionUserStatePredicate } from "./session-user-state.ts";
+import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { DECANT_VERSION } from "./version.ts";
 
 export { DECANT_VERSION };
@@ -245,12 +245,13 @@ export function isDestructive(command: string): string | null {
 
 export function timeline(db: Database, scope: Scope = {}): Distillation {
   const scoped = scopeClause(scope);
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   const count = db
     .query(
       `SELECT COUNT(*) AS session_count, MIN(s.started_at) AS date_from, MAX(s.started_at) AS date_to
        FROM session s
        LEFT JOIN project p ON p.id = s.project_id
-       WHERE ${sessionUserStatePredicate("s")}${scoped.sql}`,
+       WHERE ${visibleSession}${scoped.sql}`,
     )
     .get(...scoped.values) as {
     session_count: number;
@@ -263,7 +264,7 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
        FROM tool_call tc
        JOIN session s ON s.id = tc.session_id
        LEFT JOIN project p ON p.id = s.project_id
-       WHERE ${sessionUserStatePredicate("s")}${scoped.sql}
+       WHERE ${visibleSession}${scoped.sql}
        ORDER BY tc.session_id, tc.ordinal`,
     )
     .all(...scoped.values) as ToolCallRow[];
@@ -444,6 +445,7 @@ export function renderReplay(
 
 export function hotContext(db: Database, scope: Scope = {}, limitValue = 15): HotFile[] {
   const scoped = scopeClause(scope);
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   return db
     .query(
       `SELECT fr.rel_path,
@@ -454,7 +456,7 @@ export function hotContext(db: Database, scope: Scope = {}, limitValue = 15): Ho
        JOIN session s ON s.id = fr.session_id
        LEFT JOIN project p ON p.id = s.project_id
        WHERE fr.rel_path IS NOT NULL
-         AND ${sessionUserStatePredicate("s")}${scoped.sql}
+         AND ${visibleSession}${scoped.sql}
        GROUP BY fr.rel_path
        HAVING reads > 0
        ORDER BY sessions DESC, reads DESC, fr.rel_path

@@ -915,7 +915,7 @@ describe("openDb", () => {
       BEGIN
         INSERT INTO operator_update_audit(tool_call_id) VALUES (new.id);
       END;
-      DELETE FROM schema_migrations WHERE version = 19;
+      DELETE FROM schema_migrations WHERE version >= 19;
     `);
     db.close();
 
@@ -980,7 +980,7 @@ describe("openDb", () => {
     const db = openDb(path);
     db.exec(`
       ALTER TABLE session ADD COLUMN unexpected_local_state TEXT;
-      DELETE FROM schema_migrations WHERE version = 19;
+      DELETE FROM schema_migrations WHERE version >= 19;
     `);
     db.close();
 

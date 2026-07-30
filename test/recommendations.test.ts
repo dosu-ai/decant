@@ -466,7 +466,8 @@ describe("recommendations", () => {
          )
          VALUES (?1, 'claude_code', 'archive-signal-' || ?1, 1, ?2, datetime('now'), ?3)`,
       ).run(id, sourcePath, index < 7 ? "abandoned" : "completed");
-      for (let call = 0; call < 9; call += 1) {
+      const searchCalls = index < 10 ? 10 : 9;
+      for (let call = 0; call < searchCalls; call += 1) {
         db.query(
           `INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
            VALUES (?1, 'builtin', 'Grep', datetime('now'))`,

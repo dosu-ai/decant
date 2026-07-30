@@ -521,6 +521,8 @@ const SLICE_LOADERS: Record<
     }),
   },
   recommendations: {
+    // Recommendations are archive-wide. If they become date-scoped, the
+    // recommendations loading key and layout effect must include dateQuery too.
     dateScoped: false,
     load: async () => ({
       recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),

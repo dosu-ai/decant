@@ -39,8 +39,8 @@ function base(): Database {
 
 function seedTool(
   db: Database,
-  name: string,
-  kind: string,
+  name: string | null,
+  kind: string | null,
   server: string | null,
   calls: number,
   errors: number,
@@ -81,6 +81,9 @@ function keys(rows: { key: string }[]): string[] {
   return rows.map((row) => row.key);
 }
 
+const BUILTIN_ERROR_ID = ".h96c30c4821d37d05";
+const MCP_SVC_ERROR_ID = ".hc49c405203ddd0d7";
+
 describe("recommendations", () => {
   test("catalog keys and spotlight entry match the reference", () => {
     const rows = catalog();
@@ -118,7 +121,7 @@ describe("recommendations", () => {
     `);
 
     const rows = signals(db);
-    const error = rows.find((row) => row.key === "signal:error:fetch");
+    const error = rows.find((row) => row.key === `signal:error:fetch${MCP_SVC_ERROR_ID}`);
     expect(error).toMatchObject({
       title: '"fetch" fails 20% of the time',
       detail: '5 errors across 25 calls on "svc".',
@@ -145,6 +148,136 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("error hotspots distinguish tools that share a name across kinds and servers", () => {
+    const db = base();
+    seedTool(db, "fetch", "builtin", null, 25, 5);
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+
+    const errors = signals(db).filter((row) => row.key.startsWith("signal:error:fetch"));
+    expect(errors).toHaveLength(2);
+    expect(new Set(errors.map((row) => row.key)).size).toBe(2);
+    expect(errors.map((row) => row.detail)).toEqual(
+      expect.arrayContaining(["5 errors across 25 calls.", '5 errors across 25 calls on "svc".']),
+    );
+    db.close();
+  });
+
+  test("migrates a handled legacy hotspot by server identity when counts and siblings change", () => {
+    const db = base();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    db.exec(`
+      INSERT INTO recommendation(
+        key, kind, title, detail, score, status, first_seen_at, updated_at
+      )
+      VALUES(
+        'signal:error:fetch', 'signal', '"fetch" fails 20% of the time',
+        '4 errors across 20 calls on "svc".', 4, 'open',
+        '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z'
+      )
+    `);
+    expect(markImplemented(db, "signal:error:fetch", "manual", "already handled")).toBe(true);
+
+    seedTool(db, "fetch", "builtin", null, 25, 5);
+    regenerate(db);
+    const colliding = list(db, "all").filter((row) => row.key.startsWith("signal:error:fetch"));
+    expect(colliding).toHaveLength(2);
+    expect(colliding.every((row) => row.key !== "signal:error:fetch")).toBe(true);
+
+    const service = colliding.find((row) => row.detail?.includes('"svc"'));
+    expect(service).toMatchObject({
+      note: "already handled",
+      status: "implemented",
+      status_source: "manual",
+      first_seen_at: "2026-07-01T00:00:00Z",
+    });
+    const builtin = colliding.find((row) => !row.detail?.includes('"svc"'));
+    expect(builtin).toMatchObject({
+      note: null,
+      status: "open",
+      status_source: null,
+    });
+    expect(builtin?.first_seen_at).not.toBeNull();
+    expect((builtin?.first_seen_at ?? "") > "2026-07-01T00:00:00Z").toBe(true);
+
+    const serviceKey = service?.key;
+    expect(serviceKey).toBeDefined();
+    db.query("DELETE FROM tool_call WHERE tool_kind = 'builtin'").run();
+    regenerate(db);
+    expect(signals(db).filter((row) => row.key.startsWith("signal:error:fetch"))).toMatchObject([
+      { key: serviceKey },
+    ]);
+    expect(list(db, "all").find((row) => row.key === serviceKey)).toMatchObject({
+      note: "already handled",
+      status: "implemented",
+      status_source: "manual",
+    });
+    db.close();
+  });
+
+  test("keeps ambiguous durable legacy state without fanning it out beyond the signal cap", () => {
+    const db = base();
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    seedTool(db, "fetch", "mcp", "svc", 20, 4);
+    seedTool(db, "fetch", "builtin", "svc", 20, 3);
+    for (let index = 0; index < 11; index += 1) {
+      seedTool(db, `higher-${index}`, "builtin", null, 20, 20);
+    }
+    db.exec(`
+      INSERT INTO recommendation(
+        key, kind, title, detail, score, status, status_source, note,
+        first_seen_at, updated_at, implemented_at
+      )
+      VALUES(
+        'signal:error:fetch', 'signal', '"fetch" fails 10% of the time',
+        '2 errors across 20 calls on "svc".', 2, 'implemented', 'manual',
+        'legacy state', '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z',
+        '2026-07-02T00:00:00Z'
+      )
+    `);
+
+    regenerate(db);
+
+    const colliding = list(db, "all").filter((row) => row.key.startsWith("signal:error:fetch"));
+    expect(colliding.find((row) => row.key === "signal:error:fetch")).toMatchObject({
+      note: "legacy state",
+      status: "implemented",
+      status_source: "manual",
+      first_seen_at: "2026-07-01T00:00:00Z",
+    });
+    const stable = colliding.filter((row) => row.key !== "signal:error:fetch");
+    expect(stable).toHaveLength(1);
+    expect(stable[0]).toMatchObject({
+      note: null,
+      status: "open",
+      status_source: null,
+    });
+    expect(stable[0]?.first_seen_at).not.toBe("2026-07-01T00:00:00Z");
+    db.close();
+  });
+
+  test("coalesces null and empty tool identity fields before detecting error hotspots", () => {
+    const db = base();
+    seedTool(db, "unknown-kind", null, null, 10, 2);
+    seedTool(db, "unknown-kind", "", null, 15, 3);
+    seedTool(db, null, "builtin", null, 10, 2);
+    seedTool(db, "", "builtin", null, 15, 3);
+
+    const errors = signals(db);
+    expect(errors.filter((row) => row.key.startsWith("signal:error:unknown-kind"))).toMatchObject([
+      {
+        detail: "5 errors across 25 calls.",
+        impact_label: "20% error rate",
+      },
+    ]);
+    expect(errors.filter((row) => row.title === '"" fails 20% of the time')).toMatchObject([
+      {
+        detail: "5 errors across 25 calls.",
+        impact_label: "20% error rate",
+      },
+    ]);
+    db.close();
+  });
+
   test("signals are capped at twelve and ranked by score", () => {
     const db = base();
     db.query("UPDATE session SET estimated_cost_usd = 0").run();
@@ -154,8 +287,8 @@ describe("recommendations", () => {
 
     const rows = signals(db);
     expect(rows).toHaveLength(12);
-    expect(keys(rows)).toContain("signal:error:fetch-12");
-    expect(keys(rows)).not.toContain("signal:error:fetch-00");
+    expect(keys(rows)).toContain(`signal:error:fetch-12${BUILTIN_ERROR_ID}`);
+    expect(keys(rows)).not.toContain(`signal:error:fetch-00${BUILTIN_ERROR_ID}`);
     expect(rows.map((row) => row.score)).toEqual(
       [...rows].map((row) => row.score).sort((a, b) => b - a),
     );
@@ -172,7 +305,7 @@ describe("recommendations", () => {
     expect(keys(signals(db))).toEqual(
       Array.from(
         { length: 12 },
-        (_, index) => `signal:error:fetch-${String(index).padStart(2, "0")}`,
+        (_, index) => `signal:error:fetch-${String(index).padStart(2, "0")}${BUILTIN_ERROR_ID}`,
       ),
     );
     db.close();
@@ -198,7 +331,7 @@ describe("recommendations", () => {
     const rows = signals(db);
     expect(rows.filter((row) => row.score === 5).map((row) => row.key)).toEqual([
       "signal:cost-concentration",
-      "signal:error:fetch",
+      `signal:error:fetch${BUILTIN_ERROR_ID}`,
     ]);
     expect(
       rows.filter((row) => row.key.startsWith("signal:hot-context:")).map((row) => row.key),
@@ -226,7 +359,7 @@ describe("recommendations", () => {
     seedTool(db, "OldBuiltin", "builtin", null, 250, 0, 3);
 
     const rows = signals(db);
-    expect(keys(rows)).not.toContain("signal:error:old-fetch");
+    expect(keys(rows).some((key) => key.startsWith("signal:error:old-fetch."))).toBe(false);
     expect(keys(rows)).not.toContain("signal:heavy-server:old-svc");
     expect(keys(rows)).not.toContain("signal:heavy-tool:OldBuiltin");
     expect(rows.find((row) => row.key === "signal:cost-concentration")?.title).toBe(
@@ -360,14 +493,16 @@ describe("recommendations", () => {
       expect(key).toMatch(/^[A-Za-z0-9._:/-]+$/);
     }
 
-    // An unsanitized name keeps its historical key; the look-alike gets its own.
+    // A safe name keeps its readable segment; the look-alike gets its own digest.
     const errors = all.filter((key) => key.startsWith("signal:error:")).sort();
     expect(errors).toEqual([
-      "signal:error:Bash",
       // A name that already ends in the reserved digest suffix is re-digested, so
       // the sanitized branch and the verbatim branch can never meet.
-      expect.stringMatching(/^signal:error:Bash\.h0123456789abcdef\.h[0-9a-f]{16}$/),
-      expect.stringMatching(/^signal:error:Bash\.h[0-9a-f]{16}$/),
+      expect.stringMatching(
+        /^signal:error:Bash\.h0123456789abcdef\.h[0-9a-f]{16}\.h96c30c4821d37d05$/,
+      ),
+      expect.stringMatching(/^signal:error:Bash\.h[0-9a-f]{16}\.h96c30c4821d37d05$/),
+      `signal:error:Bash${BUILTIN_ERROR_ID}`,
     ]);
     const servers = all.filter((key) => key.startsWith("signal:heavy-server:")).sort();
     expect(servers).toEqual([
@@ -402,7 +537,9 @@ describe("recommendations", () => {
     seedTool(db, "fetch", "mcp", "svc", 25, 5);
     const rows = current(db);
     const firstCatalog = rows.findIndex((row) => row.kind === "catalog");
-    const signalIndex = rows.findIndex((row) => row.key === "signal:error:fetch");
+    const signalIndex = rows.findIndex(
+      (row) => row.key === `signal:error:fetch${MCP_SVC_ERROR_ID}`,
+    );
     expect(signalIndex).toBeGreaterThanOrEqual(0);
     expect(signalIndex).toBeLessThan(firstCatalog);
     expect(keys(rows)).toContain("catalog:hooks");
@@ -467,10 +604,11 @@ describe("recommendations", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);
     regenerate(db);
+    const errorKey = `signal:error:fetch${MCP_SVC_ERROR_ID}`;
     const firstSeenAt = (
-      db
-        .query("SELECT first_seen_at FROM recommendation WHERE key = 'signal:error:fetch'")
-        .get() as { first_seen_at: string }
+      db.query("SELECT first_seen_at FROM recommendation WHERE key = ?1").get(errorKey) as {
+        first_seen_at: string;
+      }
     ).first_seen_at;
     db.query("DELETE FROM tool_call").run();
     seedTool(db, "fetch", "mcp", "svc", 100, 2);
@@ -480,9 +618,9 @@ describe("recommendations", () => {
       db
         .query(
           `SELECT status, status_source, implemented_at
-           FROM recommendation WHERE key = 'signal:error:fetch'`,
+           FROM recommendation WHERE key = ?1`,
         )
-        .get(),
+        .get(errorKey),
     ).toMatchObject({ status: "implemented", status_source: "activity" });
     expect(
       (
@@ -501,9 +639,9 @@ describe("recommendations", () => {
       db
         .query(
           `SELECT status, status_source, implemented_at, first_seen_at
-           FROM recommendation WHERE key = 'signal:error:fetch'`,
+           FROM recommendation WHERE key = ?1`,
         )
-        .get(),
+        .get(errorKey),
     ).toEqual({
       status: "open",
       status_source: null,
@@ -518,7 +656,8 @@ describe("recommendations", () => {
       const db = base();
       seedTool(db, "fetch", "mcp", "svc", 25, 5);
       regenerate(db);
-      expect(markImplemented(db, "signal:error:fetch", source, "accepted")).toBe(true);
+      const errorKey = `signal:error:fetch${MCP_SVC_ERROR_ID}`;
+      expect(markImplemented(db, errorKey, source, "accepted")).toBe(true);
       db.query("DELETE FROM tool_call").run();
       seedTool(db, "fetch", "mcp", "svc", 100, 2);
       regenerate(db);
@@ -529,9 +668,9 @@ describe("recommendations", () => {
         db
           .query(
             `SELECT status, status_source, note
-             FROM recommendation WHERE key = 'signal:error:fetch'`,
+             FROM recommendation WHERE key = ?1`,
           )
-          .get(),
+          .get(errorKey),
       ).toEqual({ status: "implemented", status_source: source, note: "accepted" });
       db.close();
     }

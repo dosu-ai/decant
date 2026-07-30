@@ -136,7 +136,9 @@ export function toolUsage(
     ON fs.id = t.session_id`;
   const statement = db.prepare(
     `WITH scoped AS (
-         SELECT t.tool_name, t.tool_kind, t.mcp_server, t.is_error,
+         SELECT COALESCE(t.tool_name, '') AS tool_name,
+                COALESCE(t.tool_kind, '') AS tool_kind,
+                t.mcp_server, t.is_error,
                 t.duration_ms, t.timestamp
          FROM tool_call t
          ${scope}

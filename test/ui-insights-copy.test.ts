@@ -76,4 +76,12 @@ describe("Insights information hierarchy", () => {
     );
     expect(styles).toContain(".insights-signals-skeleton");
   });
+
+  test("keeps recommendations archive-wide so date changes cannot latch the skeleton", () => {
+    const loaderStart = main.indexOf("  recommendations: {", main.indexOf("const SLICE_LOADERS"));
+    const loader = main.slice(loaderStart, main.indexOf("  config: {", loaderStart));
+    expect(loader).toContain("dateScoped: false");
+    expect(loader).toContain("Recommendations are archive-wide.");
+    expect(loader).toContain('getJson<Recommendation[]>("/api/recommendations?status=all")');
+  });
 });

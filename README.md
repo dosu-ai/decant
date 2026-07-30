@@ -17,10 +17,9 @@ both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,
 token economics, context-window occupancy, and phase breakdowns from a CLI or a
 local web UI. Your transcripts never leave your machine.
 
-![Decant serve showing the analytics view: session, message, tool-call, token,
-and cost totals; an activity breakdown splitting cost and time across context,
-planning, code, and communicating; and sessions-per-day and cost-per-day charts.
-Rendered from synthetic demo data.](docs/assets/decant-serve.png)
+![The current Decant Analytics UI showing the command palette, report and share
+controls, session and token totals, activity economics, and daily charts.
+Rendered from the repository's synthetic fixtures.](docs/assets/decant-serve.png)
 
 ## Features
 
@@ -37,27 +36,30 @@ Rendered from synthetic demo data.](docs/assets/decant-serve.png)
 
 ## Quick Start
 
-Run from source. This works today, before any package or image is published:
+Run Decant with `npx`—no Bun install or global package required:
 
 ```bash
-bun run dev
+npx @dosu/decant@latest serve
 ```
 
-Requires Bun 1.3+. `bun run dev` performs a frozen dependency install, starts
-`decant serve`, runs the startup sync, and keeps watching your source logs. The
-UI runs at `http://127.0.0.1:3000`.
+Open `http://127.0.0.1:3000`. The first run syncs the Claude Code and Codex logs
+already on your machine, then keeps watching them for changes. `npx` downloads
+the launcher and matching native binary for this run without installing a
+persistent `decant` command.
 
-Everything below is **available from v0.1.0**, once the Release workflow has
-published a version. See [Install Matrix](#install-matrix) for the full set of
-options and when to pick which.
-
-Run it with npm, no Bun install needed:
+Use the same package for one-off CLI commands:
 
 ```bash
-npx @dosu/decant sync
-npx @dosu/decant ls
-npx @dosu/decant search "auth bug"
-npx @dosu/decant serve
+npx @dosu/decant@latest sync
+npx @dosu/decant@latest ls
+npx @dosu/decant@latest search "auth bug"
+```
+
+For a persistent installation:
+
+```bash
+npm install --global @dosu/decant@latest
+decant serve
 ```
 
 Install it with Homebrew:
@@ -84,6 +86,11 @@ docker run --rm \
   -v "$HOME/.codex:/sources/codex:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
+
+To run from source instead, install Bun 1.3+ and use `bun run dev`. It performs
+a frozen dependency install, starts `decant serve`, runs the startup sync, and
+keeps watching your source logs. See [Install Matrix](#install-matrix) for the
+full set of options.
 
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
 `-p 3000:3000` exposes the archive port on every host interface. The container
@@ -232,8 +239,8 @@ details and per-artifact verification.
 1. **npx / npm** — zero persistent install, or a global one:
 
    ```bash
-   npx @dosu/decant sync
-   npm i -g @dosu/decant   # persistent install, then just `decant`
+   npx @dosu/decant@latest serve
+   npm install --global @dosu/decant@latest   # persistent, then use `decant`
    ```
 
 2. **Homebrew** — via the `dosu-ai/dosu` tap:

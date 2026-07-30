@@ -326,6 +326,11 @@ paths:
       tags: [Sessions]
       operationId: listSessions
       summary: List visible sessions newest first
+      description: >-
+        Returns a bare newest-first array with no total or continuation token.
+        Advance offset by the number of rows received. The effective page size
+        defaults to 50 and never exceeds 100. A final short or empty page marks
+        the end; an exact multiple requires one empty request to confirm it.
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
@@ -360,7 +365,7 @@ paths:
       tags: [Sessions]
       operationId: getSessionSearchIndex
       summary: Read lightweight metadata for client-side fuzzy search
-      description: Returns every visible non-archived session, including subagents, without message data.
+      description: Returns every visible non-archived top-level session without message data.
       responses:
         "200":
           description: Stable newest-first search index

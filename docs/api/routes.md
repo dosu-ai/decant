@@ -11,6 +11,25 @@ code. A running server exposes the same OpenAPI 3.1 document as JSON at
 
 This page records the operational semantics around that contract.
 
+## UI routes
+
+- `GET /` (Analytics; grouped under Overview in the sidebar)
+- `GET /projects`
+- `GET /sessions`
+- `GET /sessions/:id`
+- `GET /search`
+- `GET /analytics`
+- `GET /insights`
+- `GET /tools`
+- `GET /files`
+- `GET /settings`
+- `GET /reports/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /reports/session/:id`
+
+The report UI routes render a light, print-ready preview with Back, Download
+HTML, and Save as PDF controls. They read the local-only report operations;
+the session preview intentionally omits transcript content.
+
 ## Access control
 
 The API has no authentication. Any request that reaches the listener and passes
@@ -71,6 +90,18 @@ does not restore the session. Neither operation modifies the source JSONL file.
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.
+
+### Session listing and command-palette index
+
+`GET /api/sessions` returns a bare newest-first array, not an envelope with a
+total or continuation token. Its `limit` defaults to 50 and has an effective
+maximum of 100. Increment `offset` by the number of rows received; a final short
+or empty page marks the end. When the result count is an exact multiple of the
+page size, one empty request is required to confirm the end.
+
+`GET /api/sessions/search-index` returns lightweight metadata for every visible,
+non-archived top-level session. It is the command palette's local fuzzy-search
+haystack and intentionally omits transcript content.
 
 ## Server-Sent Events
 

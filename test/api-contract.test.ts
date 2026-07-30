@@ -8,7 +8,7 @@ import { openDb } from "../src/db.ts";
 import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import { serve } from "../src/server.ts";
+import { serve, serviceStartingResponse } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -20,8 +20,11 @@ interface ContractCase {
   url: string;
   status?: number;
   body?: unknown;
+  expectedCode?: string;
+  headers?: Record<string, string>;
   mediaType?: "application/json" | "text/event-stream" | "text/html";
   requestValid?: boolean;
+  response?: () => Response | Promise<Response>;
 }
 
 interface OpenApiOperation {
@@ -33,6 +36,7 @@ interface OpenApiOperation {
   responses: Record<
     string,
     {
+      $ref?: string;
       content?: Record<string, { schema?: Record<string, unknown> }>;
     }
   >;
@@ -245,6 +249,77 @@ describe("local API OpenAPI contract", () => {
           body: { key: recommendationKey, source: "api-contract", note: "fixture-only" },
         },
       ];
+      const errorCases: ContractCase[] = [
+        {
+          path: "/api/health",
+          method: "get",
+          url: "/api/health",
+          status: 503,
+          expectedCode: "service_starting",
+          response: serviceStartingResponse,
+        },
+        {
+          path: "/api/health",
+          method: "get",
+          url: "/api/health",
+          status: 403,
+          expectedCode: "forbidden_host",
+          headers: { host: "remote.invalid" },
+        },
+        {
+          path: "/api/sessions/{id}",
+          method: "get",
+          url: "/api/sessions/not-a-number",
+          status: 400,
+          expectedCode: "invalid_session_id",
+        },
+        {
+          path: "/api/sessions/{id}",
+          method: "get",
+          url: "/api/sessions/999999999",
+          status: 404,
+          expectedCode: "session_not_found",
+        },
+        {
+          path: "/api/search",
+          method: "post",
+          url: "/api/search",
+          body: {},
+          status: 400,
+          expectedCode: "query_required",
+          requestValid: false,
+        },
+        {
+          path: "/api/stats/by-dimension",
+          method: "get",
+          url: "/api/stats/by-dimension?dim=unknown",
+          status: 400,
+          expectedCode: "unknown_dimension",
+        },
+        {
+          path: "/api/files",
+          method: "get",
+          url: "/api/files?group=unknown",
+          status: 400,
+          expectedCode: "invalid_files_query",
+        },
+        {
+          path: "/api/recommendations",
+          method: "get",
+          url: "/api/recommendations?status=unknown",
+          status: 400,
+          expectedCode: "unknown_status",
+        },
+        {
+          path: "/api/settings",
+          method: "post",
+          url: "/api/settings",
+          body: {},
+          headers: { "content-type": "text/plain" },
+          status: 415,
+          expectedCode: "unsupported_media_type",
+        },
+      ];
 
       expect(operationKeys(document)).toEqual(
         cases.map((entry) => `${entry.method.toUpperCase()} ${entry.path}`).sort(),
@@ -286,6 +361,19 @@ describe("local API OpenAPI contract", () => {
       ]);
       expect(requestPropertyNames(document, "/api/search", "post")).toContain("include_total");
       expect(requestPropertyNames(document, "/api/sessions/{id}/state", "post")).toEqual(["state"]);
+      expect(operationDescription(document, "/api/sessions", "get")).toContain(
+        "A final short or empty page marks the end",
+      );
+      expect(operationDescription(document, "/api/sessions/search-index", "get")).toContain(
+        "top-level",
+      );
+      const routesDocumentation = readFileSync(
+        join(import.meta.dir, "..", "docs", "api", "routes.md"),
+        "utf8",
+      );
+      expect(routesDocumentation).toContain("## UI routes");
+      expect(routesDocumentation).toContain("GET /api/sessions/search-index");
+      expect(routesDocumentation).toMatch(/final short\s+or empty page/);
       expect(sseEventNames(document)).toEqual([
         "archive_updated",
         "error",
@@ -298,18 +386,24 @@ describe("local API OpenAPI contract", () => {
       ]);
       const validators = new Map<string, ValidateFunction>();
 
-      for (const contractCase of cases) {
+      for (const contractCase of [...cases, ...errorCases]) {
         const expectedStatus = contractCase.status ?? 200;
         const expectedMediaType = contractCase.mediaType ?? "application/json";
-        const response = await fetch(`${baseUrl}${contractCase.url}`, {
-          method: contractCase.method.toUpperCase(),
-          ...(contractCase.body === undefined
-            ? {}
-            : {
-                body: JSON.stringify(contractCase.body),
-                headers: { "content-type": "application/json" },
-              }),
-        });
+        const response =
+          contractCase.response == null
+            ? await fetch(`${baseUrl}${contractCase.url}`, {
+                method: contractCase.method.toUpperCase(),
+                ...(contractCase.body === undefined
+                  ? { headers: contractCase.headers }
+                  : {
+                      body: JSON.stringify(contractCase.body),
+                      headers: {
+                        "content-type": "application/json",
+                        ...contractCase.headers,
+                      },
+                    }),
+              })
+            : await contractCase.response();
         expect(response.status).toBe(expectedStatus);
         expect(response.headers.get("content-type")).toStartWith(expectedMediaType);
         if (contractCase.body !== undefined) {
@@ -327,6 +421,9 @@ describe("local API OpenAPI contract", () => {
             : expectedMediaType === "text/event-stream"
               ? await firstStreamChunk(response)
               : await response.text();
+        if (contractCase.expectedCode != null) {
+          expect(value).toMatchObject({ code: contractCase.expectedCode });
+        }
         if (expectedMediaType === "text/event-stream") {
           const frame = parseSseFrame(value as string);
           expect(frame.event).toBe("hello");
@@ -529,6 +626,12 @@ function requestPropertyNames(
   return Object.keys(resolved.properties ?? {}).sort();
 }
 
+function operationDescription(document: OpenApiDocument, path: string, method: HttpMethod): string {
+  return (
+    (document.paths[path]?.[method] as { description?: string } | undefined)?.description ?? ""
+  );
+}
+
 function sseEventNames(document: OpenApiDocument): string[] {
   return Object.keys(document.paths["/api/events"]?.get?.["x-sse-events"] ?? {}).sort();
 }
@@ -573,10 +676,22 @@ function compileResponseValidator(
   status: number,
   mediaType: string,
 ): ValidateFunction {
-  const operation = openApiFromAjv(ajv).paths?.[path]?.[method];
-  const schema = operation?.responses[String(status)]?.content?.[mediaType]?.schema;
+  const document = openApiFromAjv(ajv);
+  const operation = document.paths?.[path]?.[method];
+  const documentedResponse = operation?.responses[String(status)];
+  const response =
+    documentedResponse?.$ref == null
+      ? documentedResponse
+      : resolveLocalRef<OpenApiOperation["responses"][string]>(document, documentedResponse.$ref);
+  const schema = response?.content?.[mediaType]?.schema;
   if (schema == null) {
     throw new Error(`${method.toUpperCase()} ${path} does not document ${status} ${mediaType}`);
+  }
+  if (documentedResponse?.$ref != null) {
+    return ajv.compile({
+      $ref:
+        `decant-openapi${documentedResponse.$ref}/content/` + `${jsonPointer(mediaType)}/schema`,
+    });
   }
   return ajv.compile({
     $ref:

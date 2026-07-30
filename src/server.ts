@@ -1082,12 +1082,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       const activeDb = db;
       const activeEconomics = economics;
       if (activeDb == null || activeEconomics == null) {
-        return errorResponse(
-          "service_starting",
-          "Decant is still starting. Please try again.",
-          { retryable: true },
-          503,
-        );
+        return serviceStartingResponse();
       }
       try {
         const response = await handleRequest(request, options.config, {
@@ -1274,6 +1269,16 @@ export function errorResponse(
   status = 400,
 ): Response {
   return json({ error: message, code, ...extras }, status);
+}
+
+/** Stable startup response shared by the live guard and contract tests. */
+export function serviceStartingResponse(): Response {
+  return errorResponse(
+    "service_starting",
+    "Decant is still starting. Please try again.",
+    { retryable: true },
+    503,
+  );
 }
 
 function responseForError(error: unknown): Response {

@@ -103,10 +103,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v20.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v21.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow
-   v8-to-v20 migrations preserve existing TypeScript-cutover archives. A
+   v8-to-v21 migrations preserve existing TypeScript-cutover archives. A
    migration is frozen as soon as it is committed to a branch because a
    dogfooding archive may already have run it. During review, put any schema
    adjustment in a new version; never edit a committed migration.

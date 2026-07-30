@@ -1,7 +1,7 @@
--- decant:schema_version=20
--- Effective decant schema (migrations 1..20 applied), frozen as the current
--- baseline. v20 adds durable user archive/delete state keyed by source
--- identity so synchronization cannot resurrect a deleted session.
+-- decant:schema_version=21
+-- Effective decant schema (migrations 1..21 applied), frozen as the current
+-- baseline. v21 only drops the never-committed context_compaction_count
+-- column from drifted archives, so the baseline DDL is unchanged from v20.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,

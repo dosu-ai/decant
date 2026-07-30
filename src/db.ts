@@ -21,7 +21,7 @@ import {
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 20;
+export const LATEST_SCHEMA_VERSION = 21;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -705,6 +705,16 @@ function migrate(db: Database, current: number): void {
       `);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (20, datetime('now'))",
+      ).run();
+    }
+    if (current < 21) {
+      // A never-merged variant of migration 11 left this column on dogfooding
+      // archives; no committed build reads or writes it.
+      if (hasColumn(db, "session", "context_compaction_count")) {
+        db.exec("ALTER TABLE session DROP COLUMN context_compaction_count");
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (21, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

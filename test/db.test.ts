@@ -99,7 +99,7 @@ function historicalArchive(path: string, version: 8 | 9 | 12 | 13 | 14): Databas
   return db;
 }
 
-// Inventory of the frozen v20 baseline. Shadow tables
+// Inventory of the frozen v21 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -485,7 +485,7 @@ describe("openDb", () => {
       INSERT INTO session(id, tool, source_session_id, title)
       VALUES (1, 'codex', 'preserved-v19', 'Preserved');
       DROP TABLE session_user_state;
-      DELETE FROM schema_migrations WHERE version = 20;
+      DELETE FROM schema_migrations WHERE version >= 20;
     `);
     old.close();
 
@@ -506,6 +506,45 @@ describe("openDb", () => {
       ).version,
     ).toBe(LATEST_SCHEMA_VERSION);
     migrated.close();
+  });
+
+  test("migrates archives that ran the never-committed context_compaction_count variant", () => {
+    const path = freshPath();
+    const old = openDb(path);
+    old.exec(`
+      INSERT INTO session(id, tool, source_session_id, title)
+      VALUES (1, 'claude_code', 'preserved-drift', 'Preserved');
+      ALTER TABLE session ADD COLUMN context_compaction_count INTEGER;
+      UPDATE session SET context_compaction_count = 1 WHERE id = 1;
+      DROP TABLE session_user_state;
+      DELETE FROM schema_migrations WHERE version >= 19;
+    `);
+    old.close();
+
+    const migrated = openDb(path);
+    const baseline = openDb(freshPath());
+    expect(buildSchemaManifest(migrated)).toEqual(buildSchemaManifest(baseline));
+    expect(
+      migrated
+        .query("SELECT 1 FROM pragma_table_info('session') WHERE name = 'context_compaction_count'")
+        .get(),
+    ).toBeNull();
+    expect(
+      migrated.query("SELECT tool, source_session_id, title FROM session WHERE id = 1").get(),
+    ).toEqual({
+      tool: "claude_code",
+      source_session_id: "preserved-drift",
+      title: "Preserved",
+    });
+    expect(
+      (
+        migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(LATEST_SCHEMA_VERSION);
+    migrated.close();
+    baseline.close();
   });
 
   test("migrates v12 archives and invalidates stale Claude context-window rollups", () => {

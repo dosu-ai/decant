@@ -204,7 +204,7 @@ async function assertCompiledEconomics(port: number): Promise<void> {
       );
     }
     latest = await response.json();
-    const totals = (latest as { totals?: Record<string, unknown> }).totals;
+    const totals = (latest as { totals?: Record<string, unknown> } | null)?.totals;
     if (
       typeof totals?.generation_tokens === "number" &&
       totals.generation_tokens > 0 &&

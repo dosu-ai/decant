@@ -74,7 +74,7 @@ describe("distribution helpers", () => {
     expect(parseDistributionArgs(["--version", "1.2.3"]).version).toBe("1.2.3");
   });
 
-  test("passes release version through Bun env inlining for compiled binaries", () => {
+  test("includes worker entrypoints and optional release version in compiled binaries", () => {
     const target = selectTargets("linux-x64")[0];
     if (target == null) {
       throw new Error("missing linux-x64 target");
@@ -85,6 +85,8 @@ describe("distribution helpers", () => {
       "--target",
       "bun-linux-x64",
       "src/cli.ts",
+      "src/sync-worker.ts",
+      "src/stats-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);
@@ -95,6 +97,8 @@ describe("distribution helpers", () => {
       "bun-linux-x64",
       "--env=DECANT_BUILD_VERSION*",
       "src/cli.ts",
+      "src/sync-worker.ts",
+      "src/stats-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);

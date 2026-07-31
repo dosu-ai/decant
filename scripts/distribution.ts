@@ -118,7 +118,10 @@ export function buildTargetArgs(
   if (version != null) {
     args.push("--env=DECANT_BUILD_VERSION*");
   }
-  args.push("src/cli.ts", "--outfile", outPath);
+  // Bun does not infer Worker entrypoints for standalone executables. Each
+  // worker must be listed explicitly so its module is embedded alongside the
+  // CLI entrypoint instead of being resolved from the runtime filesystem.
+  args.push("src/cli.ts", "src/sync-worker.ts", "src/stats-worker.ts", "--outfile", outPath);
   return args;
 }
 

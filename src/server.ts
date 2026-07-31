@@ -71,6 +71,7 @@ import {
   type WatchEvent,
   type WatchHandle,
 } from "./watch.ts";
+import { workerError, workerUrl } from "./worker-runtime.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
@@ -810,7 +811,7 @@ function runSyncWorker(
   onProgress?: (progress: SyncProgress) => void,
 ): Promise<ReturnType<typeof ingestSync>> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
+    const worker = new Worker(workerUrl("sync-worker.ts"), { type: "module" });
     const cancelBuffer =
       cancel == null ? null : new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const cancelView = cancelBuffer == null ? null : new Int32Array(cancelBuffer);
@@ -839,7 +840,7 @@ function runSyncWorker(
     });
     worker.addEventListener("error", (event) => {
       settle();
-      reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
+      reject(workerError(event, "sync worker failed"));
     });
     if (cancel != null) {
       // Share cancellation with the worker so it can stop between files and

@@ -6,6 +6,7 @@ import {
   type SessionEconomicsVector,
   type TokenEconomics,
 } from "./token-economics.ts";
+import { workerError, workerUrl } from "./worker-runtime.ts";
 
 /**
  * Serves /api/analytics/token-economics from precomputed per-session vectors.
@@ -171,7 +172,7 @@ function computeVectorsInWorker(
       reject(new Error("aborted"));
       return;
     }
-    const worker = new Worker(new URL("./stats-worker.ts", import.meta.url), { type: "module" });
+    const worker = new Worker(workerUrl("stats-worker.ts"), { type: "module" });
     const cancelBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const cancelView = new Int32Array(cancelBuffer);
     let promiseSettled = false;
@@ -205,7 +206,7 @@ function computeVectorsInWorker(
         return;
       }
       promiseSettled = true;
-      reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
+      reject(workerError(event, "token economics worker failed"));
     });
     worker.postMessage({ dbPath, cancelBuffer });
   });

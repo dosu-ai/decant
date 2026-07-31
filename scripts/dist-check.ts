@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,7 +36,7 @@ if (target == null) {
 
 const binary = buildTarget(target, { outDir: binaryDir, version });
 assertVersion(binary, ["--version"], {}, version);
-await assertOpenApi(binary, version);
+await assertCompiledServe(binary, version);
 
 stageNpmPackages({
   outDir: npmDir,
@@ -98,8 +98,17 @@ function assertVersion(
   }
 }
 
-async function assertOpenApi(binary: string, expectedVersion: string): Promise<void> {
+async function assertCompiledServe(binary: string, expectedVersion: string): Promise<void> {
   const serveDir = mkdtempSync(join(outRoot, "serve-"));
+  const claudeDir = join(serveDir, "claude");
+  const codexDir = join(serveDir, "codex");
+  const codexSessionsDir = join(codexDir, "sessions");
+  mkdirSync(claudeDir, { recursive: true });
+  mkdirSync(codexSessionsDir, { recursive: true });
+  copyFileSync(
+    join(import.meta.dir, "..", "fixtures", "codex", "sample.jsonl"),
+    join(codexSessionsDir, "rollout-sample.jsonl"),
+  );
   const proc = Bun.spawn(
     [
       binary,
@@ -111,6 +120,10 @@ async function assertOpenApi(binary: string, expectedVersion: string): Promise<v
       "127.0.0.1",
       "--port",
       "0",
+      "--claude-dir",
+      claudeDir,
+      "--codex-dir",
+      codexDir,
     ],
     {
       env: {
@@ -150,6 +163,27 @@ async function assertOpenApi(binary: string, expectedVersion: string): Promise<v
     if (document.paths?.["/api/health"] == null) {
       throw new Error("compiled OpenAPI document is missing /api/health");
     }
+
+    const syncResponse = await fetch(`http://127.0.0.1:${port}/api/sync`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    if (!syncResponse.ok) {
+      throw new Error(
+        `compiled binary returned ${syncResponse.status} for /api/sync: ${await syncResponse.text()}`,
+      );
+    }
+    const report = (await syncResponse.json()) as {
+      scanned?: unknown;
+      ingested?: unknown;
+      failed?: unknown;
+    };
+    if (report.scanned !== 1 || report.ingested !== 1 || report.failed !== 0) {
+      throw new Error(`compiled sync returned an unexpected report: ${JSON.stringify(report)}`);
+    }
+
+    await assertCompiledEconomics(port);
   } finally {
     if (startupTimeout != null) {
       clearTimeout(startupTimeout);
@@ -157,6 +191,31 @@ async function assertOpenApi(binary: string, expectedVersion: string): Promise<v
     proc.kill();
     await proc.exited;
   }
+}
+
+async function assertCompiledEconomics(port: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  let latest: unknown = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/analytics/token-economics`);
+    if (!response.ok) {
+      throw new Error(
+        `compiled binary returned ${response.status} for token economics: ${await response.text()}`,
+      );
+    }
+    latest = await response.json();
+    const totals = (latest as { totals?: Record<string, unknown> }).totals;
+    if (
+      typeof totals?.generation_tokens === "number" &&
+      totals.generation_tokens > 0 &&
+      typeof totals.estimated_cost_usd === "number" &&
+      totals.estimated_cost_usd > 0
+    ) {
+      return;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(`compiled token economics stayed empty: ${JSON.stringify(latest)}`);
 }
 
 async function readServePort(proc: Bun.Subprocess<"ignore", "ignore", "pipe">): Promise<number> {

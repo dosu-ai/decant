@@ -118,7 +118,7 @@ The `dosu-ai/dosu` tap carries a formula that installs the same prebuilt
 release tarball as every other channel — there is no source build:
 
 ```sh
-brew install dosu-ai/dosu/decant   # fully qualified — works on every Homebrew version
+brew install dosu-ai/dosu/decant
 ```
 
 Or with the tap and short names:
@@ -128,19 +128,6 @@ brew tap dosu-ai/dosu
 brew trust dosu-ai/dosu   # Homebrew 6.0+ only — skip on older versions
 brew install decant
 ```
-
-Since [Homebrew 6.0](https://brew.sh/2026/06/11/homebrew-6.0.0/) (2026-06-11),
-third-party taps start untrusted and short-name installs or upgrades refuse
-with `Error: Refusing to load formula dosu-ai/dosu/decant from untrusted tap
-dosu-ai/dosu` — including on machines that tapped before upgrading to
-Homebrew 6 — until a one-time `brew trust dosu-ai/dosu` or
-`brew trust --formula dosu-ai/dosu/decant`
-([tap trust](https://docs.brew.sh/Tap-Trust)). The fully qualified install
-needs none of that: verified on 6.0.14, it taps the repo if needed, records
-trust for just the `decant` formula, and runs non-interactively; on Homebrew
-5 and earlier (no trust mechanism) it behaves as it always did. An Apple
-Developer signature would not change any of this — tap trust is Homebrew's
-own consent gate, unrelated to Gatekeeper.
 
 The formula is rendered from `packaging/homebrew/decant.rb.template` during the
 release run, smoke-tested on all four supported OS/architecture targets, and

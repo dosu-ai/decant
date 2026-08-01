@@ -249,26 +249,13 @@ details and per-artifact verification.
    brew install dosu-ai/dosu/decant
    ```
 
-   The fully qualified name works on every Homebrew version: it taps the
-   repo if needed and, on Homebrew 6.0+, records trust for just the `decant`
-   formula. To work with tapped short names instead:
+   Or with the tap and short names:
 
    ```bash
    brew tap dosu-ai/dosu
    brew trust dosu-ai/dosu   # Homebrew 6.0+ only — skip on older versions
    brew install decant
    ```
-
-   **Homebrew 6.0+ only**
-   ([released 2026-06-11](https://brew.sh/2026/06/11/homebrew-6.0.0/)):
-   third-party taps start untrusted
-   ([tap trust](https://docs.brew.sh/Tap-Trust)), and short-name installs or
-   upgrades — including on machines that tapped `dosu-ai/dosu` before
-   upgrading Homebrew — fail with `Error: Refusing to load formula
-   dosu-ai/dosu/decant from untrusted tap dosu-ai/dosu` until a one-time
-   `brew trust dosu-ai/dosu` (or `brew trust --formula dosu-ai/dosu/decant`).
-   Homebrew 5 and earlier has no trust step and needs none. Code signing
-   plays no part here: this is Homebrew consent, not Gatekeeper.
 
 3. **Install script** — for machines without Node:
 

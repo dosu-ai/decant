@@ -332,6 +332,17 @@ makes no outbound runtime network calls. Do not commit real session data,
 personal archives, tokens, keys, or `.env` files. To report a vulnerability, see
 [SECURITY.md](SECURITY.md).
 
+## About Dosu
+
+Decant is built and maintained by [Dosu](https://dosu.dev), Knowledge
+Infrastructure for Agents. Dosu makes agents faster, cheaper, and more effective
+across every run.
+
+Decant is the measurement end of that. It shows you what your agents actually
+spent, read, and touched, from logs already on your disk. It is Apache 2.0 and
+runs entirely on your own machine. See
+[Security and Privacy](#security-and-privacy).
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).

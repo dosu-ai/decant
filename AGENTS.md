@@ -147,10 +147,22 @@ A change is ready when:
 
 Maintainers keep durable, cross-session context for this repo in a Dosu
 knowledge library, reachable over the Dosu MCP server. The wiring is
-per-developer and machine-local. `dosu setup --deployment <id>` writes it to
-your own agent config, never to the repo, because it carries an API key. Scope
-it to this project so a decant session cannot read or write another library's
-knowledge.
+per-developer and machine-local, and it carries an API key, so it must never
+reach a commit.
+
+Scope the server to this project, so a decant session cannot read or write
+another library's knowledge. From the repo root:
+
+```sh
+dosu deployments switch <id>
+dosu mcp add claude
+```
+
+`dosu setup --deployment <id>` is the wrong tool for that: it installs at your
+agent's user scope, which makes the server global to every project on the
+machine. `dosu mcp add` is the project-scoped path, but note that it writes
+the key into `.mcp.json` in your working tree rather than to a config outside
+the repo. `.gitignore` covers that path; do not force-add it.
 
 None of this is required to build, test, or ship Decant. Without Dosu access
 the tools are simply not listed and the guidance below no-ops. It is also

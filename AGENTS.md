@@ -25,6 +25,13 @@ point). Docs: `docs/api/openapi.yaml` (local API contract),
 `docs/api/routes.md` (serve semantics), `docs/distribution.md`
 (npm/installer/Docker/source), and `docs/releasing.md` (release operations).
 
+Agent tooling lives in `.claude/`. Two skills cover the work most likely to go
+wrong, `new-source-parser` for invariant 6 and `new-migration` for invariant 5.
+`scripts/claude-hooks/reflect-on-stop.sh` is a Stop hook, wired in
+`.claude/settings.json`, that nudges toward recording durable findings when a
+session changed several files and wrote none down. It is offline, bash and jq
+only, and always exits 0.
+
 ## Setup
 
 - Bun 1.3+ (`bun run dev` performs a frozen install before serving).

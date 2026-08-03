@@ -8,6 +8,11 @@ type SyncWorkerMessage =
   | { type: "complete"; ok: false; error: string };
 
 self.addEventListener("message", (event) => {
+  // Dedicated worker: the only sender is the spawning parent thread, whose
+  // messages carry an empty origin. Drop anything else.
+  if (event.origin !== "") {
+    return;
+  }
   const { config, cancelBuffer } = event.data as {
     config: Config;
     cancelBuffer: SharedArrayBuffer | null;

@@ -3,6 +3,11 @@ import { closeDb } from "./db.ts";
 import { computeSessionEconomicsVectors } from "./token-economics.ts";
 
 self.addEventListener("message", (event) => {
+  // Dedicated worker: the only sender is the spawning parent thread, whose
+  // messages carry an empty origin. Drop anything else.
+  if (event.origin !== "") {
+    return;
+  }
   const { dbPath, cancelBuffer } = event.data as {
     dbPath: string;
     cancelBuffer: SharedArrayBuffer | null;

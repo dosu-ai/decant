@@ -22,7 +22,7 @@ not suggestions.
    (`src/ingest.ts: discover()`); non-session sidecars are excluded by name,
    like Codex's `session_index.jsonl` and Claude's `journal.jsonl`. Add an
    environment override alongside `DECANT_CLAUDE_DIR` and `DECANT_CODEX_DIR`,
-   and document it in AGENTS.md and README.md.
+   and document it in `AGENTS.md` and `README.md`.
 2. **A parser** — `src/sources/<tool>.ts` exporting
    `parse<Tool>Session(sourceSessionId: string, content: string, ...): ParsedSession`.
    Pure and print-free: return data and issues; never throw on malformed
@@ -80,8 +80,8 @@ PR so the maintainers wire the presentation tier deliberately.
 3. Ingest tests: extend `test/ingest.test.ts` discovery coverage.
 4. Goldens: add the new fixtures to `test/golden/meta.json`'s `fixtures`
    list, and teach both stagers the new tool's directory: `stageFixtures()`
-   in `scripts/regen-goldens.ts` (it rejects fixture paths it does not
-   know) and its counterpart in `test/cli-golden.test.ts` (otherwise the
+   in `scripts/regen-goldens.ts` (it rejects unknown fixture paths) and
+   its counterpart in `test/cli-golden.test.ts` (otherwise the
    parity test stages a database without the new tool and fails against
    the regenerated goldens). Then regenerate:
 

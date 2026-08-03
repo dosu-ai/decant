@@ -22,12 +22,14 @@ INPUT="$(cat)"
 # jq does the JSONL walking. Without it the hook is a no-op rather than an error.
 command -v jq >/dev/null 2>&1 || exit 0
 
-# Never re-fire on a stop that this hook itself provoked.
-if [ "$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false')" = "true" ]; then
+# Never re-fire on a stop that this hook itself provoked. Both reads discard
+# jq's stderr, so an empty or malformed payload leaves the hook silent instead of
+# spilling a parse error into the session.
+if [ "$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
   exit 0
 fi
 
-TRANSCRIPT="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
+TRANSCRIPT="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
 [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ] || exit 0
 
 # The transcript is JSONL and a single assistant turn can carry several tool_use
@@ -58,8 +60,10 @@ CAPTURED="$(count_tools 'write_knowledge$')"
 EDITS="${EDITS:-0}"
 CAPTURED="${CAPTURED:-0}"
 
-# Writing the repo's own guidance is capture by another route.
-if edited_paths | grep -qE '(AGENTS|CLAUDE)\.md$'; then
+# Writing the repo's own guidance is capture by another route. Anchor on a path
+# boundary so a file that merely ends in those characters, say NOT_AGENTS.md,
+# does not silence the nudge.
+if edited_paths | grep -qE '(^|/)(AGENTS|CLAUDE)\.md$'; then
   CAPTURED=$((CAPTURED + 1))
 fi
 

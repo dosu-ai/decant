@@ -100,6 +100,26 @@ describe("reflect-on-stop hook", () => {
     expect(stderr).toBe("");
   });
 
+  test("does not treat a lookalike filename as recording", () => {
+    const transcript = writeTranscript([
+      ...edits(3),
+      assistantTurn([{ name: "Edit", filePath: "/repo/NOT_AGENTS.md" }]),
+    ]);
+    const { status, stderr } = runHook({ transcript_path: transcript });
+
+    expect(status).toBe(0);
+    expect(stderr).toContain("file changes this session");
+  });
+
+  test("stays silent on an empty or malformed payload", () => {
+    for (const payload of ["", "not json at all", "{", "[]"]) {
+      const result = spawnSync("bash", [hookPath], { input: payload, encoding: "utf8" });
+
+      expect(result.status ?? -1).toBe(0);
+      expect(result.stderr ?? "").toBe("");
+    }
+  });
+
   test("does not re-fire when the stop came from this hook", () => {
     const transcript = writeTranscript(edits(5));
     const { status, stderr } = runHook({ transcript_path: transcript, stop_hook_active: true });

@@ -27,6 +27,9 @@ point). Docs: `docs/api/openapi.yaml` (local API contract),
 
 Agent tooling lives in `.claude/`. Two skills cover the work most likely to go
 wrong, `new-source-parser` for invariant 6 and `new-migration` for invariant 5.
+The `new-source-parser` skill stays thin and defers to
+`docs/prompts/add-source.md`, the canonical add-a-source workflow that
+`CONTRIBUTING.md` also points at.
 `scripts/claude-hooks/reflect-on-stop.sh` is a Stop hook, wired in
 `.claude/settings.json`, that nudges toward recording durable findings when a
 session changed several files and wrote none down. It is offline, bash and jq

@@ -14,13 +14,15 @@ not suggestions.
   with invented content ("hello", "/tmp/example", "example-model"). A fixture
   that started life as a real transcript is a rejected PR, even if edited.
 - Parity checks against your own real store report **counts and shape
-  mismatches only** (see step 6), never content.
+  mismatches only** (see Definition of done), never content.
 
 ## What Decant needs from a source
 
 1. **Discovery** — where session files live and which filenames are sessions
    (`src/ingest.ts: discover()`); non-session sidecars are excluded by name,
-   like Codex's `session_index.jsonl` and Claude's `journal.jsonl`.
+   like Codex's `session_index.jsonl` and Claude's `journal.jsonl`. Add an
+   environment override alongside `DECANT_CLAUDE_DIR` and `DECANT_CODEX_DIR`,
+   and document it in AGENTS.md and README.md.
 2. **A parser** — `src/sources/<tool>.ts` exporting
    `parse<Tool>Session(sourceSessionId: string, content: string, ...): ParsedSession`.
    Pure and print-free: return data and issues; never throw on malformed
@@ -42,7 +44,10 @@ not suggestions.
 | timestamps | per record / per session / absent |
 | tool call/result linkage | by id / by adjacency / absent |
 
-Decant promises economics only where usage data exists. If this source
+Decant promises economics only where usage data exists. Costs are computed
+once at ingest by `estimateCost` (`src/cost.ts`) and stored on the session
+row; editing pricing later does not rewrite historical rows (invariant 4),
+so confirm the token fields map correctly on day one. If this source
 reports no usage, cost must surface as unavailable, not zero — say so in the
 PR so the maintainers wire the presentation tier deliberately.
 
@@ -68,18 +73,29 @@ PR so the maintainers wire the presentation tier deliberately.
 ## Tests (all required)
 
 1. Parser tests: `test/<tool>.test.ts` — happy path, malformed line,
-   unknown record type, tool call/result linkage, usage totals.
+   unknown record type, tool call/result linkage, usage totals;
+   `test/codex.test.ts` shows the pattern.
 2. Fixtures: `fixtures/<tool>/sample.jsonl` (+ variants your parser branches
    on), synthetic per the privacy rules.
 3. Ingest tests: extend `test/ingest.test.ts` discovery coverage.
-4. Goldens: new fixtures must appear in `test/golden/rows/*.json` and
-   `test/golden/meta.json`'s fixture list. Goldens are hand-maintained —
-   mirror the existing rows' field layout exactly; there is no regeneration
-   script.
+4. Goldens: add the new fixtures to `test/golden/meta.json`'s `fixtures`
+   list, and teach both stagers the new tool's directory: `stageFixtures()`
+   in `scripts/regen-goldens.ts` (it rejects fixture paths it does not
+   know) and its counterpart in `test/cli-golden.test.ts` (otherwise the
+   parity test stages a database without the new tool and fails against
+   the regenerated goldens). Then regenerate:
+
+   ```bash
+   bun run scripts/regen-goldens.ts --i-reviewed-the-diff
+   ```
+
+   The flag is deliberate. Read the resulting diff before committing it,
+   because an unreviewed golden update hides a real behavior change.
 
 ## Definition of done
 
-`bun test && bunx tsc --noEmit && bunx biome check .` green, plus a parity
-run over your own real store: parse every session, then report — in
-aggregate only — sessions parsed, sessions with issues, issue counts by
-code, and any record type your parser had to mark unknown.
+`just check` green (`bun test`, `bunx tsc --noEmit`, `bunx biome check .`,
+plus the distribution staging smoke), plus a parity run over your own real
+store: parse every session, then report — in aggregate only — sessions
+parsed, sessions with issues, issue counts by code, and any record type
+your parser had to mark unknown.

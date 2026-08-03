@@ -8,6 +8,11 @@
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
 
+# Per-developer coding-agent config. Holds machine-local MCP server entries,
+# hook wiring, and credentials, so it must never be committed. Shared agent
+# guidance belongs in AGENTS.md instead.
+.claude/settings.local.json
+
 # Browser-automation artifacts
 .playwright-mcp/
 .playwright-cli/

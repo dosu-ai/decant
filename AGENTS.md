@@ -164,6 +164,11 @@ machine. `dosu mcp add` is the project-scoped path, but note that it writes
 the key into `.mcp.json` in your working tree rather than to a config outside
 the repo. `.gitignore` covers that path; do not force-add it.
 
+Only that generated `.mcp.json` is per-project. `dosu deployments switch` sets
+the CLI's own active deployment globally, so `dosu ask` run from another
+checkout follows whichever deployment you switched to last, not that
+checkout's `.mcp.json`.
+
 None of this is required to build, test, or ship Decant. Without Dosu access
 the tools are simply not listed and the guidance below no-ops. It is also
 agent-side tooling only, never a runtime dependency of the app, so invariant 3

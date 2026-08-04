@@ -60,6 +60,16 @@
     "last_used_at": "2026-05-06T09:00:07.000Z"
   },
   {
+    "tool_name": "mcp__dosu__read_knowledge",
+    "tool_kind": "mcp",
+    "mcp_server": "dosu",
+    "calls": 2,
+    "errors": 0,
+    "p50_ms": 2000,
+    "p95_ms": 3000,
+    "last_used_at": "2026-05-06T09:00:08.000Z"
+  },
+  {
     "tool_name": "Agent",
     "tool_kind": "builtin",
     "mcp_server": null,
@@ -88,15 +98,5 @@
     "p50_ms": null,
     "p95_ms": null,
     "last_used_at": "2026-05-03T10:01:00.000Z"
-  },
-  {
-    "tool_name": "dosu__unqualified_tool",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 1,
-    "errors": 0,
-    "p50_ms": null,
-    "p95_ms": null,
-    "last_used_at": "2026-05-06T09:00:05.000Z"
   }
 ]

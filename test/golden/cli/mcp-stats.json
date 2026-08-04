@@ -1,5 +1,14 @@
 [
   {
+    "mcp_server": "dosu",
+    "tools": 1,
+    "calls": 2,
+    "errors": 0,
+    "p50_ms": 2000,
+    "p95_ms": 3000,
+    "last_used_at": "2026-05-06T09:00:08.000Z"
+  },
+  {
     "mcp_server": "github",
     "tools": 2,
     "calls": 2,
@@ -9,12 +18,21 @@
     "last_used_at": "2026-05-06T09:00:04.000Z"
   },
   {
-    "mcp_server": "dosu",
+    "mcp_server": "codex_apps",
     "tools": 1,
     "calls": 1,
-    "errors": 0,
-    "p50_ms": 3000,
-    "p95_ms": 3000,
-    "last_used_at": "2026-05-06T09:00:03.000Z"
+    "errors": 1,
+    "p50_ms": 500,
+    "p95_ms": 500,
+    "last_used_at": "2026-05-06T09:00:10.500Z"
+  },
+  {
+    "mcp_server": "exa",
+    "tools": 1,
+    "calls": 1,
+    "errors": 1,
+    "p50_ms": 0,
+    "p95_ms": 0,
+    "last_used_at": "2026-05-06T09:00:12.000Z"
   }
 ]

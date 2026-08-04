@@ -128,9 +128,7 @@ describe("upsertSession", () => {
           `SELECT tool_name, tool_kind, mcp_server, tool_base_name, is_error, duration_ms
            FROM tool_call WHERE session_id = ?1 AND tool_use_id = ?2`,
         )
-        .all(sessionId, "11111111-2222-4333-8444-555555555555") as Array<
-        Record<string, unknown>
-      >;
+        .all(sessionId, "11111111-2222-4333-8444-555555555555") as Array<Record<string, unknown>>;
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         tool_name: "mcp__dosu__read_knowledge",

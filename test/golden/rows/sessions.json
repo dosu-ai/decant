@@ -269,8 +269,8 @@
     "model": "gpt-5.4",
     "cli_version": "0.116.0",
     "started_at": "2026-05-06T09:00:00.000Z",
-    "ended_at": "2026-05-06T09:00:07.000Z",
-    "message_count": 6,
+    "ended_at": "2026-05-06T09:00:13.000Z",
+    "message_count": 12,
     "total_input_tokens": 0,
     "total_output_tokens": 0,
     "total_cache_read_tokens": 0,
@@ -282,7 +282,7 @@
     "is_archived": 0,
     "source_path": "<TMP>/sources/codex/sessions/rollout-mcp.jsonl",
     "turn_count": 1,
-    "error_count": 0,
+    "error_count": 2,
     "interruption_count": 0,
     "compaction_count": 0,
     "sidechain_message_count": 0,
@@ -291,8 +291,8 @@
     "command_count": 0,
     "thinking_block_count": 0,
     "thinking_chars": 0,
-    "active_seconds": 5,
-    "outcome": "completed",
+    "active_seconds": 10,
+    "outcome": "failed",
     "work_type": null
   }
 ]

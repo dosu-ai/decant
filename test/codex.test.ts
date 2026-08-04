@@ -413,8 +413,7 @@ describe("mcp_tool_call_end events", () => {
   test("back-dates the call message by the event duration", async () => {
     const { session } = await mcpParsed();
     const call = pairs(session).find(
-      (p) =>
-        p.block.blockType === "tool_use" && p.block.toolUseId?.startsWith("11111111") === true,
+      (p) => p.block.blockType === "tool_use" && p.block.toolUseId?.startsWith("11111111") === true,
     );
     const result = pairs(session).find(
       (p) =>

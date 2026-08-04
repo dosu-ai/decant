@@ -116,10 +116,7 @@ export function parseCodexSession(
       if (isObject(last)) {
         stampLatestAssistant(messages, usageFrom(last));
       }
-    } else if (
-      typ === "event_msg" &&
-      asString(get(payload, "type")) === "mcp_tool_call_end"
-    ) {
+    } else if (typ === "event_msg" && asString(get(payload, "type")) === "mcp_tool_call_end") {
       // Current Codex rollouts record MCP calls only here: there is no
       // response_item counterpart, so this event IS the durable copy.
       const pair = mcpEventMessages(value, payload, seq, timestamp);

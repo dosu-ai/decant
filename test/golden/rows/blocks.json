@@ -802,5 +802,77 @@
     "tool_use_id": null,
     "tool_input": null,
     "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 6,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__dosu__read_knowledge",
+    "tool_use_id": "11111111-2222-4333-8444-555555555555",
+    "tool_input": "{\"query\":\"synthetic event query\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 7,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "11111111-2222-4333-8444-555555555555",
+    "tool_input": null,
+    "tool_result": "synthetic knowledge line one\nsynthetic knowledge line two"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 8,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__codex_apps__slack.slack_read_thread",
+    "tool_use_id": "22222222-3333-4444-8555-666666666666",
+    "tool_input": "{\"channel\":\"synthetic-channel\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 9,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "22222222-3333-4444-8555-666666666666",
+    "tool_input": null,
+    "tool_result": "synthetic tool error"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 10,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__exa__web_search_exa",
+    "tool_use_id": "33333333-4444-4555-8666-777777777777",
+    "tool_input": "{\"query\":\"synthetic\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 11,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "33333333-4444-4555-8666-777777777777",
+    "tool_input": null,
+    "tool_result": "{\"Err\":\"synthetic transport failure\"}"
   }
 ]

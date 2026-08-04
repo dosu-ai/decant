@@ -87,7 +87,7 @@ other connections; the server serves the previous model while rebuilding and
 then emits `archive_updated` so clients can refresh.
 
 The worker files are also standalone-binary entrypoints. See the compiled
-worker rule in [Distribution](distribution.md#standalone-worker-entrypoints).
+worker rule in the Standalone worker entrypoints section of docs/distribution.md.
 
 ## Local API and UI
 

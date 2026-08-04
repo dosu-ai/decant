@@ -101,6 +101,6 @@ files, and economics exclude user-hidden sessions. Statistics operations that
 accept `include_archived=true` add archived sessions back; deleted sessions and
 their content remain absent.
 
-See [Local Serve API](api/routes.md#response-and-archive-semantics) for the
+See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.

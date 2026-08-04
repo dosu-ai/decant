@@ -162,4 +162,23 @@ describe("serve banner and auto-open", () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
+
+  test("a busy port fails with a pointer instead of a stack trace", async () => {
+    const scratch = scratchDir();
+    const port = await freePort();
+    const holder = net.createServer();
+    await new Promise<void>((resolve) => holder.listen(port, "127.0.0.1", resolve));
+    const cli = startCli(["serve", "--port", String(port)], scratch);
+    try {
+      const code = await new Promise<number | null>((resolve) => {
+        cli.child.once("exit", (value) => resolve(value));
+      });
+      expect(code).toBe(1);
+      expect(cli.stderr()).toContain(`port ${port} is already in use`);
+      expect(cli.stderr()).toContain("decant serve --port");
+    } finally {
+      holder.close();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

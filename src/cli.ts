@@ -346,28 +346,42 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           // at all. POST /api/sync is deliberately untouched -- this turns off
           // syncing decant starts on its own, not a sync the operator asks for.
           const syncEnabled = shouldSync(globals(), options.env);
-          const server = serveApp({
-            config,
-            hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
-            port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-            // Omit entirely (rather than passing []) when no --trusted-peer was
-            // given, so serve()'s resolveTrustedPeers() can still fall through
-            // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
-            // passed here replaces both.
-            trustedPeers:
-              commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
-                ? trustedPeers(commandOptions.trustedPeer)
+          let server: ReturnType<typeof serveApp>;
+          try {
+            server = serveApp({
+              config,
+              hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
+              port: commandOptions.port ?? DEFAULT_SERVE_PORT,
+              // Omit entirely (rather than passing []) when no --trusted-peer was
+              // given, so serve()'s resolveTrustedPeers() can still fall through
+              // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
+              // passed here replaces both.
+              trustedPeers:
+                commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
+                  ? trustedPeers(commandOptions.trustedPeer)
+                  : undefined,
+              logger: globals().quiet ? undefined : serverLogger,
+              watch: syncEnabled
+                ? {
+                    intervalMs: commandOptions.intervalMs,
+                    debounceMs: commandOptions.debounceMs,
+                    enableWatch: commandOptions.fsWatch !== false,
+                    onEvent: emitWatchEvent,
+                  }
                 : undefined,
-            logger: globals().quiet ? undefined : serverLogger,
-            watch: syncEnabled
-              ? {
-                  intervalMs: commandOptions.intervalMs,
-                  debounceMs: commandOptions.debounceMs,
-                  enableWatch: commandOptions.fsWatch !== false,
-                  onEvent: emitWatchEvent,
-                }
-              : undefined,
-          });
+            });
+          } catch (error) {
+            if (isPortInUse(error)) {
+              const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
+              const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, wanted);
+              io.writeErr(
+                `error: port ${wanted} is already in use — is Decant already running at ${url}?\n` +
+                  "Pick another port with: decant serve --port <n>\n",
+              );
+              return 1;
+            }
+            throw error;
+          }
           if (!globals().quiet) {
             serverLogger.info("Server started.", {
               "event.name": "decant.server.started",
@@ -1129,6 +1143,14 @@ function serveBanner(url: string, opening: boolean): string {
     "",
     "",
   ].join("\n");
+}
+
+function isPortInUse(error: unknown): boolean {
+  if (typeof error !== "object" || error == null) {
+    return false;
+  }
+  const { code, message } = error as { code?: string; message?: string };
+  return code === "EADDRINUSE" || (message?.includes("in use") ?? false);
 }
 
 function openArchive(config: Config): Archive {

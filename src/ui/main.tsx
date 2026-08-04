@@ -6395,6 +6395,25 @@ function formatInt(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
+const MCP_SERVER_PREFIXES = ["claude_ai_", "plugin_vercel_"];
+
+function formatMcpServer(raw: string): string {
+  let rest = raw;
+  for (const prefix of MCP_SERVER_PREFIXES) {
+    if (rest.startsWith(prefix)) {
+      rest = rest.slice(prefix.length);
+      break;
+    }
+  }
+  return rest
+    .split("_")
+    .filter(Boolean)
+    .map((segment) =>
+      /[A-Z]/.test(segment) ? segment : segment.charAt(0).toUpperCase() + segment.slice(1),
+    )
+    .join(" ");
+}
+
 function compact(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
@@ -7234,7 +7253,7 @@ function ToolsView({
                       <td className="mono">
                         <span className="icon-cell drilldown-label">
                           <Icon name="cpu" />
-                          <span>{row.mcp_server}</span>
+                          <span>{formatMcpServer(row.mcp_server)}</span>
                         </span>
                       </td>
                       <td className="numeric muted">{formatInt(row.tools)}</td>
@@ -7357,7 +7376,7 @@ function ToolsView({
                       {row.mcp_server != null && row.mcp_server !== "" ? (
                         <span className="icon-cell">
                           <Icon name="cpu" />
-                          <span>{row.mcp_server}</span>
+                          <span>{formatMcpServer(row.mcp_server)}</span>
                         </span>
                       ) : (
                         <span className="faint">-</span>
@@ -7415,7 +7434,7 @@ function ToolsView({
               <option value="">All servers</option>
               {data.mcp.map((row) => (
                 <option key={row.mcp_server} value={row.mcp_server}>
-                  {row.mcp_server} ({formatInt(row.calls)})
+                  {formatMcpServer(row.mcp_server)} ({formatInt(row.calls)})
                 </option>
               ))}
             </select>

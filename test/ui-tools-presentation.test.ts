@@ -45,7 +45,7 @@ describe("Tools and MCP presentation", () => {
     expect(tools).toContain('<table className="data-table tool-calls-table">');
     expect(tools).not.toContain("has-duration");
     expect(tools).toMatch(
-      /<span className="icon-cell">\s*<Icon name="cpu" \/>\s*<span>\{row\.mcp_server\}<\/span>/,
+      /<span className="icon-cell">\s*<Icon name="cpu" \/>\s*<span>\{formatMcpServer\(row\.mcp_server\)\}<\/span>/,
     );
     expect(styles).toMatch(
       /\.tool-call-detail-button \{[\s\S]*?max-width: 100%;[\s\S]*?text-overflow: ellipsis;/,

@@ -874,5 +874,53 @@
     "tool_use_id": "33333333-4444-4555-8666-777777777777",
     "tool_input": null,
     "tool_result": "{\"Err\":\"synthetic transport failure\"}"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 12,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__context7__query-docs",
+    "tool_use_id": "55555555-6666-4777-8888-999999999999",
+    "tool_input": "{\"libraryId\":\"synthetic-lib\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 13,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "55555555-6666-4777-8888-999999999999",
+    "tool_input": null,
+    "tool_result": "{\"result\":\"synthetic structured\"}"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 14,
+    "ordinal": 0,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "mcp__node_repl__js",
+    "tool_use_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+    "tool_input": "{\"code\":\"1\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 15,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+    "tool_input": null,
+    "tool_result": ""
   }
 ]

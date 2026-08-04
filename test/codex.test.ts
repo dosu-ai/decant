@@ -459,4 +459,25 @@ describe("mcp_tool_call_end events", () => {
     expect(call?.block.toolName).toBe("mcp__dosu__read_knowledge");
     expect(call?.block.blockType).toBe("tool_use");
   });
+
+  test("a textless Ok result projects structured content, not the envelope", async () => {
+    const { session } = await mcpParsed();
+    const result = pairs(session).find(
+      (p) =>
+        p.block.blockType === "tool_result" && p.block.toolUseId?.startsWith("55555555") === true,
+    );
+    expect(result?.block.toolResult).toBe('{"result":"synthetic structured"}');
+    expect(result?.block.toolResult).not.toContain('"Ok"');
+    expect(result?.block.isError).toBe(false);
+  });
+
+  test("a bare empty Ok result projects an empty string", async () => {
+    const { session } = await mcpParsed();
+    const result = pairs(session).find(
+      (p) =>
+        p.block.blockType === "tool_result" && p.block.toolUseId?.startsWith("66666666") === true,
+    );
+    expect(result?.block.toolResult).toBe("");
+    expect(result?.block.isError).toBe(false);
+  });
 });

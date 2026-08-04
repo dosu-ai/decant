@@ -269,8 +269,8 @@
     "model": "gpt-5.4",
     "cli_version": "0.116.0",
     "started_at": "2026-05-06T09:00:00.000Z",
-    "ended_at": "2026-05-06T09:00:13.000Z",
-    "message_count": 12,
+    "ended_at": "2026-05-06T09:00:15.000Z",
+    "message_count": 16,
     "total_input_tokens": 0,
     "total_output_tokens": 0,
     "total_cache_read_tokens": 0,
@@ -291,8 +291,8 @@
     "command_count": 0,
     "thinking_block_count": 0,
     "thinking_chars": 0,
-    "active_seconds": 10,
-    "outcome": "failed",
+    "active_seconds": 13,
+    "outcome": "abandoned",
     "work_type": null
   }
 ]

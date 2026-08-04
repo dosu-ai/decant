@@ -511,5 +511,43 @@
     "output_bytes": 37,
     "duration_ms": 0,
     "timestamp": "2026-05-06T09:00:12.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 12,
+    "ordinal": 0,
+    "tool_kind": "mcp",
+    "tool_name": "mcp__context7__query-docs",
+    "mcp_server": "context7",
+    "tool_base_name": "query-docs",
+    "tool_use_id": "55555555-6666-4777-8888-999999999999",
+    "input": "{\"libraryId\":\"synthetic-lib\"}",
+    "is_error": 0,
+    "input_bytes": 29,
+    "has_result": 1,
+    "output_preview": "{\"result\":\"synthetic structured\"}",
+    "output_bytes": 33,
+    "duration_ms": 1000,
+    "timestamp": "2026-05-06T09:00:13.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-mcp",
+    "seq": 14,
+    "ordinal": 0,
+    "tool_kind": "mcp",
+    "tool_name": "mcp__node_repl__js",
+    "mcp_server": "node_repl",
+    "tool_base_name": "js",
+    "tool_use_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+    "input": "{\"code\":\"1\"}",
+    "is_error": 0,
+    "input_bytes": 12,
+    "has_result": 1,
+    "output_preview": "",
+    "output_bytes": 0,
+    "duration_ms": 0,
+    "timestamp": "2026-05-06T09:00:15.000Z"
   }
 ]

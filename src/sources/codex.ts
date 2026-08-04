@@ -470,9 +470,16 @@ function mcpEventMessages(
   };
 }
 
-/** Text of the Ok content entries, else the canonical JSON of the result. */
+/** Readable projection of an MCP result: Ok text content first, then
+ * structured content, then empty for a bare success — never the Result
+ * envelope, which stays available on message.raw. Non-Ok results (Err,
+ * unrecognized) serialize whole so the failure remains visible. */
 function mcpResultText(result: Json): string {
-  const content = get(get(result, "Ok"), "content");
+  const ok = get(result, "Ok");
+  if (ok === undefined) {
+    return canonicalJson(result);
+  }
+  const content = get(ok, "content");
   if (Array.isArray(content)) {
     const texts = content
       .filter((entry) => asString(get(entry, "type")) === "text")
@@ -482,7 +489,11 @@ function mcpResultText(result: Json): string {
       return texts.join("\n");
     }
   }
-  return canonicalJson(result);
+  const structured = get(ok, "structuredContent");
+  if (structured !== undefined) {
+    return canonicalJson(structured);
+  }
+  return Array.isArray(content) ? "" : canonicalJson(result);
 }
 
 /** Event timestamp minus the reported duration; the event marks the call's end. */

@@ -48,6 +48,27 @@ Build all release artifacts:
 bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
 
+### Standalone worker entrypoints
+
+Bun does not infer modules passed to `new Worker(...)` when compiling a
+standalone executable. Every runtime worker must therefore be an explicit
+entrypoint in `buildTargetArgs()` alongside `src/cli.ts`. Decant currently
+embeds `src/sync-worker.ts` and `src/stats-worker.ts`.
+
+A missing worker can pass `decant --help` and other shallow binary checks, then
+fail only when the runtime tries to sync or calculate token economics. When a
+worker is added or renamed, update all three parts of the distribution
+contract:
+
+1. the entrypoint list in `scripts/distribution.ts`;
+2. the exact argument assertion in `test/distribution.test.ts`;
+3. the native staging smoke in `scripts/dist-check.ts`, exercising meaningful
+   worker-backed output rather than only process startup.
+
+`just check` builds the native binary, runs `POST /api/sync`, waits for
+`/api/analytics/token-economics` to return populated totals, then packs and
+installs the launcher and platform packages.
+
 Release builds stamp the same version into package metadata and the compiled
 binary. The release workflow publishes all platform packages first, then the
 launcher, so `optionalDependencies` always point at packages that already

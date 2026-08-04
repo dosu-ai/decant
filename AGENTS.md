@@ -21,9 +21,12 @@ one Decant process. The pre-cutover tree is preserved in the signed
 ## Layout
 
 Start from `src/cli.ts`; parsers live in `src/sources/` (the extension
-point). Docs: `docs/api/openapi.yaml` (local API contract),
-`docs/api/routes.md` (serve semantics), `docs/distribution.md`
-(npm/installer/Docker/source), and `docs/releasing.md` (release operations).
+point). Docs: `docs/architecture.md` (module and data flow),
+`docs/analytics-methodology.md` (metric semantics), `docs/data-lifecycle.md`
+(sync and local state), `docs/api/openapi.yaml` (local API contract),
+`docs/api/routes.md` (serve semantics), `docs/api/recipes.md` (read recipes),
+`docs/distribution.md` (npm/installer/Docker/source), and `docs/releasing.md`
+(release operations).
 
 Agent tooling lives in `.claude/`. Two skills cover the work most likely to go
 wrong, `new-source-parser` for invariant 6 and `new-migration` for invariant 5.

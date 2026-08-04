@@ -235,6 +235,11 @@ tag.
 The local API contract lives in
 [docs/api/openapi.yaml](docs/api/openapi.yaml), with operational semantics in
 [docs/api/routes.md](docs/api/routes.md).
+The [architecture guide](docs/architecture.md) maps the modules and data flow;
+[analytics methodology](docs/analytics-methodology.md) defines the reported
+units; [API recipes](docs/api/recipes.md) show reproducible local queries; and
+[archive lifecycle](docs/data-lifecycle.md) explains sync, visibility, deletion,
+and rebuild behavior.
 Operational log fields and privacy rules live in [docs/logging.md](docs/logging.md).
 Distribution notes live in [docs/distribution.md](docs/distribution.md), and the
 tag-driven release pipeline is documented in

@@ -117,6 +117,38 @@ describe("upsertSession", () => {
     }
   });
 
+  test("event-based codex MCP calls land as classified tool_call rows", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    try {
+      const parsed = parseCodexSession("fallback", fixture("codex", "mcp.jsonl"), new Map());
+      const sessionId = upsertSession(db, parsed, "/x/codex-mcp-event.jsonl", 1, 2, "hash");
+      const rows = db
+        .query(
+          `SELECT tool_name, tool_kind, mcp_server, tool_base_name, is_error, duration_ms
+           FROM tool_call WHERE session_id = ?1 AND tool_use_id = ?2`,
+        )
+        .all(sessionId, "11111111-2222-4333-8444-555555555555") as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        tool_name: "mcp__dosu__read_knowledge",
+        tool_kind: "mcp",
+        mcp_server: "dosu",
+        tool_base_name: "read_knowledge",
+        is_error: 0,
+        duration_ms: 2000,
+      });
+      const err = db
+        .query(`SELECT is_error FROM tool_call WHERE session_id = ?1 AND tool_use_id = ?2`)
+        .get(sessionId, "33333333-4444-4555-8666-777777777777") as Record<string, unknown>;
+      expect(err.is_error).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   test("writes sessions, messages, blocks, tool calls, file refs, facets, and FTS rows", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);

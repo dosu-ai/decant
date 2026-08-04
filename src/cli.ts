@@ -216,6 +216,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ...archive.config,
         sourcePaths: commandOptions.path,
       });
+      const issuesHint =
+        report.issues > 0
+          ? "inspect affected sessions with: decant ls --json | jq '[.[] | select(.ingest_issue_count > 0)]' " +
+            "(issue detail: GET /api/sessions/:id/issues under `decant serve`)"
+          : undefined;
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
@@ -223,6 +228,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         issues: report.issues,
         issues_by_code: report.issuesByCode,
         failed: report.failed,
+        ...(issuesHint != null ? { issues_hint: issuesHint } : {}),
       };
       if (isJson(globals())) {
         io.writeOut(`${JSON.stringify(jsonReport, null, 2)}\n`);
@@ -231,6 +237,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           `synced: ${report.scanned} scanned, ${report.ingested} ingested, ` +
             `${report.skipped} skipped, ${report.issues} issues, ${report.failed} failed\n`,
         );
+        if (issuesHint != null) {
+          io.writeErr(`  ${issuesHint}\n`);
+        }
       }
       // Exit 3 means decant dropped source content, which is what an unparsed
       // line is. The other codes are sensors over content that did land, so

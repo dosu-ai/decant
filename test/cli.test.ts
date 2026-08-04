@@ -516,10 +516,13 @@ describe("runCli", () => {
       { homeDir: targetDir },
     );
     expect(soft.code).toBe(0);
-    expect(JSON.parse(soft.stdout)).toMatchObject({
+    const softReport = JSON.parse(soft.stdout);
+    expect(softReport).toMatchObject({
       issues: 1,
       issues_by_code: { unknown_record_type: 1 },
     });
+    expect(softReport.issues_hint).toContain("decant ls --json");
+    expect(softReport.issues_hint).toContain("/api/sessions/:id/issues");
 
     // A line that cannot be parsed is content decant dropped: exit 3.
     const lossy = join(targetDir, "lossy.jsonl");
@@ -548,7 +551,9 @@ describe("runCli", () => {
       { homeDir: targetDir },
     );
     expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 2, ingested: 2, issues: 0 });
+    const cleanReport = JSON.parse(result.stdout);
+    expect(cleanReport).toMatchObject({ scanned: 2, ingested: 2, issues: 0 });
+    expect(cleanReport.issues_hint).toBeUndefined();
 
     const list = await runCli(["--db", fixtureCase.dbPath, "--json", "--no-sync", "ls"]);
     expect(list.code).toBe(0);

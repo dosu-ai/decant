@@ -63,6 +63,10 @@ const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
+// Flat and low: volume alone isn't a problem, so usage signals (heavy server/tool)
+// must lose to every signal that flags an actual issue. Every issue-flagging
+// signal's minimum possible score must stay above this.
+const USAGE_SIGNAL_SCORE = 2;
 const WINDOW_DAYS = 30;
 const WINDOW = "s.started_at >= date('now','-30 days')";
 
@@ -691,11 +695,7 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
             icon: "hero-cpu-chip",
             tone: "accent",
             impact_label: `${server.calls} calls`,
-            // Flat and low: volume alone isn't a problem, so this must lose to
-            // every signal that flags an actual issue. The lowest score any of
-            // those can produce is errorHotspots' eligibility floor (20 calls at
-            // a 12% error rate = 2.4), so this stays under that.
-            score: 2,
+            score: USAGE_SIGNAL_SCORE,
           },
         ]
       : [];
@@ -723,9 +723,7 @@ function heavyTools(tools: ReturnType<typeof toolUsage>): Recommendation[] {
               icon: "hero-bolt",
               tone: "info",
               impact_label: `${tool.calls} calls`,
-              // See heavyServers' score comment: flat and below the floor of
-              // every issue-flagging signal on purpose.
-              score: 2,
+              score: USAGE_SIGNAL_SCORE,
             },
           ]
         : [];

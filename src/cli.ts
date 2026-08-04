@@ -216,9 +216,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ...archive.config,
         sourcePaths: commandOptions.path,
       });
+      const dbFlag = globals().db ?? options.env?.DECANT_DB;
       const issuesHint =
         report.issues > 0
-          ? "inspect affected sessions with: decant ls --json | jq '[.[] | select(.ingest_issue_count > 0)]' " +
+          ? `inspect affected sessions with: decant ${dbFlag ? `--db ${archive.config.dbPath} ` : ""}ls --json | ` +
+            "jq '[.[] | select(.ingest_issue_count + .informational_ingest_issue_count > 0)]' " +
             "(issue detail: GET /api/sessions/:id/issues under `decant serve`)"
           : undefined;
       const jsonReport = {

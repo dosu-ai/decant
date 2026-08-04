@@ -521,8 +521,29 @@ describe("runCli", () => {
       issues: 1,
       issues_by_code: { unknown_record_type: 1 },
     });
-    expect(softReport.issues_hint).toContain("decant ls --json");
+    expect(softReport.issues_hint).toContain(`--db ${fixtureCase.dbPath} ls --json`);
+    expect(softReport.issues_hint).toContain("informational_ingest_issue_count");
     expect(softReport.issues_hint).toContain("/api/sessions/:id/issues");
+
+    const flagged = JSON.parse(
+      (await runCli(["--db", fixtureCase.dbPath, "--json", "--no-sync", "ls"])).stdout,
+    ).filter(
+      (row: { ingest_issue_count: number; informational_ingest_issue_count: number }) =>
+        row.ingest_issue_count + row.informational_ingest_issue_count > 0,
+    );
+    expect(flagged).toHaveLength(1);
+
+    const textCase = freshCase();
+    const informationalText = join(targetDir, "informational-text.jsonl");
+    writeFileSync(
+      informationalText,
+      `${sample}\n{"type":"mystery","uuid":"m2","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
+    );
+    const softText = await runCli(["--db", textCase.dbPath, "sync", "--path", informationalText], {
+      homeDir: targetDir,
+    });
+    expect(softText.code).toBe(0);
+    expect(softText.stderr).toContain(`--db ${textCase.dbPath} ls --json`);
 
     // A line that cannot be parsed is content decant dropped: exit 3.
     const lossy = join(targetDir, "lossy.jsonl");

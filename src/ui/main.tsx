@@ -108,6 +108,7 @@ import {
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "./loading-state.ts";
+import { formatMcpServer } from "./mcp-server.ts";
 import {
   documentTitleFor,
   isKnownRoute,
@@ -3367,7 +3368,7 @@ function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return row.mcp_server;
+      return formatMcpServer(row.mcp_server);
     case "tools":
       return row.tools;
   }
@@ -3386,7 +3387,7 @@ function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return row.mcp_server;
+      return formatMcpServer(row.mcp_server);
     case "tool":
       return row.tool_name;
   }
@@ -6395,28 +6396,6 @@ function formatInt(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-const MCP_SERVER_PREFIXES = ["claude_ai_", "plugin_vercel_"];
-
-function formatMcpServer(raw: string | null | undefined): string {
-  if (raw == null || raw === "") {
-    return "";
-  }
-  let rest = raw;
-  for (const prefix of MCP_SERVER_PREFIXES) {
-    if (rest.startsWith(prefix)) {
-      rest = rest.slice(prefix.length);
-      break;
-    }
-  }
-  return rest
-    .split("_")
-    .filter(Boolean)
-    .map((segment) =>
-      /[A-Z]/.test(segment) ? segment : segment.charAt(0).toUpperCase() + segment.slice(1),
-    )
-    .join(" ");
-}
-
 function compact(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
@@ -6910,7 +6889,7 @@ function ToolCallDetail({
         <header>
           <div>
             <span className="section-eyebrow">
-              {call.mcp_server ?? call.tool_kind ?? "Tool call"}
+              {formatMcpServer(call.mcp_server) || call.tool_kind || "Tool call"}
             </span>
             <h2 id={titleId}>{call.tool_name ?? "Unknown tool"}</h2>
           </div>
@@ -7251,12 +7230,14 @@ function ToolsView({
                     <DrilldownTableRow
                       href={href}
                       key={row.mcp_server}
-                      label={`Show calls from MCP server ${row.mcp_server}`}
+                      label={`Show calls from MCP server ${formatMcpServer(row.mcp_server)}`}
                     >
                       <td className="mono">
                         <span className="icon-cell drilldown-label">
                           <Icon name="cpu" />
-                          <span>{formatMcpServer(row.mcp_server)}</span>
+                          <span title={row.mcp_server ?? undefined}>
+                            {formatMcpServer(row.mcp_server)}
+                          </span>
                         </span>
                       </td>
                       <td className="numeric muted">{formatInt(row.tools)}</td>
@@ -7379,7 +7360,7 @@ function ToolsView({
                       {row.mcp_server != null && row.mcp_server !== "" ? (
                         <span className="icon-cell">
                           <Icon name="cpu" />
-                          <span>{formatMcpServer(row.mcp_server)}</span>
+                          <span title={row.mcp_server}>{formatMcpServer(row.mcp_server)}</span>
                         </span>
                       ) : (
                         <span className="faint">-</span>
@@ -7436,7 +7417,7 @@ function ToolsView({
             >
               <option value="">All servers</option>
               {data.mcp.map((row) => (
-                <option key={row.mcp_server} value={row.mcp_server}>
+                <option key={row.mcp_server} title={row.mcp_server} value={row.mcp_server}>
                   {formatMcpServer(row.mcp_server)} ({formatInt(row.calls)})
                 </option>
               ))}

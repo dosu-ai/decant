@@ -99,7 +99,7 @@ function historicalArchive(path: string, version: 8 | 9 | 12 | 13 | 14): Databas
   return db;
 }
 
-// Inventory of the frozen v21 baseline. Shadow tables
+// Inventory of the frozen schema baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -179,6 +179,46 @@ describe("openDb", () => {
     ).sql;
     expect(ftsSql).toContain("prefix='2 3'");
     db.close();
+  });
+
+  test("adds the ingest revision checkpoint when upgrading a v21 archive", () => {
+    const path = freshPath();
+    const legacy = openDb(path);
+    legacy
+      .query(
+        `INSERT INTO ingest_source(path, tool, size, mtime, hash, status)
+         VALUES ('/tmp/legacy.jsonl', 'codex', 10, 20, 'legacy-hash', 'ok')`,
+      )
+      .run();
+    const hasRevision =
+      legacy
+        .query(
+          `SELECT 1 FROM pragma_table_info('ingest_source')
+           WHERE name = 'ingest_revision'`,
+        )
+        .get() != null;
+    if (hasRevision) {
+      legacy.exec("ALTER TABLE ingest_source DROP COLUMN ingest_revision");
+    }
+    legacy.exec("DELETE FROM schema_migrations WHERE version > 21");
+    legacy.close();
+
+    const migrated = openDb(path);
+    expect(
+      migrated
+        .query(
+          `SELECT name, type, "notnull" AS is_not_null, dflt_value
+           FROM pragma_table_info('ingest_source')
+           WHERE name = 'ingest_revision'`,
+        )
+        .get(),
+    ).toEqual({ name: "ingest_revision", type: "INTEGER", is_not_null: 1, dflt_value: "0" });
+    expect(
+      migrated
+        .query("SELECT ingest_revision FROM ingest_source WHERE path = '/tmp/legacy.jsonl'")
+        .get(),
+    ).toEqual({ ingest_revision: 0 });
+    migrated.close();
   });
 
   test("creates durable user state keyed by source identity", () => {

@@ -46,6 +46,13 @@ export interface IngestConfig {
   sourcePaths?: string[];
 }
 
+/**
+ * Version of the source-to-archive derivation pipeline. Increment this when a
+ * parser or ingest enrichment change must be applied to already-seen source
+ * files. The next sync re-ingests each stale source transactionally once.
+ */
+export const INGEST_PIPELINE_REVISION = 1;
+
 export interface SyncReport {
   scanned: number;
   ingested: number;
@@ -196,12 +203,17 @@ export function sync(
       let content: string;
       try {
         stats = fstatSync(fd);
-        const prior = ingestRow<{ size: number; mtime: number }>(
+        const prior = ingestRow<{ size: number; mtime: number; ingest_revision: number }>(
           db,
-          "SELECT size, mtime FROM ingest_source WHERE path = ?1",
+          "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
           [file.path],
         );
-        if (prior != null && prior.size === stats.size && prior.mtime === mtimeSecs(stats)) {
+        if (
+          prior != null &&
+          prior.size === stats.size &&
+          prior.mtime === mtimeSecs(stats) &&
+          prior.ingest_revision === INGEST_PIPELINE_REVISION
+        ) {
           report.skipped += 1;
           continue;
         }
@@ -705,18 +717,21 @@ function writeIngestSource(
   runIngestStatement(
     db,
     `INSERT INTO ingest_source(
-       path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at
+       path, tool, size, mtime, hash, ingest_revision, session_id, line_count, status,
+       last_ingested_at
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
      ON CONFLICT(path) DO UPDATE SET
-       tool = ?2, size = ?3, mtime = ?4, hash = ?5, session_id = ?6,
-       line_count = ?7, status = ?8, error = NULL, last_ingested_at = datetime('now')`,
+       tool = ?2, size = ?3, mtime = ?4, hash = ?5, ingest_revision = ?6,
+       session_id = ?7, line_count = ?8, status = ?9, error = NULL,
+       last_ingested_at = datetime('now')`,
     [
       prepared.file.path,
       prepared.file.tool,
       prepared.size,
       prepared.mtime,
       prepared.hash,
+      INGEST_PIPELINE_REVISION,
       sessionId,
       prepared.lineCount,
       status,

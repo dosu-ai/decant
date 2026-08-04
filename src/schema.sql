@@ -1,7 +1,7 @@
--- decant:schema_version=21
--- Effective decant schema (migrations 1..21 applied), frozen as the current
--- baseline. v21 only drops the never-committed context_compaction_count
--- column from drifted archives, so the baseline DDL is unchanged from v20.
+-- decant:schema_version=22
+-- Effective decant schema (migrations 1..22 applied), frozen as the current
+-- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
+-- enrichment changes can reprocess existing sources automatically once.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -142,6 +142,7 @@ CREATE TABLE ingest_source (
   size INTEGER,
   mtime INTEGER,
   hash TEXT,
+  ingest_revision INTEGER NOT NULL DEFAULT 0,
   session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
   line_count INTEGER,
   status TEXT,

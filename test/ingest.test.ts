@@ -7,6 +7,7 @@ import { closeDb, openDb } from "../src/db.ts";
 import {
   discover,
   discoverSourcePaths,
+  INGEST_PIPELINE_REVISION,
   type IngestConfig,
   resolveSubagentParents,
   sync,
@@ -1099,6 +1100,69 @@ describe("sync", () => {
         }
       ).score,
     ).toBe(0);
+    db.close();
+  });
+
+  test("re-ingests unchanged sources once when the ingest pipeline revision advances", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.codexDir, "sessions", "rollout-mcp.jsonl");
+    write(sourcePath, fixture("codex", "mcp.jsonl"));
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
+    const original = db
+      .query("SELECT id FROM session WHERE source_session_id = 'sess-codex-mcp'")
+      .get() as { id: number };
+    expect(setSessionUserState(db, original.id, "archived")).toBe(true);
+    const originalCallCount = (
+      db.query("SELECT COUNT(*) AS n FROM tool_call WHERE session_id = ?1").get(original.id) as {
+        n: number;
+      }
+    ).n;
+
+    db.query(
+      `DELETE FROM tool_call
+       WHERE session_id = ?1 AND tool_use_id = '11111111-2222-4333-8444-555555555555'`,
+    ).run(original.id);
+    db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
+      INGEST_PIPELINE_REVISION - 1,
+      sourcePath,
+    );
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT id,
+                  (SELECT COUNT(*) FROM tool_call WHERE session_id = session.id) AS calls
+           FROM session WHERE source_session_id = 'sess-codex-mcp'`,
+        )
+        .get(),
+    ).toEqual({ id: original.id, calls: originalCallCount });
+    expect(
+      db
+        .query(
+          `SELECT state FROM session_user_state
+           WHERE tool = 'codex' AND source_session_id = 'sess-codex-mcp'`,
+        )
+        .get(),
+    ).toEqual({ state: "archived" });
+    expect(
+      db.query("SELECT ingest_revision FROM ingest_source WHERE path = ?1").get(sourcePath),
+    ).toEqual({ ingest_revision: INGEST_PIPELINE_REVISION });
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 0 });
+    expect(
+      (
+        db.query("SELECT COUNT(*) AS n FROM tool_call WHERE session_id = ?1").get(original.id) as {
+          n: number;
+        }
+      ).n,
+    ).toBe(originalCallCount);
     db.close();
   });
 

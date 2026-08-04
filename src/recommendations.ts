@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { withImmediateTransaction } from "./db.ts";
+import { mcpServerLabel, mcpServerLabels } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
@@ -678,8 +679,15 @@ function renderedErrorServerIdentity(detail: string): { serverLabel: string | nu
 }
 
 function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
+  // Labels come from the whole server set, so a card names a server the same
+  // way the Tools & MCP table does -- including the origin suffix when two
+  // registrations would otherwise both read "Dosu".
+  const labels = mcpServerLabels(mcp.map((server) => server.mcp_server));
   return mcp.slice(0, 3).flatMap((server) => {
-    const name = quoted(server.mcp_server);
+    const name = quoted(mcpServerLabel(labels, server.mcp_server));
+    // The prompt is pasted into an agent that has to find the server in a
+    // config file, so it keeps the raw slug the display name strips.
+    const slug = quoted(server.mcp_server);
     return server.calls >= 50
       ? [
           {
@@ -689,7 +697,7 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
             title: `Heavy reliance on the ${name} MCP server`,
             detail: `${server.calls} calls across ${server.tools} tools.`,
             suggestion: `Package the common ${name} workflows into a reusable Skill so agents use them consistently.`,
-            prompt: `We rely heavily on the ${name} MCP server (${server.calls} calls across ${server.tools} tools). Create a reusable Skill that packages our most common ${name} workflows so agents use them consistently. Follow this repo's Skill conventions. ${UNTRUSTED_NOTE}`,
+            prompt: `We rely heavily on the ${slug} MCP server (${server.calls} calls across ${server.tools} tools). Create a reusable Skill that packages our most common ${slug} workflows so agents use them consistently. Follow this repo's Skill conventions. ${UNTRUSTED_NOTE}`,
             url: SKILLS_URL,
             link_label: "Skills guide",
             icon: "hero-cpu-chip",

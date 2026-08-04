@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { mcpServerLabel, mcpServerLabels } from "../mcp-names.ts";
 import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
 import { DECANT_VERSION } from "../version.ts";
 import {
@@ -354,6 +355,9 @@ function EconomicsRow({ bucket }: { bucket: TokenEconomicsBucket }) {
 }
 
 function ToolTable({ rows }: { rows: SessionToolReportRow[] }) {
+  // Same naming as the Tools & MCP view, disambiguated across the whole table
+  // so two registrations of one server do not read as one duplicated row.
+  const serverLabels = mcpServerLabels(rows.map((row) => row.mcpServer));
   if (rows.length === 0) {
     return <p className="empty">No tool calls were captured.</p>;
   }
@@ -373,7 +377,11 @@ function ToolTable({ rows }: { rows: SessionToolReportRow[] }) {
         {rows.map((row) => (
           <tr key={`${row.toolName}:${row.toolKind ?? ""}:${row.mcpServer ?? ""}`}>
             <td className="path">{row.toolName}</td>
-            <td>{[row.toolKind, row.mcpServer].filter(Boolean).join(" · ") || "—"}</td>
+            <td title={row.mcpServer ?? undefined}>
+              {[row.toolKind, mcpServerLabel(serverLabels, row.mcpServer)]
+                .filter(Boolean)
+                .join(" · ") || "—"}
+            </td>
             <td className="number">{formatInteger(row.calls)}</td>
             <td className="number">{formatInteger(row.errors)}</td>
             <td className="number">{formatMilliseconds(row.p50Ms)}</td>

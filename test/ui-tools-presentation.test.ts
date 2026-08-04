@@ -45,11 +45,31 @@ describe("Tools and MCP presentation", () => {
     expect(tools).toContain('<table className="data-table tool-calls-table">');
     expect(tools).not.toContain("has-duration");
     expect(tools).toMatch(
-      /<span className="icon-cell">\s*<Icon name="cpu" \/>\s*<span title=\{row\.mcp_server\}>\{formatMcpServer\(row\.mcp_server\)\}<\/span>/,
+      /<span className="icon-cell">\s*<Icon name="cpu" \/>\s*<span title=\{row\.mcp_server\}>\s*\{mcpServerLabel\(serverLabels, row\.mcp_server\)\}\s*<\/span>/,
     );
     expect(styles).toMatch(
       /\.tool-call-detail-button \{[\s\S]*?max-width: 100%;[\s\S]*?text-overflow: ellipsis;/,
     );
+  });
+
+  test("server names are formatted for display only, never for identity", () => {
+    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+
+    // Labels cover both tables, which are limited independently, so a server
+    // in one but not the other still reads the same.
+    expect(tools).toContain("...data.mcp.map((row) => row.mcp_server)");
+    expect(tools).toContain("...data.tools.map((row) => row.mcp_server)");
+    // Filter value, drilldown target, and the hover title stay on the raw slug:
+    // the display label is deliberately not unique, so it cannot be identity.
+    expect(tools).toContain("server: row.mcp_server,");
+    expect(tools).toContain("value={row.mcp_server}");
+    expect(tools).toContain("title={row.mcp_server}");
+    expect(tools).not.toMatch(/value=\{(formatMcpServer|mcpServerLabel)\(/);
+    expect(tools).not.toMatch(/server: (formatMcpServer|mcpServerLabel)\(/);
+    // Nothing in the view formats a name on its own. `formatMcpServer` ignores
+    // the other servers on screen, so a render site calling it directly is how
+    // two rows both reading "Dosu" would come back.
+    expect(tools).not.toContain("formatMcpServer(");
   });
 
   test("lays out summary cards as two by two and collapses only at phone width", () => {

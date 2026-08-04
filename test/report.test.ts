@@ -428,6 +428,50 @@ describe("static report rendering", () => {
     expect(html).toContain("<svg");
   });
 
+  test("session reports name MCP servers the way the Tools & MCP view does", () => {
+    const html = renderSessionReport({
+      ...session,
+      tools: [
+        {
+          toolName: "mcp__dosu__read_knowledge",
+          toolKind: "mcp",
+          mcpServer: "dosu",
+          calls: 4,
+          errors: 0,
+          p50Ms: 20,
+          p95Ms: 30,
+        },
+        {
+          toolName: "mcp__claude_ai_Dosu__read_knowledge",
+          toolKind: "mcp",
+          mcpServer: "claude_ai_Dosu",
+          calls: 2,
+          errors: 0,
+          p50Ms: 21,
+          p95Ms: 31,
+        },
+        {
+          toolName: "mcp__playwright__click",
+          toolKind: "mcp",
+          mcpServer: "playwright",
+          calls: 1,
+          errors: 0,
+          p50Ms: 22,
+          p95Ms: 32,
+        },
+      ],
+    });
+    // Both registrations of Dosu are in this table, so each says where it came
+    // from rather than both reading "mcp · Dosu".
+    expect(html).toContain("mcp · Dosu (local)");
+    expect(html).toContain("mcp · Dosu (connector)");
+    // A server nothing else collides with keeps the short name.
+    expect(html).toContain("mcp · Playwright");
+    // The raw slug stays reachable on hover, and is no longer the visible text.
+    expect(html).toContain('title="claude_ai_Dosu"');
+    expect(html).not.toContain("mcp · claude_ai_Dosu<");
+  });
+
   test("keeps analytics token economics near the top of the report", () => {
     const html = renderAnalyticsReport(analytics);
     expect(html.indexOf("<h2>Working rhythm</h2>")).toBeLessThan(

@@ -1,21 +1,10 @@
-const MCP_SERVER_PREFIXES = [/^claude_ai_/, /^plugin_[^_]+_/];
-
-export function formatMcpServer(raw: string | null | undefined): string {
-  if (raw == null || raw === "") {
-    return "";
-  }
-  let rest = raw;
-  for (const prefix of MCP_SERVER_PREFIXES) {
-    if (prefix.test(rest)) {
-      rest = rest.replace(prefix, "");
-      break;
-    }
-  }
-  return rest
-    .split("_")
-    .filter(Boolean)
-    .map((segment) =>
-      /[A-Z]/.test(segment) ? segment : segment.charAt(0).toUpperCase() + segment.slice(1),
-    )
-    .join(" ");
-}
+/** MCP server display names, shared with `recommendations.ts` so the Insights
+ * cards and the Tools & MCP tables name a server the same way. The logic lives
+ * in `src/mcp-names.ts`; this keeps `main.tsx` importing from `./` like the
+ * rest of the UI. */
+export {
+  formatMcpServer,
+  mcpServerLabel,
+  mcpServerLabels,
+  mcpServerOrigin,
+} from "../mcp-names.ts";

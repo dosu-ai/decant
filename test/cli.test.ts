@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runCli } from "../src/cli.ts";
+import { defaultArgv, runCli } from "../src/cli.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
@@ -56,6 +56,29 @@ async function syncedCase(): Promise<{ dbPath: string }> {
   expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 7, ingested: 7, issues: 0 });
   return { dbPath: fixtureCase.dbPath };
 }
+
+describe("defaultArgv", () => {
+  test("an empty invocation becomes serve", () => {
+    expect(defaultArgv([])).toEqual(["serve"]);
+  });
+
+  test("commands pass through untouched", () => {
+    expect(defaultArgv(["ls"])).toEqual(["ls"]);
+  });
+
+  test("flag-only invocations pass through untouched", () => {
+    expect(defaultArgv(["--db", "/tmp/x.db"])).toEqual(["--db", "/tmp/x.db"]);
+    expect(defaultArgv(["--help"])).toEqual(["--help"]);
+  });
+});
+
+describe("unknown commands still fail fast", () => {
+  test("a typo does not silently start a server", async () => {
+    const result = await runCli(["frobnicate"]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("frobnicate");
+  });
+});
 
 describe("runCli", () => {
   test("sync then list, project, db, stats, search, files, tool, and export", async () => {
@@ -654,7 +677,7 @@ describe("runCli", () => {
 
     const serve = await runCli(["serve", "--help"]);
     expect(serve).toMatchObject({ code: 0, stderr: "" });
-    expect(serve.stdout).toContain("in-process web UI");
+    expect(serve.stdout.replace(/\s+/g, " ")).toContain("default when run with no arguments");
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
     expect(serve.stdout).toContain("--trusted-peer");

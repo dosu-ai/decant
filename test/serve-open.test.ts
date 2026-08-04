@@ -57,6 +57,9 @@ async function waitFor(
 }
 
 function stop(child: ChildProcess): Promise<number | null> {
+  if (child.exitCode != null || child.signalCode != null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve) => {
     child.once("exit", (code) => resolve(code));
     child.kill("SIGTERM");
@@ -178,6 +181,21 @@ describe("serve banner and auto-open", () => {
       expect(cli.stderr()).toContain("decant serve --port");
     } finally {
       holder.close();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("bare decant serves instead of printing help", async () => {
+    const scratch = scratchDir();
+    const cli = startCli([], scratch, { BROWSER: "none" });
+    try {
+      await waitFor(
+        () => URL_LINE.test(cli.stderr()) || cli.stderr().includes("already in use"),
+        "serve banner or busy-port message",
+      );
+      expect(cli.stderr()).not.toContain("Usage:");
+    } finally {
+      await stop(cli.child);
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);

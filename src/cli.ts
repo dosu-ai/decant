@@ -103,6 +103,15 @@ interface DbInfo {
   tool_calls: number;
 }
 
+/**
+ * Bare `decant` is the fast entrypoint: it serves the UI. Only a completely
+ * empty argv rewrites — flag-only invocations stay errors because token
+ * splitting makes them ambiguous, and typos must never boot a server.
+ */
+export function defaultArgv(argv: string[]): string[] {
+  return argv.length === 0 ? ["serve"] : argv;
+}
+
 export async function runCli(argv: string[], options: CliRunOptions = {}): Promise<CliResult> {
   const watchLogger = getDecantLogger("watch");
   const serverLogger = getDecantLogger("server");
@@ -301,7 +310,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("serve")
-    .description("serve the in-process web UI and keep the session log index current")
+    .description(
+      "serve the web UI and keep the index current (the default when run with no arguments)",
+    )
     .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
@@ -1110,7 +1121,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     );
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    await program.parseAsync(defaultArgv(argv), { from: "user" });
   } catch (error) {
     if (typeof error === "object" && error !== null && "exitCode" in error) {
       setCode(commanderExitCode(error as { exitCode: number; code?: string }));

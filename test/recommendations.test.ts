@@ -132,12 +132,12 @@ describe("recommendations", () => {
       score: 5,
     });
     expect(rows.find((row) => row.key === "signal:heavy-server:svc")).toMatchObject({
-      score: 42.5,
+      score: 2,
       tone: "accent",
       impact_label: "85 calls",
     });
     expect(rows.find((row) => row.key === "signal:heavy-tool:Bash")).toMatchObject({
-      score: 62.5,
+      score: 2,
       tone: "info",
       impact_label: "250 calls",
     });
@@ -147,6 +147,13 @@ describe("recommendations", () => {
       tone: "warning",
       impact_label: "83% of spend",
     });
+    // The Insights UI picks its "hero" as the highest-scored open signal.
+    // A tool being heavily used is not itself a problem, so it must never
+    // outrank a signal that flags a real issue -- like this 20% error rate.
+    const usageVsError = rows
+      .filter((row) => row.key.startsWith("signal:heavy-") || row.key === error?.key)
+      .sort((left, right) => right.score - left.score);
+    expect(usageVsError[0]?.key).toBe(error?.key);
     db.close();
   });
 

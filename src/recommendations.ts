@@ -691,7 +691,11 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
             icon: "hero-cpu-chip",
             tone: "accent",
             impact_label: `${server.calls} calls`,
-            score: server.calls / 2,
+            // Flat and low: volume alone isn't a problem, so this must lose to
+            // every signal that flags an actual issue. The lowest score any of
+            // those can produce is errorHotspots' eligibility floor (20 calls at
+            // a 12% error rate = 2.4), so this stays under that.
+            score: 2,
           },
         ]
       : [];
@@ -719,7 +723,9 @@ function heavyTools(tools: ReturnType<typeof toolUsage>): Recommendation[] {
               icon: "hero-bolt",
               tone: "info",
               impact_label: `${tool.calls} calls`,
-              score: tool.calls / 4,
+              // See heavyServers' score comment: flat and below the floor of
+              // every issue-flagging signal on purpose.
+              score: 2,
             },
           ]
         : [];

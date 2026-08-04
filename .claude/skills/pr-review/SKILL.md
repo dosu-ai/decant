@@ -5,12 +5,12 @@ description: Review a pull request in the decant house style and post it with gh
 
 # Reviewing a pull request
 
-The canonical workflow is `docs/prompts/review-pr.md` — read it and work
+The canonical workflow is `docs/prompts/review-pr.md`. Read it and work
 through it top to bottom. It owns the voice rules, the severity callouts, the
 verification bar, suggestion-block mechanics, and the posting steps. The
 voice rules are hard requirements for posted text, not decoration.
 
-Anchors while you work:
+Keep these anchors in mind while you work.
 
 - Verify every finding against the PR head, not local `main`, and reproduce
   bugs on a scratch archive (`--db` to a scratch path plus `--no-sync` on

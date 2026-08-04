@@ -1,4 +1,4 @@
-# Review a pull request: the decant house style
+# Review a pull request in the decant house style
 
 You are reviewing a decant pull request and posting the review under a
 maintainer's name. Work through this document top to bottom. The voice rules
@@ -59,8 +59,8 @@ and give it the Kudos treatment. One is the right dose. Several is noise.
   semantics you are leaning on.
 - Reproduce bugs empirically when feasible and include the repro in the
   comment. For decant that means a scratch archive. Point `--db` at a
-  scratch path and pass `--no-sync` on reads, or sync-on-read and the serve
-  watcher will fill the scratch archive from the real `~/.claude` and
+  scratch path and pass `--no-sync` on reads. Otherwise sync-on-read and the
+  serve watcher will fill the scratch archive from the real `~/.claude` and
   `~/.codex`.
 - Check the diff against the project invariants and the definition of done
   in `AGENTS.md`. Watch especially for edits to committed migrations

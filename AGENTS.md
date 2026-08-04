@@ -33,9 +33,9 @@ go wrong or drift, `new-source-parser` for invariant 6, `new-migration` for
 invariant 5, and `pr-review` for the house pull-request review style.
 The `new-source-parser` skill stays thin and defers to
 `docs/prompts/add-source.md`, the canonical add-a-source workflow that
-`CONTRIBUTING.md` also points at; `pr-review` defers the same way to
-`docs/prompts/review-pr.md` (voice, severity callouts, verification bar, and
-posting mechanics).
+`CONTRIBUTING.md` also points at. The `pr-review` skill defers the same way
+to `docs/prompts/review-pr.md` (voice, severity callouts, verification bar,
+and posting mechanics).
 `scripts/claude-hooks/reflect-on-stop.sh` is a Stop hook, wired in
 `.claude/settings.json`, that nudges toward recording durable findings when a
 session changed several files and wrote none down. It is offline, bash and jq

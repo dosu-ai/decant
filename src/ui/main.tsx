@@ -6397,7 +6397,10 @@ function formatInt(value: number): string {
 
 const MCP_SERVER_PREFIXES = ["claude_ai_", "plugin_vercel_"];
 
-function formatMcpServer(raw: string): string {
+function formatMcpServer(raw: string | null | undefined): string {
+  if (raw == null || raw === "") {
+    return "";
+  }
   let rest = raw;
   for (const prefix of MCP_SERVER_PREFIXES) {
     if (rest.startsWith(prefix)) {

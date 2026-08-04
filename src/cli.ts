@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
+import { decideOpen, displayUrl, openBrowser } from "./browser.ts";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
@@ -319,6 +320,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       collectOption,
       [] as string[],
     )
+    .option("--no-open", "do not open the browser after the server starts")
     .action(
       (commandOptions: {
         host?: string;
@@ -329,6 +331,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         debounceMs?: number;
         fsWatch?: boolean;
         trustedPeer?: string[];
+        open?: boolean;
       }) =>
         runAsync(async () => {
           const config = resolve({
@@ -372,6 +375,25 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               "server.port": server.port,
               "watch.enabled": syncEnabled,
             });
+          }
+          const boundPort = server.port ?? commandOptions.port ?? DEFAULT_SERVE_PORT;
+          const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, boundPort);
+          const environment = options.env ?? process.env;
+          const decision = decideOpen({
+            enabled: commandOptions.open !== false,
+            env: {
+              BROWSER: environment.BROWSER,
+              DECANT_NO_OPEN: environment.DECANT_NO_OPEN,
+              CI: environment.CI,
+            },
+            isTTY: process.stdout.isTTY === true,
+            platform: process.platform,
+          });
+          if (!globals().quiet) {
+            io.writeErr(serveBanner(url, decision.open));
+          }
+          if (decision.open && decision.command != null) {
+            openBrowser(url, decision.command);
           }
           try {
             await waitForProcessSignal();
@@ -1091,6 +1113,22 @@ function commanderExitCode(error: { exitCode: number; code?: string }): number {
     return 2;
   }
   return Number(error.exitCode);
+}
+
+function serveBanner(url: string, opening: boolean): string {
+  return [
+    "",
+    "  Decant is running.",
+    "",
+    `    ${url}`,
+    "",
+    opening
+      ? "  Opening your browser — the printed link works if it does not."
+      : "  Open the link in your browser.",
+    "  Ctrl-C stops the server; decant --help lists every command.",
+    "",
+    "",
+  ].join("\n");
 }
 
 function openArchive(config: Config): Archive {

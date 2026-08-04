@@ -74,6 +74,10 @@ Every release after the bootstrap:
    git push origin v0.2.0
    ```
 
+   `just release 0.2.0` wraps this: it checks you're on a clean, up-to-date
+   `main` and then runs the two commands above. It only saves the typing —
+   you still choose the version number, same as today.
+
 3. Watch the release workflow's job graph:
 
    ```

@@ -55,6 +55,19 @@ docker-build *ARGS:
 docker-buildx *ARGS:
     docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly {{ARGS}} .
 
+# Cut and push a signed release tag (see docs/releasing.md). VERSION is semver, no leading "v".
+[group('dist')]
+release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty"; exit 1; }
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    [ "$branch" = "main" ] || { echo "release from main, not $branch"; exit 1; }
+    git fetch origin main
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not up to date with origin/main"; exit 1; }
+    git tag -s "v{{VERSION}}" -m "v{{VERSION}}"
+    git push origin "v{{VERSION}}"
+
 # CLI
 [group('cli')]
 sync *ARGS:

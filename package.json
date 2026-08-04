@@ -13,6 +13,9 @@
   "engines": {
     "bun": ">=1.3.0"
   },
+  "overrides": {
+    "fast-uri": "^3.1.5"
+  },
   "scripts": {
     "predev": "bun install --frozen-lockfile",
     "dev": "bun run src/cli.ts serve",

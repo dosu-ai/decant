@@ -521,7 +521,9 @@ describe("runCli", () => {
       issues: 1,
       issues_by_code: { unknown_record_type: 1 },
     });
-    expect(softReport.issues_hint).toContain(`--db ${fixtureCase.dbPath} ls --json`);
+    // The path is shell-quoted so the hint stays copy-pasteable when the
+    // archive lives under a directory with a space in it.
+    expect(softReport.issues_hint).toContain(`--db '${fixtureCase.dbPath}' ls --json`);
     expect(softReport.issues_hint).toContain("informational_ingest_issue_count");
     expect(softReport.issues_hint).toContain("/api/sessions/:id/issues");
 
@@ -543,7 +545,37 @@ describe("runCli", () => {
       homeDir: targetDir,
     });
     expect(softText.code).toBe(0);
-    expect(softText.stderr).toContain(`--db ${textCase.dbPath} ls --json`);
+    expect(softText.stderr).toContain(`--db '${textCase.dbPath}' ls --json`);
+
+    // An archive selected by DECANT_DB rather than --db still needs the flag,
+    // or a one-shot `DECANT_DB=... decant sync` sends the reader to the
+    // default archive instead of the one that reported the issue.
+    const envCase = freshCase();
+    const informationalEnv = join(targetDir, "informational-env.jsonl");
+    writeFileSync(
+      informationalEnv,
+      `${sample}\n{"type":"mystery","uuid":"m3","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
+    );
+    const softEnv = await runCli(["--json", "sync", "--path", informationalEnv], {
+      env: { DECANT_DB: envCase.dbPath },
+      homeDir: targetDir,
+    });
+    expect(softEnv.code).toBe(0);
+    expect(JSON.parse(softEnv.stdout).issues_hint).toContain(`--db '${envCase.dbPath}' ls --json`);
+
+    // No archive override at all: the bare command already reads the default,
+    // so the flag would be noise. This run lands on `homeDir`'s default path.
+    const informationalDefault = join(targetDir, "informational-default.jsonl");
+    writeFileSync(
+      informationalDefault,
+      `${sample}\n{"type":"mystery","uuid":"m4","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
+    );
+    const softDefault = await runCli(["--json", "sync", "--path", informationalDefault], {
+      env: {},
+      homeDir: targetDir,
+    });
+    expect(softDefault.code).toBe(0);
+    expect(JSON.parse(softDefault.stdout).issues_hint).toContain("decant ls --json");
 
     // A line that cannot be parsed is content decant dropped: exit 3.
     const lossy = join(targetDir, "lossy.jsonl");

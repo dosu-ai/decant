@@ -15,6 +15,7 @@ import {
   renderScript,
   renderSkill,
   replayOps,
+  shellQuote,
   timeline,
 } from "./distill.ts";
 import type { Operation } from "./enrich.ts";
@@ -216,10 +217,13 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ...archive.config,
         sourcePaths: commandOptions.path,
       });
-      const dbFlag = globals().db ?? options.env?.DECANT_DB;
+      // `options.env` is only populated by tests, so read through to the real
+      // environment the way `shouldSync` and `resolveConfig` do -- otherwise
+      // the hint omits `--db` for anyone running with `DECANT_DB` set.
+      const dbFlag = globals().db ?? (options.env ?? process.env).DECANT_DB;
       const issuesHint =
         report.issues > 0
-          ? `inspect affected sessions with: decant ${dbFlag ? `--db ${archive.config.dbPath} ` : ""}ls --json | ` +
+          ? `inspect affected sessions with: decant ${dbFlag ? `--db ${shellQuote(archive.config.dbPath)} ` : ""}ls --json | ` +
             "jq '[.[] | select(.ingest_issue_count + .informational_ingest_issue_count > 0)]' " +
             "(issue detail: GET /api/sessions/:id/issues under `decant serve`)"
           : undefined;

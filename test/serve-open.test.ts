@@ -69,6 +69,9 @@ function stop(child: ChildProcess): Promise<number | null> {
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
+    // A failed listen (EACCES, fd limits) emits "error"; without a listener
+    // that is an uncaught exception instead of a clean test failure.
+    probe.on("error", reject);
     probe.listen(0, "127.0.0.1", () => {
       const address = probe.address();
       probe.close(() => {
@@ -170,7 +173,13 @@ describe("serve banner and auto-open", () => {
     const scratch = scratchDir();
     const port = await freePort();
     const holder = net.createServer();
-    await new Promise<void>((resolve) => holder.listen(port, "127.0.0.1", resolve));
+    // Same exposure as freePort's probe, plus a real race: this re-binds a
+    // port that was only just released, so a rare EADDRINUSE must reject
+    // rather than raise an unhandled "error" event.
+    await new Promise<void>((resolve, reject) => {
+      holder.on("error", reject);
+      holder.listen(port, "127.0.0.1", resolve);
+    });
     const cli = startCli(["serve", "--port", String(port)], scratch);
     try {
       const code = await new Promise<number | null>((resolve) => {

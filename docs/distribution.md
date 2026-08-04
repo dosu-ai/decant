@@ -13,6 +13,7 @@ The package is a release target, not a currently published install path until
 the first Release workflow run succeeds.
 
 ```sh
+npx @dosu/decant          # starts the web UI and opens your browser
 npx @dosu/decant --help
 npx @dosu/decant sync
 npx @dosu/decant serve

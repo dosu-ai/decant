@@ -45,6 +45,13 @@ class Decant < Formula
     bin.install "decant"
   end
 
+  def caveats
+    <<~EOS
+      Run `decant` to start the local UI at http://127.0.0.1:3000
+      (it prints the link and opens your browser).
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/decant --version")
   end

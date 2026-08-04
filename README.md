@@ -39,13 +39,16 @@ Rendered from the repository's synthetic fixtures.](docs/assets/decant-serve.png
 Run Decant with `npx`—no Bun install or global package required:
 
 ```bash
-npx @dosu/decant@latest serve
+npx @dosu/decant@latest
 ```
 
-Open `http://127.0.0.1:3000`. The first run syncs the Claude Code and Codex logs
-already on your machine, then keeps watching them for changes. `npx` downloads
-the launcher and matching native binary for this run without installing a
-persistent `decant` command.
+That starts the local web UI at `http://127.0.0.1:3000`, prints the link, and
+opens your browser (skipped when it can't — the printed link always works). The
+first run syncs the Claude Code and Codex logs already on your machine, then
+keeps watching them for changes. `decant serve` is the same thing with flags:
+`--port`, `--host`, `--no-open`, and friends. `npx` downloads the launcher and
+matching native binary for this run without installing a persistent `decant`
+command.
 
 Use the same package for one-off CLI commands:
 
@@ -59,21 +62,21 @@ For a persistent installation:
 
 ```bash
 npm install --global @dosu/decant@latest
-decant serve
+decant
 ```
 
 Install it with Homebrew:
 
 ```bash
 brew install dosu-ai/dosu/decant
-decant serve
+decant
 ```
 
 Install it without Node, straight from the release assets:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
-decant serve
+decant
 ```
 
 Run the GHCR image:
@@ -153,6 +156,12 @@ Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths
   archive as-is and ingests nothing. The `--no-sync` flag does the same. The
   "Sync now" button and `POST /api/sync` still work; this only suppresses the
   syncing Decant starts on its own.
+- `DECANT_NO_OPEN`: set to any value to never auto-open a browser from
+  `decant serve`; the `--no-open` flag does the same per run.
+- `BROWSER`: opener command used instead of the platform default (`open` on
+  macOS, `xdg-open` on Linux). A bare command name or path, no arguments;
+  `BROWSER=none` disables opening. The URL is always printed either way, and
+  auto-open is skipped in CI or when stdout is not a terminal.
 - `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
   the local API guard when `serve` is bound to a non-loopback host. Unset by
   default. Keep it as narrow as the deployment allows: every listed address, and
@@ -239,7 +248,7 @@ details and per-artifact verification.
 1. **npx / npm** — zero persistent install, or a global one:
 
    ```bash
-   npx @dosu/decant@latest serve
+   npx @dosu/decant@latest
    npm install --global @dosu/decant@latest   # persistent, then use `decant`
    ```
 

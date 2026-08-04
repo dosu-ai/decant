@@ -48,9 +48,9 @@ Run from the repo root.
 - `bun run dev` — one-command local UI + startup sync.
 - `just check` — the full local quality gate (see Definition of done).
 - `bun run src/cli.ts --help` — the `decant` CLI: `sync`, `ls`, `search`,
-  `stats`, `files`, `distill`, `recommendations`, `watch`, `serve`; add
-  `--db` to target an alternate archive. `just` lists wrapper recipes for
-  the common ones.
+  `stats`, `files`, `distill`, `recommendations`, `watch`, `serve` (the default
+  when `decant` runs bare); add `--db` to target an alternate archive. `just`
+  lists wrapper recipes for the common ones.
 
 ## Config
 
@@ -78,6 +78,10 @@ Run from the repo root.
   this suppresses syncs decant starts on its own, not one an operator asks for.
   Use it whenever pointing a command at a scratch archive, or the watcher will
   fill that archive from the real `~/.claude` and `~/.codex`.
+- `DECANT_NO_OPEN` (any value) or `serve --no-open`: never auto-open a browser.
+  `BROWSER` overrides the opener (`open`/`xdg-open`); `BROWSER=none` disables.
+  Auto-open is skipped in CI and non-TTY runs; the URL banner still prints
+  unless `-q`.
 - Global flags on every command: `--db`, `--json`, `--format table|json|md`,
   `-q/--quiet`, `--no-color`, `--no-sync`.
 

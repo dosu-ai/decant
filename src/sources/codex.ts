@@ -116,6 +116,17 @@ export function parseCodexSession(
       if (isObject(last)) {
         stampLatestAssistant(messages, usageFrom(last));
       }
+    } else if (
+      typ === "event_msg" &&
+      asString(get(payload, "type")) === "mcp_tool_call_end"
+    ) {
+      // Current Codex rollouts record MCP calls only here: there is no
+      // response_item counterpart, so this event IS the durable copy.
+      const pair = mcpEventMessages(value, payload, seq, timestamp);
+      if (pair != null) {
+        messages.push(pair.call, pair.result);
+        seq += 2;
+      }
     } else if (typ === "compacted") {
       messages.push(compactedMessage(value, payload, seq, timestamp));
       seq += 1;
@@ -129,9 +140,11 @@ export function parseCodexSession(
         seq += 1;
       }
     } else if (typ !== "event_msg") {
-      // event_msg subtypes other than token_count are known stream noise
-      // (response_item carries the durable copy). Anything else is a
-      // top-level record type this parser has never seen — the drift sensor.
+      // Remaining event_msg subtypes are stream noise whose durable copy is a
+      // response_item. The exceptions are token_count and mcp_tool_call_end,
+      // handled above — MCP calls have no response_item in current rollouts.
+      // Anything else is a top-level record type this parser has never seen —
+      // the drift sensor.
       const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
       seen.count += 1;
       unknownTypes.set(typ, seen);
@@ -389,6 +402,105 @@ function qualifiedToolName(payload: Json): string | null {
     return name;
   }
   return name.startsWith(`${namespace}__`) ? name : `${namespace}__${name}`;
+}
+
+function mcpEventMessages(
+  value: Json,
+  payload: Json,
+  seq: number,
+  timestamp: string | null,
+): { call: NormalizedMessage; result: NormalizedMessage } | null {
+  const invocation = get(payload, "invocation");
+  const server = asString(get(invocation, "server"));
+  const tool = asString(get(invocation, "tool"));
+  const callId = asString(get(payload, "call_id"));
+  if (server == null || server === "" || tool == null || tool === "" || callId == null) {
+    return null;
+  }
+  const name = server.startsWith("mcp__") ? `${server}__${tool}` : `mcp__${server}__${tool}`;
+  const result = get(payload, "result") ?? null;
+  const ok = get(result, "Ok");
+  const isError = get(result, "Err") !== undefined || get(ok, "isError") === true;
+  const text = mcpResultText(result);
+  const callTimestamp = backdate(timestamp, get(payload, "duration"));
+  return {
+    call: {
+      seq,
+      sourceUuid: null,
+      parentSourceUuid: null,
+      role: "assistant",
+      model: null,
+      stopReason: null,
+      timestamp: callTimestamp,
+      usage: null,
+      raw: value,
+      blocks: [
+        {
+          ordinal: 0,
+          blockType: "tool_use",
+          text: null,
+          toolName: name,
+          toolUseId: callId,
+          toolInput: get(invocation, "arguments"),
+          toolResult: null,
+          isError: null,
+        },
+      ],
+    },
+    result: {
+      seq: seq + 1,
+      sourceUuid: null,
+      parentSourceUuid: null,
+      role: "tool",
+      model: null,
+      stopReason: null,
+      timestamp,
+      usage: null,
+      raw: value,
+      blocks: [
+        {
+          ordinal: 0,
+          blockType: "tool_result",
+          text: null,
+          toolName: null,
+          toolUseId: callId,
+          toolInput: undefined,
+          toolResult: text,
+          isError,
+        },
+      ],
+    },
+  };
+}
+
+/** Text of the Ok content entries, else the canonical JSON of the result. */
+function mcpResultText(result: Json): string {
+  const content = get(get(result, "Ok"), "content");
+  if (Array.isArray(content)) {
+    const texts = content
+      .filter((entry) => asString(get(entry, "type")) === "text")
+      .map((entry) => asString(get(entry, "text")))
+      .filter((entry): entry is string => entry != null && entry !== "");
+    if (texts.length > 0) {
+      return texts.join("\n");
+    }
+  }
+  return canonicalJson(result);
+}
+
+/** Event timestamp minus the reported duration; the event marks the call's end. */
+function backdate(timestamp: string | null, duration: Json | undefined): string | null {
+  if (timestamp == null) {
+    return null;
+  }
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) {
+    return timestamp;
+  }
+  const secs = asInteger(get(duration, "secs")) ?? 0;
+  const nanos = asInteger(get(duration, "nanos")) ?? 0;
+  const ms = secs * 1000 + Math.round(nanos / 1_000_000);
+  return new Date(parsed - ms).toISOString();
 }
 
 function messageRole(role: string | null): Role {

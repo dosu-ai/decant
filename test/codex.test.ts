@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { NormalizedBlock, NormalizedMessage, NormalizedSession } from "../src/model.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
 async function fixture(): Promise<string> {
@@ -370,5 +371,93 @@ describe("parseCodexSession", () => {
     expect(toolNames).toContain("mcp__dosu__read_knowledge");
     expect(toolNames).toContain("mcp__github__search_code");
     expect(toolNames).toContain("dosu__unqualified_tool");
+  });
+});
+
+describe("mcp_tool_call_end events", () => {
+  async function mcpParsed() {
+    const content = await Bun.file(
+      join(import.meta.dir, "..", "fixtures", "codex", "mcp.jsonl"),
+    ).text();
+    return parseCodexSession("fallback", content, new Map());
+  }
+
+  function pairs(
+    session: NormalizedSession,
+  ): Array<{ message: NormalizedMessage; block: NormalizedBlock }> {
+    return session.messages.flatMap((message) =>
+      message.blocks.map((block) => ({ message, block })),
+    );
+  }
+
+  test("synthesizes a linked tool_use/tool_result pair with the mcp__ name", async () => {
+    const { session } = await mcpParsed();
+    const call = pairs(session).find(
+      (p) =>
+        p.block.toolName === "mcp__dosu__read_knowledge" &&
+        p.block.toolUseId === "11111111-2222-4333-8444-555555555555",
+    );
+    expect(call?.block.blockType).toBe("tool_use");
+    expect(call?.message.role).toBe("assistant");
+    expect(call?.block.toolInput).toEqual({ query: "synthetic event query" });
+    const result = pairs(session).find(
+      (p) => p.block.blockType === "tool_result" && p.block.toolUseId === call?.block.toolUseId,
+    );
+    expect(result?.message.role).toBe("tool");
+    expect(result?.block.toolResult).toBe(
+      "synthetic knowledge line one\nsynthetic knowledge line two",
+    );
+    expect(result?.block.isError).toBe(false);
+  });
+
+  test("back-dates the call message by the event duration", async () => {
+    const { session } = await mcpParsed();
+    const call = pairs(session).find(
+      (p) =>
+        p.block.blockType === "tool_use" && p.block.toolUseId?.startsWith("11111111") === true,
+    );
+    const result = pairs(session).find(
+      (p) =>
+        p.block.blockType === "tool_result" && p.block.toolUseId?.startsWith("11111111") === true,
+    );
+    expect(call?.message.timestamp).toBe("2026-05-06T09:00:08.000Z");
+    expect(result?.message.timestamp).toBe("2026-05-06T09:00:10.000Z");
+  });
+
+  test("keeps dotted compound tool names intact under the proxy server", async () => {
+    const { session } = await mcpParsed();
+    const call = pairs(session).find(
+      (p) => p.block.toolName === "mcp__codex_apps__slack.slack_read_thread",
+    );
+    expect(call?.block.blockType).toBe("tool_use");
+    const result = pairs(session).find(
+      (p) => p.block.blockType === "tool_result" && p.block.toolUseId === call?.block.toolUseId,
+    );
+    expect(result?.block.isError).toBe(true);
+  });
+
+  test("an Err result is an error with the serialized result as text", async () => {
+    const { session } = await mcpParsed();
+    const call = pairs(session).find((p) => p.block.toolName === "mcp__exa__web_search_exa");
+    const result = pairs(session).find(
+      (p) => p.block.blockType === "tool_result" && p.block.toolUseId === call?.block.toolUseId,
+    );
+    expect(result?.block.isError).toBe(true);
+    expect(result?.block.toolResult).toContain("synthetic transport failure");
+  });
+
+  test("a malformed event stays noise: no message, no issue", async () => {
+    const parsed = await mcpParsed();
+    expect(
+      pairs(parsed.session).some((p) => p.block.toolUseId?.startsWith("44444444") === true),
+    ).toBe(false);
+    expect(parsed.issues.filter((issue) => issue.code === "unknown_record_type")).toHaveLength(0);
+  });
+
+  test("old-format mcp_tool_call response_items still parse unchanged", async () => {
+    const { session } = await mcpParsed();
+    const call = pairs(session).find((p) => p.block.toolUseId === "call_dosu");
+    expect(call?.block.toolName).toBe("mcp__dosu__read_knowledge");
+    expect(call?.block.blockType).toBe("tool_use");
   });
 });

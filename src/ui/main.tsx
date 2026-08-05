@@ -5878,6 +5878,13 @@ function DateRangeControl({
             <Icon name="chevronLeft" />
           </button>
         ) : null}
+        <button
+          aria-pressed={range.preset === "all"}
+          onClick={() => onChange(ALL_DATE_RANGE)}
+          type="button"
+        >
+          All time
+        </button>
         {RANGE_PRESETS.map((preset) => (
           <button
             aria-pressed={range.preset === preset.key}
@@ -5888,13 +5895,6 @@ function DateRangeControl({
             {preset.label}
           </button>
         ))}
-        <button
-          aria-pressed={range.preset === "all"}
-          onClick={() => onChange(ALL_DATE_RANGE)}
-          type="button"
-        >
-          All
-        </button>
         {range.from != null && range.to != null ? (
           <button
             aria-label="Next period"

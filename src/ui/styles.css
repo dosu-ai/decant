@@ -939,6 +939,7 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 

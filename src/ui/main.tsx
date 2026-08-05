@@ -5925,7 +5925,10 @@ function DateRangeControl({
           </button>
         ) : null}
       </div>
-      <span>{dateRangeLabel(range)}</span>
+      {/* The label spells out a custom range ("Jun 3 to Jun 17"). For "all" it
+       * returns "All time", which is now exactly what the selected button reads,
+       * so showing it twice just looks like a bug. */}
+      {range.preset === "all" ? null : <span>{dateRangeLabel(range)}</span>}
     </div>
   );
 }

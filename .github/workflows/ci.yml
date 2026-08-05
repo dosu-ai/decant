@@ -3,8 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
+  # `pull_request.branches` filters on the BASE branch, so a main-only filter
+  # skips a pull request stacked on another feature branch entirely. No checks
+  # run, and the pull request reports "no checks reported" rather than failing,
+  # which is easy to miss. #100 is stacked on #99 and got nothing. Adding
+  # feat/** means a stacked pull request still gets the gate review needs.
+  #
+  # Only this workflow. codeql.yml and workflow-lint.yml stay on main, since
+  # both are slow and neither tells a reviewer anything a rebase onto main will
+  # not tell them later.
   pull_request:
-    branches: [main]
+    branches: [main, "feat/**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

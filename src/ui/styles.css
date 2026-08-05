@@ -281,7 +281,7 @@ svg {
   width: 15rem;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--canvas);
 }
 
 .sidebar-backdrop {
@@ -304,9 +304,10 @@ svg {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0;
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .brand-icon {

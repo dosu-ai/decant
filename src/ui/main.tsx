@@ -1,4 +1,8 @@
-import * as echarts from "echarts";
+// Type-only, so this erases at build time. ECharts is ~1.1MB minified and is
+// reachable from exactly two call sites, both of which import() it on demand:
+// eagerly importing it here put the whole library on every route, including
+// /settings and /search, which never draw a chart.
+import type { ECharts as EChartsInstance, EChartsOption } from "echarts";
 import type { LucideIcon } from "lucide-react";
 import {
   Archive,
@@ -5023,6 +5027,7 @@ async function renderShareCardPng(
   chartNode.style.cssText =
     "position:fixed;left:-10000px;top:-10000px;width:1080px;height:310px;pointer-events:none";
   document.body.append(chartNode);
+  const echarts = await import("echarts");
   const chart = echarts.init(chartNode, null, {
     renderer: "canvas",
     width: 1080,
@@ -5150,7 +5155,7 @@ function AnalyticsChart({
   variant: AnalyticsChartVariant;
 }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
-  const chartInstanceRef = useRef<echarts.ECharts | null>(null);
+  const chartInstanceRef = useRef<EChartsInstance | null>(null);
   const lastDrawnKeyRef = useRef<string | null>(null);
   const chartState = prepareAnalyticsChartState({ labels, metric, values, variant });
   const chartStateRef = useRef<AnalyticsChartState>(chartState);
@@ -5161,34 +5166,48 @@ function AnalyticsChart({
     if (element == null) {
       return;
     }
-    const chart = echarts.init(element, null, { renderer: "canvas" });
-    chartInstanceRef.current = chart;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const draw = (force = false) => {
-      const current = chartStateRef.current;
-      if (!force && lastDrawnKeyRef.current === current.key) {
+    let cancelled = false;
+    let disposeChart: (() => void) | null = null;
+    void (async () => {
+      const echarts = await import("echarts");
+      if (cancelled) {
         return;
       }
-      chart.setOption(buildChartOption(current), true);
-      lastDrawnKeyRef.current = current.key;
-      chart.resize();
-    };
-    const resize = () => chart.resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(element);
-    window.addEventListener("resize", resize);
-    const redrawForTheme = () => draw(true);
-    window.addEventListener("decant:set-theme", redrawForTheme);
-    media.addEventListener("change", redrawForTheme);
-    draw();
+      const chart = echarts.init(element, null, { renderer: "canvas" });
+      chartInstanceRef.current = chart;
+      const media = window.matchMedia("(prefers-color-scheme: dark)");
+      const draw = (force = false) => {
+        const current = chartStateRef.current;
+        if (!force && lastDrawnKeyRef.current === current.key) {
+          return;
+        }
+        chart.setOption(buildChartOption(current), true);
+        lastDrawnKeyRef.current = current.key;
+        chart.resize();
+      };
+      const resize = () => chart.resize();
+      const observer = new ResizeObserver(resize);
+      observer.observe(element);
+      window.addEventListener("resize", resize);
+      const redrawForTheme = () => draw(true);
+      window.addEventListener("decant:set-theme", redrawForTheme);
+      media.addEventListener("change", redrawForTheme);
+      // Draws whatever chartStateRef holds now, so a state change that arrived
+      // while the import was in flight is not lost.
+      draw();
+      disposeChart = () => {
+        observer.disconnect();
+        window.removeEventListener("resize", resize);
+        window.removeEventListener("decant:set-theme", redrawForTheme);
+        media.removeEventListener("change", redrawForTheme);
+        chart.dispose();
+        chartInstanceRef.current = null;
+        lastDrawnKeyRef.current = null;
+      };
+    })();
     return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", resize);
-      window.removeEventListener("decant:set-theme", redrawForTheme);
-      media.removeEventListener("change", redrawForTheme);
-      chart.dispose();
-      chartInstanceRef.current = null;
-      lastDrawnKeyRef.current = null;
+      cancelled = true;
+      disposeChart?.();
     };
   }, []);
 
@@ -5216,7 +5235,7 @@ function buildChartOption({
   metric: AnalyticsChartMetric;
   values: number[];
   variant: AnalyticsChartVariant;
-}): echarts.EChartsOption {
+}): EChartsOption {
   const colors = chartColors();
   const moneyMetric = metric === "money";
   const seriesType = variant;

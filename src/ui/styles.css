@@ -1,10 +1,14 @@
 /* ===========================================================================
  * Fonts
  *
- * Served same-origin by decant itself (see `fontAsset` in src/server.ts), never
- * fetched from a CDN — invariant 3 keeps this app offline. The same woff2 files
- * back the exported report, which inlines them as data URIs instead because a
- * report has to survive as one self-contained file (src/report/fonts.ts).
+ * Bundled from the repo, never fetched from a CDN — invariant 3 keeps this app
+ * offline. Bun resolves these url()s at build time and inlines the woff2 as data
+ * URIs, so the paths point at the files rather than at a route decant serves. A
+ * root-relative /fonts/… URL builds fine under `bun run dev` and then fails
+ * scripts/build-binaries.ts outright, so keep them relative.
+ *
+ * These are the same files the exported report uses (src/report/fonts.ts), which
+ * base64s them itself because a report has to survive as one standalone file.
  *
  * Only the Semibold serif is bundled, so it is declared at the weight it
  * actually is. Declaring it as 400 would make browsers synthesize a bold on top
@@ -162,8 +166,8 @@
     --btn-ink-fg: #17160f;
     --shade-rgb: 0, 0, 0;
     --shadow-button:
-      0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4),
-      inset 0 -2px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+      0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5),
+      inset 0 -2px 0 rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.55);
     --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     --shadow-card: 0 1px 2px rgba(var(--shade-rgb), 0.35);
   }
@@ -192,8 +196,8 @@
   --btn-ink-fg: #17160f;
   --shade-rgb: 0, 0, 0;
   --shadow-button:
-    0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 -2px 0 rgba(0, 0, 0, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5), inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
   --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --shadow-card: 0 1px 2px rgba(var(--shade-rgb), 0.35);
 }
@@ -204,6 +208,9 @@
   color-scheme: light;
 }
 
+/* ===========================================================================
+ * Reset and base elements
+ * =========================================================================== */
 * {
   box-sizing: border-box;
 }
@@ -268,6 +275,9 @@ svg {
   background: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
+/* ===========================================================================
+ * Shell: sidebar, topbar, workspace
+ * =========================================================================== */
 .app-shell {
   min-height: 100vh;
   background: var(--canvas);
@@ -558,6 +568,9 @@ nav a[aria-current="page"] svg {
   display: none;
 }
 
+/* ===========================================================================
+ * Command palette
+ * =========================================================================== */
 .command-palette-backdrop {
   position: fixed;
   inset: 0;
@@ -756,6 +769,9 @@ nav a[aria-current="page"] svg {
   gap: 4px;
 }
 
+/* ===========================================================================
+ * Controls: icon buttons, toggles, date range
+ * =========================================================================== */
 .icon-button {
   display: inline-grid;
   width: 34px;
@@ -875,6 +891,9 @@ nav a[aria-current="page"] svg {
   height: 14px;
 }
 
+/* ===========================================================================
+ * Content shell and page headings
+ * =========================================================================== */
 .content {
   flex: 1;
   min-width: 0;
@@ -1027,6 +1046,9 @@ nav a[aria-current="page"] svg {
   white-space: nowrap;
 }
 
+/* ===========================================================================
+ * Panels, cards and stat grids
+ * =========================================================================== */
 .panel,
 .signal-hero,
 .signal-list,
@@ -1190,6 +1212,9 @@ nav a[aria-current="page"] svg {
   color: var(--muted);
 }
 
+/* ===========================================================================
+ * Tables
+ * =========================================================================== */
 .table-scroll {
   overflow-x: auto;
 }
@@ -2035,6 +2060,9 @@ select {
   -webkit-appearance: none;
 }
 
+/* ===========================================================================
+ * Buttons
+ * =========================================================================== */
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -2140,6 +2168,9 @@ select {
   }
 }
 
+/* ===========================================================================
+ * Badges and tones
+ * =========================================================================== */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -2289,6 +2320,9 @@ select {
   width: min(100%, 42rem);
 }
 
+/* ===========================================================================
+ * Search
+ * =========================================================================== */
 .search-form {
   position: relative;
 }
@@ -3145,6 +3179,9 @@ mark {
   font-weight: 650;
 }
 
+/* ===========================================================================
+ * Insights and signals
+ * =========================================================================== */
 .insights-stack {
   gap: 36px;
 }
@@ -3739,6 +3776,9 @@ mark {
   padding-top: 16px;
 }
 
+/* ===========================================================================
+ * Settings
+ * =========================================================================== */
 .settings-form {
   display: grid;
   padding: 8px 0;
@@ -3846,6 +3886,9 @@ mark {
   padding-left: 12px;
 }
 
+/* ===========================================================================
+ * Session detail and transcript
+ * =========================================================================== */
 .session-detail {
   display: grid;
   width: 100%;
@@ -4978,6 +5021,9 @@ pre {
   word-break: break-word;
 }
 
+/* ===========================================================================
+ * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
+ * =========================================================================== */
 @media (max-width: 1200px) {
   .transcript-layout {
     grid-template-columns: 1fr;
@@ -5304,6 +5350,9 @@ pre {
   overflow: hidden;
 }
 
+/* ===========================================================================
+ * Context window strip
+ * =========================================================================== */
 .ctx-strip {
   display: block;
   /* The base stylesheet sizes every svg at 1em for icons. The intrinsic

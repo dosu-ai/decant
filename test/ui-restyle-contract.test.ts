@@ -46,7 +46,9 @@ describe("restyle contract", () => {
     expect(grid).toContain("border-top: 1px solid var(--line)");
     expect(grid).toContain("border-bottom: 1px solid var(--line)");
     expect(grid).not.toContain("border-radius");
-    expect(/\.stat-card \{([^}]*)\}/.exec(styles)?.[1] ?? "").toContain("background: var(--canvas)");
+    expect(/\.stat-card \{([^}]*)\}/.exec(styles)?.[1] ?? "").toContain(
+      "background: var(--canvas)",
+    );
   });
 
   test("table headers are sentence case, as the design draws them", () => {

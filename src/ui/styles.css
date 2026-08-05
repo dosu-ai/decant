@@ -73,7 +73,6 @@
   /* brand/400. Decorative and chart-facing — see --btn-ink for buttons. */
   --accent: #ee67d1;
   --accent-hover: #d94ab8;
-  --on-accent: #141414;
   --accent-soft: rgba(238, 103, 209, 0.12);
   --claude: #d97757;
   --claude-strong: #c6613f;
@@ -154,7 +153,6 @@
     --faint: rgba(244, 242, 232, 0.46);
     --accent: #f087dd;
     --accent-hover: #f5a5e6;
-    --on-accent: #17160f;
     --accent-soft: rgba(240, 135, 221, 0.16);
     --success: #a3e635;
     --warning: #fb923c;
@@ -185,7 +183,6 @@
   --faint: rgba(244, 242, 232, 0.46);
   --accent: #f087dd;
   --accent-hover: #f5a5e6;
-  --on-accent: #17160f;
   --accent-soft: rgba(240, 135, 221, 0.16);
   --success: #a3e635;
   --warning: #fb923c;
@@ -263,7 +260,7 @@ svg {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -521,8 +518,9 @@ nav a[aria-current="page"] svg {
   min-width: 220px;
   min-height: 34px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-button-light);
   color: var(--faint);
   font: inherit;
   font-size: 14px;
@@ -763,8 +761,9 @@ nav a[aria-current="page"] svg {
   height: 34px;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-button-light);
   color: var(--muted);
   padding: 0;
   transition:
@@ -788,8 +787,8 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
   padding: 2px;
 }
 
@@ -835,8 +834,8 @@ nav a[aria-current="page"] svg {
   align-items: center;
   gap: 2px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
   padding: 2px;
 }
 
@@ -846,12 +845,12 @@ nav a[aria-current="page"] svg {
   height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
-  padding: 0 8px;
+  padding: 0 10px;
 }
 
 .date-range-buttons button:hover {
@@ -860,8 +859,9 @@ nav a[aria-current="page"] svg {
 }
 
 .date-range-buttons button[aria-pressed="true"] {
-  background: var(--elevated);
-  color: var(--fg);
+  background: var(--btn-ink);
+  box-shadow: var(--shadow-button);
+  color: var(--btn-ink-fg);
 }
 
 .date-range-buttons .icon-period-button {
@@ -2030,12 +2030,13 @@ select {
   gap: 6px;
   min-height: 30px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-button-light);
   color: var(--fg);
   font-size: 13px;
   font-weight: 550;
-  padding: 0 10px;
+  padding: 0 12px;
 }
 
 .primary-button {
@@ -2044,19 +2045,18 @@ select {
   justify-content: center;
   gap: 7px;
   min-height: 36px;
-  border: 1px solid color-mix(in oklab, var(--accent) 78%, var(--line));
-  border-radius: 9px;
-  background: var(--accent);
-  box-shadow: 0 8px 22px -14px color-mix(in oklab, var(--accent) 80%, transparent);
-  color: var(--on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--btn-ink);
+  box-shadow: var(--shadow-button);
+  color: var(--btn-ink-fg);
   font-size: 13px;
-  font-weight: 680;
-  padding: 0 14px;
+  font-weight: 600;
+  padding: 0 16px;
 }
 
 .primary-button:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  background: color-mix(in oklab, var(--btn-ink) 88%, var(--fg));
 }
 
 .primary-button:disabled {
@@ -2132,8 +2132,9 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border-radius: 6px;
-  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--card);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;

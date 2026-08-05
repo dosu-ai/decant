@@ -17,9 +17,11 @@ both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,
 token economics, context-window occupancy, and phase breakdowns from a CLI or a
 local web UI. Your transcripts never leave your machine.
 
-![The current Decant Analytics UI showing the command palette, report and share
-controls, session and token totals, activity economics, and daily charts.
-Rendered from the repository's synthetic fixtures.](docs/assets/decant-serve.png)
+![The Decant Analytics UI showing the command palette, report and share controls,
+session and token totals, activity economics, and daily charts. Rendered from
+the repository's synthetic fixtures. (UI restyled to the Dosu x Venice design
+as of 2026-08, PR #99: warm cream/near-black palette, Source Serif 4 display,
+IBM Plex Mono labels, pill-shaped buttons, lime/pink chart accents.)](docs/assets/decant-serve.png)
 
 ## Features
 

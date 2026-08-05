@@ -70,7 +70,6 @@
   --fg: #141414;
   --muted: rgba(26, 26, 26, 0.69);
   --faint: rgba(26, 26, 26, 0.48);
-  --fg-quaternary: rgba(26, 26, 26, 0.28);
   /* brand/400. Decorative and chart-facing — see --btn-ink for buttons. */
   --accent: #ee67d1;
   --accent-hover: #d94ab8;
@@ -153,7 +152,6 @@
     --fg: #f4f2e8;
     --muted: rgba(244, 242, 232, 0.68);
     --faint: rgba(244, 242, 232, 0.46);
-    --fg-quaternary: rgba(244, 242, 232, 0.28);
     --accent: #f087dd;
     --accent-hover: #f5a5e6;
     --on-accent: #17160f;
@@ -185,7 +183,6 @@
   --fg: #f4f2e8;
   --muted: rgba(244, 242, 232, 0.68);
   --faint: rgba(244, 242, 232, 0.46);
-  --fg-quaternary: rgba(244, 242, 232, 0.28);
   --accent: #f087dd;
   --accent-hover: #f5a5e6;
   --on-accent: #17160f;
@@ -347,9 +344,10 @@ nav {
   margin: 0 0 7px;
   padding: 0 10px;
   color: var(--faint);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
 }
 
@@ -367,8 +365,11 @@ nav a {
   gap: 10px;
   border-radius: 8px;
   color: var(--muted);
-  font-size: 13.5px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   padding: 8px 10px;
   transition:
     background 0.12s ease,
@@ -907,8 +908,21 @@ nav a[aria-current="page"] svg {
 }
 
 .page-heading h1 {
-  font-size: 20px;
-  font-weight: 650;
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.14;
+  letter-spacing: -0.01em;
+}
+
+/* Analytics, Sessions, Tools and Files wrap the title and subtitle in a div next
+ * to their actions, so the baseline row goes on that wrapper. Insights keeps a
+ * stacked heading: its eyebrow is a sibling of the h1, not a child of a wrapper. */
+.inline-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .page-heading p,
@@ -1135,8 +1149,10 @@ nav a[aria-current="page"] svg {
 
 .stat-card span {
   color: var(--muted);
+  font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
 }
 
@@ -1597,9 +1613,10 @@ tbody tr:hover {
 
 th {
   color: var(--muted);
+  font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0;
+  font-weight: 500;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
@@ -3143,7 +3160,7 @@ mark {
 
 .insights-heading h1 {
   font-size: 28px;
-  font-weight: 680;
+  font-weight: 600;
   line-height: 1.15;
 }
 

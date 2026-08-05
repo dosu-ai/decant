@@ -56,8 +56,14 @@ describe("theme tokens", () => {
     // renders cream-on-cream. Font/radius tokens are theme-independent by design.
     const themeIndependent = /^--(font|radius)-/;
     const lightNames = declarations(rootBlock)
-      .map((declaration) => declaration.split(":")[0] ?? "")
-      .filter((name) => !themeIndependent.test(name));
+      .filter((declaration) => {
+        const [name, value] = [declaration.split(":")[0] ?? "", declaration.split(": ")[1] ?? ""];
+        // A token built out of other tokens rethemes through them — --accent-text
+        // follows --accent and --fg on its own, so pinning it in dark as well
+        // would be two places to forget instead of one.
+        return !themeIndependent.test(name) && !value.includes("var(");
+      })
+      .map((declaration) => declaration.split(":")[0] ?? "");
     const darkNames = new Set(
       declarations(darkAttrBlock).map((declaration) => declaration.split(":")[0]),
     );
@@ -84,6 +90,17 @@ describe("theme tokens", () => {
       (match) => match[1] ?? [],
     );
     expect(readNames.sort()).toEqual([...CHART_TOKENS].sort());
+  });
+
+  test("fill-grade colours are never used as text", () => {
+    // The design's accents are tuned for chart series and badge fills. As `color:`
+    // on a page surface they measure 2.1–3.8:1 against cream and miss WCAG AA, so
+    // text goes through the -text variants instead. Borders, backgrounds and
+    // accent-color are all still fair game for the raw token.
+    for (const token of ["accent", "success", "warning", "danger", "info", "claude"]) {
+      expect(styles).not.toContain(`color: var(--${token});`);
+      expect(styles).toContain(`--${token}-text:`);
+    }
   });
 
   test.each([...CHART_TOKENS])("%s stays parseable by zrender", (token) => {

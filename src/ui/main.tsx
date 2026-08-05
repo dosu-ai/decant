@@ -5221,7 +5221,12 @@ function buildChartOption({
   const moneyMetric = metric === "money";
   const seriesType = variant;
   return {
-    color: [colors.accent, colors.info, colors.success, colors.warning],
+    // Bars lead lime and lines lead pink, as the design draws them. The rest of
+    // each palette is the fallback order for any additional series.
+    color:
+      seriesType === "bar"
+        ? [colors.success, colors.info, colors.warning, colors.accent]
+        : [colors.accent, colors.info, colors.success, colors.warning],
     textStyle: { fontFamily: "inherit", color: colors.muted },
     animationDuration: 180,
     grid: { left: 6, right: 16, top: 18, bottom: 6, containLabel: true },

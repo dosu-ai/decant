@@ -1027,7 +1027,6 @@ nav a[aria-current="page"] svg {
 }
 
 .panel,
-.stat-card,
 .signal-hero,
 .signal-list,
 .catalog-card {
@@ -1128,7 +1127,11 @@ nav a[aria-current="page"] svg {
 
 .stat-grid {
   display: grid;
-  gap: 12px;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--line);
+  overflow: hidden;
 }
 
 .sessions-stat-grid,
@@ -1137,15 +1140,17 @@ nav a[aria-current="page"] svg {
 }
 
 .analytics-stat-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
 }
 
 .stat-card {
   display: flex;
+  flex-direction: row-reverse;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 18px;
+  justify-content: flex-end;
+  gap: 10px;
+  background: var(--surface);
+  padding: 18px 20px;
 }
 
 .stat-card span {
@@ -1168,16 +1173,20 @@ nav a[aria-current="page"] svg {
 
 .stat-icon {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 20px;
+  height: 20px;
   place-items: center;
-  border-radius: 8px;
-  background: var(--elevated);
 }
 
 .stat-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
+}
+
+/* Two classes, so this outranks the single-class .tone-* colour without
+ * needing to sit after it in the file. */
+.stat-card .stat-icon {
+  color: var(--muted);
 }
 
 .table-scroll {
@@ -1585,7 +1594,7 @@ table {
 th,
 td {
   border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
-  padding: 10px 16px;
+  padding: 14px 16px;
   text-align: left;
   vertical-align: middle;
 }
@@ -1613,6 +1622,7 @@ tbody tr:hover {
 }
 
 th {
+  background: var(--elevated);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -2200,42 +2210,35 @@ select {
 }
 
 .badge.tone-accent,
-.signal-icon.tone-accent,
-.stat-icon.tone-accent {
+.signal-icon.tone-accent {
   background: color-mix(in oklab, var(--accent) 13%, transparent);
 }
 
 .badge.tone-success,
-.signal-icon.tone-success,
-.stat-icon.tone-success {
+.signal-icon.tone-success {
   background: color-mix(in oklab, var(--success) 12%, transparent);
 }
 
 .badge.tone-warning,
-.signal-icon.tone-warning,
-.stat-icon.tone-warning {
+.signal-icon.tone-warning {
   background: color-mix(in oklab, var(--warning) 12%, transparent);
 }
 
 .badge.tone-danger,
-.signal-icon.tone-danger,
-.stat-icon.tone-danger {
+.signal-icon.tone-danger {
   background: color-mix(in oklab, var(--danger) 12%, transparent);
 }
 
 .badge.tone-info,
-.signal-icon.tone-info,
-.stat-icon.tone-info {
+.signal-icon.tone-info {
   background: color-mix(in oklab, var(--info) 12%, transparent);
 }
 
-.badge.tone-claude,
-.stat-icon.tone-claude {
+.badge.tone-claude {
   background: color-mix(in oklab, var(--claude) 12%, transparent);
 }
 
-.badge.tone-openai,
-.stat-icon.tone-openai {
+.badge.tone-openai {
   background: var(--elevated);
 }
 

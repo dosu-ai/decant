@@ -27,6 +27,10 @@ function declarations(block: string): string[] {
   );
 }
 
+function tokenValue(name: string, block: string): string | undefined {
+  return new RegExp(`^\\s*${name}:\\s*([^;]+);`, "im").exec(block)?.[1]?.trim();
+}
+
 function blockAfter(marker: string, closer: string): string {
   const start = styles.indexOf(marker);
   expect(start).toBeGreaterThanOrEqual(0);
@@ -90,6 +94,17 @@ describe("theme tokens", () => {
       (match) => match[1] ?? [],
     );
     expect(readNames.sort()).toEqual([...CHART_TOKENS].sort());
+  });
+
+  test("--fg stays a plain 6-digit hex", () => {
+    // buildChartOption builds an ECharts shadow colour by string concatenation —
+    // `${colors.fg}0d` — so --fg has to be hex for that to mean anything. An
+    // rgba() or 8-digit value would silently produce a garbage colour.
+    expect(main).toContain("colors.fg}0d");
+    for (const block of [rootBlock, darkAttrBlock, darkMediaBlock]) {
+      const value = tokenValue("--fg", block);
+      expect(value).toMatch(/^#[0-9a-f]{6}$/i);
+    }
   });
 
   test("fill-grade colours are never used as text", () => {

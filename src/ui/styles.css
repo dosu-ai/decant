@@ -69,6 +69,7 @@
   --card: rgba(255, 255, 255, 0.48);
   /* bg/components/secondary — buttons sit lighter than card surfaces. */
   --btn-ghost: rgba(255, 255, 255, 0.28);
+  --btn-ghost-hover: rgba(255, 255, 255, 0.75);
   /* border/default and a stronger step for focused/active edges. */
   --line: rgba(26, 26, 26, 0.09);
   --line-strong: rgba(26, 26, 26, 0.16);
@@ -115,6 +116,7 @@
    * so it stays a button rather than a hole in the page. */
   --btn-ink: #09090b;
   --btn-ink-fg: #fafafa;
+  --btn-ink-hover: #3f3f46;
   /* The near-black every scrim and drop shadow layers, as bare channels so each
    * site keeps its own alpha — a slide-over scrim is deliberately lighter than a
    * modal's. Warm on purpose: these used to be Tailwind slate-900, which laid a
@@ -152,6 +154,7 @@
     --overlay: #262418;
     --card: rgba(255, 255, 255, 0.035);
     --btn-ghost: rgba(255, 255, 255, 0.06);
+    --btn-ghost-hover: rgba(255, 255, 255, 0.12);
     --line: rgba(240, 238, 228, 0.1);
     --line-strong: rgba(240, 238, 228, 0.18);
     --fg: #f4f2e8;
@@ -166,6 +169,7 @@
     --info: #38bdf8;
     --btn-ink: #f4f2e8;
     --btn-ink-fg: #17160f;
+    --btn-ink-hover: #d8d5c6;
     --shade-rgb: 0, 0, 0;
     --shadow-button:
       0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5),
@@ -182,6 +186,7 @@
   --overlay: #262418;
   --card: rgba(255, 255, 255, 0.035);
   --btn-ghost: rgba(255, 255, 255, 0.06);
+  --btn-ghost-hover: rgba(255, 255, 255, 0.12);
   --line: rgba(240, 238, 228, 0.1);
   --line-strong: rgba(240, 238, 228, 0.18);
   --fg: #f4f2e8;
@@ -196,6 +201,7 @@
   --info: #38bdf8;
   --btn-ink: #f4f2e8;
   --btn-ink-fg: #17160f;
+  --btn-ink-hover: #d8d5c6;
   --shade-rgb: 0, 0, 0;
   --shadow-button:
     0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5), inset 0 -2px 0 rgba(0, 0, 0, 0.16),
@@ -2106,7 +2112,7 @@ select {
 }
 
 .primary-button:hover {
-  background: color-mix(in oklab, var(--btn-ink) 88%, var(--fg));
+  background: var(--btn-ink-hover);
 }
 
 .primary-button:disabled {
@@ -2155,7 +2161,7 @@ select {
 }
 
 .secondary-button:hover {
-  background: var(--elevated);
+  background: var(--btn-ghost-hover);
 }
 
 .secondary-button:disabled {

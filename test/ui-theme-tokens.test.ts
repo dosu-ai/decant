@@ -106,6 +106,27 @@ describe("theme tokens", () => {
     expect(readNames.sort()).toEqual([...CHART_TOKENS].sort());
   });
 
+  test("hover states actually differ from their rest state", () => {
+    // A hover built as color-mix(--btn-ink 88%, --fg) was a literal no-op in dark,
+    // where those two tokens are byte-identical, and imperceptible in light where
+    // both are near-black. Hovers now point at their own token, so the pair can be
+    // compared per theme.
+    for (const [rest, hover] of [
+      ["--btn-ink", "--btn-ink-hover"],
+      ["--btn-ghost", "--btn-ghost-hover"],
+    ] as const) {
+      for (const block of [rootBlock, darkAttrBlock]) {
+        const restValue = tokenValue(rest, block);
+        const hoverValue = tokenValue(hover, block);
+        expect(restValue).toBeDefined();
+        expect(hoverValue).toBeDefined();
+        expect(hoverValue).not.toBe(restValue);
+      }
+    }
+    // And no hover may mix a token toward one that equals it in either theme.
+    expect(styles).not.toMatch(/:hover \{\s*background: color-mix\([^)]*var\(--btn-ink\)/);
+  });
+
   test("--fg stays a plain 6-digit hex", () => {
     // buildChartOption builds an ECharts shadow colour by string concatenation —
     // `${colors.fg}0d` — so --fg has to be hex for that to mean anything. An

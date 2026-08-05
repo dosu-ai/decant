@@ -67,6 +67,8 @@
   --elevated: #e1dfd6;
   --overlay: #fbfaf6;
   --card: rgba(255, 255, 255, 0.48);
+  /* bg/components/secondary — buttons sit lighter than card surfaces. */
+  --btn-ghost: rgba(255, 255, 255, 0.28);
   /* border/default and a stronger step for focused/active edges. */
   --line: rgba(26, 26, 26, 0.09);
   --line-strong: rgba(26, 26, 26, 0.16);
@@ -149,6 +151,7 @@
     --elevated: #1f1d14;
     --overlay: #262418;
     --card: rgba(255, 255, 255, 0.035);
+    --btn-ghost: rgba(255, 255, 255, 0.06);
     --line: rgba(240, 238, 228, 0.1);
     --line-strong: rgba(240, 238, 228, 0.18);
     --fg: #f4f2e8;
@@ -178,6 +181,7 @@
   --elevated: #1f1d14;
   --overlay: #262418;
   --card: rgba(255, 255, 255, 0.035);
+  --btn-ghost: rgba(255, 255, 255, 0.06);
   --line: rgba(240, 238, 228, 0.1);
   --line-strong: rgba(240, 238, 228, 0.18);
   --fg: #f4f2e8;
@@ -368,6 +372,7 @@ nav a {
   display: flex;
   align-items: center;
   gap: 10px;
+  border: 1px solid transparent;
   border-radius: 8px;
   color: var(--muted);
   font-family: var(--font-mono);
@@ -400,13 +405,14 @@ nav a:hover svg {
 /* The icon carries the accent and the label goes full-contrast bold. Tinting
    the text accent as well washed it out against the tinted background. */
 nav a[aria-current="page"] {
-  background: color-mix(in oklab, var(--accent) 15%, transparent);
+  border: 1px solid var(--line);
+  background: var(--overlay);
+  box-shadow: var(--shadow-button-light);
   color: var(--fg);
-  font-weight: 640;
 }
 
 nav a[aria-current="page"] svg {
-  color: var(--accent-text);
+  color: var(--fg);
   opacity: 1;
 }
 
@@ -873,9 +879,9 @@ nav a[aria-current="page"] svg {
 }
 
 .date-range-buttons button[aria-pressed="true"] {
-  background: var(--btn-ink);
-  box-shadow: var(--shadow-button);
-  color: var(--btn-ink-fg);
+  background: var(--overlay);
+  box-shadow: var(--shadow-button-light);
+  color: var(--fg);
 }
 
 .date-range-buttons .icon-period-button {
@@ -968,6 +974,7 @@ nav a[aria-current="page"] svg {
 .page-heading-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -1148,10 +1155,9 @@ nav a[aria-current="page"] svg {
 .stat-grid {
   display: grid;
   gap: 1px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--line);
-  overflow: hidden;
 }
 
 .sessions-stat-grid,
@@ -1169,7 +1175,7 @@ nav a[aria-current="page"] svg {
   align-items: flex-start;
   justify-content: flex-end;
   gap: 10px;
-  background: var(--surface);
+  background: var(--canvas);
   padding: 18px 20px;
 }
 
@@ -1647,11 +1653,10 @@ tbody tr:hover {
 th {
   background: var(--elevated);
   color: var(--muted);
-  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .data-table td,
@@ -2070,11 +2075,14 @@ select {
   min-height: 30px;
   border: 1px solid var(--line);
   border-radius: var(--radius-full);
-  background: var(--card);
+  background: var(--btn-ghost);
   box-shadow: var(--shadow-button-light);
   color: var(--fg);
+  font-family: var(--font-mono);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   padding: 0 12px;
 }
 
@@ -2089,8 +2097,11 @@ select {
   background: var(--btn-ink);
   box-shadow: var(--shadow-button);
   color: var(--btn-ink-fg);
+  font-family: var(--font-mono);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   padding: 0 16px;
 }
 
@@ -3944,6 +3955,7 @@ mark {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

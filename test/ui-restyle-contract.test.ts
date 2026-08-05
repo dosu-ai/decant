@@ -40,7 +40,23 @@ describe("restyle contract", () => {
     const grid = /\.stat-grid \{([^}]*)\}/.exec(styles)?.[1] ?? "";
     expect(grid).toContain("gap: 1px");
     expect(grid).toContain("background: var(--line)");
-    expect(grid).toContain("overflow: hidden");
+    // A ruled band on the page, not a card: the design has a rule above and below
+    // the row and hairlines between the cells, with no outer box or fill. Cells
+    // therefore carry --canvas, so they read as page rather than as panels.
+    expect(grid).toContain("border-top: 1px solid var(--line)");
+    expect(grid).toContain("border-bottom: 1px solid var(--line)");
+    expect(grid).not.toContain("border-radius");
+    expect(/\.stat-card \{([^}]*)\}/.exec(styles)?.[1] ?? "").toContain("background: var(--canvas)");
+  });
+
+  test("table headers are sentence case, as the design draws them", () => {
+    // The design's table-head component is Inter 12/500 with letterSpacing 0, and
+    // both designed screens render "Cost Share" / "Peak CTX" / "Agent Runs". The
+    // uppercase treatment predated this branch; the design asks for it gone.
+    const th = /^th \{([^}]*)\}/m.exec(styles)?.[1] ?? "";
+    expect(th).toContain("text-transform: none");
+    expect(th).toContain("letter-spacing: 0");
+    expect(th).not.toContain("var(--font-mono)");
   });
 
   test("the display serif is only asked for a weight that ships", () => {

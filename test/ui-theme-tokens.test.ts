@@ -59,15 +59,25 @@ describe("theme tokens", () => {
     // A token defined in light but forgotten in dark inherits the light value and
     // renders cream-on-cream. Font/radius tokens are theme-independent by design.
     const themeIndependent = /^--(font|radius)-/;
+    // Fully derived: each is color-mix() of two other tokens with no literal of
+    // its own, so it rethemes through --fg and needs no dark counterpart.
+    //
+    // Listed by name rather than sniffed for "var(", because a token can
+    // reference another token AND still carry a theme-specific literal of its
+    // own — a shadow built as `rgba(var(--shade-rgb), 0.05)` needs a dark
+    // override for the alpha, and a blanket var() exclusion would quietly stop
+    // requiring it.
+    const derived = new Set([
+      "--accent-text",
+      "--success-text",
+      "--warning-text",
+      "--danger-text",
+      "--info-text",
+      "--claude-text",
+    ]);
     const lightNames = declarations(rootBlock)
-      .filter((declaration) => {
-        const [name, value] = [declaration.split(":")[0] ?? "", declaration.split(": ")[1] ?? ""];
-        // A token built out of other tokens rethemes through them — --accent-text
-        // follows --accent and --fg on its own, so pinning it in dark as well
-        // would be two places to forget instead of one.
-        return !themeIndependent.test(name) && !value.includes("var(");
-      })
-      .map((declaration) => declaration.split(":")[0] ?? "");
+      .map((declaration) => declaration.split(":")[0] ?? "")
+      .filter((name) => !themeIndependent.test(name) && !derived.has(name));
     const darkNames = new Set(
       declarations(darkAttrBlock).map((declaration) => declaration.split(":")[0]),
     );

@@ -26,78 +26,162 @@
   src: url("../report/fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2");
 }
 
+/* ===========================================================================
+ * Tokens
+ *
+ * Light is the base theme because light is the one that was designed (Figma:
+ * "Dosu x Venice"); dark is derived from it and lives in the two override
+ * blocks below.
+ *
+ * Two rules keep this block safe to edit:
+ *
+ * 1. DO NOT RENAME --fg, --muted, --faint, --line, --surface, --accent, --info,
+ *    --success or --warning. `chartColors()` in main.tsx reads those nine names
+ *    off the computed root style and hands them to ECharts. A rename leaves
+ *    charts silently unstyled — no error, no visual clue except wrong axes.
+ * 2. Keep those nine in a colour grammar zrender can parse, because ECharts gets
+ *    the raw string. Its parser (zrender/lib/tool/color.js) accepts hex — 3, 4,
+ *    6 and 8 digit — plus comma-separated rgb()/rgba()/hsl(), and nothing else.
+ *    So: no `color-mix()`, no `rgba(var(--x), …)` (custom-property substitution
+ *    in getComputedStyle is not something to bet charts on), and no space/slash
+ *    `rgb(0 0 0 / 50%)`, which zrender splits on commas and reads as black.
+ *    Literal `rgba()` here is deliberate; Bun's minifier rewrites it to 8-digit
+ *    hex on the way out, which zrender handles fine.
+ *
+ * --success/--info/--warning/--danger are fill-grade, taken straight from the
+ * design: they are tuned for chart series and badge backgrounds, not for text
+ * on --canvas. Text-on-colour pairings go through the -ink tokens.
+ * =========================================================================== */
 :root {
-  color-scheme: dark;
-  --canvas: #0b0e14;
-  --surface: #11151f;
-  --elevated: #161c28;
-  --overlay: #1b2230;
-  --line: #232b3b;
-  --line-strong: #303a4e;
-  --fg: #e7eaf0;
-  --muted: #9aa6b8;
-  --faint: #6b7689;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --on-accent: #f5f3ff;
+  color-scheme: light;
+  /* bg/primary — the warm cream the whole app sits on. */
+  --canvas: #e6e3d7;
+  /* bg/card, flattened to an opaque colour: chart tooltips and `chartColors()`
+   * need something real to paint on. The genuinely translucent fill is --card. */
+  --surface: #f2f0ea;
+  /* bg/secondary — tinted table headers and hover states. */
+  --elevated: #e1dfd6;
+  --overlay: #fbfaf6;
+  --card: rgba(255, 255, 255, 0.48);
+  /* border/default and a stronger step for focused/active edges. */
+  --line: rgba(26, 26, 26, 0.09);
+  --line-strong: rgba(26, 26, 26, 0.16);
+  /* fg/primary → fg/quaternary: one near-black at four opacities. */
+  --fg: #141414;
+  --muted: rgba(26, 26, 26, 0.69);
+  --faint: rgba(26, 26, 26, 0.48);
+  --fg-quaternary: rgba(26, 26, 26, 0.28);
+  /* brand/400. Decorative and chart-facing — see --btn-ink for buttons. */
+  --accent: #ee67d1;
+  --accent-hover: #d94ab8;
+  --on-accent: #141414;
+  --accent-soft: rgba(238, 103, 209, 0.12);
   --claude: #d97757;
   --claude-strong: #c6613f;
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --info: #60a5fa;
+  --success: #65a30d;
+  --warning: #ea580c;
+  --danger: #dc2626;
+  --info: #0ea5e9;
+  /* Dosu sage. Brand-locked, so it does not move between themes. */
+  --dosu: #b4bb91;
+  --dosu-strong: #65704b;
+  /* The design's primary button is near-black, not brand pink. Inverted in dark
+   * so it stays a button rather than a hole in the page. */
+  --btn-ink: #09090b;
+  --btn-ink-fg: #fafafa;
+  --scrim: rgba(23, 22, 15, 0.46);
+  /* The design's four-layer button treatment: two drops for lift, two insets for
+   * the top bevel. Defined once because nobody will retype this correctly. */
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.1), inset 0 -2px 0 #52525b,
+    inset 0 -1px 0 #27272a;
+  --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  --shadow-card: 0 1px 2px rgba(20, 20, 10, 0.05);
+  --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 14px;
+  --radius-full: 9999px;
   --font-serif: "Source Serif 4", ui-serif, Georgia, Cambria, "Times New Roman", serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: light) {
+/* The two dark blocks below MUST stay byte-identical. CSS cannot share
+ * declarations between a media query and an attribute selector, so this is two
+ * copies on purpose: the media block serves "system" (no data-theme attribute),
+ * the attribute block serves an explicit choice. Edit both or neither.
+ *
+ * Dark is derived, not designed — the Figma file ships no dark palette. It keeps
+ * light's warm cast so the two read as one product. */
+@media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    color-scheme: light;
-    --canvas: #f6f7f9;
-    --surface: #ffffff;
-    --elevated: #f3f5f8;
-    --overlay: #ffffff;
-    --line: #e4e8ef;
-    --line-strong: #d2d8e2;
-    --fg: #131722;
-    --muted: #5a6473;
-    --faint: #97a1b0;
-    --accent: #7c3aed;
-    --accent-hover: #6d28d9;
-    --on-accent: #ffffff;
-    --success: #059669;
-    --warning: #b45309;
-    --danger: #dc2626;
-    --info: #2563eb;
+    color-scheme: dark;
+    --canvas: #17160f;
+    --surface: #201f16;
+    --elevated: #1f1d14;
+    --overlay: #262418;
+    --card: rgba(255, 255, 255, 0.035);
+    --line: rgba(240, 238, 228, 0.1);
+    --line-strong: rgba(240, 238, 228, 0.18);
+    --fg: #f4f2e8;
+    --muted: rgba(244, 242, 232, 0.68);
+    --faint: rgba(244, 242, 232, 0.46);
+    --fg-quaternary: rgba(244, 242, 232, 0.28);
+    --accent: #f087dd;
+    --accent-hover: #f5a5e6;
+    --on-accent: #17160f;
+    --accent-soft: rgba(240, 135, 221, 0.16);
+    --success: #a3e635;
+    --warning: #fb923c;
+    --danger: #f87171;
+    --info: #38bdf8;
+    --btn-ink: #f4f2e8;
+    --btn-ink-fg: #17160f;
+    --scrim: rgba(0, 0, 0, 0.62);
+    --shadow-button:
+      0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4),
+      inset 0 -2px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
   }
-}
-
-[data-theme="light"] {
-  color-scheme: light;
-  --canvas: #f6f7f9;
-  --surface: #ffffff;
-  --elevated: #f3f5f8;
-  --overlay: #ffffff;
-  --line: #e4e8ef;
-  --line-strong: #d2d8e2;
-  --fg: #131722;
-  --muted: #5a6473;
-  --faint: #97a1b0;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
-  --on-accent: #ffffff;
-  --success: #059669;
-  --warning: #b45309;
-  --danger: #dc2626;
-  --info: #2563eb;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
+  --canvas: #17160f;
+  --surface: #201f16;
+  --elevated: #1f1d14;
+  --overlay: #262418;
+  --card: rgba(255, 255, 255, 0.035);
+  --line: rgba(240, 238, 228, 0.1);
+  --line-strong: rgba(240, 238, 228, 0.18);
+  --fg: #f4f2e8;
+  --muted: rgba(244, 242, 232, 0.68);
+  --faint: rgba(244, 242, 232, 0.46);
+  --fg-quaternary: rgba(244, 242, 232, 0.28);
+  --accent: #f087dd;
+  --accent-hover: #f5a5e6;
+  --on-accent: #17160f;
+  --accent-soft: rgba(240, 135, 221, 0.16);
+  --success: #a3e635;
+  --warning: #fb923c;
+  --danger: #f87171;
+  --info: #38bdf8;
+  --btn-ink: #f4f2e8;
+  --btn-ink-fg: #17160f;
+  --scrim: rgba(0, 0, 0, 0.62);
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 -2px 0 rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* Light is :root, so forcing light only has to stop the dark media block from
+ * matching — which the [data-theme] attribute already does. */
+[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {

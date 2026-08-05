@@ -61,8 +61,14 @@ describe("theme tokens", () => {
     const darkNames = new Set(
       declarations(darkAttrBlock).map((declaration) => declaration.split(":")[0]),
     );
-    // --dosu is brand-locked and intentionally identical across themes.
-    const brandLocked = new Set(["--dosu", "--dosu-strong", "--claude", "--claude-strong"]);
+    // Brand colours are intentionally identical across themes.
+    const brandLocked = new Set([
+      "--dosu",
+      "--dosu-mid",
+      "--dosu-strong",
+      "--claude",
+      "--claude-strong",
+    ]);
     for (const name of lightNames) {
       if (brandLocked.has(name)) {
         continue;

@@ -82,21 +82,26 @@
   --warning: #ea580c;
   --danger: #dc2626;
   --info: #0ea5e9;
-  /* Dosu sage. Brand-locked, so it does not move between themes. */
+  /* Dosu sage, light to dark. Brand-locked, so it does not move between themes. */
   --dosu: #b4bb91;
+  --dosu-mid: #899364;
   --dosu-strong: #65704b;
   /* The design's primary button is near-black, not brand pink. Inverted in dark
    * so it stays a button rather than a hole in the page. */
   --btn-ink: #09090b;
   --btn-ink-fg: #fafafa;
-  --scrim: rgba(23, 22, 15, 0.46);
+  /* The near-black every scrim and drop shadow layers, as bare channels so each
+   * site keeps its own alpha — a slide-over scrim is deliberately lighter than a
+   * modal's. Warm on purpose: these used to be Tailwind slate-900, which laid a
+   * cold blue veil over a warm cream page. */
+  --shade-rgb: 23, 22, 15;
   /* The design's four-layer button treatment: two drops for lift, two insets for
    * the top bevel. Defined once because nobody will retype this correctly. */
   --shadow-button:
     0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.1), inset 0 -2px 0 #52525b,
     inset 0 -1px 0 #27272a;
   --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.48);
-  --shadow-card: 0 1px 2px rgba(20, 20, 10, 0.05);
+  --shadow-card: 0 1px 2px rgba(var(--shade-rgb), 0.05);
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 14px;
@@ -138,12 +143,12 @@
     --info: #38bdf8;
     --btn-ink: #f4f2e8;
     --btn-ink-fg: #17160f;
-    --scrim: rgba(0, 0, 0, 0.62);
+    --shade-rgb: 0, 0, 0;
     --shadow-button:
       0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4),
       inset 0 -2px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.16);
     --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-card: 0 1px 2px rgba(var(--shade-rgb), 0.35);
   }
 }
 
@@ -170,12 +175,12 @@
   --info: #38bdf8;
   --btn-ink: #f4f2e8;
   --btn-ink-fg: #17160f;
-  --scrim: rgba(0, 0, 0, 0.62);
+  --shade-rgb: 0, 0, 0;
   --shadow-button:
     0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 -2px 0 rgba(0, 0, 0, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
   --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 1px 2px rgba(var(--shade-rgb), 0.35);
 }
 
 /* Light is :root, so forcing light only has to stop the dark media block from
@@ -539,7 +544,7 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  background: rgb(0 0 0 / 58%);
+  background: rgba(var(--shade-rgb), 0.58);
   padding: min(12vh, 104px) 20px 20px;
   backdrop-filter: blur(5px);
 }
@@ -553,7 +558,7 @@ nav a[aria-current="page"] svg {
   border: 1px solid var(--line-strong);
   border-radius: 14px;
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(0 0 0 / 38%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.38);
   flex-direction: column;
 }
 
@@ -919,7 +924,7 @@ nav a[aria-current="page"] svg {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgb(15 23 42 / 46%);
+  background: rgba(var(--shade-rgb), 0.46);
   padding: 24px;
 }
 
@@ -929,7 +934,7 @@ nav a[aria-current="page"] svg {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(15 23 42 / 28%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.28);
 }
 
 .report-review-sheet > header,
@@ -1285,7 +1290,7 @@ table {
   z-index: 80;
   inset: 0;
   border: 0;
-  background: rgb(15 23 42 / 28%);
+  background: rgba(var(--shade-rgb), 0.28);
   cursor: default;
 }
 
@@ -1301,7 +1306,7 @@ table {
   overflow-y: auto;
   border-left: 1px solid var(--line);
   background: var(--surface);
-  box-shadow: -18px 0 50px rgb(15 23 42 / 18%);
+  box-shadow: -18px 0 50px rgba(var(--shade-rgb), 0.18);
 }
 
 .tool-detail-panel > header,
@@ -1780,9 +1785,9 @@ td a:hover {
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  border: 1px solid color-mix(in oklab, #b4bb91 45%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 45%, var(--line));
   border-radius: 999px;
-  background: color-mix(in oklab, #b4bb91 12%, var(--surface));
+  background: color-mix(in oklab, var(--dosu) 12%, var(--surface));
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
@@ -1792,7 +1797,7 @@ td a:hover {
 
 .dosu-provenance-badge:hover,
 .dosu-provenance-badge:focus-visible {
-  border-color: color-mix(in oklab, #b4bb91 72%, var(--line-strong));
+  border-color: color-mix(in oklab, var(--dosu) 72%, var(--line-strong));
   color: var(--fg);
 }
 
@@ -2259,7 +2264,7 @@ select {
   min-height: 48px;
   border-radius: 12px;
   padding-left: 44px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+  box-shadow: 0 1px 2px rgba(var(--shade-rgb), 0.12);
 }
 
 .result-caption {
@@ -2574,7 +2579,7 @@ mark {
   display: grid;
   place-items: center;
   overflow-y: auto;
-  background: rgb(0 0 0 / 72%);
+  background: rgba(var(--shade-rgb), 0.72);
   padding: 24px;
   backdrop-filter: blur(8px);
 }
@@ -2586,7 +2591,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(0 0 0 / 44%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.44);
 }
 
 .share-review-sheet > header,
@@ -2935,7 +2940,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--overlay);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+  box-shadow: 0 12px 32px rgba(var(--shade-rgb), 0.3);
   color: var(--fg);
   font-size: 12px;
   line-height: 1.45;
@@ -3193,9 +3198,9 @@ mark {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
-  border: 1px solid color-mix(in oklab, #b4bb91 34%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 34%, var(--line));
   border-radius: 10px;
-  background: color-mix(in oklab, #b4bb91 8%, var(--surface));
+  background: color-mix(in oklab, var(--dosu) 8%, var(--surface));
   padding: 12px 14px;
 }
 
@@ -3542,7 +3547,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   background: var(--surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
+  box-shadow: 0 12px 32px rgba(var(--shade-rgb), 0.32);
   padding: 4px;
 }
 
@@ -3618,9 +3623,9 @@ mark {
 }
 
 .insights-dosu-list {
-  border-color: color-mix(in oklab, #b4bb91 38%, var(--line));
-  background: color-mix(in oklab, #b4bb91 7%, var(--surface));
-  box-shadow: 0 12px 28px -26px color-mix(in oklab, #65704b 48%, transparent);
+  border-color: color-mix(in oklab, var(--dosu) 38%, var(--line));
+  background: color-mix(in oklab, var(--dosu) 7%, var(--surface));
+  box-shadow: 0 12px 28px -26px color-mix(in oklab, var(--dosu-strong) 48%, transparent);
 }
 
 .dosu-insights-row {
@@ -4156,7 +4161,7 @@ mark {
 }
 
 .toc-icon.is-dosu {
-  background: color-mix(in oklab, #b4bb91 16%, transparent);
+  background: color-mix(in oklab, var(--dosu) 16%, transparent);
 }
 
 .toc a.is-dosu {
@@ -4165,7 +4170,7 @@ mark {
 
 .toc a.is-dosu:hover .toc-icon,
 .toc a.is-dosu.is-current .toc-icon {
-  background: color-mix(in oklab, #b4bb91 25%, transparent);
+  background: color-mix(in oklab, var(--dosu) 25%, transparent);
 }
 
 .toc a:hover .toc-icon {
@@ -4186,7 +4191,7 @@ mark {
 
 .toc em {
   align-self: center;
-  border: 1px solid color-mix(in oklab, #b4bb91 40%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 40%, var(--line));
   border-radius: 999px;
   color: var(--faint);
   font-size: 9px;
@@ -4583,11 +4588,11 @@ mark {
 }
 
 .tool-call.is-dosu {
-  border-color: color-mix(in oklab, #b4bb91 58%, var(--line));
-  background: color-mix(in oklab, #b4bb91 9%, var(--surface));
+  border-color: color-mix(in oklab, var(--dosu) 58%, var(--line));
+  background: color-mix(in oklab, var(--dosu) 9%, var(--surface));
   box-shadow:
-    inset 3px 0 0 color-mix(in oklab, #899364 70%, transparent),
-    0 12px 28px -22px color-mix(in oklab, #65704b 65%, transparent);
+    inset 3px 0 0 color-mix(in oklab, var(--dosu-mid) 70%, transparent),
+    0 12px 28px -22px color-mix(in oklab, var(--dosu-strong) 65%, transparent);
   padding-left: 12px;
 }
 
@@ -4597,7 +4602,7 @@ mark {
   height: 24px;
   place-items: center;
   border-radius: 6px;
-  background: color-mix(in oklab, #b4bb91 18%, transparent);
+  background: color-mix(in oklab, var(--dosu) 18%, transparent);
 }
 
 .dosu-tool-mark img {
@@ -4606,7 +4611,7 @@ mark {
 }
 
 .dosu-tool-badge {
-  border: 1px solid color-mix(in oklab, #b4bb91 48%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 48%, var(--line));
   border-radius: 999px;
   color: var(--muted);
   font-size: 10px;
@@ -4958,7 +4963,7 @@ pre {
     inset: 0;
     z-index: 30;
     display: block;
-    background: rgb(0 0 0 / 58%);
+    background: rgba(var(--shade-rgb), 0.58);
     backdrop-filter: blur(4px);
   }
 

@@ -6,8 +6,6 @@ const root = join(import.meta.dir, "..");
 const styles = readFileSync(join(root, "src", "ui", "styles.css"), "utf8");
 const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
 
-/** Token names `chartColors()` hands to ECharts. Kept in sync with main.tsx by
- * the first test below rather than by hope. */
 const CHART_TOKENS = [
   "--fg",
   "--muted",
@@ -20,7 +18,6 @@ const CHART_TOKENS = [
   "--warning",
 ] as const;
 
-/** Every `--name: value` pair inside a block, indentation normalized away. */
 function declarations(block: string): string[] {
   return [...block.matchAll(/^\s*(--[a-z0-9-]+):\s*([^;]+);/gim)].map(
     (match) => `${match[1]}: ${match[2]?.replace(/\s+/g, " ").trim()}`,
@@ -45,10 +42,6 @@ const darkAttrBlock = blockAfter('[data-theme="dark"] {\n  color-scheme: dark;',
 
 describe("theme tokens", () => {
   test("the two dark blocks stay identical", () => {
-    // CSS cannot share declarations between a media query and an attribute
-    // selector, so dark is deliberately written twice. Drift between the copies
-    // shows up only as "dark mode looks subtly wrong on one machine", which is
-    // exactly the bug nobody files.
     const fromMedia = declarations(darkMediaBlock);
     const fromAttribute = declarations(darkAttrBlock);
     expect(fromMedia.length).toBeGreaterThan(10);
@@ -56,17 +49,7 @@ describe("theme tokens", () => {
   });
 
   test("dark overrides every themed token light defines", () => {
-    // A token defined in light but forgotten in dark inherits the light value and
-    // renders cream-on-cream. Font/radius tokens are theme-independent by design.
     const themeIndependent = /^--(font|radius)-/;
-    // Fully derived: each is color-mix() of two other tokens with no literal of
-    // its own, so it rethemes through --fg and needs no dark counterpart.
-    //
-    // Listed by name rather than sniffed for "var(", because a token can
-    // reference another token AND still carry a theme-specific literal of its
-    // own — a shadow built as `rgba(var(--shade-rgb), 0.05)` needs a dark
-    // override for the alpha, and a blanket var() exclusion would quietly stop
-    // requiring it.
     const derived = new Set([
       "--accent-text",
       "--success-text",
@@ -75,13 +58,14 @@ describe("theme tokens", () => {
       "--info-text",
       "--claude-text",
     ]);
+    const pureAlias = /^var\(--[a-z0-9-]+\)$/;
     const lightNames = declarations(rootBlock)
+      .filter((declaration) => !pureAlias.test(declaration.split(": ").slice(1).join(": ")))
       .map((declaration) => declaration.split(":")[0] ?? "")
       .filter((name) => !themeIndependent.test(name) && !derived.has(name));
     const darkNames = new Set(
       declarations(darkAttrBlock).map((declaration) => declaration.split(":")[0]),
     );
-    // Brand colours are intentionally identical across themes.
     const brandLocked = new Set([
       "--dosu",
       "--dosu-mid",
@@ -98,51 +82,53 @@ describe("theme tokens", () => {
   });
 
   test("chart tokens match what chartColors() actually reads", () => {
-    // If someone adds a tenth read in main.tsx, this list — and the two rules
-    // below it — need to grow with it.
     const readNames = [...main.matchAll(/value\("(--[a-z-]+)"\)/g)].flatMap(
       (match) => match[1] ?? [],
     );
     expect(readNames.sort()).toEqual([...CHART_TOKENS].sort());
   });
 
+  test("bar charts use a neutral hover band in both themes", () => {
+    expect(main).toContain("shadowStyle: { color: colors.hover }");
+    expect(main).toContain('styles.colorScheme === "dark"');
+    expect(main).toContain('"rgba(255, 255, 255, 0.05)"');
+    expect(main).toContain('"rgba(20, 20, 20, 0.05)"');
+    expect(main).not.toContain("colors.fg}0d");
+    expect(main).not.toContain('seriesType === "bar" && colors.dark');
+  });
+
   test("hover states actually differ from their rest state", () => {
-    // A hover built as color-mix(--btn-ink 88%, --fg) was a literal no-op in dark,
-    // where those two tokens are byte-identical, and imperceptible in light where
-    // both are near-black. Hovers now point at their own token, so the pair can be
-    // compared per theme.
+    const resolve = (name: string, block: string): string | undefined => {
+      let value = tokenValue(name, block) ?? tokenValue(name, rootBlock);
+      for (let hop = 0; hop < 8; hop++) {
+        const target = /^var\((--[a-z0-9-]+)\)$/.exec(value ?? "")?.[1];
+        if (!target) {
+          break;
+        }
+        const next = tokenValue(target, block) ?? tokenValue(target, rootBlock);
+        if (next === undefined) {
+          return `var(${target})`;
+        }
+        value = next;
+      }
+      return value;
+    };
     for (const [rest, hover] of [
       ["--btn-ink", "--btn-ink-hover"],
       ["--btn-ghost", "--btn-ghost-hover"],
     ] as const) {
       for (const block of [rootBlock, darkAttrBlock]) {
-        const restValue = tokenValue(rest, block);
-        const hoverValue = tokenValue(hover, block);
+        const restValue = resolve(rest, block);
+        const hoverValue = resolve(hover, block);
         expect(restValue).toBeDefined();
         expect(hoverValue).toBeDefined();
         expect(hoverValue).not.toBe(restValue);
       }
     }
-    // And no hover may mix a token toward one that equals it in either theme.
     expect(styles).not.toMatch(/:hover \{\s*background: color-mix\([^)]*var\(--btn-ink\)/);
   });
 
-  test("--fg stays a plain 6-digit hex", () => {
-    // buildChartOption builds an ECharts shadow colour by string concatenation —
-    // `${colors.fg}0d` — so --fg has to be hex for that to mean anything. An
-    // rgba() or 8-digit value would silently produce a garbage colour.
-    expect(main).toContain("colors.fg}0d");
-    for (const block of [rootBlock, darkAttrBlock, darkMediaBlock]) {
-      const value = tokenValue("--fg", block);
-      expect(value).toMatch(/^#[0-9a-f]{6}$/i);
-    }
-  });
-
   test("fill-grade colours are never used as text", () => {
-    // The design's accents are tuned for chart series and badge fills. As `color:`
-    // on a page surface they measure 2.1–3.8:1 against cream and miss WCAG AA, so
-    // text goes through the -text variants instead. Borders, backgrounds and
-    // accent-color are all still fair game for the raw token.
     for (const token of ["accent", "success", "warning", "danger", "info", "claude"]) {
       expect(styles).not.toContain(`color: var(--${token});`);
       expect(styles).toContain(`--${token}-text:`);
@@ -150,22 +136,12 @@ describe("theme tokens", () => {
   });
 
   test.each([...CHART_TOKENS])("%s stays parseable by zrender", (token) => {
-    // ECharts receives these as raw strings, and zrender's parser
-    // (zrender/lib/tool/color.js) understands only hex and comma-separated
-    // rgb()/rgba()/hsl(). Anything else silently resolves to black or nothing,
-    // which shows up as blank axes rather than an error.
-    //
-    // 8-digit hex is deliberately allowed: zrender handles it (color.js checks
-    // `strLen === 7 || strLen === 9`), and Bun's minifier rewrites our literal
-    // rgba() into it anyway, so banning it here would fail on a non-problem.
     const pattern = new RegExp(`^\\s*${token}:\\s*([^;]+);`, "gim");
     const values = [...styles.matchAll(pattern)].flatMap((match) => match[1] ?? []);
     expect(values.length).toBeGreaterThan(0);
     for (const value of values) {
       expect(value).not.toContain("var(");
       expect(value).not.toContain("color-mix(");
-      // Space/slash syntax: zrender splits on commas, so `rgb(0 0 0 / 50%)`
-      // arrives as a single unparseable param and renders black.
       expect(value).not.toContain("/");
     }
   });

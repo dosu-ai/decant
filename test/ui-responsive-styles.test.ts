@@ -37,18 +37,24 @@ describe("responsive session detail styles", () => {
 
   test("keeps wide data surfaces inside their panels", () => {
     expect(rule(".activity-table-wrap")).toContain("overflow-x: auto");
+    expect(rule(".sessions-table")).toContain("min-width: 1280px");
     expect(rule(".ctx-strip-frame")).toContain("overflow: hidden");
     expect(rule(".ctx-strip")).toContain("max-width: 100%");
     expect(rule(".ctx-tooltip")).toContain("max-width: calc(100% - 4px)");
     expect(rule(".ctx-strip-compaction-marker rect")).toContain("stroke: var(--accent)");
   });
 
-  test("collapses the transcript navigation at laptop widths", () => {
+  test("collapses the shell and transcript navigation at laptop widths", () => {
     const start = styles.indexOf("@media (max-width: 1200px)");
     const end = styles.indexOf("@media (max-width: 980px)", start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const laptopRules = styles.slice(start, end);
+    expect(laptopRules).toContain(".mobile-only");
+    expect(laptopRules).toContain(".sidebar");
+    expect(laptopRules).toContain("transform: translateX(-100%)");
+    expect(laptopRules).toContain(".workspace");
+    expect(laptopRules).toContain("padding-left: 0");
     expect(laptopRules).toContain(".transcript-layout");
     expect(laptopRules).toContain("grid-template-columns: 1fr");
     expect(laptopRules).toContain(".toc");

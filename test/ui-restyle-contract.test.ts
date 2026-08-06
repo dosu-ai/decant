@@ -62,14 +62,22 @@ describe("restyle contract", () => {
   });
 
   test("the display serif is only asked for a weight that ships", () => {
-    // Only SourceSerif4-Semibold is vendored. Requesting 400 or 700 makes the
-    // browser synthesize a face instead of reporting a missing one.
+    const weightTokens = new Map(
+      [...styles.matchAll(/--font-weight-(\w+):\s*(\d+);/g)].map((match) => [
+        match[1] as string,
+        match[2] as string,
+      ]),
+    );
+    expect(weightTokens.size).toBe(3);
     const serifWeights = [...styles.matchAll(/font-family: var\(--font-serif\)[^}]*?}/gs)]
-      .flatMap((match) => [...match[0].matchAll(/font-weight: (\d+)/g)])
-      .flatMap((match) => match[1] ?? []);
+      .flatMap((match) => [...match[0].matchAll(/font-weight: var\(--font-weight-(\w+)\)/g)])
+      .map((match) => weightTokens.get(match[1] as string));
     expect(serifWeights.length).toBeGreaterThan(0);
     for (const weight of serifWeights) {
-      expect(weight).toBe("600");
+      expect(weight).toBe("400");
     }
+    // The serif text token carries the weight for callers using the shorthand,
+    // which the sweep above cannot see because it names no font-family.
+    expect(styles).toMatch(/--text-serif-xl-regular:\s*400 /);
   });
 });

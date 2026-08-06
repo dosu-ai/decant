@@ -5240,8 +5240,6 @@ function buildChartOption({
   const moneyMetric = metric === "money";
   const seriesType = variant;
   return {
-    // Bars lead lime and lines lead pink, as the design draws them. The rest of
-    // each palette is the fallback order for any additional series.
     color:
       seriesType === "bar"
         ? [colors.success, colors.info, colors.warning, colors.accent]
@@ -5259,7 +5257,7 @@ function buildChartOption({
       axisPointer: {
         type: seriesType === "bar" ? "shadow" : "line",
         lineStyle: { color: colors.faint, width: 1 },
-        shadowStyle: { color: `${colors.fg}0d` },
+        shadowStyle: { color: colors.hover },
       },
       valueFormatter: (value) =>
         moneyMetric ? money(Number(value ?? 0)) : formatInt(Number(value ?? 0)),
@@ -5307,6 +5305,7 @@ function chartColors() {
   const value = (name: string) => styles.getPropertyValue(name).trim();
   return {
     fg: value("--fg"),
+    hover: styles.colorScheme === "dark" ? "rgba(255, 255, 255, 0.05)" : "rgba(20, 20, 20, 0.05)",
     muted: value("--muted"),
     faint: value("--faint"),
     line: value("--line"),

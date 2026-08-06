@@ -122,8 +122,7 @@ function createArchiveFile(path: string): void {
 }
 
 /**
- * Best-effort narrow of an existing archive file — the database or one of its
- * `-wal`/`-shm` sidecars — that an older decant left group- or world-readable.
+ * Best-effort permission tightening for an archive and its `-wal`/`-shm` sidecars.
  *
  * The `lstat` gate is not a security check; the two guarantees below are. It is
  * there because closing a descriptor releases *every* POSIX lock this process
@@ -472,10 +471,7 @@ function migrate(db: Database, current: number): void {
       ).run();
     }
     if (current < 15) {
-      // Schema v14 incorrectly relabeled Claude Code's provider-supplied `max`
-      // effort as `ultra`. Only archives that were already opened by a v14
-      // build need repair; older archives retain their original labels while
-      // migrating directly through the corrected v14 step above.
+      // Direct migrations use the corrected v14 step; only a v14 archive needs repair.
       if (current === 14) {
         db.exec(`
           UPDATE session

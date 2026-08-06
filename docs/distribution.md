@@ -204,8 +204,7 @@ resolves to no peers rather than guessing:
   nothing;
 - the gateway is on-link on that route's interface;
 - the gateway is inside `172.16.0.0/12`, a bound on the derivation rather than
-  an allowlist, so the image's default trust set stays a strict subset of the
-  `DECANT_TRUSTED_PEERS=172.16.0.0/12` it used to ship;
+  an allowlist;
 - the interface is a veth whose peer sits in another network namespace, which
   is true of a bridge-networked container and false for `--network host`,
   macvlan, ipvlan and vlan links, where the "default gateway" is the LAN or VPC
@@ -214,12 +213,9 @@ resolves to no peers rather than guessing:
 So `--network host`, macvlan/ipvlan, multi-homed hosts, and bridges outside
 `172.16.0.0/12` (Podman's default `10.88.0.0/16`, an explicit
 `--subnet 10.10.0.0/16`, Kubernetes pods) trust nobody beyond loopback and
-answer `403 forbidden remote` on `/api/*`. Shapes outside `172.16.0.0/12` were
-already refused by the allowlist the image used to ship. A shape inside it, such
-as a macvlan container on a `172.16.0.0/12` LAN, loses trust it used to have,
-which is the point of the change. Give these deployments the exact forwarding
-address with `-e DECANT_TRUSTED_PEERS=192.168.65.1`, which replaces the gateway
-default entirely, or turn the derivation off with
+answer `403 forbidden remote` on `/api/*`. Give these deployments the exact
+forwarding address with `-e DECANT_TRUSTED_PEERS=192.168.65.1`, which replaces
+the gateway default entirely, or turn the derivation off with
 `-e DECANT_TRUST_DEFAULT_GATEWAY=0`. Prefer single addresses: every entry, and
 every address inside a CIDR, reads the entire archive with no credential.
 

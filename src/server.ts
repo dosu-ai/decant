@@ -1441,15 +1441,8 @@ const DEFAULT_SYS_CLASS_NET_PATH = "/sys/class/net";
  * gateway instead of being on-link. */
 const RTF_UP = 0x1;
 const RTF_GATEWAY = 0x2;
-/** Bound on gateway auto-trust, not an allowlist: no address in this range is
- * trusted unless it is *this* container's own bridge gateway. Container
- * runtimes carve their default bridge networks out of it (Docker's default
- * address pool starts at 172.17.0.0/16), while LAN and VPC routers -- the
- * addresses a `--network host`, macvlan or ipvlan container would otherwise
- * resolve -- practically never sit in it. Bounding the derived address this way
- * also keeps the image's default trust set a strict subset of the
- * `172.16.0.0/12` allowlist it used to ship, so no deployment shape gains trust
- * it did not already have. */
+/** Bound on gateway auto-trust, not an allowlist. Only the detected bridge
+ * gateway is trusted; host, macvlan, ipvlan, LAN, and VPC gateways are excluded. */
 const GATEWAY_AUTO_TRUST_RANGE = "172.16.0.0/12";
 
 /** Test seam: where the Linux network facts are read from. */

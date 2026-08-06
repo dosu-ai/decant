@@ -224,13 +224,12 @@ describe("openDb", () => {
   test("adds the tool-call paging index when upgrading a v22 archive", () => {
     // listToolCalls orders by (timestamp DESC, id DESC). Without this index
     // SQLite sorts every tool call in a temp b-tree to return a page of fifty,
-    // drawing a random `message` row per call on the way, which is what made the
-    // first load of the Tools & MCP page take most of a second.
+    // drawing a random `message` row per call on the way.
     const path = freshPath();
     const legacy = openDb(path);
     legacy.exec("DROP INDEX IF EXISTS idx_toolcall_timestamp");
     legacy.exec("DELETE FROM schema_migrations WHERE version > 22");
-    legacy.close();
+    closeDb(legacy);
 
     const migrated = openDb(path);
     const index = migrated
@@ -241,7 +240,7 @@ describe("openDb", () => {
     expect(index).not.toBeNull();
     expect(index?.sql).toContain("timestamp DESC");
     expect(index?.sql).toContain("id DESC");
-    migrated.close();
+    closeDb(migrated);
   });
 
   test("serves the tool-call page order from an index rather than a sort", () => {
@@ -266,7 +265,7 @@ describe("openDb", () => {
       .join("\n");
     expect(plan).toContain("idx_toolcall_timestamp");
     expect(plan).not.toContain("TEMP B-TREE");
-    db.close();
+    closeDb(db);
   });
 
   test("creates durable user state keyed by source identity", () => {

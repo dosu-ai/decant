@@ -724,17 +724,23 @@ function migrate(db: Database, current: number): void {
     if (current < 23) {
       // listToolCalls orders by (timestamp DESC, id DESC) and takes a page of 50.
       // Without an index in that order SQLite joins every tool call to session,
-      // project and message, then sorts the whole result in a temp b-tree to
-      // discard all but 50 rows. On a 669 MB archive with 20k tool calls the
-      // first request for the Tools & MCP page measured 705 ms, because each of
-      // those 20k rows also drew a random `message` row for its `seq`.
+      // project and message, then sorts the whole result in a temp b-tree and
+      // discards all but 50 rows, drawing a random `message` row per call for its
+      // `seq` on the way. With the index it walks tool_call in order and stops
+      // after 50, so the message lookups fall from 20k to 50 and the sort
+      // disappears. test/db.test.ts asserts that plan.
       //
-      // With the index SQLite walks tool_call in order and stops after 50, so
-      // the message lookups fall from 20k to 50 and the temp b-tree disappears.
-      // Measured on two copies of the same 20k-call archive, one with the index
-      // dropped, both on raw connections so no migration could blur the two:
-      // every page got faster, by 1.6x at offset 0 to 2.8x at offset 1000, and
-      // the errors-only view by 1.6x. Nothing measured slower.
+      // What this is and is not worth, measured rather than assumed. At the query
+      // level, on two copies of one 20k-call archive with the index present on
+      // only one, it runs 1.6x to 2.8x faster. End to end over HTTP with the page
+      // cache warm it is a wash: median first-hit latency was 59 ms without and
+      // 68 ms with, across nine server restarts each, so per-request overhead
+      // swamps the difference at this size.
+      //
+      // It is kept because the work it removes grows with the table while the
+      // work it adds does not, so the margin widens as an archive does. It is not
+      // the fix for a slow-feeling first load; see the note on bundle size in the
+      // pull request that added this.
       if (hasTable(db, "tool_call")) {
         db.exec(
           "CREATE INDEX IF NOT EXISTS idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC)",

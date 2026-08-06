@@ -6828,13 +6828,8 @@ function prettyToolValue(value: string | null): string {
   }
 }
 
-/** The note shown above an elided value.
- *
- * Previews are stored head-and-tail with the middle elided, so any value over
- * the preview budget cannot parse as JSON and Preview silently renders the same
- * raw text as Raw. On a real archive that is 3,285 of 20,053 tool calls, and
- * they are the large ones, so it is exactly the calls worth opening that look
- * broken. Saying so beats appearing to have formatted something. */
+/** An elided value cannot parse as JSON, so Preview would silently render the
+ * same raw text as Raw with nothing explaining why. */
 function ToolValueElision({ value }: { value: string | null }) {
   const omitted = previewOmittedCount(value);
   if (omitted == null) {

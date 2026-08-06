@@ -2,8 +2,7 @@
 -- Effective decant schema (migrations 1..23 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
--- indexes tool_call in the order the tool-call list pages through, so that page
--- stops scanning the whole table to return fifty rows.
+-- indexes tool_call in the order the tool-call list pages through.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,

@@ -69,16 +69,7 @@ export function previewHeadTail(s: string, max: number): string {
   return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
 }
 
-/** Recognizes the marker `previewHeadTail` leaves behind, capturing the omitted
- * count.
- *
- * Callers need this to tell a complete value from an elided one. The elision
- * lands in the middle of the string, so an elided JSON payload no longer parses,
- * and a reader offered a "pretty" view of one is being shown raw text with no
- * indication of why. The UI uses this to say so instead.
- *
- * Kept beside the function that writes the marker, and pinned to it by a test,
- * because the two drifting apart fails silently in exactly that direction. */
+/** Must track the marker `previewHeadTail` writes; a drift fails silently. */
 export const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
 
 /** Scalars omitted from the middle of a preview, or null if it is complete. */

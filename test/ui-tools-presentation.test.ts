@@ -15,26 +15,16 @@ function sourceBetween(source: string, start: string, end: string): string {
 
 describe("Tools and MCP presentation", () => {
   test("the detail header can shrink so a long MCP tool name cannot push the close button out", () => {
-    // Tool names reach 60 characters of underscore-joined text in a real archive
-    // (mcp__codex_apps__google_drive___get_document_paragraph_range), wider than
-    // the 38rem panel at 20px and with no space to wrap at. A flex item defaults
-    // to min-width: auto, so without these two rules the text column holds its
-    // intrinsic width and the header overflows.
     const header = sourceBetween(styles, ".tool-detail-heading {", ".tool-detail-elision {");
     expect(header).toContain("min-width: 0");
     expect(header).toMatch(/\.tool-detail-panel > header h2 \{[^}]*overflow-wrap: anywhere/s);
-    // The rule is useless unless the element it names is the one that renders.
     expect(main).toContain('<div className="tool-detail-heading">');
   });
 
   test("an elided value says so instead of appearing unformatted", () => {
-    // Previews are stored head-and-tail, so anything over the budget cannot parse
-    // as JSON and the Preview tab renders the same raw text as Raw. Without the
-    // note there is nothing on screen explaining why.
     const detail = sourceBetween(main, "function ToolValueElision(", "function ToolCallStatus(");
     expect(detail).toContain("previewOmittedCount");
     expect(detail).toContain("tool-detail-elision");
-    // Rendered for both panes, not just the input.
     const panel = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
     expect(panel).toContain("<ToolValueElision value={call.input_preview} />");
     expect(panel).toContain("<ToolValueElision value={call.output_preview} />");

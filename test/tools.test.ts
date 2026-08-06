@@ -74,10 +74,6 @@ describe("previewHeadTail", () => {
 
 describe("previewOmittedCount", () => {
   test("reads back the count previewHeadTail wrote", () => {
-    // The matcher and the writer live in the same file precisely so they cannot
-    // drift; this is what holds them together. A change to the marker format
-    // that forgot the matcher would leave every elided value looking complete,
-    // which is a silent failure in the UI rather than a loud one here.
     const s = "a".repeat(5000);
     const out = previewHeadTail(s, 500);
     expect(previewOmittedCount(out)).toBe(5000 - 500);
@@ -86,8 +82,6 @@ describe("previewOmittedCount", () => {
   test("returns null for a complete value", () => {
     expect(previewOmittedCount("short")).toBeNull();
     expect(previewOmittedCount(previewHeadTail("short", 500))).toBeNull();
-    // Real tool inputs are JSON; a complete one has to stay parseable, since
-    // that is what lets the detail panel pretty-print it.
     const json = JSON.stringify({ command: "ls -la" });
     expect(previewOmittedCount(previewHeadTail(json, 500))).toBeNull();
     expect(() => JSON.parse(previewHeadTail(json, 500))).not.toThrow();
@@ -99,9 +93,6 @@ describe("previewOmittedCount", () => {
   });
 
   test("flags the elided JSON the detail panel cannot reformat", () => {
-    // The case that made Preview look broken: an oversized JSON payload elides
-    // mid-structure, so JSON.parse fails and Preview renders the same raw text
-    // as Raw with nothing explaining why.
     const big = JSON.stringify({ file_text: "x".repeat(4000) });
     const elided = previewHeadTail(big, 500);
     expect(() => JSON.parse(elided)).toThrow();

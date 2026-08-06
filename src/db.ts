@@ -722,30 +722,8 @@ function migrate(db: Database, current: number): void {
       ).run();
     }
     if (current < 23) {
-      // listToolCalls orders by (timestamp DESC, id DESC) and takes a page of 50.
-      // Without an index in that order SQLite joins every tool call to session,
-      // project and message, then sorts the whole result in a temp b-tree and
-      // discards all but 50 rows, drawing a random `message` row per call for its
-      // `seq` on the way. With the index it walks tool_call in order and stops
-      // after 50, so the message lookups fall from 20k to 50 and the sort
-      // disappears. test/db.test.ts asserts that plan.
-      //
-      // What this is worth depends on the size of the archive, so the number
-      // moves. On a 20k-call archive the query-level win is 1.6x to 2.8x and
-      // end to end over HTTP it is a wash. On a 57k-call, 3 GB archive it is
-      // not. Without the index the plan sorts every matching row through a
-      // temp b-tree while carrying `t.input`, so dropping and recreating the
-      // index on one copy of that archive measured tens of seconds without it
-      // against single-digit milliseconds with it, and `/api/tools/calls` at
-      // offset 50 went from 0.6-1.4 s to a steady 0.12 s.
-      //
-      // It is kept because the work it removes grows with the table while the
-      // work it adds does not, so the margin widens as an archive does. It is
-      // not the whole fix for a slow first load. listToolCalls also runs its
-      // summary CTE whenever offset is 0, and that aggregates the entire
-      // filtered join through window functions no index on tool_call can
-      // serve, which costs tens of seconds on a 57k-call archive against
-      // milliseconds for the row query beside it.
+      // Serves listToolCalls's ORDER BY so a page of 50 stops sorting the whole
+      // table. test/db.test.ts asserts the plan.
       if (hasTable(db, "tool_call")) {
         db.exec(
           "CREATE INDEX IF NOT EXISTS idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC)",

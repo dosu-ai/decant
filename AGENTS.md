@@ -156,6 +156,10 @@ A change is ready when:
 - Commits: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`,
   scope optional). Sign commits when the environment supports it.
 - Prefer surrounding code style, narrow changes, and focused tests.
+- Comments default to none. A comment earns its place by explaining why the
+  code is the way it is, never what it does. Investigation notes, benchmark
+  numbers, and the history of a change belong in the PR description or in the
+  Dosu knowledge library, not above the code.
 - Branch off `main`; open a PR. CI must be green.
 - Install hooks once with `pre-commit install` if you use pre-commit locally.
 

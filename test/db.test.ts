@@ -24,6 +24,8 @@ import {
 import { configureLogging } from "../src/logging.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
 import { buildSchemaManifest } from "../src/schema-manifest.ts";
+import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
+import { visibleSessionPredicate } from "../src/session-visibility.ts";
 import schemaV8Sql from "./fixtures/schema-v8.sql" with { type: "text" };
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-db-test-"));
@@ -247,15 +249,29 @@ describe("openDb", () => {
     // The point of the index is the query plan, so assert the plan. A rename or a
     // reordered ORDER BY would leave the index in place and silently stop using
     // it, which no row-count or timing assertion would catch.
+    //
+    // Built from the same predicate helpers listToolCalls uses, not a hand-copied
+    // query: an unfiltered SELECT would also pick the index, but listToolCalls
+    // never runs one. It always applies the visibility and user-state predicates,
+    // and those filter `session` while the ORDER BY reads `tool_call`, which is
+    // exactly the shape that could push SQLite back to a temp b-tree. Asserting
+    // the real shape means a future predicate change cannot regress the plan with
+    // this test still green.
     const db = openDb(freshPath());
+    const where = [
+      visibleSessionPredicate("s"),
+      sessionUserStatePredicateForDatabase(db, "s"),
+    ].join(" AND ");
     const plan = (
       db
         .query(
           `EXPLAIN QUERY PLAN
-           SELECT t.id, m.seq
+           SELECT t.id, s.title, p.path, m.seq
            FROM tool_call t
            JOIN session s ON s.id = t.session_id
+           LEFT JOIN project p ON p.id = s.project_id
            LEFT JOIN message m ON m.id = t.message_id
+           WHERE ${where}
            ORDER BY t.timestamp DESC, t.id DESC
            LIMIT 50`,
         )

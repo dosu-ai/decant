@@ -16,7 +16,7 @@ function sourceBetween(source: string, start: string, end: string): string {
 describe("Tools and MCP presentation", () => {
   test("the detail header can shrink so a long MCP tool name cannot push the close button out", () => {
     // Tool names reach 60 characters of underscore-joined text in a real archive
-    // (mcp__codey_apps__google_drive___get_document_paragraph_range), wider than
+    // (mcp__codex_apps__google_drive___get_document_paragraph_range), wider than
     // the 38rem panel at 20px and with no space to wrap at. A flex item defaults
     // to min-width: auto, so without these two rules the text column holds its
     // intrinsic width and the header overflows.

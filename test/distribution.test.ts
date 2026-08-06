@@ -110,7 +110,7 @@ describe("distribution helpers", () => {
     // Bun does not split chunks in a compiled binary, so echarts ships whether or
     // not it is dynamically imported and the only lever on first-load parse cost
     // is minification. Measured by fetching the bundle from each binary:
-    // 6,211,618 bytes without, 3,211,522 with.
+    // 6,211,618 bytes without, 3,211,476 with.
     //
     // --sourcemap would recover the identifiers that minification mangles in
     // `exception.stacktrace`, but it breaks the compiled binary: the server dies

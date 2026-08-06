@@ -164,6 +164,8 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
       throw new Error("compiled OpenAPI document is missing /api/health");
     }
 
+    await assertCompiledUiBundle(port);
+
     const syncResponse = await fetch(`http://127.0.0.1:${port}/api/sync`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -190,6 +192,48 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
     }
     proc.kill();
     await proc.exited;
+  }
+}
+
+// --minify rewrites the UI bundle and leaves the server untouched, so every
+// other check in this file could pass against a bundle that fails to parse.
+// This is the one check that fetches the bundle's actual bytes from the
+// running binary rather than an API route.
+//
+// It proves the bytes are intact and syntactically valid JavaScript, not that
+// the app renders: `new Function(code)` compiles the source without invoking
+// it, so it catches truncation or minifier corruption but not a runtime throw
+// from `createRoot(root).render(...)`, which needs a real DOM (canvas, for
+// echarts) that nothing in this repo currently emulates. Closing that gap
+// means either a real browser or a DOM/canvas shim, and that's a dependency
+// decision for whoever picks it up, not something to fake here.
+async function assertCompiledUiBundle(port: number): Promise<void> {
+  const page = await fetch(`http://127.0.0.1:${port}/`);
+  if (!page.ok) {
+    throw new Error(`compiled binary returned ${page.status} for /`);
+  }
+  const html = await page.text();
+  const scriptSrc = /<script[^>]*\ssrc="([^"]+\.js)"/.exec(html)?.[1];
+  if (scriptSrc == null) {
+    throw new Error(`compiled binary's / did not link a bundled script:\n${html}`);
+  }
+  const bundleUrl = new URL(scriptSrc, `http://127.0.0.1:${port}`);
+  const bundle = await fetch(bundleUrl);
+  if (!bundle.ok) {
+    throw new Error(`compiled binary returned ${bundle.status} for ${scriptSrc}`);
+  }
+  const code = await bundle.text();
+  // Comfortably under the measured minified size (3,211,476 B) and comfortably
+  // over an empty or stub response, so this only trips on real truncation.
+  if (code.length < 500_000) {
+    throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
+  }
+  try {
+    new Function(code);
+  } catch (error) {
+    throw new Error(
+      `compiled UI bundle at ${scriptSrc} does not parse: ${(error as Error).message}`,
+    );
   }
 }
 

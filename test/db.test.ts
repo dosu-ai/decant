@@ -254,9 +254,16 @@ describe("openDb", () => {
     // query: an unfiltered SELECT would also pick the index, but listToolCalls
     // never runs one. It always applies the visibility and user-state predicates,
     // and those filter `session` while the ORDER BY reads `tool_call`, which is
-    // exactly the shape that could push SQLite back to a temp b-tree. Asserting
-    // the real shape means a future predicate change cannot regress the plan with
-    // this test still green.
+    // exactly the shape that could push SQLite back to a temp b-tree.
+    //
+    // This covers that shape, not every shape listToolCalls can produce. Adding
+    // `t.tool_name = ?` or `p.path = ?` drops this same index for a temp b-tree
+    // again, in favor of the narrower index those filters can use instead — not a
+    // regression today (idx_toolcall_name narrows first, so it stays fast), but
+    // this test would not catch one there. It also runs against an empty table,
+    // so the planner is choosing from default estimates rather than real
+    // cardinality; that happens to agree with a populated archive, but isn't
+    // guaranteed to in general.
     const db = openDb(freshPath());
     const where = [
       visibleSessionPredicate("s"),

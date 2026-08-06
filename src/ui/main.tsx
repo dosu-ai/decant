@@ -6844,8 +6844,8 @@ function ToolValueElision({ value }: { value: string | null }) {
     <p className="tool-detail-elision">
       <Icon name="minus" />
       <span>
-        Middle elided, {formatInt(omitted)} characters omitted. Too long to reformat — open the
-        transcript for the whole value.
+        Middle elided, {formatInt(omitted)} characters omitted. Open the transcript for the whole
+        value.
       </span>
     </p>
   );

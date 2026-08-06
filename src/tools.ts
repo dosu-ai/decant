@@ -68,3 +68,15 @@ export function previewHeadTail(s: string, max: number): string {
   const tail = tailLen === 0 ? "" : [...s.slice(-tailLen * 2)].slice(-tailLen).join("");
   return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
 }
+
+/** Must track the marker `previewHeadTail` writes; a drift fails silently. */
+export const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
+
+/** Scalars omitted from the middle of a preview, or null if it is complete. */
+export function previewOmittedCount(value: string | null | undefined): number | null {
+  if (value == null) {
+    return null;
+  }
+  const match = PREVIEW_ELISION.exec(value);
+  return match?.[1] == null ? null : Number(match[1]);
+}

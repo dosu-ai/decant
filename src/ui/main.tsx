@@ -64,6 +64,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
@@ -6827,6 +6828,24 @@ function prettyToolValue(value: string | null): string {
   }
 }
 
+/** An elided value cannot parse as JSON, so Preview would silently render the
+ * same raw text as Raw with nothing explaining why. */
+function ToolValueElision({ value }: { value: string | null }) {
+  const omitted = previewOmittedCount(value);
+  if (omitted == null) {
+    return null;
+  }
+  return (
+    <p className="tool-detail-elision">
+      <Icon name="minus" />
+      <span>
+        Middle elided, {formatInt(omitted)} characters omitted. Open the transcript for the whole
+        value.
+      </span>
+    </p>
+  );
+}
+
 function ToolCallStatus({ call }: { call: ToolCallRow }) {
   const status = toolCallStatus(call.is_error);
   const badge = (
@@ -6921,7 +6940,7 @@ function ToolCallDetail({
         tabIndex={-1}
       >
         <header>
-          <div>
+          <div className="tool-detail-heading">
             <span className="section-eyebrow" title={call.mcp_server ?? undefined}>
               {serverLabel || call.tool_kind || "Tool call"}
             </span>
@@ -6974,12 +6993,14 @@ function ToolCallDetail({
         <div className="tool-detail-content">
           <section>
             <h3>Input</h3>
+            <ToolValueElision value={call.input_preview} />
             <pre>
               {tab === "raw" ? (call.input_preview ?? "") : prettyToolValue(call.input_preview)}
             </pre>
           </section>
           <section>
             <h3>{call.is_error === true ? "Error output" : "Output preview"}</h3>
+            <ToolValueElision value={call.output_preview} />
             <pre>
               {tab === "raw" ? (call.output_preview ?? "") : prettyToolValue(call.output_preview)}
             </pre>

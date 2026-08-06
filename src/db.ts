@@ -21,7 +21,7 @@ import {
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 22;
+export const LATEST_SCHEMA_VERSION = 23;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -719,6 +719,18 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (22, datetime('now'))",
+      ).run();
+    }
+    if (current < 23) {
+      // Serves listToolCalls's ORDER BY so a page of 50 stops sorting the whole
+      // table. test/db.test.ts asserts the plan.
+      if (hasTable(db, "tool_call")) {
+        db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC)",
+        );
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (23, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

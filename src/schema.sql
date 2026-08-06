@@ -1,7 +1,8 @@
--- decant:schema_version=22
--- Effective decant schema (migrations 1..22 applied), frozen as the current
+-- decant:schema_version=23
+-- Effective decant schema (migrations 1..23 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
--- enrichment changes can reprocess existing sources automatically once.
+-- enrichment changes can reprocess existing sources automatically once. v23
+-- indexes tool_call in the order the tool-call list pages through.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -229,6 +230,7 @@ CREATE INDEX idx_toolcall_result_block ON tool_call(result_block_id);
 CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
 CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
+CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id',

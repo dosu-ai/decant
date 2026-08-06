@@ -24,6 +24,8 @@ import {
 import { configureLogging } from "../src/logging.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
 import { buildSchemaManifest } from "../src/schema-manifest.ts";
+import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
+import { visibleSessionPredicate } from "../src/session-visibility.ts";
 import schemaV8Sql from "./fixtures/schema-v8.sql" with { type: "text" };
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-db-test-"));
@@ -118,7 +120,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 26;
+const BASELINE_INDEX_COUNT = 27;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -219,6 +221,58 @@ describe("openDb", () => {
         .get(),
     ).toEqual({ ingest_revision: 0 });
     migrated.close();
+  });
+
+  test("adds the tool-call paging index when upgrading a v22 archive", () => {
+    // listToolCalls orders by (timestamp DESC, id DESC). Without this index
+    // SQLite sorts every tool call in a temp b-tree to return a page of fifty,
+    // drawing a random `message` row per call on the way.
+    const path = freshPath();
+    const legacy = openDb(path);
+    legacy.exec("DROP INDEX IF EXISTS idx_toolcall_timestamp");
+    legacy.exec("DELETE FROM schema_migrations WHERE version > 22");
+    closeDb(legacy);
+
+    const migrated = openDb(path);
+    const index = migrated
+      .query(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_toolcall_timestamp'",
+      )
+      .get() as { sql: string } | null;
+    expect(index).not.toBeNull();
+    expect(index?.sql).toContain("timestamp DESC");
+    expect(index?.sql).toContain("id DESC");
+    closeDb(migrated);
+  });
+
+  test("serves the tool-call page order from an index rather than a sort", () => {
+    // Covers the unfiltered shape only; a tool_name or project filter picks a
+    // different index.
+    const db = openDb(freshPath());
+    const where = [
+      visibleSessionPredicate("s"),
+      sessionUserStatePredicateForDatabase(db, "s"),
+    ].join(" AND ");
+    const plan = (
+      db
+        .query(
+          `EXPLAIN QUERY PLAN
+           SELECT t.id, s.title, p.path, m.seq
+           FROM tool_call t
+           JOIN session s ON s.id = t.session_id
+           LEFT JOIN project p ON p.id = s.project_id
+           LEFT JOIN message m ON m.id = t.message_id
+           WHERE ${where}
+           ORDER BY t.timestamp DESC, t.id DESC
+           LIMIT 50`,
+        )
+        .all() as { detail: string }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(plan).toContain("idx_toolcall_timestamp");
+    expect(plan).not.toContain("TEMP B-TREE");
+    closeDb(db);
   });
 
   test("creates durable user state keyed by source identity", () => {

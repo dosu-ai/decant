@@ -1817,9 +1817,33 @@ table {
   background: var(--surface);
 }
 
+/* Load-bearing: a flex item defaults to min-width: auto, so without this a long
+ * MCP tool name pushes the close button out of the panel. */
+.tool-detail-heading {
+  min-width: 0;
+}
+
 .tool-detail-panel > header h2 {
   margin: 3px 0 0;
   font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.tool-detail-elision {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tool-detail-elision svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 
 .tool-detail-meta {

@@ -123,10 +123,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v22.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v23.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
    broad forward migrations unless that product decision changes; the narrow
-   v8-to-v22 migrations preserve existing TypeScript-cutover archives.
+   v8-to-v23 migrations preserve existing TypeScript-cutover archives.
    `ingest_source.ingest_revision` is the parser/enrichment checkpoint: bump
    `INGEST_PIPELINE_REVISION` whenever unchanged sources must be re-derived so
    the next sync backfills them once and later syncs remain idempotent. A
@@ -156,6 +156,10 @@ A change is ready when:
 - Commits: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`,
   scope optional). Sign commits when the environment supports it.
 - Prefer surrounding code style, narrow changes, and focused tests.
+- Comments default to none. A comment earns its place by explaining why the
+  code is the way it is, never what it does. Investigation notes, benchmark
+  numbers, and the history of a change belong in the PR description or in the
+  Dosu knowledge library, not above the code.
 - Branch off `main`; open a PR. CI must be green.
 - Install hooks once with `pre-commit install` if you use pre-commit locally.
 

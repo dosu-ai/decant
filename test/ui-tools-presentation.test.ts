@@ -14,6 +14,23 @@ function sourceBetween(source: string, start: string, end: string): string {
 }
 
 describe("Tools and MCP presentation", () => {
+  test("the detail header can shrink so a long MCP tool name cannot push the close button out", () => {
+    const header = sourceBetween(styles, ".tool-detail-heading {", ".tool-detail-elision {");
+    expect(header).toContain("min-width: 0");
+    expect(header).toMatch(/\.tool-detail-panel > header h2 \{[^}]*overflow-wrap: anywhere/s);
+    expect(main).toContain('<div className="tool-detail-heading">');
+  });
+
+  test("an elided value says so instead of appearing unformatted", () => {
+    const detail = sourceBetween(main, "function ToolValueElision(", "function ToolCallStatus(");
+    expect(detail).toContain("previewOmittedCount");
+    expect(detail).toContain("tool-detail-elision");
+    const panel = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
+    expect(panel).toContain("<ToolValueElision value={call.input_preview} />");
+    expect(panel).toContain("<ToolValueElision value={call.output_preview} />");
+    expect(styles).toContain(".tool-detail-elision {");
+  });
+
   test("renders accessible icon-and-text statuses in the table and detail dialog", () => {
     const status = sourceBetween(main, "function ToolCallStatus(", "function DrilldownTableRow(");
     const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");

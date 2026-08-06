@@ -183,8 +183,10 @@ means no gateway is derived.
 deliberately want other hosts in: the `Host` header check is not an access
 control for non-browser clients, which can send `Host: localhost` freely.
 
-Archives older than schema v8 are rebuild-only. v8 through v21 archives migrate
-forward to v22 on open. Schema v22 tracks the ingest-pipeline revision for every
+Archives older than schema v8 are rebuild-only. v8 through v22 archives migrate
+forward to v23 on open. Schema v23 indexes tool calls in the order the Tools and
+MCP page pages through them, so that page stops scanning the whole table to
+return fifty rows. Schema v22 tracks the ingest-pipeline revision for every
 source: when parser or enrichment behavior advances, the next `decant sync`
 transactionally re-ingests each unchanged stale source once, and later syncs
 skip it again. Existing archives therefore backfill new derived data without a

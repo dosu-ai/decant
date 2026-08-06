@@ -69,9 +69,6 @@ async function readServePort(
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      // serve reports startup as JSON Lines on stderr (PR #41). The older
-      // "serving http://host:port" line no longer exists, and scraping for it
-      // drains the deadline and fails as if the server never started.
       const match = buffer.match(/"server\.port":\s*(\d+)/);
       if (match) {
         return { port: Number(match[1]), log: buffer };
@@ -149,10 +146,7 @@ describe.skipIf(lanIP == null)("serve trusted-peer wiring (real CLI process)", (
     });
   }, 30_000);
 
-  // Precedence, not union: the highest-priority source that is present wins
-  // outright (src/server.ts, PR #40). Flags beat the environment, so passing
-  // --trusted-peer REPLACES DECANT_TRUSTED_PEERS rather than adding to it.
-  // That is what lets an operator narrow trust; a union could only widen it.
+  // Flags replace the environment so operators can narrow trust.
   test("flags replace the env var rather than merging with it", async () => {
     await withServe(
       { env: { DECANT_TRUSTED_PEERS: "203.0.113.0/24" }, flags: ["--trusted-peer", ip] },
@@ -172,15 +166,7 @@ describe.skipIf(lanIP == null)("serve trusted-peer wiring (real CLI process)", (
   }, 30_000);
 });
 
-/**
- * `--no-sync` is a global flag, and `serve` used to accept it while its watcher
- * kept ingesting anyway. That is worse than rejecting it: pointing `serve` at a
- * scratch archive to inspect it, or to take a screenshot, silently filled that
- * archive with whatever the real `~/.claude` and `~/.codex` held.
- *
- * These spawn the real CLI against a synthetic source tree, because the bug was
- * entirely in the argv-to-serve() wiring -- every layer below it was correct.
- */
+// Exercise argv-to-serve wiring against synthetic sources.
 interface SyncCase {
   env?: Record<string, string>;
   flags?: string[];

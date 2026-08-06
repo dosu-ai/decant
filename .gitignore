@@ -29,3 +29,6 @@
 # has been committed here before.
 node_modules
 /dist/
+# `bun build --compile` leaves one of these behind in the repo root when a
+# compile fails, which is exactly when someone is most likely to `git add -A`.
+*.bun-build

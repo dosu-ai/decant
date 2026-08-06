@@ -12,11 +12,7 @@ const ONE_MILLION_CLAUDE_FAMILIES = [
   /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
 ];
 
-/**
- * Claude Code logs do not record the model's context-window size. Infer it
- * from Anthropic's published model limits, while preserving historical 1M
- * beta sessions when their observed usage already proves a larger window.
- */
+/** Infer the missing window size from model limits and observed usage. */
 export function inferClaudeContextWindowTokens(model: string | null, maxSeen: number): number {
   if (maxSeen > DEFAULT_WINDOW_TOKENS) {
     return EXTENDED_WINDOW_TOKENS;

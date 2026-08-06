@@ -113,9 +113,6 @@ describe("transcript pagination", () => {
 
 describe("transcript window clamping", () => {
   test("keeps an out-of-range deep link on the last real page", () => {
-    // A link shared from a longer archive -- /sessions/12#message-1400 where
-    // this archive's session 12 holds 200 messages -- used to request offset
-    // 1380, get an empty page back, and blank the transcript.
     expect(clampTranscriptWindowOffset(transcriptWindowOffset(1400), 200, 160)).toBe(40);
   });
 

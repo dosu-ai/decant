@@ -22,13 +22,7 @@ export const ANALYTICS_REPORT_KEY = "analytics-report";
 export const SESSION_REPORT_LABEL = "Session report";
 export const SESSION_REPORT_KEY = "session-report";
 
-/**
- * `/` is the canonical URL for the landing view, so that is what the sidebar
- * links to -- clicking the entry you are already on should not rewrite the URL.
- * `/analytics` stays a working alias so older links and bookmarks still land in
- * the right place, and is listed here rather than left to the unknown-route
- * fallback, which would resolve it correctly only by coincidence.
- */
+// Keep `/analytics` as an explicit alias for existing links and bookmarks.
 const ALIASES: Record<string, string> = { "/analytics": HOME_KEY };
 
 export function pathOnly(path: string): string {

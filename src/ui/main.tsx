@@ -64,6 +64,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
@@ -6827,6 +6828,29 @@ function prettyToolValue(value: string | null): string {
   }
 }
 
+/** The note shown above an elided value.
+ *
+ * Previews are stored head-and-tail with the middle elided, so any value over
+ * the preview budget cannot parse as JSON and Preview silently renders the same
+ * raw text as Raw. On a real archive that is 3,285 of 20,053 tool calls, and
+ * they are the large ones, so it is exactly the calls worth opening that look
+ * broken. Saying so beats appearing to have formatted something. */
+function ToolValueElision({ value }: { value: string | null }) {
+  const omitted = previewOmittedCount(value);
+  if (omitted == null) {
+    return null;
+  }
+  return (
+    <p className="tool-detail-elision">
+      <Icon name="minus" />
+      <span>
+        Middle elided, {formatInt(omitted)} characters omitted. Too long to reformat — open the
+        transcript for the whole value.
+      </span>
+    </p>
+  );
+}
+
 function ToolCallStatus({ call }: { call: ToolCallRow }) {
   const status = toolCallStatus(call.is_error);
   const badge = (
@@ -6921,7 +6945,7 @@ function ToolCallDetail({
         tabIndex={-1}
       >
         <header>
-          <div>
+          <div className="tool-detail-heading">
             <span className="section-eyebrow" title={call.mcp_server ?? undefined}>
               {serverLabel || call.tool_kind || "Tool call"}
             </span>
@@ -6974,12 +6998,14 @@ function ToolCallDetail({
         <div className="tool-detail-content">
           <section>
             <h3>Input</h3>
+            <ToolValueElision value={call.input_preview} />
             <pre>
               {tab === "raw" ? (call.input_preview ?? "") : prettyToolValue(call.input_preview)}
             </pre>
           </section>
           <section>
             <h3>{call.is_error === true ? "Error output" : "Output preview"}</h3>
+            <ToolValueElision value={call.output_preview} />
             <pre>
               {tab === "raw" ? (call.output_preview ?? "") : prettyToolValue(call.output_preview)}
             </pre>

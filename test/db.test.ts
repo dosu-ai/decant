@@ -118,7 +118,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 26;
+const BASELINE_INDEX_COUNT = 27;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -219,6 +219,54 @@ describe("openDb", () => {
         .get(),
     ).toEqual({ ingest_revision: 0 });
     migrated.close();
+  });
+
+  test("adds the tool-call paging index when upgrading a v22 archive", () => {
+    // listToolCalls orders by (timestamp DESC, id DESC). Without this index
+    // SQLite sorts every tool call in a temp b-tree to return a page of fifty,
+    // drawing a random `message` row per call on the way, which is what made the
+    // first load of the Tools & MCP page take most of a second.
+    const path = freshPath();
+    const legacy = openDb(path);
+    legacy.exec("DROP INDEX IF EXISTS idx_toolcall_timestamp");
+    legacy.exec("DELETE FROM schema_migrations WHERE version > 22");
+    legacy.close();
+
+    const migrated = openDb(path);
+    const index = migrated
+      .query(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_toolcall_timestamp'",
+      )
+      .get() as { sql: string } | null;
+    expect(index).not.toBeNull();
+    expect(index?.sql).toContain("timestamp DESC");
+    expect(index?.sql).toContain("id DESC");
+    migrated.close();
+  });
+
+  test("serves the tool-call page order from an index rather than a sort", () => {
+    // The point of the index is the query plan, so assert the plan. A rename or a
+    // reordered ORDER BY would leave the index in place and silently stop using
+    // it, which no row-count or timing assertion would catch.
+    const db = openDb(freshPath());
+    const plan = (
+      db
+        .query(
+          `EXPLAIN QUERY PLAN
+           SELECT t.id, m.seq
+           FROM tool_call t
+           JOIN session s ON s.id = t.session_id
+           LEFT JOIN message m ON m.id = t.message_id
+           ORDER BY t.timestamp DESC, t.id DESC
+           LIMIT 50`,
+        )
+        .all() as { detail: string }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(plan).toContain("idx_toolcall_timestamp");
+    expect(plan).not.toContain("TEMP B-TREE");
+    db.close();
   });
 
   test("creates durable user state keyed by source identity", () => {

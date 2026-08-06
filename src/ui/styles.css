@@ -1817,9 +1817,44 @@ table {
   background: var(--surface);
 }
 
+/* A flex item defaults to min-width: auto, so this column refuses to shrink
+ * below its content and pushes the close button out of the panel. MCP tool names
+ * reach 60 characters of underscore-joined text
+ * (mcp__codex_apps__google_drive___get_document_paragraph_range), which is wider
+ * than the 38rem panel at 20px and has no space to wrap at.
+ *
+ * Carries its own class rather than being matched as `header > div`: that form
+ * outranks the plain `> div` rules further down this file and trips
+ * noDescendingSpecificity. */
+.tool-detail-heading {
+  min-width: 0;
+}
+
 .tool-detail-panel > header h2 {
   margin: 3px 0 0;
   font-size: 20px;
+  /* `anywhere` rather than break-word: it also lets the intrinsic minimum
+   * shrink, which is what actually stops the header blowing out. */
+  overflow-wrap: anywhere;
+}
+
+/* Sits between the heading and the value, so the reason the value looks
+ * unformatted is visible before the value is read. */
+.tool-detail-elision {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tool-detail-elision svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 
 .tool-detail-meta {

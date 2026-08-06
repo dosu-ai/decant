@@ -21,7 +21,7 @@ import {
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
 /// and is now the frozen baseline, so a fresh archive is created in one step
 /// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 22;
+export const LATEST_SCHEMA_VERSION = 23;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -719,6 +719,29 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (22, datetime('now'))",
+      ).run();
+    }
+    if (current < 23) {
+      // listToolCalls orders by (timestamp DESC, id DESC) and takes a page of 50.
+      // Without an index in that order SQLite joins every tool call to session,
+      // project and message, then sorts the whole result in a temp b-tree to
+      // discard all but 50 rows. On a 669 MB archive with 20k tool calls the
+      // first request for the Tools & MCP page measured 705 ms, because each of
+      // those 20k rows also drew a random `message` row for its `seq`.
+      //
+      // With the index SQLite walks tool_call in order and stops after 50, so
+      // the message lookups fall from 20k to 50 and the temp b-tree disappears.
+      // Measured on two copies of the same 20k-call archive, one with the index
+      // dropped, both on raw connections so no migration could blur the two:
+      // every page got faster, by 1.6x at offset 0 to 2.8x at offset 1000, and
+      // the errors-only view by 1.6x. Nothing measured slower.
+      if (hasTable(db, "tool_call")) {
+        db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC)",
+        );
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (23, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

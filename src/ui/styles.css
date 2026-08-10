@@ -262,7 +262,8 @@
   --blur-dropdown: 18px;
 }
 
-:root {
+:root,
+.report-route-theme {
   color-scheme: light;
   /* Light semantic tokens */
   --bg-primary: #e6e3d7;

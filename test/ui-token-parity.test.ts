@@ -64,7 +64,7 @@ function blockAfter(marker: string, closer: string): string {
   return styles.slice(start, end);
 }
 
-const lightBlock = blockAfter(":root {\n  color-scheme: light;", "\n}");
+const lightBlock = blockAfter(":root,\n.report-route-theme {\n  color-scheme: light;", "\n}");
 const darkBlock = blockAfter('[data-theme="dark"] {\n  color-scheme: dark;', "\n}");
 
 function tokenValue(name: string, block: string): string | undefined {

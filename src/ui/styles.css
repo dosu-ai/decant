@@ -3279,8 +3279,7 @@ mark {
   top: 0;
   z-index: 2;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
 }
 
 .share-review-sheet > header span {
@@ -3374,8 +3373,7 @@ mark {
   bottom: 0;
   align-items: flex-end;
   border-top: 1px solid var(--line);
-  background: color-mix(in oklab, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
 }
 
 .share-actions {

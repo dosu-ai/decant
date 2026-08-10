@@ -2699,12 +2699,12 @@ select {
   height: 15px;
 }
 
-.report-route-toolbar :where(.primary-button, .secondary-button) {
+.report-route-toolbar :is(.primary-button, .secondary-button) {
   min-height: 34px;
   box-shadow: none;
 }
 
-.report-route-toolbar :where(.primary-button, .secondary-button):focus-visible {
+.report-route-toolbar :is(.primary-button, .secondary-button):focus-visible {
   box-shadow: var(--shadow-focus-ring);
 }
 

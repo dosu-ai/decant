@@ -55,13 +55,13 @@ describe("theme tokens", () => {
 
   test("report toolbar actions share a flat height and retain their focus ring", () => {
     expect(styles).toContain(
-      ".report-route-toolbar :where(.primary-button, .secondary-button) {\n" +
+      ".report-route-toolbar :is(.primary-button, .secondary-button) {\n" +
         "  min-height: 34px;\n" +
         "  box-shadow: none;\n" +
         "}",
     );
     expect(styles).toContain(
-      ".report-route-toolbar :where(.primary-button, .secondary-button):focus-visible {\n" +
+      ".report-route-toolbar :is(.primary-button, .secondary-button):focus-visible {\n" +
         "  box-shadow: var(--shadow-focus-ring);\n" +
         "}",
     );

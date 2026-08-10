@@ -53,6 +53,20 @@ describe("theme tokens", () => {
     expect(reportRoute).toContain('className="report-route-toolbar"');
   });
 
+  test("report toolbar actions share a flat height and retain their focus ring", () => {
+    expect(styles).toContain(
+      ".report-route-toolbar :where(.primary-button, .secondary-button) {\n" +
+        "  min-height: 34px;\n" +
+        "  box-shadow: none;\n" +
+        "}",
+    );
+    expect(styles).toContain(
+      ".report-route-toolbar :where(.primary-button, .secondary-button):focus-visible {\n" +
+        "  box-shadow: var(--shadow-focus-ring);\n" +
+        "}",
+    );
+  });
+
   test("the two dark blocks stay identical", () => {
     const fromMedia = declarations(darkMediaBlock);
     const fromAttribute = declarations(darkAttrBlock);

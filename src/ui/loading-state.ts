@@ -3,31 +3,30 @@ import { SESSION_LIST_MAX_LIMIT } from "../api-limits.ts";
 export type SessionLoadPlan = {
   limit: number;
   offset: number;
-  replace: boolean;
+  page: number;
 };
 
-export function planSessionLoad({
+export function planSessionPageLoad({
   loadedRequestKey,
-  loadedRows,
+  page,
   pageSize,
   requestKey,
-  sessionLimit,
 }: {
   loadedRequestKey: string | null;
-  loadedRows: number;
+  page: number;
   pageSize: number;
   requestKey: string;
-  sessionLimit: number;
 }): SessionLoadPlan | null {
-  const refreshFirstPage = loadedRequestKey !== requestKey;
-  const offset = refreshFirstPage ? 0 : loadedRows;
-  const desiredRows = Math.max(sessionLimit, pageSize);
-  const remainingRows = desiredRows - offset;
-  const limit = Math.min(SESSION_LIST_MAX_LIMIT, Math.max(0, remainingRows));
-  if (limit <= 0) {
+  if (loadedRequestKey === requestKey) {
     return null;
   }
-  return { limit, offset, replace: refreshFirstPage };
+  const requestedPage = Number.isSafeInteger(page) && page > 0 ? page : 1;
+  const normalizedPageSize = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 1;
+  const candidateOffset = (requestedPage - 1) * normalizedPageSize;
+  const offset = Number.isSafeInteger(candidateOffset) ? candidateOffset : 0;
+  const normalizedPage = offset === candidateOffset ? requestedPage : 1;
+  const limit = Math.min(SESSION_LIST_MAX_LIMIT, normalizedPageSize + 1);
+  return { limit, offset, page: normalizedPage };
 }
 
 export function shouldShowSessionSkeleton({

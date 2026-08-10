@@ -62,12 +62,17 @@ describe("coded UI recovery", () => {
     expect(main).toContain('active === "Sessions" && sessionsError != null');
   });
 
-  test("refreshes dashboard slices after a dropped live connection recovers", () => {
+  test("queues an explicit refresh after a dropped live connection recovers", () => {
     expect(main).toContain("const liveDroppedRef = useRef(false)");
     expect(main).toMatch(
-      /if \(liveDroppedRef\.current\) \{\s*liveDroppedRef\.current = false;\s*requestRefresh\(\);/,
+      /if \(liveDroppedRef\.current\) \{\s*liveDroppedRef\.current = false;\s*setArchiveUpdateAvailable\(true\);/,
     );
     expect(main).toContain("liveDroppedRef.current = true");
+  });
+
+  test("preserves the archive update reason in server events", () => {
+    expect(server).toMatch(/type: "archive_updated",\s*reason: "manual"/);
+    expect(server).toMatch(/type: "archive_updated",\s*reason: event\.reason/);
   });
 
   test("adds recovery actions to empty Projects and Analytics states", () => {

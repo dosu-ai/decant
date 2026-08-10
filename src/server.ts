@@ -784,6 +784,7 @@ async function syncNow(
       economics?.invalidate();
       publishServerEvent({
         type: "archive_updated",
+        reason: "manual",
         ingested: report.ingested,
         last_sync_at: syncStatus.last_sync_at,
       });
@@ -1234,6 +1235,7 @@ function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
     economics.invalidate();
     publishServerEvent({
       type: "archive_updated",
+      reason: event.reason,
       ingested: event.report.ingested,
       last_sync_at: syncStatus.last_sync_at,
     });

@@ -112,7 +112,9 @@ haystack and intentionally omits transcript content.
 - `ready` — source watcher initialized
 - `sync_progress` — bounded progress snapshot for a running sync
 - `sync` — terminal successful sync report
-- `archive_updated` — archive-derived UI data changed
+- `archive_updated` — archive-derived UI data changed; `reason` distinguishes
+  background watcher activity from manual syncs, statistics rebuilds, and
+  session-state changes
 - `error` — watcher or sync failure
 - `stopped` — source watcher stopped
 

@@ -257,6 +257,7 @@ describe("server routes", () => {
     await reader.cancel();
     const frame = new TextDecoder().decode(update.value);
     expect(frame).toContain("event: sync_progress");
+    expect(frame).toContain('"reason":"manual"');
     expect(frame).toContain('"scanned":0');
     expect(frame).toContain('"total":0');
   });

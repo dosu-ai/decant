@@ -49,8 +49,29 @@ export function sessionIncludesArchived(path: string): boolean {
   return pathOnly(path) === "/sessions" && sessionParams(path).get("include_archived") === "true";
 }
 
+export function sessionPageFromPath(path: string): number {
+  if (pathOnly(path) !== "/sessions") {
+    return 1;
+  }
+  const page = Number(sessionParams(path).get("page") ?? "1");
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+}
+
+export function sessionsPageHref(path: string, page: number): string {
+  const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
+  const normalizedPage = Number.isSafeInteger(page) && page > 1 ? page : 1;
+  if (normalizedPage === 1) {
+    params.delete("page");
+  } else {
+    params.set("page", String(normalizedPage));
+  }
+  const query = params.toString();
+  return query === "" ? "/sessions" : `/sessions?${query}`;
+}
+
 export function sessionsArchivedHref(path: string, includeArchived: boolean): string {
   const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
+  params.delete("page");
   if (includeArchived) {
     params.set("include_archived", "true");
   } else {

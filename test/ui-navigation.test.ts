@@ -8,8 +8,10 @@ import {
   pathOnly,
   projectSessionsHref,
   sessionIncludesArchived,
+  sessionPageFromPath,
   sessionProjectFilter,
   sessionsArchivedHref,
+  sessionsPageHref,
   titleFor,
 } from "../src/ui/navigation.ts";
 
@@ -128,6 +130,25 @@ describe("archived session filters", () => {
     expect(sessionIncludesArchived("/sessions?include_archived=true")).toBe(true);
     expect(sessionIncludesArchived("/projects?include_archived=true")).toBe(false);
     expect(sessionsArchivedHref("/sessions", false)).toBe("/sessions");
+  });
+});
+
+describe("session pagination", () => {
+  test("round-trips pages while preserving filters and keeping page one canonical", () => {
+    const filtered = sessionsArchivedHref(projectSessionsHref("/Users/dev/My Project"), true);
+    const secondPage = sessionsPageHref(filtered, 2);
+
+    expect(sessionPageFromPath(secondPage)).toBe(2);
+    expect(sessionProjectFilter(secondPage)).toBe("/Users/dev/My Project");
+    expect(sessionIncludesArchived(secondPage)).toBe(true);
+    expect(sessionsPageHref(secondPage, 1)).toBe(filtered);
+  });
+
+  test("normalizes invalid pages and resets pagination when archive visibility changes", () => {
+    expect(sessionPageFromPath("/sessions?page=0")).toBe(1);
+    expect(sessionPageFromPath("/sessions?page=1.5")).toBe(1);
+    expect(sessionPageFromPath("/projects?page=3")).toBe(1);
+    expect(sessionsArchivedHref("/sessions?page=3", true)).toBe("/sessions?include_archived=true");
   });
 });
 

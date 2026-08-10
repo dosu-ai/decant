@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  planSessionLoad,
+  planSessionPageLoad,
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "../src/ui/loading-state.ts";
@@ -10,67 +10,45 @@ import {
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
 
 describe("session loading state", () => {
-  test("refreshes the first page without depending on currently rendered rows", () => {
+  test("loads one explicit page plus a bounded next-page probe", () => {
     expect(
-      planSessionLoad({
+      planSessionPageLoad({
         loadedRequestKey: "all:1",
-        loadedRows: 100,
-        pageSize: 100,
+        page: 1,
+        pageSize: 50,
         requestKey: "all:2",
-        sessionLimit: 100,
       }),
-    ).toEqual({ limit: 100, offset: 0, replace: true });
+    ).toEqual({ limit: 51, offset: 0, page: 1 });
+    expect(
+      planSessionPageLoad({
+        loadedRequestKey: "all:2:2",
+        page: 3,
+        pageSize: 50,
+        requestKey: "all:2:3",
+      }),
+    ).toEqual({ limit: 51, offset: 100, page: 3 });
   });
 
-  test("preserves expanded refresh depth through successive bounded pages", () => {
+  test("does not refetch the page represented by the active request key", () => {
     expect(
-      planSessionLoad({
-        loadedRequestKey: "all:1",
-        loadedRows: 300,
-        pageSize: 100,
-        requestKey: "all:2",
-        sessionLimit: 300,
-      }),
-    ).toEqual({ limit: 100, offset: 0, replace: true });
-    expect(
-      planSessionLoad({
+      planSessionPageLoad({
         loadedRequestKey: "all:2",
-        loadedRows: 100,
-        pageSize: 100,
+        page: 2,
+        pageSize: 50,
         requestKey: "all:2",
-        sessionLimit: 300,
-      }),
-    ).toEqual({ limit: 100, offset: 100, replace: false });
-    expect(
-      planSessionLoad({
-        loadedRequestKey: "all:2",
-        loadedRows: 200,
-        pageSize: 100,
-        requestKey: "all:2",
-        sessionLimit: 300,
-      }),
-    ).toEqual({ limit: 100, offset: 200, replace: false });
-    expect(
-      planSessionLoad({
-        loadedRequestKey: "all:2",
-        loadedRows: 300,
-        pageSize: 100,
-        requestKey: "all:2",
-        sessionLimit: 300,
       }),
     ).toBeNull();
   });
 
-  test("loads the next page only after the active request key is current", () => {
+  test("normalizes invalid page offsets without issuing an unsafe request", () => {
     expect(
-      planSessionLoad({
-        loadedRequestKey: "all:2",
-        loadedRows: 100,
-        pageSize: 100,
-        requestKey: "all:2",
-        sessionLimit: 200,
+      planSessionPageLoad({
+        loadedRequestKey: null,
+        page: Number.MAX_SAFE_INTEGER,
+        pageSize: 50,
+        requestKey: "all:huge",
       }),
-    ).toEqual({ limit: 100, offset: 100, replace: false });
+    ).toEqual({ limit: 51, offset: 0, page: 1 });
   });
 
   test("does not fake a loading skeleton when rows are already visible", () => {
@@ -81,27 +59,23 @@ describe("session loading state", () => {
     expect(shouldShowSessionSkeleton({ isLoading: true, loadedRows: 0, query: "" })).toBe(true);
   });
 
-  test("marks only short pages as exhausted so exact page multiples get one final probe", () => {
-    expect(sessionPageExhausted({ receivedRows: 49, requestedRows: 50 })).toBe(true);
-    expect(sessionPageExhausted({ receivedRows: 50, requestedRows: 50 })).toBe(false);
-    expect(sessionPageExhausted({ receivedRows: 0, requestedRows: 50 })).toBe(true);
+  test("uses the extra row probe to stop at an exact page boundary", () => {
+    expect(sessionPageExhausted({ receivedRows: 50, requestedRows: 51 })).toBe(true);
+    expect(sessionPageExhausted({ receivedRows: 51, requestedRows: 51 })).toBe(false);
+    expect(sessionPageExhausted({ receivedRows: 0, requestedRows: 51 })).toBe(true);
   });
 
-  test("waits for scroll idle before auto-loading and keeps existing rows stable", () => {
+  test("uses explicit pagination without observing scroll position", () => {
     const sessionsViewStart = main.indexOf("function SessionsView(");
     const sessionsViewEnd = main.indexOf("function SessionTableSkeletonRows()", sessionsViewStart);
     expect(sessionsViewStart).toBeGreaterThanOrEqual(0);
     expect(sessionsViewEnd).toBeGreaterThan(sessionsViewStart);
     const sessionsView = main.slice(sessionsViewStart, sessionsViewEnd);
     expect(sessionsView).toContain("const toggleSession = useCallback(");
-    expect(sessionsView).toContain(
-      "loadTimer = window.setTimeout(loadNextPage, SESSION_AUTO_LOAD_IDLE_MS)",
-    );
-    expect(sessionsView).toContain(
-      'window.addEventListener("scroll", onScroll, { passive: true })',
-    );
-    expect(sessionsView).toContain('window.removeEventListener("scroll", onScroll)');
-    expect(sessionsView).toContain("clearLoadTimer()");
+    expect(sessionsView).toContain('aria-label="Sessions pagination"');
+    expect(sessionsView).toContain("sessionsPageHref(path, displayedPage + 1)");
+    expect(sessionsView).not.toContain("IntersectionObserver");
+    expect(sessionsView).not.toContain("infinite-sentinel");
     expect(main).toContain("const SessionTableRow = memo(function SessionTableRow(");
   });
 });

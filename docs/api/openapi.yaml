@@ -1680,13 +1680,13 @@ components:
       additionalProperties: false
     ArchiveUpdatedEvent:
       type: object
-      required: [type]
+      required: [type, reason]
       properties:
         type:
           const: archive_updated
         reason:
           type: string
-          enum: [stats, session_state]
+          enum: [startup, watch, sweep, manual, stats, session_state]
         ingested:
           type: integer
           minimum: 0

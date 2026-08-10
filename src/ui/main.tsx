@@ -109,7 +109,7 @@ import {
 } from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import {
-  planSessionLoad,
+  planSessionPageLoad,
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "./loading-state.ts";
@@ -122,8 +122,10 @@ import {
   activeRoute as resolveActiveRoute,
   activeRouteKey as resolveActiveRouteKey,
   sessionIncludesArchived,
+  sessionPageFromPath,
   sessionProjectFilter,
   sessionsArchivedHref,
+  sessionsPageHref,
   titleFor,
 } from "./navigation.ts";
 import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
@@ -275,10 +277,15 @@ type SyncProgress = {
 };
 
 type SyncEventPayload = {
+  reason?: string;
   status?: {
     in_progress?: boolean;
     last_sync_at?: string | null;
   };
+};
+
+type ArchiveUpdatedPayload = {
+  reason?: string;
 };
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
@@ -686,7 +693,6 @@ const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
 const SESSION_PAGE_SIZE = 50;
-const SESSION_AUTO_LOAD_IDLE_MS = 120;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
@@ -726,7 +732,7 @@ function App() {
   );
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionListExhausted, setSessionListExhausted] = useState(false);
-  const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
+  const [loadedSessionPage, setLoadedSessionPage] = useState<number | null>(null);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -734,6 +740,7 @@ function App() {
   const [syncError, setSyncError] = useState<unknown>(null);
   const [syncComplete, setSyncComplete] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [archiveUpdateAvailable, setArchiveUpdateAvailable] = useState(false);
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
   const syncCompleteTimerRef = useRef<number | null>(null);
@@ -742,7 +749,8 @@ function App() {
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
-  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${includeArchivedSessions}:${reloadKey}`;
+  const sessionPage = sessionPageFromPath(path);
+  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${includeArchivedSessions}:${sessionPage}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRoute(path, navItems);
@@ -805,8 +813,8 @@ function App() {
     void includeArchivedSessions;
     setData((current) => ({ ...current, sessions: [] }));
     setLoadedSessionKey(null);
+    setLoadedSessionPage(null);
     setSessionListExhausted(false);
-    setSessionLimit(SESSION_PAGE_SIZE);
   }, [dateQuery, includeArchivedSessions, sessionProject]);
 
   useEffect(() => {
@@ -848,12 +856,11 @@ function App() {
       return;
     }
     let cancelled = false;
-    const plan = planSessionLoad({
+    const plan = planSessionPageLoad({
       loadedRequestKey: loadedSessionKey,
-      loadedRows: data.sessions.length,
+      page: sessionPage,
       pageSize: SESSION_PAGE_SIZE,
       requestKey: sessionLoadKey,
-      sessionLimit,
     });
     if (plan == null) {
       return;
@@ -875,12 +882,13 @@ function App() {
         }
         setData((current) => ({
           ...current,
-          sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
+          sessions: sessions.slice(0, SESSION_PAGE_SIZE),
         }));
         setSessionListExhausted(
           sessionPageExhausted({ receivedRows: sessions.length, requestedRows: plan.limit }),
         );
         setLoadedSessionKey(sessionLoadKey);
+        setLoadedSessionPage(plan.page);
         setSessionsError(null);
       })
       .catch((err: unknown) => {
@@ -897,12 +905,11 @@ function App() {
       cancelled = true;
     };
   }, [
-    data.sessions.length,
     dateQuery,
     includeArchivedSessions,
     loadedSessionKey,
-    sessionLimit,
     sessionLoadKey,
+    sessionPage,
     sessionProject,
     showsSessions,
   ]);
@@ -915,7 +922,7 @@ function App() {
     const markConnected = () => {
       if (liveDroppedRef.current) {
         liveDroppedRef.current = false;
-        requestRefresh();
+        setArchiveUpdateAvailable(true);
       }
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
@@ -926,7 +933,13 @@ function App() {
     const handleProgress = (event: MessageEvent<string>) => {
       markConnected();
       try {
-        const payload = JSON.parse(event.data) as { progress?: SyncProgress };
+        const payload = JSON.parse(event.data) as {
+          progress?: SyncProgress;
+          reason?: string;
+        };
+        if (payload.reason !== "manual") {
+          return;
+        }
         if (payload.progress != null) {
           setSyncProgress(payload.progress);
           setLocalSyncing(true);
@@ -942,17 +955,20 @@ function App() {
     };
     const handleSync = (event: MessageEvent<string>) => {
       markConnected();
-      setLocalSyncing(false);
-      setSyncError(null);
-      setSyncComplete(true);
       let payload: SyncEventPayload = {};
       try {
         payload = JSON.parse(event.data) as SyncEventPayload;
       } catch {
-        // A terminal sync event is authoritative even if optional metadata is
-        // unavailable. Clear the local status immediately instead of waiting
-        // for the slower grouped dashboard refresh.
+        // Treat malformed events as background updates so a broken optional
+        // payload cannot cause an unexpected page refresh.
       }
+      if (payload.reason !== "manual") {
+        return;
+      }
+      setArchiveUpdateAvailable(false);
+      setLocalSyncing(false);
+      setSyncError(null);
+      setSyncComplete(true);
       setData((current) =>
         current.now == null
           ? current
@@ -974,6 +990,21 @@ function App() {
       }, 1_500);
       requestRefresh();
     };
+    const handleArchiveUpdated = (event: MessageEvent<string>) => {
+      let payload: ArchiveUpdatedPayload = {};
+      try {
+        payload = JSON.parse(event.data) as ArchiveUpdatedPayload;
+      } catch {
+        // Unknown archive updates remain pending until the user asks to load
+        // them, preserving the current page while they scroll or inspect it.
+      }
+      if (payload.reason === "manual" || payload.reason === "session_state") {
+        setArchiveUpdateAvailable(false);
+        requestRefresh();
+        return;
+      }
+      setArchiveUpdateAvailable(true);
+    };
     const handleOpen = () => markConnected();
     const handleError = () => {
       liveDroppedRef.current = true;
@@ -993,7 +1024,7 @@ function App() {
     events.addEventListener("ping", handleHeartbeat);
     events.addEventListener("sync_progress", handleProgress as EventListener);
     events.addEventListener("sync", handleSync);
-    events.addEventListener("archive_updated", requestRefresh);
+    events.addEventListener("archive_updated", handleArchiveUpdated as EventListener);
     events.addEventListener("error", handleError);
     return () => {
       events.removeEventListener("open", handleOpen);
@@ -1001,7 +1032,7 @@ function App() {
       events.removeEventListener("ping", handleHeartbeat);
       events.removeEventListener("sync_progress", handleProgress as EventListener);
       events.removeEventListener("sync", handleSync);
-      events.removeEventListener("archive_updated", requestRefresh);
+      events.removeEventListener("archive_updated", handleArchiveUpdated as EventListener);
       events.removeEventListener("error", handleError);
       events.close();
       if (liveDisconnectTimerRef.current != null) {
@@ -1048,7 +1079,7 @@ function App() {
   // other stats; dateBounds is archive-wide and only a fallback for routes
   // that never load session rows, so it must never win over an in-range value.
   const lastActivity = latestSessionDay(data.sessions) ?? formatDay(data.dateBounds?.max ?? null);
-  const syncInProgress = localSyncing || data.now?.sync_in_progress === true;
+  const syncInProgress = localSyncing;
   const runSync = () => {
     if (syncInProgress) {
       return;
@@ -1056,9 +1087,11 @@ function App() {
     setSyncError(null);
     setSyncComplete(false);
     setSyncProgress(null);
+    setArchiveUpdateAvailable(false);
     setLocalSyncing(true);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
       .then(() => {
+        setArchiveUpdateAvailable(false);
         setLocalSyncing(false);
         setSyncComplete(true);
         requestRefresh();
@@ -1075,6 +1108,10 @@ function App() {
         setSyncProgress(null);
         setSyncError(err);
       });
+  };
+  const loadArchiveUpdates = () => {
+    setArchiveUpdateAvailable(false);
+    requestRefresh();
   };
   const reconnectLiveUpdates = () => {
     liveDroppedRef.current = false;
@@ -1243,15 +1280,15 @@ function App() {
             <Icon name="search" />
           </button>
           <button
-            aria-label="Sync session logs"
+            aria-label={archiveUpdateAvailable ? "Load new activity" : "Sync session logs"}
             aria-busy={syncInProgress}
-            className={`secondary-button sync-button${syncInProgress ? " is-syncing" : ""}`}
+            className={`secondary-button sync-button${syncInProgress ? " is-syncing" : ""}${archiveUpdateAvailable ? " has-update" : ""}`}
             disabled={syncInProgress}
-            onClick={runSync}
+            onClick={archiveUpdateAvailable ? loadArchiveUpdates : runSync}
             type="button"
           >
             <Icon name="refresh" />
-            {syncInProgress ? null : "Sync"}
+            {syncInProgress ? null : archiveUpdateAvailable ? "Update" : "Sync"}
           </button>
           <span aria-live="polite" className="sr-only" role="status">
             {syncInProgress
@@ -1320,18 +1357,19 @@ function App() {
               renderView(active, path, data, {
                 dateRange: dateRangeSelection,
                 onDateRangeChange: (next) => {
-                  setSessionLimit(SESSION_PAGE_SIZE);
+                  if (sessionPageFromPath(path) > 1) {
+                    visit(sessionsPageHref(path, 1), setPath);
+                  }
                   setDateRangeSelection(next);
                 },
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
                 failedSlices,
+                loadedSessionPage,
                 recommendationsLoading,
                 sessionListExhausted,
-                sessionLimit,
                 sessionsLoading,
-                setSessionLimit,
                 syncing: syncInProgress,
               })
             )}
@@ -1373,11 +1411,10 @@ function renderView(
     reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
+    loadedSessionPage: number | null;
     recommendationsLoading: boolean;
     sessionListExhausted: boolean;
-    sessionLimit: number;
     sessionsLoading: boolean;
-    setSessionLimit: (limit: number) => void;
     syncing: boolean;
   },
 ) {
@@ -1400,10 +1437,9 @@ function renderView(
         <SessionsView
           data={data}
           dateRange={actions.dateRange}
-          limit={actions.sessionLimit}
+          loadedPage={actions.loadedSessionPage}
           loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
-          onLimitChange={actions.setSessionLimit}
           path={path}
           reloadKey={actions.reloadKey}
           sessionListExhausted={actions.sessionListExhausted}
@@ -1479,20 +1515,18 @@ function NotFoundView({ pathname }: { pathname: string }) {
 function SessionsView({
   data,
   dateRange,
-  limit,
+  loadedPage,
   loading,
   onDateRangeChange,
-  onLimitChange,
   path,
   reloadKey,
   sessionListExhausted,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
-  limit: number;
+  loadedPage: number | null;
   loading: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
-  onLimitChange: (limit: number) => void;
   path: string;
   reloadKey: number;
   sessionListExhausted: boolean;
@@ -1503,12 +1537,16 @@ function SessionsView({
     value: Summary;
   } | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const tableTopRef = useRef<HTMLElement | null>(null);
+  const previousLoadedPageRef = useRef<number | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const project = sessionProjectFilter(path);
   const includeArchived = sessionIncludesArchived(path);
-  const sessionFilterKey = `${project ?? ""}:${includeArchived}`;
+  const page = sessionPageFromPath(path);
+  const displayedPage = loadedPage ?? page;
+  const pageLoading = loading || (loadedPage != null && page !== loadedPage);
+  const sessionFilterKey = `${project ?? ""}:${includeArchived}:${page}`;
   const dateQuery = dateRangeQuery(dateRange);
   const scopedSummaryRequest =
     project == null && !includeArchived
@@ -1526,10 +1564,14 @@ function SessionsView({
   const visibleTotal =
     project == null ? total : (currentScopedSummary?.sessions ?? data.sessions.length);
   const listTotal = includeArchived ? null : visibleTotal;
-  const hasMore =
-    !loading &&
+  const pageCount =
+    listTotal == null ? null : Math.max(1, Math.ceil(listTotal / SESSION_PAGE_SIZE));
+  const hasNextPage =
     !sessionListExhausted &&
-    (project == null && !includeArchived ? data.sessions.length < visibleTotal : true);
+    (listTotal == null
+      ? data.sessions.length === SESSION_PAGE_SIZE
+      : displayedPage * SESSION_PAGE_SIZE < listTotal);
+  const showPagination = displayedPage > 1 || page > 1 || hasNextPage;
   const waitingForSessions = shouldShowSessionSkeleton({
     isLoading: loading,
     loadedRows: data.sessions.length,
@@ -1568,54 +1610,15 @@ function SessionsView({
   }, [sessionFilterKey]);
 
   useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (sentinel == null || !hasMore) {
+    if (loadedPage == null) {
       return;
     }
-    let sentinelVisible = false;
-    let loadTimer: number | null = null;
-    const clearLoadTimer = () => {
-      if (loadTimer != null) {
-        window.clearTimeout(loadTimer);
-        loadTimer = null;
-      }
-    };
-    const loadNextPage = () => {
-      loadTimer = null;
-      onLimitChange(
-        listTotal == null
-          ? limit + SESSION_PAGE_SIZE
-          : Math.min(listTotal, limit + SESSION_PAGE_SIZE),
-      );
-    };
-    const scheduleLoad = () => {
-      clearLoadTimer();
-      loadTimer = window.setTimeout(loadNextPage, SESSION_AUTO_LOAD_IDLE_MS);
-    };
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        sentinelVisible = entry?.isIntersecting === true;
-        if (sentinelVisible) {
-          scheduleLoad();
-        } else {
-          clearLoadTimer();
-        }
-      },
-      { rootMargin: "320px 0px" },
-    );
-    const onScroll = () => {
-      if (sentinelVisible) {
-        scheduleLoad();
-      }
-    };
-    observer.observe(sentinel);
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("scroll", onScroll);
-      clearLoadTimer();
-    };
-  }, [hasMore, limit, listTotal, onLimitChange]);
+    const previousPage = previousLoadedPageRef.current;
+    previousLoadedPageRef.current = loadedPage;
+    if (previousPage != null && previousPage !== loadedPage) {
+      tableTopRef.current?.scrollIntoView({ block: "start" });
+    }
+  }, [loadedPage]);
 
   const toggleSession = useCallback((id: number) => {
     setExpandedSessions((current) => {
@@ -1679,7 +1682,7 @@ function SessionsView({
         />
       </div>
 
-      <section className="panel">
+      <section aria-busy={pageLoading} className="panel sessions-panel" ref={tableTopRef}>
         <div className="panel-heading">
           <div>
             <h2>Sessions</h2>
@@ -1771,9 +1774,40 @@ function SessionsView({
               listTotal,
               loading,
               includeArchived,
+              displayedPage,
             )}
           </span>
-          <div aria-hidden="true" className="infinite-sentinel" ref={sentinelRef} />
+          {showPagination ? (
+            <nav aria-label="Sessions pagination" className="session-pagination">
+              <button
+                aria-label={`Go to page ${Math.max(1, displayedPage - 1)}`}
+                className="secondary-button"
+                disabled={pageLoading || displayedPage <= 1}
+                onClick={() => visit(sessionsPageHref(path, displayedPage - 1))}
+                type="button"
+              >
+                <Icon name="chevronLeft" />
+                Previous
+              </button>
+              <span aria-live="polite">
+                {pageLoading && page !== displayedPage
+                  ? `Loading page ${formatInt(page)}…`
+                  : pageCount == null
+                    ? `Page ${formatInt(displayedPage)}`
+                    : `Page ${formatInt(displayedPage)} of ${formatInt(pageCount)}`}
+              </span>
+              <button
+                aria-label={`Go to page ${displayedPage + 1}`}
+                className="secondary-button"
+                disabled={pageLoading || !hasNextPage}
+                onClick={() => visit(sessionsPageHref(path, displayedPage + 1))}
+                type="button"
+              >
+                Next
+                <Icon name="chevronRight" />
+              </button>
+            </nav>
+          ) : null}
         </div>
       </section>
     </div>
@@ -2066,24 +2100,25 @@ function sessionsCaption(
   total: number | null,
   loading: boolean,
   includeArchived: boolean,
+  page: number,
 ): string {
-  if (loading && query.trim() === "") {
-    if (loaded === 0) {
-      return total != null && total > 0
-        ? `Loading ${formatInt(total)} sessions...`
-        : "Loading sessions...";
-    }
-    return total != null && loaded < total
-      ? `Refreshing ${formatInt(loaded)} of ${formatInt(total)} sessions`
-      : `Refreshing ${formatInt(loaded)} sessions`;
+  if (loading && loaded === 0 && query.trim() === "") {
+    return `Loading page ${formatInt(page)}…`;
   }
   if (query.trim() !== "") {
-    return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} available sessions`;
+    return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} on page ${formatInt(page)}`;
   }
+  if (loaded === 0) {
+    return total == null
+      ? `No sessions${includeArchived ? ", including archived" : ""}`
+      : `Showing 0 of ${formatInt(total)} sessions`;
+  }
+  const start = (page - 1) * SESSION_PAGE_SIZE + 1;
+  const end = start + Math.max(0, loaded - 1);
   if (total == null) {
-    return `Showing ${formatInt(loaded)} sessions${includeArchived ? ", including archived" : ""}`;
+    return `Showing ${formatInt(start)}–${formatInt(end)} sessions${includeArchived ? ", including archived" : ""}`;
   }
-  return `Showing ${formatInt(loaded)} of ${formatInt(total)} sessions`;
+  return `Showing ${formatInt(start)}–${formatInt(Math.min(end, total))} of ${formatInt(total)} sessions`;
 }
 
 const SessionTableRow = memo(function SessionTableRow({

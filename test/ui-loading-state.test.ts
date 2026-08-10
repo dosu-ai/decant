@@ -86,6 +86,24 @@ describe("session loading state", () => {
     expect(sessionPageExhausted({ receivedRows: 50, requestedRows: 50 })).toBe(false);
     expect(sessionPageExhausted({ receivedRows: 0, requestedRows: 50 })).toBe(true);
   });
+
+  test("waits for scroll idle before auto-loading and keeps existing rows stable", () => {
+    const sessionsViewStart = main.indexOf("function SessionsView(");
+    const sessionsViewEnd = main.indexOf("function SessionTableSkeletonRows()", sessionsViewStart);
+    expect(sessionsViewStart).toBeGreaterThanOrEqual(0);
+    expect(sessionsViewEnd).toBeGreaterThan(sessionsViewStart);
+    const sessionsView = main.slice(sessionsViewStart, sessionsViewEnd);
+    expect(sessionsView).toContain("const toggleSession = useCallback(");
+    expect(sessionsView).toContain(
+      "loadTimer = window.setTimeout(loadNextPage, SESSION_AUTO_LOAD_IDLE_MS)",
+    );
+    expect(sessionsView).toContain(
+      'window.addEventListener("scroll", onScroll, { passive: true })',
+    );
+    expect(sessionsView).toContain('window.removeEventListener("scroll", onScroll)');
+    expect(sessionsView).toContain("clearLoadTimer()");
+    expect(main).toContain("const SessionTableRow = memo(function SessionTableRow(");
+  });
 });
 
 describe("session table skeleton", () => {

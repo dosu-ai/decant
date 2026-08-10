@@ -63,7 +63,7 @@ describe("restyle contract", () => {
 
   test("persistent sticky headers stay opaque during scrolling", () => {
     for (const selector of ["topbar", "thread-header"]) {
-      const block = new RegExp(`^\\.${selector} \\{([^}]*)\\}`, "m").exec(styles)?.[1] ?? "";
+      const block = new RegExp(`^\\s*\\.${selector}\\s*\\{([^}]*)\\}`, "m").exec(styles)?.[1] ?? "";
       expect(block).toContain("position: sticky");
       expect(block).toContain("background: var(--canvas)");
       expect(block).not.toContain("backdrop-filter");

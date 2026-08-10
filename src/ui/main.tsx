@@ -686,6 +686,7 @@ const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
 const SESSION_PAGE_SIZE = 50;
+const SESSION_AUTO_LOAD_IDLE_MS = 120;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
@@ -1571,23 +1572,52 @@ function SessionsView({
     if (sentinel == null || !hasMore) {
       return;
     }
+    let sentinelVisible = false;
+    let loadTimer: number | null = null;
+    const clearLoadTimer = () => {
+      if (loadTimer != null) {
+        window.clearTimeout(loadTimer);
+        loadTimer = null;
+      }
+    };
+    const loadNextPage = () => {
+      loadTimer = null;
+      onLimitChange(
+        listTotal == null
+          ? limit + SESSION_PAGE_SIZE
+          : Math.min(listTotal, limit + SESSION_PAGE_SIZE),
+      );
+    };
+    const scheduleLoad = () => {
+      clearLoadTimer();
+      loadTimer = window.setTimeout(loadNextPage, SESSION_AUTO_LOAD_IDLE_MS);
+    };
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry?.isIntersecting === true) {
-          onLimitChange(
-            listTotal == null
-              ? limit + SESSION_PAGE_SIZE
-              : Math.min(listTotal, limit + SESSION_PAGE_SIZE),
-          );
+        sentinelVisible = entry?.isIntersecting === true;
+        if (sentinelVisible) {
+          scheduleLoad();
+        } else {
+          clearLoadTimer();
         }
       },
       { rootMargin: "320px 0px" },
     );
+    const onScroll = () => {
+      if (sentinelVisible) {
+        scheduleLoad();
+      }
+    };
     observer.observe(sentinel);
-    return () => observer.disconnect();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      clearLoadTimer();
+    };
   }, [hasMore, limit, listTotal, onLimitChange]);
 
-  const toggleSession = (id: number) => {
+  const toggleSession = useCallback((id: number) => {
     setExpandedSessions((current) => {
       const next = new Set(current);
       if (next.has(id)) {
@@ -1597,7 +1627,7 @@ function SessionsView({
       }
       return next;
     });
-  };
+  }, []);
 
   const renderRows = (session: SessionSummary, depth = 0): ReactNode[] => {
     const expanded = expandedSessions.has(session.id);
@@ -2056,7 +2086,7 @@ function sessionsCaption(
   return `Showing ${formatInt(loaded)} of ${formatInt(total)} sessions`;
 }
 
-function SessionTableRow({
+const SessionTableRow = memo(function SessionTableRow({
   depth,
   expanded,
   onToggle,
@@ -2136,7 +2166,7 @@ function SessionTableRow({
       </td>
     </tr>
   );
-}
+});
 
 function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
   if (session.dosu_mcp_tree_calls <= 0) {

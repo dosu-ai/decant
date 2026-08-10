@@ -695,7 +695,7 @@ const ANTHROPIC_ICON_PATH =
 const SESSION_PAGE_SIZE = 50;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
-  { length: 10 },
+  { length: SESSION_PAGE_SIZE },
   (_, index) => `session-row-skeleton-${index}`,
 );
 type ThemeChoice = "system" | "light" | "dark";
@@ -730,7 +730,9 @@ function App() {
   const [recommendationsLoading, setRecommendationsLoading] = useState(
     () => resolveActiveRoute(locationPath(), navItems) === "Insights",
   );
-  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(
+    () => resolveActiveRoute(locationPath(), navItems) === "Sessions",
+  );
   const [sessionListExhausted, setSessionListExhausted] = useState(false);
   const [loadedSessionPage, setLoadedSessionPage] = useState<number | null>(null);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
@@ -807,7 +809,7 @@ function App() {
     );
   }, [activeView, reloadKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     void dateQuery;
     void sessionProject;
     void includeArchivedSessions;
@@ -816,6 +818,12 @@ function App() {
     setLoadedSessionPage(null);
     setSessionListExhausted(false);
   }, [dateQuery, includeArchivedSessions, sessionProject]);
+
+  useLayoutEffect(() => {
+    if (showsSessions && loadedSessionKey !== sessionLoadKey) {
+      setSessionsLoading(true);
+    }
+  }, [loadedSessionKey, sessionLoadKey, showsSessions]);
 
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
@@ -1537,8 +1545,6 @@ function SessionsView({
     value: Summary;
   } | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
-  const tableTopRef = useRef<HTMLElement | null>(null);
-  const previousLoadedPageRef = useRef<number | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const project = sessionProjectFilter(path);
@@ -1609,17 +1615,6 @@ function SessionsView({
     setExpandedSessions(new Set());
   }, [sessionFilterKey]);
 
-  useEffect(() => {
-    if (loadedPage == null) {
-      return;
-    }
-    const previousPage = previousLoadedPageRef.current;
-    previousLoadedPageRef.current = loadedPage;
-    if (previousPage != null && previousPage !== loadedPage) {
-      tableTopRef.current?.scrollIntoView({ block: "start" });
-    }
-  }, [loadedPage]);
-
   const toggleSession = useCallback((id: number) => {
     setExpandedSessions((current) => {
       const next = new Set(current);
@@ -1682,7 +1677,7 @@ function SessionsView({
         />
       </div>
 
-      <section aria-busy={pageLoading} className="panel sessions-panel" ref={tableTopRef}>
+      <section aria-busy={pageLoading} className="panel">
         <div className="panel-heading">
           <div>
             <h2>Sessions</h2>

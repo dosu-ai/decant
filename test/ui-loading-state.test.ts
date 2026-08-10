@@ -76,11 +76,18 @@ describe("session loading state", () => {
     expect(sessionsView).toContain("sessionsPageHref(path, displayedPage + 1)");
     expect(sessionsView).not.toContain("IntersectionObserver");
     expect(sessionsView).not.toContain("infinite-sentinel");
+    expect(sessionsView).not.toContain("scrollIntoView");
     expect(main).toContain("const SessionTableRow = memo(function SessionTableRow(");
   });
 });
 
 describe("session table skeleton", () => {
+  test("reserves all fifty row slots before the first page settles", () => {
+    expect(main).toContain("{ length: SESSION_PAGE_SIZE }");
+    expect(main).toContain('() => resolveActiveRoute(locationPath(), navItems) === "Sessions"');
+    expect(main).toContain("if (showsSessions && loadedSessionKey !== sessionLoadKey)");
+  });
+
   test("keeps one placeholder aligned with each of the eleven session columns", () => {
     const start = main.indexOf("function SessionTableSkeletonRows()");
     const end = main.indexOf("function ProjectsView(", start);

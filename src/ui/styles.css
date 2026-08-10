@@ -1581,10 +1581,6 @@ nav a[aria-current="page"] svg {
   text-align: center;
 }
 
-.sessions-panel {
-  scroll-margin-top: 68px;
-}
-
 .stat-grid {
   display: grid;
   gap: 1px;

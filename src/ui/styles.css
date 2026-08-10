@@ -904,9 +904,8 @@ nav a[aria-current="page"] svg {
   gap: 12px;
   height: 56px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--canvas) 84%, transparent);
+  background: var(--canvas);
   padding: 0 24px;
-  backdrop-filter: blur(14px);
 }
 
 .topbar h1 {
@@ -4501,9 +4500,8 @@ mark {
   z-index: 10;
   margin: -24px -32px 0;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--canvas) 86%, transparent);
+  background: var(--canvas);
   padding: 12px 32px;
-  backdrop-filter: blur(14px);
 }
 
 .thread-header-inner {

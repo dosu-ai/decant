@@ -3862,6 +3862,7 @@ function ReportRouteView({
 
   return (
     <div
+      className="report-route-theme"
       style={{
         background: "#eef0ec",
         color: "#24302a",

@@ -82,6 +82,7 @@ describe("distribution helpers", () => {
     expect(buildTargetArgs(target, "/tmp/decant")).toEqual([
       "build",
       "--compile",
+      "--minify",
       "--target",
       "bun-linux-x64",
       "src/cli.ts",
@@ -93,6 +94,7 @@ describe("distribution helpers", () => {
     expect(buildTargetArgs(target, "/tmp/decant", "1.2.3")).toEqual([
       "build",
       "--compile",
+      "--minify",
       "--target",
       "bun-linux-x64",
       "--env=DECANT_BUILD_VERSION*",
@@ -102,6 +104,23 @@ describe("distribution helpers", () => {
       "--outfile",
       "/tmp/decant",
     ]);
+  });
+
+  test("ships the binary minified, since that halves what the browser parses", () => {
+    // Bun does not split chunks in a compiled binary, so echarts ships whether or
+    // not it is dynamically imported and the only lever on first-load parse cost
+    // is minification. Measured by fetching the bundle from each binary:
+    // 6,211,618 bytes without, 3,211,476 with.
+    //
+    // --sourcemap would recover the identifiers that minification mangles in
+    // `exception.stacktrace`, but it breaks the compiled binary: the server dies
+    // after POST /api/sync and dist-check fails with ConnectionRefused. Asserted
+    // absent so a well-meaning future edit does not reintroduce it.
+    for (const target of selectTargets("all")) {
+      const args = buildTargetArgs(target, "/tmp/decant");
+      expect(args).toContain("--minify");
+      expect(args).not.toContain("--sourcemap");
+    }
   });
 
   test("lets Homebrew infer the formula version from release URLs", () => {

@@ -262,7 +262,8 @@
   --blur-dropdown: 18px;
 }
 
-:root {
+:root,
+.report-route-theme {
   color-scheme: light;
   /* Light semantic tokens */
   --bg-primary: #e6e3d7;
@@ -2695,6 +2696,15 @@ select {
 .secondary-button svg {
   width: 15px;
   height: 15px;
+}
+
+.report-route-toolbar :is(.primary-button, .secondary-button) {
+  min-height: 34px;
+  box-shadow: none;
+}
+
+.report-route-toolbar :is(.primary-button, .secondary-button):focus-visible {
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .sync-button.is-syncing svg {

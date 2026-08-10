@@ -36,11 +36,37 @@ function blockAfter(marker: string, closer: string): string {
   return styles.slice(start, end);
 }
 
-const rootBlock = blockAfter(":root {\n  color-scheme: light;", "\n}");
+const rootBlock = blockAfter(":root,\n.report-route-theme {\n  color-scheme: light;", "\n}");
 const darkMediaBlock = blockAfter(":root:not([data-theme]) {\n    color-scheme: dark;", "\n  }");
 const darkAttrBlock = blockAfter('[data-theme="dark"] {\n  color-scheme: dark;', "\n}");
 
 describe("theme tokens", () => {
+  test("the report preview scopes the complete light theme in every app mode", () => {
+    const start = main.indexOf("function ReportRouteView(");
+    const end = main.indexOf("async function waitForReportFonts(");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const reportRoute = main.slice(start, end);
+
+    expect(styles).toContain(":root,\n.report-route-theme {");
+    expect(reportRoute).toContain('className="report-route-theme"');
+    expect(reportRoute).toContain('className="report-route-toolbar"');
+  });
+
+  test("report toolbar actions share a flat height and retain their focus ring", () => {
+    expect(styles).toContain(
+      ".report-route-toolbar :is(.primary-button, .secondary-button) {\n" +
+        "  min-height: 34px;\n" +
+        "  box-shadow: none;\n" +
+        "}",
+    );
+    expect(styles).toContain(
+      ".report-route-toolbar :is(.primary-button, .secondary-button):focus-visible {\n" +
+        "  box-shadow: var(--shadow-focus-ring);\n" +
+        "}",
+    );
+  });
+
   test("the two dark blocks stay identical", () => {
     const fromMedia = declarations(darkMediaBlock);
     const fromAttribute = declarations(darkAttrBlock);

@@ -7,19 +7,12 @@ export type SessionLoadPlan = {
 };
 
 export function planSessionPageLoad({
-  loadedRequestKey,
   page,
   pageSize,
-  requestKey,
 }: {
-  loadedRequestKey: string | null;
   page: number;
   pageSize: number;
-  requestKey: string;
-}): SessionLoadPlan | null {
-  if (loadedRequestKey === requestKey) {
-    return null;
-  }
+}): SessionLoadPlan {
   const requestedPage = Number.isSafeInteger(page) && page > 0 ? page : 1;
   const normalizedPageSize = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 1;
   const candidateOffset = (requestedPage - 1) * normalizedPageSize;

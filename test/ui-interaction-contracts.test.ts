@@ -153,13 +153,14 @@ describe("UI interaction contracts", () => {
     const sessions = sourceBetween("function SessionsView(", "function SessionTableSkeletonRows(");
     const row = sourceBetween("function SessionTableRow(", "function DosuProvenanceBadge(");
 
-    expect(app).toContain("sessionLoadKey");
+    expect(app).toContain("useSessionPage({");
     expect(app).toContain("includeArchivedSessions");
     expect(app).toContain("reloadKey");
     expect(app).toContain("reloadKey,");
     expect(render).toContain("reloadKey={actions.reloadKey}");
-    expect(app).toContain('"&include_archived=true"');
-    expect(app).toContain("sessionPageExhausted({");
+    expect(main).toContain('"&include_archived=true"');
+    expect(app).toContain("sessionPageState,");
+    expect(main).toContain("sessionPageExhausted({");
     expect(sessions).toContain("scopedSessionSummaryKey(scopedSummaryRequest, reloadKey)");
     expect(sessions).toContain("<span>Show archived</span>");
     expect(sessions).toContain("sessionsArchivedHref(path, event.target.checked)");

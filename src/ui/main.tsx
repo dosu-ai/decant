@@ -481,7 +481,6 @@ type SettingsInfo = {
 
 type DashboardData = {
   summary: Summary | null;
-  sessions: SessionSummary[];
   byModel: DimensionRow[];
   byProject: DimensionRow[];
   byDay: DimensionRow[];
@@ -501,7 +500,6 @@ type DashboardData = {
 
 const emptyData: DashboardData = {
   summary: null,
-  sessions: [],
   byModel: [],
   byProject: [],
   byDay: [],
@@ -519,7 +517,7 @@ const emptyData: DashboardData = {
   dateBounds: null,
 };
 
-type DataSlice = Exclude<keyof DashboardData, "sessions">;
+type DataSlice = keyof DashboardData;
 
 // Each page fetches only the slices it renders; fetching everything for every
 // page made first paint wait on the slowest analytics endpoint. Slices are
@@ -698,6 +696,7 @@ const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: SESSION_PAGE_SIZE },
   (_, index) => `session-row-skeleton-${index}`,
 );
+const EMPTY_SESSION_IDS = new Set<number>();
 type ThemeChoice = "system" | "light" | "dark";
 type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
 type DateRangeSelection = {
@@ -720,21 +719,119 @@ const RANGE_PRESETS = [
 ] as const;
 const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
 
+type LoadedSessionPage = {
+  exhausted: boolean;
+  page: number;
+  requestKey: string;
+  scopeKey: string;
+  sessions: SessionSummary[];
+};
+
+type SessionPageState = {
+  error: unknown;
+  exhausted: boolean;
+  loadedPage: number | null;
+  loading: boolean;
+  sessions: SessionSummary[];
+};
+
+const SESSION_PAGE_CACHE_LIMIT = 12;
+
+function rememberSessionPage(cache: Map<string, LoadedSessionPage>, page: LoadedSessionPage): void {
+  cache.delete(page.requestKey);
+  cache.set(page.requestKey, page);
+  while (cache.size > SESSION_PAGE_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest == null) {
+      return;
+    }
+    cache.delete(oldest);
+  }
+}
+
+function useSessionPage({
+  dateQuery,
+  enabled,
+  includeArchived,
+  page,
+  project,
+  reloadKey,
+}: {
+  dateQuery: string;
+  enabled: boolean;
+  includeArchived: boolean;
+  page: number;
+  project: string | null;
+  reloadKey: number;
+}): SessionPageState {
+  const cacheRef = useRef(new Map<string, LoadedSessionPage>());
+  const [settled, setSettled] = useState<{
+    failed: { error: unknown; requestKey: string } | null;
+    loaded: LoadedSessionPage | null;
+  }>({ failed: null, loaded: null });
+  const scopeKey = JSON.stringify([dateQuery, project, includeArchived, reloadKey]);
+  const requestKey = `${scopeKey}:${page}`;
+  const cached = cacheRef.current.get(requestKey) ?? null;
+  const visible = cached ?? (settled.loaded?.scopeKey === scopeKey ? settled.loaded : null);
+  const currentError = settled.failed?.requestKey === requestKey ? settled.failed.error : null;
+  const loading = enabled && cached == null && currentError == null;
+
+  useEffect(() => {
+    if (!enabled || cacheRef.current.has(requestKey)) {
+      return;
+    }
+    const controller = new AbortController();
+    const plan = planSessionPageLoad({ page, pageSize: SESSION_PAGE_SIZE });
+    const projectParam = project == null ? "" : `&project=${encodeURIComponent(project)}`;
+    const archivedParam = includeArchived ? "&include_archived=true" : "";
+    void getJson<SessionSummary[]>(
+      withDateQuery(
+        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}` +
+          `&with_subagents=true${projectParam}${archivedParam}`,
+        dateQuery,
+      ),
+      { signal: controller.signal },
+    )
+      .then((sessions) => {
+        const loaded: LoadedSessionPage = {
+          exhausted: sessionPageExhausted({
+            receivedRows: sessions.length,
+            requestedRows: plan.limit,
+          }),
+          page: plan.page,
+          requestKey,
+          scopeKey,
+          sessions: sessions.slice(0, SESSION_PAGE_SIZE),
+        };
+        rememberSessionPage(cacheRef.current, loaded);
+        setSettled({ failed: null, loaded });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setSettled((current) => ({ ...current, failed: { error, requestKey } }));
+      });
+    return () => controller.abort();
+  }, [dateQuery, enabled, includeArchived, page, project, requestKey, scopeKey]);
+
+  return {
+    error: currentError,
+    exhausted: visible?.exhausted ?? false,
+    loadedPage: visible?.page ?? null,
+    loading,
+    sessions: visible?.sessions ?? [],
+  };
+}
+
 function App() {
   const [path, setPath] = useState(locationPath);
   const [data, setData] = useState<DashboardData>(emptyData);
-  const [sessionsError, setSessionsError] = useState<unknown>(null);
   const [failedSlices, setFailedSlices] = useState<DataSlice[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
-  const [loadedSessionKey, setLoadedSessionKey] = useState<string | null>(null);
   const [recommendationsLoading, setRecommendationsLoading] = useState(
     () => resolveActiveRoute(locationPath(), navItems) === "Insights",
   );
-  const [sessionsLoading, setSessionsLoading] = useState(
-    () => resolveActiveRoute(locationPath(), navItems) === "Sessions",
-  );
-  const [sessionListExhausted, setSessionListExhausted] = useState(false);
-  const [loadedSessionPage, setLoadedSessionPage] = useState<number | null>(null);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -752,11 +849,18 @@ function App() {
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
   const sessionPage = sessionPageFromPath(path);
-  const sessionLoadKey = `${dateQuery}:${sessionProject ?? ""}:${includeArchivedSessions}:${sessionPage}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRoute(path, navItems);
   const showsSessions = activeView === "Sessions";
+  const sessionPageState = useSessionPage({
+    dateQuery,
+    enabled: showsSessions,
+    includeArchived: includeArchivedSessions,
+    page: sessionPage,
+    project: sessionProject,
+    reloadKey,
+  });
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -809,22 +913,6 @@ function App() {
     );
   }, [activeView, reloadKey]);
 
-  useLayoutEffect(() => {
-    void dateQuery;
-    void sessionProject;
-    void includeArchivedSessions;
-    setData((current) => ({ ...current, sessions: [] }));
-    setLoadedSessionKey(null);
-    setLoadedSessionPage(null);
-    setSessionListExhausted(false);
-  }, [dateQuery, includeArchivedSessions, sessionProject]);
-
-  useLayoutEffect(() => {
-    if (showsSessions && loadedSessionKey !== sessionLoadKey) {
-      setSessionsLoading(true);
-    }
-  }, [loadedSessionKey, sessionLoadKey, showsSessions]);
-
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
       SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
@@ -858,69 +946,6 @@ function App() {
       cancelled = true;
     };
   }, [activeView, dateQuery, reloadKey]);
-
-  useEffect(() => {
-    if (!showsSessions) {
-      return;
-    }
-    let cancelled = false;
-    const plan = planSessionPageLoad({
-      loadedRequestKey: loadedSessionKey,
-      page: sessionPage,
-      pageSize: SESSION_PAGE_SIZE,
-      requestKey: sessionLoadKey,
-    });
-    if (plan == null) {
-      return;
-    }
-    setSessionsLoading(true);
-    const projectParam =
-      sessionProject == null ? "" : `&project=${encodeURIComponent(sessionProject)}`;
-    const archivedParam = includeArchivedSessions ? "&include_archived=true" : "";
-    void getJson<SessionSummary[]>(
-      withDateQuery(
-        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}` +
-          `&with_subagents=true${projectParam}${archivedParam}`,
-        dateQuery,
-      ),
-    )
-      .then((sessions) => {
-        if (cancelled) {
-          return;
-        }
-        setData((current) => ({
-          ...current,
-          sessions: sessions.slice(0, SESSION_PAGE_SIZE),
-        }));
-        setSessionListExhausted(
-          sessionPageExhausted({ receivedRows: sessions.length, requestedRows: plan.limit }),
-        );
-        setLoadedSessionKey(sessionLoadKey);
-        setLoadedSessionPage(plan.page);
-        setSessionsError(null);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setSessionsError(err);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setSessionsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    dateQuery,
-    includeArchivedSessions,
-    loadedSessionKey,
-    sessionLoadKey,
-    sessionPage,
-    sessionProject,
-    showsSessions,
-  ]);
 
   useEffect(() => {
     // Incrementing this key intentionally replaces the EventSource when the
@@ -1083,10 +1108,8 @@ function App() {
     slicesForView(activeView).includes(slice),
   );
   const metrics = data.summary;
-  // Prefer the loaded (date-filtered) session list, matching the sidebar's
-  // other stats; dateBounds is archive-wide and only a fallback for routes
-  // that never load session rows, so it must never win over an in-range value.
-  const lastActivity = latestSessionDay(data.sessions) ?? formatDay(data.dateBounds?.max ?? null);
+  const lastActivity =
+    latestSessionDay(sessionPageState.sessions) ?? formatDay(data.dateBounds?.max ?? null);
   const syncInProgress = localSyncing;
   const runSync = () => {
     if (syncInProgress) {
@@ -1359,8 +1382,12 @@ function App() {
                 </button>
               </div>
             ) : null}
-            {active === "Sessions" && sessionsError != null ? (
-              <ApiFailureState error={sessionsError} onRetry={requestRefresh} onSync={runSync} />
+            {active === "Sessions" && sessionPageState.error != null ? (
+              <ApiFailureState
+                error={sessionPageState.error}
+                onRetry={requestRefresh}
+                onSync={runSync}
+              />
             ) : (
               renderView(active, path, data, {
                 dateRange: dateRangeSelection,
@@ -1374,10 +1401,8 @@ function App() {
                 reloadKey,
                 runSync,
                 failedSlices,
-                loadedSessionPage,
                 recommendationsLoading,
-                sessionListExhausted,
-                sessionsLoading,
+                sessionPageState,
                 syncing: syncInProgress,
               })
             )}
@@ -1419,10 +1444,8 @@ function renderView(
     reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
-    loadedSessionPage: number | null;
     recommendationsLoading: boolean;
-    sessionListExhausted: boolean;
-    sessionsLoading: boolean;
+    sessionPageState: SessionPageState;
     syncing: boolean;
   },
 ) {
@@ -1445,12 +1468,10 @@ function renderView(
         <SessionsView
           data={data}
           dateRange={actions.dateRange}
-          loadedPage={actions.loadedSessionPage}
-          loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           path={path}
           reloadKey={actions.reloadKey}
-          sessionListExhausted={actions.sessionListExhausted}
+          sessionPageState={actions.sessionPageState}
         />
       );
     case "Projects":
@@ -1523,37 +1544,39 @@ function NotFoundView({ pathname }: { pathname: string }) {
 function SessionsView({
   data,
   dateRange,
-  loadedPage,
-  loading,
   onDateRangeChange,
   path,
   reloadKey,
-  sessionListExhausted,
+  sessionPageState,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
-  loadedPage: number | null;
-  loading: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   path: string;
   reloadKey: number;
-  sessionListExhausted: boolean;
+  sessionPageState: SessionPageState;
 }) {
   const [query, setQuery] = useState("");
   const [scopedSummary, setScopedSummary] = useState<{
     key: string;
     value: Summary;
   } | null>(null);
-  const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
-  const total = data.summary?.sessions ?? data.sessions.length;
-  const filtered = filterSessions(data.sessions, query);
+  const [expandedSessionState, setExpandedSessionState] = useState<{
+    ids: Set<number>;
+    key: string;
+  }>(() => ({ ids: new Set(), key: "" }));
+  const { exhausted, loadedPage, loading, sessions } = sessionPageState;
+  const total = data.summary?.sessions ?? sessions.length;
+  const filtered = filterSessions(sessions, query);
   const project = sessionProjectFilter(path);
   const includeArchived = sessionIncludesArchived(path);
   const page = sessionPageFromPath(path);
   const displayedPage = loadedPage ?? page;
   const pageLoading = loading || (loadedPage != null && page !== loadedPage);
-  const sessionFilterKey = `${project ?? ""}:${includeArchived}:${page}`;
   const dateQuery = dateRangeQuery(dateRange);
+  const sessionFilterKey = JSON.stringify([dateQuery, project, includeArchived, page]);
+  const expandedSessions =
+    expandedSessionState.key === sessionFilterKey ? expandedSessionState.ids : EMPTY_SESSION_IDS;
   const scopedSummaryRequest =
     project == null && !includeArchived
       ? null
@@ -1568,19 +1591,19 @@ function SessionsView({
     query,
   );
   const visibleTotal =
-    project == null ? total : (currentScopedSummary?.sessions ?? data.sessions.length);
+    project == null ? total : (currentScopedSummary?.sessions ?? sessions.length);
   const listTotal = includeArchived ? null : visibleTotal;
   const pageCount =
     listTotal == null ? null : Math.max(1, Math.ceil(listTotal / SESSION_PAGE_SIZE));
   const hasNextPage =
-    !sessionListExhausted &&
+    !exhausted &&
     (listTotal == null
-      ? data.sessions.length === SESSION_PAGE_SIZE
+      ? sessions.length === SESSION_PAGE_SIZE
       : displayedPage * SESSION_PAGE_SIZE < listTotal);
   const showPagination = displayedPage > 1 || page > 1 || hasNextPage;
   const waitingForSessions = shouldShowSessionSkeleton({
     isLoading: loading,
-    loadedRows: data.sessions.length,
+    loadedRows: sessions.length,
     query,
   });
 
@@ -1610,22 +1633,20 @@ function SessionsView({
     };
   }, [reloadKey, scopedSummaryRequest]);
 
-  useEffect(() => {
-    void sessionFilterKey;
-    setExpandedSessions(new Set());
-  }, [sessionFilterKey]);
-
-  const toggleSession = useCallback((id: number) => {
-    setExpandedSessions((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
+  const toggleSession = useCallback(
+    (id: number) => {
+      setExpandedSessionState((current) => {
+        const next = new Set(current.key === sessionFilterKey ? current.ids : EMPTY_SESSION_IDS);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return { ids: next, key: sessionFilterKey };
+      });
+    },
+    [sessionFilterKey],
+  );
 
   const renderRows = (session: SessionSummary, depth = 0): ReactNode[] => {
     const expanded = expandedSessions.has(session.id);
@@ -1677,7 +1698,7 @@ function SessionsView({
         />
       </div>
 
-      <section aria-busy={pageLoading} className="panel">
+      <section aria-busy={pageLoading} className="panel sessions-panel">
         <div className="panel-heading">
           <div>
             <h2>Sessions</h2>
@@ -1765,7 +1786,7 @@ function SessionsView({
             {sessionsCaption(
               query,
               filtered.length,
-              data.sessions.length,
+              sessions.length,
               listTotal,
               loading,
               includeArchived,

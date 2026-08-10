@@ -8,45 +8,38 @@ import {
 } from "../src/ui/loading-state.ts";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
 describe("session loading state", () => {
   test("loads one explicit page plus a bounded next-page probe", () => {
     expect(
       planSessionPageLoad({
-        loadedRequestKey: "all:1",
         page: 1,
         pageSize: 50,
-        requestKey: "all:2",
       }),
     ).toEqual({ limit: 51, offset: 0, page: 1 });
     expect(
       planSessionPageLoad({
-        loadedRequestKey: "all:2:2",
         page: 3,
         pageSize: 50,
-        requestKey: "all:2:3",
       }),
     ).toEqual({ limit: 51, offset: 100, page: 3 });
   });
 
-  test("does not refetch the page represented by the active request key", () => {
+  test("returns the same plan independently of request lifecycle state", () => {
     expect(
       planSessionPageLoad({
-        loadedRequestKey: "all:2",
         page: 2,
         pageSize: 50,
-        requestKey: "all:2",
       }),
-    ).toBeNull();
+    ).toEqual({ limit: 51, offset: 50, page: 2 });
   });
 
   test("normalizes invalid page offsets without issuing an unsafe request", () => {
     expect(
       planSessionPageLoad({
-        loadedRequestKey: null,
         page: Number.MAX_SAFE_INTEGER,
         pageSize: 50,
-        requestKey: "all:huge",
       }),
     ).toEqual({ limit: 51, offset: 0, page: 1 });
   });
@@ -77,15 +70,24 @@ describe("session loading state", () => {
     expect(sessionsView).not.toContain("IntersectionObserver");
     expect(sessionsView).not.toContain("infinite-sentinel");
     expect(sessionsView).not.toContain("scrollIntoView");
+    expect(sessionsView).not.toContain("setExpandedSessions");
     expect(main).toContain("const SessionTableRow = memo(function SessionTableRow(");
+  });
+
+  test("isolates page swaps from document paint and scroll anchoring", () => {
+    expect(styles).toContain(".sessions-panel {");
+    expect(styles).toContain("contain: layout paint;");
+    expect(styles).toContain("overflow-anchor: none;");
+    expect(styles).toContain(".sessions-table tbody tr {\n  transition: none;");
   });
 });
 
 describe("session table skeleton", () => {
   test("reserves all fifty row slots before the first page settles", () => {
     expect(main).toContain("{ length: SESSION_PAGE_SIZE }");
-    expect(main).toContain('() => resolveActiveRoute(locationPath(), navItems) === "Sessions"');
-    expect(main).toContain("if (showsSessions && loadedSessionKey !== sessionLoadKey)");
+    expect(main).toContain("const loading = enabled && cached == null && currentError == null");
+    expect(main).not.toContain("setSessionsLoading");
+    expect(main).not.toContain("loadedSessionKey");
   });
 
   test("keeps one placeholder aligned with each of the eleven session columns", () => {

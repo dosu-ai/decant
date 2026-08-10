@@ -58,8 +58,8 @@ describe("coded UI recovery", () => {
     expect(main).toContain(
       "setFailedSlices((current) => current.filter((slice) => needed.includes(slice)))",
     );
-    expect(main).toContain("const [sessionsError, setSessionsError]");
-    expect(main).toContain('active === "Sessions" && sessionsError != null');
+    expect(main).toContain("failed: { error: unknown; requestKey: string } | null");
+    expect(main).toContain('active === "Sessions" && sessionPageState.error != null');
   });
 
   test("queues an explicit refresh after a dropped live connection recovers", () => {

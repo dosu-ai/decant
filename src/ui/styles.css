@@ -1935,6 +1935,11 @@ table {
   min-width: 1280px;
 }
 
+.sessions-panel {
+  contain: layout paint;
+  overflow-anchor: none;
+}
+
 .sessions-table .col-session-tool {
   width: 9%;
 }
@@ -2087,6 +2092,10 @@ tr:last-child td {
 
 tbody tr {
   transition: background var(--duration-hover) ease;
+}
+
+.sessions-table tbody tr {
+  transition: none;
 }
 
 @media (hover: hover) and (pointer: fine) {

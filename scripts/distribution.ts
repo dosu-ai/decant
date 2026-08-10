@@ -114,7 +114,27 @@ export function buildTargetArgs(
   outPath: string,
   version?: string,
 ): string[] {
-  const args = ["build", "--compile", "--target", target.bunTarget];
+  // --minify halves the UI bundle the embedded server hands the browser, from
+  // 6,211,618 bytes to 3,211,476 measured by fetching it from each binary. Bun
+  // does not split chunks in a compiled binary (see test/ui-lazy-echarts.test.ts),
+  // so echarts ships either way and the only lever on how much JavaScript the
+  // browser parses on first load is how densely it is written.
+  //
+  // Only the shipped binary. Running from source stays unminified, because dev
+  // wants fast rebuilds and legible output far more than it wants small bytes.
+  //
+  // What this costs: src/logging.ts emits `exception.stacktrace` for unexpected
+  // errors, and mangled identifiers make that field much less useful in a bug
+  // report. `exception.type` is unaffected, because every custom error class
+  // assigns `this.name` from a string literal.
+  //
+  // DO NOT ADD --sourcemap TO RECOVER THOSE NAMES. It breaks the compiled binary.
+  // The server answers /api/openapi.json and POST /api/sync, then dies before the
+  // next request, and scripts/dist-check.ts fails with ConnectionRefused on
+  // /api/analytics/token-economics. Reproduced 2 of 2 with the flag and 2 of 2
+  // without, both with and without --minify, so it is --sourcemap on its own.
+  // Bun 1.3.14.
+  const args = ["build", "--compile", "--minify", "--target", target.bunTarget];
   if (version != null) {
     args.push("--env=DECANT_BUILD_VERSION*");
   }

@@ -14,7 +14,9 @@ test("sync stays visually icon-led while retaining a hidden live announcement", 
   expect(main).not.toContain("Synced ·");
   expect(main).not.toContain('? "Synced" : "Sync"');
   expect(main).toContain("const LIVE_DISCONNECT_GRACE_MS = 15_000");
-  expect(main).toContain("sync_in_progress: false");
+  expect(main).toMatch(
+    /setArchiveUpdateAvailable\(false\);\s*setLocalSyncing\(false\);\s*setSyncError\(null\);\s*setSyncComplete\(true\);/,
+  );
   expect(styles).toContain(".sr-only {");
   expect(styles).toContain("clip-path: inset(50%)");
 });
@@ -28,4 +30,7 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).not.toContain('events.addEventListener("archive_updated", requestRefresh)');
   expect(main).toContain('archiveUpdateAvailable ? "Update" : "Sync"');
   expect(main).toContain("archiveUpdateAvailable ? loadArchiveUpdates : runSync");
+  // The shell stopped rendering server-wide sync status, so the slice that
+  // carried it must not be fetched on every route either.
+  expect(main).not.toContain("/api/analytics/now");
 });

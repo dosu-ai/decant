@@ -10,6 +10,14 @@ import {
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
+function sessionsViewSource(): string {
+  const start = main.indexOf("function SessionsView(");
+  const end = main.indexOf("function SessionTableSkeletonRows()", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return main.slice(start, end);
+}
+
 describe("session loading state", () => {
   test("loads one explicit page plus a bounded next-page probe", () => {
     expect(
@@ -59,11 +67,7 @@ describe("session loading state", () => {
   });
 
   test("uses explicit pagination without observing scroll position", () => {
-    const sessionsViewStart = main.indexOf("function SessionsView(");
-    const sessionsViewEnd = main.indexOf("function SessionTableSkeletonRows()", sessionsViewStart);
-    expect(sessionsViewStart).toBeGreaterThanOrEqual(0);
-    expect(sessionsViewEnd).toBeGreaterThan(sessionsViewStart);
-    const sessionsView = main.slice(sessionsViewStart, sessionsViewEnd);
+    const sessionsView = sessionsViewSource();
     expect(sessionsView).toContain("const toggleSession = useCallback(");
     expect(sessionsView).toContain('aria-label="Sessions pagination"');
     expect(sessionsView).toContain("sessionsPageHref(path, displayedPage + 1)");
@@ -72,6 +76,18 @@ describe("session loading state", () => {
     expect(sessionsView).not.toContain("scrollIntoView");
     expect(sessionsView).not.toContain("setExpandedSessions");
     expect(main).toContain("const SessionTableRow = memo(function SessionTableRow(");
+  });
+
+  test("derives the next page from the row probe rather than a pending total", () => {
+    const sessionsView = sessionsViewSource();
+    expect(sessionsView).toContain("const hasNextPage = !exhausted;");
+    expect(sessionsView).not.toContain("SESSION_PAGE_SIZE < listTotal");
+    expect(sessionsView).not.toContain("?? sessions.length");
+    expect(sessionsView).toContain('"No sessions on this page."');
+  });
+
+  test("reports archive-wide latest activity from page one only", () => {
+    expect(main).toMatch(/loadedPage === 1\s*\?\s*latestSessionDay\(/);
   });
 
   test("isolates page swaps from document paint and scroll anchoring", () => {

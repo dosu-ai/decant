@@ -276,15 +276,7 @@ type SyncProgress = {
   total: number;
 };
 
-type SyncEventPayload = {
-  reason?: string;
-  status?: {
-    in_progress?: boolean;
-    last_sync_at?: string | null;
-  };
-};
-
-type ArchiveUpdatedPayload = {
+type ServerEventPayload = {
   reason?: string;
 };
 
@@ -306,13 +298,6 @@ type ModelSparklines = {
 type DateBounds = {
   min: string | null;
   max: string | null;
-};
-
-type NowView = {
-  today: Summary;
-  active_sessions: unknown[];
-  last_sync_at: string | null;
-  sync_in_progress: boolean;
 };
 
 type ActivityBucket = "context" | "planning" | "code" | "communicating";
@@ -494,7 +479,6 @@ type DashboardData = {
   activity: Activity | null;
   modelSparklines: ModelSparklines | null;
   tokenEconomics: TokenEconomics | null;
-  now: NowView | null;
   dateBounds: DateBounds | null;
 };
 
@@ -513,7 +497,6 @@ const emptyData: DashboardData = {
   activity: null,
   modelSparklines: null,
   tokenEconomics: null,
-  now: null,
   dateBounds: null,
 };
 
@@ -613,10 +596,6 @@ const SLICE_LOADERS: Record<
       ),
     }),
   },
-  now: {
-    dateScoped: false,
-    load: async () => ({ now: await getJson<NowView>("/api/analytics/now") }),
-  },
   dateBounds: {
     dateScoped: false,
     load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
@@ -624,7 +603,7 @@ const SLICE_LOADERS: Record<
 };
 
 // Slices the app shell itself renders (sidebar stats, sync button, pickers).
-const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds", "config"];
+const SHELL_SLICES: DataSlice[] = ["summary", "dateBounds", "config"];
 
 const ROUTE_SLICES: Record<string, DataSlice[]> = {
   Sessions: [],
@@ -976,11 +955,6 @@ function App() {
         if (payload.progress != null) {
           setSyncProgress(payload.progress);
           setLocalSyncing(true);
-          setData((current) =>
-            current.now == null
-              ? current
-              : { ...current, now: { ...current.now, sync_in_progress: true } },
-          );
         }
       } catch {
         // A malformed progress event must not interrupt the live channel.
@@ -988,9 +962,9 @@ function App() {
     };
     const handleSync = (event: MessageEvent<string>) => {
       markConnected();
-      let payload: SyncEventPayload = {};
+      let payload: ServerEventPayload = {};
       try {
-        payload = JSON.parse(event.data) as SyncEventPayload;
+        payload = JSON.parse(event.data) as ServerEventPayload;
       } catch {
         // Treat malformed events as background updates so a broken optional
         // payload cannot cause an unexpected page refresh.
@@ -1002,18 +976,6 @@ function App() {
       setLocalSyncing(false);
       setSyncError(null);
       setSyncComplete(true);
-      setData((current) =>
-        current.now == null
-          ? current
-          : {
-              ...current,
-              now: {
-                ...current.now,
-                last_sync_at: payload.status?.last_sync_at ?? current.now.last_sync_at,
-                sync_in_progress: false,
-              },
-            },
-      );
       if (syncCompleteTimerRef.current != null) {
         window.clearTimeout(syncCompleteTimerRef.current);
       }
@@ -1024,9 +986,9 @@ function App() {
       requestRefresh();
     };
     const handleArchiveUpdated = (event: MessageEvent<string>) => {
-      let payload: ArchiveUpdatedPayload = {};
+      let payload: ServerEventPayload = {};
       try {
-        payload = JSON.parse(event.data) as ArchiveUpdatedPayload;
+        payload = JSON.parse(event.data) as ServerEventPayload;
       } catch {
         // Unknown archive updates remain pending until the user asks to load
         // them, preserving the current page while they scroll or inspect it.
@@ -1108,8 +1070,11 @@ function App() {
     slicesForView(activeView).includes(slice),
   );
   const metrics = data.summary;
+  // Only page one begins at the newest row, so a later page's first row is not
+  // the latest activity and the archive-wide bounds are the better fallback.
   const lastActivity =
-    latestSessionDay(sessionPageState.sessions) ?? formatDay(data.dateBounds?.max ?? null);
+    (sessionPageState.loadedPage === 1 ? latestSessionDay(sessionPageState.sessions) : null) ??
+    formatDay(data.dateBounds?.max ?? null);
   const syncInProgress = localSyncing;
   const runSync = () => {
     if (syncInProgress) {
@@ -1566,7 +1531,6 @@ function SessionsView({
     key: string;
   }>(() => ({ ids: new Set(), key: "" }));
   const { exhausted, loadedPage, loading, sessions } = sessionPageState;
-  const total = data.summary?.sessions ?? sessions.length;
   const filtered = filterSessions(sessions, query);
   const project = sessionProjectFilter(path);
   const includeArchived = sessionIncludesArchived(path);
@@ -1591,15 +1555,14 @@ function SessionsView({
     query,
   );
   const visibleTotal =
-    project == null ? total : (currentScopedSummary?.sessions ?? sessions.length);
+    project == null ? (data.summary?.sessions ?? null) : (currentScopedSummary?.sessions ?? null);
   const listTotal = includeArchived ? null : visibleTotal;
   const pageCount =
     listTotal == null ? null : Math.max(1, Math.ceil(listTotal / SESSION_PAGE_SIZE));
-  const hasNextPage =
-    !exhausted &&
-    (listTotal == null
-      ? sessions.length === SESSION_PAGE_SIZE
-      : displayedPage * SESSION_PAGE_SIZE < listTotal);
+  // The page request asks for one row past the page, so a full response is the
+  // only signal a next page needs. Deriving it from a total instead would hide
+  // Next while a scoped summary is still in flight.
+  const hasNextPage = !exhausted;
   const showPagination = displayedPage > 1 || page > 1 || hasNextPage;
   const waitingForSessions = shouldShowSessionSkeleton({
     isLoading: loading,
@@ -1771,9 +1734,11 @@ function SessionsView({
               {!waitingForSessions && filtered.length === 0 ? (
                 <tr>
                   <td colSpan={11}>
-                    {query.trim() === ""
-                      ? "No sessions ingested yet."
-                      : "No sessions match that filter."}
+                    {query.trim() !== ""
+                      ? "No sessions match that filter."
+                      : displayedPage > 1
+                        ? "No sessions on this page."
+                        : "No sessions ingested yet."}
                   </td>
                 </tr>
               ) : null}

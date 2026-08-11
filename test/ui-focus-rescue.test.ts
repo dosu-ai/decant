@@ -55,7 +55,9 @@ describe("disabled focus rescue wiring", () => {
   test("only rescues the control that held focus, and never steals it back", () => {
     expect(hook).toContain("control !== lastFocused");
     expect(hook).toContain('control.matches(":disabled")');
-    expect(hook).toContain("active !== null && active !== document.body");
+    expect(hook).toContain(
+      "active !== null && active !== document.body && active !== document.documentElement",
+    );
   });
 
   test("searches widening scopes with the shared focus selector", () => {

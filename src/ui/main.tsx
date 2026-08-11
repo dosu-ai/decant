@@ -3638,7 +3638,7 @@ function useDisabledFocusRescue() {
           control !== lastFocused ||
           !(control instanceof HTMLElement) ||
           !control.matches(":disabled") ||
-          (active !== null && active !== document.body)
+          (active !== null && active !== document.body && active !== document.documentElement)
         ) {
           continue;
         }

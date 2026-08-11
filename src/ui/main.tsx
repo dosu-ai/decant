@@ -99,6 +99,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
 import {
   createSessionSearchIndex,
@@ -861,6 +862,8 @@ function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useDisabledFocusRescue();
 
   useEffect(() => {
     document.title = documentTitleFor(path, navItems);
@@ -3535,15 +3538,16 @@ const SESSION_REPORT_NEVER_INCLUDES = [
   "Remote scripts, fonts, or tracking pixels",
 ] as const;
 
+const FOCUS_CANDIDATE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 function dialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
   if (dialog == null) {
     return [];
   }
-  return Array.from(
-    dialog.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => element.getClientRects().length > 0);
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUS_CANDIDATE_SELECTOR)).filter(
+    (element) => !element.matches(":disabled") && element.getClientRects().length > 0,
+  );
 }
 
 function useDialogFocusTrap(
@@ -3600,6 +3604,60 @@ function useDialogFocusTrap(
       }
     };
   }, [dialogRef, onClose, open]);
+}
+
+/**
+ * One rescue for every button that disables itself while focused. React writes
+ * `disabled` as an attribute, so a single observer sees all of them and the fix
+ * does not have to be repeated at each `disabled={...ing}` call site.
+ */
+function useDisabledFocusRescue() {
+  useEffect(() => {
+    let lastFocused: HTMLElement | null = null;
+    const remember = (event: FocusEvent) => {
+      lastFocused = event.target instanceof HTMLElement ? event.target : null;
+    };
+    const rescue = (control: HTMLElement) => {
+      for (let scope = control.parentElement; scope != null; scope = scope.parentElement) {
+        const candidates = Array.from(
+          scope.querySelectorAll<HTMLElement>(FOCUS_CANDIDATE_SELECTOR),
+        ).filter((element) => element === control || element.getClientRects().length > 0);
+        const enabled = candidates.map((element) => !element.matches(":disabled"));
+        const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
+        if (next != null) {
+          next.focus();
+          return;
+        }
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const control = record.target;
+        const active = document.activeElement;
+        if (
+          control !== lastFocused ||
+          !(control instanceof HTMLElement) ||
+          !control.matches(":disabled") ||
+          (active !== null && active !== document.body)
+        ) {
+          continue;
+        }
+        lastFocused = null;
+        rescue(control);
+        return;
+      }
+    });
+    document.addEventListener("focusin", remember);
+    observer.observe(document.body, {
+      attributeFilter: ["disabled"],
+      attributes: true,
+      subtree: true,
+    });
+    return () => {
+      document.removeEventListener("focusin", remember);
+      observer.disconnect();
+    };
+  }, []);
 }
 
 function PrivacyReviewLists({

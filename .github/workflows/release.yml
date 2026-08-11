@@ -927,7 +927,7 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@5037c6f1012cc5ea0b9f03fedbaf9955ed9e51e0 # main @ 2026-07-31
+        uses: Homebrew/actions/setup-homebrew@c8707045ccae42888fe98e86f2ee8938bc7cc193 # main @ 2026-07-31
 
       - name: Download rendered formula
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

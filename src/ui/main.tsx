@@ -3637,8 +3637,8 @@ function useDisabledFocusRescue() {
         const enabled = candidates.map((element) => !element.matches(":disabled"));
         const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
         if (next != null) {
-          next.focus();
           pending = { control, landed: next };
+          next.focus();
           return;
         }
         if (scope === boundary) {

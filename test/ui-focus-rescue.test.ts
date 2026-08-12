@@ -75,6 +75,22 @@ describe("disabled focus rescue wiring", () => {
     expect(hook).toContain("disposed = true");
   });
 
+  test("hands focus back to a busy control once it re-enables", () => {
+    expect(hook).toContain(
+      "pending = { control: new WeakRef(control), landed: new WeakRef(next) }",
+    );
+    expect(hook).toContain("control === pendingControl");
+    expect(hook).toContain('!control.matches(":disabled")');
+    expect(hook).toContain("document.activeElement === pending?.landed.deref()");
+    expect(hook).toContain("control.isConnected");
+  });
+
+  test("does not pin a control that never re-enables", () => {
+    expect(hook).toContain("WeakRef<HTMLElement>");
+    expect(hook).toContain("pending?.control.deref()");
+    expect(hook).toContain("pending !== null && pendingControl === undefined");
+  });
+
   test("searches widening scopes with the shared focus selector, up to a landmark", () => {
     expect(hook).toContain("FOCUS_CANDIDATE_SELECTOR");
     expect(hook).toContain("scope = scope.parentElement");

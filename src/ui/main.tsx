@@ -3621,6 +3621,13 @@ function useDisabledFocusRescue() {
       const landed = document.activeElement;
       return landed === null || landed === document.body || landed === document.documentElement;
     };
+    // A control that disables because it is busy, like Sync, comes back; one that
+    // disables because it is redundant, like Next on the last page, does not. The
+    // difference does not need naming: a control that never re-enables never
+    // claims focus back, so the same pending record covers both.
+    // Weak, because this hook lives as long as the app and a control that never
+    // re-enables would otherwise pin its detached subtree until the next rescue.
+    let pending: { control: WeakRef<HTMLElement>; landed: WeakRef<HTMLElement> } | null = null;
     const rescue = (control: HTMLElement) => {
       // Landing outside the region the reader was working in, or outside an open
       // dialog, is more disorienting than leaving focus where it fell.
@@ -3632,6 +3639,7 @@ function useDisabledFocusRescue() {
         const enabled = candidates.map((element) => !element.matches(":disabled"));
         const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
         if (next != null) {
+          pending = { control: new WeakRef(control), landed: new WeakRef(next) };
           next.focus();
           return;
         }
@@ -3660,6 +3668,26 @@ function useDisabledFocusRescue() {
     const observer = new MutationObserver((records) => {
       for (const record of records) {
         const control = record.target;
+        const pendingControl = pending?.control.deref();
+        if (pending !== null && pendingControl === undefined) {
+          pending = null;
+        }
+        if (
+          pendingControl !== undefined &&
+          control === pendingControl &&
+          control instanceof HTMLElement &&
+          !control.matches(":disabled")
+        ) {
+          // Focus still sitting exactly where the rescue put it is the whole test
+          // for "the reader has not moved on". Anywhere else and the work is
+          // theirs, not ours to interrupt.
+          const restore = document.activeElement === pending?.landed.deref() && control.isConnected;
+          pending = null;
+          if (restore) {
+            control.focus();
+          }
+          continue;
+        }
         if (
           control !== lastFocused ||
           !(control instanceof HTMLElement) ||

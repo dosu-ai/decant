@@ -9,9 +9,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Default-deny, then grant per job. A job that needs more than `contents: read`
-# has to say so at its own level, so widening this file later cannot silently
-# widen a job that never asked for it.
 permissions: {}
 
 jobs:
@@ -22,13 +19,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Nothing here pushes; don't leave the token in .git/config.
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: .bun-version
 
@@ -57,15 +53,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Nothing here pushes; don't leave the token in .git/config.
           persist-credentials: false
 
-      # .bun-version is the single source of truth for the Bun toolchain.
-      # Dependabot bumps the Dockerfile's builder tag weekly, so drift is
-      # otherwise guaranteed — this guard turns silent drift into a red check so
-      # the pin is only ever moved deliberately (via .bun-version).
       - name: Assert Dockerfile builder matches .bun-version
         run: |
           set -euo pipefail
@@ -77,10 +68,10 @@ jobs:
           fi
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
 
       - name: Build local amd64 image
         run: docker build --platform linux/amd64 -t decant:ci .
@@ -88,17 +79,6 @@ jobs:
       - name: Smoke CLI
         run: docker run --rm decant:ci --help
 
-      # Curl an /api/* route from the host through a published port: the
-      # request arrives at the container from the Docker bridge gateway,
-      # exercising the image's DECANT_TRUST_DEFAULT_GATEWAY derivation
-      # end-to-end exactly like the documented `docker run` deployment. This
-      # proves the derivation only on a runner whose default bridge gateway
-      # is on-link, inside 172.16.0.0/12, and reached via a veth peered into
-      # another netns -- true for stock Docker Engine's default `docker0`
-      # bridge, which is what GitHub-hosted runners use. It is NOT true for
-      # Docker Desktop/OrbStack-style setups, which forward through a
-      # different bridge range by design (see README.md's
-      # DECANT_TRUST_DEFAULT_GATEWAY / DECANT_TRUSTED_PEERS docs).
       - name: Smoke /api/* through the bridge (DECANT_TRUST_DEFAULT_GATEWAY)
         run: |
           set -euo pipefail
@@ -109,10 +89,6 @@ jobs:
             if [ "$http_status" = "200" ]; then
               break
             fi
-            # 403 means the server is up but denied the request: the gateway
-            # derivation didn't resolve to a trusted peer on this runner.
-            # That's deterministic, not a boot race, so fail fast instead of
-            # burning the retry budget on a result that will not change.
             if [ "$http_status" = "403" ]; then
               echo "::error::/api/health answered 403 through the published port — the bridge-gateway derivation (DECANT_TRUST_DEFAULT_GATEWAY) did not resolve to a trusted peer on this runner"
               docker network inspect bridge --format '{{range .IPAM.Config}}gateway={{.Gateway}}{{end}}' || true

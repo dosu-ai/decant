@@ -32,10 +32,22 @@ describe("Dosu product copy", () => {
     expect(main).not.toContain("saved you $");
   });
 
-  test("uses the truthful origin line in both source and launcher documentation", () => {
-    const origin =
-      "Built by [Dosu](https://dosu.dev) for developers who want their agents to learn";
-    expect(readme).toContain(origin);
-    expect(npmReadme).toContain(origin);
+  test("uses current Dosu positioning and tracked links in public documentation", () => {
+    expect(readme).toContain(
+      "https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme",
+    );
+    expect(npmReadme).toContain(
+      "https://dosu.dev?utm_source=decant&utm_medium=npm&utm_campaign=attribution&utm_content=package_readme",
+    );
+    for (const document of [readme, npmReadme]) {
+      const normalized = document.replaceAll("\n", " ");
+      expect(normalized).toContain("Knowledge Infrastructure for Agents");
+      expect(normalized).toContain(
+        "Dosu makes agents faster, cheaper, and more effective across every run.",
+      );
+      expect(normalized).toContain(
+        "Decant is local-first. It makes no outbound network calls at runtime,",
+      );
+    }
   });
 });

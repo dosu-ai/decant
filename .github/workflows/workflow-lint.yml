@@ -1,8 +1,5 @@
 name: Workflow lint
 
-# These files sign and publish every release artifact, and install.sh runs on
-# users' machines from a `curl | sh`. Both are easy to break in ways that only
-# surface at tag time or on someone else's laptop, so they get their own gate.
 on:
   push:
     branches: [main]
@@ -22,13 +19,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-      # Pinned release + checksum rather than piping the upstream installer
-      # script: a linter that guards the release pipeline should not itself be
-      # fetched from a moving target.
       - name: Install actionlint (pinned)
         env:
           ACTIONLINT_VERSION: 1.7.12
@@ -44,23 +38,12 @@ jobs:
           install -m 755 actionlint "$RUNNER_TEMP/bin/actionlint"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
-      # shellcheck is preinstalled on ubuntu-latest; actionlint shells out to it
-      # to lint every `run:` block in addition to the workflow syntax itself.
       - name: actionlint
         run: actionlint -color -shellcheck=shellcheck
 
       - name: shellcheck install.sh
         run: shellcheck -s sh install.sh
 
-      # zizmor checks for Actions-specific security problems actionlint does not
-      # model: template-injection sinks, credential persistence, overbroad
-      # permissions, cache poisoning.
-      # `regular` persona at medium severity: fails the build on real problems
-      # (cache poisoning, credential persistence, template injection) without
-      # blocking on style-level findings. Deliberate exceptions carry an inline
-      # `# zizmor: ignore[audit]` with the reason next to it.
-      # --no-online-audits keeps this from depending on network reachability of
-      # third-party services for a required check.
       - name: zizmor
         run: |
           set -euo pipefail

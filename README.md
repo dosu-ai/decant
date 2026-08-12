@@ -11,11 +11,13 @@ tangible insights. See where tokens, cost, and agent time go, inspect context
 usage, find the files and tools agents touch, and search complete transcripts
 from a CLI or local web UI.
 
-Decant is local-first. It makes no outbound network or LLM calls at runtime,
+Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine.
 
-Built by [Dosu](https://dosu.dev) for developers who want their agents to learn
-from real work.
+Built by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme),
+Knowledge Infrastructure for Agents. Dosu makes agents faster, cheaper, and
+more effective across every run.
 
 ![Decant analytics dashboard](docs/assets/decant-serve.png)
 
@@ -143,7 +145,11 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## About Dosu
 
-Decant is built and maintained by [Dosu](https://dosu.dev). Decant shows what your agents spent, read, and touched via your agent logs.
+Decant is built and maintained by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=about),
+Knowledge Infrastructure for Agents. Dosu makes agents faster, cheaper, and
+more effective across every run. Decant shows what your agents spent, read, and
+touched via your agent logs.
 
 ## Acknowledgments
 

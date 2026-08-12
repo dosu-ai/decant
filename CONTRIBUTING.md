@@ -48,13 +48,15 @@ architecture, invariants, and documentation map.
 
 Useful contribution paths:
 
-- New source parser: follow [Add a source](docs/adding-a-source.md).
-- Model pricing: update `src/cost.ts`, normalize model names, add focused tests,
-  and cite dated first-party rates in [Pricing estimates](docs/pricing.md).
+- New source parser, following [Add a source](docs/adding-a-source.md).
+- Model pricing, which requires updating `src/cost.ts`, normalizing model
+  names, adding focused tests, and citing dated first-party rates in
+  [Pricing estimates](docs/pricing.md).
 - Local API: update the implementation, `docs/api/openapi.yaml`,
   `docs/api/routes.md`, and contract tests together.
-- Schema: add a new migration; never edit a migration already committed to a
-  branch. Update the effective schema and migration tests together.
+- Schema, which requires adding a new migration and never editing a migration
+  already committed to a branch. Update the effective schema and migration
+  tests together.
 - UI: include a screenshot or short recording in the pull request.
 
 When testing against a scratch archive, pass `--no-sync` or set
@@ -90,7 +92,7 @@ Do not weaken or remove tests to make a change pass.
 - Keep one concern per pull request and explain the user-visible outcome.
 - Include the commands you ran and their results.
 - Link the issue the pull request closes when one exists.
-- Keep `main` green; every pull request needs passing CI and review.
+- Keep `main` green, as every pull request needs passing CI and review.
 
 Maintainers squash-merge pull requests.
 

@@ -7,11 +7,13 @@ Local-first analytics for Claude Code and Codex sessions: token and cost
 breakdowns, context-window usage, full-text search, files touched, tool usage,
 and complete transcript browsing.
 
-Decant reads the session logs already on your machine. It makes no outbound
-network or LLM calls at runtime, and your transcripts never leave your machine.
+Decant is local-first. It makes no outbound network calls at runtime,
+and your transcripts never leave your machine.
 
-Built by [Dosu](https://dosu.dev) for developers who want their agents to learn
-from real work.
+Built by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=npm&utm_campaign=attribution&utm_content=package_readme),
+Knowledge Infrastructure for Agents. Dosu makes agents faster, cheaper, and
+more effective across every run.
 
 ## Run without installing
 

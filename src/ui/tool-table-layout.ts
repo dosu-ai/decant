@@ -47,17 +47,17 @@ const TABLE_COLUMNS: Record<
   },
   calls: {
     withoutDuration: [
-      { className: "col-call-status", width: 12 },
-      { className: "col-call-tool", width: 22 },
-      { className: "col-call-input", width: 27 },
+      { className: "col-call-status", width: 15 },
+      { className: "col-call-tool", width: 21 },
+      { className: "col-call-input", width: 25 },
       { className: "col-call-output", width: 11 },
       { className: "col-call-when", width: 12 },
       { className: "col-call-session", width: 16 },
     ],
     withDuration: [
-      { className: "col-call-status", width: 12 },
-      { className: "col-call-tool", width: 20 },
-      { className: "col-call-input", width: 22 },
+      { className: "col-call-status", width: 15 },
+      { className: "col-call-tool", width: 19 },
+      { className: "col-call-input", width: 20 },
       { className: "col-call-elapsed", width: 10 },
       { className: "col-call-output", width: 10 },
       { className: "col-call-when", width: 11 },

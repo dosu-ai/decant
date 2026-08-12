@@ -162,6 +162,7 @@ import {
 import { collectSliceResults } from "./slice-loading.ts";
 import { toolCallStatus } from "./tool-call-status.ts";
 import {
+  clearToolCallFilters,
   isDrilldownActivationKey,
   type ToolFilters,
   toolDateRangeFromFilters,
@@ -4165,8 +4166,8 @@ function AnalyticsView({
         <aside className="dosu-callout">
           <img alt="" src={dosuOfficialUrl} />
           <div>
-            <strong>Your session logs show the pattern.</strong>
-            <span>Dosu helps the next agent use it.</span>
+            <strong>Your agents keep relearning what your team already knows.</strong>
+            <span>Dosu gets them that knowledge faster and cheaper.</span>
           </div>
           <a href={dosuLink("analytics_callout")} rel="noopener" target="_blank">
             Learn about Dosu →
@@ -6894,7 +6895,7 @@ function ToolValueElision({ value }: { value: string | null }) {
 }
 
 function ToolCallStatus({ call }: { call: ToolCallRow }) {
-  const status = toolCallStatus(call.is_error);
+  const status = toolCallStatus(call.is_error, call.has_result);
   const badge = (
     <Badge className="tool-call-status" tone={status.tone}>
       <Icon name={status.icon} />
@@ -7014,11 +7015,11 @@ function ToolCallDetail({
             <dd>{durationPrecise(call.duration_ms)}</dd>
           </div>
           <div>
-            <dt>Input</dt>
+            <dt>Input size</dt>
             <dd>{formatBytes(call.input_bytes)}</dd>
           </div>
           <div>
-            <dt>Output</dt>
+            <dt>Output size</dt>
             <dd>{formatBytes(call.output_bytes)}</dd>
           </div>
         </dl>
@@ -7054,10 +7055,17 @@ function ToolCallDetail({
           </section>
         </div>
         <footer>
-          <a className="primary-button" href={transcriptHref}>
-            Open in transcript →
+          <div className="tool-detail-session">
+            <span>Session</span>
+            <strong title={call.session_title ?? undefined}>
+              {call.session_title ?? `Session ${call.session_id}`}
+            </strong>
+          </div>
+          <a className="secondary-button tool-detail-transcript-link" href={transcriptHref}>
+            <Icon name="messages" />
+            View in transcript
+            <Icon name="chevronRight" />
           </a>
-          <span className="muted">{call.session_title ?? `Session ${call.session_id}`}</span>
         </footer>
       </section>
     </>
@@ -7208,14 +7216,8 @@ function ToolsView({
     window.history.pushState(null, "", href);
     window.dispatchEvent(new PopStateEvent("popstate"));
   };
-  const clearedFiltersHref = toolFiltersHref({
-    ...locationFilters,
-    errorsOnly: false,
-    minMs: 0,
-    offset: 0,
-    server: "",
-    tool: "",
-  });
+  const clearedCallFilters = clearToolCallFilters(locationFilters);
+  const clearedFiltersHref = toolFiltersHref(clearedCallFilters);
 
   return (
     <div className="view-stack">
@@ -7337,9 +7339,8 @@ function ToolsView({
               <tbody>
                 {mcpRows.map((row) => {
                   const href = toolFiltersHref({
-                    ...locationFilters,
+                    ...clearedCallFilters,
                     server: row.mcp_server,
-                    offset: 0,
                   });
                   return (
                     <DrilldownTableRow
@@ -7455,9 +7456,8 @@ function ToolsView({
               ) : null}
               {toolRows.map((row) => {
                 const href = toolFiltersHref({
-                  ...locationFilters,
+                  ...clearedCallFilters,
                   tool: row.tool_name,
-                  offset: 0,
                 });
                 return (
                   <DrilldownTableRow

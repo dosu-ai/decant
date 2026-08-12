@@ -351,13 +351,22 @@ personal archives, tokens, keys, or `.env` files. To report a vulnerability, see
 ## About Dosu
 
 Decant is built and maintained by [Dosu](https://dosu.dev), Knowledge
-Infrastructure for Agents. Dosu makes agents faster, cheaper, and more effective
-across every run.
+Infrastructure for Agents.
 
 Decant is the measurement end of that. It shows you what your agents actually
 spent, read, and touched, from logs already on your disk. It is Apache 2.0 and
 runs entirely on your own machine. See
 [Security and Privacy](#security-and-privacy).
+
+When agents keep relearning what your team already knows, Dosu turns that
+context into durable knowledge they can reach faster, making future sessions
+cheaper and more effective.
+
+## Acknowledgments
+
+Decant was inspired in part by
+[Letta's Trajectory](https://github.com/letta-ai/trajectory), which normalizes
+agent transcripts across runtimes into a shared record format.
 
 ## License
 

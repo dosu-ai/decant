@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clearToolCallFilters,
   isDrilldownActivationKey,
   toolDateRangeFromFilters,
   toolFiltersFromSearch,
@@ -87,6 +88,22 @@ describe("tool URL filters", () => {
       from: "2026-07-01",
       offset: 0,
       to: "2026-07-28",
+    });
+  });
+
+  test("clears call filters without discarding the page date scope", () => {
+    const filtered = toolFiltersFromSearch(
+      "?tool=read&server=filesystem&errors_only=1&min_ms=1000&offset=50&from=2026-07-01&to=2026-07-28",
+    );
+
+    expect(clearToolCallFilters(filtered)).toEqual({
+      errorsOnly: false,
+      from: "2026-07-01",
+      minMs: 0,
+      offset: 0,
+      server: "",
+      to: "2026-07-28",
+      tool: "",
     });
   });
 });

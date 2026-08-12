@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -172,18 +172,29 @@ interface SyncCase {
   flags?: string[];
 }
 
+interface SeededSources {
+  claudeProjectDir: string;
+  claudeSessionPath: string;
+  codexSessionsDir: string;
+  codexSessionPath: string;
+}
+
 async function withSeededServe<T>(
   c: SyncCase,
-  run: (port: number, startupLog: string) => Promise<T>,
+  run: (port: number, startupLog: string, sources: SeededSources) => Promise<T>,
 ): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "decant-serve-sync-"));
   const claudeDir = join(dir, "claude");
   const codexDir = join(dir, "codex");
   const projectDir = join(claudeDir, "-Users-dev-proj");
+  const codexSessionsDir = join(codexDir, "sessions");
+  const claudeSessionPath = join(projectDir, "s1.jsonl");
+  const codexSessionPath = join(codexSessionsDir, "rollout-s1.jsonl");
   mkdirSync(projectDir, { recursive: true });
-  mkdirSync(codexDir, { recursive: true });
-  // A real, ingestible session. If the watcher runs, this lands in the archive.
-  copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), join(projectDir, "s1.jsonl"));
+  mkdirSync(codexSessionsDir, { recursive: true });
+  // Real, ingestible sessions. If the watcher runs, both land in the archive.
+  copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), claudeSessionPath);
+  copyFileSync(join(repoRoot, "fixtures", "codex", "sample.jsonl"), codexSessionPath);
 
   const env = { ...process.env, ...(c.env ?? {}) };
   delete env.DECANT_TRUSTED_PEERS;
@@ -212,8 +223,13 @@ async function withSeededServe<T>(
   );
 
   try {
-    const { port, log } = await readServePort(proc);
-    return await run(port, log);
+    const { port: boundPort, log } = await readServePort(proc);
+    return await run(boundPort, log, {
+      claudeProjectDir: projectDir,
+      claudeSessionPath,
+      codexSessionsDir,
+      codexSessionPath,
+    });
   } finally {
     proc.kill();
     await proc.exited;
@@ -221,23 +237,44 @@ async function withSeededServe<T>(
   }
 }
 
-async function sessionCount(port: number): Promise<number> {
-  const response = await fetch(`http://127.0.0.1:${port}/api/stats/summary`);
-  const body = (await response.json()) as { sessions?: number };
-  return body.sessions ?? 0;
+interface ArchiveSummary {
+  sessions: number;
+  messages: number;
+  tool_calls: number;
 }
 
-/** Poll until the startup sync lands, rather than sleeping a fixed guess. */
-async function waitForIngest(port: number): Promise<number> {
+async function archiveSummary(port: number): Promise<ArchiveSummary> {
+  const response = await fetch(`http://127.0.0.1:${port}/api/stats/summary`);
+  return (await response.json()) as ArchiveSummary;
+}
+
+async function sessionCount(port: number): Promise<number> {
+  return (await archiveSummary(port)).sessions;
+}
+
+/** Poll until the expected sessions land, rather than sleeping a fixed guess. */
+async function waitForSessionCount(port: number, expected: number): Promise<number> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const count = await sessionCount(port);
-    if (count > 0) {
+    if (count === expected) {
       return count;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("watcher never ingested the fixture");
+  throw new Error(`watcher never reached ${expected} ingested sessions`);
+}
+
+async function waitForToolCallCount(port: number, expected: number): Promise<ArchiveSummary> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const summary = await archiveSummary(port);
+    if (summary.tool_calls === expected) {
+      return summary;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`watcher never reached ${expected} ingested tool calls`);
 }
 
 /**
@@ -247,7 +284,7 @@ async function waitForIngest(port: number): Promise<number> {
  * intended behaviour is that nothing happens. This cannot be shortened to a
  * token delay: against the unfixed CLI the ingest lands around the 2.5s mark,
  * so a 100ms wait would let these tests pass on the very bug they exist to
- * catch. It is deliberately longer than `waitForIngest` needs when the watcher
+ * catch. It is deliberately longer than `waitForSessionCount` needs when the watcher
  * IS running, which the baseline test measures.
  */
 const NO_INGEST_GRACE_MS = 4000;
@@ -265,8 +302,44 @@ describe("serve sync opt-out (real CLI process)", () => {
       expect(startupLog).toContain('"watch.enabled":true');
       // Also establishes that the grace period below outlasts a real ingest.
       const started = Date.now();
-      expect(await waitForIngest(port)).toBeGreaterThan(0);
+      expect(await waitForSessionCount(port, 2)).toBe(2);
       expect(Date.now() - started).toBeLessThan(NO_INGEST_GRACE_MS);
+    });
+  }, 40_000);
+
+  test("keeps Claude and Codex sources current after startup", async () => {
+    await withSeededServe({}, async (port, startupLog, sources) => {
+      expect(startupLog).toContain('"watch.enabled":true');
+      expect(await waitForSessionCount(port, 2)).toBe(2);
+      const initial = await archiveSummary(port);
+
+      appendFileSync(
+        sources.claudeSessionPath,
+        '\n{"type":"assistant","uuid":"a3","parentUuid":"a2","sessionId":"sess-claude-1","timestamp":"2026-05-01T10:00:11.000Z","cwd":"/Users/dev/proj","gitBranch":"main","version":"2.1.0","message":{"role":"assistant","model":"claude-opus-4-7","stop_reason":"tool_use","usage":{"input_tokens":1600,"output_tokens":130},"content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"/Users/dev/proj/README.md"}}]}}\n{"type":"user","uuid":"u3","parentUuid":"a3","sessionId":"sess-claude-1","timestamp":"2026-05-01T10:00:12.000Z","cwd":"/Users/dev/proj","gitBranch":"main","version":"2.1.0","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":false,"content":"Synthetic README"}]}}\n',
+      );
+      const afterClaudeAppend = await waitForToolCallCount(port, initial.tool_calls + 1);
+      expect(afterClaudeAppend.sessions).toBe(2);
+      expect(afterClaudeAppend.messages).toBeGreaterThan(initial.messages);
+
+      appendFileSync(
+        sources.codexSessionPath,
+        '\n{"type":"response_item","timestamp":"2026-05-02T09:00:09.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"call_2","arguments":"{\\"command\\":\\"pwd\\"}"}}\n{"type":"response_item","timestamp":"2026-05-02T09:00:10.000Z","payload":{"type":"function_call_output","call_id":"call_2","output":"/Users/dev/proj"}}\n',
+      );
+      const afterCodexAppend = await waitForToolCallCount(port, initial.tool_calls + 2);
+      expect(afterCodexAppend.sessions).toBe(2);
+      expect(afterCodexAppend.messages).toBeGreaterThan(afterClaudeAppend.messages);
+
+      copyFileSync(
+        join(repoRoot, "fixtures", "claude", "enriched.jsonl"),
+        join(sources.claudeProjectDir, "s2.jsonl"),
+      );
+      expect(await waitForSessionCount(port, 3)).toBe(3);
+
+      copyFileSync(
+        join(repoRoot, "fixtures", "codex", "enriched.jsonl"),
+        join(sources.codexSessionsDir, "rollout-s2.jsonl"),
+      );
+      expect(await waitForSessionCount(port, 4)).toBe(4);
     });
   }, 40_000);
 

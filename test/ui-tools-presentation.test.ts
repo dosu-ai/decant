@@ -36,8 +36,7 @@ describe("Tools and MCP presentation", () => {
     const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
     const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
 
-    expect(status).toContain("toolCallStatus(call.is_error)");
-    expect(status).not.toContain("call.has_result");
+    expect(status).toContain("toolCallStatus(call.is_error, call.has_result)");
     expect(status).toContain("<Badge");
     expect(status).toContain("<Icon name={status.icon} />");
     expect(status).toContain("{status.label}");
@@ -47,6 +46,31 @@ describe("Tools and MCP presentation", () => {
     expect(status).not.toContain("title={status.title ?? undefined}");
     expect(detail).toContain("<ToolCallStatus call={call} />");
     expect(tools).toContain("<ToolCallStatus call={call} />");
+  });
+
+  test("keeps tool and MCP drilldowns independent from stale call filters", () => {
+    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+
+    expect(tools).toContain("const clearedCallFilters = clearToolCallFilters(locationFilters)");
+    expect(tools.match(/\.\.\.clearedCallFilters/g)).toHaveLength(2);
+    expect(tools).not.toMatch(/\.\.\.locationFilters,\s+(server|tool): row\./);
+  });
+
+  test("gives call details room to scan and a compact transcript action", () => {
+    const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
+    const detailStyles = sourceBetween(styles, ".tool-detail-panel {", ".files-table {");
+
+    expect(detail).toContain("<dt>Input size</dt>");
+    expect(detail).toContain("<dt>Output size</dt>");
+    expect(detail).toContain('className="tool-detail-session"');
+    expect(detail).toContain('className="secondary-button tool-detail-transcript-link"');
+    expect(detail).toContain('<Icon name="messages" />');
+    expect(detail).toContain("View in transcript");
+    expect(detailStyles).toMatch(
+      /\.tool-detail-meta \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/s,
+    );
+    expect(detailStyles).toMatch(/\.tool-detail-content \{[^}]*align-content: start/s);
+    expect(detailStyles).toMatch(/\.tool-detail-transcript-link \{[^}]*white-space: nowrap/s);
   });
 
   test("uses normalized table colgroups and ellipsizes long tool and server names", () => {

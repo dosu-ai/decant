@@ -87,6 +87,18 @@ export function withToolDateRange(
   };
 }
 
+export function clearToolCallFilters(filters: Pick<ToolFilters, "from" | "to">): ToolFilters {
+  return {
+    errorsOnly: false,
+    from: filters.from,
+    minMs: 0,
+    offset: 0,
+    server: "",
+    to: filters.to,
+    tool: "",
+  };
+}
+
 export function isDrilldownActivationKey(key: string): boolean {
   return key === "Enter" || key === " ";
 }

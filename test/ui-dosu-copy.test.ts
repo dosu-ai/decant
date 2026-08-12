@@ -13,7 +13,8 @@ describe("Dosu product copy", () => {
     expect(main).toContain("<span>Created by Dosu</span>");
     expect(main).not.toContain("Built by Dosu ↗");
     expect(main).toContain("Make these patterns available to every coding agent");
-    expect(main).toContain("Your session logs show the pattern.");
+    expect(main).toContain("Your agents keep relearning what your team already knows.");
+    expect(main).toContain("Dosu gets them that knowledge faster and cheaper.");
     expect(main).toContain("Decant is an open source");
     expect(main).toContain(
       "Decant makes no outbound network calls. Your session logs stay on this machine.",

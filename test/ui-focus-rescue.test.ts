@@ -56,13 +56,30 @@ describe("disabled focus rescue wiring", () => {
     expect(hook).toContain("control !== lastFocused");
     expect(hook).toContain('control.matches(":disabled")');
     expect(hook).toContain(
-      "active !== null && active !== document.body && active !== document.documentElement",
+      "landed === null || landed === document.body || landed === document.documentElement",
     );
+    expect(hook).toContain("!onTheFloor()");
   });
 
-  test("searches widening scopes with the shared focus selector", () => {
+  test("forgets a control the reader left while it was still enabled", () => {
+    expect(hook).toContain('document.addEventListener("focusout", forget)');
+    expect(hook).toContain('document.removeEventListener("focusout", forget)');
+    expect(hook).toContain("event.target === lastFocused");
+    expect(hook).toContain('!event.target.matches(":disabled")');
+  });
+
+  test("re-picks while focus is on the floor until the transition settles", () => {
+    expect(hook).toContain("requestAnimationFrame(() => settle(control, deadline))");
+    expect(hook).toContain("control.isConnected");
+    expect(hook).toContain("performance.now() + settleWindowMs");
+    expect(hook).toContain("disposed = true");
+  });
+
+  test("searches widening scopes with the shared focus selector, up to a landmark", () => {
     expect(hook).toContain("FOCUS_CANDIDATE_SELECTOR");
     expect(hook).toContain("scope = scope.parentElement");
     expect(hook).toContain("nearestUsableIndex(");
+    expect(hook).toContain("control.closest('dialog, [role=\"dialog\"], main, nav, form')");
+    expect(hook).toContain("scope === boundary");
   });
 });

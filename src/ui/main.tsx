@@ -3621,6 +3621,11 @@ function useDisabledFocusRescue() {
       const landed = document.activeElement;
       return landed === null || landed === document.body || landed === document.documentElement;
     };
+    // A control that disables because it is busy, like Sync, comes back; one that
+    // disables because it is redundant, like Next on the last page, does not. The
+    // difference does not need naming: a control that never re-enables never
+    // claims focus back, so the same pending record covers both.
+    let pending: { control: HTMLElement; landed: HTMLElement } | null = null;
     const rescue = (control: HTMLElement) => {
       // Landing outside the region the reader was working in, or outside an open
       // dialog, is more disorienting than leaving focus where it fell.
@@ -3633,6 +3638,7 @@ function useDisabledFocusRescue() {
         const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
         if (next != null) {
           next.focus();
+          pending = { control, landed: next };
           return;
         }
         if (scope === boundary) {
@@ -3660,6 +3666,22 @@ function useDisabledFocusRescue() {
     const observer = new MutationObserver((records) => {
       for (const record of records) {
         const control = record.target;
+        if (
+          pending !== null &&
+          control === pending.control &&
+          control instanceof HTMLElement &&
+          !control.matches(":disabled")
+        ) {
+          // Focus still sitting exactly where the rescue put it is the whole test
+          // for "the reader has not moved on". Anywhere else and the work is
+          // theirs, not ours to interrupt.
+          const restore = document.activeElement === pending.landed && control.isConnected;
+          pending = null;
+          if (restore) {
+            control.focus();
+          }
+          continue;
+        }
         if (
           control !== lastFocused ||
           !(control instanceof HTMLElement) ||

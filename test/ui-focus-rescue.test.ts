@@ -75,6 +75,13 @@ describe("disabled focus rescue wiring", () => {
     expect(hook).toContain("disposed = true");
   });
 
+  test("hands focus back to a busy control once it re-enables", () => {
+    expect(hook).toContain("pending = { control, landed: next }");
+    expect(hook).toContain("control === pending.control");
+    expect(hook).toContain('!control.matches(":disabled")');
+    expect(hook).toContain("document.activeElement === pending.landed && control.isConnected");
+  });
+
   test("searches widening scopes with the shared focus selector, up to a landmark", () => {
     expect(hook).toContain("FOCUS_CANDIDATE_SELECTOR");
     expect(hook).toContain("scope = scope.parentElement");

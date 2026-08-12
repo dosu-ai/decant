@@ -56,7 +56,7 @@ rollups and versioned per-session economics vectors. Costs are also stored at
 ingest, so later pricing edits do not mutate history.
 
 The supported extension point is a new parser under `src/sources/`. Follow
-[Add a source](prompts/add-source.md); it defines the privacy, capability,
+[Add a source](adding-a-source.md); it defines the privacy, capability,
 fixture, ingest, and golden requirements.
 
 ## SQLite ownership and schema
@@ -65,11 +65,12 @@ The active CLI process opens the archive directly. WAL mode permits concurrent
 reads and the worker-owned ingest connection, but Decant does not put another
 daemon or API process in front of SQLite.
 
-`src/schema.sql` is the effective v21 baseline. Narrow migrations preserve
-v8-and-newer TypeScript archives; older archives are rebuild-only. A migration
-is immutable once committed because a dogfooding archive may already have
-applied it. Schema manifests detect missing, unexpected, or structurally
-different owned objects before Decant continues on a drifted archive.
+`src/schema.sql` is the effective baseline, and `LATEST_SCHEMA_VERSION` in
+`src/db.ts` is the source of truth for its version. Supported archives migrate
+forward; older archives are rebuild-only. A migration is immutable once
+committed because someone may already have opened an archive with that branch.
+Schema manifests detect missing, unexpected, or structurally different owned
+objects before Decant continues on a drifted archive.
 
 Archive files and sidecars are created or narrowed to owner-only permissions
 where the platform supports POSIX modes.
@@ -86,8 +87,8 @@ Economics vectors are cached in memory. `PRAGMA data_version` detects writes by
 other connections; the server serves the previous model while rebuilding and
 then emits `archive_updated` so clients can refresh.
 
-The worker files are also standalone-binary entrypoints. See the compiled
-worker rule in the Standalone worker entrypoints section of docs/distribution.md.
+The worker files are also standalone-binary entrypoints and must remain in the
+compile entrypoint list in `scripts/distribution.ts`.
 
 ## Local API and UI
 

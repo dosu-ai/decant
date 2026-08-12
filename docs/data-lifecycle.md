@@ -79,10 +79,10 @@ data allowed in this repository.
 
 ## Rebuilds and migrations
 
-Source logs are sufficient to rebuild transcript-derived state. Archives older
-than schema v8 are intentionally rebuild-only; v8 through v20 migrate to the
-current v21 baseline on open. The next sync backfills persisted economics and
-context rollups when required.
+Source logs are sufficient to rebuild transcript-derived state. Supported
+archives migrate to the current baseline on open; older archives are
+rebuild-only. The next sync backfills persisted economics, parser enrichments,
+and context rollups when required.
 
 Costs are materialized at ingest. A rebuild uses the pricing table in the new
 Decant version and can therefore change historical estimates even when the

@@ -8,14 +8,8 @@
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
 
-# Per-developer coding-agent config. Holds machine-local MCP server entries,
-# hook wiring, and credentials, so it must never be committed. Shared agent
-# guidance belongs in AGENTS.md instead.
+# Per-developer coding-agent configuration may contain credentials.
 .claude/settings.local.json
-# `dosu mcp add claude` writes the Dosu MCP server here with a literal
-# X-Dosu-API-Key, and this repo is public. Project-scoped MCP config is
-# normally shareable, but decant's Dosu wiring is per-developer by design
-# (see "Shared knowledge" in AGENTS.md), so nothing here belongs in a commit.
 .mcp.json
 
 # Browser-automation artifacts

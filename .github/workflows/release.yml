@@ -1,4 +1,4 @@
-# Tag-driven release pipeline (runbook: docs/releasing.md).
+# Tag-driven release pipeline.
 #
 # Publishes, for every v* tag: five npm packages (OIDC trusted publishing with
 # Sigstore provenance), a GitHub Release carrying deterministic tarballs +
@@ -6,8 +6,7 @@
 # — for stable is_latest releases only — the Homebrew tap formula.
 # When the Apple secrets below are configured, the two darwin binaries are
 # Developer ID-signed and notarized (rcodesign, Linux-native) inside `build`,
-# before anything publishes; without them the build ad-hoc signs instead
-# (docs/releasing.md#macos-signing-and-notarization).
+# before anything publishes; without them the build ad-hoc signs instead.
 #
 # Secrets contract:
 #   MACOS_CERT_P12_B64   base64-encoded Developer ID Application certificate (.p12).
@@ -18,12 +17,11 @@
 #     All five or none: `build` Developer ID-signs and notarizes only when every one
 #     is present, and otherwise falls back to ad-hoc signing with a loud warning.
 #     Signing runs only on tag pushes and the guarded dispatch fallback — this
-#     workflow has no PR trigger. See
-#     docs/releasing.md#macos-signing-and-notarization.
+#     workflow has no PR trigger.
 #   HOMEBREW_TOKEN       PAT with push access to dosu-ai/homebrew-dosu (tap-update).
 #
 # npm needs no secret: publishing is OIDC trusted publishing, configured on all
-# five packages (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+# five packages.
 #
 # Re-run safety: every publish job is idempotent — npm skips versions
 # that already exist, github-release refreshes assets instead of 422ing, Docker
@@ -37,8 +35,7 @@ name: release
 on:
   push:
     tags: ["v*"]
-  # Manual fallback / re-runs — gated by meta's tag guard
-  # (docs/releasing.md#tag-guard-and-prerelease-detection).
+  # Manual fallback / re-runs — gated by meta's tag guard.
   workflow_dispatch:
     inputs:
       version:
@@ -90,8 +87,8 @@ jobs:
 
           if [[ "$VERSION" == *-* ]]; then IS_PRERELEASE=true; else IS_PRERELEASE=false; fi
 
-          # is_latest: is VERSION the highest stable vX.Y.Z on origin right now? (Pure function of
-          # live tag state — a v0.1.0 rerun after v0.2.0 exists computes false, by construction.)
+          # is_latest: is VERSION the highest stable vX.Y.Z on origin right now? This is a pure
+          # function of live tag state, so re-running an older release cannot reclaim `latest`.
           # sed strips the peeled ^{} refs ls-remote emits for annotated signed tags; sort -V on a
           # pre-filtered stable-only list avoids git's versionsort.suffix prerelease-ordering trap.
           IS_LATEST=false
@@ -100,8 +97,8 @@ jobs:
             # command substitution propagates its exit status, so a transient ls-remote failure
             # kills the job here instead of silently yielding HIGHEST=$VERSION. is_latest must
             # fail CLOSED — failing open re-creates the exact :latest/dist-tag/tap regression
-            # this gate exists to prevent. (Empty tag list on the first release is fine: the
-            # union with $VERSION below makes v0.1.0 correctly compute is_latest=true.)
+            # this gate exists to prevent. An empty stable-tag list is fine because the union with
+            # $VERSION below makes the first stable release compute is_latest=true.
             TAGS="$(git ls-remote --tags origin 'v*')"
             HIGHEST=$(
               { printf '%s\n' "$TAGS" \
@@ -188,8 +185,7 @@ jobs:
         run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
 
       # The determinism canary diffs against THESE hashes — Developer ID signatures
-      # embed a secure timestamp and would always diverge post-signing
-      # (docs/releasing.md#determinism-canary).
+      # embed a secure timestamp and would always diverge post-signing.
       - name: Record pre-signing SHA256s
         run: sha256sum dist/bin/*/decant | tee presign-sha256s.txt
 
@@ -212,7 +208,7 @@ jobs:
 
       # Developer ID signing needs all five Apple secrets. Until Apple Developer
       # enrollment lands they are absent, so the release ad-hoc signs instead of
-      # failing — see docs/releasing.md#macos-signing-and-notarization. This step
+      # failing. This step
       # owns the presence check for both signing steps below; it tests emptiness
       # only and never echoes a secret value.
       - name: Determine signing mode
@@ -236,14 +232,14 @@ jobs:
             echo "signing mode: Developer ID (sign + notarize)"
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::${missing} of 5 Apple signing secrets are missing — falling back to AD-HOC signing. The darwin binaries will NOT be Developer ID-signed or notarized, and macOS users will get a Gatekeeper prompt on first run that they must clear by hand. Configure all five secrets to publish notarized builds: docs/releasing.md#macos-signing-and-notarization"
+            echo "::warning::${missing} of 5 Apple signing secrets are missing — falling back to AD-HOC signing. The darwin binaries will NOT be Developer ID-signed or notarized, and macOS users will get a Gatekeeper prompt on first run that they must clear by hand. Configure all five secrets to publish notarized builds."
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Runs only when every Apple secret is present. Signing happens only on tag
       # builds by construction — this workflow has no PR trigger. A failure here
       # (bad certificate, notary rejection) fails the release before anything
-      # publishes: docs/releasing.md#macos-signing-and-notarization.
+      # publishes.
       - name: Sign and notarize darwin binaries (Developer ID)
         if: steps.signing-mode.outputs.signed == 'true'
         env:
@@ -267,8 +263,7 @@ jobs:
 
           for target in darwin-arm64 darwin-x64; do
             # --for-notarization enforces hardened runtime + secure timestamp;
-            # entitlements.plist carries Bun's documented JIT entitlements
-            # (docs/releasing.md#macos-signing-and-notarization).
+            # entitlements.plist carries Bun's documented JIT entitlements.
             rcodesign sign \
               --p12-file "${keys_dir}/cert.p12" \
               --p12-password-file "${keys_dir}/p12-password" \
@@ -278,8 +273,7 @@ jobs:
 
             # Notarize a temporary .zip: the Notary API rejects .tar.gz, and a
             # bare Mach-O binary cannot be stapled, so the ticket stays with
-            # Apple rather than in the file
-            # (docs/releasing.md#macos-signing-and-notarization). Retry transient
+            # Apple rather than in the file. Retry transient
             # notary failures; a real rejection fails the release here, before
             # anything publishes.
             zip -j -q "${keys_dir}/decant-${target}.zip" "dist/bin/${target}/decant"
@@ -312,15 +306,14 @@ jobs:
           for target in darwin-arm64 darwin-x64; do
             rcodesign sign "dist/bin/${target}/decant"
           done
-          echo "::warning::darwin binaries are AD-HOC signed — not Developer ID-signed and not notarized. macOS users will see a Gatekeeper prompt on first run: docs/releasing.md#macos-signing-and-notarization"
+          echo "::warning::darwin binaries are AD-HOC signed — not Developer ID-signed and not notarized. macOS users will see a Gatekeeper prompt on first run."
 
       - name: Package deterministic release tarballs
         run: |
           set -euo pipefail
           mkdir -p dist/release
           # Deterministic archives: fixed member order/ownership, mtimes pinned to
-          # the tag commit time, and gzip without the embedded timestamp
-          # (docs/releasing.md#deterministic-tarballs).
+          # the tag commit time, and gzip without the embedded timestamp.
           SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
             cp LICENSE NOTICE "dist/bin/${target}/"
@@ -384,8 +377,7 @@ jobs:
 
   # Release GATE, not an observer: every publish job sits downstream of this one,
   # so a darwin binary that will not run — or that fails the Gatekeeper gate on a
-  # Developer ID build — blocks all publishing
-  # (docs/releasing.md#macos-signing-and-notarization).
+  # Developer ID build — blocks all publishing.
   # Run both architectures: GitHub's standard macOS label is arm64, so an explicit
   # Intel runner is required to exercise the darwin-x64 artifact too.
   smoke-darwin:
@@ -498,8 +490,7 @@ jobs:
             echo "determinism canary: rebuild is byte-identical to the release build"
           else
             # Bun does not formally guarantee deterministic --compile output; measure,
-            # don't promise. Promote to blocking once green for a few releases
-            # (docs/releasing.md#determinism-canary).
+            # don't promise. Promote to blocking once green for a few releases.
             echo "::warning::determinism canary: rebuild diverged from the release build's pre-signing hashes (non-blocking)"
           fi
 
@@ -533,8 +524,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Staging must consume the binaries `build` signed — never rebuild here
-      # (docs/releasing.md#macos-signing-and-notarization).
+      # Staging must consume the binaries `build` signed — never rebuild here.
       - name: Download signed binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -567,8 +557,7 @@ jobs:
 
       # Node 24's bundled npm already clears the trusted-publishing floor. Do NOT
       # `npm install -g npm@latest` — an unpinned moving target at the most
-      # supply-chain-sensitive step; assert the floor instead
-      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      # supply-chain-sensitive step; assert the floor instead.
       - name: Assert npm supports trusted publishing (>= 11.5.1)
         run: dpkg --compare-versions "$(npm --version)" ge 11.5.1 || exit 1
 
@@ -611,9 +600,8 @@ jobs:
           done
           rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
 
-      # Dist-tag chosen at publish time: `npm dist-tag add` is not OIDC-capable, so
-      # tagging after the fact would silently keep the bootstrap token alive past
-      # its purpose (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      # Dist-tag chosen at publish time: `npm dist-tag add` is not OIDC-capable and
+      # would require reintroducing token authentication.
       - name: Derive npm dist-tag channel
         run: |
           if [[ "${{ needs.meta.outputs.is_prerelease }}" == "true" ]]; then CHANNEL=next
@@ -622,10 +610,8 @@ jobs:
           echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
 
       # OIDC trusted publishing: NO NODE_AUTH_TOKEN anywhere in this step — its
-      # presence silently flips npm onto the legacy token path. The v0.1.0
-      # bootstrap-token step that used to sit beside this one is gone: trusted
-      # publishers now exist on all five packages
-      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      # presence silently flips npm onto the legacy token path. Trusted
+      # publishers are configured on all five packages.
       #
       # Publish ORDER MATTERS: the four platform packages first, because the
       # launcher declares optionalDependencies on them, then `@dosu/decant`.
@@ -675,12 +661,9 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      # A package's FIRST publish takes materially longer to become resolvable
-      # than a subsequent version of an existing package: v0.1.0-rc.2 exhausted a
-      # 10x30s budget and was resolvable minutes later, with the same command
-      # succeeding by hand. 20 attempts covers that without turning a genuine
-      # publish failure into a 20-minute wait, because a real failure fails the
-      # `npm` job upstream and this job never runs.
+      # Registry propagation can take several minutes. Twenty attempts cover that
+      # delay without masking a publish failure, because a real failure stops the
+      # upstream `npm` job and this job never runs.
       - name: Run the launcher like an npx user (retry for registry propagation)
         run: |
           set -euo pipefail
@@ -783,7 +766,7 @@ jobs:
 
       # Hand-rolled tag list on purpose: docker/metadata-action's latest=auto cannot
       # compare across tags and would re-tag :latest on a backport — meta owns that
-      # decision (docs/releasing.md#tag-guard-and-prerelease-detection).
+      # decision.
       - name: Compute tag list
         id: tags
         env:

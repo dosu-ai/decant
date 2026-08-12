@@ -3617,7 +3617,14 @@ function useDisabledFocusRescue() {
     const remember = (event: FocusEvent) => {
       lastFocused = event.target instanceof HTMLElement ? event.target : null;
     };
+    const onTheFloor = () => {
+      const landed = document.activeElement;
+      return landed === null || landed === document.body || landed === document.documentElement;
+    };
     const rescue = (control: HTMLElement) => {
+      // Landing outside the region the reader was working in, or outside an open
+      // dialog, is more disorienting than leaving focus where it fell.
+      const boundary = control.closest('dialog, [role="dialog"], main, nav, form');
       for (let scope = control.parentElement; scope != null; scope = scope.parentElement) {
         const candidates = Array.from(
           scope.querySelectorAll<HTMLElement>(FOCUS_CANDIDATE_SELECTOR),
@@ -3628,33 +3635,66 @@ function useDisabledFocusRescue() {
           next.focus();
           return;
         }
+        if (scope === boundary) {
+          return;
+        }
+      }
+    };
+    // A control usually disables as one render of an async transition, while the
+    // rest of its group is still disabled and the outgoing rows are still
+    // mounted, so the first pick can be unmounted a frame later. Keep re-picking
+    // while focus is on the floor until the transition settles.
+    const settleWindowMs = 600;
+    let disposed = false;
+    const settle = (control: HTMLElement, deadline: number) => {
+      if (disposed) {
+        return;
+      }
+      if (onTheFloor() && control.isConnected) {
+        rescue(control);
+      }
+      if (performance.now() < deadline) {
+        requestAnimationFrame(() => settle(control, deadline));
       }
     };
     const observer = new MutationObserver((records) => {
       for (const record of records) {
         const control = record.target;
-        const active = document.activeElement;
         if (
           control !== lastFocused ||
           !(control instanceof HTMLElement) ||
           !control.matches(":disabled") ||
-          (active !== null && active !== document.body && active !== document.documentElement)
+          !onTheFloor()
         ) {
           continue;
         }
         lastFocused = null;
-        rescue(control);
+        settle(control, performance.now() + settleWindowMs);
         return;
       }
     });
+    // Focus leaving a control that is still enabled means the reader moved on,
+    // so a later disable on that control is not ours to rescue.
+    const forget = (event: FocusEvent) => {
+      if (
+        event.target === lastFocused &&
+        event.target instanceof HTMLElement &&
+        !event.target.matches(":disabled")
+      ) {
+        lastFocused = null;
+      }
+    };
     document.addEventListener("focusin", remember);
+    document.addEventListener("focusout", forget);
     observer.observe(document.body, {
       attributeFilter: ["disabled"],
       attributes: true,
       subtree: true,
     });
     return () => {
+      disposed = true;
       document.removeEventListener("focusin", remember);
+      document.removeEventListener("focusout", forget);
       observer.disconnect();
     };
   }, []);

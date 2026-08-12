@@ -1,7 +1,11 @@
 import * as echarts from "echarts";
 import type { ContextWindowTimeline } from "../context-window.ts";
 import type { DimRow } from "../stats.ts";
-import { layoutContextCurve } from "../ui/context-window-layout.ts";
+import {
+  groupContextMarkers,
+  layoutContextAnnotations,
+  layoutContextCurve,
+} from "../ui/context-window-layout.ts";
 
 export interface ReportChartSize {
   width?: number;
@@ -17,8 +21,13 @@ const SAGE = "#778561";
 const SAGE_LIGHT = "#b4bb91";
 const REPORT_SANS_STACK =
   "'IBM Plex Sans', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-const CONTEXT_GRID_HORIZONTAL_PADDING = 80;
+const CONTEXT_GRID_TOP = 24;
+const CONTEXT_GRID_LEFT = 62;
+const CONTEXT_GRID_RIGHT = 18;
+const CONTEXT_GRID_HORIZONTAL_PADDING = CONTEXT_GRID_LEFT + CONTEXT_GRID_RIGHT;
 const CONTEXT_MARKER_GAP_PX = 3;
+const CONTEXT_COMPACTION_LABEL_SEPARATION_PX = 100;
+const CONTEXT_COMPACTION_LABEL_LANE_GAP_PX = 13;
 const REPORT_SVG_TAGS = new Set([
   "svg",
   "g",
@@ -45,6 +54,14 @@ export interface ReportContextWindowGeometry {
   segments: [number, number][][];
   slotWidth: number;
   turnOrder: number[];
+}
+
+export interface ReportCompactionLabel {
+  align: "left" | "right";
+  lane: number;
+  markerIndex: number;
+  offset: [number, number];
+  text: string;
 }
 
 /**
@@ -214,6 +231,12 @@ export function renderContextWindowChart(
   const width = size.width ?? DEFAULT_WIDTH;
   const geometry = reportContextWindowGeometry(timeline, width);
   const windowTokens = timeline.window_tokens;
+  const labelList = reportCompactionLabels(geometry.compactionXs, width);
+  const compactionLabels = new Map(labelList.map((label) => [label.markerIndex, label]));
+  const compactionLabelLanes = labelList.reduce(
+    (highestLane, label) => Math.max(highestLane, label.lane),
+    0,
+  );
   const compactionMarkLine =
     geometry.compactionXs.length === 0
       ? undefined
@@ -223,10 +246,25 @@ export function renderContextWindowChart(
           label: {
             color: MUTED,
             fontSize: 10,
-            formatter: "compaction",
+            position: "end" as const,
+            verticalAlign: "bottom" as const,
           },
           lineStyle: { color: MUTED, type: "dashed" as const, width: 1 },
-          data: geometry.compactionXs.map((x) => ({ xAxis: x })),
+          data: geometry.compactionXs.map((x, index) => {
+            const label = compactionLabels.get(index);
+            return {
+              xAxis: x,
+              label:
+                label == null
+                  ? { show: false }
+                  : {
+                      align: label.align,
+                      formatter: label.text,
+                      offset: label.offset,
+                      show: true,
+                    },
+            };
+          }),
         };
   const lineSeries = geometry.segments.map(
     (segment, index): echarts.LineSeriesOption => ({
@@ -258,7 +296,12 @@ export function renderContextWindowChart(
       : [];
   return renderChartSvg(
     {
-      grid: { top: 24, right: 18, bottom: 44, left: 62 },
+      grid: {
+        top: CONTEXT_GRID_TOP + compactionLabelLanes * CONTEXT_COMPACTION_LABEL_LANE_GAP_PX,
+        right: CONTEXT_GRID_RIGHT,
+        bottom: 44,
+        left: CONTEXT_GRID_LEFT,
+      },
       xAxis: {
         type: "value",
         min: 0,
@@ -288,6 +331,53 @@ export function renderContextWindowChart(
     },
     { width, height: size.height ?? 280 },
   );
+}
+
+/**
+ * Nearby compaction lines share one count label. Repeating the same word above
+ * every line adds no information and makes dense report charts unreadable.
+ * Remaining edge collisions move into additional lanes above the plot.
+ */
+export function reportCompactionLabels(
+  compactionXs: readonly number[],
+  width = DEFAULT_WIDTH,
+): ReportCompactionLabel[] {
+  const plotLeft = CONTEXT_GRID_LEFT;
+  const plotRight = Math.max(plotLeft, width - CONTEXT_GRID_RIGHT);
+  const plotWidth = plotRight - plotLeft;
+  const markerPixels = compactionXs.map((x) => plotLeft + x * plotWidth);
+  const grouped = groupContextMarkers(markerPixels, CONTEXT_COMPACTION_LABEL_SEPARATION_PX).map(
+    (group) => {
+      const markerIndex = group.indexes.reduce((nearest, index) => {
+        const nearestDistance = Math.abs((markerPixels[nearest] ?? group.x) - group.x);
+        const distance = Math.abs((markerPixels[index] ?? group.x) - group.x);
+        return distance < nearestDistance ? index : nearest;
+      }, group.indexes[0] ?? 0);
+      return {
+        markerIndex,
+        text: group.indexes.length === 1 ? "compaction" : `${group.indexes.length} compactions`,
+        x: markerPixels[markerIndex] ?? group.x,
+      };
+    },
+  );
+  const placements = layoutContextAnnotations(grouped, {
+    labelYs: grouped.map((_, lane) =>
+      lane === 0 ? 0 : -lane * CONTEXT_COMPACTION_LABEL_LANE_GAP_PX,
+    ),
+    plotLeft,
+    plotRight,
+  });
+
+  return grouped.map((group, index) => {
+    const placement = placements[index];
+    return {
+      align: placement?.anchor === "end" ? "right" : "left",
+      lane: placement?.lane ?? 0,
+      markerIndex: group.markerIndex,
+      offset: [placement == null ? 0 : placement.textX - group.x, placement?.textY ?? 0],
+      text: group.text,
+    };
+  });
 }
 
 /**

@@ -42,7 +42,8 @@ describe("Dosu product copy", () => {
     for (const document of [readme, npmReadme]) {
       const normalized = document.replaceAll("\n", " ");
       expect(normalized).toContain("Knowledge Infrastructure for Agents");
-      expect(normalized).toContain(
+      expect(normalized).toContain("Dosu helps make agents faster, cheaper, and more effective.");
+      expect(normalized).not.toContain(
         "Dosu makes agents faster, cheaper, and more effective across every run.",
       );
       expect(normalized).toContain(

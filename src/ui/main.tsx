@@ -8837,7 +8837,7 @@ function SessionDetailView({
                   type="button"
                 >
                   <Icon name="trash" />
-                  <span>Delete session…</span>
+                  <span>Delete session</span>
                 </button>
               </OverflowMenu>
             </div>

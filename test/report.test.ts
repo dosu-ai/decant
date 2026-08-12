@@ -9,6 +9,7 @@ import {
   renderChartSvg,
   renderContextWindowChart,
   renderSessionsByDayChart,
+  reportCompactionLabels,
   reportContextWindowGeometry,
   sanitizeReportSvg,
 } from "../src/report/charts.ts";
@@ -359,6 +360,32 @@ describe("report charts", () => {
     expect(svg).toContain("<svg");
     expect(svg).toContain("compaction");
     expect(svg).not.toContain("NaN");
+
+    const clusteredSvg = renderContextWindowChart({
+      ...timeline,
+      compactions: [
+        {
+          seq: 2,
+          timestamp: "2026-07-28T10:01:00Z",
+          trigger: "auto",
+          pre_tokens: 24_000,
+          post_tokens: 5_000,
+        },
+        ...timeline.compactions,
+      ],
+    });
+    expect(clusteredSvg).toContain("2 compactions");
+  });
+
+  test("groups nearby compaction labels so report annotations cannot collide", () => {
+    expect(reportCompactionLabels([0.4, 0.43, 0.8], 760)).toMatchObject([
+      { markerIndex: 0, text: "2 compactions" },
+      { markerIndex: 2, text: "compaction" },
+    ]);
+    expect(reportCompactionLabels([0.79, 0.94], 760)).toMatchObject([
+      { lane: 0, offset: [6, 0] },
+      { lane: 1, offset: [-6, -13] },
+    ]);
   });
 
   test("report narrative and notices name the bundled font families and licenses", () => {

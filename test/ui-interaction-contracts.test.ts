@@ -192,7 +192,8 @@ describe("UI interaction contracts", () => {
     expect(session).toContain("archiveActionFor(detail.summary)");
     expect(session).toContain("Archive session");
     expect(session).toContain("Unarchive session");
-    expect(session).toContain("Delete session…");
+    expect(session).toContain("Delete session");
+    expect(session).not.toContain("Delete session…");
     expect(session).toContain("sessionStateRequest(id, state)");
     expect(session).toContain("sessionStateMutationGenerationRef.current !== mutationGeneration");
   });

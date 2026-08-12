@@ -12,8 +12,8 @@ and your transcripts never leave your machine.
 
 Built by
 [Dosu](https://dosu.dev?utm_source=decant&utm_medium=npm&utm_campaign=attribution&utm_content=package_readme),
-Knowledge Infrastructure for Agents. Dosu makes agents faster, cheaper, and
-more effective across every run.
+Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
+and more effective.
 
 ## Run without installing
 

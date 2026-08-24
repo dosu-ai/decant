@@ -55,10 +55,11 @@ describe("disabled focus rescue wiring", () => {
   test("only rescues the control that held focus, and never steals it back", () => {
     expect(hook).toContain("control !== lastFocused");
     expect(hook).toContain('control.matches(":disabled")');
-    expect(hook).toContain(
-      "landed === null || landed === document.body || landed === document.documentElement",
-    );
-    expect(hook).toContain("!onTheFloor()");
+    expect(hook).toContain("landed === null");
+    expect(hook).toContain('landed === control && control.matches(":disabled")');
+    expect(hook).toContain("landed === document.body");
+    expect(hook).toContain("landed === document.documentElement");
+    expect(hook).toContain("!focusNeedsRescue(control)");
   });
 
   test("forgets a control the reader left while it was still enabled", () => {
@@ -68,27 +69,48 @@ describe("disabled focus rescue wiring", () => {
     expect(hook).toContain('!event.target.matches(":disabled")');
   });
 
-  test("re-picks while focus is on the floor until the transition settles", () => {
-    expect(hook).toContain("requestAnimationFrame(() => settle(control, deadline))");
+  test("retries from later disabled mutations instead of racing a fixed timer", () => {
+    expect(hook).toContain("let pendingRescue: WeakRef<HTMLElement> | null = null");
+    expect(hook).toContain("pendingRescue = new WeakRef(control)");
+    expect(hook).toContain("const control = pendingRescue?.deref()");
     expect(hook).toContain("control.isConnected");
-    expect(hook).toContain("performance.now() + settleWindowMs");
-    expect(hook).toContain("disposed = true");
+    expect(hook).toContain("retryPending();");
+    expect(hook).not.toContain("settleWindowMs");
   });
 
-  test("hands focus back to a busy control once it re-enables", () => {
-    expect(hook).toContain(
-      "pending = { control: new WeakRef(control), landed: new WeakRef(next) }",
-    );
-    expect(hook).toContain("control === pendingControl");
-    expect(hook).toContain('!control.matches(":disabled")');
-    expect(hook).toContain("document.activeElement === pending?.landed.deref()");
-    expect(hook).toContain("control.isConnected");
+  test("hands focus back only while focus remains at the rescue landing", () => {
+    const recordRestore = hook.indexOf("pendingRestore = {");
+    const moveFocus = hook.indexOf("next.focus();", recordRestore);
+    expect(recordRestore).toBeGreaterThan(-1);
+    expect(recordRestore).toBeLessThan(moveFocus);
+    expect(hook).toContain("const restoreControl = pendingRestore?.control.deref()");
+    expect(hook).toContain("const restoreLanding = pendingRestore?.landed.deref()");
+    expect(hook).toContain("document.activeElement !== restoreLanding");
+    expect(hook).toContain('!restoreControl.matches(":disabled")');
+    expect(hook).toContain("restoreControl.focus()");
   });
 
-  test("does not pin a control that never re-enables", () => {
-    expect(hook).toContain("WeakRef<HTMLElement>");
-    expect(hook).toContain("pending?.control.deref()");
-    expect(hook).toContain("pending !== null && pendingControl === undefined");
+  test("restores directly if the original re-enables before a landing is available", () => {
+    const reenabled = hook.indexOf('if (!control.matches(":disabled"))');
+    expect(reenabled).toBeGreaterThan(-1);
+    expect(hook.indexOf("control.focus();", reenabled)).toBeGreaterThan(reenabled);
+  });
+
+  test("does not pin controls that never re-enable", () => {
+    expect(hook).toContain("pendingRescue: WeakRef<HTMLElement>");
+    expect(hook).toContain("control: WeakRef<HTMLElement>");
+    expect(hook).toContain("landed: WeakRef<HTMLElement>");
+    expect(hook).toContain("pendingRestore?.control.deref()");
+    expect(hook).toContain("pendingRestore?.landed.deref()");
+  });
+
+  test("abandons pending rescue and restore state when the reader takes another action", () => {
+    expect(hook).toContain("pendingRescue = null");
+    expect(hook).toContain("pendingRestore = null");
+    expect(hook).toContain('document.addEventListener("keydown", cancelPending, true)');
+    expect(hook).toContain('document.addEventListener("pointerdown", cancelPending, true)');
+    expect(hook).toContain('document.removeEventListener("keydown", cancelPending, true)');
+    expect(hook).toContain('document.removeEventListener("pointerdown", cancelPending, true)');
   });
 
   test("searches widening scopes with the shared focus selector, up to a landmark", () => {

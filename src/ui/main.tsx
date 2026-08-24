@@ -3614,21 +3614,32 @@ function useDialogFocusTrap(
 function useDisabledFocusRescue() {
   useEffect(() => {
     let lastFocused: HTMLElement | null = null;
+    let pendingRescue: WeakRef<HTMLElement> | null = null;
+    // A busy control may come back, while a redundant control (for example,
+    // Next on the last page) may never re-enable. Keep both elements weak so a
+    // pending restore cannot retain a detached subtree for the life of the app.
+    let pendingRestore: {
+      control: WeakRef<HTMLElement>;
+      landed: WeakRef<HTMLElement>;
+    } | null = null;
     const remember = (event: FocusEvent) => {
-      lastFocused = event.target instanceof HTMLElement ? event.target : null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      pendingRescue = null;
+      if (pendingRestore?.landed.deref() !== target) {
+        pendingRestore = null;
+      }
+      lastFocused = target;
     };
-    const onTheFloor = () => {
+    const focusNeedsRescue = (control: HTMLElement) => {
       const landed = document.activeElement;
-      return landed === null || landed === document.body || landed === document.documentElement;
+      return (
+        landed === null ||
+        (landed === control && control.matches(":disabled")) ||
+        landed === document.body ||
+        landed === document.documentElement
+      );
     };
-    // A control that disables because it is busy, like Sync, comes back; one that
-    // disables because it is redundant, like Next on the last page, does not. The
-    // difference does not need naming: a control that never re-enables never
-    // claims focus back, so the same pending record covers both.
-    // Weak, because this hook lives as long as the app and a control that never
-    // re-enables would otherwise pin its detached subtree until the next rescue.
-    let pending: { control: WeakRef<HTMLElement>; landed: WeakRef<HTMLElement> } | null = null;
-    const rescue = (control: HTMLElement) => {
+    const rescueTarget = (control: HTMLElement) => {
       // Landing outside the region the reader was working in, or outside an open
       // dialog, is more disorienting than leaving focus where it fell.
       const boundary = control.closest('dialog, [role="dialog"], main, nav, form');
@@ -3639,67 +3650,75 @@ function useDisabledFocusRescue() {
         const enabled = candidates.map((element) => !element.matches(":disabled"));
         const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
         if (next != null) {
-          pending = { control: new WeakRef(control), landed: new WeakRef(next) };
-          next.focus();
-          return;
+          return next;
         }
         if (scope === boundary) {
-          return;
+          return null;
         }
       }
+      return null;
     };
-    // A control usually disables as one render of an async transition, while the
-    // rest of its group is still disabled and the outgoing rows are still
-    // mounted, so the first pick can be unmounted a frame later. Keep re-picking
-    // while focus is on the floor until the transition settles.
-    const settleWindowMs = 600;
-    let disposed = false;
-    const settle = (control: HTMLElement, deadline: number) => {
-      if (disposed) {
+    const retryPending = () => {
+      const control = pendingRescue?.deref();
+      if (control == null || !control.isConnected || !focusNeedsRescue(control)) {
+        pendingRescue = null;
         return;
       }
-      if (onTheFloor() && control.isConnected) {
-        rescue(control);
+      // If the original control re-enabled before the rest of its group offered
+      // a safe landing place, it is itself the least surprising destination.
+      if (!control.matches(":disabled")) {
+        pendingRescue = null;
+        control.focus();
+        return;
       }
-      if (performance.now() < deadline) {
-        requestAnimationFrame(() => settle(control, deadline));
+      const next = rescueTarget(control);
+      if (next != null) {
+        // Set this before focus(): focusin fires synchronously and must recognize
+        // the landing as ours rather than treating it as reader navigation.
+        pendingRestore = {
+          control: new WeakRef(control),
+          landed: new WeakRef(next),
+        };
+        next.focus();
+        if (document.activeElement !== next) {
+          pendingRestore = null;
+        }
       }
     };
     const observer = new MutationObserver((records) => {
+      const restoreControl = pendingRestore?.control.deref();
+      const restoreLanding = pendingRestore?.landed.deref();
+      if (
+        restoreControl == null ||
+        restoreLanding == null ||
+        !restoreControl.isConnected ||
+        !restoreLanding.isConnected ||
+        document.activeElement !== restoreLanding
+      ) {
+        pendingRestore = null;
+      } else if (!restoreControl.matches(":disabled")) {
+        pendingRestore = null;
+        restoreControl.focus();
+      }
+
       for (const record of records) {
         const control = record.target;
-        const pendingControl = pending?.control.deref();
-        if (pending !== null && pendingControl === undefined) {
-          pending = null;
-        }
-        if (
-          pendingControl !== undefined &&
-          control === pendingControl &&
-          control instanceof HTMLElement &&
-          !control.matches(":disabled")
-        ) {
-          // Focus still sitting exactly where the rescue put it is the whole test
-          // for "the reader has not moved on". Anywhere else and the work is
-          // theirs, not ours to interrupt.
-          const restore = document.activeElement === pending?.landed.deref() && control.isConnected;
-          pending = null;
-          if (restore) {
-            control.focus();
-          }
-          continue;
-        }
         if (
           control !== lastFocused ||
           !(control instanceof HTMLElement) ||
           !control.matches(":disabled") ||
-          !onTheFloor()
+          !focusNeedsRescue(control)
         ) {
           continue;
         }
         lastFocused = null;
-        settle(control, performance.now() + settleWindowMs);
-        return;
+        pendingRescue = new WeakRef(control);
+        break;
       }
+      // A pagination group can remain entirely disabled for longer than any
+      // safe timer. Every relevant control becoming usable changes its disabled
+      // attribute, so retry from that mutation instead of racing the request.
+      retryPending();
     });
     // Focus leaving a control that is still enabled means the reader moved on,
     // so a later disable on that control is not ours to rescue.
@@ -3712,17 +3731,24 @@ function useDisabledFocusRescue() {
         lastFocused = null;
       }
     };
+    const cancelPending = () => {
+      pendingRescue = null;
+      pendingRestore = null;
+    };
     document.addEventListener("focusin", remember);
     document.addEventListener("focusout", forget);
+    document.addEventListener("keydown", cancelPending, true);
+    document.addEventListener("pointerdown", cancelPending, true);
     observer.observe(document.body, {
       attributeFilter: ["disabled"],
       attributes: true,
       subtree: true,
     });
     return () => {
-      disposed = true;
       document.removeEventListener("focusin", remember);
       document.removeEventListener("focusout", forget);
+      document.removeEventListener("keydown", cancelPending, true);
+      document.removeEventListener("pointerdown", cancelPending, true);
       observer.disconnect();
     };
   }, []);
@@ -8963,7 +8989,7 @@ function SessionDetailView({
                   type="button"
                 >
                   <Icon name="trash" />
-                  <span>Delete session…</span>
+                  <span>Delete session</span>
                 </button>
               </OverflowMenu>
             </div>

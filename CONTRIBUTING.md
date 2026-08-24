@@ -1,103 +1,113 @@
 # Contributing to Decant
 
-Thanks for improving Decant. [AGENTS.md](AGENTS.md) is the canonical reference
-for commands, conventions, and project invariants; this file is the shorter
-on-ramp.
+Thanks for improving Decant. Bug reports, feature proposals, documentation
+fixes, and code contributions are welcome.
 
-## Prerequisites
+Before sharing logs or fixtures, remember that coding-agent transcripts can
+contain source code, prompts, credentials, and local paths. Use synthetic data
+only. See [Security and privacy](#security-and-privacy) below.
 
-- Bun 1.3+
-- pre-commit, if you want local hooks (`pipx install pre-commit` or
-  `brew install pre-commit`)
-- Docker, only if you are touching the container build
+## Report a bug or propose a feature
 
-## Get set up
+Use the repository's issue templates and include the Decant version, operating
+system and architecture, install method, exact command, expected result, and
+actual result. A small, hand-written synthetic JSONL reproduction is especially
+helpful.
 
-```bash
-git clone https://github.com/dosu-ai/decant
+Report security vulnerabilities privately through [SECURITY.md](SECURITY.md),
+not a public issue.
+
+## Development setup
+
+Requirements:
+
+- Bun 1.3 or newer.
+- Docker only when changing the container build.
+- Optional: [pre-commit](https://pre-commit.com) for local hooks.
+
+```sh
+git clone https://github.com/dosu-ai/decant.git
 cd decant
 bun run dev
 ```
 
-`bun run dev` performs a frozen dependency install, starts the local UI, and
-runs the startup sync. Open `http://127.0.0.1:3000`.
+`bun run dev` performs a frozen dependency install, starts the local UI at
+<http://127.0.0.1:3000>, indexes existing sessions, and watches for changes.
 
-Install optional hooks after setup if you use pre-commit locally:
+Install the optional hooks with:
 
-```bash
+```sh
 pre-commit install
 ```
 
-## Make your change
+## Make a change
 
-We work test-first. Add or update focused tests alongside behavior changes and
-keep commits small.
+Branch from `main`, keep the change focused, and add or update tests alongside
+behavior changes. Coding agents should read [AGENTS.md](AGENTS.md) for the
+architecture, invariants, and documentation map.
 
-Before you push:
+Useful contribution paths:
 
-```bash
+- New source parser, following [Add a source](docs/adding-a-source.md).
+- Model pricing, which requires updating `src/cost.ts`, normalizing model
+  names, adding focused tests, and citing dated first-party rates in
+  [Pricing estimates](docs/pricing.md).
+- Local API: update the implementation, `docs/api/openapi.yaml`,
+  `docs/api/routes.md`, and contract tests together.
+- Schema, which requires adding a new migration and never editing a migration
+  already committed to a branch. Update the effective schema and migration
+  tests together.
+- UI: include a screenshot or short recording in the pull request.
+
+When testing against a scratch archive, pass `--no-sync` or set
+`DECANT_NO_SYNC` so it is not populated from your real session directories:
+
+```sh
+bun run src/cli.ts --db /tmp/decant-dev.db --no-sync serve --no-open
+```
+
+## Validate
+
+Run the focused tests while iterating, then the full local gate before opening
+a pull request:
+
+```sh
 bun test
 bunx tsc --noEmit
 bunx biome check .
+just check
 ```
 
-`pre-commit run --all-files` runs the local hook suite.
+`just check` also builds and installs staged native/npm artifacts, so it needs
+network access. If Docker is in scope and available, also run a local image
+build and `--help` smoke.
 
-## Project invariants
-
-1. Core modules do not print; `src/cli.ts` owns output and exit codes.
-2. One Bun process owns SQLite directly. Do not reintroduce the old daemon,
-   Phoenix app, token/lock file, or cross-process API contract.
-3. Decant is local-first and offline: no outbound runtime network calls and no
-   LLM calls.
-4. Never commit secrets, private transcripts, or a personal archive DB.
-5. Pre-v8 archives are rebuild-only; v8 and newer migrate forward on open. See
-   `LATEST_SCHEMA_VERSION` in `src/db.ts` for the current baseline rather than
-   trusting a number written down here.
-
-Adding model pricing? Update `src/cost.ts`, include string normalization, and add
-tests.
-
-Adding a source tool? Add `src/sources/<tool>.ts`, synthetic fixtures, parser
-tests, ingest/query coverage, and golden updates.
-
-Adding support for a new agent CLI? Follow the agent-executable prompt in docs/prompts/add-source.md.
-
-## How we work
-
-Decant is trunk-based. There is one long-lived branch, `main`, and it is always
-releasable.
-
-- **Branch off `main`, keep it short-lived.** Days, not weeks. A branch that
-  lives long enough to drift is a branch that will conflict, and conflicts get
-  resolved by whoever has the least context.
-- **One PR, one concern.** A PR that mixes a feature with unrelated cleanup is
-  harder to review and much harder to revert.
-- **Squash-merge.** `main`'s history is one commit per PR. Your branch is
-  deleted on merge.
-- **`main` stays green.** Every PR needs CI passing and one approving review.
-- **Tags are the only thing that publishes.** Merging to `main` ships nothing.
-  Pushing a `v*` tag builds, signs, and publishes to npm, Homebrew, GHCR, and
-  the GitHub Release. Nothing else does. See
-  [docs/releasing.md](docs/releasing.md).
+Do not weaken or remove tests to make a change pass.
 
 ## Commits and pull requests
 
-- Use Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`,
-  `refactor:`, `style:`, `ci:` with optional scope.
-- **Commits must be signed.** `main` rejects unsigned commits. Either GPG or SSH
-  signing works — see
-  [GitHub's guide](https://docs.github.com/authentication/managing-commit-signature-verification)
-  — and `git config commit.gpgsign true` makes it automatic.
-- Branch off `main`, open a PR, and make sure CI is green.
+- Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`,
+  `refactor:`, and `chore:`.
+- Sign commits. The protected `main` branch requires verified commits.
+- Keep one concern per pull request and explain the user-visible outcome.
+- Include the commands you ran and their results.
+- Link the issue the pull request closes when one exists.
+- Keep `main` green, as every pull request needs passing CI and review.
 
-## Reporting bugs and proposing features
+Maintainers squash-merge pull requests.
 
-Open an issue with enough detail to reproduce: Decant version, OS, command,
-actual result, and expected result. For security issues, do not open a public
-issue; see [SECURITY.md](SECURITY.md).
+## Security and privacy
+
+- Never commit real Claude Code or Codex transcripts, a personal Decant
+  archive, exported real sessions, tokens, keys, or `.env` files.
+- Write fixtures from scratch using invented prompts, paths, tool results, and
+  identifiers. Editing a real transcript does not make it synthetic.
+- Keep logs and issue output redacted. Prefer record shapes, counts, and field
+  names over content.
+- Decant stays offline at runtime. Features that require hosted services,
+  outbound runtime calls, or LLM calls are out of scope.
 
 ## License
 
 By contributing, you agree that your contributions are licensed under the
-[Apache License 2.0](LICENSE), the same license as the project.
+[Apache License 2.0](LICENSE).

@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-Decant is pre-1.0 and under active development. Security fixes apply to the
-latest `main`. Until a stable release line exists, verify issues against current
-`main` before reporting.
+Security fixes apply to the latest release and current `main`. Verify issues
+against one of those builds before reporting.
 
 ## Reporting a vulnerability
 

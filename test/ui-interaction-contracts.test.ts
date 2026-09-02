@@ -198,7 +198,7 @@ describe("UI interaction contracts", () => {
     expect(session).toContain("sessionStateMutationGenerationRef.current !== mutationGeneration");
   });
 
-  test("requires a focus-managed explicit confirmation before permanent deletion", () => {
+  test("requires a focus-managed explicit confirmation before archive deletion", () => {
     const dialog = sourceBetween("function DeleteSessionDialog(", "function SessionDetailView(");
 
     expect(dialog).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");

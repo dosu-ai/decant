@@ -34,7 +34,7 @@ import {
   parsePeerList,
   serve as serveApp,
 } from "./server.ts";
-import { sessionSubtreeIds, setSessionUserState } from "./session-user-state.ts";
+import { setSessionUserState } from "./session-user-state.ts";
 import {
   byDimension,
   fileHotspots,
@@ -107,7 +107,7 @@ interface DbInfo {
   file_refs: number;
   /**
    * Pages SQLite has freed but not returned to the filesystem. Deleted rows
-   * keep their bytes readable in the file until `decant db vacuum` runs, so
+   * can leave readable bytes in those pages until `decant db vacuum` runs, so
    * this is the number that says a vacuum is owed.
    */
   freelist_bytes: number;
@@ -552,16 +552,32 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               return 1;
             };
 
-            // Counted before the delete, because afterwards there is nothing
-            // left to count.
-            const subtree = sessionSubtreeIds(archive.db, id);
-            if (subtree.length === 0) {
+            let outcome: "missing" | "dry_run" | "confirmation_required" | "deleted" = "missing";
+            let descendants = 0;
+            const deleted = setSessionUserState(archive.db, id, "deleted", {
+              // The callback runs after BEGIN IMMEDIATE and before any write,
+              // so another ingest cannot add a descendant between this guard
+              // and the deletion.
+              confirmDelete: (sessionIds) => {
+                descendants = sessionIds.length - 1;
+                if (commandOptions.dryRun === true) {
+                  outcome = "dry_run";
+                  return false;
+                }
+                if (descendants > 0 && commandOptions.yes !== true) {
+                  outcome = "confirmation_required";
+                  return false;
+                }
+                outcome = "deleted";
+                return true;
+              },
+            });
+            if (outcome === "missing") {
               return reportMiss();
             }
-            const descendants = subtree.length - 1;
             const plural = descendants === 1 ? "" : "s";
 
-            if (commandOptions.dryRun === true) {
+            if (outcome === "dry_run") {
               if (json) {
                 writeJson({ deleted: false, dry_run: true, session_id: id, descendants });
               } else if (!globals().quiet) {
@@ -577,7 +593,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             // later sync from re-ingesting the source, and the only way back is
             // editing two tables by hand. A mistyped id must not silently take
             // a whole tree with it.
-            if (descendants > 0 && commandOptions.yes !== true) {
+            if (outcome === "confirmation_required") {
               if (json) {
                 writeJson({
                   deleted: false,
@@ -588,16 +604,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               } else {
                 io.writeErr(
                   `error: session ${id} has ${descendants} descendant${plural}; ` +
-                    `deleting it removes ${subtree.length} sessions\n` +
+                    `deleting it removes ${descendants + 1} sessions\n` +
                     "re-run with --yes to confirm, or --dry-run to preview\n",
                 );
               }
               return 2;
             }
 
-            if (!setSessionUserState(archive.db, id, "deleted")) {
-              // Unreachable in practice: the subtree query above found the row
-              // on this same connection.
+            if (!deleted) {
+              // The deletion callback authorized the write, so false here is
+              // defensive rather than an expected state.
               return reportMiss();
             }
             if (json) {
@@ -605,8 +621,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             } else if (!globals().quiet) {
               io.writeOut(
                 `deleted session ${id} (${descendants} descendant${plural})\n` +
-                  // SQLite frees the pages without zeroing them, so the
-                  // transcript stays readable in the file until a vacuum.
+                  // SQLite may leave deleted transcript bytes readable in
+                  // freed pages until a vacuum rewrites the archive.
                   "run `decant db vacuum` to release the freed pages\n",
               );
             }

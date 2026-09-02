@@ -978,8 +978,8 @@ describe("session rm", () => {
     ]);
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(`deleted session ${rootId} (1 descendant)`);
-    // The bytes stay readable in the file until a vacuum, so the hint is part
-    // of the contract, not a nicety.
+    // Deleted bytes may remain readable until a vacuum, so the hint is part of
+    // the contract, not a nicety.
     expect(removed.stdout).toContain("decant db vacuum");
 
     expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(0);

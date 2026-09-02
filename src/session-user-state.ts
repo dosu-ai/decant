@@ -32,6 +32,13 @@ export interface DeletedSessionLineageContext {
 
 export interface SessionUserStateMutationOptions {
   /**
+   * Authorize a deletion after the exact subtree has been read under the same
+   * write lock used for the mutation. Returning false leaves the archive
+   * unchanged. This keeps destructive CLI guards free of count/delete races
+   * with another ingesting process.
+   */
+  confirmDelete?: (sessionIds: readonly number[]) => boolean;
+  /**
    * Derived writes that must commit or roll back with the state mutation.
    * The callback runs inside the same immediate transaction.
    */
@@ -208,22 +215,6 @@ const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
  )`;
 
 /**
- * Ids in a session's descendant tree, including the session itself. Empty when
- * the id is not in the archive, which is the same signal setSessionUserState
- * returns false on.
- */
-export function sessionSubtreeIds(db: Database, sessionId: number): number[] {
-  return (
-    db
-      .query(
-        `${SUBTREE_CTE}
-         SELECT s.id FROM session s JOIN subtree ON subtree.id = s.id ORDER BY s.id`,
-      )
-      .all(sessionId) as { id: number }[]
-  ).map((row) => row.id);
-}
-
-/**
  * Apply direct user archive state, or delete a session's existing descendant
  * tree.
  *
@@ -271,6 +262,13 @@ export function setSessionUserState(
       return false;
     }
     const targets = state === "deleted" ? identities : [selected];
+    if (
+      state === "deleted" &&
+      options.confirmDelete != null &&
+      !options.confirmDelete(identities.map((identity) => identity.id))
+    ) {
+      return false;
+    }
     upsertSessionStateIdentities(db, targets, state);
 
     if (state === "deleted") {

@@ -15,12 +15,13 @@ Decant is local-first. It makes no outbound network calls at runtime, and your
 transcripts never leave your machine.
 
 It does keep a copy of them. To make sessions searchable, Decant writes prompts,
-tool inputs, tool output, and the verbatim source records into an **unencrypted**
-SQLite archive at `~/.decant/decant.db`, with a full-text index over the prompt
-and tool-argument text. Whatever your agents read is in there too — source code,
-file contents, local paths, and any credentials pasted into a session. Decant
-creates the archive owner-only (`0600`). If your organization has a retention
-policy for agent transcripts, this archive is subject to it. See
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it. See
 [What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
 inspect, delete, or remove it.
 

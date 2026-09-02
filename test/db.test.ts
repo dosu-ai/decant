@@ -1365,6 +1365,27 @@ describe("deleting a session", () => {
     db.close();
   });
 
+  test("authorizes the exact descendant tree before mutating it", () => {
+    const db = openDb(freshPath());
+    const rootId = seedSession(db, { sourceSessionId: "root" });
+    const childId = seedSession(db, { sourceSessionId: "child", parentId: rootId });
+    let guardedIds: readonly number[] = [];
+
+    expect(
+      setSessionUserState(db, rootId, "deleted", {
+        confirmDelete: (sessionIds) => {
+          guardedIds = sessionIds;
+          return false;
+        },
+      }),
+    ).toBe(false);
+
+    expect(guardedIds).toEqual([rootId, childId]);
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 2 });
+    expect(db.query("SELECT count(*) AS n FROM session_user_state").get()).toMatchObject({ n: 0 });
+    db.close();
+  });
+
   test("enforces foreign keys, which is what makes the cascade fire", () => {
     const db = openDb(freshPath());
     expect(db.query("PRAGMA foreign_keys").get()).toMatchObject({ foreign_keys: 1 });

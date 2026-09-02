@@ -30,14 +30,16 @@ JSONL files.
 
 ## What the archive stores
 
-The archive is a searchable copy of your session content, not a summary of it.
-Everything Decant ingests is written into it verbatim.
+The archive is a searchable copy of the transcript content Decant retains, not
+just a summary of it. Decant canonicalizes stored JSON instead of preserving
+source whitespace and key order. Parsers also omit non-transcript event records
+that duplicate retained messages or contain only stream metadata.
 
 | What it holds | Columns |
 | --- | --- |
-| The full source record for every message, exactly as the tool wrote it | `message.raw` |
+| The full source record for every retained transcript message, canonicalized as JSON | `message.raw` |
 | Prompt, response, and reasoning text | `block.text` |
-| The opening of your first prompt, kept verbatim as the session's display title | `session.title` |
+| A display title, normally the first 120 characters of the opening prompt or a provider title | `session.title` |
 | Tool arguments, including shell commands, file paths, and patch bodies | `block.tool_input`, `tool_call.input` |
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
@@ -93,42 +95,35 @@ radius without touching anything.
 
 #### If you delete something by mistake
 
-There is no un-delete command, and it is not enough to re-run `sync`: deletion
-writes a tombstone that makes every later sync skip that source file on purpose.
-The source JSONL is untouched on disk, so the session can be recovered by
-clearing the two rows that block it and re-ingesting. Close `decant serve`
-first, and back the archive up before editing it.
+There is no un-delete command, and it is not enough to re-run `sync`. Deletion
+writes tombstones that make later syncs skip the deleted source files on purpose.
+The source JSONL remains on disk, so you can restore deleted sessions by clearing
+the tombstones and ingest bookkeeping before syncing again. Close `decant serve`
+first, and back up the archive before editing it.
+
+The archive removes the parent-child links during deletion. After deleting a
+tree, it cannot reliably identify only that tree's tombstones and source paths.
+The following recovery therefore restores **every** deleted session whose source
+JSONL still exists:
 
 ```sh
-# 1. Find the tombstone for the session you want back.
 sqlite3 ~/.decant/decant.db \
-  "SELECT tool, source_session_id, state FROM session_user_state WHERE state = 'deleted';"
+  "BEGIN IMMEDIATE;
+   DELETE FROM session_user_state WHERE state = 'deleted';
+   DELETE FROM ingest_source WHERE status = 'skipped_deleted';
+   COMMIT;"
 
-# 2. Clear it. LIKE also catches the Claude subagent-spawn tombstones, which
-#    store a JSON pair containing the parent's source_session_id.
-sqlite3 ~/.decant/decant.db \
-  "DELETE FROM session_user_state
-    WHERE state = 'deleted' AND source_session_id LIKE '%PASTE_SOURCE_SESSION_ID%';"
-
-# 3. Forget the ingest bookkeeping for that file. Without this the next sync
-#    skips it on unchanged size and mtime before it ever re-reads it.
-sqlite3 ~/.decant/decant.db \
-  "DELETE FROM ingest_source WHERE path = '/path/to/the/session.jsonl';"
-
-# 4. Re-ingest it.
-decant sync --path /path/to/the/session.jsonl
+decant sync
 ```
 
-Both deletes are required. Clearing only `session_user_state` leaves the file
-skipped by the unchanged-metadata check, and the session does not come back.
-Anything vacuumed away in the meantime is rebuilt from the source log, not
-recovered from the archive, so this works only while the source JSONL still
-exists.
+Both deletes are required. Clearing only `session_user_state` leaves each file
+skipped by the unchanged-metadata check, so the sessions do not come back. This
+rebuilds sessions from the source logs rather than recovering deleted archive
+pages, and only works while those source files still exist.
 
-Both paths are a hard delete: the rows are removed and their full-text index
-entries with them. The bytes are not. SQLite returns freed pages to its own free
-list without zeroing them, so deleted transcript text remains readable inside the
-archive file, recoverable with `grep`, until `decant db vacuum` rewrites it.
+Both paths remove the live rows and their full-text index entries. SQLite can
+leave deleted transcript text recoverable in freed pages until `decant db
+vacuum` rewrites the archive.
 `decant db info` reports `freelist_bytes`, and a non-zero value means a vacuum is
 owed. The converse does not hold. Freed pages are reused: the next sync, and any
 read command that syncs first, writes new rows into them. So `freelist_bytes` can
@@ -181,7 +176,7 @@ SQLite row id.
 | --- | --- | --- | --- | --- |
 | Archive | Retained | Hidden, including effective descendants | Remains archived | Unchanged |
 | Restore visibility | Retained | Visible unless an ancestor or source state still hides it | Remains visible | Unchanged |
-| Delete | Selected session tree is physically removed; freed bytes persist until `db vacuum` | Excluded | Tombstones prevent resurrection | Unchanged |
+| Delete | Selected session tree is physically removed; deleted text may persist in freed pages until `db vacuum` | Excluded | Tombstones prevent resurrection | Unchanged |
 
 Archiving records a direct override only on the selected session. Descendants
 inherit effective visibility from their current ancestry. This lets a child
@@ -204,9 +199,8 @@ Claude Code or Codex log remains on disk. If the source record must also be
 removed, manage it through the owning tool or delete that source file only
 after deciding that losing the original transcript is intended.
 
-Removing the rows does not remove their bytes. Until `decant db vacuum` runs,
-the deleted transcript is still readable in the archive file. For a session that
-was sensitive enough to delete, the sequence is both commands:
+Removing the rows may leave their text recoverable in freed pages. For a session
+that was sensitive enough to delete, run both commands:
 
 ```sh
 decant session rm <id> --yes

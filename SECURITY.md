@@ -53,11 +53,12 @@ only.
 
 The archive is a second, durable copy of your transcripts, and it is not
 encrypted. `~/.decant/decant.db` holds prompts, tool arguments, tool output, the
-verbatim source records, and absolute local paths. In practice that means source
-code, file contents, and any credentials that passed through a session.
+canonicalized raw records for retained transcript messages, and absolute local
+paths. In practice that means source code, file contents, and any credentials
+that passed through a session.
 Decant creates it at mode `0600`, and creates `~/.decant` at `0700` when it
 creates that directory; an existing directory keeps its own mode. Deleting a
-session removes its rows, but the freed bytes stay readable in the file until
-`decant db vacuum` runs. See
+session removes its rows, but deleted text may remain recoverable in freed pages
+until `decant db vacuum` rewrites the archive. See
 [What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) for
 how to inspect and remove it.

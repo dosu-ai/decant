@@ -42,6 +42,54 @@ const READONLY_BASH = new Set([
 ]);
 const READONLY_GIT = new Set(["status", "diff", "log", "show", "branch", "remote", "blame"]);
 
+const SEARCH_COMMANDS = new Set([
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ripgrep",
+  "ack",
+  "ag",
+  "find",
+  "fd",
+]);
+const SEARCH_TOOLS = new Set(["grep", "glob"]);
+
+// Statements, not pipelines: `ps aux | grep node` filters output rather than
+// searching a repo, so counting it would make the code-map suggestion useless.
+const STATEMENT_SEPARATORS = /\n|;|&&|\|\|/;
+
+/** Counts how many search operations a tool call represents: 1 for a
+ * structured Grep/Glob call, or one per shell statement whose leading
+ * command is a search binary (rg, grep, find, ...). Compound commands are
+ * split on `;`, `&&`, `||`, and newlines -- never on `|`, since a pipeline's
+ * tail filters output rather than searching the repo. */
+export function countSearches(toolName: string, input: string | null): number {
+  // Raw name, before localToolName: an MCP server may be named `exec`, and a
+  // dotted `mcp__x__y.shell` would otherwise flatten to `shell`.
+  if (toolName.startsWith("mcp__")) {
+    return 0;
+  }
+  const normalized = localToolName(toolName).toLowerCase();
+  if (SEARCH_TOOLS.has(normalized)) {
+    return 1;
+  }
+  if (!SHELL_TOOLS.has(normalized)) {
+    return 0;
+  }
+  const command = commandFromInput(input ?? undefined);
+  if (command == null) {
+    return 0;
+  }
+  return command.split(STATEMENT_SEPARATORS).filter((statement) => {
+    const [head, subcommand] = commandHead(statement);
+    if (head == null) {
+      return false;
+    }
+    return SEARCH_COMMANDS.has(head) || (head === "git" && subcommand === "grep");
+  }).length;
+}
+
 export function toolBucket(
   toolName: string | null | undefined,
   input?: string | Json,

@@ -83,6 +83,34 @@ function keys(rows: { key: string }[]): string[] {
   return rows.map((row) => row.key);
 }
 
+// A project-only base, deliberately without base()'s extra session: the
+// search-heavy tests need exact control over session count to land ratios
+// precisely on either side of SEARCH_HEAVY_RATIO.
+function searchHeavyBase(): Database {
+  const db = freshDb();
+  db.exec(`INSERT INTO project(id, path) VALUES (1, '/p');`);
+  return db;
+}
+
+function seedSearchSession(db: Database, id: number): void {
+  db.query(
+    `INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+     VALUES (?1, 'claude_code', 'search' || ?1, 1, datetime('now'))`,
+  ).run(id);
+}
+
+function seedToolCallWithInput(
+  db: Database,
+  sessionId: number,
+  toolName: string,
+  input: string | null = null,
+): void {
+  db.query(
+    `INSERT INTO tool_call(session_id, tool_kind, tool_name, input, timestamp)
+     VALUES (?1, 'builtin', ?2, ?3, datetime('now'))`,
+  ).run(sessionId, toolName, input);
+}
+
 const BUILTIN_ERROR_ID = ".h96c30c4821d37d05";
 const MCP_SVC_ERROR_ID = ".hc49c405203ddd0d7";
 
@@ -486,6 +514,128 @@ describe("recommendations", () => {
       "35% abandoned",
     );
     db.close();
+  });
+
+  describe("search-heavy signal counting", () => {
+    test("search-heavy counts shell searches run through Bash", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 5; call += 1) {
+          seedToolCallWithInput(db, id, "Bash", JSON.stringify({ command: "rg needle src" }));
+        }
+      }
+      const found = signals(db);
+      expect(keys(found)).toContain("signal:search-heavy");
+      expect(found.find((s) => s.key === "signal:search-heavy")?.impact_label).toBe(
+        "5 searches/session",
+      );
+      db.close();
+    });
+
+    test("search-heavy counts Claude Grep and Glob tool calls", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 5; call += 1) {
+          seedToolCallWithInput(db, id, "Grep");
+        }
+      }
+      const found = signals(db);
+      expect(keys(found)).toContain("signal:search-heavy");
+      expect(found.find((s) => s.key === "signal:search-heavy")?.impact_label).toBe(
+        "5 searches/session",
+      );
+      db.close();
+    });
+
+    test("search-heavy counts Codex shell searches from exec_command", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 5; call += 1) {
+          seedToolCallWithInput(db, id, "exec_command", '"{\\"cmd\\":\\"rg needle src\\"}"');
+        }
+      }
+      const found = signals(db);
+      expect(keys(found)).toContain("signal:search-heavy");
+      expect(found.find((s) => s.key === "signal:search-heavy")?.impact_label).toBe(
+        "5 searches/session",
+      );
+      db.close();
+    });
+
+    test("search-heavy counts each search statement in a compound command", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 2; call += 1) {
+          seedToolCallWithInput(
+            db,
+            id,
+            "Bash",
+            JSON.stringify({ command: "grep -n a src; echo ---; grep -n b src" }),
+          );
+        }
+        seedToolCallWithInput(db, id, "Grep");
+      }
+      const found = signals(db);
+      expect(keys(found)).toContain("signal:search-heavy");
+      expect(found.find((s) => s.key === "signal:search-heavy")?.impact_label).toBe(
+        "5 searches/session",
+      );
+      db.close();
+    });
+
+    test("search-heavy ignores pipeline filters and mutating shell commands", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 10; call += 1) {
+          const command = call % 2 === 0 ? "ps aux | grep node" : "bun test";
+          seedToolCallWithInput(db, id, "Bash", JSON.stringify({ command }));
+        }
+      }
+      const found = signals(db);
+      expect(keys(found)).not.toContain("signal:search-heavy");
+      db.close();
+    });
+
+    test("search-heavy stays silent below the ratio threshold", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 4; call += 1) {
+          seedToolCallWithInput(db, id, "Grep");
+        }
+      }
+      const found = signals(db);
+      expect(keys(found)).not.toContain("signal:search-heavy");
+      db.close();
+    });
+
+    test("search-heavy detail and prompt describe shell searches", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        for (let call = 0; call < 5; call += 1) {
+          seedToolCallWithInput(db, id, "Bash", JSON.stringify({ command: "rg needle src" }));
+        }
+      }
+      const found = signals(db);
+      const signal = found.find((s) => s.key === "signal:search-heavy");
+      expect(signal?.detail).toContain("searches across");
+      expect(signal?.detail).not.toContain("Grep/Glob calls");
+      expect(signal?.prompt).toContain("code searches per session");
+      db.close();
+    });
   });
 
   test("signals exclude direct evidence inherited from an archived parent", () => {

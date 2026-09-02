@@ -15,5 +15,21 @@
       "claude_code",
       "codex"
     ]
+  },
+  {
+    "path": "/Users/dev/cursor-demo",
+    "name": "cursor-demo",
+    "sessions": 1,
+    "estimated_cost_usd": 0,
+    "last_seen_at": "2025-07-14T10:31:00.000Z",
+    "is_worktree": false,
+    "root_path": "/Users/dev/cursor-demo",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "cursor"
+    ]
   }
 ]

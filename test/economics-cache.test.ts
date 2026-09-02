@@ -296,7 +296,12 @@ describe("economics cache", () => {
   test("token-economics route answers from the cache when provided", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
-    const config = { dbPath, claudeDir: join(workDir, "none"), codexDir: join(workDir, "none") };
+    const config = {
+      dbPath,
+      claudeDir: join(workDir, "none"),
+      codexDir: join(workDir, "none"),
+      cursorDir: join(workDir, "none"),
+    };
     const cache = new EconomicsCache({
       dbPath,
       db,

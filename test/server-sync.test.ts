@@ -27,6 +27,7 @@ function freshConfig(): Config {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    cursorDir: join(root, "cursor"),
   };
 }
 

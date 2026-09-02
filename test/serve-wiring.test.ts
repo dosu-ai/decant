@@ -89,8 +89,10 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
   const dir = mkdtempSync(join(tmpdir(), "decant-serve-wiring-"));
   const claudeDir = join(dir, "claude");
   const codexDir = join(dir, "codex");
+  const cursorDir = join(dir, "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexDir, { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
 
   const env = { ...process.env, ...(c.env ?? {}) };
   if (!(c.env && "DECANT_TRUSTED_PEERS" in c.env)) delete env.DECANT_TRUSTED_PEERS;
@@ -110,6 +112,8 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
       claudeDir,
       "--codex-dir",
       codexDir,
+      "--cursor-dir",
+      cursorDir,
       ...(c.flags ?? []),
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
@@ -186,12 +190,14 @@ async function withSeededServe<T>(
   const dir = mkdtempSync(join(tmpdir(), "decant-serve-sync-"));
   const claudeDir = join(dir, "claude");
   const codexDir = join(dir, "codex");
+  const cursorDir = join(dir, "cursor");
   const projectDir = join(claudeDir, "-Users-dev-proj");
   const codexSessionsDir = join(codexDir, "sessions");
   const claudeSessionPath = join(projectDir, "s1.jsonl");
   const codexSessionPath = join(codexSessionsDir, "rollout-s1.jsonl");
   mkdirSync(projectDir, { recursive: true });
   mkdirSync(codexSessionsDir, { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
   // Real, ingestible sessions. If the watcher runs, both land in the archive.
   copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), claudeSessionPath);
   copyFileSync(join(repoRoot, "fixtures", "codex", "sample.jsonl"), codexSessionPath);
@@ -218,6 +224,8 @@ async function withSeededServe<T>(
       claudeDir,
       "--codex-dir",
       codexDir,
+      "--cursor-dir",
+      cursorDir,
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
   );

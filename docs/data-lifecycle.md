@@ -1,9 +1,9 @@
 # Archive and data lifecycle
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
-the archive have different jobs: source JSONL is the durable record produced by
-Claude Code or Codex; `~/.decant/decant.db` is a searchable, rebuildable index
-plus Decant-owned user state.
+the archive have different jobs: source session files are the durable records
+produced by Claude Code, Codex, or Cursor CLI; `~/.decant/decant.db` is a searchable,
+rebuildable index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service.
 
@@ -13,7 +13,8 @@ By default Decant discovers:
 
 - Claude Code sessions under `~/.claude/projects`;
 - Codex sessions under `~/.codex/sessions` and source-archived sessions under
-  `~/.codex/archived_sessions`.
+  `~/.codex/archived_sessions`;
+- Cursor CLI chats under `~/.cursor/chats`.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by metadata and content checks. Watch mode combines
@@ -69,7 +70,7 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code or Codex log remains on disk. If the source record must also be
+Claude Code, Codex, or Cursor CLI session remains on disk. If the source record must also be
 removed, manage it through the owning tool or delete that source file only
 after deciding that losing the original transcript is intended.
 

@@ -150,13 +150,16 @@ export function watchDirs(config: Config): string[] {
     config.claudeDir,
     join(config.codexDir, "sessions"),
     join(config.codexDir, "archived_sessions"),
-  ].filter((dir) => {
-    try {
-      return existsSync(dir) && statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
+    config.cursorDir,
+  ]
+    .filter((dir): dir is string => typeof dir === "string")
+    .filter((dir) => {
+      try {
+        return existsSync(dir) && statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    });
 }
 
 export function runSyncOnce(

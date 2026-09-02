@@ -6,8 +6,8 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code and Codex session logs on your machine into
-tangible insights. See where tokens, cost, and agent time go, inspect context
+Decant turns the Claude Code, Codex, and Cursor CLI session logs on your machine
+into tangible insights. See where tokens, cost, and agent time go, inspect context
 usage, find the files and tools agents touch, and search complete transcripts
 from a CLI or local web UI.
 
@@ -29,12 +29,12 @@ Run Decant with `npx` with no Bun install or global package required.
 npx @dosu/decant@latest
 ```
 
-This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code and
-Codex logs on your machine, and watches for changes.
+This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
+Codex, and Cursor CLI logs on your machine, and watches for changes.
 
 ## What you get
 
-- One SQLite archive for Claude Code and Codex sessions.
+- One SQLite archive for Claude Code, Codex, and Cursor CLI sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -80,6 +80,7 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
@@ -113,6 +114,11 @@ To index selected files or a temporary source tree:
 ```sh
 decant --db /tmp/decant.db sync --path ./session.jsonl --path ./sessions
 ```
+
+Cursor CLI chats are discovered under `~/.cursor/chats`. Override that root
+with `DECANT_CURSOR_DIR` or `--cursor-dir` on `sync`, `watch`, or `serve`.
+Cursor's chat stores do not report token usage, so Decant marks token and cost
+metrics unavailable for Cursor sessions instead of treating them as free.
 
 ## Local API
 

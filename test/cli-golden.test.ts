@@ -18,9 +18,14 @@ function fixtureFiles(tool: string): string[] {
     .sort();
 }
 
-function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string } {
+function stageFixtures(caseDir: string): {
+  claudeDir: string;
+  codexDir: string;
+  cursorDir: string;
+} {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
+  const cursorDir = join(caseDir, "sources", "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   for (const file of fixtureFiles("claude")) {
@@ -32,7 +37,17 @@ function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string }
       join(codexDir, "sessions", `rollout-${file}`),
     );
   }
-  return { claudeDir, codexDir };
+  const cursorChatDir = join(cursorDir, "synthetic-workspace", "sample");
+  mkdirSync(cursorChatDir, { recursive: true });
+  copyFileSync(
+    join(import.meta.dir, "..", "fixtures", "cursor", "sample", "store.db"),
+    join(cursorChatDir, "store.db"),
+  );
+  copyFileSync(
+    join(import.meta.dir, "..", "fixtures", "cursor", "sample", "meta.json"),
+    join(cursorChatDir, "meta.json"),
+  );
+  return { claudeDir, codexDir, cursorDir };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -88,7 +103,7 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir } = stageFixtures(caseDir);
+    const { claudeDir, codexDir, cursorDir } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli([
       "--db",
@@ -99,6 +114,8 @@ describe("CLI golden parity", () => {
       claudeDir,
       "--codex-dir",
       codexDir,
+      "--cursor-dir",
+      cursorDir,
     ]);
     expect(sync).toMatchObject({ code: 0, stderr: "" });
 

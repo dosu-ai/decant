@@ -36,6 +36,7 @@ export interface SessionSummary {
   message_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  usage_available: boolean;
   estimated_cost_usd: number;
   /** Direct user override for this source identity. */
   user_state: SessionUserState | null;
@@ -90,11 +91,17 @@ export interface SessionSearchIndexRow {
 interface SessionSummaryRow
   extends Omit<
     SessionSummary,
-    "is_archived" | "is_user_archived" | "is_subagent" | "reasoning_effort_levels" | "subagents"
+    | "is_archived"
+    | "is_user_archived"
+    | "is_subagent"
+    | "reasoning_effort_levels"
+    | "subagents"
+    | "usage_available"
   > {
   is_archived: number;
   is_user_archived: number;
   is_subagent: number;
+  usage_available: number;
   reasoning_effort_levels_json: string | null;
 }
 
@@ -105,6 +112,14 @@ function sessionSummarySelect(subagentVisibility: string): string {
          s.reasoning_effort_levels AS reasoning_effort_levels_json,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
+         EXISTS (
+           SELECT 1 FROM message usage_message
+           WHERE usage_message.session_id = s.id
+             AND (usage_message.input_tokens IS NOT NULL
+               OR usage_message.output_tokens IS NOT NULL
+               OR usage_message.cache_read_tokens IS NOT NULL
+               OR usage_message.cache_creation_tokens IS NOT NULL)
+         ) AS usage_available,
          ${directSessionUserStateExpression("s")} AS user_state,
          ${sessionIsUserArchivedExpression("s")} AS is_user_archived,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
@@ -988,6 +1003,7 @@ function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
   return {
     ...summary,
     reasoning_effort_levels: parseReasoningEffortLevels(levelsJson),
+    usage_available: row.usage_available !== 0,
     is_user_archived: row.is_user_archived !== 0,
     is_archived: row.is_archived !== 0,
     is_subagent: row.is_subagent !== 0,

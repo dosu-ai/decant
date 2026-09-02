@@ -922,5 +922,77 @@
     "tool_use_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
     "tool_input": null,
     "tool_result": ""
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 0,
+    "ordinal": 0,
+    "type": "text",
+    "text": "Inspect the demo project.",
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 1,
+    "ordinal": 0,
+    "type": "thinking",
+    "text": "I will inspect the requested file.",
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 1,
+    "ordinal": 1,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "read_file",
+    "tool_use_id": "call-1",
+    "tool_input": "{\"path\":\"/Users/dev/cursor-demo/src/index.ts\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 2,
+    "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": "read_file",
+    "tool_use_id": "call-1",
+    "tool_input": null,
+    "tool_result": "export const greeting = 'hello';"
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 3,
+    "ordinal": 0,
+    "type": "thinking",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
+  },
+  {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 3,
+    "ordinal": 1,
+    "type": "text",
+    "text": "The demo exports a greeting.",
+    "tool_name": null,
+    "tool_use_id": null,
+    "tool_input": null,
+    "tool_result": null
   }
 ]

@@ -18,7 +18,7 @@ function freshConfig(): Config {
   const codexDir = join(root, "codex");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
-  return { dbPath: join(root, "archive.db"), claudeDir, codexDir };
+  return { dbPath: join(root, "archive.db"), claudeDir, codexDir, cursorDir: join(root, "cursor") };
 }
 
 function seed(config: Config): void {

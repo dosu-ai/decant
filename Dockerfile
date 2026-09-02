@@ -26,7 +26,7 @@ FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe6
 
 RUN groupadd --system decant \
     && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \
-    && mkdir -p /var/lib/decant /sources/claude /sources/codex \
+    && mkdir -p /var/lib/decant /sources/claude /sources/codex /sources/cursor \
     && chown -R decant:decant /var/lib/decant /sources
 
 COPY --from=build /usr/local/bin/decant /usr/local/bin/decant
@@ -37,6 +37,7 @@ WORKDIR /var/lib/decant
 ENV DECANT_DB=/var/lib/decant/decant.db
 ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
+ENV DECANT_CURSOR_DIR=/sources/cursor
 # The archive is served without credentials and the `Host` header is forgeable
 # by any non-browser client, so the peer's source address is the only real
 # boundary. Ship no peer allowlist: a baked-in CIDR handed the whole archive to

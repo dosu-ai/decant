@@ -1,7 +1,8 @@
 {
-  "sessions": 8,
-  "messages": 61,
-  "tool_calls": 29,
+  "sessions": 9,
+  "usage_sessions": 4,
+  "messages": 65,
+  "tool_calls": 30,
   "input_tokens": 11820,
   "output_tokens": 1860,
   "cache_read_tokens": 12000,

@@ -38,7 +38,7 @@ describe("golden harness", () => {
     expect(meta.generator).toBe("synthetic TypeScript golden snapshot");
     expect(meta.regeneration).toContain("synthetic fixtures");
     const tools = new Set(sessions.map((s) => s.tool));
-    expect(tools).toEqual(new Set(["claude_code", "codex"]));
+    expect(tools).toEqual(new Set(["claude_code", "codex", "cursor"]));
   });
 
   test("row dumps are internally consistent on natural keys", async () => {

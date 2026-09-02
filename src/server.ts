@@ -235,6 +235,7 @@ export async function handleRequest(
         dbPath: config.dbPath,
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
+        cursorDir: config.cursorDir,
         version: DECANT_VERSION,
       });
     }

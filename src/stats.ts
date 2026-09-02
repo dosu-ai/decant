@@ -6,6 +6,7 @@ import { visibleSessionPredicate } from "./session-visibility.ts";
 
 export interface Totals {
   sessions: number;
+  usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
@@ -28,10 +29,21 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(visible)}
+         SELECT s.*,
+                EXISTS (
+                  SELECT 1 FROM message usage_message
+                  WHERE usage_message.session_id = s.id
+                    AND (usage_message.input_tokens IS NOT NULL
+                      OR usage_message.output_tokens IS NOT NULL
+                      OR usage_message.cache_read_tokens IS NOT NULL
+                      OR usage_message.cache_creation_tokens IS NOT NULL)
+                ) AS usage_available
+         FROM session s ${whereClause(visible)}
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
+         (SELECT COUNT(*) FROM filtered_session
+          WHERE is_subagent = 0 AND usage_available = 1) AS usage_sessions,
          (SELECT COUNT(*) FROM message m JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
          (SELECT COALESCE(SUM(total_input_tokens), 0) FROM filtered_session) AS input_tokens,
@@ -467,7 +479,15 @@ export function todayTotals(db: Database): Totals {
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT *
+         SELECT s.*,
+                EXISTS (
+                  SELECT 1 FROM message usage_message
+                  WHERE usage_message.session_id = s.id
+                    AND (usage_message.input_tokens IS NOT NULL
+                      OR usage_message.output_tokens IS NOT NULL
+                      OR usage_message.cache_read_tokens IS NOT NULL
+                      OR usage_message.cache_creation_tokens IS NOT NULL)
+                ) AS usage_available
          FROM session s
          ${whereClause({
            sql: [visible.sql, "substr(s.started_at, 1, 10) = date('now', 'localtime')"].join(
@@ -478,6 +498,8 @@ export function todayTotals(db: Database): Totals {
        )
        SELECT
          COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+         COALESCE(SUM(CASE WHEN is_subagent = 0 AND usage_available = 1 THEN 1 ELSE 0 END), 0)
+           AS usage_sessions,
          (SELECT COUNT(*) FROM message m
           JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t

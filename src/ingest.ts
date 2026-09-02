@@ -11,7 +11,7 @@ import {
   readSync,
   statSync,
 } from "node:fs";
-import { extname, join, basename as pathBasename } from "node:path";
+import { dirname, extname, join, basename as pathBasename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
@@ -33,6 +33,7 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
+import { parseCursorSession, readCursorSource } from "./sources/cursor.ts";
 import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
@@ -43,6 +44,7 @@ import { resolveWorktreeRoots } from "./worktree.ts";
 export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
+  cursorDir?: string;
   sourcePaths?: string[];
 }
 
@@ -136,7 +138,10 @@ export function discover(config: IngestConfig): SourceFile[] {
   collect(config.claudeDir, "claude_code", false, isClaudeSessionFile, out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
-  return out;
+  if (config.cursorDir != null) {
+    collect(config.cursorDir, "cursor", false, (name) => name === "store.db", out);
+  }
+  return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
 }
 
 export function discoverSourcePaths(paths: string[]): SourceFile[] {
@@ -200,9 +205,23 @@ export function sync(
         continue;
       }
       let stats: Stats;
-      let content: string;
+      let content: string | Uint8Array;
+      let effectiveSize: number;
+      let effectiveMtime: number;
       try {
         stats = fstatSync(fd);
+        const sidecarStats: Stats[] = [];
+        if (file.tool === "cursor") {
+          for (const path of cursorFingerprintPaths(file.path)) {
+            try {
+              sidecarStats.push(statSync(path));
+            } catch {
+              // Active Cursor stores may or may not have a WAL sidecar.
+            }
+          }
+        }
+        effectiveSize = stats.size + sidecarStats.reduce((sum, sidecar) => sum + sidecar.size, 0);
+        effectiveMtime = Math.max(mtimeSecs(stats), ...sidecarStats.map(mtimeSecs));
         const prior = ingestRow<{ size: number; mtime: number; ingest_revision: number }>(
           db,
           "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
@@ -210,8 +229,8 @@ export function sync(
         );
         if (
           prior != null &&
-          prior.size === stats.size &&
-          prior.mtime === mtimeSecs(stats) &&
+          prior.size === effectiveSize &&
+          prior.mtime === effectiveMtime &&
           prior.ingest_revision === INGEST_PIPELINE_REVISION
         ) {
           report.skipped += 1;
@@ -220,7 +239,7 @@ export function sync(
         // fstat before read: a write landing mid-window records a smaller size
         // than the content read, so the next sync re-ingests instead of
         // silently skipping the tail.
-        content = readFileSync(fd, "utf8");
+        content = file.tool === "cursor" ? readFileSync(fd) : readFileSync(fd, "utf8");
       } catch {
         report.failed += 1;
         continue;
@@ -234,22 +253,28 @@ export function sync(
         }
       }
 
-      const stem = fileStem(file.path);
+      const stem = file.tool === "cursor" ? pathBasename(dirname(file.path)) : fileStem(file.path);
       const parsed =
         file.tool === "claude_code"
-          ? parseClaudeSession(stem, content, {
+          ? parseClaudeSession(stem, content as string, {
               sourcePath: file.path,
               sidecarMeta: readClaudeSidecarMeta(file.path),
             })
-          : parseCodexSession(stem, content, titles);
+          : file.tool === "codex"
+            ? parseCodexSession(stem, content as string, titles)
+            : parseCursorSession(stem, readCursorSource(file.path));
       parsed.session.isArchived = file.archived;
 
       const prepared: Prepared = {
         file,
-        lineCount: lineCount(content),
-        mtime: mtimeSecs(stats),
-        size: stats.size,
-        hash: hashContent(content),
+        lineCount:
+          file.tool === "cursor" ? parsed.session.messages.length : lineCount(content as string),
+        mtime: effectiveMtime,
+        size: effectiveSize,
+        hash:
+          file.tool === "cursor"
+            ? hashCursorSource(content as Uint8Array, file.path)
+            : hashContent(content as string),
       };
 
       const outcome = writeIngestedFile(db, prepared, parsed);
@@ -377,7 +402,7 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_raw
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'cursor')`,
   );
 
   const sessionBySource = new Map<string, number>();
@@ -546,6 +571,9 @@ interface ReasoningEffortSummary {
 }
 
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
+  if (tool === "cursor") {
+    return { summary: null, levels: [] };
+  }
   const efforts = new Set<string>();
   const buffer = Buffer.allocUnsafe(64 * 1024);
   const decoder = new StringDecoder("utf8");
@@ -626,6 +654,8 @@ function inferSubagent(row: {
   const meta = parseObject(row.raw_meta);
   const first = parseObject(row.first_raw);
   const source = get(meta, "source");
+  const cursorStore = get(meta, "store");
+  const cursorSubagent = get(cursorStore, "subagentInfo");
   const subagentSource = get(source, "subagent");
   const threadSpawn = get(subagentSource, "thread_spawn");
   const parentThreadId =
@@ -641,16 +671,22 @@ function inferSubagent(row: {
   return {
     isSubagent,
     rootKey:
-      parentThreadId ?? asString(get(meta, "sessionId")) ?? asString(get(first, "sessionId")),
+      parentThreadId ??
+      asString(get(cursorSubagent, "rootParentAgentId")) ??
+      asString(get(cursorSubagent, "parentAgentId")) ??
+      asString(get(meta, "sessionId")) ??
+      asString(get(first, "sessionId")),
     spawnToolUseId:
       row.spawn_tool_use_id ??
       asString(get(meta, "spawnToolUseId")) ??
-      asString(get(meta, "toolUseId")),
+      asString(get(meta, "toolUseId")) ??
+      asString(get(cursorSubagent, "toolCallId")),
     agentId:
       row.agent_id ??
       asString(get(meta, "agent_nickname")) ??
       asString(get(threadSpawn, "agent_nickname")) ??
       asString(get(meta, "agentId")) ??
+      asString(get(cursorStore, "agentId")) ??
       asString(get(first, "agentId")) ??
       (isSubagent && row.tool === "codex" ? row.source_session_id : null),
     agentType:
@@ -660,7 +696,8 @@ function inferSubagent(row: {
       asString(subagentSource) ??
       asString(get(meta, "agentType")) ??
       asString(get(meta, "subagentType")) ??
-      asString(get(meta, "subagent_type")),
+      asString(get(meta, "subagent_type")) ??
+      asString(get(cursorSubagent, "typeName")),
     spawnDepth:
       row.spawn_depth ?? asInteger(get(threadSpawn, "depth")) ?? asInteger(get(meta, "spawnDepth")),
   };
@@ -1091,6 +1128,9 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
 
 function sourceFileForPath(path: string): SourceFile | null {
   const name = pathBasename(path);
+  if (name === "store.db") {
+    return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
+  }
   if (!name.endsWith(".jsonl") || name === "session_index.jsonl" || name === "journal.jsonl") {
     return null;
   }
@@ -1212,8 +1252,37 @@ function mtimeSecs(stats: Stats): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 
-function hashContent(content: string): string {
+function hashContent(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function cursorMetaPath(path: string): string {
+  return join(dirname(path), "meta.json");
+}
+
+function isCursorConversationStore(path: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(cursorMetaPath(path), "utf8")) as Json;
+    return get(meta, "hasConversation") === true;
+  } catch {
+    return false;
+  }
+}
+
+function hashCursorSource(content: Uint8Array, path: string): string {
+  const hash = createHash("sha256").update(content);
+  for (const sidecar of cursorFingerprintPaths(path)) {
+    try {
+      hash.update(readFileSync(sidecar));
+    } catch {
+      // The required metadata is reported by the parser; a WAL is optional.
+    }
+  }
+  return hash.digest("hex");
+}
+
+function cursorFingerprintPaths(path: string): string[] {
+  return [cursorMetaPath(path), `${path}-wal`];
 }
 
 function byteLength(value: string): number {

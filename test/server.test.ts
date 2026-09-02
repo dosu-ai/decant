@@ -42,6 +42,7 @@ function freshConfig(): Config {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    cursorDir: join(root, "cursor"),
   };
 }
 
@@ -137,7 +138,9 @@ describe("server routes", () => {
     ).match(/<head>([\s\S]*?)<\/head>/)?.[1];
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
-    expect(sourceHead).toContain("Local-first analytics for Claude Code and Codex sessions.");
+    expect(sourceHead).toContain(
+      "Local-first analytics for Claude Code, Codex, and Cursor CLI sessions.",
+    );
 
     const favicon = await route(config, "/favicon.ico");
     expect(favicon.status).toBe(200);

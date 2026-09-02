@@ -63,6 +63,7 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 

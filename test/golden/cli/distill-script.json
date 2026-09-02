@@ -1,7 +1,7 @@
 {
   "scope": "all sessions",
-  "session_count": 8,
-  "date_from": "2026-05-01T10:00:00.000Z",
+  "session_count": 9,
+  "date_from": "2025-07-14T10:30:00.000Z",
   "date_to": "2026-05-06T09:00:00.000Z",
   "generated_with": "0.0.0-dev",
   "ops": [
@@ -114,5 +114,5 @@
       "success_rate": 1
     }
   ],
-  "artifact": "#!/usr/bin/env bash\n# Distilled by Decant 0.0.0-dev from all sessions\n# 8 session(s) (2026-05-01..2026-05-06). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\nset -euo pipefail\nPROJECT_ROOT=\"${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}\"\n\n# build\n# seen 2/8, 100% ok\ncargo build --workspace\n\n# test\n# seen 2/8, 100% ok\ncargo test --workspace\n"
+  "artifact": "#!/usr/bin/env bash\n# Distilled by Decant 0.0.0-dev from all sessions\n# 9 session(s) (2025-07-14..2026-05-06). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\nset -euo pipefail\nPROJECT_ROOT=\"${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}\"\n\n# (no recurring commands met the frequency threshold)\n"
 }

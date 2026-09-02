@@ -31,6 +31,7 @@ function requireReviewedDiff(): void {
 function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
+  const cursorDir = join(caseDir, "sources", "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   for (const fixture of fixtures) {
@@ -39,11 +40,16 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     if (fixture.startsWith("fixtures/claude/")) copyFileSync(source, join(claudeDir, name));
     else if (fixture.startsWith("fixtures/codex/")) {
       copyFileSync(source, join(codexDir, "sessions", `rollout-${name}`));
+    } else if (fixture.startsWith("fixtures/cursor/")) {
+      const chatDir = join(cursorDir, "synthetic-workspace", "sample");
+      mkdirSync(chatDir, { recursive: true });
+      copyFileSync(source, join(chatDir, "store.db"));
+      copyFileSync(join(dirname(source), "meta.json"), join(chatDir, "meta.json"));
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
   }
-  return { claudeDir, codexDir };
+  return { claudeDir, codexDir, cursorDir };
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {

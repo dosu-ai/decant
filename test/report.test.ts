@@ -26,6 +26,7 @@ import { contextCurveTopology } from "../src/ui/context-window-layout.ts";
 
 const totals = {
   sessions: 2,
+  usage_sessions: 2,
   messages: 14,
   tool_calls: 8,
   input_tokens: 24_000,
@@ -146,6 +147,7 @@ const session: SessionReportData = {
     message_count: 6,
     total_input_tokens: 2_000,
     total_output_tokens: 500,
+    usage_available: true,
     estimated_cost_usd: 0.15,
     user_state: null,
     is_user_archived: false,

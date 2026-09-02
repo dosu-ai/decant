@@ -21,13 +21,15 @@ const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 let caseCounter = 0;
-function freshCase(): { dbPath: string; claudeDir: string; codexDir: string } {
+function freshCase(): { dbPath: string; claudeDir: string; codexDir: string; cursorDir: string } {
   caseCounter += 1;
   const dir = join(workDir, `case-${caseCounter}`);
   const claudeDir = join(dir, "sources", "claude");
   const codexDir = join(dir, "sources", "codex");
+  const cursorDir = join(dir, "sources", "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", name), join(claudeDir, name));
   }
@@ -37,7 +39,7 @@ function freshCase(): { dbPath: string; claudeDir: string; codexDir: string } {
       join(codexDir, "sessions", `rollout-${name}`),
     );
   }
-  return { dbPath: join(dir, "archive.db"), claudeDir, codexDir };
+  return { dbPath: join(dir, "archive.db"), claudeDir, codexDir, cursorDir };
 }
 
 async function syncedCase(): Promise<{ dbPath: string }> {
@@ -51,6 +53,8 @@ async function syncedCase(): Promise<{ dbPath: string }> {
     fixtureCase.claudeDir,
     "--codex-dir",
     fixtureCase.codexDir,
+    "--cursor-dir",
+    fixtureCase.cursorDir,
   ]);
   expect(result).toMatchObject({ code: 0, stderr: "" });
   expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 7, ingested: 7, issues: 0 });

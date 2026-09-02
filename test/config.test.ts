@@ -9,6 +9,7 @@ describe("resolveConfig", () => {
         DECANT_DB: "/env/db",
         DECANT_CLAUDE_DIR: "/env/claude",
         DECANT_CODEX_DIR: "/env/codex",
+        DECANT_CURSOR_DIR: "/env/cursor",
       },
       homeDir: "/home/dev",
     });
@@ -16,6 +17,7 @@ describe("resolveConfig", () => {
     expect(config.dbPath).toBe("/tmp/x.db");
     expect(config.claudeDir).toBe("/env/claude");
     expect(config.codexDir).toBe("/env/codex");
+    expect(config.cursorDir).toBe("/env/cursor");
   });
 
   test("environment overrides beat defaults", () => {
@@ -24,6 +26,7 @@ describe("resolveConfig", () => {
         DECANT_DB: "/env/db",
         DECANT_CLAUDE_DIR: "/env/claude",
         DECANT_CODEX_DIR: "/env/codex",
+        DECANT_CURSOR_DIR: "/env/cursor",
       },
       homeDir: "/home/dev",
     });
@@ -32,6 +35,7 @@ describe("resolveConfig", () => {
       dbPath: "/env/db",
       claudeDir: "/env/claude",
       codexDir: "/env/codex",
+      cursorDir: "/env/cursor",
     });
   });
 
@@ -40,5 +44,6 @@ describe("resolveConfig", () => {
     expect(config.dbPath).toBe("/home/dev/.decant/decant.db");
     expect(config.claudeDir).toBe("/home/dev/.claude/projects");
     expect(config.codexDir).toBe("/home/dev/.codex");
+    expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
   });
 });

@@ -143,6 +143,7 @@ import {
   sessionCardMetrics,
   sessionSummaryPath,
   sessionThreadCost,
+  sessionThreadUsageAvailable,
 } from "./session-summary.ts";
 import {
   hasShareCardValues,
@@ -207,6 +208,7 @@ import "./styles.css";
 
 type Summary = {
   sessions: number;
+  usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
@@ -227,6 +229,7 @@ type SessionSummary = {
   message_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  usage_available: boolean;
   estimated_cost_usd: number;
   user_state: "archived" | null;
   is_user_archived: boolean;
@@ -1649,7 +1652,7 @@ function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code and Codex session log on this device.</p>
+          <p>Every Claude Code, Codex, and Cursor session log on this device.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
@@ -1671,7 +1674,11 @@ function SessionsView({
           icon="money"
           label="Est. cost"
           tone="success"
-          value={money(cardSummary.estimated_cost_usd)}
+          value={usageMetric(
+            cardSummary.sessions,
+            cardSummary.usage_sessions,
+            money(cardSummary.estimated_cost_usd),
+          )}
         />
       </div>
 
@@ -2190,7 +2197,13 @@ const SessionTableRow = memo(function SessionTableRow({
         <SubagentRollup session={session} />
       </td>
       <td className="numeric muted">{formatInt(session.message_count)}</td>
-      <td className="numeric">{money(sessionThreadCost(session))}</td>
+      <td className="numeric">
+        {sessionThreadUsageAvailable(session) ? (
+          money(sessionThreadCost(session))
+        ) : (
+          <span className="faint">-</span>
+        )}
+      </td>
       <td className="numeric muted">
         <SessionStartedAt value={session.started_at} />
       </td>
@@ -3502,9 +3515,9 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the JSONL logs Claude Code and Codex already write and turns them into a
-          searchable session-log index with token, cost, and context-window analytics. Nothing
-          leaves this machine.
+          Decant reads the session logs Claude Code, Codex, and Cursor CLI already write and turns
+          them into a searchable session-log index. Usage-based analytics are shown when the source
+          records that data. Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button
@@ -4281,23 +4294,40 @@ function AnalyticsView({
           icon="download"
           label="Input tokens"
           tone="neutral"
-          value={compact(data.summary?.input_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.input_tokens ?? 0),
+          )}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
           tone="neutral"
-          value={compact(data.summary?.output_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.output_tokens ?? 0),
+          )}
         />
         <StatCard
           icon="money"
           label="Est. cost"
           tone="success"
-          value={money(data.summary?.estimated_cost_usd ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            money(data.summary?.estimated_cost_usd ?? 0),
+          )}
         />
       </div>
 
-      <TokenEconomicsPanel economics={data.tokenEconomics} />
+      <TokenEconomicsPanel
+        costAvailable={
+          (data.summary?.sessions ?? 0) === 0 || (data.summary?.usage_sessions ?? 0) > 0
+        }
+        economics={data.tokenEconomics}
+      />
 
       <div className="split">
         <DailyPanel
@@ -4547,12 +4577,14 @@ function ActivityPanel({
 
 function TokenEconomicsPanel({
   compact: isCompact = false,
+  costAvailable = true,
   description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
   subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
+  costAvailable?: boolean;
   description?: string;
   economics: TokenEconomics | null;
   subagentRuns?: number;
@@ -4572,7 +4604,7 @@ function TokenEconomicsPanel({
         {economics != null ? (
           <div className="activity-summary">
             <span>
-              <strong>{money(totalCost)}</strong>
+              <strong>{costAvailable ? money(totalCost) : "Unavailable"}</strong>
               total
             </span>
             <span>
@@ -4664,18 +4696,22 @@ function TokenEconomicsPanel({
                           </span>
                         </td>
                         <td className="activity-share">
-                          <span className="activity-share-inner">
-                            <span className="activity-bar">
-                              <span
-                                className={`tone-${tone}`}
-                                style={{ width: `${share * 100}%` }}
-                              />
+                          {costAvailable ? (
+                            <span className="activity-share-inner">
+                              <span className="activity-bar">
+                                <span
+                                  className={`tone-${tone}`}
+                                  style={{ width: `${share * 100}%` }}
+                                />
+                              </span>
+                              <small>{Math.round(share * 100)}%</small>
                             </span>
-                            <small>{Math.round(share * 100)}%</small>
-                          </span>
+                          ) : (
+                            <span className="faint">-</span>
+                          )}
                         </td>
                         <td className="numeric activity-number">
-                          {money(bucket.estimated_cost_usd)}
+                          {costAvailable ? money(bucket.estimated_cost_usd) : "-"}
                         </td>
                         <td className="activity-share">
                           <span className="activity-share-inner">
@@ -5766,6 +5802,9 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "cursor") {
+    return <Badge tone="accent">Cursor</Badge>;
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -6652,6 +6691,10 @@ function compact(value: number): string {
 
 function money(value: number): string {
   return `$${value.toFixed(2)}`;
+}
+
+function usageMetric(sessions: number, usageSessions: number, value: string): string {
+  return sessions > 0 && usageSessions === 0 ? "Unavailable" : value;
 }
 
 function duration(ms: number): string {
@@ -8185,8 +8228,9 @@ function SettingsView({
           <div>
             <h2>About Decant</h2>
             <p>
-              Local-first analytics for Claude Code and Codex sessions. Decant is an open source
-              tool from Dosu.
+              {
+                "Local-first analytics for Claude Code, Codex, and Cursor CLI sessions. Decant is an open source tool from Dosu."
+              }
             </p>
           </div>
           <img alt="" src={dosuDecantUrl} />
@@ -9046,10 +9090,17 @@ function SessionDetailView({
               <strong>{formatInt(stats.toolCalls)}</strong> tool calls
             </span>
             <span>
-              <strong>{compact(stats.tokens)}</strong> tokens
+              <strong>
+                {detail.summary.usage_available ? compact(stats.tokens) : "Unavailable"}
+              </strong>{" "}
+              tokens
             </span>
             <span>
-              <strong>{money(detail.summary.estimated_cost_usd)}</strong>
+              <strong>
+                {detail.summary.usage_available
+                  ? money(detail.summary.estimated_cost_usd)
+                  : "Unavailable"}
+              </strong>
             </span>
           </div>
         </div>
@@ -9130,6 +9181,7 @@ function SessionDetailView({
       {economics != null ? (
         <TokenEconomicsPanel
           compact
+          costAvailable={detail.summary.usage_available}
           description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
           subagentRuns={subagentRuns}
@@ -10715,7 +10767,9 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         </span>
         <small>
           {formatInt(subagent.summary.message_count)} msgs ·{" "}
-          {money(subagent.summary.estimated_cost_usd)}
+          {subagent.summary.usage_available
+            ? money(subagent.summary.estimated_cost_usd)
+            : "cost n/a"}
         </small>
       </summary>
       {messages.length === 0 ? (
@@ -11019,6 +11073,9 @@ function providerIdentity(tool: string): {
   }
   if (tool === "codex") {
     return { key: "openai", label: "Codex", tone: "openai", icon: "openai" };
+  }
+  if (tool === "cursor") {
+    return { key: "assistant", label: "Cursor", tone: "accent", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

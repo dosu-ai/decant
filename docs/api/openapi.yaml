@@ -1403,13 +1403,15 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, version]
+      required: [dbPath, claudeDir, codexDir, cursorDir, version]
       properties:
         dbPath:
           type: string
         claudeDir:
           type: string
         codexDir:
+          type: string
+        cursorDir:
           type: string
         version:
           type: string
@@ -1732,6 +1734,7 @@ components:
         - message_count
         - total_input_tokens
         - total_output_tokens
+        - usage_available
         - estimated_cost_usd
         - user_state
         - is_user_archived
@@ -1784,6 +1787,8 @@ components:
         total_output_tokens:
           type: integer
           minimum: 0
+        usage_available:
+          type: boolean
         estimated_cost_usd:
           type: number
           minimum: 0
@@ -2197,6 +2202,7 @@ components:
       type: object
       required:
         - sessions
+        - usage_sessions
         - messages
         - tool_calls
         - input_tokens
@@ -2208,6 +2214,9 @@ components:
         - estimated_cost_usd
       properties:
         sessions:
+          type: integer
+          minimum: 0
+        usage_sessions:
           type: integer
           minimum: 0
         messages:

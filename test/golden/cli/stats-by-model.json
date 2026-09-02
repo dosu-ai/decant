@@ -16,5 +16,14 @@
     "reasoning_tokens": 140,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.00985
+  },
+  {
+    "key": "cursor-test-model",
+    "sessions": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reasoning_tokens": 0,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0
   }
 ]

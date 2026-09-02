@@ -56,18 +56,23 @@ describe("coded UI recovery", () => {
     expect(main).toContain("activeFailedSlices.join");
     expect(main).toContain("slicesForView(activeView).includes(slice)");
     expect(main).toContain(
-      "setFailedSlices((current) => current.filter((slice) => needed.includes(slice)))",
+      "const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice))",
     );
     expect(main).toContain("failed: { error: unknown; requestKey: string } | null");
     expect(main).toContain('active === "Sessions" && sessionPageState.error != null');
   });
 
-  test("queues an explicit refresh after a dropped live connection recovers", () => {
+  test("refreshes failed slices on reconnect without replacing healthy data", () => {
     expect(main).toContain("const liveDroppedRef = useRef(false)");
+    expect(main).toContain("const failedSlicesRef = useRef<DataSlice[]>([])");
+    expect(main).toContain("failedSlicesRef.current = failures");
     expect(main).toMatch(
-      /if \(liveDroppedRef\.current\) \{\s*liveDroppedRef\.current = false;\s*setArchiveUpdateAvailable\(true\);/,
+      /if \(liveDroppedRef\.current\) \{\s*liveDroppedRef\.current = false;\s*if \(failedSlicesRef\.current\.length > 0\) \{\s*requestRefresh\(\);\s*\} else \{\s*setArchiveUpdateAvailable\(true\);/,
     );
     expect(main).toContain("liveDroppedRef.current = true");
+    expect(main).toMatch(
+      /if \(events\.readyState !== EventSource\.OPEN\) \{\s*setLiveDisconnected\(true\);\s*setLiveConnectionKey\(\(key\) => key \+ 1\);/,
+    );
   });
 
   test("preserves the archive update reason in server events", () => {

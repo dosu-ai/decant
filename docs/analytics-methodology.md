@@ -85,15 +85,20 @@ provider charges.
 ### Search counting
 
 This defines the search count behind the "discovery is expensive"
-recommendation signal (`signal:search-heavy`); it is not an activity-bucket
-rule, and it does not change how shell commands are bucketed above. A search
-is a `Grep` or `Glob` tool call, or a shell statement whose leading
-command is a search binary such as `rg`, `grep`, or `find`. Compound commands
-are split on `;`, `&&`, `||`, and newlines, so `cd src && rg handler` counts.
-Pipelines are not split: `ps aux | grep node` filters output rather than
-searching a repository, and does not count. Codex records some shell activity
-inside a JavaScript `exec` program; those inner commands are not yet counted,
-so Codex search volume is understated.
+recommendation signal (`signal:search-heavy`). It is separate from activity
+buckets and does not change how shell commands are bucketed above. A search is
+a `Grep` or `Glob` tool call, or a shell statement whose leading command is a
+search binary such as `rg`, `grep`, or `find`. Compound commands are split on
+`;`, `&&`, `||`, and newlines. For example, `cd src && rg handler` counts.
+Pipelines are not split. A command such as `ps aux | grep node` filters output
+rather than searching a repository, so it does not count.
+
+Search binaries count only when they are the leading command. Searches wrapped
+by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
+Codex also records some shell activity inside a JavaScript `exec` program, and
+those inner commands do not count yet. The statement splitter does not parse
+shell quoting, so text such as `echo "a; grep b"` can add a false search. These
+cases can make the reported shell and Codex search volume too low or too high.
 
 ## Orientation and implementation
 

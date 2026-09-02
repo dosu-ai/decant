@@ -9,11 +9,15 @@ export interface Price {
   cacheWrite1hPerMtok: number;
 }
 
-function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
+function claudePrice(
+  inputPerMtok: number,
+  outputPerMtok: number,
+  cacheReadMultiplier = 0.1,
+): Price {
   return {
     inputPerMtok,
     outputPerMtok,
-    cacheReadPerMtok: inputPerMtok * 0.1,
+    cacheReadPerMtok: inputPerMtok * cacheReadMultiplier,
     cacheWritePerMtok: inputPerMtok * 1.25,
     cacheWrite1hPerMtok: inputPerMtok * 2.0,
   };
@@ -40,6 +44,7 @@ export function defaultPricing(): Map<string, Price> {
   // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens. Rates and
   // exclusions were checked against the official sources in docs/pricing.md.
   return new Map<string, Price>([
+    ["claude-fable-5-1", claudePrice(10.0, 50.0, 0.025)],
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus", claudePrice(5.0, 25.0)],
     ["claude-opus-4.1", claudePrice(15.0, 75.0)],
@@ -48,9 +53,10 @@ export function defaultPricing(): Map<string, Price> {
     ["claude-sonnet", claudePrice(3.0, 15.0)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
-    ["gpt-5.6-sol", openAiPrice(5.0, 0.5, 30.0, 1.25)],
-    ["gpt-5.6-terra", openAiPrice(2.5, 0.25, 15.0, 1.25)],
-    ["gpt-5.6-luna", openAiPrice(1.0, 0.1, 6.0, 1.25)],
+    ["gpt-5.6-sol", openAiPrice(4.0, 0.4, 20.0, 1.25)],
+    ["gpt-5.6-terra", openAiPrice(2.0, 0.2, 12.0, 1.25)],
+    ["gpt-5.6-luna", openAiPrice(0.2, 0.02, 1.2, 1.25)],
+    ["gpt-5.6-cyber", openAiPrice(12.5, 1.25, 75.0, 1.25)],
     ["gpt-5.5", openAiPrice(5.0, 0.5, 30.0)],
     ["gpt-5.5-pro", openAiPrice(30.0, null, 180.0)],
     ["gpt-5.4", openAiPrice(2.5, 0.25, 15.0)],
@@ -114,6 +120,9 @@ function canonicalModel(raw: string): string | null {
     model === "fable"
   ) {
     if (model.includes("fable") || model.includes("mythos")) {
+      if (/(?:fable|mythos)-5(?:-|\.)1(?:$|-|\[)/.test(model)) {
+        return "claude-fable-5-1";
+      }
       return "claude-fable";
     }
     if (model.includes("opus")) {
@@ -164,7 +173,15 @@ function canonicalModel(raw: string): string | null {
     return null;
   }
 
+  if (model === "gpt-5.6" || model === "gpt-daybreak-blue-latest") {
+    return "gpt-5.6-sol";
+  }
+  if (model === "gpt-daybreak-red-latest") {
+    return "gpt-5.6-cyber";
+  }
+
   for (const key of [
+    "gpt-5.6-cyber",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",

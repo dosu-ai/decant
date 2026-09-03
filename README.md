@@ -11,8 +11,19 @@ tangible insights. See where tokens, cost, and agent time go, inspect context
 usage, find the files and tools agents touch, and search complete transcripts
 from a CLI or local web UI.
 
-Decant is local-first. It makes no outbound network calls at runtime,
-and your transcripts never leave your machine.
+Decant is local-first. It makes no outbound network calls at runtime, and your
+transcripts never leave your machine.
+
+It does keep a copy of them. To make sessions searchable, Decant writes prompts,
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it. See
+[What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
+inspect, delete, or remove it.
 
 Built by
 [Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme),
@@ -88,6 +99,10 @@ unauthenticated archive API on every host interface. Custom container networks
 may need the trusted-peer setting documented under
 [Docker distribution](docs/distribution.md#docker).
 
+The source mounts are read-only, but `decant-data` is a **named volume**: the
+archive outlives every container, and neither `--rm` nor `docker rm` removes it.
+Use `docker volume rm decant-data` when you want it gone.
+
 ## CLI
 
 ```sh
@@ -102,6 +117,9 @@ decant files --group ext       # file hotspots
 decant tool stats              # tool usage
 decant mcp stats               # MCP server usage
 decant export 1 > session.md   # export a session
+decant db info                 # what the archive holds and where
+decant session rm 1 --yes      # delete a session and its descendants
+decant db vacuum               # release the freed pages after a delete
 ```
 
 Run `decant --help` or `decant <command> --help` for all commands and flags.

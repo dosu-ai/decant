@@ -15,6 +15,7 @@ import { defaultArgv, runCli } from "../src/cli.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
@@ -740,5 +741,442 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("--port");
     expect(serve.stdout).toContain("--trusted-peer");
     expect(serve.stdout).toContain("(default: 3000)");
+  });
+});
+
+describe("db info discloses what the archive stores", () => {
+  interface InfoJson {
+    size_bytes: number;
+    sessions: number;
+    messages: number;
+    blocks: number;
+    tool_calls: number;
+    file_refs: number;
+    freelist_bytes: number;
+    fts_rows?: number;
+    text_bytes?: number;
+  }
+  type FullInfoJson = InfoJson & { fts_rows: number; text_bytes: number };
+
+  /** Bulky enough that removing it actually frees whole SQLite pages. */
+  function seedBulkySession(dbPath: string): number {
+    const db = openDb(dbPath);
+    try {
+      const sessionId = Number(
+        db
+          .query(
+            `INSERT INTO session (tool, source_session_id, source_path)
+             VALUES ('claude_code', 'bulky', '/home/u/.claude/projects/p/bulky.jsonl')`,
+          )
+          .run().lastInsertRowid,
+      );
+      db.exec("BEGIN IMMEDIATE;");
+      const insertMessage = db.prepare(
+        "INSERT INTO message (session_id, seq, role, raw) VALUES (?1, ?2, 'assistant', ?3)",
+      );
+      const insertBlock = db.prepare(
+        `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_name, tool_input)
+         VALUES (?1, ?2, 0, 'tool_use', ?3, 'Read', ?4)`,
+      );
+      for (let seq = 0; seq < 200; seq += 1) {
+        const messageId = Number(
+          insertMessage.run(sessionId, seq, `{"canary":"${"r".repeat(2_000)}"}`).lastInsertRowid,
+        );
+        insertBlock.run(messageId, sessionId, "t".repeat(2_000), `{"file_path":"${seq}"}`);
+      }
+      insertMessage.finalize();
+      insertBlock.finalize();
+      db.exec("COMMIT;");
+      return sessionId;
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("reports blocks and file refs, and keeps the full-scan totals opt-in", async () => {
+    const { dbPath } = await syncedCase();
+    const base = ["--db", dbPath, "--json", "--no-sync"];
+
+    const info = await runCli([...base, "db", "info"]);
+    expect(info.code).toBe(0);
+    const row = JSON.parse(info.stdout) as InfoJson;
+    expect(row.blocks).toBeGreaterThan(0);
+    expect(row.file_refs).toBeGreaterThan(0);
+    expect(row.freelist_bytes).toBe(0);
+    // A byte sum and an FTS row count are full scans; a multi-GB archive must
+    // not pay for them just to read its path and schema version.
+    expect(row.fts_rows).toBeUndefined();
+    expect(row.text_bytes).toBeUndefined();
+
+    const full = await runCli([...base, "db", "info", "--full"]);
+    expect(full.code).toBe(0);
+    const fullRow = JSON.parse(full.stdout) as FullInfoJson;
+    expect(fullRow.fts_rows).toBe(row.blocks);
+    expect(fullRow.text_bytes).toBeGreaterThan(0);
+  });
+
+  test("renders the new fields in the human table", async () => {
+    const { dbPath } = await syncedCase();
+    const info = await runCli(["--db", dbPath, "--no-sync", "db", "info", "--full"]);
+    expect(info.code).toBe(0);
+    expect(info.stdout).toContain("blocks:");
+    expect(info.stdout).toContain("file_refs:");
+    expect(info.stdout).toContain("freelist_bytes:");
+    expect(info.stdout).toContain("fts_rows:");
+    expect(info.stdout).toContain("text_bytes:");
+  });
+
+  test("an empty archive reports zeros rather than omitting the fields", async () => {
+    const dbPath = join(workDir, "db-info-empty.db");
+    const info = await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"]);
+    expect(info.code).toBe(0);
+    expect(JSON.parse(info.stdout)).toMatchObject({
+      sessions: 0,
+      messages: 0,
+      blocks: 0,
+      tool_calls: 0,
+      file_refs: 0,
+      fts_rows: 0,
+      text_bytes: 0,
+      freelist_bytes: 0,
+    });
+  });
+
+  test("reports freed pages until the archive is vacuumed", async () => {
+    const dbPath = join(workDir, "db-info-freelist.db");
+    const sessionId = seedBulkySession(dbPath);
+    const base = ["--db", dbPath, "--json", "--no-sync"];
+
+    const before = JSON.parse(
+      (await runCli([...base, "db", "info", "--full"])).stdout,
+    ) as FullInfoJson;
+    expect(before.freelist_bytes).toBe(0);
+
+    const db = openDb(dbPath);
+    expect(setSessionUserState(db, sessionId, "deleted")).toBe(true);
+    closeDb(db);
+
+    const afterDelete = JSON.parse(
+      (await runCli([...base, "db", "info", "--full"])).stdout,
+    ) as FullInfoJson;
+    expect(afterDelete.text_bytes).toBeLessThan(before.text_bytes);
+    // The rows are gone but their bytes are still in the file: this is the
+    // number that tells a user a vacuum is owed.
+    expect(afterDelete.freelist_bytes).toBeGreaterThan(0);
+
+    expect((await runCli(["--db", dbPath, "--no-sync", "db", "vacuum"])).code).toBe(0);
+
+    const afterVacuum = JSON.parse(
+      (await runCli([...base, "db", "info", "--full"])).stdout,
+    ) as FullInfoJson;
+    expect(afterVacuum.freelist_bytes).toBe(0);
+    expect(afterVacuum.size_bytes).toBeLessThan(afterDelete.size_bytes);
+  });
+
+  test("text_bytes counts bytes, not characters", async () => {
+    const dbPath = join(workDir, "db-info-utf8.db");
+    // SQLite's LENGTH() counts characters on a TEXT column. The field sits
+    // directly under size_bytes, which is real bytes from statSync, so it has
+    // to be measured the same way or the two disagree in the same output.
+    const sample = "h\u00e9llo\u2192\ud83d\ude42";
+    // Code points, not UTF-16 units: SQLite's LENGTH() counts characters, and
+    // JS .length would count the emoji's surrogate pair twice.
+    expect([...sample].length).toBe(7);
+    expect(Buffer.byteLength(sample, "utf8")).toBe(13);
+
+    const db = openDb(dbPath);
+    const sessionId = Number(
+      db.query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'utf8')").run()
+        .lastInsertRowid,
+    );
+    const messageId = Number(
+      db
+        .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
+        .run(sessionId, sample).lastInsertRowid,
+    );
+    // Every column the sum touches gets the multibyte sample. Leaving
+    // tool_input and tool_result NULL would let COALESCE return 0 either way,
+    // so reverting those two call sites to LENGTH() would go unnoticed --
+    // and tool_result is the largest content column in a real archive.
+    db.query(
+      `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_input, tool_result)
+       VALUES (?1, ?2, 0, 'tool_use', ?3, ?3, ?3)`,
+    ).run(messageId, sessionId, sample);
+    closeDb(db);
+
+    const info = JSON.parse(
+      (await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"])).stdout,
+    ) as FullInfoJson;
+    // Four stored copies of the sample at 13 bytes each: message.raw, and
+    // block.text / tool_input / tool_result.
+    expect(info.text_bytes).toBe(52);
+  });
+});
+
+describe("session rm", () => {
+  function seedTree(dbPath: string): { rootId: number; childId: number } {
+    const db = openDb(dbPath);
+    try {
+      const insertSession = (sourceSessionId: string, parentId: number | null): number =>
+        Number(
+          db
+            .query(
+              `INSERT INTO session (tool, source_session_id, source_path, parent_session_id)
+               VALUES ('claude_code', ?1, ?2, ?3)`,
+            )
+            .run(sourceSessionId, `/home/u/.claude/projects/p/${sourceSessionId}.jsonl`, parentId)
+            .lastInsertRowid,
+        );
+      const addBlock = (sessionId: number, canary: string): void => {
+        const messageId = Number(
+          db
+            .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', '{}')")
+            .run(sessionId).lastInsertRowid,
+        );
+        db.query(
+          `INSERT INTO block (message_id, session_id, ordinal, type, text)
+           VALUES (?1, ?2, 0, 'text', ?3)`,
+        ).run(messageId, sessionId, canary);
+      };
+      const rootId = insertSession("rm-root", null);
+      addBlock(rootId, "ROOTCANARYTEXT");
+      const childId = insertSession("rm-child", rootId);
+      addBlock(childId, "CHILDCANARYTEXT");
+      return { rootId, childId };
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  function ftsMatches(dbPath: string, needle: string): number {
+    const db = openDb(dbPath);
+    try {
+      return (
+        db.query("SELECT count(*) AS n FROM block_fts WHERE block_fts MATCH ?1").get(needle) as {
+          n: number;
+        }
+      ).n;
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("deletes a session, its descendants, and their full-text entries", async () => {
+    const dbPath = join(workDir, "session-rm.db");
+    const { rootId } = seedTree(dbPath);
+    expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(1);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
+
+    const removed = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--yes",
+    ]);
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain(`deleted session ${rootId} (1 descendant)`);
+    // Deleted bytes may remain readable until a vacuum, so the hint is part of
+    // the contract, not a nicety.
+    expect(removed.stdout).toContain("decant db vacuum");
+
+    expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(0);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(0);
+    const db = openDb(dbPath);
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 0 });
+    closeDb(db);
+  });
+
+  test("refuses an unknown id with a non-zero exit", async () => {
+    const dbPath = join(workDir, "session-rm-missing.db");
+    seedTree(dbPath);
+    const removed = await runCli(["--db", dbPath, "--no-sync", "session", "rm", "4242"]);
+    expect(removed.code).toBe(1);
+    expect(removed.stderr).toContain("no session with id 4242");
+    expect(removed.stdout).toBe("");
+    const db = openDb(dbPath);
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 2 });
+    closeDb(db);
+  });
+
+  test("--json reports what it deleted", async () => {
+    const dbPath = join(workDir, "session-rm-json.db");
+    const { rootId } = seedTree(dbPath);
+    const removed = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--yes",
+    ]);
+    expect(removed.code).toBe(0);
+    expect(JSON.parse(removed.stdout)).toMatchObject({
+      deleted: true,
+      session_id: rootId,
+      descendants: 1,
+    });
+  });
+
+  test("--json reports a miss without deleting anything", async () => {
+    const dbPath = join(workDir, "session-rm-json-missing.db");
+    seedTree(dbPath);
+    const removed = await runCli(["--db", dbPath, "--json", "--no-sync", "session", "rm", "4242"]);
+    expect(removed.code).toBe(1);
+    expect(JSON.parse(removed.stdout)).toMatchObject({ deleted: false, session_id: 4242 });
+  });
+
+  function seedLoneSession(dbPath: string): number {
+    const db = openDb(dbPath);
+    try {
+      return Number(
+        db
+          .query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'lone')")
+          .run().lastInsertRowid,
+      );
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  function sessionCount(dbPath: string): number {
+    const db = openDb(dbPath);
+    try {
+      return (db.query("SELECT count(*) AS n FROM session").get() as { n: number }).n;
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("refuses a tree delete without --yes and mutates nothing", async () => {
+    const dbPath = join(workDir, "session-rm-guard.db");
+    const { rootId } = seedTree(dbPath);
+
+    const refused = await runCli(["--db", dbPath, "--no-sync", "session", "rm", String(rootId)]);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("1 descendant");
+    expect(refused.stderr).toContain("--yes");
+    expect(refused.stdout).toBe("");
+
+    // There is no un-delete, so a refused guard has to leave the archive
+    // byte-for-byte as it found it.
+    expect(sessionCount(dbPath)).toBe(2);
+    expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(1);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
+  });
+
+  test("a session with no descendants does not need --yes", async () => {
+    const dbPath = join(workDir, "session-rm-lone.db");
+    const id = seedLoneSession(dbPath);
+
+    const removed = await runCli(["--db", dbPath, "--no-sync", "session", "rm", String(id)]);
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain(`deleted session ${id} (0 descendants)`);
+    expect(sessionCount(dbPath)).toBe(0);
+  });
+
+  test("--dry-run reports the blast radius and mutates nothing", async () => {
+    const dbPath = join(workDir, "session-rm-dry.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(dry.stdout).toContain(`would delete session ${rootId} (1 descendant)`);
+    expect(sessionCount(dbPath)).toBe(2);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
+  });
+
+  test("--dry-run wins over --yes", async () => {
+    const dbPath = join(workDir, "session-rm-dry-yes.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--yes",
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--json marks a dry run and still deletes nothing", async () => {
+    const dbPath = join(workDir, "session-rm-dry-json.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(JSON.parse(dry.stdout)).toMatchObject({
+      deleted: false,
+      dry_run: true,
+      session_id: rootId,
+      descendants: 1,
+    });
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--json reports a refused guard", async () => {
+    const dbPath = join(workDir, "session-rm-guard-json.db");
+    const { rootId } = seedTree(dbPath);
+
+    const refused = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+    ]);
+    expect(refused.code).toBe(2);
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      deleted: false,
+      session_id: rootId,
+      descendants: 1,
+    });
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--dry-run still reports an unknown id as a miss", async () => {
+    const dbPath = join(workDir, "session-rm-dry-missing.db");
+    seedTree(dbPath);
+    const dry = await runCli(["--db", dbPath, "--no-sync", "session", "rm", "4242", "--dry-run"]);
+    expect(dry.code).toBe(1);
+    expect(dry.stderr).toContain("no session with id 4242");
+  });
+
+  test("is offered by shell completion", async () => {
+    // A bare substring check passes on "--format"; match whole words only.
+    const fish = await runCli(["completion", "fish"]);
+    expect(fish.code).toBe(0);
+    expect(fish.stdout).toContain("complete -c decant -f -a 'rm'");
+    const zsh = await runCli(["completion", "zsh"]);
+    expect(zsh.code).toBe(0);
+    expect(zsh.stdout).toMatch(/\brm\b/);
   });
 });

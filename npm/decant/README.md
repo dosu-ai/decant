@@ -10,6 +10,15 @@ and complete transcript browsing.
 Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine.
 
+It does keep a copy of them. To make sessions searchable, Decant writes prompts,
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it.
+
 Built by
 [Dosu](https://dosu.dev?utm_source=decant&utm_medium=npm&utm_campaign=attribution&utm_content=package_readme),
 Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
@@ -22,6 +31,7 @@ npx @dosu/decant@latest          # start the local web UI
 npx @dosu/decant@latest --help
 npx @dosu/decant@latest ls
 npx @dosu/decant@latest search "auth bug"
+npx @dosu/decant@latest db info  # what the archive holds and where
 ```
 
 ## Install globally

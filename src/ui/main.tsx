@@ -136,6 +136,7 @@ import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
+  DELETE_SESSION_EYEBROW,
   type SessionStateUpdate,
   sessionStateRequest,
 } from "./session-state.ts";
@@ -827,6 +828,7 @@ function App() {
   const syncCompleteTimerRef = useRef<number | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
+  const failedSlicesRef = useRef<DataSlice[]>([]);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
@@ -901,7 +903,9 @@ function App() {
     const sliceKey = (slice: DataSlice): string =>
       SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
     const needed = slicesForView(activeView);
-    setFailedSlices((current) => current.filter((slice) => needed.includes(slice)));
+    const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice));
+    failedSlicesRef.current = relevantFailures;
+    setFailedSlices(relevantFailures);
     const missing = needed.filter(
       (slice) => loadedSlicesRef.current.get(slice) !== sliceKey(slice),
     );
@@ -919,7 +923,9 @@ function App() {
         for (const slice of settled.loaded) {
           loadedSlicesRef.current.set(slice, sliceKey(slice));
         }
-        setFailedSlices(settled.failures.map((failure) => failure.slice));
+        const failures = settled.failures.map((failure) => failure.slice);
+        failedSlicesRef.current = failures;
+        setFailedSlices(failures);
       })
       .finally(() => {
         if (!cancelled && missing.includes("recommendations")) {
@@ -939,7 +945,11 @@ function App() {
     const markConnected = () => {
       if (liveDroppedRef.current) {
         liveDroppedRef.current = false;
-        setArchiveUpdateAvailable(true);
+        if (failedSlicesRef.current.length > 0) {
+          requestRefresh();
+        } else {
+          setArchiveUpdateAvailable(true);
+        }
       }
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
@@ -1015,6 +1025,7 @@ function App() {
         liveDisconnectTimerRef.current = null;
         if (events.readyState !== EventSource.OPEN) {
           setLiveDisconnected(true);
+          setLiveConnectionKey((key) => key + 1);
         }
       }, LIVE_DISCONNECT_GRACE_MS);
     };
@@ -8243,7 +8254,7 @@ function DeleteSessionDialog({
       >
         <header>
           <div>
-            <span className="section-eyebrow">Permanent action</span>
+            <span className="section-eyebrow">{DELETE_SESSION_EYEBROW}</span>
             <h2 id={titleId}>Delete session?</h2>
           </div>
           <button

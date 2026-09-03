@@ -32,6 +32,13 @@ export interface DeletedSessionLineageContext {
 
 export interface SessionUserStateMutationOptions {
   /**
+   * Authorize a deletion after the exact subtree has been read under the same
+   * write lock used for the mutation. Returning false leaves the archive
+   * unchanged. This keeps destructive CLI guards free of count/delete races
+   * with another ingesting process.
+   */
+  confirmDelete?: (sessionIds: readonly number[]) => boolean;
+  /**
    * Derived writes that must commit or roll back with the state mutation.
    * The callback runs inside the same immediate transaction.
    */
@@ -195,6 +202,19 @@ export function inheritDeletedSessionTombstone(
 }
 
 /**
+ * A session plus everything descended from it. Deletion applies to the whole
+ * tree, so anything that reports the blast radius of a delete has to use the
+ * same shape the delete does, or the two drift apart silently.
+ */
+const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
+   SELECT id FROM session WHERE id = ?1
+   UNION
+   SELECT child.id
+   FROM session child
+   JOIN subtree parent ON child.parent_session_id = parent.id
+ )`;
+
+/**
  * Apply direct user archive state, or delete a session's existing descendant
  * tree.
  *
@@ -213,13 +233,7 @@ export function setSessionUserState(
   return withImmediateTransaction(db, () => {
     const identities = db
       .query(
-        `WITH RECURSIVE subtree(id) AS (
-           SELECT id FROM session WHERE id = ?1
-           UNION
-           SELECT child.id
-           FROM session child
-           JOIN subtree parent ON child.parent_session_id = parent.id
-         )
+        `${SUBTREE_CTE}
          SELECT s.id, s.tool, s.source_session_id, s.source_path
          FROM session s
          JOIN subtree ON subtree.id = s.id
@@ -248,6 +262,13 @@ export function setSessionUserState(
       return false;
     }
     const targets = state === "deleted" ? identities : [selected];
+    if (
+      state === "deleted" &&
+      options.confirmDelete != null &&
+      !options.confirmDelete(identities.map((identity) => identity.id))
+    ) {
+      return false;
+    }
     upsertSessionStateIdentities(db, targets, state);
 
     if (state === "deleted") {

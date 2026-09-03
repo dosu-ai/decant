@@ -31,7 +31,22 @@ export async function getJson<T>(
     headers.set("content-type", "application/json");
   }
   for (let attempt = 0; ; attempt += 1) {
-    const response = await fetcher(path, { ...init, headers });
+    const retryDelay = retryPolicy.delaysMs[attempt];
+    let response: Response;
+    try {
+      response = await fetcher(path, { ...init, headers });
+    } catch (error) {
+      if (
+        error instanceof TypeError &&
+        isSafeMethod(init?.method) &&
+        retryDelay != null &&
+        init?.signal?.aborted !== true
+      ) {
+        await retryPolicy.wait(retryDelay, init?.signal);
+        continue;
+      }
+      throw error;
+    }
     if (response.ok) {
       if (response.status === 204) {
         return undefined as T;
@@ -51,18 +66,17 @@ export async function getJson<T>(
     const code =
       typeof payload.code === "string" && payload.code !== "" ? payload.code : "request_failed";
     const { error: _error, code: _code, ...extras } = payload;
-    const retryDelay = retryPolicy.delaysMs[attempt];
-    if (
-      code === "archive_locked" &&
-      payload.retryable === true &&
-      retryDelay != null &&
-      init?.signal?.aborted !== true
-    ) {
+    if (payload.retryable === true && retryDelay != null && init?.signal?.aborted !== true) {
       await retryPolicy.wait(retryDelay, init?.signal);
       continue;
     }
     throw new ApiError(response.status, code, message, extras);
   }
+}
+
+function isSafeMethod(method: string | undefined): boolean {
+  const normalized = method?.toUpperCase() ?? "GET";
+  return normalized === "GET" || normalized === "HEAD";
 }
 
 const DEFAULT_RETRY_POLICY: ApiRetryPolicy = {

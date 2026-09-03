@@ -1067,7 +1067,7 @@ describe("sync", () => {
           )
           .get() as { cache_write_per_mtok: number; cache_write_1h_per_mtok: number }
       ).cache_write_1h_per_mtok,
-    ).toBe(6.25);
+    ).toBe(5);
 
     // Simulate opening a migrated v9 archive whose transcripts are unchanged.
     db.exec("DELETE FROM session_economics");

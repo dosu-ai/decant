@@ -62,4 +62,79 @@ describe("getJson", () => {
     ).resolves.toEqual({ ok: true });
     expect(attempts).toBe(3);
   });
+
+  test("retries any response the server marks as transient", async () => {
+    let attempts = 0;
+    const fetcher = () => {
+      attempts += 1;
+      return Promise.resolve(
+        attempts === 1
+          ? Response.json(
+              { error: "still starting", code: "service_starting", retryable: true },
+              { status: 503 },
+            )
+          : Response.json({ ok: true }),
+      );
+    };
+
+    await expect(
+      getJson("/api/test", undefined, fetcher, {
+        delaysMs: [0],
+        wait: () => Promise.resolve(),
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(attempts).toBe(2);
+  });
+
+  test("retries transport failures for safe reads", async () => {
+    let attempts = 0;
+    const fetcher = () => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new TypeError("connection refused"))
+        : Promise.resolve(Response.json({ ok: true }));
+    };
+
+    await expect(
+      getJson("/api/test", undefined, fetcher, {
+        delaysMs: [0],
+        wait: () => Promise.resolve(),
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(attempts).toBe(2);
+  });
+
+  test("does not replay a write after a transport failure", async () => {
+    let attempts = 0;
+    const failure = new TypeError("connection reset after send");
+    const fetcher = () => {
+      attempts += 1;
+      return Promise.reject(failure);
+    };
+
+    await expect(
+      getJson("/api/sync", { method: "POST", body: "{}" }, fetcher, {
+        delaysMs: [0],
+        wait: () => Promise.resolve(),
+      }),
+    ).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+  });
+
+  test("does not hide unexpected fetcher failures behind retries", async () => {
+    let attempts = 0;
+    const failure = new Error("fetch wrapper bug");
+    const fetcher = () => {
+      attempts += 1;
+      return Promise.reject(failure);
+    };
+
+    await expect(
+      getJson("/api/test", undefined, fetcher, {
+        delaysMs: [0],
+        wait: () => Promise.resolve(),
+      }),
+    ).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+  });
 });

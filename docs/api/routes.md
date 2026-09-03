@@ -87,6 +87,9 @@ parameter on session-list and statistics operations opts it back into those
 operations; full-text and command-palette search remain limited to visible
 sessions. Deletion creates a tombstone keyed to source identity, so a later sync
 does not restore the session. Neither operation modifies the source JSONL file.
+Deletion removes the live rows. SQLite may leave deleted text recoverable in
+freed pages until `decant db vacuum` rewrites the archive. See
+[What the archive stores](../data-lifecycle.md#what-the-archive-stores).
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.

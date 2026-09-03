@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { countSearches } from "./buckets.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { mcpServerLabel, mcpServerLabels } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
@@ -838,14 +839,33 @@ function churnFiles(db: Database, visibleSession: string): Recommendation[] {
   });
 }
 
+// Candidate tool names worth scanning for search calls: structured Grep/Glob,
+// plus every shell surface (Claude's Bash, Codex's exec_command/local_shell,
+// and MCP-flattened variants like `functions.shell`). countSearches does the
+// actual counting -- this predicate only narrows the row set the query pulls
+// into TypeScript, so it stays permissive by design.
+const SEARCH_CANDIDATE_TOOLS = ["grep", "glob", "bash", "shell", "exec_command", "local_shell"];
+
 function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
-  const counts = queryOne<{ searches: number; sessions: number }>(
+  const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
+    (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
+  ).join(" OR ");
+  const rows = queryRows<{ session_id: number; tool_name: string; input: string | null }>(
     db,
-    `SELECT COUNT(*) AS searches, COUNT(DISTINCT s.id) AS sessions
+    `SELECT tc.session_id AS session_id, tc.tool_name AS tool_name, tc.input AS input
        FROM tool_call tc JOIN session s ON s.id = tc.session_id
-       WHERE ${WINDOW} AND ${visibleSession}
-         AND tc.tool_name IN ('Grep','Glob')`,
+      WHERE ${WINDOW} AND ${visibleSession} AND (${namePredicate})`,
   );
+  let searches = 0;
+  const searchSessions = new Set<number>();
+  for (const row of rows) {
+    const found = countSearches(row.tool_name, row.input);
+    if (found > 0) {
+      searches += found;
+      searchSessions.add(row.session_id);
+    }
+  }
+  const counts = { searches, sessions: searchSessions.size };
   const inWindow = queryOne<{ n: number }>(
     db,
     `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${visibleSession}`,
@@ -864,10 +884,10 @@ function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
       kind: "signal",
       category: null,
       title: `${rounded} searches per session — discovery is expensive`,
-      detail: `${counts.searches} Grep/Glob calls across ${inWindow} sessions in the last 30 days.`,
+      detail: `${counts.searches} searches across ${inWindow} sessions in the last 30 days, counting Grep and Glob calls plus shell searches such as rg, grep, and find.`,
       suggestion:
         "Agents grep for structure the repo could state once: add a code map / module index to AGENTS.md so discovery is a read, not a search loop.",
-      prompt: `Our agents average ${rounded} Grep/Glob searches per session (${counts.searches} over the last 30 days). Build a concise code map — key modules, their responsibilities, where common things live — and add it to AGENTS.md so agents can navigate by reading instead of searching.`,
+      prompt: `Our agents average ${rounded} code searches per session (${counts.searches} over the last 30 days, across Grep and Glob calls and shell searches such as rg, grep, and find). Build a concise code map — key modules, their responsibilities, where common things live — and add it to AGENTS.md so agents can navigate by reading instead of searching.`,
       url: null,
       link_label: null,
       icon: "hero-magnifying-glass",
@@ -1034,7 +1054,7 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
       "When agents need to navigate the repo structure.",
       evidence,
       action,
-      "Grep and Glob calls per session fall below the signal threshold.",
+      "Searches per session fall below the signal threshold.",
     );
   }
   if (rec.key === "signal:abandoned-rate") {

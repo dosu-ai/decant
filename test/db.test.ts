@@ -24,7 +24,10 @@ import {
 import { configureLogging } from "../src/logging.ts";
 import schemaSql from "../src/schema.sql" with { type: "text" };
 import { buildSchemaManifest } from "../src/schema-manifest.ts";
-import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
+import {
+  sessionUserStatePredicateForDatabase,
+  setSessionUserState,
+} from "../src/session-user-state.ts";
 import { visibleSessionPredicate } from "../src/session-visibility.ts";
 import schemaV8Sql from "./fixtures/schema-v8.sql" with { type: "text" };
 
@@ -1274,6 +1277,144 @@ describe("openDb", () => {
     db.exec("DELETE FROM schema_migrations WHERE version >= 8");
     db.close();
     expect(() => openDb(path)).toThrow(/rebuild/i);
+  });
+});
+
+describe("deleting a session", () => {
+  const ftsMatchCount = (db: Database, needle: string): number =>
+    (
+      db.query("SELECT count(*) AS n FROM block_fts WHERE block_fts MATCH ?1").get(needle) as {
+        n: number;
+      }
+    ).n;
+
+  /**
+   * Seeds through the real tables rather than raw fixtures so the block_fts
+   * triggers and the ON DELETE CASCADE chains fire exactly as they do during
+   * ingest -- that wiring is what these tests exist to pin.
+   */
+  function seedSession(
+    db: Database,
+    spec: { sourceSessionId: string; parentId?: number; text?: string; toolInput?: string },
+  ): number {
+    const sourcePath = `/home/u/.claude/projects/p/${spec.sourceSessionId}.jsonl`;
+    const sessionId = Number(
+      db
+        .query(
+          `INSERT INTO session (tool, source_session_id, source_path, parent_session_id)
+           VALUES ('claude_code', ?1, ?2, ?3)`,
+        )
+        .run(spec.sourceSessionId, sourcePath, spec.parentId ?? null).lastInsertRowid,
+    );
+    db.query(
+      `INSERT INTO ingest_source (path, tool, session_id, status, last_ingested_at)
+       VALUES (?1, 'claude_code', ?2, 'ingested', datetime('now'))`,
+    ).run(sourcePath, sessionId);
+    const messageId = Number(
+      db
+        .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'assistant', ?2)")
+        .run(sessionId, '{"canary":"CANARYRAWRECORD"}').lastInsertRowid,
+    );
+    db.query(
+      `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_name, tool_input, tool_result)
+       VALUES (?1, ?2, 0, 'tool_use', ?3, 'Read', ?4, 'CANARYTOOLRESULT')`,
+    ).run(messageId, sessionId, spec.text ?? null, spec.toolInput ?? null);
+    db.query(
+      `INSERT INTO file_ref (session_id, message_id, path, operation)
+       VALUES (?1, ?2, ?3, 'read')`,
+    ).run(sessionId, messageId, sourcePath);
+    return sessionId;
+  }
+
+  test("clears its rows and its full-text index entries", () => {
+    const db = openDb(freshPath());
+    const sessionId = seedSession(db, {
+      sourceSessionId: "root",
+      text: "CANARYBLOCKTEXT",
+      toolInput: "CANARYTOOLINPUT",
+    });
+    expect(ftsMatchCount(db, "CANARYBLOCKTEXT")).toBe(1);
+    expect(ftsMatchCount(db, "CANARYTOOLINPUT")).toBe(1);
+
+    expect(setSessionUserState(db, sessionId, "deleted")).toBe(true);
+
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 0 });
+    expect(db.query("SELECT count(*) AS n FROM message").get()).toMatchObject({ n: 0 });
+    expect(db.query("SELECT count(*) AS n FROM block").get()).toMatchObject({ n: 0 });
+    expect(db.query("SELECT count(*) AS n FROM file_ref").get()).toMatchObject({ n: 0 });
+    expect(ftsMatchCount(db, "CANARYBLOCKTEXT")).toBe(0);
+    expect(ftsMatchCount(db, "CANARYTOOLINPUT")).toBe(0);
+    db.close();
+  });
+
+  test("removes the whole descendant tree, not just the named session", () => {
+    const db = openDb(freshPath());
+    const rootId = seedSession(db, { sourceSessionId: "root", text: "ROOTCANARY" });
+    const childId = seedSession(db, {
+      sourceSessionId: "child",
+      parentId: rootId,
+      text: "CHILDCANARY",
+    });
+    seedSession(db, { sourceSessionId: "grandchild", parentId: childId, text: "GRANDCANARY" });
+
+    expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
+
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 0 });
+    expect(ftsMatchCount(db, "CHILDCANARY")).toBe(0);
+    expect(ftsMatchCount(db, "GRANDCANARY")).toBe(0);
+    db.close();
+  });
+
+  test("authorizes the exact descendant tree before mutating it", () => {
+    const db = openDb(freshPath());
+    const rootId = seedSession(db, { sourceSessionId: "root" });
+    const childId = seedSession(db, { sourceSessionId: "child", parentId: rootId });
+    let guardedIds: readonly number[] = [];
+
+    expect(
+      setSessionUserState(db, rootId, "deleted", {
+        confirmDelete: (sessionIds) => {
+          guardedIds = sessionIds;
+          return false;
+        },
+      }),
+    ).toBe(false);
+
+    expect(guardedIds).toEqual([rootId, childId]);
+    expect(db.query("SELECT count(*) AS n FROM session").get()).toMatchObject({ n: 2 });
+    expect(db.query("SELECT count(*) AS n FROM session_user_state").get()).toMatchObject({ n: 0 });
+    db.close();
+  });
+
+  test("enforces foreign keys, which is what makes the cascade fire", () => {
+    const db = openDb(freshPath());
+    expect(db.query("PRAGMA foreign_keys").get()).toMatchObject({ foreign_keys: 1 });
+    db.close();
+  });
+
+  test("keeps the ingest_source tombstone so a later sync cannot resurrect it", () => {
+    const db = openDb(freshPath());
+    const sessionId = seedSession(db, { sourceSessionId: "root" });
+    const sourcePath = "/home/u/.claude/projects/p/root.jsonl";
+
+    expect(setSessionUserState(db, sessionId, "deleted")).toBe(true);
+
+    // session_id is cleared alongside the status, so the surviving row is only
+    // reachable by path.
+    const source = db
+      .query("SELECT session_id, status FROM ingest_source WHERE path = ?1")
+      .get(sourcePath) as { session_id: number | null; status: string } | null;
+    expect(source).toMatchObject({ session_id: null, status: "skipped_deleted" });
+    expect(
+      db.query("SELECT state FROM session_user_state WHERE source_session_id = 'root'").get(),
+    ).toMatchObject({ state: "deleted" });
+    db.close();
+  });
+
+  test("reports no match for an id that is not in the archive", () => {
+    const db = openDb(freshPath());
+    expect(setSessionUserState(db, 4242, "deleted")).toBe(false);
+    db.close();
   });
 });
 

@@ -46,12 +46,12 @@ describe("restyle contract", () => {
     const cards = grid.match(/<StatCard/g)?.length ?? 0;
     expect(cards).toBe(6);
 
-    expect(styles).not.toMatch(/\.analytics-stat-grid \{[^}]*auto-fit/);
+    expect(styles).not.toMatch(/\.analytics-stat-grid \{[^}]*auto-(?:fit|fill)/);
 
     const declared = [...styles.matchAll(/\.analytics-stat-grid \{([^}]*)\}/g)];
     expect(declared.length).toBeGreaterThan(1);
     for (const declaration of declared) {
-      const repeat = /repeat\((\d+),/.exec(declaration[1] ?? "");
+      const repeat = /repeat\(\s*(\d+)\s*,/.exec(declaration[1] ?? "");
       const columns = repeat == null ? 1 : Number(repeat[1]);
       expect(cards % columns).toBe(0);
     }

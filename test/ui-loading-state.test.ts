@@ -99,6 +99,10 @@ describe("session loading state", () => {
 });
 
 describe("session table skeleton", () => {
+  test("keeps the reserved rows static so a first-load fling has raster headroom", () => {
+    expect(styles).toContain(".session-row-skeleton .skeleton-line {\n  animation: none;\n}");
+  });
+
   test("reserves all fifty row slots before the first page settles", () => {
     expect(main).toContain("{ length: SESSION_PAGE_SIZE }");
     expect(main).toContain("const loading = enabled && cached == null && currentError == null");

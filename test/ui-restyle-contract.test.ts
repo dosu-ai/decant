@@ -108,6 +108,27 @@ describe("restyle contract", () => {
     }
   });
 
+  test("backdrop blur stays on transient overlays, never on per-row chrome", () => {
+    // Every backdrop-filter is its own compositor render surface, resampled on each
+    // frame it intersects. Fifty rows of blurred badges made fast flings checkerboard.
+    const badge = /^\s*\.badge\s*\{([^}]*)\}/m.exec(styles)?.[1] ?? "";
+    expect(badge).toContain("background: var(--bg-components-badge-default)");
+    expect(badge).not.toContain("backdrop-filter");
+
+    const overlays = new Set([
+      ".command-palette-backdrop",
+      ".command-palette",
+      ".share-review-backdrop",
+      ".overflow-menu-popover",
+      ".sidebar-backdrop.is-open",
+    ]);
+    const blurred = [...styles.matchAll(/([^{}]+)\{([^{}]*backdrop-filter[^{}]*)\}/g)].map(
+      (match) => match[1]?.trim().split("\n").at(-1)?.trim() ?? "",
+    );
+    expect(blurred.length).toBeGreaterThan(0);
+    expect(blurred.filter((selector) => !overlays.has(selector))).toEqual([]);
+  });
+
   test("the display serif is only asked for a weight that ships", () => {
     const weightTokens = new Map(
       [...styles.matchAll(/--font-weight-(\w+):\s*(\d+);/g)].map((match) => [

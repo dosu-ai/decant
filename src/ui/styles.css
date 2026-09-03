@@ -2806,8 +2806,6 @@ select {
   border-radius: var(--radius-sm);
   background: var(--bg-components-badge-default);
   color: var(--fg-secondary);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   font: var(--text-primary-xs-medium);
   padding: var(--space-4) var(--space-8);
   white-space: nowrap;
@@ -4709,6 +4707,12 @@ mark {
   to {
     background-position: -100% 0;
   }
+}
+
+/* Fifty rows of shimmering gradients repaint on the main thread every frame,
+   right when a first-load fling needs raster headroom. */
+.session-row-skeleton .skeleton-line {
+  animation: none;
 }
 
 .session-detail-skeleton .thread-header {

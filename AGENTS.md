@@ -7,10 +7,11 @@ truth.
 
 ## Project overview
 
-Decant is a local-first Bun and TypeScript application that turns Claude Code
-and Codex JSONL session logs into a normalized, full-text-searchable SQLite
-archive. The `decant` CLI owns parsing, ingest, reads, reports, distillation,
-recommendations, watch mode, and the React UI served by `decant serve`.
+Decant is a local-first Bun and TypeScript application that turns Claude Code,
+Codex, and Gemini CLI JSONL session logs into a normalized, full-text-searchable
+SQLite archive. The `decant` CLI owns parsing, ingest, reads, reports,
+distillation, recommendations, watch mode, and the React UI served by
+`decant serve`.
 
 Start with these files and guides:
 
@@ -44,8 +45,8 @@ only needed when validating the container image.
 
 The default archive is `~/.decant/decant.db`. Override it with `DECANT_DB` or
 `--db`. Set `DECANT_NO_SYNC` or pass `--no-sync` whenever a command points at a
-scratch archive, or automatic sync may populate it from the real Claude Code
-and Codex directories.
+scratch archive, or automatic sync may populate it from the real Claude Code,
+Codex, and Gemini CLI directories.
 
 ## Definition of done
 
@@ -96,9 +97,9 @@ A change is ready when:
 
 - Never commit secrets, API keys, tokens, `.env` files, private keys, real
   transcripts, exports from real sessions, or personal archive databases.
-- `~/.claude` and `~/.codex` contain private content. Fixtures must be written
-  from scratch, and `test/golden/` must be generated only from those synthetic
-  fixtures.
+- `~/.claude`, `~/.codex`, and `~/.gemini` contain private content. Fixtures
+  must be written from scratch, and `test/golden/` must be generated only from
+  those synthetic fixtures.
 - Keep source parsing resilient, meaning malformed records should become
   diagnostics, not crashes or leaked transcript content.
 - Non-loopback serving must require explicit trusted-peer configuration. Treat

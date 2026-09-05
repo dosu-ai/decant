@@ -10,7 +10,8 @@ truth.
 Decant is a local-first Bun and TypeScript application that turns Claude Code,
 Codex, and Gemini CLI JSONL session logs into a normalized, full-text-searchable
 SQLite archive. The `decant` CLI owns parsing, ingest, reads, reports,
-distillation, recommendations, watch mode, and the React UI served by `decant serve`.
+distillation, recommendations, watch mode, and the React UI served by
+`decant serve`.
 
 Start with these files and guides:
 
@@ -96,9 +97,9 @@ A change is ready when:
 
 - Never commit secrets, API keys, tokens, `.env` files, private keys, real
   transcripts, exports from real sessions, or personal archive databases.
-- `~/.claude`, `~/.codex`, and `~/.gemini` contain private content. Fixtures
-  must be written from scratch, and `test/golden/` must be generated only from
-  those synthetic fixtures.
+- `~/.claude`, `~/.codex`, and `~/.gemini` directories contain private content.
+  Fixtures must be written from scratch, and `test/golden/` must be generated
+  only from those synthetic fixtures.
 - Keep source parsing resilient, meaning malformed records should become
   diagnostics, not crashes or leaked transcript content.
 - Non-loopback serving must require explicit trusted-peer configuration. Treat

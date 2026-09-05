@@ -218,6 +218,11 @@ describe("local API OpenAPI contract", () => {
           url: "/api/metadata/date-bounds",
         },
         {
+          path: "/api/metadata/session-sources",
+          method: "get",
+          url: "/api/metadata/session-sources",
+        },
+        {
           path: "/api/files",
           method: "get",
           url: "/api/files?group=path&limit=10",
@@ -348,6 +353,7 @@ describe("local API OpenAPI contract", () => {
         "from",
         "include_archived",
         "project",
+        "source",
         "to",
         "tool",
       ]);
@@ -356,6 +362,7 @@ describe("local API OpenAPI contract", () => {
         "from",
         "include_archived",
         "project",
+        "source",
         "to",
         "tool",
       ]);

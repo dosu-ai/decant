@@ -45,6 +45,7 @@ import {
   settingsPath,
   terminalOptions,
 } from "./settings.ts";
+import { availableSessionSources, parseSessionSource, SESSION_SOURCES } from "./source-filter.ts";
 import {
   activity as activityStats,
   byDimension,
@@ -211,6 +212,14 @@ export async function handleRequest(
     return securityFailure;
   }
   const dateFilter = dateFilterFromSearch(url.searchParams);
+  const sourceValue = url.searchParams.get("source");
+  const source = parseSessionSource(sourceValue);
+  // Every analytics-scoped route shares one guard: a present-but-unknown
+  // source value must reject the request before any archive read happens.
+  const unknownSource =
+    sourceValue != null && source == null
+      ? errorResponse("invalid_request", "unknown source", { allowed: SESSION_SOURCES }, 400)
+      : null;
   try {
     if (request.method === "GET" && url.pathname === "/favicon.ico") {
       return embeddedAsset(faviconPath, "image/x-icon");
@@ -525,18 +534,25 @@ export async function handleRequest(
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
+      if (unknownSource != null) {
+        return unknownSource;
+      }
       return withDb(config, context, (db) =>
         json(
           totals(db, {
             ...dateFilter,
             includeArchived: url.searchParams.get("include_archived") === "true",
             project: url.searchParams.get("project"),
+            source,
             tool: url.searchParams.get("tool"),
           }),
         ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
+      if (unknownSource != null) {
+        return unknownSource;
+      }
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
         return errorResponse(
@@ -552,22 +568,32 @@ export async function handleRequest(
             ...dateFilter,
             includeArchived: url.searchParams.get("include_archived") === "true",
             project: url.searchParams.get("project"),
+            source,
             tool: url.searchParams.get("tool"),
           }),
         ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
-      return withDb(config, context, (db) => json(activityStats(db, dateFilter)));
+      if (unknownSource != null) {
+        return unknownSource;
+      }
+      return withDb(config, context, (db) => json(activityStats(db, { ...dateFilter, source })));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
-      return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
+      if (unknownSource != null) {
+        return unknownSource;
+      }
+      return withDb(config, context, (db) => json(modelSparklines(db, { ...dateFilter, source })));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
-      if (context.economics != null) {
+      if (unknownSource != null) {
+        return unknownSource;
+      }
+      if (context.economics != null && source == null) {
         return json(await context.economics.get(dateFilter));
       }
-      return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
+      return withDb(config, context, (db) => json(tokenEconomics(db, { ...dateFilter, source })));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
       return withDb(config, context, (db) =>
@@ -580,9 +606,12 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
+      if (unknownSource != null) {
+        return unknownSource;
+      }
       return withDb(config, context, (db) =>
         reportHtmlResponse(
-          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter })),
+          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: { ...dateFilter, source } })),
           "decant-analytics-report.html",
         ),
       );
@@ -615,6 +644,9 @@ export async function handleRequest(
       (url.pathname === "/api/date-bounds" || url.pathname === "/api/metadata/date-bounds")
     ) {
       return withDb(config, context, (db) => json(dateBounds(db)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/metadata/session-sources") {
+      return withDb(config, context, (db) => json(availableSessionSources(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");

@@ -16,6 +16,25 @@ Archived and deleted sessions are excluded by default. Statistics endpoints
 that accept `include_archived=true` can include user-archived sessions; deleted
 sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 
+## Session source
+
+The `source` filter scopes analytics to the client that produced a session:
+`claude_code` for Claude Code, `gemini_cli` for Gemini CLI, and, for Codex, the
+recorded producer metadata splits `codex_app` from `codex_cli`. That split
+reads only the session's own `originator` and `source` metadata: desktop
+origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
+origins (`source: cli`, or the legacy `codex-tui` originator) count as the
+CLI. Codex sessions recorded by other producers, such as editor extensions or
+scripted runs, match neither bucket; they remain visible under "All sources".
+The filter describes the producing client only and never infers an account
+identity, email address, or organization.
+
+Like date filtering, a selected source describes which sessions are in scope,
+not a different metric. `GET /api/metadata/session-sources` lists the source
+values represented by visible sessions so the picker can omit empty ones, and
+the analytics report names the selected source. Source-filtered reports omit
+archive-wide insights because signals use archive-wide evidence.
+
 ## Sessions, runs, and subagents
 
 A top-level session is a run that is not marked as a subagent. A subagent is a

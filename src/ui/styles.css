@@ -4553,6 +4553,15 @@ mark {
   transform: translateY(-50%);
 }
 
+.source-filter-control .select-shell {
+  min-width: 9.5rem;
+  width: 9.5rem;
+}
+
+.source-filter-control .select-shell select {
+  height: 34px;
+}
+
 .settings-note {
   color: var(--faint);
   font-size: 12px;

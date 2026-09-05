@@ -636,6 +636,7 @@ paths:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Source"
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/IncludeArchived"
       responses:
@@ -645,6 +646,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Totals"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -664,6 +667,7 @@ paths:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Source"
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/IncludeArchived"
       responses:
@@ -676,11 +680,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/DimensionRow"
         "400":
-          description: Unknown dimension
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiError"
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -698,6 +698,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Activity distribution
@@ -705,6 +706,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Activity"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -722,6 +725,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Model sparkline series
@@ -729,6 +733,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelSparklines"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -746,6 +752,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Archive economics
@@ -753,6 +760,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenEconomics"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -791,6 +800,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Zero-JavaScript HTML report with inline styles and SVG
@@ -803,6 +813,8 @@ paths:
             text/html:
               schema:
                 type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -876,6 +888,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DateBounds"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/metadata/session-sources:
+    get:
+      tags: [Statistics]
+      operationId: getMetadataSessionSources
+      summary: List session sources present in the visible archive
+      responses:
+        "200":
+          description: Available session sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableSessionSource"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -1112,6 +1147,13 @@ components:
       description: Exact tool or tool-name filter, depending on the route
       schema:
         type: string
+    Source:
+      name: source
+      in: query
+      description: Combined provider and client filter for analytics sessions
+      schema:
+        type: string
+        enum: [claude_code, codex_app, codex_cli, gemini_cli]
     Model:
       name: model
       in: query
@@ -2561,6 +2603,16 @@ components:
         max:
           type: [string, "null"]
           format: date
+      additionalProperties: false
+    AvailableSessionSource:
+      type: object
+      required: [key, label]
+      properties:
+        key:
+          type: string
+          enum: [claude_code, codex_app, codex_cli, gemini_cli]
+        label:
+          type: string
       additionalProperties: false
     FileStatRow:
       type: object

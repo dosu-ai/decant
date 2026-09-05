@@ -3,6 +3,8 @@ import { type ContextWindowTimeline, contextWindowForSession } from "../context-
 import type { DateFilter } from "../date-filter.ts";
 import { getSession, type SessionSummary } from "../query.ts";
 import { list, type StoredRecommendation } from "../recommendations.ts";
+import type { SessionSource } from "../source-filter.ts";
+import type { StatsFilter } from "../stats.ts";
 import {
   type Activity,
   activity,
@@ -23,6 +25,7 @@ import {
 export interface AnalyticsReportData {
   kind: "analytics";
   range: DateFilter;
+  source: SessionSource | null;
   totals: Totals;
   sessionsByDay: DimRow[];
   byModel: DimRow[];
@@ -56,7 +59,7 @@ export interface SessionReportData {
 }
 
 export interface AnalyticsReportOptions {
-  filter?: DateFilter | null;
+  filter?: StatsFilter | null;
   insightLimit?: number;
 }
 
@@ -71,10 +74,11 @@ export function assembleAnalyticsReport(
 ): AnalyticsReportData {
   const filter = options.filter ?? {};
   const insightLimit = normalizePositiveInteger(options.insightLimit, 5, 20);
-  const dateScoped = filter.from != null || filter.to != null;
+  const scoped = filter.from != null || filter.to != null || filter.source != null;
   return {
     kind: "analytics",
     range: { from: filter.from ?? null, to: filter.to ?? null },
+    source: filter.source ?? null,
     totals: totals(db, filter),
     sessionsByDay: byDimension(db, "day", filter),
     byModel: byDimension(db, "model", filter).sort(
@@ -85,7 +89,7 @@ export function assembleAnalyticsReport(
     ),
     activity: activity(db, filter),
     economics: tokenEconomics(db, filter),
-    insights: dateScoped
+    insights: scoped
       ? []
       : list(db, "open")
           .filter((recommendation) => recommendation.kind === "signal")

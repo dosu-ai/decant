@@ -37,6 +37,7 @@ import { parseGeminiSession } from "./sources/gemini.ts";
 import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
+  refreshSessionCosts,
 } from "./token-economics.ts";
 import { classifyTool, previewHeadTail } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
@@ -56,6 +57,8 @@ export interface IngestConfig {
 export const INGEST_PIPELINE_REVISION = 2;
 
 export interface SyncReport {
+  /** Present when stored cost estimates changed without requiring re-ingest. */
+  repriced?: number;
   scanned: number;
   ingested: number;
   skipped: number;
@@ -159,9 +162,11 @@ export function sync(
   onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
+  const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
   const report: SyncReport = {
+    ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
     ingested: 0,
     skipped: 0,
@@ -296,7 +301,7 @@ export function sync(
           LIMIT 1`,
       )
       .get() != null;
-  if (report.ingested > 0 || uncheckedRecommendationImpactLabels) {
+  if (report.ingested > 0 || repriced > 0 || uncheckedRecommendationImpactLabels) {
     regenerateRecommendations(db);
   }
   if (

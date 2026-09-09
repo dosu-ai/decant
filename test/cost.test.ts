@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { defaultPricing, estimateCost, isPriceable, type Price } from "../src/cost.ts";
+import {
+  defaultPricing,
+  estimateCost,
+  estimateCostParts,
+  isPriceable,
+  type Price,
+} from "../src/cost.ts";
 import { emptyUsage, type TokenUsage } from "../src/model.ts";
 
 // Ports cost.rs tests verbatim — these are the spec for model normalization
@@ -132,6 +138,32 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.4-pro", u, pricing)).toBeCloseTo(210.0, 6);
     expect(estimateCost("gpt-5.5", u, pricing)).toBeCloseTo(35.0, 6);
     expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
+  });
+
+  test("Astra prices input, output, cache reads, and cache writes separately", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    for (const model of ["gpt-6-astra", "openai/gpt-6-astra", "OpenAI:GPT-6-ASTRA"]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input: 10,
+        output: 50,
+        cacheRead: 2,
+        cacheCreation: 37.5,
+      });
+      expect(estimateCost(model, usage, pricing)).toBeCloseTo(99.5, 6);
+    }
+    expect(isPriceable("gpt-6")).toBe(false);
+    expect(isPriceable("gpt-6-unpublished")).toBe(false);
+    for (const model of ["gpt-6-astra-pro", "gpt-6-astral", "openai/gpt-6-astra-preview"]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, usage, pricing)).toBe(0);
+    }
   });
 
   test("gpt-5.6 uses the published input, cache, and output rates", () => {

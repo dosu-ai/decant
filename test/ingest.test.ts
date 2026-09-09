@@ -18,6 +18,7 @@ import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { totals } from "../src/stats.ts";
+import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -1462,6 +1463,101 @@ describe("sync", () => {
     const clean = sync(db, config);
     expect(clean).toMatchObject({ ingested: 1, issues: 0 });
     expect(clean.issuesByCode).toEqual({});
+    db.close();
+  });
+
+  test("ingests Astra costs and seeds its published cache-write rate", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.codexDir, "sessions", "rollout-astra.jsonl"),
+      fixture("codex", "sample.jsonl").replace('"gpt-5.4"', '"gpt-6-astra"'),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+    const session = db.query("SELECT model, estimated_cost_usd FROM session").get() as {
+      model: string;
+      estimated_cost_usd: number;
+    };
+    expect(session.model).toBe("gpt-6-astra");
+    // 500 uncached input, 400 cached input, and 150 output tokens.
+    expect(session.estimated_cost_usd).toBeCloseTo(0.0129, 8);
+    expect(
+      db
+        .query(
+          "SELECT cache_write_per_mtok, cache_write_1h_per_mtok FROM model_pricing WHERE model = 'gpt-6-astra'",
+        )
+        .get(),
+    ).toEqual({ cache_write_per_mtok: 12.5, cache_write_1h_per_mtok: 12.5 });
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    db.close();
+  });
+
+  test("reprices retained sessions and activity costs atomically without replacing user state", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    const path = join(config.codexDir, "sessions", "rollout-astra.jsonl");
+    write(path, fixture("codex", "sample.jsonl").replace('"gpt-5.4"', '"gpt-6-astra"'));
+    const db = openFreshDb(dir);
+    sync(db, config);
+    const original = db.query("SELECT * FROM session").get() as {
+      id: number;
+      [key: string]: unknown;
+    };
+    setSessionUserState(db, original.id, "archived");
+    const state = db.query("SELECT * FROM session_user_state").all();
+    const messages = db.query("SELECT * FROM message").all();
+    const sources = db.query("SELECT * FROM ingest_source").all();
+    db.exec("UPDATE recommendation SET status = 'dismissed'");
+    const recommendations = db
+      .query("SELECT key, status FROM recommendation WHERE kind = 'catalog'")
+      .all();
+    db.exec("UPDATE session SET estimated_cost_usd = 0");
+    db.exec(
+      "UPDATE session_economics SET vector_json = json_set(vector_json, '$.input_cost', 0, '$.output_cost', 0)",
+    );
+    rmSync(path);
+
+    db.exec(
+      "CREATE TEMP TRIGGER reject_reprice BEFORE UPDATE ON session_economics BEGIN SELECT RAISE(ABORT, 'reprice failure'); END",
+    );
+    expect(() => sync(db, config)).toThrow("reprice failure");
+    expect(db.query("SELECT estimated_cost_usd FROM session").get()).toEqual({
+      estimated_cost_usd: 0,
+    });
+    db.exec("DROP TRIGGER reject_reprice");
+
+    expect(sync(db, config)).toMatchObject({ scanned: 0, ingested: 0, repriced: 1 });
+    expect(db.query("SELECT * FROM session").get()).toEqual(original);
+    expect(db.query("SELECT * FROM session_user_state").all()).toEqual(state);
+    expect(db.query("SELECT * FROM message").all()).toEqual(messages);
+    expect(db.query("SELECT * FROM ingest_source").all()).toEqual(sources);
+    expect(db.query("SELECT key, status FROM recommendation WHERE kind = 'catalog'").all()).toEqual(
+      recommendations,
+    );
+    const economics = tokenEconomicsForSession(db, original.id);
+    expect(economics?.totals.input_cost_usd).toBeCloseTo(0.0054, 8);
+    expect(economics?.totals.output_cost_usd).toBeCloseTo(0.0075, 8);
+
+    // A component-only error must be repaired even when the session total is correct.
+    db.exec(
+      "UPDATE session_economics SET vector_json = json_set(vector_json, '$.input_cost', 0.0129, '$.output_cost', 0)",
+    );
+    expect(sync(db, config).repriced).toBe(1);
+    expect(tokenEconomicsForSession(db, original.id)?.totals.output_cost_usd).toBeCloseTo(
+      0.0075,
+      8,
+    );
+    db.exec(
+      "CREATE TEMP TRIGGER reject_session_write BEFORE UPDATE ON session BEGIN SELECT RAISE(ABORT, 'unexpected session write'); END",
+    );
+    db.exec(
+      "CREATE TEMP TRIGGER reject_economics_write BEFORE UPDATE ON session_economics BEGIN SELECT RAISE(ABORT, 'unexpected economics write'); END",
+    );
+    expect(sync(db, config).repriced).toBeUndefined();
     db.close();
   });
 

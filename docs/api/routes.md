@@ -81,6 +81,10 @@ the structured stderr log retains the diagnostic.
 `DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and
 sweep syncs. They do not disable `POST /api/sync`.
 
+Sync responses include `repriced` when stored session or activity costs changed.
+A repricing-only sync also invalidates server economics caches and emits
+`archive_updated`, even when `ingested` is zero.
+
 Session archive/delete state is local metadata. Archiving hides a session from
 default lists, searches, and aggregate statistics. The `include_archived`
 parameter on session-list and statistics operations opts it back into those

@@ -66,6 +66,7 @@ export function defaultPricing(): Map<string, Price> {
     ["claude-sonnet", claudePrice(3.0, 15.0)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
+    ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
     ["gpt-5.6-sol", openAiPrice(4.0, 0.4, 20.0, 1.25)],
     ["gpt-5.6-terra", openAiPrice(2.0, 0.2, 12.0, 1.25)],
     ["gpt-5.6-luna", openAiPrice(0.2, 0.02, 1.2, 1.25)],
@@ -205,6 +206,10 @@ function canonicalModel(raw: string): string | null {
   }
   if (model === "gpt-daybreak-red-latest") {
     return "gpt-5.6-cyber";
+  }
+
+  if (model === "gpt-6-astra") {
+    return "gpt-6-astra";
   }
 
   for (const key of [

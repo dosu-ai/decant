@@ -781,7 +781,7 @@ async function syncNow(
       `issues ${report.issues}, failed ${report.failed}`;
     syncStatus.ingested_count = report.ingested;
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
-    if (report.ingested > 0) {
+    if (report.ingested > 0 || (report.repriced ?? 0) > 0) {
       economics?.invalidate();
       publishServerEvent({
         type: "archive_updated",
@@ -1232,7 +1232,7 @@ function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
     syncStatus.ingested_count = event.status.ingested_count;
   }
   publishServerEvent(event);
-  if (event.type === "sync" && event.report.ingested > 0) {
+  if (event.type === "sync" && (event.report.ingested > 0 || (event.report.repriced ?? 0) > 0)) {
     economics.invalidate();
     publishServerEvent({
       type: "archive_updated",

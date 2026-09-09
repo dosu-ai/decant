@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
+import { EconomicsCache } from "../src/economics-cache.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { listSessions } from "../src/query.ts";
 import { regenerate } from "../src/recommendations.ts";
@@ -266,6 +267,60 @@ describe("server routes", () => {
     expect(frame).toContain('"reason":"manual"');
     expect(frame).toContain('"scanned":0');
     expect(frame).toContain('"total":0');
+  });
+
+  test("repricing-only sync refreshes cached economics and notifies clients", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    let builds = 0;
+    const economics = new EconomicsCache({
+      db,
+      dbPath: config.dbPath,
+      computeVectors: async () => {
+        builds += 1;
+        return [];
+      },
+    });
+    await economics.get();
+    const stream = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);
+    const reader = stream.body?.getReader();
+    if (reader == null) throw new Error("missing SSE body");
+    await reader.read();
+    try {
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+        config,
+        {
+          economics,
+          runSync: async () => ({
+            scanned: 0,
+            ingested: 0,
+            skipped: 0,
+            repriced: 1,
+            issues: 0,
+            issuesByCode: {},
+            failed: 0,
+            cancelled: false,
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ingested: 0, repriced: 1 });
+      await economics.settled();
+      expect(builds).toBe(2);
+      const frames =
+        new TextDecoder().decode((await reader.read()).value) +
+        new TextDecoder().decode((await reader.read()).value);
+      expect(frames).toContain("event: archive_updated");
+    } finally {
+      await reader.cancel();
+      await economics.dispose();
+      db.close();
+    }
   });
 
   test("events route terminates a failed manual sync with an error event", async () => {

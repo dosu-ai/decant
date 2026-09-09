@@ -1,11 +1,14 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-The seed table was last verified on September 2, 2026 against:
+Anthropic and current OpenAI coding-agent rates were last verified on
+September 9, 2026 against the sources below. Legacy OpenAI rates retain their
+September 2, 2026 verification, and Gemini rates were checked September 5, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
+- [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 - [OpenAI Codex pricing](https://developers.openai.com/codex/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
@@ -27,6 +30,7 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Sonnet 4.6, 4.5, 4 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
+| GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-5.6 Sol, GPT-5.6, Daybreak Blue | $4.00 | $0.40 | $5.00 | $20.00 |
 | GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
 | GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
@@ -52,8 +56,8 @@ provider does not publish a first-party API token price for that model slug.
 | Gemini image, TTS, live, transcribe, native-audio, computer-use variants | — | — | — | — |
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
-cache writes before GPT-5.6 have no additional fee; GPT-5.6 reports and bills
-cache writes at 1.25 times the uncached-input rate. Gemini bills cache storage
+cache writes before GPT-5.6 have no additional fee; GPT-5.6 and GPT-6 Astra
+bill cache writes at 1.25 times the uncached-input rate. Gemini bills cache storage
 by the token-hour, so Decant maps the equivalent write charge to approximately
 the input rate for typical session-length holds.
 

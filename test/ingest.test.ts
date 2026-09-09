@@ -1465,6 +1465,36 @@ describe("sync", () => {
     db.close();
   });
 
+  test("ingests Astra costs and seeds its published cache-write rate", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.codexDir, "sessions", "rollout-astra.jsonl"),
+      fixture("codex", "sample.jsonl").replace('"gpt-5.4"', '"gpt-6-astra"'),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+    const session = db.query("SELECT model, estimated_cost_usd FROM session").get() as {
+      model: string;
+      estimated_cost_usd: number;
+    };
+    expect(session.model).toBe("gpt-6-astra");
+    // 500 uncached input, 400 cached input, and 150 output tokens.
+    expect(session.estimated_cost_usd).toBeCloseTo(0.0129, 8);
+    expect(
+      db
+        .query(
+          "SELECT cache_write_per_mtok, cache_write_1h_per_mtok FROM model_pricing WHERE model = 'gpt-6-astra'",
+        )
+        .get(),
+    ).toEqual({ cache_write_per_mtok: 12.5, cache_write_1h_per_mtok: 12.5 });
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    db.close();
+  });
+
   test("backfills effort for an unchanged source once after the schema upgrade", () => {
     const dir = freshCase();
     const config: IngestConfig = {

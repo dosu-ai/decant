@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { mcpServerLabel, mcpServerLabels } from "../mcp-names.ts";
+import { sessionSourceLabel } from "../source-filter.ts";
 import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
 import { DECANT_VERSION } from "../version.ts";
 import {
@@ -33,8 +34,9 @@ export function renderAnalyticsReport(
   options: ReportRenderOptions = {},
 ): string {
   const normalized = normalizeOptions(options);
-  const dateScoped = data.range.from != null || data.range.to != null;
+  const scoped = data.range.from != null || data.range.to != null || data.source != null;
   const range = formatRange(data.range.from, data.range.to);
+  const source = data.source == null ? null : sessionSourceLabel(data.source);
   const sessionsSvg = renderSessionsByDayChart(data.sessionsByDay, { width: 380, height: 220 });
   const costSvg = renderCostByDayChart(data.sessionsByDay, { width: 380, height: 220 });
   const body = (
@@ -42,7 +44,7 @@ export function renderAnalyticsReport(
       <ReportHeader
         eyebrow="Session analytics"
         lede="A local-first view of how coding-agent time, context, tools, and cost were allocated."
-        meta={[range, `${data.activity.timezone} timezone`]}
+        meta={[range, ...(source == null ? [] : [source]), `${data.activity.timezone} timezone`]}
         title="Agent activity report"
       />
 
@@ -94,10 +96,9 @@ export function renderAnalyticsReport(
 
       <section className="section">
         <h2>Open insights</h2>
-        {dateScoped ? (
+        {scoped ? (
           <p className="empty">
-            Insights are omitted from date-filtered reports because signals use archive-wide
-            evidence.
+            Insights are omitted from filtered reports because signals use archive-wide evidence.
           </p>
         ) : data.insights.length === 0 ? (
           <p className="empty">No open signals are available.</p>

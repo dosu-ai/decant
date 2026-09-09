@@ -181,6 +181,31 @@ describe("UI interaction contracts", () => {
     expect(summaryLoader).not.toContain("sessionSummaryPath");
   });
 
+  test("applies one Analytics source scope to every rendered aggregate and report", () => {
+    const app = sourceBetween("function App()", "function renderView(");
+    const analytics = sourceBetween("function AnalyticsView(", "function ActivityPanel(");
+    const routes = sourceBetween("const ROUTE_SLICES:", "function slicesForView(");
+    const shell = sourceBetween("const SHELL_SLICES:", "const ROUTE_SLICES:");
+
+    expect(app).toContain(
+      'activeView === "Analytics" ? sourceScopeQuery(dateQuery, sourceSelection) : dateQuery',
+    );
+    expect(shell).toContain('"summary"');
+    for (const slice of [
+      "byDay",
+      "byModel",
+      "byProject",
+      "activity",
+      "modelSparklines",
+      "tokenEconomics",
+    ]) {
+      expect(routes).toContain(`"${slice}"`);
+    }
+    expect(analytics).toContain("sourceScopeQuery(dateRangeQuery(dateRange), source)");
+    expect(analytics).toContain('withDateQuery("/api/reports/analytics.html", analyticsQuery)');
+    expect(analytics).toContain('withDateQuery("/reports/analytics", analyticsQuery)');
+  });
+
   test("exposes session state actions through the shared accessible overflow menu", () => {
     const overflow = sourceBetween("function OverflowMenu(", "function PromotionPanel(");
     const session = sourceBetween("function SessionDetailView(", "function SessionDetailSkeleton(");

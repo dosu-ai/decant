@@ -1,4 +1,4 @@
--- decant:schema_version=9
+-- decant:schema_version=10
 -- Effective decant schema (migrations 1..8 applied), frozen at the
 -- pre-typescript cutover. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
@@ -34,6 +34,7 @@ CREATE TABLE session (
   total_output_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  total_cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
   total_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   est_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_source TEXT,

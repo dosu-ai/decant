@@ -107,7 +107,11 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "assistant") {
       const message = parseAssistant(value, seq);
-      const requestId = asString(get(value, "requestId"));
+      // Newer journals drop the top-level requestId and instead write one
+      // line per content block (apiBlockIndex), each repeating the message's
+      // usage; the API message id then identifies the billable turn.
+      const requestId =
+        asString(get(value, "requestId")) ?? asString(get(get(value, "message"), "id"));
       const key = requestId ?? `\0seq${seq}`;
       const [output, visible, hasThinking] = lineReasoningInputs(message);
       const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
@@ -142,6 +146,7 @@ export function parseClaudeSession(
     totals.output += message.usage.output;
     totals.cacheRead += message.usage.cacheRead;
     totals.cacheCreation += message.usage.cacheCreation;
+    totals.cacheCreation1h += message.usage.cacheCreation1h;
     totals.reasoning += message.usage.reasoning;
   }
 
@@ -375,11 +380,13 @@ function parseUsage(value: Json | undefined): TokenUsage | null {
   if (!isObject(value)) {
     return null;
   }
+  const split = value.cache_creation;
   return {
     input: asInteger(value.input_tokens) ?? 0,
     output: asInteger(value.output_tokens) ?? 0,
     cacheRead: asInteger(value.cache_read_input_tokens) ?? 0,
     cacheCreation: asInteger(value.cache_creation_input_tokens) ?? 0,
+    cacheCreation1h: isObject(split) ? (asInteger(split.ephemeral_1h_input_tokens) ?? 0) : 0,
     reasoning: 0,
   };
 }

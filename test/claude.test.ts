@@ -54,6 +54,41 @@ describe("parseClaudeSession", () => {
     expect(perMessage).toBe(session.totals.output);
   });
 
+  test("per-block lines without requestId bill once per message id", () => {
+    // Current Claude Code journals omit the top-level requestId and instead
+    // write one assistant line per content block (apiBlockIndex), each
+    // repeating the message's usage. The API message id identifies the turn.
+    const line = (output: number, block: string) =>
+      `{"type":"assistant","apiBlockIndex":0,"message":{"id":"msg_abc","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":${output},"cache_read_input_tokens":5000,"cache_creation_input_tokens":900},"content":[${block}]}}`;
+    const content = [
+      line(50, '{"type":"thinking","thinking":"","signature":"sig"}'),
+      line(120, '{"type":"text","text":"hello"}'),
+      line(150, '{"type":"tool_use","name":"Read","id":"t1","input":{}}'),
+      '{"type":"assistant","message":{"id":"msg_def","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":30,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"bye"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("s", `${content}\n`).session;
+    expect(session.totals.input).toBe(100 + 10);
+    expect(session.totals.output).toBe(150 + 30);
+    expect(session.totals.cacheRead).toBe(5000);
+    expect(session.totals.cacheCreation).toBe(900);
+  });
+
+  test("cache_creation 1h split flows into totals", () => {
+    const content =
+      '{"type":"assistant","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":60,"ephemeral_5m_input_tokens":40}},"content":[{"type":"text","text":"x"}]}}\n';
+    const session = parseClaudeSession("s", content).session;
+    expect(session.totals.cacheCreation).toBe(100);
+    expect(session.totals.cacheCreation1h).toBe(60);
+  });
+
+  test("usage without a cache_creation split reports zero 1h tokens", () => {
+    const content =
+      '{"type":"assistant","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"x"}]}}\n';
+    const session = parseClaudeSession("s", content).session;
+    expect(session.totals.cacheCreation).toBe(100);
+    expect(session.totals.cacheCreation1h).toBe(0);
+  });
+
   test("turn with a usageless leading line is still billed", () => {
     const content = [
       '{"type":"assistant","requestId":"r9","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"s"}]}}',

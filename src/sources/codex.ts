@@ -98,6 +98,7 @@ export function parseCodexSession(
         output: getInteger(source, "output_tokens"),
         cacheRead: cached,
         cacheCreation: 0,
+        cacheCreation1h: 0,
         reasoning: getInteger(source, "reasoning_output_tokens"),
       };
     } else if (typ === "response_item") {

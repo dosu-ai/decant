@@ -34,6 +34,7 @@ interface SessionRow {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
+  total_cache_creation_1h_tokens: number;
   total_reasoning_tokens: number;
   est_reasoning_tokens: number;
 }
@@ -99,6 +100,7 @@ function tokenEconomicsForScope(
       `${scopeCte}
        SELECT s.id, s.model, s.total_input_tokens, s.total_output_tokens,
               s.total_cache_read_tokens, s.total_cache_creation_tokens,
+              s.total_cache_creation_1h_tokens,
               s.total_reasoning_tokens, s.est_reasoning_tokens
        FROM session s
        JOIN scoped_session fs ON fs.id = s.id`,
@@ -155,6 +157,7 @@ function tokenEconomicsForScope(
         output: session.total_output_tokens,
         cacheRead: session.total_cache_read_tokens,
         cacheCreation: session.total_cache_creation_tokens,
+        cacheCreation1h: session.total_cache_creation_1h_tokens,
         reasoning: session.total_reasoning_tokens,
       },
       defaultPricing(),
@@ -190,6 +193,7 @@ function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEco
       `${scopeCte}
        SELECT s.id, s.model, s.total_input_tokens, s.total_output_tokens,
               s.total_cache_read_tokens, s.total_cache_creation_tokens,
+              s.total_cache_creation_1h_tokens,
               s.total_reasoning_tokens, s.est_reasoning_tokens
        FROM session s
        JOIN scoped_session fs ON fs.id = s.id`,
@@ -234,6 +238,7 @@ function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEco
         output: session.total_output_tokens,
         cacheRead: session.total_cache_read_tokens,
         cacheCreation: session.total_cache_creation_tokens,
+        cacheCreation1h: session.total_cache_creation_1h_tokens,
         reasoning: session.total_reasoning_tokens,
       },
       defaultPricing(),

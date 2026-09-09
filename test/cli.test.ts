@@ -79,7 +79,7 @@ describe("runCli", () => {
     expect(dbInfo.code).toBe(0);
     expect(JSON.parse(dbInfo.stdout)).toMatchObject({
       path: dbPath,
-      schema_version: 9,
+      schema_version: 10,
       sessions: 7,
     });
 

@@ -149,7 +149,7 @@ describe("openDb", () => {
     expect(() => openDb(path)).toThrow(/newer/i);
   });
 
-  test("migrates a v8 archive to v9", () => {
+  test("migrates a v8 archive to the latest version", () => {
     const path = freshPath();
     const db = new Database(path, { create: true, strict: true });
     db.exec(`
@@ -171,8 +171,10 @@ describe("openDb", () => {
           version: number;
         }
       ).version,
-    ).toBe(9);
+    ).toBe(10);
     expect(inventory(migrated, "index")).toContain("idx_session_parent");
+    const columns = migrated.query("PRAGMA table_info(session)").all() as { name: string }[];
+    expect(columns.map((column) => column.name)).toContain("total_cache_creation_1h_tokens");
     migrated.close();
   });
 

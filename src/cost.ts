@@ -5,6 +5,10 @@ export interface Price {
   outputPerMtok: number;
   cacheReadPerMtok: number;
   cacheWritePerMtok: number;
+  /** Rate for cache writes with a 1-hour TTL (Claude: 2x input). Applied to
+   * the `cacheCreation1h` sub-component; the remainder uses the 5-minute
+   * `cacheWritePerMtok`. */
+  cacheWrite1hPerMtok: number;
 }
 
 function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
@@ -13,6 +17,7 @@ function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
     outputPerMtok,
     cacheReadPerMtok: inputPerMtok * 0.1,
     cacheWritePerMtok: inputPerMtok * 1.25,
+    cacheWrite1hPerMtok: inputPerMtok * 2.0,
   };
 }
 
@@ -26,12 +31,14 @@ function openAiPrice(
     outputPerMtok,
     cacheReadPerMtok: cacheReadPerMtok ?? inputPerMtok,
     cacheWritePerMtok: inputPerMtok,
+    cacheWrite1hPerMtok: inputPerMtok,
   };
 }
 
 export function defaultPricing(): Map<string, Price> {
-  // Standard first-party API text-token rates per 1M tokens. Claude cache writes use
-  // the 5-minute cache-write rate because session logs do not distinguish 1h writes.
+  // Standard first-party API text-token rates per 1M tokens. Claude journals
+  // report the 5m/1h cache-write split (usage.cache_creation.ephemeral_*);
+  // writes without a reported split are priced at the 5-minute rate.
   return new Map<string, Price>([
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus", claudePrice(5.0, 25.0)],
@@ -229,11 +236,14 @@ export function estimateCostParts(
   }
 
   const per = (tokens: number, rate: number): number => (tokens * rate) / 1_000_000.0;
+  const oneHour = Math.min(usage.cacheCreation1h, usage.cacheCreation);
   return {
     input: per(usage.input, price.inputPerMtok),
     output: per(usage.output, price.outputPerMtok),
     cacheRead: per(usage.cacheRead, price.cacheReadPerMtok),
-    cacheCreation: per(usage.cacheCreation, price.cacheWritePerMtok),
+    cacheCreation:
+      per(usage.cacheCreation - oneHour, price.cacheWritePerMtok) +
+      per(oneHour, price.cacheWrite1hPerMtok),
   };
 }
 

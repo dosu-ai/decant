@@ -35,13 +35,17 @@ export interface TokenUsage {
   output: number;
   cacheRead: number;
   cacheCreation: number;
+  /** Sub-component of `cacheCreation` written with a 1-hour TTL, which Claude
+   * bills at 2x input (vs 1.25x for 5-minute writes). 0 when the source does
+   * not report a split. */
+  cacheCreation1h: number;
   /** Output tokens spent on internal reasoning — a sub-component of `output`,
    * never priced separately. Codex reports it exactly; Claude reports none. */
   reasoning: number;
 }
 
 export function emptyUsage(): TokenUsage {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, reasoning: 0 };
+  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheCreation1h: 0, reasoning: 0 };
 }
 
 export interface NormalizedBlock {

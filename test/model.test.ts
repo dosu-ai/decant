@@ -33,6 +33,7 @@ describe("model wire strings", () => {
       output: 0,
       cacheRead: 0,
       cacheCreation: 0,
+      cacheCreation1h: 0,
       reasoning: 0,
     });
   });

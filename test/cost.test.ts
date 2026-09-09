@@ -5,7 +5,14 @@ import { emptyUsage, type TokenUsage } from "../src/model.ts";
 // Ports cost.rs tests verbatim — these are the spec for model normalization
 // (Bedrock ARNs, date/[1m] suffixes, aliases) and estimate-at-ingest.
 function usage1m(): TokenUsage {
-  return { input: 1_000_000, output: 1_000_000, cacheRead: 0, cacheCreation: 0, reasoning: 0 };
+  return {
+    input: 1_000_000,
+    output: 1_000_000,
+    cacheRead: 0,
+    cacheCreation: 0,
+    cacheCreation1h: 0,
+    reasoning: 0,
+  };
 }
 
 describe("estimateCost", () => {
@@ -27,6 +34,19 @@ describe("estimateCost", () => {
     const usage: TokenUsage = { ...emptyUsage(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
     // opus: cache read $0.50 + cache write $6.25.
     expect(estimateCost("claude-opus-4-8", usage, defaultPricing())).toBeCloseTo(6.75, 6);
+  });
+
+  test("1h cache writes price at 2x input, 5m remainder at 1.25x", () => {
+    // 1M writes, 600K of them 1h: 400K @ $6.25/M + 600K @ $10/M.
+    const usage: TokenUsage = {
+      ...emptyUsage(),
+      cacheCreation: 1_000_000,
+      cacheCreation1h: 600_000,
+    };
+    expect(estimateCost("claude-opus-5", usage, defaultPricing())).toBeCloseTo(
+      0.4 * 6.25 + 0.6 * 10.0,
+      6,
+    );
   });
 
   test("claude variants normalize to their tier", () => {
@@ -154,7 +174,13 @@ describe("estimateCost", () => {
     const pricing = new Map<string, Price>([
       [
         "claude-opus",
-        { inputPerMtok: 5.0, outputPerMtok: 25.0, cacheReadPerMtok: 0.5, cacheWritePerMtok: 6.25 },
+        {
+          inputPerMtok: 5.0,
+          outputPerMtok: 25.0,
+          cacheReadPerMtok: 0.5,
+          cacheWritePerMtok: 6.25,
+          cacheWrite1hPerMtok: 10.0,
+        },
       ],
     ]);
     expect(estimateCost("claude-haiku-4-5", usage1m(), pricing)).toBe(0.0);

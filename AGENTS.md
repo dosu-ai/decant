@@ -73,9 +73,9 @@ A change is ready when:
 3. **Runtime stays local-first.** Do not add outbound network calls, hosted
    service dependencies, or LLM calls. The only runtime networking is the local
    UI and API served by `decant serve`, bound to loopback by default.
-4. **Costs are computed at ingest.** `estimateCost` in `src/cost.ts` is applied
-   when a session is written. Pricing changes do not rewrite historical rows,
-   so users must rebuild the archive to recompute them.
+4. **Costs reflect current pricing.** `estimateCost` in `src/cost.ts` is applied
+   when a session is written. Every sync reconciles stored session and activity
+   costs with current rates, preserving transcripts and user state.
 5. **Schema constants are the source of truth.** Use `LATEST_SCHEMA_VERSION` in
    `src/db.ts` rather than copying the current number into documentation.
    Unsupported older archives are rebuild-only. A migration is frozen once

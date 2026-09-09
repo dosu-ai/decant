@@ -1548,6 +1548,10 @@ components:
       type: object
       required: [scanned, ingested, skipped, issues, issuesByCode, failed, cancelled]
       properties:
+        repriced:
+          type: integer
+          minimum: 1
+          description: Sessions whose stored cost or activity cost components were refreshed. Omitted when unchanged.
         scanned:
           type: integer
           minimum: 0

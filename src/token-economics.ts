@@ -363,6 +363,65 @@ export function materializeSessionEconomics(db: Database, sessionId: number): bo
   return true;
 }
 
+/** Reprice stored usage without rereading transcripts or replacing user state.
+ * Check the components too: a rate change can leave the total unchanged. */
+export function refreshSessionCosts(db: Database): number {
+  return withImmediateTransaction(db, () => {
+    const pricing = defaultPricing();
+    const rows = economicsRows<
+      SessionRow & {
+        estimated_cost_usd: number;
+        format_version: number | null;
+        vector_json: string | null;
+      }
+    >(
+      db,
+      `SELECT s.id, s.model, s.estimated_cost_usd,
+               s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
+               s.total_cache_creation_tokens, s.total_cache_creation_1h_tokens,
+               s.total_reasoning_tokens, e.format_version, e.vector_json
+             FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
+    );
+    let refreshed = 0;
+    for (const row of rows) {
+      const parts = estimateCostParts(
+        row.model,
+        {
+          input: row.total_input_tokens,
+          output: row.total_output_tokens,
+          cacheRead: row.total_cache_read_tokens,
+          cacheCreation: row.total_cache_creation_tokens,
+          cacheCreation1h: row.total_cache_creation_1h_tokens,
+          reasoning: row.total_reasoning_tokens,
+        },
+        pricing,
+      );
+      const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
+      const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+      const vector =
+        row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
+          ? parseEconomicsVector(row.vector_json)
+          : null;
+      const staleVector =
+        vector != null &&
+        vector.id === row.id &&
+        (vector.input_cost !== inputCost || vector.output_cost !== parts.output);
+      if (row.estimated_cost_usd === total && !staleVector) continue;
+      if (row.estimated_cost_usd !== total) {
+        runEconomicsStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
+          total,
+          row.id,
+        ]);
+      }
+      if (staleVector) {
+        storeEconomicsVector(db, { ...vector, input_cost: inputCost, output_cost: parts.output });
+      }
+      refreshed += 1;
+    }
+    return refreshed;
+  });
+}
+
 /** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
  * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
 export function materializeMissingSessionEconomics(db: Database): number {

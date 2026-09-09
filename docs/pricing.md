@@ -95,6 +95,9 @@ show whether an individual request crossed that threshold, so these estimates
 use short-context rates and may be low for qualifying requests. Claude 4.6 and
 later include their full context window at the standard rate.
 
-Costs are stored on the session row when the transcript is ingested. Updating
-the seed table does not rewrite historical rows; rebuild the archive to
-re-estimate existing sessions with a newer pricing table.
+Costs are stored when transcripts are ingested and checked against current
+pricing on every sync, including unchanged and archived sessions. Sync updates
+stale session costs and persisted activity cost components together without
+rereading transcripts or replacing user metadata. Later syncs leave matching
+costs untouched. Aggregate dollar totals include only estimates for supported
+models.

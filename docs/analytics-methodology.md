@@ -67,11 +67,12 @@ content, so input is stored net of cache reads, and thought tokens are
 reported outside the candidate count, so they are folded into output and also
 recorded as reported reasoning.
 
-Costs use the pricing table that existed when the session was ingested. They
-are estimates of standard API token rates, not a reconstruction of a ChatGPT
-subscription, Codex credits, discounts, or provider invoices. Updating
-[pricing](pricing.md) does not rewrite historical rows; rebuild the archive to
-re-estimate them.
+Costs use the current [pricing table](pricing.md). Every sync reconciles
+stored session and activity costs, so historical estimates can change when
+rates or pricing logic change. These are estimates of standard API token rates,
+not a reconstruction of a ChatGPT subscription, Codex credits, discounts, or
+provider invoices. Usage from unsupported models is retained, but aggregate
+dollar totals exclude their unknown costs.
 
 ## Activity buckets
 

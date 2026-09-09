@@ -62,6 +62,7 @@ describe("local API OpenAPI contract", () => {
       hostname: "127.0.0.1",
       port: 0,
       syncRunner: async () => ({
+        repriced: 1,
         scanned: 0,
         ingested: 0,
         skipped: 0,

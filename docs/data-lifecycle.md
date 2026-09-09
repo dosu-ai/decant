@@ -232,9 +232,11 @@ archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
 
-Costs are materialized at ingest. A rebuild uses the pricing table in the new
-Decant version and can therefore change historical estimates even when the
-source logs did not change.
+Costs are materialized at ingest and reconciled with current pricing on every
+sync. This includes unchanged and archived sessions, even when their source
+files are no longer available. Session costs and cached activity cost components
+update in one transaction. Recommendations and server caches refresh after
+repricing. No archive rebuild is needed, and user state is preserved.
 
 Local state that does not come from provider logs belongs to the archive. That
 includes recommendation status, session archive overrides, and deletion

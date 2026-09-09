@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { withImmediateTransaction } from "./db.ts";
 import { compareCodePoints } from "./order.ts";
 
 export type RootSource = "self" | "git" | "intree" | "namematch" | "synthetic";
@@ -190,10 +191,17 @@ function stripCodename(tool: string, leaf: string): string {
 
 export function resolveGitRoot(dir: string): Resolution | null {
   const dotgit = `${dir}/.git`;
-  if (!existsSync(dotgit) || !statSync(dotgit).isFile()) {
+  // Read unconditionally instead of stat-then-read: a regular repo's `.git`
+  // directory throws EISDIR and an absent one ENOENT, both meaning "not a
+  // worktree leaf", with no window for the path to change between check and
+  // use.
+  let raw: string;
+  try {
+    raw = readFileSync(dotgit, "utf8");
+  } catch {
     return null;
   }
-  const target = readFileSync(dotgit, "utf8")
+  const target = raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.startsWith("gitdir:"))
@@ -237,16 +245,20 @@ export function inferTool(path: string): string {
 }
 
 export function resolveWorktreeRoots(db: Database): void {
-  const projects = db
-    .query(
-      `SELECT p.id, p.path, p.is_worktree AS isWorktree, p.root_path AS rootPath,
+  const projectStatement = db.prepare(
+    `SELECT p.id, p.path, p.is_worktree AS isWorktree, p.root_path AS rootPath,
               p.root_source AS source, p.worktree_label AS worktreeLabel,
               p.worktree_tool AS worktreeTool, COUNT(s.id) AS sessions,
               MAX(s.started_at) AS lastSeen
        FROM project p LEFT JOIN session s ON s.project_id = p.id
        GROUP BY p.id`,
-    )
-    .all() as ProjectRow[];
+  );
+  let projects: ProjectRow[];
+  try {
+    projects = projectStatement.all() as ProjectRow[];
+  } finally {
+    projectStatement.finalize();
+  }
 
   const writes: { id: number; resolution: Resolution }[] = [];
   const deferred: { id: number; path: string; tool: string; leaf: string }[] = [];
@@ -322,23 +334,26 @@ export function resolveWorktreeRoots(db: Database): void {
      WHERE id = ?1`,
   );
   const byId = new Map(projects.map((project) => [project.id, project]));
-  const apply = db.transaction((items: typeof writes) => {
-    for (const { id, resolution } of items) {
-      const project = byId.get(id);
-      if (project == null || unchanged(project, resolution)) {
-        continue;
+  try {
+    withImmediateTransaction(db, () => {
+      for (const { id, resolution } of writes) {
+        const project = byId.get(id);
+        if (project == null || unchanged(project, resolution)) {
+          continue;
+        }
+        update.run(
+          id,
+          resolution.isWorktree ? 1 : 0,
+          resolution.rootPath,
+          resolution.worktreeLabel,
+          resolution.worktreeTool,
+          resolution.source,
+        );
       }
-      update.run(
-        id,
-        resolution.isWorktree ? 1 : 0,
-        resolution.rootPath,
-        resolution.worktreeLabel,
-        resolution.worktreeTool,
-        resolution.source,
-      );
-    }
-  });
-  apply(writes);
+    });
+  } finally {
+    update.finalize();
+  }
 }
 
 function unchanged(project: ProjectRow, resolution: Resolution): boolean {

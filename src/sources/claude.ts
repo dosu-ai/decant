@@ -1,25 +1,39 @@
 import { isPriceable } from "../cost.ts";
+import { linkageIssues } from "../diagnostics.ts";
 import { canonicalJson } from "../json.ts";
 import {
   emptyUsage,
   type Json,
   type NormalizedBlock,
   type NormalizedMessage,
+  type NormalizedSession,
   type ParsedSession,
   type Role,
+  reasoningEffortLevels,
+  recordedReasoningEffort,
+  summarizeReasoningEfforts,
   type TokenUsage,
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
 
-const KNOWN_META = new Set([
-  "summary",
-  "ai-title",
+const TITLE_META = new Set(["summary", "ai-title"]);
+
+// Operational journal records are neither conversation messages nor title
+// sources. Keep their payloads opaque until Claude documents stable semantics.
+const IGNORED_JOURNAL_META = new Set([
+  "agent-name",
   "last-prompt",
   "permission-mode",
   "attachment",
+  "file-history-delta",
   "file-history-snapshot",
+  "frame-link",
+  "inter_agent_communication_metadata",
+  "mode",
+  "pr-link",
   "queue-operation",
+  "world_state",
 ]);
 
 const CHARS_PER_TOKEN = 4;
@@ -56,10 +70,15 @@ export function parseClaudeSession(
   let cwd: string | null = null;
   let gitBranch: string | null = null;
   let cliVersion: string | null = null;
+  let sessionModel: string | null = null;
+  const reasoningEfforts = new Set<string>();
+  let resultTotals: TokenUsage | null = null;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
-  let title: string | null = null;
+  let promptTitle: string | null = null;
+  let metadataTitle: string | null = null;
   let seq = 0;
+  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
   for (const [index, line] of content.split(/\n/).entries()) {
     if (line.trim() === "") {
@@ -71,6 +90,7 @@ export function parseClaudeSession(
       value = JSON.parse(line) as Json;
     } catch (error) {
       issues.push({
+        code: "unparsed_line",
         lineNo: index + 1,
         error: error instanceof Error ? error.message : String(error),
         rawLine: line,
@@ -78,40 +98,44 @@ export function parseClaudeSession(
       continue;
     }
 
-    const typ = asString(get(value, "type")) ?? "";
-    rootSourceSessionId ??= asString(get(value, "sessionId"));
+    const typ = stringAt(value, "type") ?? "";
+    rootSourceSessionId ??= stringAt(value, "sessionId", "session_id");
     if (asBoolean(get(value, "isSidechain")) === true) {
       sawSidechainRecord = true;
     } else if (typ === "user" || typ === "assistant" || typ === "system") {
       sawMainRecord = true;
     }
-    agentId ??= asString(get(value, "agentId"));
-    const timestamp = asString(get(value, "timestamp"));
+    agentId ??= stringAt(value, "agentId", "agent_id");
+    const timestamp = stringAt(value, "timestamp");
     if (timestamp != null) {
       startedAt ??= timestamp;
       endedAt = timestamp;
     }
-    cwd ??= asString(get(value, "cwd"));
-    gitBranch ??= asString(get(value, "gitBranch"));
-    cliVersion ??= asString(get(value, "version"));
+    cwd ??= stringAt(value, "cwd");
+    gitBranch ??= stringAt(value, "gitBranch", "git_branch");
+    cliVersion ??= stringAt(value, "version", "cli_version");
+    sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
+    const effort = recordedReasoningEffort(get(value, "effort"));
+    if (effort != null) {
+      reasoningEfforts.add(effort);
+    }
 
     if (typ === "user") {
       const message = parseUser(value, seq);
-      if (title == null && message.role === "user") {
+      if (promptTitle == null && message.role === "user") {
         const text = firstText(message);
         if (text != null) {
-          title = truncate(text, 120);
+          promptTitle = truncate(text, 120);
         }
       }
       messages.push(message);
       seq += 1;
     } else if (typ === "assistant") {
       const message = parseAssistant(value, seq);
-      // Newer journals drop the top-level requestId and instead write one
-      // line per content block (apiBlockIndex), each repeating the message's
-      // usage; the API message id then identifies the billable turn.
+      // Journal content blocks can repeat a message's full usage without a
+      // request id. The API message id still identifies the billable turn.
       const requestId =
-        asString(get(value, "requestId")) ?? asString(get(get(value, "message"), "id"));
+        stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
       const key = requestId ?? `\0seq${seq}`;
       const [output, visible, hasThinking] = lineReasoningInputs(message);
       const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
@@ -124,31 +148,46 @@ export function parseClaudeSession(
     } else if (typ === "system") {
       messages.push(simpleMessage(value, "system", seq));
       seq += 1;
-    } else if (KNOWN_META.has(typ)) {
-      if (title == null) {
-        const metaTitle = asString(get(value, "summary")) ?? asString(get(value, "title"));
+    } else if (typ === "result") {
+      resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
+    } else if (TITLE_META.has(typ)) {
+      if (metadataTitle == null) {
+        const metaTitle = stringAt(value, "summary", "title");
         if (metaTitle != null) {
-          title = truncate(metaTitle, 120);
+          metadataTitle = truncate(metaTitle, 120);
         }
       }
-    } else {
+    } else if (!IGNORED_JOURNAL_META.has(typ)) {
+      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
+      seen.count += 1;
+      unknownTypes.set(typ, seen);
       messages.push(simpleMessage(value, "other", seq));
       seq += 1;
     }
   }
 
-  const totals = emptyUsage();
+  for (const [typ, seen] of unknownTypes) {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo: seen.firstLine,
+      error: `unknown record type "${typ}" on ${seen.count} line(s); kept as role "other"`,
+      rawLine: null,
+    });
+  }
+
+  const messageTotals = emptyUsage();
   for (const message of messages) {
     if (message.usage == null) {
       continue;
     }
-    totals.input += message.usage.input;
-    totals.output += message.usage.output;
-    totals.cacheRead += message.usage.cacheRead;
-    totals.cacheCreation += message.usage.cacheCreation;
-    totals.cacheCreation1h += message.usage.cacheCreation1h;
-    totals.reasoning += message.usage.reasoning;
+    messageTotals.input += message.usage.input;
+    messageTotals.output += message.usage.output;
+    messageTotals.cacheRead += message.usage.cacheRead;
+    messageTotals.cacheCreation += message.usage.cacheCreation;
+    messageTotals.cacheCreation1h += message.usage.cacheCreation1h;
+    messageTotals.reasoning += message.usage.reasoning;
   }
+  const totals = resultTotals ?? messageTotals;
 
   let estReasoningTokens = 0;
   let anyThinking = false;
@@ -159,8 +198,11 @@ export function parseClaudeSession(
     anyThinking = true;
     estReasoningTokens += Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN));
   }
+  if (resultTotals != null) {
+    estReasoningTokens = Math.min(estReasoningTokens, resultTotals.output);
+  }
 
-  const model = primaryModel(messages);
+  const model = primaryModel(messages) ?? sessionModel;
   const meta = isObject(options.sidecarMeta) ? options.sidecarMeta : {};
   const spawnToolUseId = asString(meta.toolUseId);
   const agentType =
@@ -175,34 +217,40 @@ export function parseClaudeSession(
     spawnToolUseId,
     spawnDepth,
   };
+  const effortLevels = reasoningEffortLevels(reasoningEfforts);
 
-  return {
-    session: {
-      tool: "claude_code",
-      sourceSessionId,
-      projectPath: cwd,
-      title,
-      cwd,
-      gitBranch,
-      model,
-      cliVersion,
-      startedAt,
-      endedAt,
-      isArchived: false,
-      isSubagent,
-      rootSourceSessionId,
-      spawnToolUseId,
-      agentId,
-      agentType,
-      spawnDepth,
-      rawMeta,
-      totals,
-      estReasoningTokens,
-      reasoningSource: anyThinking ? "inferred" : "none",
-      messages,
-    },
-    issues,
+  const normalized: NormalizedSession = {
+    tool: "claude_code",
+    sourceSessionId,
+    projectPath: cwd,
+    // Claude emits ai-title after the first user record in normal sessions.
+    // Keep the human prompt as the display title and use its metadata only
+    // when the session has no usable prompt.
+    title: promptTitle ?? metadataTitle,
+    cwd,
+    gitBranch,
+    model,
+    reasoningEffort: summarizeReasoningEfforts(effortLevels),
+    reasoningEffortLevels: effortLevels,
+    cliVersion,
+    startedAt,
+    endedAt,
+    isArchived: false,
+    isSubagent,
+    rootSourceSessionId,
+    spawnToolUseId,
+    agentId,
+    agentType,
+    spawnDepth,
+    rawMeta,
+    totals,
+    estReasoningTokens,
+    reasoningSource: anyThinking ? "inferred" : "none",
+    messages,
   };
+  issues.push(...linkageIssues(normalized));
+
+  return { session: normalized, issues };
 }
 
 function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {
@@ -266,12 +314,12 @@ function compareModelCandidate(
 function simpleMessage(value: Json, role: Role, seq: number): NormalizedMessage {
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role,
     model: null,
     stopReason: null,
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: null,
     raw: value,
     blocks: [],
@@ -313,12 +361,12 @@ function parseUser(value: Json, seq: number): NormalizedMessage {
 
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role: hasToolResult && !hasText ? "tool" : "user",
     model: null,
     stopReason: null,
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: null,
     raw: value,
     blocks,
@@ -364,12 +412,12 @@ function parseAssistant(value: Json, seq: number): NormalizedMessage {
 
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role: "assistant",
     model: asString(get(message, "model")),
     stopReason: asString(get(message, "stop_reason")),
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: parseUsage(get(message, "usage")),
     raw: value,
     blocks,
@@ -380,15 +428,20 @@ function parseUsage(value: Json | undefined): TokenUsage | null {
   if (!isObject(value)) {
     return null;
   }
-  const split = value.cache_creation;
   return {
     input: asInteger(value.input_tokens) ?? 0,
     output: asInteger(value.output_tokens) ?? 0,
     cacheRead: asInteger(value.cache_read_input_tokens) ?? 0,
     cacheCreation: asInteger(value.cache_creation_input_tokens) ?? 0,
-    cacheCreation1h: isObject(split) ? (asInteger(split.ephemeral_1h_input_tokens) ?? 0) : 0,
+    cacheCreation1h: isObject(value.cache_creation)
+      ? (asInteger(value.cache_creation.ephemeral_1h_input_tokens) ?? 0)
+      : 0,
     reasoning: 0,
   };
+}
+
+function sourceUuid(value: Json): string | null {
+  return stringAt(value, "uuid") ?? stringAt(get(value, "message"), "id");
 }
 
 function billAssistant(
@@ -475,6 +528,16 @@ function get(value: Json | undefined, key: string): Json | undefined {
     return undefined;
   }
   return value[key];
+}
+
+function stringAt(value: Json | undefined, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const got = asString(get(value, key));
+    if (got != null) {
+      return got;
+    }
+  }
+  return null;
 }
 
 function hasKey(value: Json, key: string): boolean {

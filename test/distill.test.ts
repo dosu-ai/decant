@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import {
   classifyPhase,
+  commentSafe,
   DECANT_VERSION,
   decodeCommand,
   hotContext,
@@ -22,6 +23,7 @@ import {
   writeBlock,
 } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -70,6 +72,48 @@ function seedEnrichedClaude(db: Database, count: number): void {
 
 function firstSessionId(db: Database): number {
   return (db.query("SELECT MIN(id) AS id FROM session").get() as { id: number }).id;
+}
+
+// Synthetic transcript whose title and Edit file_path try to break out of the
+// replay script's `#` comments with an embedded newline plus a command.
+function hostileClaudeTranscript(titlePayload: string, editPayload: string): string {
+  return [
+    {
+      type: "user",
+      uuid: "hu1",
+      parentUuid: null,
+      sessionId: "sess-hostile",
+      timestamp: "2026-05-05T10:00:00.000Z",
+      cwd: "/Users/dev/proj",
+      message: { role: "user", content: `Ship it\n${titlePayload}` },
+    },
+    {
+      type: "assistant",
+      uuid: "ha1",
+      parentUuid: "hu1",
+      sessionId: "sess-hostile",
+      timestamp: "2026-05-05T10:01:00.000Z",
+      cwd: "/Users/dev/proj",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-7",
+        content: [
+          {
+            type: "tool_use",
+            id: "ht1",
+            name: "Edit",
+            input: {
+              file_path: `src/main.rs\n${editPayload}\n#`,
+              old_string: "a",
+              new_string: "b",
+            },
+          },
+        ],
+      },
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
 }
 
 describe("distill pure helpers", () => {
@@ -205,6 +249,34 @@ describe("distill timeline and renderers", () => {
     db.close();
   });
 
+  test("timeline hides effectively archived trees but exact replay remains available", () => {
+    const db = seededN(3);
+    const ids = (db.query("SELECT id FROM session ORDER BY id").all() as { id: number }[]).map(
+      (row) => row.id,
+    );
+    const rootId = ids[0] as number;
+    const childId = ids[1] as number;
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+
+    expect(
+      timeline(db).ops.find((op) => op.normalized === "cargo build --workspace"),
+    ).toMatchObject({ sessions_seen: 3 });
+    expect(setSessionUserState(db, rootId, "archived")).toBe(true);
+
+    const visible = timeline(db);
+    expect(visible.session_count).toBe(1);
+    expect(visible.ops.find((op) => op.normalized === "cargo build --workspace")).toMatchObject({
+      sessions_seen: 1,
+    });
+    expect(renderReplay(db, rootId, false)).not.toBeNull();
+    expect(renderReplay(db, childId, false)).not.toBeNull();
+    db.close();
+  });
+
   test("replay reproduces commands, writes, edits, and patches", () => {
     const db = seededN(1);
     const id = firstSessionId(db);
@@ -270,6 +342,26 @@ describe("distill timeline and renderers", () => {
     db.close();
   });
 
+  test("hot context excludes file evidence inherited from an archived parent", () => {
+    const db = freshDb();
+    seedEnrichedClaude(db, 3);
+    const ids = (db.query("SELECT id FROM session ORDER BY id").all() as { id: number }[]).map(
+      (row) => row.id,
+    );
+    const rootId = ids[0] as number;
+    const childId = ids[1] as number;
+    db.query(
+      `UPDATE session
+       SET is_subagent = 1, parent_session_id = ?1
+       WHERE id = ?2`,
+    ).run(rootId, childId);
+
+    expect(hotContext(db, {}, 10).find((row) => row.rel_path === "src/main.rs")?.sessions).toBe(3);
+    expect(setSessionUserState(db, rootId, "archived")).toBe(true);
+    expect(hotContext(db, {}, 10).find((row) => row.rel_path === "src/main.rs")?.sessions).toBe(1);
+    db.close();
+  });
+
   test("just and make renderers emit grouped command recipes", () => {
     const db = seededN(2);
     const d = timeline(db);
@@ -293,5 +385,44 @@ describe("distill timeline and renderers", () => {
     expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toStartWith("# SKIPPED patch");
     expect(writeBlock("evil.txt", "line\nDECANT_EOF\n")).toContain("heredoc — recreate");
     expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toContain("delimiter — apply");
+  });
+
+  test("replay keeps transcript-supplied newlines inside comments", () => {
+    const db = freshDb();
+    const titlePayload = "echo decant-injection-title";
+    const editPayload = "echo decant-injection-edit";
+    upsertSession(
+      db,
+      parseClaudeSession("hostile", hostileClaudeTranscript(titlePayload, editPayload)),
+      "/x/hostile.jsonl",
+      1,
+      2,
+      "hh",
+    );
+    const replay = renderReplay(db, firstSessionId(db), false) ?? "";
+    const carrying = replay.split("\n").filter((line) => line.includes("decant-injection-"));
+    expect(carrying.some((line) => line.includes(titlePayload))).toBe(true);
+    expect(carrying.some((line) => line.includes(editPayload))).toBe(true);
+    for (const line of carrying) {
+      expect(line, line).toStartWith("#");
+    }
+    db.close();
+  });
+
+  test("commentSafe escapes control characters and line separators", () => {
+    expect(commentSafe("src/main.rs")).toBe("src/main.rs");
+    expect(commentSafe("a\nb")).toBe("a\\u000ab");
+    expect(commentSafe("a\rb\u2028c\u2029d\u0085e")).toBe("a\\u000db\\u2028c\\u2029d\\u0085e");
+  });
+});
+
+describe("decodeCommand", () => {
+  test("reads the Gemini run_shell_command input", () => {
+    expect(
+      decodeCommand(
+        "run_shell_command",
+        JSON.stringify({ command: "cargo test --workspace", description: "Run the tests" }),
+      ),
+    ).toBe("cargo test --workspace");
   });
 });

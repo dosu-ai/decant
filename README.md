@@ -1,165 +1,186 @@
-# decant
+# Decant
 
+[![npm version](https://img.shields.io/npm/v/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
+[![npm downloads](https://img.shields.io/npm/dm/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Extract Claude Code and Codex CLI sessions into a normalized,
-full-text-searchable SQLite archive, then browse, search, analyze, and distill
-that history from a fast local CLI or web UI.
+Decant turns the Claude Code, Codex, and Gemini CLI session logs on your machine
+into tangible insights. See where tokens, cost, and agent time go, inspect
+context usage, find the files and tools agents touch, and search complete
+transcripts from a CLI or local web UI.
 
-decant reads the JSONL logs those tools already write
-(`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalizes
-the formats into one WAL + FTS5 SQLite archive, and keeps everything local. Your
+Decant is local-first. It makes no outbound network calls at runtime, and your
 transcripts never leave your machine.
 
-## Features
+It does keep a copy of them. To make sessions searchable, Decant writes prompts,
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it. See
+[What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
+inspect, delete, or remove it.
 
-- One archive for Claude Code and Codex sessions.
-- Full-text search across messages and tool calls.
-- Usage, cost, tool, MCP, file-hotspot, and activity analytics.
-- Deterministic `distill` artifacts from real command history: scripts, replays,
-  and skill/AGENTS snippets.
-- Persisted recommendations with implemented-state tracking.
-- Local React UI served by the same Bun process: `decant serve`.
-- Watch mode with native filesystem events plus a periodic sweep.
-- Scriptable JSON output, shell completions, and stable exit codes.
+Built by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme),
+Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
+and more effective.
 
-## Quick Start
+![Decant analytics dashboard](docs/assets/decant-serve.png)
 
-Use source during the pre-release TypeScript migration:
+## Quick start
 
-```bash
-bun run dev
+Run Decant with `npx` with no Bun install or global package required.
+
+```sh
+npx @dosu/decant@latest
 ```
 
-Requires Bun 1.3+. `bun run dev` installs dependencies with the lockfile
-frozen, starts `decant serve`, runs the startup sync, and keeps watching your
-source logs. The UI runs at `http://127.0.0.1:3000`.
+This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
+Codex, and Gemini CLI logs on your machine, and watches for changes.
 
-After the first Release workflow publishes packages, install from npm without
-installing Bun:
+## What you get
 
-```bash
-npx @dosu/decant sync
-npx @dosu/decant ls
-npx @dosu/decant search "auth bug"
-npx @dosu/decant serve
+- One SQLite archive for Claude Code, Codex, and Gemini CLI sessions.
+- Full-text search across messages, tool calls, and transcripts.
+- Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
+  file analytics.
+- Browsable sessions, projects, files, and ingest diagnostics.
+- Markdown, JSON, report, and trajectory exports.
+- Deterministic scripts, replays, and agent instructions distilled from command
+  history.
+
+## Install
+
+Published binaries support macOS and Linux on x64 and arm64. Native Windows
+binaries are not currently available.
+
+Install a persistent command with npm:
+
+```sh
+npm install --global @dosu/decant@latest
+decant
 ```
 
-After the first Release workflow publishes an image, run the GHCR image:
+Or use Homebrew:
 
-```bash
+```sh
+brew install dosu-ai/dosu/decant
+decant
+```
+
+Or install the latest release without Node.js or Bun:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
+decant
+```
+
+See [Distribution](docs/distribution.md) for installer options, Docker, source
+builds, and release verification.
+
+## Docker
+
+```sh
 docker run --rm \
   -p 127.0.0.1:3000:3000 \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
-Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
-`-p 3000:3000` exposes the archive port on every host interface. The container
-binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
-publish can reach it. The image trusts Docker bridge peers by default via
-`DECANT_TRUSTED_PEERS=172.16.0.0/12`; use a narrower value if your local Docker
-network is different.
+Keep the `127.0.0.1:` prefix. Publishing `-p 3000:3000` exposes the
+unauthenticated archive API on every host interface. Custom container networks
+may need the trusted-peer setting documented under
+[Docker distribution](docs/distribution.md#docker).
+
+The source mounts are read-only, but `decant-data` is a **named volume**: the
+archive outlives every container, and neither `--rm` nor `docker rm` removes it.
+Use `docker volume rm decant-data` when you want it gone.
 
 ## CLI
 
-```bash
-decant sync
-decant ls
-decant show 1
-decant search "auth bug"
-decant stats --by model
-decant files --group ext
-decant tool stats
-decant mcp stats
-decant distill script
-decant distill replay 1
-decant distill skill --kind agents
-decant recommendations ls
-decant export 1 > session.md
-decant completion zsh
+```sh
+decant                         # start the local web UI
+decant sync                    # index new and changed sessions
+decant ls                      # list sessions
+decant show 1                  # render a transcript
+decant search "auth bug"       # full-text search
+decant stats --by model        # usage and cost rollups
+decant economics               # token, cost, and time breakdowns
+decant files --group ext       # file hotspots
+decant tool stats              # tool usage
+decant mcp stats               # MCP server usage
+decant export 1 > session.md   # export a session
+decant db info                 # what the archive holds and where
+decant session rm 1 --yes      # delete a session and its descendants
+decant db vacuum               # release the freed pages after a delete
 ```
 
-All read commands support `--json`. Use `--db /path/to/decant.db` or
-`DECANT_DB` for an alternate archive.
+Run `decant --help` or `decant <command> --help` for all commands and flags.
+Read commands support `--json`; global flags include `--db`, `--format`,
+`--quiet`, `--no-color`, and `--no-sync`.
 
-## Configuration
+Decant reads `~/.claude/projects`, `~/.codex`, and `~/.gemini/tmp` by default.
+Override them with `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, and
+`DECANT_GEMINI_DIR`, or with the corresponding `--claude-dir`, `--codex-dir`,
+and `--gemini-dir` flags on `sync`, `watch`, and `serve`.
 
-- `DECANT_DB`: archive path, default `~/.decant/decant.db`.
-- `DECANT_CLAUDE_DIR`: Claude projects directory, default
-  `~/.claude/projects`.
-- `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
-- `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
-- `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
-  the local API guard when `serve` is bound to a non-loopback host.
+To index selected files or a temporary source tree:
 
-`decant serve` binds `127.0.0.1:3000` by default. Override with
-`--host`/`--port`.
-
-Archives older than schema v8 are rebuild-only. v8 archives migrate to v9 on
-open; older archives should be deleted and rebuilt with `decant sync`. Source
-logs remain the source of truth.
-
-## How It Works
-
-```
-~/.claude + ~/.codex
-        |
-        v
- Bun + TypeScript decant process
- parse -> enrich -> ingest -> SQLite WAL + FTS5
-        |
-        +--> CLI reads / JSON
-        +--> local React UI + JSON routes + SSE
+```sh
+decant --db /tmp/decant.db sync --path ./session.jsonl --path ./sessions
 ```
 
-There is no background daemon and no cross-process API contract. The old
-Rust/Phoenix/Swift implementation is preserved in the signed `pre-typescript`
-tag.
+## Local API
 
-Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
-Distribution notes live in [docs/distribution.md](docs/distribution.md).
-Release automation is configured to publish npm packages and the GHCR image from
-the `Release` workflow once a version is dispatched.
+The OpenAPI 3.1 contract is [docs/api/openapi.yaml](docs/api/openapi.yaml), and
+a running server exposes it at
+<http://127.0.0.1:3000/api/openapi.json>. See [API recipes](docs/api/recipes.md)
+for examples.
 
-## Development
+## Documentation
 
-Run the local UI and watcher:
+- [Analytics methodology](docs/analytics-methodology.md)
+- [Pricing estimates](docs/pricing.md)
+- [Archive and data lifecycle](docs/data-lifecycle.md)
+- [Local Serve API](docs/api/routes.md)
+- [Distribution and release verification](docs/distribution.md)
+- [Architecture](docs/architecture.md)
 
-```bash
-bun run dev
-```
+## Contributing
 
-Run quality gates:
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+tests, and privacy requirements. Coding agents should also read
+[AGENTS.md](AGENTS.md).
 
-```bash
-bun test
-bunx tsc --noEmit
-bunx biome check .
-just check
-```
+Use synthetic session data in issues and tests. Real transcripts can contain
+source code, prompts, credentials, and local paths.
 
-Build distribution artifacts:
+## Security
 
-```bash
-bun run scripts/build-binaries.ts --target native
-bun run scripts/build-npm.ts --target native --no-build
-docker build --platform linux/amd64 -t decant:local .
-```
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
-See [AGENTS.md](AGENTS.md) for the full command list, conventions, and project
-invariants.
+## About Dosu
 
-## Security and Privacy
+Decant is built and maintained by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=about),
+Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
+and more effective. Decant shows what your agents spent, read, and touched via
+your agent logs.
 
-decant is local-first and offline at runtime. It reads files already on disk and
-makes no outbound runtime network calls. Do not commit real session data,
-personal archives, tokens, keys, or `.env` files. To report a vulnerability, see
-[SECURITY.md](SECURITY.md).
+## Acknowledgments
+
+Decant was inspired in part by
+[Letta's Trajectory](https://github.com/letta-ai/trajectory), which normalizes
+agent transcripts across runtimes into a shared record format.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Decant is licensed under the [Apache License 2.0](LICENSE).

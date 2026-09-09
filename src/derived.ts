@@ -1,12 +1,17 @@
 import type { Database } from "bun:sqlite";
 import { resolveSubagentParents } from "./ingest.ts";
+import { materializeMissingSessionEconomics } from "./token-economics.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
 
 export function refreshDerivedMetadata(
   db: Database,
   options: { ignoreReadonly?: boolean } = {},
 ): void {
-  for (const refresh of [resolveSubagentParents, resolveWorktreeRoots]) {
+  for (const refresh of [
+    resolveSubagentParents,
+    resolveWorktreeRoots,
+    materializeMissingSessionEconomics,
+  ]) {
     try {
       refresh(db);
     } catch (error) {

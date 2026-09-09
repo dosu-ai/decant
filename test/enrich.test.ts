@@ -46,6 +46,8 @@ function oneBlockSession(tool: Tool, block: NormalizedBlock): NormalizedSession 
     cwd: null,
     gitBranch: null,
     model: null,
+    reasoningEffort: null,
+    reasoningEffortLevels: [],
     cliVersion: null,
     startedAt: null,
     endedAt: null,
@@ -106,6 +108,24 @@ describe("fileRefs", () => {
     expect(fileRefs(bash)).toEqual([]);
   });
 
+  test("Gemini file tools become refs keyed by file_path", () => {
+    const read = oneBlockSession("gemini", toolUse("read_file", { file_path: "/w/src/a.ts" }));
+    read.cwd = "/w";
+    expect(fileRefs(read).map(brief)).toEqual([["src/a.ts", "read", "ts"]]);
+    const edit = oneBlockSession(
+      "gemini",
+      toolUse("replace", { file_path: "b.md", old_string: "x", new_string: "y" }),
+    );
+    expect(fileRefs(edit).map(brief)).toEqual([["b.md", "edit", "md"]]);
+    const write = oneBlockSession(
+      "gemini",
+      toolUse("write_file", { file_path: "c.json", content: "{}" }),
+    );
+    expect(fileRefs(write).map(brief)).toEqual([["c.json", "write", "json"]]);
+    const shell = oneBlockSession("gemini", toolUse("run_shell_command", { command: "cat f.txt" }));
+    expect(fileRefs(shell)).toEqual([]);
+  });
+
   test("Codex apply_patch with non-string input is skipped", () => {
     const objectInput = oneBlockSession("codex", toolUse("apply_patch", { patch: "x" }));
     expect(fileRefs(objectInput)).toEqual([]);
@@ -138,6 +158,29 @@ describe("facets", () => {
     expect(got.thinkingBlockCount).toBe(1);
     expect(got.thinkingChars).toBe("Plan the refactor carefully.".length);
     expect(got.activeSeconds).toBe(490);
+  });
+
+  test("standalone subagents count their sidechain prompts as turns", () => {
+    const content = [
+      '{"type":"user","uuid":"u1","isSidechain":true,"timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"inspect it"}}',
+      '{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":true,"timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("agent-a1", content, {
+      sourcePath: "/tmp/project/session/subagents/agent-a1.jsonl",
+    }).session;
+
+    expect(session.isSubagent).toBe(true);
+    expect(facets(session)).toMatchObject({ turnCount: 1, sidechainMessageCount: 2 });
+  });
+
+  test("compact summaries do not count as user turns", () => {
+    const content = [
+      '{"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"start"}}',
+      '{"type":"user","uuid":"u2","parentUuid":"u1","isCompactSummary":true,"timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"user","content":"carried summary"}}',
+    ].join("\n");
+    const session = parseClaudeSession("summary-turn", content).session;
+
+    expect(facets(session).turnCount).toBe(1);
   });
 
   test("thinking chars count UTF-8 bytes", () => {

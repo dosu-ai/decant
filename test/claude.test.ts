@@ -7,6 +7,50 @@ async function fixture(): Promise<string> {
 }
 
 describe("parseClaudeSession", () => {
+  test("journal content blocks without request ids bill one message and share reasoning", async () => {
+    const content = await Bun.file(
+      join(import.meta.dir, "fixtures", "claude-split-message.jsonl"),
+    ).text();
+    const session = parseClaudeSession("split", content).session;
+    expect(session.totals).toEqual({
+      input: 100,
+      output: 200,
+      cacheRead: 30,
+      cacheCreation: 20,
+      cacheCreation1h: 5,
+      reasoning: 0,
+    });
+    expect(session.messages.map((message) => message.sourceUuid)).toEqual([
+      "block-thinking",
+      "block-text",
+      "block-tool",
+    ]);
+    expect(
+      session.messages.flatMap((message) => message.blocks.map((block) => block.blockType)),
+    ).toEqual(["thinking", "text", "tool_use"]);
+    expect(session.messages.filter((message) => message.usage != null)).toHaveLength(1);
+    expect(session.estReasoningTokens).toBe(200 - Math.trunc((8 + 18) / 4));
+  });
+
+  test("per-block lines without requestId bill once per message id", () => {
+    // Current Claude Code journals omit the top-level requestId and instead
+    // write one assistant line per content block (apiBlockIndex), each
+    // repeating the message's usage. The API message id identifies the turn.
+    const line = (output: number, block: string) =>
+      `{"type":"assistant","apiBlockIndex":0,"message":{"id":"msg_abc","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":${output},"cache_read_input_tokens":5000,"cache_creation_input_tokens":900},"content":[${block}]}}`;
+    const content = [
+      line(50, '{"type":"thinking","thinking":"","signature":"sig"}'),
+      line(120, '{"type":"text","text":"hello"}'),
+      line(150, '{"type":"tool_use","name":"Read","id":"t1","input":{}}'),
+      '{"type":"assistant","message":{"id":"msg_def","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":30,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"bye"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("s", `${content}\n`).session;
+    expect(session.totals.input).toBe(100 + 10);
+    expect(session.totals.output).toBe(150 + 30);
+    expect(session.totals.cacheRead).toBe(5000);
+    expect(session.totals.cacheCreation).toBe(900);
+  });
+
   test("parses messages blocks and roles", async () => {
     const parsed = parseClaudeSession("sess-claude-1", await fixture());
     const session = parsed.session;
@@ -54,41 +98,6 @@ describe("parseClaudeSession", () => {
     expect(perMessage).toBe(session.totals.output);
   });
 
-  test("per-block lines without requestId bill once per message id", () => {
-    // Current Claude Code journals omit the top-level requestId and instead
-    // write one assistant line per content block (apiBlockIndex), each
-    // repeating the message's usage. The API message id identifies the turn.
-    const line = (output: number, block: string) =>
-      `{"type":"assistant","apiBlockIndex":0,"message":{"id":"msg_abc","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":${output},"cache_read_input_tokens":5000,"cache_creation_input_tokens":900},"content":[${block}]}}`;
-    const content = [
-      line(50, '{"type":"thinking","thinking":"","signature":"sig"}'),
-      line(120, '{"type":"text","text":"hello"}'),
-      line(150, '{"type":"tool_use","name":"Read","id":"t1","input":{}}'),
-      '{"type":"assistant","message":{"id":"msg_def","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":30,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"bye"}]}}',
-    ].join("\n");
-    const session = parseClaudeSession("s", `${content}\n`).session;
-    expect(session.totals.input).toBe(100 + 10);
-    expect(session.totals.output).toBe(150 + 30);
-    expect(session.totals.cacheRead).toBe(5000);
-    expect(session.totals.cacheCreation).toBe(900);
-  });
-
-  test("cache_creation 1h split flows into totals", () => {
-    const content =
-      '{"type":"assistant","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":60,"ephemeral_5m_input_tokens":40}},"content":[{"type":"text","text":"x"}]}}\n';
-    const session = parseClaudeSession("s", content).session;
-    expect(session.totals.cacheCreation).toBe(100);
-    expect(session.totals.cacheCreation1h).toBe(60);
-  });
-
-  test("usage without a cache_creation split reports zero 1h tokens", () => {
-    const content =
-      '{"type":"assistant","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"x"}]}}\n';
-    const session = parseClaudeSession("s", content).session;
-    expect(session.totals.cacheCreation).toBe(100);
-    expect(session.totals.cacheCreation1h).toBe(0);
-  });
-
   test("turn with a usageless leading line is still billed", () => {
     const content = [
       '{"type":"assistant","requestId":"r9","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"s"}]}}',
@@ -96,6 +105,90 @@ describe("parseClaudeSession", () => {
     ].join("\n");
     const session = parseClaudeSession("s", `${content}\n`).session;
     expect(session.totals.output).toBe(500);
+  });
+
+  test("stream-json result totals are used for raw Claude streams", () => {
+    const content = [
+      '{"type":"system","subtype":"init","session_id":"stream-1","cwd":"/repo","git_branch":"main","model":"claude-opus-4-7","timestamp":"2026-05-01T10:00:00.000Z"}',
+      '{"type":"user","session_id":"stream-1","message":{"role":"user","content":"Price this streaming run"}}',
+      '{"type":"assistant","session_id":"stream-1","message":{"id":"msg-1","role":"assistant","content":[{"type":"text","text":"Done"}]}}',
+      '{"type":"result","subtype":"success","session_id":"stream-1","usage":{"input_tokens":123,"output_tokens":45,"cache_read_input_tokens":6,"cache_creation_input_tokens":7},"total_cost_usd":0.01}',
+    ].join("\n");
+    const session = parseClaudeSession("stream-file", `${content}\n`).session;
+    expect(session.rootSourceSessionId).toBe("stream-1");
+    expect(session.rawMeta).toMatchObject({ sessionId: "stream-1" });
+    expect(session.title).toBe("Price this streaming run");
+    expect(session.cwd).toBe("/repo");
+    expect(session.gitBranch).toBe("main");
+    expect(session.model).toBe("claude-opus-4-7");
+    expect(session.totals).toMatchObject({
+      input: 123,
+      output: 45,
+      cacheRead: 6,
+      cacheCreation: 7,
+    });
+    expect(session.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+    ]);
+    expect(session.messages[2]?.sourceUuid).toBe("msg-1");
+    expect(session.messages[2]?.usage).toBeNull();
+  });
+
+  test("captures effort and the one-hour cache creation breakdown", () => {
+    const content = [
+      '{"type":"assistant","effort":"max","requestId":"r1","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":60}},"content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("effort-cache", `${content}\n`).session;
+    expect(session.reasoningEffort).toBe("max");
+    expect(session.reasoningEffortLevels).toEqual(["max"]);
+    expect(session.totals.cacheCreation).toBe(100);
+    expect(session.totals.cacheCreation1h).toBe(60);
+  });
+
+  test("marks sessions whose effort changes between assistant turns", () => {
+    const content = [
+      '{"type":"assistant","effort":"high","message":{"role":"assistant","content":[]}}',
+      '{"type":"assistant","effort":"max","message":{"role":"assistant","content":[]}}',
+    ].join("\n");
+    const session = parseClaudeSession("mixed", content).session;
+    expect(session.reasoningEffort).toBe("mixed");
+    expect(session.reasoningEffortLevels).toEqual(["high", "max"]);
+  });
+
+  test("preserves every current Claude Code effort label", () => {
+    const content = ["low", "medium", "high", "xhigh", "max"]
+      .map(
+        (effort) =>
+          `{"type":"assistant","effort":"${effort}","message":{"role":"assistant","content":[]}}`,
+      )
+      .join("\n");
+    const session = parseClaudeSession("all-efforts", content).session;
+    expect(session.reasoningEffort).toBe("mixed");
+    expect(session.reasoningEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("preserves numeric Agent SDK effort budgets", () => {
+    const content =
+      '{"type":"assistant","effort":16384,"message":{"role":"assistant","content":[]}}';
+    const session = parseClaudeSession("numeric-effort", content).session;
+    expect(session.reasoningEffort).toBe("16384");
+    expect(session.reasoningEffortLevels).toEqual(["16384"]);
+  });
+
+  test("snake case streaming request ids de-dupe cumulative assistant usage", () => {
+    const content = [
+      '{"type":"assistant","request_id":"req-1","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"content":[{"type":"thinking","thinking":"","signature":"sig"}]}}',
+      '{"type":"assistant","request_id":"req-1","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":400,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("s", `${content}\n`).session;
+    expect(session.totals.input).toBe(100);
+    expect(session.totals.output).toBe(400);
+    expect(session.totals.cacheRead).toBe(10);
+    expect(session.totals.cacheCreation).toBe(5);
+    expect(session.messages[0]?.usage).toBeNull();
+    expect(session.messages[1]?.usage?.output).toBe(400);
   });
 
   test("reasoning is estimated by subtraction on thinking turns", () => {
@@ -129,6 +222,32 @@ describe("parseClaudeSession", () => {
     expect(parsed.session.title).toBe("hello");
   });
 
+  test("flags unparsed lines with the unparsed_line code", () => {
+    const parsed = parseClaudeSession("s1", "not json\n");
+    expect(parsed.issues).toHaveLength(1);
+    expect(parsed.issues[0]?.code).toBe("unparsed_line");
+    expect(parsed.issues[0]?.lineNo).toBe(1);
+  });
+
+  test("flags unknown record types once per type with a count", () => {
+    const lines = [
+      JSON.stringify({ type: "wormhole", timestamp: "2026-07-01T00:00:00Z" }),
+      JSON.stringify({ type: "wormhole", timestamp: "2026-07-01T00:00:01Z" }),
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      }),
+    ].join("\n");
+    const parsed = parseClaudeSession("s1", lines);
+    const unknown = parsed.issues.filter((issue) => issue.code === "unknown_record_type");
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]?.error).toContain('"wormhole"');
+    expect(unknown[0]?.error).toContain("2 line");
+    expect(unknown[0]?.rawLine).toBeNull();
+    // the records themselves still land as role-"other" messages — behavior unchanged
+    expect(parsed.session.messages.filter((m) => m.role === "other")).toHaveLength(2);
+  });
+
   test("meta summary sets title and system and unknown types become messages", () => {
     const content = [
       '{"type":"summary","summary":"Synthesized Title"}',
@@ -145,6 +264,58 @@ describe("parseClaudeSession", () => {
   test("meta title field is used when summary absent", () => {
     const parsed = parseClaudeSession("s", '{"type":"ai-title","title":"From Title Field"}\n');
     expect(parsed.session.title).toBe("From Title Field");
+  });
+
+  test("uses ai-title as a fallback without replacing the first user prompt", () => {
+    const content = [
+      '{"type":"user","message":{"role":"user","content":"Human title wins"}}',
+      '{"type":"ai-title","title":"Generated Title"}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.session.title).toBe("Human title wins");
+    expect(parsed.issues).toEqual([]);
+  });
+
+  test("ignored journal metadata cannot supply titles or alter conversation sequencing", () => {
+    const ignoredRecordTypes = [
+      "agent-name",
+      "last-prompt",
+      "permission-mode",
+      "attachment",
+      "file-history-delta",
+      "file-history-snapshot",
+      "frame-link",
+      "inter_agent_communication_metadata",
+      "mode",
+      "pr-link",
+      "queue-operation",
+      "world_state",
+    ];
+    const ignoredRecords = ignoredRecordTypes.map((type) =>
+      JSON.stringify({
+        type,
+        title: `Not a session title: ${type}`,
+        summary: `Not a session summary: ${type}`,
+      }),
+    );
+
+    const metadataOnly = parseClaudeSession("metadata-only", ignoredRecords.join("\n"));
+    expect(metadataOnly.issues).toEqual([]);
+    expect(metadataOnly.session.title).toBeNull();
+    expect(metadataOnly.session.messages).toEqual([]);
+
+    const content = [
+      ...ignoredRecords,
+      '{"type":"user","uuid":"u1","message":{"role":"user","content":"Keep this human prompt"}}',
+      '{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[]}}',
+    ].join("\n");
+    const parsed = parseClaudeSession("conversation", content);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.title).toBe("Keep this human prompt");
+    expect(parsed.session.messages.map(({ seq, role }) => ({ seq, role }))).toEqual([
+      { seq: 0, role: "user" },
+      { seq: 1, role: "assistant" },
+    ]);
   });
 
   test("unknown blocks and tool result arrays parse", () => {
@@ -164,6 +335,22 @@ describe("parseClaudeSession", () => {
     expect(messages[1]?.blocks.some((block) => block.blockType === "other")).toBe(true);
     expect(messages[2]?.role).toBe("user");
     expect(messages[2]?.blocks).toEqual([]);
+  });
+
+  test("preserves embedded images exactly for presentation-safe summarization", () => {
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+    };
+    const content = JSON.stringify({
+      type: "user",
+      uuid: "u-image",
+      timestamp: "2026-05-01T10:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "See image" }, image] },
+    });
+    const blocks = parseClaudeSession("image", content).session.messages[0]?.blocks ?? [];
+    expect(blocks.map((block) => block.blockType)).toEqual(["text", "other"]);
+    expect(JSON.parse(blocks[1]?.text ?? "")).toEqual(image);
   });
 
   test("meta without title and already titled meta are noops", () => {

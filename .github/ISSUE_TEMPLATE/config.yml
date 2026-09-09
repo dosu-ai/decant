@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/dosu-ai/decant/discussions
+    about: Ask how something works, or float an idea before it becomes an issue.
+  - name: Security vulnerability
+    url: https://github.com/dosu-ai/decant/security/policy
+    about: Report privately through GitHub's advisory flow. Do not open a public issue.

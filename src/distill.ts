@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { compareCodePoints } from "./order.ts";
+import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
+import { DECANT_VERSION } from "./version.ts";
 
-export const DECANT_VERSION = process.env.DECANT_BUILD_VERSION ?? "0.1.0";
+export { DECANT_VERSION };
 
 export const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
 export type OpKind = (typeof OP_KINDS)[number];
@@ -117,7 +119,7 @@ export function decodeCommand(toolName: string, input: string | null | undefined
   }
   const object = value as Record<string, unknown>;
   const key =
-    toolName === "Bash"
+    toolName === "Bash" || toolName === "run_shell_command"
       ? "command"
       : toolName === "exec_command" || toolName === "shell" || toolName === "local_shell"
         ? "cmd"
@@ -243,10 +245,13 @@ export function isDestructive(command: string): string | null {
 
 export function timeline(db: Database, scope: Scope = {}): Distillation {
   const scoped = scopeClause(scope);
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   const count = db
     .query(
       `SELECT COUNT(*) AS session_count, MIN(s.started_at) AS date_from, MAX(s.started_at) AS date_to
-       FROM session s LEFT JOIN project p ON p.id = s.project_id WHERE 1=1${scoped.sql}`,
+       FROM session s
+       LEFT JOIN project p ON p.id = s.project_id
+       WHERE ${visibleSession}${scoped.sql}`,
     )
     .get(...scoped.values) as {
     session_count: number;
@@ -259,7 +264,7 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
        FROM tool_call tc
        JOIN session s ON s.id = tc.session_id
        LEFT JOIN project p ON p.id = s.project_id
-       WHERE 1=1${scoped.sql}
+       WHERE ${visibleSession}${scoped.sql}
        ORDER BY tc.session_id, tc.ordinal`,
     )
     .all(...scoped.values) as ToolCallRow[];
@@ -400,8 +405,8 @@ export function renderReplay(
   }
   const ops = replayOps(db, sessionId);
   let out = "#!/usr/bin/env bash\n";
-  out += `# Replay of ${meta.tool} session ${sessionId}: ${meta.title ?? "(untitled)"}\n`;
-  out += `# Distilled by decant ${DECANT_VERSION}. Best-effort, REVIEW before running.\n`;
+  out += `# Replay of ${commentSafe(meta.tool)} session ${sessionId}: ${commentSafe(meta.title ?? "(untitled)")}\n`;
+  out += `# Distilled by Decant ${DECANT_VERSION}. Best-effort, REVIEW before running.\n`;
   out += "# Assumes the same starting file state; secrets are best-effort redacted.\n";
   out += "set -euo pipefail\n";
   out += `PROJECT_ROOT="\${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"\ncd "$PROJECT_ROOT"\n\n`;
@@ -413,9 +418,9 @@ export function renderReplay(
         }
         const destructive = isDestructive(op.normalized);
         if (op.is_error) {
-          out += `# (errored in original run)\n# ${op.normalized}\n`;
+          out += `# (errored in original run)\n# ${commentSafe(op.normalized)}\n`;
         } else if (destructive != null) {
-          out += `# REVIEW: destructive (${destructive})\n# ${op.normalized}\n`;
+          out += `# REVIEW: destructive (${destructive})\n# ${commentSafe(op.normalized)}\n`;
         } else {
           out += `${op.normalized}\n`;
         }
@@ -425,10 +430,10 @@ export function renderReplay(
         out += writeBlock(op.raw, op.payload ?? "");
         break;
       case "file_edit":
-        out += `# EDIT ${op.raw}: ${op.payload ?? ""} (apply manually — v1 does not auto-apply edits)\n`;
+        out += `# EDIT ${commentSafe(op.raw)}: ${commentSafe(op.payload ?? "")} (apply manually — v1 does not auto-apply edits)\n`;
         break;
       case "file_delete":
-        out += `# DELETE ${op.raw} (review)\n# rm ${shellQuote(op.raw)}\n`;
+        out += `# DELETE ${commentSafe(op.raw)} (review)\n# rm ${commentSafe(shellQuote(op.raw))}\n`;
         break;
       case "patch":
         out += patchBlock(op.payload ?? "");
@@ -440,6 +445,7 @@ export function renderReplay(
 
 export function hotContext(db: Database, scope: Scope = {}, limitValue = 15): HotFile[] {
   const scoped = scopeClause(scope);
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   return db
     .query(
       `SELECT fr.rel_path,
@@ -449,7 +455,8 @@ export function hotContext(db: Database, scope: Scope = {}, limitValue = 15): Ho
        FROM file_ref fr
        JOIN session s ON s.id = fr.session_id
        LEFT JOIN project p ON p.id = s.project_id
-       WHERE fr.rel_path IS NOT NULL${scoped.sql}
+       WHERE fr.rel_path IS NOT NULL
+         AND ${visibleSession}${scoped.sql}
        GROUP BY fr.rel_path
        HAVING reads > 0
        ORDER BY sessions DESC, reads DESC, fr.rel_path
@@ -478,7 +485,7 @@ description: Distilled workflow for ${project} — proven commands and the files
 
 # ${project} workflow
 
-_Distilled by decant ${distillation.generated_with} from ${distillation.session_count} session(s). Review and edit before use._
+_Distilled by Decant ${distillation.generated_with} from ${distillation.session_count} session(s). Review and edit before use._
 
 ## When to use
 
@@ -493,7 +500,7 @@ ${commands}`;
     case "agents":
       return `## ${project} — distilled workflow
 
-_decant ${distillation.generated_with}, from ${distillation.session_count} session(s). Review before committing._
+_Decant ${distillation.generated_with}, from ${distillation.session_count} session(s). Review before committing._
 
 ### Commands
 
@@ -506,7 +513,7 @@ ${files}`;
 description: Run the distilled ${project} workflow
 ---
 
-Proven commands for ${project} (decant, ${distillation.session_count} session(s)):
+Proven commands for ${project} (Decant, ${distillation.session_count} session(s)):
 
 ${commands}`;
   }
@@ -627,7 +634,7 @@ function headerLines(distillation: Distillation, options: ScriptOpts): string[] 
       ? "faithful single-session order"
       : "ranked by frequency × success";
   return [
-    `Distilled by decant ${distillation.generated_with} from ${distillation.scope_label}`,
+    `Distilled by Decant ${distillation.generated_with} from ${distillation.scope_label}`,
     `${distillation.session_count} session(s) (${day(distillation.date_from)}..${day(
       distillation.date_to,
     )}). Commands you actually ran, ${mode}.`,
@@ -819,6 +826,19 @@ function relToRoot(path: string, cwd: string | null): string {
 }
 
 const REPLAY_EOF = "DECANT_EOF";
+const COMMENT_UNSAFE = /[\p{Cc}\u2028\u2029]/gu;
+
+/**
+ * Escapes anything that could end a `#` comment line — transcript-supplied text
+ * (paths, titles, commands) is interpolated into comments of a generated bash
+ * script, so a raw newline there would emit an executable line.
+ */
+export function commentSafe(value: string): string {
+  return value.replace(
+    COMMENT_UNSAFE,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -827,7 +847,7 @@ export function shellQuote(value: string): string {
 export function writeBlock(path: string, content: string): string {
   const trimmed = content.replace(/\n+$/, "");
   if (trimmed.includes(REPLAY_EOF) || path.includes("\n") || path.includes(REPLAY_EOF)) {
-    return `# SKIPPED write to ${JSON.stringify(path)}: content or path unsafe for a heredoc — recreate it manually.\n`;
+    return `# SKIPPED write to ${commentSafe(JSON.stringify(path))}: content or path unsafe for a heredoc — recreate it manually.\n`;
   }
   const quoted = shellQuote(path);
   return `mkdir -p "$(dirname ${quoted})"\ncat > ${quoted} <<'${REPLAY_EOF}'\n${trimmed}\n${REPLAY_EOF}\n`;

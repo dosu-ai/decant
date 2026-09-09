@@ -2,9 +2,9 @@
   {
     "path": "/Users/dev/proj",
     "name": "proj",
-    "sessions": 7,
+    "sessions": 8,
     "estimated_cost_usd": 0.10869999999999999,
-    "last_seen_at": "2026-05-06T09:00:10.000Z",
+    "last_seen_at": "2026-05-06T09:00:15.000Z",
     "is_worktree": false,
     "root_path": "/Users/dev/proj",
     "worktree_label": null,
@@ -14,6 +14,22 @@
     "session_tools": [
       "claude_code",
       "codex"
+    ]
+  },
+  {
+    "path": "/synthetic/gemini-project",
+    "name": "gemini-project",
+    "sessions": 2,
+    "estimated_cost_usd": 0,
+    "last_seen_at": "2026-06-03T10:00:03.000Z",
+    "is_worktree": false,
+    "root_path": "/synthetic/gemini-project",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "gemini"
     ]
   }
 ]

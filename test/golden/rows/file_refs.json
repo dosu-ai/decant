@@ -108,5 +108,15 @@
     "ext": "rs",
     "operation": "edit",
     "timestamp": "2026-05-04T09:00:05.000Z"
+  },
+  {
+    "tool": "gemini",
+    "source_session_id": "gemini-synthetic",
+    "seq": 1,
+    "path": "/tmp/example.txt",
+    "rel_path": null,
+    "ext": "txt",
+    "operation": "read",
+    "timestamp": "2026-06-01T10:00:02.000Z"
   }
 ]

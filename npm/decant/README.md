@@ -1,7 +1,64 @@
-# @dosu/decant
+# Decant
 
-Node-compatible launcher for the Decant compiled binary.
+[![npm version](https://img.shields.io/npm/v/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/dosu-ai/decant/blob/main/LICENSE)
 
-The package selects the matching optional platform package and executes its
-embedded Bun-compiled `decant` binary. Source development still uses Bun from
-the repository root: `bun run dev`.
+Local-first analytics for Claude Code and Codex sessions: token and cost
+breakdowns, context-window usage, full-text search, files touched, tool usage,
+and complete transcript browsing.
+
+Decant is local-first. It makes no outbound network calls at runtime,
+and your transcripts never leave your machine.
+
+It does keep a copy of them. To make sessions searchable, Decant writes prompts,
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it.
+
+Built by
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=npm&utm_campaign=attribution&utm_content=package_readme),
+Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
+and more effective.
+
+## Run without installing
+
+```sh
+npx @dosu/decant@latest          # start the local web UI
+npx @dosu/decant@latest --help
+npx @dosu/decant@latest ls
+npx @dosu/decant@latest search "auth bug"
+npx @dosu/decant@latest db info  # what the archive holds and where
+```
+
+## Install globally
+
+```sh
+npm install --global @dosu/decant@latest
+decant
+```
+
+The package is a small Node-compatible launcher that selects and runs the
+matching compiled Decant binary. Node.js 18 or newer is required by the
+launcher; Bun is not required.
+
+Published binaries support:
+
+- macOS arm64 and x64;
+- Linux arm64 and x64.
+
+Native Windows binaries are not currently available. If the matching optional
+platform package was omitted during installation, reinstall without disabling
+optional dependencies.
+
+The local UI binds to <http://127.0.0.1:3000> by default. Run
+`decant serve --no-open` to keep Decant from opening a browser, or
+`decant --help` for the complete CLI.
+
+Documentation, alternative install methods, source, and issue tracking are at
+<https://github.com/dosu-ai/decant>.
+
+Apache-2.0

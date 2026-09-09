@@ -21,6 +21,44 @@ describe("estimateCost", () => {
     expect(cost).toBeCloseTo(30.0, 6); // 1M @ $5 + 1M @ $25
   });
 
+  test("cache writes bill 1.25x input at 5m TTL and 2x at 1h TTL", () => {
+    const pricing = defaultPricing();
+    const base = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
+    // Opus input is $5/Mtok, so 5m writes are $6.25/Mtok and 1h writes $10/Mtok.
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 0 },
+        pricing,
+      ),
+    ).toBeCloseTo(6.25, 6);
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 1_000_000 },
+        pricing,
+      ),
+    ).toBeCloseTo(10.0, 6);
+  });
+
+  test("invalid one-hour cache splits are clamped to the reported total", () => {
+    const base = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: 2_000_000 },
+        defaultPricing(),
+      ),
+    ).toBeCloseTo(10.0, 6);
+    expect(
+      estimateCost(
+        "claude-opus-5",
+        { ...base, cacheCreation: 1_000_000, cacheCreation1h: -1 },
+        defaultPricing(),
+      ),
+    ).toBeCloseTo(6.25, 6);
+  });
+
   test("reasoning tokens do not change cost", () => {
     const pricing = defaultPricing();
     const without = usage1m();
@@ -34,19 +72,6 @@ describe("estimateCost", () => {
     const usage: TokenUsage = { ...emptyUsage(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
     // opus: cache read $0.50 + cache write $6.25.
     expect(estimateCost("claude-opus-4-8", usage, defaultPricing())).toBeCloseTo(6.75, 6);
-  });
-
-  test("1h cache writes price at 2x input, 5m remainder at 1.25x", () => {
-    // 1M writes, 600K of them 1h: 400K @ $6.25/M + 600K @ $10/M.
-    const usage: TokenUsage = {
-      ...emptyUsage(),
-      cacheCreation: 1_000_000,
-      cacheCreation1h: 600_000,
-    };
-    expect(estimateCost("claude-opus-5", usage, defaultPricing())).toBeCloseTo(
-      0.4 * 6.25 + 0.6 * 10.0,
-      6,
-    );
   });
 
   test("claude variants normalize to their tier", () => {
@@ -88,6 +113,14 @@ describe("estimateCost", () => {
   test("gpt family is priced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
+    expect(estimateCost("gpt-5.6-sol", u, pricing)).toBeCloseTo(24.0, 6);
+    expect(estimateCost("gpt-5.6", u, pricing)).toBeCloseTo(24.0, 6);
+    expect(estimateCost("openai/gpt-5.6", u, pricing)).toBeCloseTo(24.0, 6);
+    expect(estimateCost("gpt-daybreak-blue-latest", u, pricing)).toBeCloseTo(24.0, 6);
+    expect(estimateCost("gpt-5.6-terra", u, pricing)).toBeCloseTo(14.0, 6);
+    expect(estimateCost("gpt-5.6-luna", u, pricing)).toBeCloseTo(1.4, 6);
+    expect(estimateCost("gpt-5.6-cyber", u, pricing)).toBeCloseTo(87.5, 6);
+    expect(estimateCost("gpt-daybreak-red-latest", u, pricing)).toBeCloseTo(87.5, 6);
     expect(estimateCost("gpt-5", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gpt-5.1", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gpt-5-mini", u, pricing)).toBeCloseTo(2.25, 6);
@@ -99,6 +132,38 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.4-pro", u, pricing)).toBeCloseTo(210.0, 6);
     expect(estimateCost("gpt-5.5", u, pricing)).toBeCloseTo(35.0, 6);
     expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
+  });
+
+  test("gpt-5.6 uses the published input, cache, and output rates", () => {
+    const pricing = defaultPricing();
+    expect(pricing.get("gpt-5.6-sol")).toEqual({
+      inputPerMtok: 4,
+      outputPerMtok: 20,
+      cacheReadPerMtok: 0.4,
+      cacheWritePerMtok: 5,
+      cacheWrite1hPerMtok: 5,
+    });
+    expect(pricing.get("gpt-5.6-terra")).toEqual({
+      inputPerMtok: 2,
+      outputPerMtok: 12,
+      cacheReadPerMtok: 0.2,
+      cacheWritePerMtok: 2.5,
+      cacheWrite1hPerMtok: 2.5,
+    });
+    expect(pricing.get("gpt-5.6-luna")).toEqual({
+      inputPerMtok: 0.2,
+      outputPerMtok: 1.2,
+      cacheReadPerMtok: 0.02,
+      cacheWritePerMtok: 0.25,
+      cacheWrite1hPerMtok: 0.25,
+    });
+    expect(pricing.get("gpt-5.6-cyber")).toEqual({
+      inputPerMtok: 12.5,
+      outputPerMtok: 75,
+      cacheReadPerMtok: 1.25,
+      cacheWritePerMtok: 15.625,
+      cacheWrite1hPerMtok: 15.625,
+    });
   });
 
   test("published openai legacy and reasoning models are priced", () => {
@@ -125,6 +190,7 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-3.5-turbo", u, pricing)).toBeCloseTo(2.0, 6);
     expect(estimateCost("gpt-3.5-turbo-1106", u, pricing)).toBeCloseTo(3.0, 6);
     expect(estimateCost("gpt-3.5-turbo-16k-0613", u, pricing)).toBeCloseTo(7.0, 6);
+    expect(estimateCost("gpt-3.5-turbo-0301", u, pricing)).toBeCloseTo(3.5, 6);
     expect(estimateCost("davinci-002", u, pricing)).toBeCloseTo(4.0, 6);
     expect(estimateCost("babbage-002", u, pricing)).toBeCloseTo(0.8, 6);
   });
@@ -132,9 +198,32 @@ describe("estimateCost", () => {
   test("codex models are priced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
+    const cached = { ...emptyUsage(), cacheRead: 1_000_000 };
     expect(estimateCost("gpt-5.3-codex", u, pricing)).toBeCloseTo(15.75, 6);
+    expect(estimateCost("gpt-5.3-codex", cached, pricing)).toBeCloseTo(0.175, 6);
+    expect(estimateCost("gpt-5.2-codex", u, pricing)).toBeCloseTo(15.75, 6);
     expect(estimateCost("gpt-5.2", u, pricing)).toBeCloseTo(15.75, 6);
-    expect(estimateCost("codex-auto-review", u, pricing)).toBeCloseTo(15.75, 6);
+    expect(estimateCost("gpt-5.1-codex", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gpt-5.1-codex-max", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gpt-5.1-codex-mini", u, pricing)).toBeCloseTo(2.25, 6);
+    expect(estimateCost("gpt-5.1-codex-mini", cached, pricing)).toBeCloseTo(0.025, 6);
+    expect(estimateCost("gpt-5-codex", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("codex-mini-latest", u, pricing)).toBeCloseTo(7.5, 6);
+    expect(estimateCost("codex-mini-latest", cached, pricing)).toBeCloseTo(0.375, 6);
+  });
+
+  test("unpublished Codex aliases are not assigned guessed API prices", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    for (const model of [
+      "codex-auto-review",
+      "gpt-5.3-codex-spark",
+      "gpt-5-codex-mini",
+      "gpt-5.4-cyber",
+    ]) {
+      expect(estimateCost(model, u, pricing)).toBe(0);
+      expect(isPriceable(model)).toBe(false);
+    }
   });
 
   test("openai models without a cached-input discount do not make cache reads free", () => {
@@ -150,6 +239,30 @@ describe("estimateCost", () => {
       expect(estimateCost(m, u, pricing)).toBeCloseTo(fable, 6);
     }
     expect(estimateCost("claude-mythos-5", u, pricing)).toBeCloseTo(fable, 6);
+  });
+
+  test("fable 5.1 and mythos 5.1 use their reduced cache-read rate", () => {
+    const pricing = defaultPricing();
+    expect(pricing.get("claude-fable-5-1")).toEqual({
+      inputPerMtok: 10,
+      outputPerMtok: 50,
+      cacheReadPerMtok: 0.25,
+      cacheWritePerMtok: 12.5,
+      cacheWrite1hPerMtok: 20,
+    });
+    const cacheRead = { ...emptyUsage(), cacheRead: 1_000_000 };
+    for (const model of [
+      "claude-fable-5-1",
+      "claude-fable-5.1",
+      "anthropic.claude-fable-5-1-v1:0",
+      "claude-mythos-5-1",
+      "claude-mythos-5.1",
+    ]) {
+      expect(estimateCost(model, cacheRead, pricing)).toBeCloseTo(0.25, 6);
+    }
+    expect(estimateCost("claude-fable-5", cacheRead, pricing)).toBeCloseTo(1.0, 6);
+    expect(estimateCost("claude-mythos-5", cacheRead, pricing)).toBeCloseTo(1.0, 6);
+    expect(estimateCost("claude-fable-5-10", cacheRead, pricing)).toBeCloseTo(1.0, 6);
   });
 
   test("fable input+output costs add up", () => {
@@ -196,5 +309,40 @@ describe("isPriceable", () => {
     expect(isPriceable("opus")).toBe(true);
     expect(isPriceable("<synthetic>")).toBe(false);
     expect(isPriceable("exa-research-pro")).toBe(false);
+  });
+
+  test("prices Gemini flash-lite variants at their own published rates", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    // Published: 3.5 at $0.30/$2.50, 3.1 at $0.25/$1.50, 2.5 at $0.10/$0.40.
+    expect(estimateCost("gemini-3.5-flash-lite", u, pricing)).toBeCloseTo(2.8, 6);
+    expect(estimateCost("gemini-3.1-flash-lite", u, pricing)).toBeCloseTo(1.75, 6);
+    expect(estimateCost("gemini-2.5-flash-lite", u, pricing)).toBeCloseTo(0.5, 6);
+    expect(estimateCost("gemini-3.1-flash-lite-preview", u, pricing)).toBeCloseTo(1.75, 6);
+  });
+
+  test("leaves Gemini versions without a published rate unpriced", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    for (const model of [
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-3.2-flash",
+      "gemini-flash-latest",
+      "gemini-4-pro",
+    ]) {
+      expect(estimateCost(model, u, pricing)).toBe(0);
+      expect(isPriceable(model)).toBe(false);
+    }
+  });
+
+  test("keeps the published Gemini flash and pro rates reachable", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    expect(estimateCost("gemini-3.5-flash", u, pricing)).toBeCloseTo(10.5, 6);
+    expect(estimateCost("gemini-2.5-flash", u, pricing)).toBeCloseTo(2.8, 6);
+    expect(estimateCost("gemini-2.5-pro", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
+    expect(estimateCost("gemini-3-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
 });

@@ -2,9 +2,9 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
+import { decideOpen, displayUrl, openBrowser } from "./browser.ts";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
-import { openDb } from "./db.ts";
-import { refreshDerivedMetadata } from "./derived.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
   DECANT_VERSION,
   defaultScriptOpts,
@@ -15,11 +15,13 @@ import {
   renderScript,
   renderSkill,
   replayOps,
+  shellQuote,
   timeline,
 } from "./distill.ts";
 import type { Operation } from "./enrich.ts";
-import { toMarkdown } from "./export.ts";
+import { exportTrajectory, toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
+import { configureLogging, getDecantLogger, logWatchEvent } from "./logging.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
@@ -30,9 +32,9 @@ import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
   parsePeerList,
-  publishServerEvent,
   serve as serveApp,
 } from "./server.ts";
+import { setSessionUserState } from "./session-user-state.ts";
 import {
   byDimension,
   fileHotspots,
@@ -100,10 +102,32 @@ interface DbInfo {
   schema_version: number;
   sessions: number;
   messages: number;
+  blocks: number;
   tool_calls: number;
+  file_refs: number;
+  /**
+   * Pages SQLite has freed but not returned to the filesystem. Deleted rows
+   * can leave readable bytes in those pages until `decant db vacuum` runs, so
+   * this is the number that says a vacuum is owed.
+   */
+  freelist_bytes: number;
+  /** Full-scan totals, present only under `--full`. */
+  fts_rows?: number;
+  text_bytes?: number;
+}
+
+/**
+ * Bare `decant` is the fast entrypoint: it serves the UI. Only a completely
+ * empty argv rewrites — flag-only invocations stay errors because token
+ * splitting makes them ambiguous, and typos must never boot a server.
+ */
+export function defaultArgv(argv: string[]): string[] {
+  return argv.length === 0 ? ["serve"] : argv;
 }
 
 export async function runCli(argv: string[], options: CliRunOptions = {}): Promise<CliResult> {
+  const watchLogger = getDecantLogger("watch");
+  const serverLogger = getDecantLogger("server");
   const streamOutput = options.liveOutput === true;
   const io: Io = {
     stdout: "",
@@ -149,19 +173,21 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const program = new Command();
   program
     .name("decant")
-    .description("extract, browse, and search Claude Code and Codex sessions")
+    .description(
+      "analyze Claude Code, Codex, and Gemini CLI sessions: tokens, context windows, and cost",
+    )
     .version(DECANT_VERSION)
     .exitOverride()
     .configureOutput({
       writeOut: (value) => io.writeOut(value),
       writeErr: (value) => io.writeErr(value),
     })
-    .option("--db <path>", "path to the decant SQLite database")
+    .option("--db <path>", "path to the Decant SQLite database")
     .option("--json", "emit machine-readable JSON")
     .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
     .option("-q, --quiet", "suppress non-essential output")
     .option("--no-color", "disable ANSI color")
-    .option("--no-sync", "skip sync-on-read for read commands");
+    .option("--no-sync", "skip sync-on-read, and serve without the source watcher");
 
   const globals = (): GlobalOptions => program.opts<GlobalOptions>();
   const resolve = (overrides: Partial<ConfigOverrides> = {}): Config =>
@@ -186,18 +212,48 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     return archive;
   };
 
-  const runSync = (commandOptions: { claudeDir?: string; codexDir?: string }): number => {
+  const runSync = (commandOptions: {
+    claudeDir?: string;
+    codexDir?: string;
+    geminiDir?: string;
+    path?: string[];
+  }): number => {
+    const missingPath = commandOptions.path?.find((path) => !existsSync(path));
+    if (missingPath != null) {
+      io.writeErr(`error: --path does not exist: ${missingPath}\n`);
+      return 2;
+    }
+
     const archive = openArchive(
-      resolve({ claudeDir: commandOptions.claudeDir, codexDir: commandOptions.codexDir }),
+      resolve({
+        claudeDir: commandOptions.claudeDir,
+        codexDir: commandOptions.codexDir,
+        geminiDir: commandOptions.geminiDir,
+      }),
     );
     try {
-      const report = ingestSync(archive.db, archive.config);
+      const report = ingestSync(archive.db, {
+        ...archive.config,
+        sourcePaths: commandOptions.path,
+      });
+      // `options.env` is only populated by tests, so read through to the real
+      // environment the way `shouldSync` and `resolveConfig` do -- otherwise
+      // the hint omits `--db` for anyone running with `DECANT_DB` set.
+      const dbFlag = globals().db ?? (options.env ?? process.env).DECANT_DB;
+      const issuesHint =
+        report.issues > 0
+          ? `inspect affected sessions with: decant ${dbFlag ? `--db ${shellQuote(archive.config.dbPath)} ` : ""}ls --json | ` +
+            "jq '[.[] | select(.ingest_issue_count + .informational_ingest_issue_count > 0)]' " +
+            "(issue detail: GET /api/sessions/:id/issues under `decant serve`)"
+          : undefined;
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
         skipped: report.skipped,
         issues: report.issues,
+        issues_by_code: report.issuesByCode,
         failed: report.failed,
+        ...(issuesHint != null ? { issues_hint: issuesHint } : {}),
       };
       if (isJson(globals())) {
         io.writeOut(`${JSON.stringify(jsonReport, null, 2)}\n`);
@@ -206,10 +262,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           `synced: ${report.scanned} scanned, ${report.ingested} ingested, ` +
             `${report.skipped} skipped, ${report.issues} issues, ${report.failed} failed\n`,
         );
+        if (issuesHint != null) {
+          io.writeErr(`  ${issuesHint}\n`);
+        }
       }
-      return report.issues > 0 ? 3 : 0;
+      // Exit 3 means decant dropped source content, which is what an unparsed
+      // line is. The other codes are sensors over content that did land, so
+      // they are reported without failing the command.
+      return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
     } finally {
-      archive.db.close();
+      closeDb(archive.db);
     }
   };
 
@@ -218,30 +280,41 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("scan session directories and upsert new or changed sessions")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
-    .action((commandOptions: { claudeDir?: string; codexDir?: string }) =>
-      run(() => runSync(commandOptions)),
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
+    .option(
+      "--path <path>",
+      "ingest only this source file or directory (repeatable)",
+      collectOption,
+      [] as string[],
+    )
+    .action(
+      (commandOptions: {
+        claudeDir?: string;
+        codexDir?: string;
+        geminiDir?: string;
+        path?: string[];
+      }) => run(() => runSync(commandOptions)),
     );
 
+  // Terminal rendering only. Under `serve`, server.ts's applyWatchEvent already
+  // publishes each event to SSE clients exactly once; publishing again here
+  // would double every /api/events frame. Under `watch`, there is no HTTP
+  // server or SSE client to publish to at all.
   const emitWatchEvent = (event: WatchEvent): void => {
-    publishServerEvent(event);
+    if (!globals().quiet) {
+      logWatchEvent(watchLogger, event);
+    }
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(event)}\n`);
-    } else if (!globals().quiet) {
-      io.writeErr(renderWatchEvent(event));
     }
   };
 
   program
     .command("watch")
-    .description("watch session directories and keep the archive current")
+    .description("watch session directories and keep the session log index current")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
-    .option(
-      "--trusted-peer <peer>",
-      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
-      collectOption,
-      [] as string[],
-    )
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -254,15 +327,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       (commandOptions: {
         claudeDir?: string;
         codexDir?: string;
+        geminiDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
-        trustedPeer?: string[];
       }) =>
         runAsync(async () => {
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            geminiDir: commandOptions.geminiDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -279,11 +353,14 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("serve")
-    .description("serve the in-process web UI and keep the archive current")
+    .description(
+      "serve the web UI and keep the index current (the default when run with no arguments)",
+    )
     .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -292,45 +369,119 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       DEFAULT_DEBOUNCE_MS,
     )
     .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--trusted-peer <peer>",
+      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
+      collectOption,
+      [] as string[],
+    )
+    .option("--no-open", "do not open the browser after the server starts")
     .action(
       (commandOptions: {
         host?: string;
         port?: number;
         claudeDir?: string;
         codexDir?: string;
+        geminiDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
         trustedPeer?: string[];
+        open?: boolean;
       }) =>
         runAsync(async () => {
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            geminiDir: commandOptions.geminiDir,
           });
-          const server = serveApp({
-            config,
-            hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
-            port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-            trustedPeers: trustedPeers(commandOptions.trustedPeer),
+          // Without this, --no-sync (and DECANT_NO_SYNC) were accepted here and
+          // silently ignored: serve's watcher kept ingesting the source
+          // directories, so pointing serve at a scratch archive filled it with
+          // whatever was in the real ~/.claude and ~/.codex. Omitting `watch`
+          // entirely is what serve() checks to decide whether to run a watcher
+          // at all. POST /api/sync is deliberately untouched -- this turns off
+          // syncing decant starts on its own, not a sync the operator asks for.
+          const syncEnabled = shouldSync(globals(), options.env);
+          let server: ReturnType<typeof serveApp>;
+          try {
+            server = serveApp({
+              config,
+              hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
+              port: commandOptions.port ?? DEFAULT_SERVE_PORT,
+              // Omit entirely (rather than passing []) when no --trusted-peer was
+              // given, so serve()'s resolveTrustedPeers() can still fall through
+              // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
+              // passed here replaces both.
+              trustedPeers:
+                commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
+                  ? trustedPeers(commandOptions.trustedPeer)
+                  : undefined,
+              logger: globals().quiet ? undefined : serverLogger,
+              watch: syncEnabled
+                ? {
+                    intervalMs: commandOptions.intervalMs,
+                    debounceMs: commandOptions.debounceMs,
+                    enableWatch: commandOptions.fsWatch !== false,
+                    onEvent: emitWatchEvent,
+                  }
+                : undefined,
+            });
+          } catch (error) {
+            if (isPortInUse(error)) {
+              const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
+              const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, wanted);
+              io.writeErr(
+                `error: port ${wanted} is already in use — is Decant already running at ${url}?\n` +
+                  "Pick another port with: decant serve --port <n>\n",
+              );
+              return 1;
+            }
+            throw error;
+          }
+          if (!globals().quiet) {
+            serverLogger.info("Server started.", {
+              "event.name": "decant.server.started",
+              "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+              "server.port": server.port,
+              "watch.enabled": syncEnabled,
+            });
+          }
+          const boundPort = server.port ?? commandOptions.port ?? DEFAULT_SERVE_PORT;
+          const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, boundPort);
+          const environment = options.env ?? process.env;
+          const decision = decideOpen({
+            enabled: commandOptions.open !== false,
+            env: {
+              BROWSER: environment.BROWSER,
+              DECANT_NO_OPEN: environment.DECANT_NO_OPEN,
+              CI: environment.CI,
+            },
+            isTTY: process.stdout.isTTY === true,
+            platform: process.platform,
           });
-          const handle = startWatch({
-            config,
-            intervalMs: commandOptions.intervalMs,
-            debounceMs: commandOptions.debounceMs,
-            enableWatch: commandOptions.fsWatch !== false,
-            onEvent: emitWatchEvent,
-          });
-          if (!isJson(globals()) && !globals().quiet) {
-            io.writeErr(
-              `serving http://${commandOptions.host ?? DEFAULT_SERVE_HOST}:${server.port}\n`,
-            );
+          if (!globals().quiet) {
+            io.writeErr(serveBanner(url, decision.open));
+          }
+          if (decision.open && decision.command != null) {
+            openBrowser(url, decision.command);
           }
           try {
             await waitForProcessSignal();
           } finally {
-            server.stop();
-            await handle.stop();
+            // Force-close: a graceful stop() never resolves while a browser
+            // tab's /api/events SSE connection is open (Bun waits for active
+            // connections to end on their own), which would hang shutdown
+            // indefinitely on Ctrl-C. This is a local dev server being
+            // intentionally torn down, so dropping open connections is fine.
+            await server.stop(true);
+            if (!globals().quiet) {
+              serverLogger.info("Server stopped.", {
+                "event.name": "decant.server.stopped",
+                "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+                "server.port": server.port,
+              });
+            }
           }
         }),
     );
@@ -367,7 +518,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                   : `${rows.map((row) => `${row.id}\t${row.tool}\t${row.title ?? ""}`).join("\n")}\n`,
               );
             } finally {
-              archive.db.close();
+              closeDb(archive.db);
             }
           }),
       );
@@ -388,7 +539,115 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             output(detail, () => toMarkdown(detail));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
+          }
+        }),
+      );
+  };
+
+  const addRm = (command: Command): void => {
+    command
+      .description("delete a session and its descendants from the archive")
+      .argument("<id>", "session id", parseInteger)
+      .option("--yes", "confirm deleting a session that has descendants")
+      .option("--dry-run", "report what would be deleted, and delete nothing")
+      .action((id: number, commandOptions: { yes?: boolean; dryRun?: boolean }) =>
+        run(() => {
+          // Deliberately not readArchive(): deleting must not first re-ingest
+          // the source directories, and the id came from a read that already
+          // synced.
+          const archive = openArchive(resolve());
+          try {
+            const json = isJson(globals());
+            const writeJson = (value: unknown): void => {
+              io.writeOut(`${JSON.stringify(value, null, 2)}\n`);
+            };
+            const reportMiss = (): number => {
+              if (json) {
+                writeJson({ deleted: false, session_id: id, error: "session not found" });
+              } else {
+                io.writeErr(`error: no session with id ${id}\n`);
+              }
+              return 1;
+            };
+
+            let outcome: "missing" | "dry_run" | "confirmation_required" | "deleted" = "missing";
+            let descendants = 0;
+            const deleted = setSessionUserState(archive.db, id, "deleted", {
+              // The callback runs after BEGIN IMMEDIATE and before any write,
+              // so another ingest cannot add a descendant between this guard
+              // and the deletion.
+              confirmDelete: (sessionIds) => {
+                descendants = sessionIds.length - 1;
+                if (commandOptions.dryRun === true) {
+                  outcome = "dry_run";
+                  return false;
+                }
+                if (descendants > 0 && commandOptions.yes !== true) {
+                  outcome = "confirmation_required";
+                  return false;
+                }
+                outcome = "deleted";
+                return true;
+              },
+            });
+            if (outcome === "missing") {
+              return reportMiss();
+            }
+            const plural = descendants === 1 ? "" : "s";
+
+            if (outcome === "dry_run") {
+              if (json) {
+                writeJson({ deleted: false, dry_run: true, session_id: id, descendants });
+              } else if (!globals().quiet) {
+                io.writeOut(
+                  `would delete session ${id} (${descendants} descendant${plural})\n` +
+                    "nothing was deleted (--dry-run)\n",
+                );
+              }
+              return 0;
+            }
+
+            // Deletion has no un-delete. The rows go, tombstones stop every
+            // later sync from re-ingesting the source, and the only way back is
+            // editing two tables by hand. A mistyped id must not silently take
+            // a whole tree with it.
+            if (outcome === "confirmation_required") {
+              if (json) {
+                writeJson({
+                  deleted: false,
+                  session_id: id,
+                  descendants,
+                  error: "refusing to delete a session tree without --yes",
+                });
+              } else {
+                io.writeErr(
+                  `error: session ${id} has ${descendants} descendant${plural}; ` +
+                    `deleting it removes ${descendants + 1} sessions\n` +
+                    "re-run with --yes to confirm, or --dry-run to preview\n",
+                );
+              }
+              return 2;
+            }
+
+            if (!deleted) {
+              // The deletion callback authorized the write, so false here is
+              // defensive rather than an expected state.
+              return reportMiss();
+            }
+            if (json) {
+              writeJson({ deleted: true, session_id: id, descendants });
+            } else if (!globals().quiet) {
+              io.writeOut(
+                `deleted session ${id} (${descendants} descendant${plural})\n` +
+                  // SQLite may leave deleted transcript bytes readable in
+                  // freed pages until a vacuum rewrites the archive.
+                  "run `decant db vacuum` to release the freed pages\n",
+              );
+            }
+            return 0;
+          } finally {
+            closeDb(archive.db);
           }
         }),
       );
@@ -397,6 +656,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const session = program.command("session").description("inspect sessions");
   addLs(session.command("ls"));
   addShow(session.command("show"));
+  addRm(session.command("rm"));
   addLs(program.command("ls"));
   addShow(program.command("show"));
 
@@ -421,32 +681,43 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               .concat(rows.length > 0 ? "\n" : ""),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
 
-  const dbCommand = program.command("db").description("inspect and maintain the archive");
+  const dbCommand = program.command("db").description("inspect and maintain the session log index");
   dbCommand
     .command("info")
-    .description("show DB path, size, schema version, and row counts")
-    .action(() =>
+    .description("show DB path, size, schema version, row counts, and freed pages")
+    .option("--full", "add full-scan totals (fts_rows, text_bytes); slow on a large archive")
+    .action((commandOptions: { full?: boolean }) =>
       run(() => {
         const archive = openArchive(resolve());
         try {
-          const row = dbInfo(archive);
-          output(
-            row,
-            () =>
-              `path:       ${row.path}\n` +
-              `size_bytes: ${row.size_bytes}\n` +
-              `schema:     v${row.schema_version}\n` +
-              `sessions:   ${row.sessions}\n` +
-              `messages:   ${row.messages}\n` +
-              `tool_calls: ${row.tool_calls}\n`,
+          const row = dbInfo(archive, { full: commandOptions.full === true });
+          const fields: [string, string | number][] = [
+            ["path", row.path],
+            ["size_bytes", row.size_bytes],
+            ["schema", `v${row.schema_version}`],
+            ["sessions", row.sessions],
+            ["messages", row.messages],
+            ["blocks", row.blocks],
+            ["tool_calls", row.tool_calls],
+            ["file_refs", row.file_refs],
+            ["freelist_bytes", row.freelist_bytes],
+          ];
+          if (row.fts_rows != null) {
+            fields.push(["fts_rows", row.fts_rows]);
+          }
+          if (row.text_bytes != null) {
+            fields.push(["text_bytes", row.text_bytes]);
+          }
+          output(row, () =>
+            fields.map(([label, value]) => `${`${label}:`.padEnd(16)}${value}\n`).join(""),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -459,7 +730,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         try {
           io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -473,7 +744,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           archive.db.exec("VACUUM;");
           io.writeErr(`vacuumed ${archive.config.dbPath}\n`);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -552,7 +823,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             return emitArtifact(io, globals(), artifact, commandOptions);
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
     );
@@ -582,7 +853,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           }
           return emitArtifact(io, globals(), artifact, commandOptions);
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -644,7 +915,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             }
             return emitArtifact(io, globals(), artifact, commandOptions);
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
     );
@@ -676,7 +947,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               (rows.length > 0 ? "\n" : ""),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -713,7 +984,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           }
           return ok ? 0 : 1;
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -748,7 +1019,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const rows = search(archive.db, query, commandOptions.limit ?? 30);
           output(rows, () => rows.map((row) => `${row.session_id}\t${row.snippet}`).join("\n"));
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -777,7 +1048,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             output(row, () => `sessions:   ${row.sessions}\nmessages:   ${row.messages}\n`);
           }
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -785,7 +1056,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .command("tokens")
     .alias("economics")
-    .description("break token and cost usage into planning, communicating, context, and code")
+    .description(
+      "break tokens, cost, agent time, and user wait into context, planning, code, and communicating",
+    )
     .action(() =>
       run(() => {
         const archive = readArchive();
@@ -797,13 +1070,17 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                 (bucket) =>
                   `${bucket.bucket}\t${formatNumber(bucket.generation_tokens)}\t` +
                   `${formatNumber(bucket.context_window_tokens)}\t` +
-                  `${bucket.estimated_cost_usd.toFixed(4)}`,
+                  `${bucket.estimated_cost_usd.toFixed(4)}\t` +
+                  `${formatDuration(bucket.active_ms)}`,
               )
               .join("\n")
-              .concat(row.buckets.length > 0 ? "\n" : ""),
+              .concat(row.buckets.length > 0 ? "\n" : "")
+              .concat(
+                `waiting_on_user\t-\t-\t-\t${formatDuration(row.totals.waiting_on_user_ms)}\n`,
+              ),
           );
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -837,7 +1114,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const rows = fileHotspots(archive.db, group, op, commandOptions.limit ?? 25);
           output(rows, () => rows.map((row) => `${row.key}\t${row.sessions}`).join("\n"));
         } finally {
-          archive.db.close();
+          closeDb(archive.db);
         }
       }),
     );
@@ -858,7 +1135,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             );
             output(rows, () => rows.map((row) => `${row.tool_name}\t${row.calls}`).join("\n"));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
       );
@@ -878,7 +1155,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             const rows = mcpUsage(archive.db, commandOptions.limit ?? 50);
             output(rows, () => rows.map((row) => `${row.mcp_server}\t${row.calls}`).join("\n"));
           } finally {
-            archive.db.close();
+            closeDb(archive.db);
           }
         }),
       );
@@ -889,67 +1166,128 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("export")
-    .description("export a session to Markdown or JSON")
+    .description("export a session to Markdown, JSON, or a trajectory-v1 record file")
     .argument("[id]", "session id", optionalInteger)
     .option("--all", "export every session")
+    .option("--include-subagents", "with --all, also export subagent sessions")
+    // Named --as, not --format, to match `distill script --as` rather than
+    // collide with the global --format table|json|md: Commander resolves a
+    // global option's flag anywhere in argv (before or after a subcommand),
+    // so a same-named local option on export would be shadowed by the root's.
+    .option("--as <format>", "md | json | trajectory (default: md, or json with --json)")
     .option("--out <dir>", "output directory")
-    .action((id: number | undefined, commandOptions: { all?: boolean; out?: string }) =>
-      run(() => {
-        const archive = readArchive();
-        try {
-          const ext = isJson(globals()) ? "json" : "md";
-          const render = (sessionId: number): string | null => {
-            const detail = getSession(archive.db, sessionId);
-            if (detail == null) {
-              return null;
-            }
-            return isJson(globals()) ? JSON.stringify(detail, null, 2) : toMarkdown(detail);
-          };
-
-          if (commandOptions.all === true) {
-            if (commandOptions.out == null) {
-              io.writeErr("error: --all requires --out <dir>\n");
-              return 2;
-            }
-            mkdirSync(commandOptions.out, { recursive: true });
-            let count = 0;
-            for (const session of listSessions(archive.db, { limit: Number.MAX_SAFE_INTEGER })) {
-              const content = render(session.id);
-              if (content != null) {
-                writeFileSync(join(commandOptions.out, `${session.id}.${ext}`), content);
-                count += 1;
-              }
-            }
-            io.writeErr(`exported ${count} sessions to ${commandOptions.out}\n`);
-            return 0;
-          }
-
-          if (id == null) {
-            io.writeErr("error: provide a session id, or --all --out <dir>\n");
+    .action(
+      (
+        id: number | undefined,
+        commandOptions: {
+          all?: boolean;
+          includeSubagents?: boolean;
+          as?: string;
+          out?: string;
+        },
+      ) =>
+        run(() => {
+          const format = commandOptions.as ?? (isJson(globals()) ? "json" : "md");
+          if (format !== "md" && format !== "json" && format !== "trajectory") {
+            io.writeErr(`error: unknown export format: ${format}\n`);
             return 2;
           }
-          const content = render(id);
-          if (content == null) {
-            io.writeErr(`error: no session with id ${id}\n`);
-            return 1;
+          const archive = readArchive();
+          try {
+            const ext = format === "md" ? "md" : format === "json" ? "json" : "trajectory.json";
+            const render = (sessionId: number): { content: string } | { error: string } => {
+              if (format === "trajectory") {
+                const out = exportTrajectory(archive.db, sessionId);
+                if (!out.ok) {
+                  return out.reason === "not_found"
+                    ? { error: `no session with id ${sessionId}` }
+                    : {
+                        error:
+                          `session ${sessionId} has no ` +
+                          `${out.reason === "missing_user_records" ? "user" : "assistant"} ` +
+                          "records; not exportable as a trajectory",
+                      };
+                }
+                if (!globals().quiet) {
+                  const repairs = Object.entries(out.report)
+                    .filter(([key, value]) => key !== "dropped_blocks" && (value as number) > 0)
+                    .map(([key, value]) => `${key}=${value}`);
+                  const dropped = Object.entries(out.report.dropped_blocks)
+                    .map(([kind, count]) => `${kind}=${count}`)
+                    .join(" ");
+                  if (dropped !== "") {
+                    repairs.push(`dropped[${dropped}]`);
+                  }
+                  const line = repairs.join(" ");
+                  if (line !== "") {
+                    io.writeErr(`session ${sessionId}: ${line}\n`);
+                  }
+                }
+                return { content: JSON.stringify(out.records, null, 2) };
+              }
+              const detail = getSession(archive.db, sessionId);
+              if (detail == null) {
+                return { error: `no session with id ${sessionId}` };
+              }
+              return {
+                content: format === "json" ? JSON.stringify(detail, null, 2) : toMarkdown(detail),
+              };
+            };
+
+            if (commandOptions.all === true) {
+              if (commandOptions.out == null) {
+                io.writeErr("error: --all requires --out <dir>\n");
+                return 2;
+              }
+              mkdirSync(commandOptions.out, { recursive: true });
+              let count = 0;
+              let skipped = 0;
+              const sessions = listSessions(archive.db, {
+                limit: Number.MAX_SAFE_INTEGER,
+                includeSubagents: commandOptions.includeSubagents === true,
+              });
+              for (const session of sessions) {
+                const rendered = render(session.id);
+                if ("error" in rendered) {
+                  skipped += 1;
+                  continue;
+                }
+                writeFileSync(join(commandOptions.out, `${session.id}.${ext}`), rendered.content);
+                count += 1;
+              }
+              io.writeErr(
+                `exported ${count} sessions to ${commandOptions.out}` +
+                  `${skipped > 0 ? ` (${skipped} skipped)` : ""}\n`,
+              );
+              return 0;
+            }
+
+            if (id == null) {
+              io.writeErr("error: provide a session id, or --all --out <dir>\n");
+              return 2;
+            }
+            const rendered = render(id);
+            if ("error" in rendered) {
+              io.writeErr(`error: ${rendered.error}\n`);
+              return 1;
+            }
+            if (commandOptions.out != null) {
+              mkdirSync(commandOptions.out, { recursive: true });
+              const path = join(commandOptions.out, `${id}.${ext}`);
+              writeFileSync(path, rendered.content);
+              io.writeErr(`wrote ${path}\n`);
+            } else {
+              io.writeOut(`${rendered.content}\n`);
+            }
+            return 0;
+          } finally {
+            closeDb(archive.db);
           }
-          if (commandOptions.out != null) {
-            mkdirSync(commandOptions.out, { recursive: true });
-            const path = join(commandOptions.out, `${id}.${ext}`);
-            writeFileSync(path, content);
-            io.writeErr(`wrote ${path}\n`);
-          } else {
-            io.writeOut(`${content}\n`);
-          }
-          return 0;
-        } finally {
-          archive.db.close();
-        }
-      }),
+        }),
     );
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    await program.parseAsync(defaultArgv(argv), { from: "user" });
   } catch (error) {
     if (typeof error === "object" && error !== null && "exitCode" in error) {
       setCode(commanderExitCode(error as { exitCode: number; code?: string }));
@@ -968,10 +1306,37 @@ function commanderExitCode(error: { exitCode: number; code?: string }): number {
   return Number(error.exitCode);
 }
 
+function serveBanner(url: string, opening: boolean): string {
+  return [
+    "",
+    "  Decant is running.",
+    "",
+    `    ${url}`,
+    "",
+    opening
+      ? "  Opening your browser — the printed link works if it does not."
+      : "  Open the link in your browser.",
+    "  Ctrl-C stops the server; decant --help lists every command.",
+    "",
+    "",
+  ].join("\n");
+}
+
+function isPortInUse(error: unknown): boolean {
+  if (typeof error !== "object" || error == null) {
+    return false;
+  }
+  const { code, message } = error as { code?: string; message?: string };
+  return code === "EADDRINUSE" || (message?.includes("in use") ?? false);
+}
+
 function openArchive(config: Config): Archive {
-  mkdirSync(dirname(config.dbPath), { recursive: true });
+  mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
-  refreshDerivedMetadata(db, { ignoreReadonly: true });
+  // Keep archive opens read-only once the schema is current. Sync/watch repair
+  // derived metadata on their write paths, and serve hydrates it once for its
+  // long-lived connection; a --no-sync CLI read must not acquire SQLite's
+  // single writer lock merely to list or search existing rows.
   return { db, config };
 }
 
@@ -1025,6 +1390,19 @@ function formatNumber(value: number): string {
   return String(Math.round(value));
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${totalSeconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function parseOperation(value: string): Operation | null {
   return value === "read" || value === "edit" || value === "write" || value === "delete"
     ? value
@@ -1038,11 +1416,19 @@ function emitArtifact(
   artifactOptions: ArtifactOptions,
 ): number {
   if (artifactOptions.out != null) {
-    if (existsSync(artifactOptions.out) && artifactOptions.force !== true) {
-      io.writeErr(`error: ${artifactOptions.out} exists (use --force to overwrite)\n`);
-      return 2;
+    // "wx" makes the no-clobber check and the write one atomic open(O_EXCL)
+    // instead of exists-then-write.
+    try {
+      writeFileSync(artifactOptions.out, artifact, {
+        flag: artifactOptions.force === true ? "w" : "wx",
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "EEXIST") {
+        io.writeErr(`error: ${artifactOptions.out} exists (use --force to overwrite)\n`);
+        return 2;
+      }
+      throw error;
     }
-    writeFileSync(artifactOptions.out, artifact);
     if (!options.quiet) {
       io.writeErr(`wrote ${artifactOptions.out}\n`);
     }
@@ -1050,19 +1436,6 @@ function emitArtifact(
     io.writeOut(artifact);
   }
   return 0;
-}
-
-function renderWatchEvent(event: WatchEvent): string {
-  switch (event.type) {
-    case "ready":
-      return `watching ${event.dirs.length} source dirs\n`;
-    case "sync":
-      return `sync (${event.reason}): ${event.report.scanned} scanned, ${event.report.ingested} ingested, ${event.report.skipped} skipped, ${event.report.issues} issues, ${event.report.failed} failed\n`;
-    case "error":
-      return `error (${event.reason}): ${event.error}\n`;
-    case "stopped":
-      return "stopped\n";
-  }
 }
 
 function waitForProcessSignal(): Promise<void> {
@@ -1077,7 +1450,14 @@ function waitForProcessSignal(): Promise<void> {
   });
 }
 
-function dbInfo(archive: Archive): DbInfo {
+/**
+ * `full` adds the two totals that cost a full scan of the archive. Measured on
+ * a 2.5 GB archive: the row counts and the freelist pragma finish in under
+ * 10 ms, while the byte sum takes 5-13 s and the FTS row count 0.6-2 s. A
+ * command whose job is to report a path and a schema version must not pay
+ * that, so those two are opt-in.
+ */
+function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
   const version =
     (
       archive.db.query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get() as {
@@ -1088,14 +1468,44 @@ function dbInfo(archive: Archive): DbInfo {
     .query(
       `SELECT (SELECT COUNT(*) FROM session) AS sessions,
               (SELECT COUNT(*) FROM message) AS messages,
-              (SELECT COUNT(*) FROM tool_call) AS tool_calls`,
+              (SELECT COUNT(*) FROM block) AS blocks,
+              (SELECT COUNT(*) FROM tool_call) AS tool_calls,
+              (SELECT COUNT(*) FROM file_ref) AS file_refs`,
     )
-    .get() as Pick<DbInfo, "sessions" | "messages" | "tool_calls">;
+    .get() as Pick<DbInfo, "sessions" | "messages" | "blocks" | "tool_calls" | "file_refs">;
+  const pages = archive.db
+    .query(
+      `SELECT (SELECT * FROM pragma_freelist_count()) AS freelist,
+              (SELECT * FROM pragma_page_size()) AS page_size`,
+    )
+    .get() as { freelist: number; page_size: number };
+  const scans =
+    options.full === true
+      ? (archive.db
+          .query(
+            // OCTET_LENGTH, not LENGTH: LENGTH counts characters on a TEXT
+            // column, which understates a non-ASCII archive by a third to a
+            // half. text_bytes is printed beside size_bytes, which is real
+            // bytes from statSync, so the two have to be the same unit.
+            //
+            // block.tool_result and message.raw are stored but not indexed, so
+            // this total is deliberately wider than what search can reach.
+            `SELECT (SELECT COUNT(*) FROM block_fts) AS fts_rows,
+                    (SELECT COALESCE(SUM(OCTET_LENGTH(raw)), 0) FROM message)
+                    + (SELECT COALESCE(SUM(OCTET_LENGTH(COALESCE(text, ''))
+                                          + OCTET_LENGTH(COALESCE(tool_input, ''))
+                                          + OCTET_LENGTH(COALESCE(tool_result, ''))), 0)
+                       FROM block) AS text_bytes`,
+          )
+          .get() as { fts_rows: number; text_bytes: number })
+      : null;
   return {
     path: archive.config.dbPath,
     size_bytes: statSync(archive.config.dbPath, { throwIfNoEntry: false })?.size ?? 0,
     schema_version: version,
     ...counts,
+    freelist_bytes: pages.freelist * pages.page_size,
+    ...(scans ?? {}),
   };
 }
 
@@ -1106,6 +1516,7 @@ const completionWords = [
   "session",
   "ls",
   "show",
+  "rm",
   "project",
   "db",
   "distill",
@@ -1164,6 +1575,7 @@ _arguments '1:command:(${words})' '*::arg:->args'
 }
 
 if (import.meta.main) {
+  configureLogging({ level: process.env.DECANT_LOG_LEVEL });
   const result = await runCli(process.argv.slice(2), { liveOutput: true });
-  process.exit(result.code);
+  process.exitCode = result.code;
 }

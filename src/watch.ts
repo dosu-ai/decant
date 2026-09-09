@@ -2,8 +2,8 @@ import type { Database } from "bun:sqlite";
 import { existsSync, type FSWatcher, mkdirSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
-import { openDb } from "./db.ts";
-import { sync as ingestSync, type SyncReport } from "./ingest.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
+import { sync as ingestSync, type SyncProgress, type SyncReport } from "./ingest.ts";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
@@ -26,6 +26,13 @@ export interface SyncEvent {
   status: SyncStatus;
 }
 
+export interface SyncProgressEvent {
+  type: "sync_progress";
+  reason: SyncReason;
+  progress: SyncProgress;
+  status: SyncStatus;
+}
+
 export interface SyncErrorEvent {
   type: "error";
   reason: SyncReason | "watch";
@@ -44,7 +51,31 @@ export interface WatchStoppedEvent {
   status: SyncStatus;
 }
 
-export type WatchEvent = SyncEvent | SyncErrorEvent | WatchReadyEvent | WatchStoppedEvent;
+export type WatchEvent =
+  | SyncEvent
+  | SyncProgressEvent
+  | SyncErrorEvent
+  | WatchReadyEvent
+  | WatchStoppedEvent;
+
+export type SyncRunner = (
+  config: Config,
+  status: SyncStatusStore,
+  cancel: { aborted: boolean },
+  onProgress: (progress: SyncProgress) => void,
+) => Promise<SyncReport | SyncRunnerResult | SyncRunnerFailure>;
+
+export interface SyncRunnerResult {
+  report: SyncReport;
+  /** False when this watcher joined a run whose terminal events have another owner. */
+  emitTerminal: boolean;
+}
+
+export interface SyncRunnerFailure {
+  error: unknown;
+  /** False when this watcher joined a run whose terminal events have another owner. */
+  emitTerminal: boolean;
+}
 
 export interface WatchOptions {
   config: Config;
@@ -55,6 +86,12 @@ export interface WatchOptions {
   open?: (path: string) => Database;
   enableWatch?: boolean;
   syncOnStart?: boolean;
+  /**
+   * How to execute one sync. Defaults to the in-process runSyncOnce; servers
+   * pass a worker-backed runner so multi-second ingests cannot stall the
+   * request event loop.
+   */
+  runner?: SyncRunner;
 }
 
 export interface WatchHandle {
@@ -113,6 +150,7 @@ export function watchDirs(config: Config): string[] {
     config.claudeDir,
     join(config.codexDir, "sessions"),
     join(config.codexDir, "archived_sessions"),
+    ...(config.geminiDir != null ? [config.geminiDir] : []),
   ].filter((dir) => {
     try {
       return existsSync(dir) && statSync(dir).isDirectory();
@@ -127,20 +165,23 @@ export function runSyncOnce(
   status: SyncStatusStore = new SyncStatusStore(),
   cancel: { aborted: boolean } = { aborted: false },
   open: (path: string) => Database = openDb,
+  onProgress?: (progress: SyncProgress) => void,
 ): SyncReport {
   status.start();
   let db: Database | null = null;
   try {
-    mkdirSync(dirname(config.dbPath), { recursive: true });
+    mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = open(config.dbPath);
-    const report = ingestSync(db, config, cancel);
+    const report = ingestSync(db, config, cancel, onProgress);
     status.finishOk(report);
     return report;
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     throw error;
   } finally {
-    db?.close();
+    if (db != null) {
+      closeDb(db);
+    }
   }
 }
 
@@ -150,6 +191,10 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const open = options.open ?? openDb;
+  const runner: SyncRunner =
+    options.runner ??
+    (async (config, syncStatus, cancelFlag, onProgress) =>
+      runSyncOnce(config, syncStatus, cancelFlag, open, onProgress));
   const enableWatch = options.enableWatch !== false;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
@@ -208,8 +253,25 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = runSyncOnce(options.config, status, cancel, open);
-          emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          const result = await runner(options.config, status, cancel, (progress) => {
+            emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
+          });
+          if ("error" in result) {
+            if (result.emitTerminal) {
+              emit({
+                type: "error",
+                reason: current,
+                error: result.error instanceof Error ? result.error.message : String(result.error),
+                status: status.snapshot(),
+              });
+            }
+          } else {
+            const { report, emitTerminal } =
+              "report" in result ? result : { report: result, emitTerminal: true };
+            if (emitTerminal) {
+              emit({ type: "sync", reason: current, report, status: status.snapshot() });
+            }
+          }
         } catch (error) {
           emit({
             type: "error",

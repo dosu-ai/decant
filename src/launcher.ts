@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
 
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
@@ -28,7 +28,12 @@ export interface LaunchOptions {
   env?: Record<string, string | undefined>;
   run?: (bin: string, args: string[]) => LaunchResult;
   tempName?: () => string;
+  /** Test seam for Warp's observable config-consumption check. */
+  warpConsumed?: (configDir: string) => boolean;
 }
+
+const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
+const WARP_CONSUME_TIMEOUT_MS = 1_500;
 
 export function canLaunch(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
@@ -62,14 +67,33 @@ export function launchAgent(
       command: command(agent, fullPrompt) ?? undefined,
     };
   }
+  sweepStaleLaunchDirs();
 
-  const promptFile = join(tmpdir(), options.tempName?.() ?? `decant-prompt-${Date.now()}.txt`);
-  writeFileSync(promptFile, fullPrompt);
+  // mkdtemp gives a fresh 0700 directory, so no other local user can
+  // pre-plant a symlink at a predictable /tmp name or read the prompt; the
+  // file itself is 0600 and the launched shell removes the whole directory
+  // after consuming it.
+  const promptDir = mkdtempSync(join(tmpdir(), "decant-launch-"));
+  const promptFile = join(promptDir, options.tempName?.() ?? "prompt.txt");
+  writeFileSync(promptFile, fullPrompt, { mode: 0o600 });
   const dir = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir();
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
-    `rm -f ${shellQuote(promptFile)})"`;
-  return launchIn(settings.terminal, launchCommand, options.run ?? runCommand, options.env);
+    `rm -rf ${shellQuote(promptDir)})"`;
+  const result = launchIn(
+    settings.terminal,
+    launchCommand,
+    options.run ?? runCommand,
+    options.env,
+    options.warpConsumed,
+  );
+  if (!result.ok) {
+    rmSync(promptDir, { recursive: true, force: true });
+    if (result.command != null) {
+      return { ...result, command: command(agent, fullPrompt) ?? result.command };
+    }
+  }
+  return result;
 }
 
 export function openIde(
@@ -91,12 +115,44 @@ function launchIn(
   cmd: string,
   run: (bin: string, args: string[]) => LaunchResult,
   env: Record<string, string | undefined> | undefined,
+  warpConsumed: ((configDir: string) => boolean) | undefined,
 ): LaunchResult {
   switch (terminal) {
     case "iterm":
       return run("osascript", ["-e", itermScript(cmd)]);
     case "ghostty":
       return openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
+    case "warp": {
+      const launch = createWarpLaunch(cmd, env);
+      const result = run("open", [launch.uri]);
+      const consumed =
+        result.ok && (warpConsumed?.(launch.configDir) ?? waitForPathRemoval(launch.configDir));
+      if (!result.ok || !consumed) {
+        rmSync(launch.configDir, { recursive: true, force: true });
+        const fallback = run("open", [
+          `warp://action/new_tab?path=${encodeURIComponent(launch.cwd)}`,
+        ]);
+        if (fallback.ok) {
+          return {
+            ok: false,
+            error:
+              "Warp opened the project directory but did not confirm that it started the agent.",
+            command: cmd,
+          };
+        }
+        return {
+          ok: false,
+          error:
+            [
+              result.error ?? (consumed ? null : "Warp did not consume the launch configuration."),
+              fallback.error,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "launch failed",
+        };
+      }
+      return result;
+    }
     case "alacritty":
       return openArgs("Alacritty", ["-e", shell(env), "-lc", cmd], run);
     case "kitty":
@@ -105,6 +161,72 @@ function launchIn(
       return openArgs("WezTerm", ["start", "--", shell(env), "-lc", cmd], run);
     default:
       return run("osascript", ["-e", terminalAppScript(cmd)]);
+  }
+}
+
+export function warpLaunchUri(
+  cmd: string,
+  env: Record<string, string | undefined> | undefined,
+): string {
+  return createWarpLaunch(cmd, env).uri;
+}
+
+function createWarpLaunch(
+  cmd: string,
+  env: Record<string, string | undefined> | undefined,
+): { configDir: string; cwd: string; uri: string } {
+  const configDir = mkdtempSync(join(tmpdir(), "decant-warp-"));
+  const configPath = join(configDir, "decant.yaml");
+  const cwd = resolve(env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir());
+  // Warp accepts a percent-encoded absolute launch-config path. Delete the
+  // private config before starting the interactive command: disappearance is
+  // the acknowledgement launchIn waits for, and it leaves no prompt-bearing
+  // config behind for a long-lived agent process.
+  const cleanupCommand = `rm -rf ${shellQuote(configDir)}; ${cmd}`;
+  const config = `---
+name: decant agent
+windows:
+  - tabs:
+      - title: decant
+        layout:
+          cwd: ${JSON.stringify(cwd)}
+          commands:
+            - exec: ${JSON.stringify(cleanupCommand)}
+`;
+  writeFileSync(configPath, config, { mode: 0o600 });
+  return { configDir, cwd, uri: `warp://launch/${encodeURIComponent(configPath)}` };
+}
+
+function waitForPathRemoval(path: string): boolean {
+  const deadline = Date.now() + WARP_CONSUME_TIMEOUT_MS;
+  const sleeper = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  while (existsSync(path) && Date.now() < deadline) {
+    Atomics.wait(sleeper, 0, 0, 25);
+  }
+  return !existsSync(path);
+}
+
+function sweepStaleLaunchDirs(now = Date.now()): void {
+  const root = tmpdir();
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith("decant-launch-") && !entry.startsWith("decant-warp-")) {
+      continue;
+    }
+    const path = join(root, entry);
+    try {
+      if (now - statSync(path).mtimeMs >= STALE_LAUNCH_AGE_MS) {
+        rmSync(path, { recursive: true, force: true });
+      }
+    } catch {
+      // Cleanup is best-effort; launch must not fail on a raced or inaccessible
+      // temp entry.
+    }
   }
 }
 

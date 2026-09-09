@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyTool, preview } from "../src/tools.ts";
+import { classifyTool, preview, previewHeadTail, previewOmittedCount } from "../src/tools.ts";
 
 // Ports tools.rs tests verbatim.
 describe("classifyTool", () => {
@@ -43,5 +43,59 @@ describe("preview", () => {
     // and truncation at 2 must not split a surrogate pair.
     expect(preview("🎉🎉🎉", 3)).toBe("🎉🎉🎉");
     expect(preview("🎉🎉🎉", 2)).toBe("🎉🎉…");
+  });
+});
+
+describe("previewHeadTail", () => {
+  test("returns short strings unchanged", () => {
+    expect(previewHeadTail("all good", 500)).toBe("all good");
+  });
+
+  test("keeps head and tail with an elision marker", () => {
+    const s = `HEAD${"x".repeat(2000)}Error: assertion failed at foo.ts:42`;
+    const out = previewHeadTail(s, 100);
+    expect(out.startsWith("HEAD")).toBe(true);
+    expect(out.endsWith("Error: assertion failed at foo.ts:42".slice(-40))).toBe(true);
+    expect(out).toContain("chars omitted");
+  });
+
+  test("counts Unicode scalars without splitting surrogate pairs", () => {
+    const s = "🎉".repeat(300);
+    const out = previewHeadTail(s, 100);
+    expect(out).not.toContain("�");
+    for (const part of out.split(/\n\[… \d+ chars omitted …\]\n/)) {
+      expect([...part].every((c) => c === "🎉")).toBe(true);
+    }
+  });
+  test("keeps no tail when max is too small for one, without leaking the whole string", () => {
+    expect(previewHeadTail("abcdef", 2)).toBe("ab\n[… 4 chars omitted …]\n");
+  });
+});
+
+describe("previewOmittedCount", () => {
+  test("reads back the count previewHeadTail wrote", () => {
+    const s = "a".repeat(5000);
+    const out = previewHeadTail(s, 500);
+    expect(previewOmittedCount(out)).toBe(5000 - 500);
+  });
+
+  test("returns null for a complete value", () => {
+    expect(previewOmittedCount("short")).toBeNull();
+    expect(previewOmittedCount(previewHeadTail("short", 500))).toBeNull();
+    const json = JSON.stringify({ command: "ls -la" });
+    expect(previewOmittedCount(previewHeadTail(json, 500))).toBeNull();
+    expect(() => JSON.parse(previewHeadTail(json, 500))).not.toThrow();
+  });
+
+  test("handles null and undefined", () => {
+    expect(previewOmittedCount(null)).toBeNull();
+    expect(previewOmittedCount(undefined)).toBeNull();
+  });
+
+  test("flags the elided JSON the detail panel cannot reformat", () => {
+    const big = JSON.stringify({ file_text: "x".repeat(4000) });
+    const elided = previewHeadTail(big, 500);
+    expect(() => JSON.parse(elided)).toThrow();
+    expect(previewOmittedCount(elided)).toBeGreaterThan(0);
   });
 });

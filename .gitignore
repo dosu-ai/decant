@@ -8,9 +8,21 @@
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
 
+# Per-developer coding-agent configuration may contain credentials.
+.claude/settings.local.json
+.mcp.json
+
 # Browser-automation artifacts
 .playwright-mcp/
+.playwright-cli/
+/output/playwright/
 
 # TypeScript app
-node_modules/
+# No trailing slash: a bare name also matches a symlink, which a directory
+# pattern does not. A node_modules symlink created inside a scratch worktree
+# has been committed here before.
+node_modules
 /dist/
+# `bun build --compile` leaves one of these behind in the repo root when a
+# compile fails, which is exactly when someone is most likely to `git add -A`.
+*.bun-build

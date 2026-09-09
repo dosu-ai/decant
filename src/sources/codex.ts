@@ -1,11 +1,17 @@
+import { linkageIssues } from "../diagnostics.ts";
 import { canonicalJson } from "../json.ts";
 import {
   emptyUsage,
   type Json,
   type NormalizedBlock,
   type NormalizedMessage,
+  type NormalizedSession,
   type ParsedSession,
   type Role,
+  reasoningEffortLevels,
+  recordedReasoningEffort,
+  summarizeReasoningEfforts,
+  type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
 
@@ -22,6 +28,7 @@ export function parseCodexSession(
   let cwd: string | null = null;
   let cliVersion: string | null = null;
   let model: string | null = null;
+  const reasoningEfforts = new Set<string>();
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let title: string | null = null;
@@ -32,8 +39,10 @@ export function parseCodexSession(
   let spawnDepth: number | null = null;
   let totals = emptyUsage();
   let sawTokenCount = false;
+  let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
+  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
   for (const [index, line] of content.split(/\n/).entries()) {
     if (line.trim() === "") {
@@ -45,6 +54,7 @@ export function parseCodexSession(
       value = JSON.parse(line) as Json;
     } catch (error) {
       issues.push({
+        code: "unparsed_line",
         lineNo: index + 1,
         error: error instanceof Error ? error.message : String(error),
         rawLine: line,
@@ -87,20 +97,36 @@ export function parseCodexSession(
       rawMeta = payload;
     } else if (typ === "turn_context") {
       model = asString(get(payload, "model")) ?? model;
+      const effort = recordedReasoningEffort(get(payload, "effort"));
+      if (effort != null) {
+        reasoningEfforts.add(effort);
+      }
       cwd ??= asString(get(payload, "cwd"));
     } else if (typ === "event_msg" && asString(get(payload, "type")) === "token_count") {
-      const nested = get(get(payload, "info"), "total_token_usage");
+      const info = get(payload, "info");
+      const nested = get(info, "total_token_usage");
       const source = nested ?? payload;
       sawTokenCount = true;
-      const cached = getInteger(source, "cached_input_tokens");
-      totals = {
-        input: Math.max(0, getInteger(source, "input_tokens") - cached),
-        output: getInteger(source, "output_tokens"),
-        cacheRead: cached,
-        cacheCreation: 0,
-        cacheCreation1h: 0,
-        reasoning: getInteger(source, "reasoning_output_tokens"),
-      };
+      totals = usageFrom(source);
+      contextWindow = asInteger(get(info, "model_context_window")) ?? contextWindow;
+      // last_token_usage is the most recent request's context reading; stamp
+      // it on the assistant message that request produced so per-call window
+      // occupancy is queryable, exactly like Claude's per-message usage.
+      const last = get(info, "last_token_usage");
+      if (isObject(last)) {
+        stampLatestAssistant(messages, usageFrom(last));
+      }
+    } else if (typ === "event_msg" && asString(get(payload, "type")) === "mcp_tool_call_end") {
+      // Current Codex rollouts record MCP calls only here: there is no
+      // response_item counterpart, so this event IS the durable copy.
+      const pair = mcpEventMessages(value, payload, seq, timestamp);
+      if (pair != null) {
+        messages.push(pair.call, pair.result);
+        seq += 2;
+      }
+    } else if (typ === "compacted") {
+      messages.push(compactedMessage(value, payload, seq, timestamp));
+      seq += 1;
     } else if (typ === "response_item") {
       const message = parseItem(value, payload, seq, title);
       if (message != null) {
@@ -110,37 +136,137 @@ export function parseCodexSession(
         messages.push(message.message);
         seq += 1;
       }
+    } else if (typ !== "event_msg") {
+      // Remaining event_msg subtypes are stream noise whose durable copy is a
+      // response_item. The exceptions are token_count and mcp_tool_call_end,
+      // handled above — MCP calls have no response_item in current rollouts.
+      // Anything else is a top-level record type this parser has never seen —
+      // the drift sensor.
+      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
+      seen.count += 1;
+      unknownTypes.set(typ, seen);
     }
   }
 
-  title = titles.get(sourceSessionId) ?? title;
+  for (const [typ, seen] of unknownTypes) {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo: seen.firstLine,
+      error: `unknown record type "${typ}" on ${seen.count} line(s); ignored`,
+      rawLine: null,
+    });
+  }
 
+  title = titles.get(sourceSessionId) ?? title;
+  if (contextWindow != null) {
+    rawMeta = { ...(isObject(rawMeta) ? rawMeta : {}), model_context_window: contextWindow };
+  }
+  const effortLevels = reasoningEffortLevels(reasoningEfforts);
+
+  const normalized: NormalizedSession = {
+    tool: "codex",
+    sourceSessionId,
+    projectPath: cwd,
+    title,
+    cwd,
+    gitBranch: null,
+    model,
+    reasoningEffort: summarizeReasoningEfforts(effortLevels),
+    reasoningEffortLevels: effortLevels,
+    cliVersion,
+    startedAt,
+    endedAt,
+    isArchived: false,
+    isSubagent,
+    rootSourceSessionId: parentThreadId,
+    spawnToolUseId: null,
+    agentId: agentId ?? (isSubagent ? sourceSessionId : null),
+    agentType,
+    spawnDepth,
+    rawMeta,
+    totals,
+    estReasoningTokens: 0,
+    reasoningSource: sawTokenCount ? "reported" : "none",
+    messages,
+  };
+  issues.push(...linkageIssues(normalized));
+
+  return { session: normalized, issues };
+}
+
+function usageFrom(source: Json | undefined): TokenUsage {
+  const totalInput = getInteger(source, "input_tokens");
+  const cached = getInteger(source, "cached_input_tokens");
+  const cacheWrite = getInteger(source, "cache_write_input_tokens");
+  // Current Codex logs, when they carry cache_write_input_tokens at all, report
+  // cached and cache-write input as subsets of input_tokens. Gate that contract:
+  // if a future producer emits an incompatible breakdown, preserve the inclusive
+  // total and cached portion instead of silently zeroing uncached input or
+  // double-counting the write bucket.
+  const disjointBreakdown = cached + cacheWrite <= totalInput;
   return {
-    session: {
-      tool: "codex",
-      sourceSessionId,
-      projectPath: cwd,
-      title,
-      cwd,
-      gitBranch: null,
-      model,
-      cliVersion,
-      startedAt,
-      endedAt,
-      isArchived: false,
-      isSubagent,
-      rootSourceSessionId: parentThreadId,
-      spawnToolUseId: null,
-      agentId: agentId ?? (isSubagent ? sourceSessionId : null),
-      agentType,
-      spawnDepth,
-      rawMeta,
-      totals,
-      estReasoningTokens: 0,
-      reasoningSource: sawTokenCount ? "reported" : "none",
-      messages,
-    },
-    issues,
+    // Codex reports input_tokens as the inclusive prompt total. Cached and
+    // cache-write tokens are component breakdowns, so normalize them into
+    // disjoint buckets before the rest of Decant adds the buckets together.
+    input: Math.max(0, totalInput - cached - (disjointBreakdown ? cacheWrite : 0)),
+    output: getInteger(source, "output_tokens"),
+    cacheRead: cached,
+    cacheCreation: disjointBreakdown ? cacheWrite : 0,
+    cacheCreation1h: 0,
+    reasoning: getInteger(source, "reasoning_output_tokens"),
+  };
+}
+
+/** Applies a token_count reading to the assistant message its request produced.
+ * Readings land after the response items they describe, so walk back past tool
+ * rows to the nearest assistant message. User and system rows are hard
+ * boundaries: in particular, post-compaction zero readings must not overwrite
+ * the pre-compaction assistant peak. Later readings within one request win. */
+function stampLatestAssistant(messages: NormalizedMessage[], usage: TokenUsage): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message == null || message.role === "user" || message.role === "system") {
+      return;
+    }
+    if (message.role === "assistant") {
+      messages[index] = { ...message, usage };
+      return;
+    }
+  }
+}
+
+function compactedMessage(
+  line: Json,
+  payload: Json,
+  seq: number,
+  timestamp: string | null,
+): NormalizedMessage {
+  const summary = asString(get(payload, "message")) ?? "";
+  return {
+    seq,
+    sourceUuid: null,
+    parentSourceUuid: null,
+    role: "system",
+    model: null,
+    stopReason: null,
+    timestamp,
+    usage: null,
+    raw: line,
+    blocks:
+      summary === ""
+        ? []
+        : [
+            {
+              ordinal: 0,
+              blockType: "text",
+              text: summary,
+              toolName: null,
+              toolUseId: null,
+              toolInput: undefined,
+              toolResult: null,
+              isError: null,
+            },
+          ],
   };
 }
 
@@ -216,7 +342,7 @@ function parseItem(
       ordinal: 0,
       blockType: "tool_use",
       text: null,
-      toolName: asString(get(payload, "name")),
+      toolName: qualifiedToolName(payload),
       toolUseId: asString(get(payload, "call_id")),
       toolInput: callInput(payload),
       toolResult: null,
@@ -264,6 +390,125 @@ function parseItem(
     toolResult: null,
     isError: null,
   });
+}
+
+function qualifiedToolName(payload: Json): string | null {
+  const name = asString(get(payload, "name"));
+  const namespace = asString(get(payload, "namespace"));
+  if (name == null || name === "" || namespace == null || namespace === "") {
+    return name;
+  }
+  return name.startsWith(`${namespace}__`) ? name : `${namespace}__${name}`;
+}
+
+function mcpEventMessages(
+  value: Json,
+  payload: Json,
+  seq: number,
+  timestamp: string | null,
+): { call: NormalizedMessage; result: NormalizedMessage } | null {
+  const invocation = get(payload, "invocation");
+  const server = asString(get(invocation, "server"));
+  const tool = asString(get(invocation, "tool"));
+  const callId = asString(get(payload, "call_id"));
+  if (server == null || server === "" || tool == null || tool === "" || callId == null) {
+    return null;
+  }
+  const name = server.startsWith("mcp__") ? `${server}__${tool}` : `mcp__${server}__${tool}`;
+  const result = get(payload, "result") ?? null;
+  const ok = get(result, "Ok");
+  const isError = get(result, "Err") !== undefined || get(ok, "isError") === true;
+  const text = mcpResultText(result);
+  const callTimestamp = backdate(timestamp, get(payload, "duration"));
+  return {
+    call: {
+      seq,
+      sourceUuid: null,
+      parentSourceUuid: null,
+      role: "assistant",
+      model: null,
+      stopReason: null,
+      timestamp: callTimestamp,
+      usage: null,
+      raw: value,
+      blocks: [
+        {
+          ordinal: 0,
+          blockType: "tool_use",
+          text: null,
+          toolName: name,
+          toolUseId: callId,
+          toolInput: get(invocation, "arguments"),
+          toolResult: null,
+          isError: null,
+        },
+      ],
+    },
+    result: {
+      seq: seq + 1,
+      sourceUuid: null,
+      parentSourceUuid: null,
+      role: "tool",
+      model: null,
+      stopReason: null,
+      timestamp,
+      usage: null,
+      raw: value,
+      blocks: [
+        {
+          ordinal: 0,
+          blockType: "tool_result",
+          text: null,
+          toolName: null,
+          toolUseId: callId,
+          toolInput: undefined,
+          toolResult: text,
+          isError,
+        },
+      ],
+    },
+  };
+}
+
+/** Readable projection of an MCP result: Ok text content first, then
+ * structured content, then empty for a bare success — never the Result
+ * envelope, which stays available on message.raw. Non-Ok results (Err,
+ * unrecognized) serialize whole so the failure remains visible. */
+function mcpResultText(result: Json): string {
+  const ok = get(result, "Ok");
+  if (ok === undefined) {
+    return canonicalJson(result);
+  }
+  const content = get(ok, "content");
+  if (Array.isArray(content)) {
+    const texts = content
+      .filter((entry) => asString(get(entry, "type")) === "text")
+      .map((entry) => asString(get(entry, "text")))
+      .filter((entry): entry is string => entry != null && entry !== "");
+    if (texts.length > 0) {
+      return texts.join("\n");
+    }
+  }
+  const structured = get(ok, "structuredContent");
+  if (structured !== undefined) {
+    return canonicalJson(structured);
+  }
+  return Array.isArray(content) ? "" : canonicalJson(result);
+}
+
+/** Event timestamp minus the reported duration; the event marks the call's end. */
+function backdate(timestamp: string | null, duration: Json | undefined): string | null {
+  if (timestamp == null) {
+    return null;
+  }
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) {
+    return timestamp;
+  }
+  const secs = asInteger(get(duration, "secs")) ?? 0;
+  const nanos = asInteger(get(duration, "nanos")) ?? 0;
+  const ms = secs * 1000 + Math.round(nanos / 1_000_000);
+  return new Date(parsed - ms).toISOString();
 }
 
 function messageRole(role: string | null): Role {

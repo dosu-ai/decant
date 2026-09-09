@@ -38,7 +38,9 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         continue;
       }
       if (session.tool === "claude_code") {
-        claudeRef(messageIdx, message, block, session.cwd, refs);
+        keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "gemini") {
+        keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -47,23 +49,30 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
   return refs;
 }
 
-function claudeRef(
+type FileToolTable = Record<string, { key: string; operation: Operation }>;
+
+const CLAUDE_FILE_TOOLS: FileToolTable = {
+  Read: { key: "file_path", operation: "read" },
+  Edit: { key: "file_path", operation: "edit" },
+  Write: { key: "file_path", operation: "write" },
+  NotebookEdit: { key: "notebook_path", operation: "edit" },
+};
+
+const GEMINI_FILE_TOOLS: FileToolTable = {
+  read_file: { key: "file_path", operation: "read" },
+  replace: { key: "file_path", operation: "edit" },
+  write_file: { key: "file_path", operation: "write" },
+};
+
+function keyedRef(
+  table: FileToolTable,
   messageIdx: number,
   message: NormalizedMessage,
   block: NormalizedBlock,
   cwd: string | null,
   refs: FileRef[],
 ): void {
-  const pair =
-    block.toolName === "Read"
-      ? ({ key: "file_path", operation: "read" } as const)
-      : block.toolName === "Edit"
-        ? ({ key: "file_path", operation: "edit" } as const)
-        : block.toolName === "Write"
-          ? ({ key: "file_path", operation: "write" } as const)
-          : block.toolName === "NotebookEdit"
-            ? ({ key: "notebook_path", operation: "edit" } as const)
-            : null;
+  const pair = block.toolName == null ? undefined : table[block.toolName];
   if (pair == null || !isObject(block.toolInput)) {
     return;
   }
@@ -154,12 +163,13 @@ export function facets(session: NormalizedSession): Facets {
 
   for (const message of session.messages) {
     const sidechain = rawBoolean(message.raw, "isSidechain") === true;
+    const compactSummary = rawBoolean(message.raw, "isCompactSummary") === true;
     if (sidechain) {
       got.sidechainMessageCount += 1;
     }
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
-      rawBoolean(message.raw, "isCompactSummary") === true
+      rawString(message.raw, "type") === "compacted"
     ) {
       got.compactionCount += 1;
     }
@@ -189,7 +199,16 @@ export function facets(session: NormalizedSession): Facets {
       }
     }
 
-    if (message.role === "user" && hasRealText && !sidechain) {
+    // Sidechain rows embedded in a parent belong to a child agent, but a
+    // standalone subagent file uses those rows as its primary conversation.
+    // Machine-generated compaction summaries continue a turn rather than
+    // starting a new one.
+    if (
+      message.role === "user" &&
+      hasRealText &&
+      (!sidechain || session.isSubagent) &&
+      !compactSummary
+    ) {
       got.turnCount += 1;
     }
 

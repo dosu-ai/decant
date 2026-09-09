@@ -1,0 +1,193 @@
+import { describe, expect, test } from "bun:test";
+import {
+  appendTranscriptPage,
+  clampTranscriptWindowOffset,
+  prependTranscriptPage,
+  previousTranscriptPageRequest,
+  runWithTranscriptRequestSlot,
+  transcriptPrefixRequest,
+  transcriptWindowOffset,
+} from "../src/ui/transcript-pagination.ts";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function nextMicrotask(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("transcript pagination", () => {
+  test("appends a page in order and removes retry overlap by sequence", () => {
+    const current = [
+      { seq: 0, text: "first" },
+      { seq: 1, text: "second" },
+    ];
+    const incoming = [
+      { seq: 1, text: "duplicate retry" },
+      { seq: 2, text: "third" },
+    ];
+
+    expect(appendTranscriptPage(current, incoming)).toEqual([
+      { seq: 0, text: "first" },
+      { seq: 1, text: "second" },
+      { seq: 2, text: "third" },
+    ]);
+  });
+
+  test("does not mutate the existing message array", () => {
+    const current = [{ seq: 0 }];
+    expect(appendTranscriptPage(current, [])).not.toBe(current);
+    expect(current).toEqual([{ seq: 0 }]);
+  });
+
+  test("opens unloaded outline targets with bounded preceding context", () => {
+    expect(transcriptWindowOffset(1_574)).toBe(1_554);
+    expect(transcriptWindowOffset(8)).toBe(0);
+  });
+
+  test("loads every earlier row when jumping to a specific transcript event", () => {
+    expect(transcriptPrefixRequest(1_258, 2_000)).toEqual({ offset: 0, limit: 1_259 });
+    expect(transcriptPrefixRequest(1_258, 2_000, 160)).toEqual({ offset: 0, limit: 1_419 });
+    expect(transcriptPrefixRequest(2_500, 2_000)).toEqual({ offset: 0, limit: 2_000 });
+    expect(transcriptPrefixRequest(Number.NaN, Number.NaN)).toEqual({ offset: 0, limit: 1 });
+    expect(transcriptPrefixRequest(20, 100, Number.NaN)).toEqual({ offset: 0, limit: 21 });
+  });
+
+  test("serializes callers that were waiting on the same active request", async () => {
+    const requestRef: { current: Promise<void> | null } = { current: null };
+    const initial = deferred();
+    requestRef.current = initial.promise.then(() => {
+      requestRef.current = null;
+    });
+    const started: { label: string; resolve: () => void }[] = [];
+
+    const startWindow = async (label: string) => {
+      await runWithTranscriptRequestSlot(
+        requestRef,
+        () => true,
+        undefined,
+        async () => {
+          const gate = deferred();
+          started.push({ label, resolve: gate.resolve });
+          await gate.promise;
+        },
+      );
+    };
+
+    const first = startWindow("first");
+    const second = startWindow("second");
+    initial.resolve();
+    await nextMicrotask();
+    expect(started.map((item) => item.label)).toEqual(["first"]);
+
+    started[0]?.resolve();
+    await nextMicrotask();
+    expect(started.map((item) => item.label)).toEqual(["first", "second"]);
+
+    started[1]?.resolve();
+    await Promise.all([first, second]);
+  });
+
+  test("abandons a queued request when its session version becomes stale", async () => {
+    const active = deferred();
+    const requestRef = { current: active.promise as Promise<unknown> | null };
+    let sessionVersion = 1;
+    const waiting = runWithTranscriptRequestSlot(
+      requestRef,
+      () => sessionVersion === 1,
+      "stale",
+      async () => "started",
+    );
+
+    sessionVersion = 2;
+    active.resolve();
+    expect(await waiting).toBe("stale");
+  });
+});
+
+describe("transcript window clamping", () => {
+  test("keeps an out-of-range deep link on the last real page", () => {
+    expect(clampTranscriptWindowOffset(transcriptWindowOffset(1400), 200, 160)).toBe(40);
+  });
+
+  test("leaves in-range offsets alone", () => {
+    expect(clampTranscriptWindowOffset(880, 2000, 160)).toBe(880);
+    expect(clampTranscriptWindowOffset(0, 2000, 160)).toBe(0);
+  });
+
+  test("collapses to the first page when the session is shorter than one page", () => {
+    expect(clampTranscriptWindowOffset(120, 40, 160)).toBe(0);
+  });
+
+  test("survives absent or nonsensical counts", () => {
+    expect(clampTranscriptWindowOffset(500, 0, 160)).toBe(0);
+    expect(clampTranscriptWindowOffset(500, Number.NaN, 160)).toBe(0);
+    expect(clampTranscriptWindowOffset(-5, 2000, 160)).toBe(0);
+  });
+
+  test("never returns a non-finite offset", () => {
+    // NaN survives Math.trunc/max/min untouched, so an unguarded input reaches
+    // the request as `message_offset=NaN`. Every degenerate input starts the
+    // window at the beginning, which is the same place the "Start at the
+    // beginning" recovery button goes.
+    for (const offset of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(clampTranscriptWindowOffset(offset, 2000, 160)).toBe(0);
+    }
+    expect(clampTranscriptWindowOffset(500, 2000, Number.NaN)).toBe(0);
+    expect(clampTranscriptWindowOffset(500, 2000, Number.POSITIVE_INFINITY)).toBe(0);
+  });
+});
+
+describe("prependTranscriptPage", () => {
+  test("puts the earlier page in front, in seq order", () => {
+    expect(prependTranscriptPage([{ seq: 4 }, { seq: 5 }], [{ seq: 2 }, { seq: 3 }])).toEqual([
+      { seq: 2 },
+      { seq: 3 },
+      { seq: 4 },
+      { seq: 5 },
+    ]);
+  });
+
+  test("drops rows already held so a retry cannot duplicate them", () => {
+    expect(prependTranscriptPage([{ seq: 3 }, { seq: 4 }], [{ seq: 2 }, { seq: 3 }])).toEqual([
+      { seq: 2 },
+      { seq: 3 },
+      { seq: 4 },
+    ]);
+  });
+
+  test("copies the window when there is nothing to add", () => {
+    const current = [{ seq: 1 }];
+    const result = prependTranscriptPage(current, []);
+    expect(result).toEqual(current);
+    expect(result).not.toBe(current);
+  });
+});
+
+describe("previousTranscriptPageRequest", () => {
+  test("asks only for the gap in front of the window", () => {
+    // A window starting at 160 with a page size of 160 has a full page missing.
+    expect(previousTranscriptPageRequest(160, 160)).toEqual({ offset: 0, limit: 160 });
+  });
+
+  test("does not re-fetch rows already held when the gap is short", () => {
+    // 40 rows missing, so ask for 40 -- not a full page that would overlap.
+    expect(previousTranscriptPageRequest(40, 160)).toEqual({ offset: 0, limit: 40 });
+  });
+
+  test("stops at the start of the session", () => {
+    expect(previousTranscriptPageRequest(0, 160)).toBeNull();
+    expect(previousTranscriptPageRequest(-5, 160)).toBeNull();
+  });
+
+  test("refuses to build a request from non-finite input", () => {
+    expect(previousTranscriptPageRequest(Number.NaN, 160)).toBeNull();
+    expect(previousTranscriptPageRequest(160, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});

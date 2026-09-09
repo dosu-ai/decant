@@ -1,0 +1,17 @@
+# Code owners for decant.
+#
+# The last matching pattern wins, so the global owner comes first and the
+# security-sensitive paths follow. Every path listed here exists in the tree;
+# a pattern that matches nothing silently owns nothing.
+
+* @teedole
+
+# Release and supply chain: CI workflows, packaging manifests, the npm
+# launcher, and the curl-to-shell installer all run on other people's machines.
+/.github/workflows/ @teedole
+/packaging/ @teedole
+/npm/ @teedole
+/install.sh @teedole
+
+# The only network listener in the project.
+/src/server.ts @teedole

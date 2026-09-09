@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +13,18 @@ import {
 } from "../scripts/distribution.ts";
 
 describe("distribution helpers", () => {
+  test("keeps source development startup direct and reproducible", () => {
+    const root = join(import.meta.dir, "..");
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(pkg.scripts?.predev).toBe("bun install --frozen-lockfile");
+    expect(pkg.scripts?.dev).toBe("bun run src/cli.ts serve");
+    expect(pkg.scripts?.up).toBeUndefined();
+    expect(existsSync(join(root, "scripts", "dev.ts"))).toBe(false);
+  });
+
   test("loads the npm binary target matrix", () => {
     const targets = readTargets();
     expect(targets.map((target) => target.key)).toEqual([
@@ -62,7 +74,7 @@ describe("distribution helpers", () => {
     expect(parseDistributionArgs(["--version", "1.2.3"]).version).toBe("1.2.3");
   });
 
-  test("passes release version through Bun env inlining for compiled binaries", () => {
+  test("includes worker entrypoints and optional release version in compiled binaries", () => {
     const target = selectTargets("linux-x64")[0];
     if (target == null) {
       throw new Error("missing linux-x64 target");
@@ -70,22 +82,55 @@ describe("distribution helpers", () => {
     expect(buildTargetArgs(target, "/tmp/decant")).toEqual([
       "build",
       "--compile",
+      "--minify",
       "--target",
       "bun-linux-x64",
       "src/cli.ts",
+      "src/sync-worker.ts",
+      "src/stats-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);
     expect(buildTargetArgs(target, "/tmp/decant", "1.2.3")).toEqual([
       "build",
       "--compile",
+      "--minify",
       "--target",
       "bun-linux-x64",
       "--env=DECANT_BUILD_VERSION*",
       "src/cli.ts",
+      "src/sync-worker.ts",
+      "src/stats-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);
+  });
+
+  test("ships the binary minified, since that halves what the browser parses", () => {
+    // Bun does not split chunks in a compiled binary, so echarts ships whether or
+    // not it is dynamically imported and the only lever on first-load parse cost
+    // is minification. Measured by fetching the bundle from each binary:
+    // 6,211,618 bytes without, 3,211,476 with.
+    //
+    // --sourcemap would recover the identifiers that minification mangles in
+    // `exception.stacktrace`, but it breaks the compiled binary: the server dies
+    // after POST /api/sync and dist-check fails with ConnectionRefused. Asserted
+    // absent so a well-meaning future edit does not reintroduce it.
+    for (const target of selectTargets("all")) {
+      const args = buildTargetArgs(target, "/tmp/decant");
+      expect(args).toContain("--minify");
+      expect(args).not.toContain("--sourcemap");
+    }
+  });
+
+  test("lets Homebrew infer the formula version from release URLs", () => {
+    const template = readFileSync(
+      join(import.meta.dir, "..", "packaging", "homebrew", "decant.rb.template"),
+      "utf8",
+    );
+
+    expect(template).toContain("https://github.com/dosu-ai/decant/releases/download/v__VERSION__/");
+    expect(template).not.toMatch(/^\s*version\s+/m);
   });
 
   test("stamps staged npm packages to one release version", async () => {
@@ -115,5 +160,58 @@ describe("distribution helpers", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("stages the launcher scoped, with the platform packages as optional deps", async () => {
+    const root = mkdtempSync(join(tmpdir(), "decant-npm-launcher-test-"));
+    try {
+      const target = selectTargets("linux-x64")[0];
+      if (target == null) {
+        throw new Error("missing linux-x64 target");
+      }
+      const binaryDir = join(root, "bin");
+      mkdirSync(join(binaryDir, target.key), { recursive: true });
+      writeFileSync(join(binaryDir, target.key, "decant"), "#!/bin/sh\n");
+
+      const outDir = stageNpmPackages({
+        outDir: join(root, "npm"),
+        binaryDir,
+        targets: [target],
+        buildMissing: false,
+        clean: true,
+        version: "1.2.3",
+      });
+
+      // The launcher publishes scoped. npm permanently refuses the unscoped
+      // `decant` as too similar to `dedent` and `recast`, and that check runs
+      // only at publish time -- `npm view` and `npm publish --dry-run` both
+      // report the name as free. Asserting the scope here is what keeps a
+      // future edit from walking back into a 403 at tag time.
+      const launcher = await Bun.file(join(outDir, "decant", "package.json")).json();
+      expect(launcher.name).toBe("@dosu/decant");
+      expect(launcher.version).toBe("1.2.3");
+      expect(launcher.bin).toEqual({ decant: "./bin/decant.cjs" });
+      expect(launcher.optionalDependencies).toEqual({ "@dosu/decant-linux-x64": "1.2.3" });
+
+      expect(existsSync(join(outDir, "dosu-decant"))).toBe(false);
+
+      for (const file of ["README.md", "targets.json", "LICENSE", "NOTICE"]) {
+        expect(existsSync(join(outDir, "decant", file))).toBe(true);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("docker image", () => {
+  test("bakes in no trusted peer allowlist", () => {
+    const dockerfile = readFileSync(join(import.meta.dir, "..", "Dockerfile"), "utf8");
+    // The archive is served without credentials, so a pre-set peer address or
+    // CIDR hands it to every host that matches. Both `ENV KEY=value` and the
+    // legacy `ENV KEY value` form count.
+    expect(dockerfile).not.toMatch(/^\s*ENV\s+DECANT_TRUSTED_PEERS[\s=]/m);
+    // The image opts into deriving one address instead, never a range.
+    expect(dockerfile).toMatch(/^ENV DECANT_TRUST_DEFAULT_GATEWAY=1$/m);
   });
 });

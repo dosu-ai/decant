@@ -1,76 +1,763 @@
-name: Release
+
+name: release
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Semver version to publish, for example 0.1.0"
+        description: "Version to release (must match an existing v* tag that peels to the run's commit)"
         required: true
         type: string
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
+
+concurrency: release-${{ github.ref_name }}
 
 jobs:
-  npm:
-    name: Publish npm packages
+  meta:
+    name: Release metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_prerelease: ${{ steps.v.outputs.is_prerelease }}
+      is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # zizmor: ignore[artipacked]
+
+      - name: Derive, validate, and guard VERSION
+        id: v
+        env:
+          RAW: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${RAW#v}"; TAG="v$VERSION"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::'$VERSION' is not semver"; exit 1; }
+
+          git fetch --no-tags --force origin "refs/tags/$TAG:refs/tags/$TAG" \
+            || { echo "::error::tag $TAG not found on origin — push the tag before releasing"; exit 1; }
+          TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          [ "$TAG_COMMIT" = "$GITHUB_SHA" ] \
+            || { echo "::error::tag $TAG points at $TAG_COMMIT but this run builds $GITHUB_SHA — dispatch with the tag as the run ref"; exit 1; }
+
+          if [[ "$VERSION" == *-* ]]; then IS_PRERELEASE=true; else IS_PRERELEASE=false; fi
+
+          IS_LATEST=false
+          if [[ "$IS_PRERELEASE" == false ]]; then
+            TAGS="$(git ls-remote --tags origin 'v*')"
+            HIGHEST=$(
+              { printf '%s\n' "$TAGS" \
+                  | awk '{print $2}' | sed -e 's#^refs/tags/##' -e 's/\^{}$//' \
+                  | sort -u | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//'
+                echo "$VERSION"
+              } | sort -V | tail -n1)
+            [[ "$HIGHEST" == "$VERSION" ]] && IS_LATEST=true
+          fi
+
+          { echo "version=$VERSION"
+            echo "is_prerelease=$IS_PRERELEASE"
+            echo "is_latest=$IS_LATEST"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify (biome, tsc, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.3.x
+          bun-version-file: .bun-version
+          no-cache: true
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build and stage packages
-        run: bun run scripts/build-npm.ts --target all --clean --version "${{ inputs.version }}"
+      - name: Lint and format (Biome)
+        run: bunx biome ci .
 
-      - name: Configure npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+      - name: Typecheck
+        run: bunx tsc --noEmit
 
-      - name: Publish platform packages
+      - name: Test
+        run: bun test
+
+  build:
+    name: Build, sign, and package binaries
+    needs: [meta, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      signed: ${{ steps.signing-mode.outputs.signed }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build all release targets
+        run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
+
+      - name: Record pre-signing SHA256s
+        run: sha256sum dist/bin/*/decant | tee presign-sha256s.txt
+
+      - name: Install rcodesign (pinned)
         run: |
-          for package in dist/npm/decant-darwin-arm64 dist/npm/decant-darwin-x64 dist/npm/decant-linux-arm64 dist/npm/decant-linux-x64; do
-            npm publish "$package" --access public
+          set -euo pipefail
+          RCODESIGN_VERSION="0.29.0"
+          RCODESIGN_SHA256="dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o rcodesign.tar.gz \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${RCODESIGN_SHA256}  rcodesign.tar.gz" | sha256sum -c -
+          tar -xzf rcodesign.tar.gz --strip-components=1 \
+            "apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl/rcodesign"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 rcodesign "$RUNNER_TEMP/bin/rcodesign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Determine signing mode
+        id: signing-mode
+        env:
+          MACOS_CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_B64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for secret_name in MACOS_CERT_P12_B64 MACOS_CERT_PASSWORD ASC_ISSUER_ID ASC_KEY_ID ASC_KEY_P8; do
+            if [ -z "${!secret_name}" ]; then
+              echo "::warning::secret ${secret_name} is not configured"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "signing mode: Developer ID (sign + notarize)"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::${missing} of 5 Apple signing secrets are missing — falling back to AD-HOC signing. The darwin binaries will NOT be Developer ID-signed or notarized, and macOS users will get a Gatekeeper prompt on first run that they must clear by hand. Configure all five secrets to publish notarized builds."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign and notarize darwin binaries (Developer ID)
+        if: steps.signing-mode.outputs.signed == 'true'
+        env:
+          MACOS_CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_B64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          keys_dir="$(mktemp -d "${RUNNER_TEMP}/sign.XXXXXX")"
+          printf '%s' "$MACOS_CERT_P12_B64" | base64 -d > "${keys_dir}/cert.p12"
+          printf '%s' "$MACOS_CERT_PASSWORD" > "${keys_dir}/p12-password"
+          printf '%s' "$ASC_KEY_P8" > "${keys_dir}/asc-key.p8"
+          rcodesign encode-app-store-connect-api-key -o "${keys_dir}/asc-api-key.json" \
+            "$ASC_ISSUER_ID" "$ASC_KEY_ID" "${keys_dir}/asc-key.p8"
+
+          for target in darwin-arm64 darwin-x64; do
+            rcodesign sign \
+              --p12-file "${keys_dir}/cert.p12" \
+              --p12-password-file "${keys_dir}/p12-password" \
+              --for-notarization \
+              -e entitlements.plist \
+              "dist/bin/${target}/decant"
+
+            zip -j -q "${keys_dir}/decant-${target}.zip" "dist/bin/${target}/decant"
+            submitted=false
+            for attempt in 1 2 3; do
+              if rcodesign notary-submit --api-key-file "${keys_dir}/asc-api-key.json" \
+                  --wait "${keys_dir}/decant-${target}.zip"; then
+                submitted=true
+                break
+              fi
+              echo "::warning::notary-submit attempt ${attempt} failed for ${target} — retrying"
+              sleep 30
+            done
+            if [ "$submitted" != "true" ]; then
+              echo "::error::notarization failed for ${target} after 3 attempts"
+              exit 1
+            fi
           done
 
-      - name: Publish launcher
-        run: npm publish dist/npm/decant --access public
+          rm -rf "${keys_dir}"
+
+      - name: Ad-hoc sign darwin binaries (no Developer ID secrets)
+        if: steps.signing-mode.outputs.signed != 'true'
+        run: |
+          set -euo pipefail
+          for target in darwin-arm64 darwin-x64; do
+            rcodesign sign "dist/bin/${target}/decant"
+          done
+          echo "::warning::darwin binaries are AD-HOC signed — not Developer ID-signed and not notarized. macOS users will see a Gatekeeper prompt on first run."
+
+      - name: Package deterministic release tarballs
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            cp LICENSE NOTICE "dist/bin/${target}/"
+            tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              -C "dist/bin/${target}" -cf - decant LICENSE NOTICE \
+              | gzip -n > "dist/release/decant-${target}.tar.gz"
+          done
+          (cd dist/release && sha256sum decant-*.tar.gz | tee SHA256SUMS)
+
+      - name: Attest build provenance (tarballs, raw binaries, SHA256SUMS)
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: |
+            dist/release/decant-*.tar.gz
+            dist/bin/*/decant
+            dist/release/SHA256SUMS
+
+      - name: Stage attestation bundle as a release asset
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          [ -s "$BUNDLE_PATH" ] || { echo "::error::actions/attest reported no bundle at '${BUNDLE_PATH}'"; exit 1; }
+          cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
+
+      - name: Upload pre-signing hashes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: presign-sha256s
+          path: presign-sha256s.txt
+          if-no-files-found: error
+
+      - name: Upload release tarballs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-tarballs
+          path: dist/release/
+          if-no-files-found: error
+
+      - name: Upload signed binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-binaries
+          path: dist/bin/
+          if-no-files-found: error
+
+  smoke-darwin:
+    name: Smoke signed darwin binary (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      SIGNED: ${{ needs.build.outputs.signed }}
+    steps:
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Extract, run, and verify the darwin binary
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          tar -xzf "dist/release/decant-${{ matrix.target }}.tar.gz" -C smoke
+          ./smoke/decant --version
+          codesign --verify --strict --verbose=2 smoke/decant
+
+          case "$SIGNED" in
+            true|false) ;;
+            *)
+              echo "::error::build reported no signing mode (got '${SIGNED}') — cannot decide whether the Gatekeeper gate applies"
+              exit 1
+              ;;
+          esac
+
+          if [ "$SIGNED" != "true" ]; then
+            echo "::warning::ad-hoc signed build — reporting the spctl assessment for information only (a Developer ID build must pass it)"
+            spctl -a -t exec -vv smoke/decant 2>&1 || true
+            exit 0
+          fi
+
+          if ! assessment="$(spctl -a -t exec -vv smoke/decant 2>&1)"; then
+            printf '%s\n' "$assessment"
+            echo "::error::spctl rejected the binary — Gatekeeper would block users"
+            exit 1
+          fi
+          printf '%s\n' "$assessment"
+          case "$assessment" in
+            *"Notarized Developer ID"*) echo "spctl assessment: Notarized Developer ID" ;;
+            *)
+              echo "::error::expected a 'Notarized Developer ID' spctl assessment"
+              exit 1
+              ;;
+          esac
+
+  determinism:
+    name: Determinism canary (non-blocking)
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild all release targets
+        run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
+
+      - name: Download pre-signing hashes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: presign-sha256s
+
+      - name: Compare rebuild against pre-signing hashes (WARN only)
+        run: |
+          set -euo pipefail
+          sha256sum dist/bin/*/decant | tee rebuild-sha256s.txt
+          if diff -u presign-sha256s.txt rebuild-sha256s.txt; then
+            echo "determinism canary: rebuild is byte-identical to the release build"
+          else
+            echo "::warning::determinism canary: rebuild diverged from the release build's pre-signing hashes (non-blocking)"
+          fi
+
+  npm:
+    name: Publish npm packages
+    needs: [meta, build, smoke-darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download signed binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signed-binaries
+          path: dist/bin
+
+      - name: Stage npm packages from signed binaries
+        run: bun run scripts/build-npm.ts --target all --binary-dir dist/bin --out-dir dist/npm --no-build --clean --version "$VERSION"
+
+      - name: Assert LICENSE and NOTICE staged in all five packages
+        run: |
+          set -euo pipefail
+          for dir in dist/npm/*/; do
+            for file in LICENSE NOTICE; do
+              if [ ! -f "${dir}${file}" ]; then
+                echo "::error::${file} missing from staged package ${dir} (Apache-2.0 §4(d))"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Set up Node for npm publish
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Assert npm supports trusted publishing (>= 11.5.1)
+        run: dpkg --compare-versions "$(npm --version)" ge 11.5.1 || exit 1
+
+      - name: Pack-and-install smoke on staged packages (pre-publish)
+        run: |
+          set -euo pipefail
+          platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
+          for launcher_dir in decant; do
+            launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${launcher_dir}/package.json','utf8')).name")"
+            launcher_tgz="$(cd "dist/npm/${launcher_dir}" && npm pack --silent | tail -n1)"
+            smoke_dir="$(mktemp -d)"
+            ( cd "$smoke_dir"
+              npm init -y >/dev/null
+              npm install --ignore-scripts --no-audit --no-fund \
+                "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
+                "$GITHUB_WORKSPACE/dist/npm/${launcher_dir}/$launcher_tgz"
+              out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
+              echo "staged launcher ${launcher_pkg} reports: $out"
+              [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher ${launcher_pkg} reported '$out', expected version $VERSION"; exit 1; }
+            )
+            rm -rf "$smoke_dir" "dist/npm/${launcher_dir}/${launcher_tgz}"
+          done
+          rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
+
+      - name: Derive npm dist-tag channel
+        run: |
+          if [[ "${{ needs.meta.outputs.is_prerelease }}" == "true" ]]; then CHANNEL=next
+          elif [[ "${{ needs.meta.outputs.is_latest }}" == "true" ]]; then CHANNEL=latest
+          else CHANNEL=previous; fi
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+
+      - name: Publish packages (OIDC trusted publishing)
+        run: |
+          set -euo pipefail
+          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant; do
+            pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
+            if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
+              continue
+            fi
+            npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
+          done
+
+  npm-smoke:
+    name: Post-publish npx smoke (${{ matrix.target }})
+    needs: [meta, npm]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions: {}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run the launcher like an npx user (retry for registry propagation)
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if npm exec --yes --prefer-online "@dosu/decant@${VERSION}" -- --version; then
+              exit 0
+            fi
+            echo "attempt ${attempt}/20: @dosu/decant@${VERSION} not resolvable yet — waiting for registry propagation"
+            sleep 30
+          done
+          echo "::error::@dosu/decant@${VERSION} never became runnable via npm exec after 10 minutes"
+          exit 1
+
+  github-release:
+    name: GitHub Release
+    needs: [meta, build, npm, npm-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Stage install.sh next to the tarballs
+        run: cp install.sh dist/release/install.sh
+
+      - name: Publish or refresh the GitHub Release
+        working-directory: dist/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.meta.outputs.version }}
+          PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
+        run: |
+          set -euo pipefail
+          bundle="decant-${TAG#v}.sigstore.json"
+          [ -f "$bundle" ] || { echo "::error::attestation bundle ${bundle} missing from the release-tarballs artifact"; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already has a release — refreshing assets only (gh release create would 422)"
+            gh release upload "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh --clobber
+          else
+            flags=(--verify-tag --generate-notes)
+            [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+            [ "$IS_LATEST" = "true" ] || flags+=(--latest=false)
+            gh release create "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh "${flags[@]}"
+          fi
 
   docker:
     name: Publish Docker image
+    needs: [meta, build, smoke-darwin]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute tag list
+        id: tags
+        env:
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          { echo "list<<TAGS_EOF"
+            echo "ghcr.io/dosu-ai/decant:${VERSION}"
+            [[ "$IS_LATEST" == "true" ]] && echo "ghcr.io/dosu-ai/decant:latest"
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/dosu-ai/decant:${{ inputs.version }}
-            ghcr.io/dosu-ai/decant:latest
+          tags: ${{ steps.tags.outputs.list }}
+          build-args: |
+            DECANT_VERSION=${{ needs.meta.outputs.version }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: ghcr.io/dosu-ai/decant
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Check the image is anonymously pullable
+        continue-on-error: true
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://ghcr.io/v2/dosu-ai/decant/manifests/${VERSION}")"
+          if [ "$code" = "200" ]; then
+            echo "anonymous pull works (HTTP 200) — package is public"
+            exit 0
+          fi
+          echo "::warning::ghcr.io/dosu-ai/decant:${VERSION} is not anonymously pullable (HTTP ${code}). A GHCR package is private on first push and there is no API to change it. Set it to public once, by hand: https://github.com/orgs/dosu-ai/packages/container/decant/settings -> Danger Zone -> Change visibility. This is a one-time action; later releases inherit it."
+
+  homebrew-formula:
+    name: Render Homebrew formula
+    needs: [meta, build, github-release]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download release tarballs (for SHA256SUMS)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Render decant.rb from the in-repo template
+        run: |
+          set -euo pipefail
+          sha_for() {
+            awk -v file="decant-$1.tar.gz" '$2 == file { print $1 }' dist/release/SHA256SUMS
+          }
+          darwin_arm64="$(sha_for darwin-arm64)"
+          darwin_x64="$(sha_for darwin-x64)"
+          linux_arm64="$(sha_for linux-arm64)"
+          linux_x64="$(sha_for linux-x64)"
+          for value in "$darwin_arm64" "$darwin_x64" "$linux_arm64" "$linux_x64"; do
+            if ! [[ "$value" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::missing or malformed sha256 in SHA256SUMS"
+              exit 1
+            fi
+          done
+          mkdir -p dist/homebrew
+          sed -e '/^##/d' \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s/__SHA256_DARWIN_ARM64__/${darwin_arm64}/g" \
+            -e "s/__SHA256_DARWIN_X64__/${darwin_x64}/g" \
+            -e "s/__SHA256_LINUX_ARM64__/${linux_arm64}/g" \
+            -e "s/__SHA256_LINUX_X64__/${linux_x64}/g" \
+            packaging/homebrew/decant.rb.template > dist/homebrew/decant.rb
+
+      - name: Upload rendered formula
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: homebrew-formula
+          path: dist/homebrew/decant.rb
+          if-no-files-found: error
+
+  homebrew-smoke:
+    name: Homebrew install smoke (${{ matrix.target }})
+    needs: [meta, homebrew-formula]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607
+
+      - name: Download rendered formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: homebrew-formula
+          path: Formula
+
+      - name: Audit, install, and test
+        run: |
+          set -euo pipefail
+          brew tap dosu-ai/dosu
+          tap_root="$(brew --repository dosu-ai/dosu)"
+          cp Formula/decant.rb "${tap_root}/Formula/decant.rb"
+          brew audit --strict --online --formula dosu-ai/dosu/decant
+          brew install --formula dosu-ai/dosu/decant
+          brew test dosu-ai/dosu/decant
+          out="$(decant --version)"
+          echo "Homebrew decant reports: $out"
+          [[ "$out" == *"$VERSION"* ]] \
+            || { echo "::error::Homebrew decant reported '$out', expected version $VERSION"; exit 1; }
+
+  tap-update:
+    name: Update Homebrew tap
+    needs: [meta, github-release, homebrew-formula, homebrew-smoke]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Check out dosu-ai/homebrew-dosu # zizmor: ignore[artipacked]
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Download tested formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: homebrew-formula
+          path: homebrew-dosu/Formula
+
+      - name: Commit and push
+        working-directory: homebrew-dosu
+        run: |
+          set -euo pipefail
+          git add Formula/decant.rb
+          if git diff --cached --quiet; then
+            echo "::notice::Formula/decant.rb already matches v${VERSION} — nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update decant to v${VERSION}"
+          git push

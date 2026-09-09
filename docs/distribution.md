@@ -1,69 +1,61 @@
 # Distribution
 
-Decant's TypeScript migration ships as one Bun-authored app through three
-paths: npm, Docker, and source.
+Decant publishes native binaries for macOS and Linux on arm64 and x64. There is
+no native Windows package.
 
 ## npm
 
-The npm package is a Node-compatible launcher. `npx` starts under Node, but
-Decant uses `bun:sqlite`, so the launcher selects a platform package containing
-a Bun-compiled standalone binary.
-
-The package is a release target, not a currently published install path until
-the first Release workflow run succeeds.
+Run Decant without installing it:
 
 ```sh
-npx @dosu/decant --help
-npx @dosu/decant sync
-npx @dosu/decant serve
+npx @dosu/decant@latest
 ```
 
-Package layout:
-
-- `@dosu/decant`: thin CommonJS launcher at `npm/decant/bin/decant.cjs`.
-- `@dosu/decant-darwin-arm64`
-- `@dosu/decant-darwin-x64`
-- `@dosu/decant-linux-arm64`
-- `@dosu/decant-linux-x64`
-
-Build native artifacts for a local smoke test:
+Or install a persistent command:
 
 ```sh
-bun run scripts/build-binaries.ts --target native --out-dir /tmp/decant-bin
-TARGET=darwin-arm64
-DECANT_BINARY_PATH="/tmp/decant-bin/$TARGET/decant" node npm/decant/bin/decant.cjs --help
-bun run scripts/build-npm.ts --target native --binary-dir /tmp/decant-bin --out-dir /tmp/decant-npm --no-build --clean
+npm install --global @dosu/decant@latest
+decant
 ```
 
-Set `TARGET` to the emitted target key for your platform; `darwin-arm64` is the
-native target on Apple Silicon Macs.
+`@dosu/decant` is a Node.js launcher that selects the matching compiled binary.
+The launcher needs Node.js 18 or newer; Bun is not required. Reinstall without
+`--omit=optional` if npm omitted the platform package.
 
-Build all release artifacts:
+## Shell installer
+
+The installer downloads the matching GitHub Release tarball, verifies its
+checksum, and installs without `sudo`:
 
 ```sh
-bun run scripts/build-npm.ts --target all --clean --version 0.1.0
+curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
 ```
 
-Release builds stamp the same version into package metadata and the compiled
-binary. The release workflow publishes all platform packages first, then the
-launcher, so `optionalDependencies` always point at packages that already exist.
+Optional environment variables:
 
-The launcher prints a clear reinstall message if optional dependencies were
-disabled and the matching platform package is missing. Windows packages are
-deferred.
+- `DECANT_VERSION`: release to install; defaults to the latest stable release.
+- `DECANT_INSTALL_DIR`: destination; defaults to `~/.local/bin`.
+- `DECANT_NO_MODIFY_PATH=1`: do not edit a shell startup file.
+- `DECANT_BASE_URL`: release mirror with the same asset layout as GitHub.
+
+When the GitHub CLI is available, the installer also performs a best-effort
+provenance check.
+
+## Homebrew
+
+```sh
+brew install dosu-ai/dosu/decant
+```
+
+Homebrew users who tap first can install the short formula name:
+
+```sh
+brew tap dosu-ai/dosu
+brew trust dosu-ai/dosu   # Homebrew 6 or newer
+brew install decant
+```
 
 ## Docker
-
-The image compiles Decant in an `oven/bun` builder and runs the standalone
-binary in a non-root Debian runtime. Docker Desktop file watching across bind
-mounts is unreliable, so the default command disables native filesystem watches
-and relies on the periodic sweep.
-
-```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/dosu-ai/decant:local .
-```
-
-Local run:
 
 ```sh
 docker run --rm \
@@ -71,28 +63,57 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
-  ghcr.io/dosu-ai/decant:local
+  -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
+  ghcr.io/dosu-ai/decant:latest
 ```
 
-Use a locally built tag such as `ghcr.io/dosu-ai/decant:local` until the first
-Release workflow publishes `ghcr.io/dosu-ai/decant:latest`.
+The image runs as a non-root user and stores the archive in
+`/var/lib/decant`. Keep the host port bound to `127.0.0.1`; Decant's local API
+has no credentials.
 
-The container binds `0.0.0.0` inside the network namespace so Docker port
-publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.
-Do not use `-p 3000:3000` unless you intentionally want to expose the archive
-port on every host interface. The image sets
-`DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from Docker bridge
-peers can pass the local-only API guard; override it with a narrower peer or
-CIDR if your Docker network uses a different gateway.
+The image trusts a verified container bridge gateway so host traffic forwarded
+through that loopback port can reach it. Custom Docker networks, Podman,
+Kubernetes, and host networking can return `403 forbidden remote`. In those
+environments, set `DECANT_TRUSTED_PEERS` to the exact forwarding IP or a narrow
+IPv4 CIDR. Every trusted address can read and mutate the archive.
 
 ## Source
 
-Source remains the contributor path and the fastest dev loop:
+Source builds need Bun 1.3 or newer:
 
 ```sh
+git clone https://github.com/dosu-ai/decant.git
+cd decant
 bun run dev
 ```
 
-`bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, performs
-the startup sync, and keeps the archive current. Source installs require Bun.
-npm and Docker installs do not.
+Build a native binary for the current platform with:
+
+```sh
+bun run scripts/build-binaries.ts --target native
+```
+
+## Verify a release
+
+GitHub Releases include four platform tarballs, `SHA256SUMS`, and a Sigstore
+bundle. Download the latest release and verify the matching tarball:
+
+```sh
+gh release download -R dosu-ai/decant
+sha256sum -c SHA256SUMS --ignore-missing      # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
+```
+
+To check npm provenance, install into a scratch project and run
+`npm audit signatures`. GHCR images also carry GitHub attestations.
+
+If macOS Gatekeeper blocks a tarball downloaded manually through a browser,
+clear the quarantine attribute from that binary:
+
+```sh
+xattr -d com.apple.quarantine ./decant
+```
+
+npm, Homebrew, and the shell installer do not set the browser quarantine
+attribute.

@@ -1,0 +1,4 @@
+{"sessionId":"gemini-mcp-synthetic","projectHash":"synthetic-project","startTime":"2026-06-03T10:00:00.000Z","lastUpdated":"2026-06-03T10:00:03.000Z","kind":"main"}
+{"id":"user-1","timestamp":"2026-06-03T10:00:01.000Z","type":"user","content":"Look up the synthetic topic."}
+{"id":"assistant-1","timestamp":"2026-06-03T10:00:02.000Z","type":"gemini","model":"example-model","content":[],"tokens":{"input":3,"output":1,"cached":0,"thoughts":0},"toolCalls":[{"id":"mcp-call-1","name":"docs_lookup","displayName":"lookup (docs MCP Server)","args":{"topic":"synthetic"},"result":[{"functionResponse":{"id":"mcp-call-1","name":"docs_lookup","response":{"output":"synthetic result"}}}],"status":"success","timestamp":"2026-06-03T10:00:02.500Z"}]}
+{"id":"tool-1","timestamp":"2026-06-03T10:00:03.000Z","type":"user","content":[{"functionResponse":{"id":"mcp-call-1","name":"docs_lookup","response":{"output":"synthetic result"}}}]}

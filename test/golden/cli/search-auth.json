@@ -2,26 +2,56 @@
   {
     "session_title": "Refactor the auth module",
     "tool": "claude_code",
-    "snippet": "Refactor the [auth] module"
+    "snippet": "Refactor the [auth] module",
+    "message_seq": 0,
+    "timestamp": "2026-05-03T10:00:00.000Z",
+    "project": "/Users/dev/proj",
+    "role": "user",
+    "block_type": "text",
+    "href": "/sessions/<ID>#message-0"
   },
   {
     "session_title": "Refactor the auth module",
     "tool": "claude_code",
-    "snippet": "explore the [auth] flows"
+    "snippet": "explore the [auth] flows",
+    "message_seq": 8,
+    "timestamp": "2026-05-03T10:13:00.000Z",
+    "project": "/Users/dev/proj",
+    "role": "user",
+    "block_type": "text",
+    "href": "/sessions/<ID>#message-8"
   },
   {
     "session_title": "Fix the failing auth test",
     "tool": "claude_code",
-    "snippet": "Fix the failing [auth] test"
+    "snippet": "Fix the failing [auth] test",
+    "message_seq": 0,
+    "timestamp": "2026-05-01T10:00:00.000Z",
+    "project": "/Users/dev/proj",
+    "role": "user",
+    "block_type": "text",
+    "href": "/sessions/<ID>#message-0"
   },
   {
     "session_title": "Refactor the auth module",
     "tool": "claude_code",
-    "snippet": "Agent"
+    "snippet": "{\"prompt\":\"explore the [auth] flows\"}",
+    "message_seq": 1,
+    "timestamp": "2026-05-03T10:01:00.000Z",
+    "project": "/Users/dev/proj",
+    "role": "assistant",
+    "block_type": "tool_use",
+    "href": "/sessions/<ID>#message-1"
   },
   {
     "session_title": "Refactor the auth module",
     "tool": "claude_code",
-    "snippet": "Edit"
+    "snippet": "{\"file_path\":\"/Users/dev/proj/src/main.rs\",\"new_string\":\"fn [auth]…",
+    "message_seq": 3,
+    "timestamp": "2026-05-03T10:02:00.000Z",
+    "project": "/Users/dev/proj",
+    "role": "assistant",
+    "block_type": "tool_use",
+    "href": "/sessions/<ID>#message-3"
   }
 ]

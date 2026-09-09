@@ -1,6 +1,9 @@
--- decant:schema_version=10
--- Effective decant schema (migrations 1..8 applied), frozen at the
--- pre-typescript cutover. Do not edit without updating schema tests.
+-- decant:schema_version=23
+-- Effective decant schema (migrations 1..23 applied), frozen as the current
+-- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
+-- enrichment changes can reprocess existing sources automatically once. v23
+-- indexes tool_call in the order the tool-call list pages through.
+-- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -26,6 +29,9 @@ CREATE TABLE session (
   cwd TEXT,
   git_branch TEXT,
   model TEXT,
+  reasoning_effort TEXT,
+  reasoning_effort_levels TEXT NOT NULL DEFAULT '[]',
+  reasoning_effort_checked INTEGER NOT NULL DEFAULT 0,
   cli_version TEXT,
   started_at TEXT,
   ended_at TEXT,
@@ -65,6 +71,10 @@ CREATE TABLE session (
   active_seconds INTEGER NOT NULL DEFAULT 0,
   outcome TEXT,
   work_type TEXT,
+  -- Context-window rollups materialized from per-message usage at ingest;
+  -- peak_context_tokens IS NULL marks a session that still needs the backfill.
+  context_window_tokens INTEGER,
+  peak_context_tokens INTEGER,
   UNIQUE(tool, source_session_id)
 );
 CREATE TABLE message (
@@ -108,7 +118,9 @@ CREATE TABLE tool_call (
   tool_base_name TEXT,
   tool_use_id TEXT,
   input TEXT,
+  input_bytes INTEGER,
   is_error INTEGER,
+  has_result INTEGER,
   output_preview TEXT,
   output_bytes INTEGER,
   duration_ms INTEGER,
@@ -131,6 +143,7 @@ CREATE TABLE ingest_source (
   size INTEGER,
   mtime INTEGER,
   hash TEXT,
+  ingest_revision INTEGER NOT NULL DEFAULT 0,
   session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
   line_count INTEGER,
   status TEXT,
@@ -142,6 +155,7 @@ CREATE TABLE ingest_issue (
   source_path TEXT,
   line_no INTEGER,
   error TEXT,
+  code TEXT NOT NULL DEFAULT 'unparsed_line',
   raw_line TEXT,
   created_at TEXT
 );
@@ -151,8 +165,22 @@ CREATE TABLE model_pricing (
   output_per_mtok REAL,
   cache_read_per_mtok REAL,
   cache_write_per_mtok REAL,
+  cache_write_1h_per_mtok REAL,
   source TEXT,
   updated_at TEXT
+);
+CREATE TABLE session_economics (
+  session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
+  format_version INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  computed_at TEXT NOT NULL
+);
+CREATE TABLE session_user_state (
+  tool TEXT NOT NULL,
+  source_session_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('archived', 'deleted')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tool, source_session_id)
 );
 CREATE TABLE recommendation (
   key            TEXT PRIMARY KEY,
@@ -166,6 +194,8 @@ CREATE TABLE recommendation (
   link_label     TEXT,
   icon           TEXT,
   tone           TEXT,
+  impact_label   TEXT,
+  impact_label_checked INTEGER NOT NULL DEFAULT 1,
   score          REAL,
   status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
   status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
@@ -185,6 +215,7 @@ CREATE INDEX idx_block_session ON block(session_id);
 CREATE INDEX idx_block_message ON block(message_id, ordinal);
 CREATE INDEX idx_block_type ON block(type);
 CREATE INDEX idx_block_tool ON block(tool_name);
+CREATE INDEX idx_block_tool_use ON block(session_id, tool_use_id);
 CREATE INDEX idx_toolcall_session ON tool_call(session_id);
 CREATE INDEX idx_toolcall_kind ON tool_call(tool_kind);
 CREATE INDEX idx_toolcall_server ON tool_call(mcp_server);
@@ -198,9 +229,12 @@ CREATE INDEX idx_toolcall_call_block ON tool_call(call_block_id);
 CREATE INDEX idx_toolcall_result_block ON tool_call(result_block_id);
 CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
+CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
+CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
-  content='block', content_rowid='id'
+  content='block', content_rowid='id',
+  prefix='2 3'
 );
 CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

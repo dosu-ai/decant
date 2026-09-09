@@ -10,11 +10,20 @@
   },
   {
     "key": "gpt-5.4",
-    "sessions": 3,
+    "sessions": 4,
     "input_tokens": 1500,
     "output_tokens": 390,
     "reasoning_tokens": 140,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.00985
+  },
+  {
+    "key": "example-model",
+    "sessions": 2,
+    "input_tokens": 18,
+    "output_tokens": 15,
+    "reasoning_tokens": 2,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0
   }
 ]

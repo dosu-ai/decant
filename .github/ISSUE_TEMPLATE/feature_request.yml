@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a change to what decant does.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        decant is local-first and offline: it makes no outbound runtime network calls
+        and no LLM calls. Proposals that need either are out of scope. Everything else
+        is fair game.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that decant makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should decant do instead? A command sketch or example output helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing commands, flags, or workarounds you tried, and why they fall short.

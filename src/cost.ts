@@ -208,8 +208,11 @@ function canonicalModel(raw: string): string | null {
     return "gpt-5.6-cyber";
   }
 
+  if (model === "gpt-6-astra") {
+    return "gpt-6-astra";
+  }
+
   for (const key of [
-    "gpt-6-astra",
     "gpt-5.6-cyber",
     "gpt-5.6-sol",
     "gpt-5.6-terra",

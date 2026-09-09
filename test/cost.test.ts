@@ -160,6 +160,10 @@ describe("estimateCost", () => {
     }
     expect(isPriceable("gpt-6")).toBe(false);
     expect(isPriceable("gpt-6-unpublished")).toBe(false);
+    for (const model of ["gpt-6-astra-pro", "gpt-6-astral", "openai/gpt-6-astra-preview"]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, usage, pricing)).toBe(0);
+    }
   });
 
   test("gpt-5.6 uses the published input, cache, and output rates", () => {

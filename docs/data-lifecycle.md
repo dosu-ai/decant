@@ -26,9 +26,13 @@ By default Decant discovers:
   a re-recorded message is stored once.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
-Unchanged files are skipped by metadata and content checks. Watch mode combines
-native filesystem events with a periodic sweep so missed notifications do not
-leave the archive stale.
+Unchanged files are skipped by metadata and content checks unless an updated
+ingest pipeline requires reprocessing them. After a parser correction, the next
+sync re-ingests sources with an older pipeline revision once, refreshing tokens,
+cost estimates, and derived analytics while preserving session IDs and local
+archive state. This requires the source files to remain available. Watch mode
+combines native filesystem events with a periodic sweep so missed notifications
+do not leave the archive stale.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local

@@ -132,7 +132,10 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "assistant") {
       const message = parseAssistant(value, seq);
-      const requestId = stringAt(value, "requestId", "request_id");
+      // Journal content blocks can repeat a message's full usage without a
+      // request id. The API message id still identifies the billable turn.
+      const requestId =
+        stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
       const key = requestId ?? `\0seq${seq}`;
       const [output, visible, hasThinking] = lineReasoningInputs(message);
       const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };

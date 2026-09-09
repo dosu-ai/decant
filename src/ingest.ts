@@ -53,7 +53,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 1;
+export const INGEST_PIPELINE_REVISION = 2;
 
 export interface SyncReport {
   scanned: number;

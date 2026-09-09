@@ -53,6 +53,14 @@ and reasoning usage when the source exposes it. Claude reasoning can be
 estimated by subtraction when the source does not report it directly; the API
 keeps reported and estimated reasoning separate.
 
+Claude journal records can split one API message across content blocks and
+repeat its usage on each record. Decant counts that usage once, grouping by
+`requestId` or `request_id`, with `message.id` as the fallback. It retains the
+usage snapshot with the largest output count and uses the same grouping for
+reasoning estimates. Records with neither identifier are counted separately.
+All content blocks remain in the transcript. Stream `result` usage, when
+present, takes precedence for session totals.
+
 Gemini CLI reports usage per model turn in the Gemini API's shape, which Decant
 normalizes at ingest: the reported prompt count already includes cached
 content, so input is stored net of cache reads, and thought tokens are

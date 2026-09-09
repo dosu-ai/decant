@@ -1277,6 +1277,59 @@ describe("sync", () => {
     db.close();
   });
 
+  test("sync repairs split Claude usage and costs once after a pipeline upgrade", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const sourcePath = join(config.claudeDir, "split.jsonl");
+    write(
+      sourcePath,
+      readFileSync(join(import.meta.dir, "fixtures", "claude-split-message.jsonl"), "utf8"),
+    );
+    const db = openFreshDb(dir);
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      const read = () =>
+        db
+          .query(
+            "SELECT id, total_input_tokens, total_output_tokens, estimated_cost_usd FROM session",
+          )
+          .get() as {
+          id: number;
+          total_input_tokens: number;
+          total_output_tokens: number;
+          estimated_cost_usd: number;
+        };
+      const original = read();
+      expect(original.total_input_tokens).toBe(100);
+      expect(original.total_output_tokens).toBe(200);
+      // Sonnet rates: input 3, output 15, cache read 0.3, 5m write 3.75,
+      // and 1h write 6 dollars per million tokens.
+      expect(original.estimated_cost_usd).toBeCloseTo(
+        (100 * 3 + 200 * 15 + 30 * 0.3 + 15 * 3.75 + 5 * 6) / 1_000_000,
+        10,
+      );
+      expect(setSessionUserState(db, original.id, "archived")).toBe(true);
+      // Simulate stored totals from the parser that billed all three blocks.
+      db.exec(
+        "UPDATE session SET total_input_tokens = total_input_tokens * 3, total_output_tokens = total_output_tokens * 3, estimated_cost_usd = estimated_cost_usd * 3",
+      );
+      db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
+      expect(read()).toEqual(original);
+      expect(db.query("SELECT state FROM session_user_state").get()).toEqual({ state: "archived" });
+      expect(db.query("SELECT COUNT(*) AS n FROM message").get()).toEqual({ n: 3 });
+      expect(db.query("SELECT COUNT(*) AS n FROM tool_call").get()).toEqual({ n: 1 });
+      expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 0 });
+      expect(read()).toEqual(original);
+    } finally {
+      closeDb(db);
+    }
+  });
+
   test("re-ingests unchanged sources once when the ingest pipeline revision advances", () => {
     const dir = freshCase();
     const config: IngestConfig = {

@@ -7,6 +7,50 @@ async function fixture(): Promise<string> {
 }
 
 describe("parseClaudeSession", () => {
+  test("journal content blocks without request ids bill one message and share reasoning", async () => {
+    const content = await Bun.file(
+      join(import.meta.dir, "fixtures", "claude-split-message.jsonl"),
+    ).text();
+    const session = parseClaudeSession("split", content).session;
+    expect(session.totals).toEqual({
+      input: 100,
+      output: 200,
+      cacheRead: 30,
+      cacheCreation: 20,
+      cacheCreation1h: 5,
+      reasoning: 0,
+    });
+    expect(session.messages.map((message) => message.sourceUuid)).toEqual([
+      "block-thinking",
+      "block-text",
+      "block-tool",
+    ]);
+    expect(
+      session.messages.flatMap((message) => message.blocks.map((block) => block.blockType)),
+    ).toEqual(["thinking", "text", "tool_use"]);
+    expect(session.messages.filter((message) => message.usage != null)).toHaveLength(1);
+    expect(session.estReasoningTokens).toBe(200 - Math.trunc((8 + 18) / 4));
+  });
+
+  test("per-block lines without requestId bill once per message id", () => {
+    // Current Claude Code journals omit the top-level requestId and instead
+    // write one assistant line per content block (apiBlockIndex), each
+    // repeating the message's usage. The API message id identifies the turn.
+    const line = (output: number, block: string) =>
+      `{"type":"assistant","apiBlockIndex":0,"message":{"id":"msg_abc","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":${output},"cache_read_input_tokens":5000,"cache_creation_input_tokens":900},"content":[${block}]}}`;
+    const content = [
+      line(50, '{"type":"thinking","thinking":"","signature":"sig"}'),
+      line(120, '{"type":"text","text":"hello"}'),
+      line(150, '{"type":"tool_use","name":"Read","id":"t1","input":{}}'),
+      '{"type":"assistant","message":{"id":"msg_def","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":30,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"bye"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("s", `${content}\n`).session;
+    expect(session.totals.input).toBe(100 + 10);
+    expect(session.totals.output).toBe(150 + 30);
+    expect(session.totals.cacheRead).toBe(5000);
+    expect(session.totals.cacheCreation).toBe(900);
+  });
+
   test("parses messages blocks and roles", async () => {
     const parsed = parseClaudeSession("sess-claude-1", await fixture());
     const session = parsed.session;

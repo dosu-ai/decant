@@ -108,6 +108,8 @@ describe("estimateCost", () => {
   test("current claude version-specific prices are represented", () => {
     const pricing = defaultPricing();
     const u = usage1m();
+    expect(estimateCost("claude-opus-5-5", u, pricing)).toBeCloseTo(24.0, 6);
+    expect(estimateCost("claude-opus-5", u, pricing)).toBeCloseTo(30.0, 6);
     expect(estimateCost("claude-opus-4-1", u, pricing)).toBeCloseTo(90.0, 6);
     expect(estimateCost("claude-opus-4", u, pricing)).toBeCloseTo(90.0, 6);
     expect(estimateCost("claude-sonnet-5", u, pricing)).toBeCloseTo(12.0, 6);
@@ -161,6 +163,55 @@ describe("estimateCost", () => {
     expect(isPriceable("gpt-6")).toBe(false);
     expect(isPriceable("gpt-6-unpublished")).toBe(false);
     for (const model of ["gpt-6-astra-pro", "gpt-6-astral", "openai/gpt-6-astra-preview"]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, usage, pricing)).toBe(0);
+    }
+  });
+
+  test("Opus 5.5 uses its reduced cache-read rate and both cache-write TTLs", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    for (const model of [
+      "claude-opus-5-5",
+      "claude-opus-5.5",
+      "claude-opus-5-5[1m]",
+      "anthropic.claude-opus-5-5-v1:0",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input: 4,
+        output: 20,
+        cacheRead: 0.4,
+        cacheCreation: 18,
+      });
+      expect(estimateCost(model, usage, pricing)).toBeCloseTo(42.4, 6);
+    }
+    expect(estimateCost("claude-opus-5", usage, pricing)).toBeCloseTo(53.5, 6);
+  });
+
+  test("GPT-6 Sol and Luna use their published input, cache, and output rates", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    for (const [model, expected] of [
+      ["gpt-6-sol", { input: 2, output: 10, cacheRead: 0.4, cacheCreation: 7.5 }],
+      ["gpt-6-luna", { input: 0.1, output: 0.5, cacheRead: 0.02, cacheCreation: 0.375 }],
+    ] as const) {
+      for (const alias of [model, `openai/${model}`, `OpenAI:${model.toUpperCase()}`]) {
+        expect(isPriceable(alias)).toBe(true);
+        expect(estimateCostParts(alias, usage, pricing)).toEqual(expected);
+      }
+    }
+    for (const model of ["gpt-6", "gpt-6-sol-preview", "gpt-6-solar", "gpt-6-luna-pro"]) {
       expect(isPriceable(model)).toBe(false);
       expect(estimateCost(model, usage, pricing)).toBe(0);
     }

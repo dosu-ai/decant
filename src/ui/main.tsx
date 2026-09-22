@@ -5765,13 +5765,26 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
     return <span className="faint">-</span>;
   }
   const tone = brandTone(label);
-  const icon = modelBrandIcon(label, tone);
+  const theme = modelTheme(label);
+  const icon = theme == null ? modelBrandIcon(label, tone) : null;
   return (
-    <Badge mono title={model?.trim() ?? label} tone={tone}>
+    <Badge
+      mono
+      title={model?.trim() ?? label}
+      tone={tone}
+      className={theme == null ? undefined : `model-${theme}`}
+    >
       {icon == null ? null : <BrandMark name={icon} />}
-      {label}
+      <span className="model-label">{label}</span>
     </Badge>
   );
+}
+
+type ModelTheme = "astra" | "sol" | "luna";
+
+function modelTheme(model: string): ModelTheme | null {
+  const tier = /(?:^|[/:])gpt-(?:5\.6|6)-(astra|sol|luna)$/i.exec(model)?.[1];
+  return tier == null ? null : (tier.toLowerCase() as ModelTheme);
 }
 
 function EffortBadge({

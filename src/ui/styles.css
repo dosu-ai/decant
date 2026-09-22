@@ -2939,6 +2939,265 @@ select {
   background: var(--elevated);
 }
 
+/* Quiet full-surface effects sit behind the model name. */
+.badge.model-astra,
+.badge.model-sol,
+.badge.model-luna {
+  position: relative;
+  isolation: isolate;
+  border-color: color-mix(in oklab, currentColor 28%, var(--line));
+  transition:
+    border-color var(--duration-hover) ease,
+    box-shadow var(--duration-hover) ease;
+}
+
+.badge.model-astra .model-label,
+.badge.model-sol .model-label,
+.badge.model-luna .model-label {
+  position: relative;
+  z-index: 1;
+}
+
+.badge.model-astra::before,
+.badge.model-astra::after,
+.badge.model-sol::before,
+.badge.model-sol::after,
+.badge.model-luna::before,
+.badge.model-luna::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+}
+
+.badge.model-astra {
+  --model-art:
+    radial-gradient(
+      ellipse 62px 13px at 30% 115%,
+      color-mix(in oklab, var(--violet-300) 18%, transparent),
+      transparent 82%
+    ),
+    radial-gradient(
+      ellipse 65px 15px at 76% -12%,
+      color-mix(in oklab, var(--blue-300) 14%, transparent),
+      transparent 84%
+    );
+  background-color: var(--bg-components-badge-violet);
+  background-image: var(--model-art);
+  color: var(--bg-components-badge-violet-accent);
+}
+
+.badge.model-astra::before {
+  background:
+    radial-gradient(circle at 12% 20%, currentColor 0 1px, transparent 1.6px),
+    radial-gradient(circle at 43% 82%, currentColor 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 78% 23%, currentColor 0 1px, transparent 1.6px);
+  animation: model-star-twinkle 2.8s ease-in-out infinite alternate;
+}
+
+.badge.model-astra::after {
+  background:
+    radial-gradient(circle at 28% 75%, currentColor 0 0.9px, transparent 1.6px),
+    radial-gradient(circle at 61% 18%, currentColor 0 0.8px, transparent 1.4px),
+    radial-gradient(circle at 91% 72%, currentColor 0 1px, transparent 1.7px);
+  animation: model-star-twinkle 3.7s ease-in-out -1.4s infinite alternate-reverse;
+}
+
+.badge.model-sol {
+  --model-art: linear-gradient(
+    to top,
+    color-mix(in oklab, var(--orange-300) 22%, transparent),
+    transparent 58%
+  );
+  background-color: var(--bg-components-badge-red);
+  background-image: var(--model-art);
+  color: color-mix(in oklab, var(--fg) 80%, var(--red-600));
+}
+
+.badge.model-sol::before {
+  inset: -5px 0;
+  background:
+    radial-gradient(
+      ellipse 34px 24px at 8% 110%,
+      color-mix(in oklab, var(--orange-300) 72%, transparent),
+      transparent 75%
+    ),
+    radial-gradient(
+      ellipse 35px 26px at 47% 112%,
+      color-mix(in oklab, var(--red-400) 70%, transparent),
+      transparent 75%
+    ),
+    radial-gradient(
+      ellipse 34px 24px at 86% 108%,
+      color-mix(in oklab, var(--orange-300) 72%, transparent),
+      transparent 75%
+    );
+  animation: model-sol-flicker 3.8s ease-in-out infinite alternate;
+}
+
+.badge.model-sol::after {
+  background:
+    radial-gradient(circle at 12% 68%, var(--orange-300) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 32% 28%, var(--red-400) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 54% 72%, var(--orange-300) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 76% 35%, var(--red-400) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 91% 78%, var(--orange-300) 0 1px, transparent 1.7px);
+  animation: model-sol-embers 4.6s linear infinite;
+}
+
+.badge.model-luna {
+  background: color-mix(in oklab, var(--bg-components-badge-blue) 82%, var(--blue-800));
+  color: var(--bg-components-badge-blue-accent);
+}
+
+.badge.model-luna::before {
+  background:
+    radial-gradient(
+      ellipse at 48% 115%,
+      color-mix(in oklab, var(--blue-300) 62%, transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      ellipse at 80% -25%,
+      color-mix(in oklab, var(--cyan-300) 32%, transparent),
+      transparent 70%
+    );
+  animation: model-luna-pulse 3.6s ease-in-out infinite alternate;
+}
+
+.badge.model-luna::after {
+  background: radial-gradient(
+    ellipse 65px 23px at 50% 150%,
+    transparent 61%,
+    color-mix(in oklab, var(--cyan-300) 62%, transparent) 65%,
+    transparent 70%
+  );
+  animation: model-luna-pulse 5.2s ease-in-out -1.1s infinite alternate;
+}
+
+/* Light mode uses clear, quiet chips; the ambient artwork belongs to dark mode. */
+:root:not([data-theme="dark"]) .badge:is(.model-astra, .model-sol, .model-luna) {
+  background-color: color-mix(in oklab, var(--elevated) 96%, currentColor);
+  background-image: none;
+}
+
+:root:not([data-theme="dark"]) .badge.model-sol {
+  color: var(--red-800);
+}
+
+:root:not([data-theme="dark"]) .badge:is(.model-astra, .model-sol, .model-luna)::before,
+:root:not([data-theme="dark"]) .badge:is(.model-astra, .model-sol, .model-luna)::after {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .badge.model-astra {
+    background-color: var(--bg-components-badge-violet);
+    background-image: var(--model-art);
+  }
+
+  :root:not([data-theme]) .badge.model-sol {
+    background-color: var(--bg-components-badge-red);
+    background-image: var(--model-art);
+    color: color-mix(in oklab, var(--fg) 80%, var(--red-600));
+  }
+
+  :root:not([data-theme]) .badge.model-luna {
+    background-color: color-mix(in oklab, var(--bg-components-badge-blue) 82%, var(--blue-800));
+  }
+
+  :root:not([data-theme]) .badge:is(.model-astra, .model-sol, .model-luna)::before,
+  :root:not([data-theme]) .badge:is(.model-astra, .model-sol, .model-luna)::after {
+    display: block;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .badge.model-astra:hover,
+  .badge.model-sol:hover,
+  .badge.model-luna:hover,
+  .sessions-table tbody tr:focus-within .badge.model-astra,
+  .sessions-table tbody tr:focus-within .badge.model-sol,
+  .sessions-table tbody tr:focus-within .badge.model-luna {
+    border-color: color-mix(in oklab, currentColor 55%, var(--line));
+    box-shadow: 0 0 0 2px color-mix(in oklab, currentColor 10%, transparent);
+  }
+
+  .badge.model-astra:hover::before,
+  .badge.model-astra:hover::after,
+  .sessions-table tbody tr:focus-within .badge.model-astra::before,
+  .sessions-table tbody tr:focus-within .badge.model-astra::after {
+    animation-duration: 1.9s;
+  }
+
+  .badge.model-sol:hover::before,
+  .sessions-table tbody tr:focus-within .badge.model-sol::before {
+    animation-duration: 2.8s;
+  }
+
+  .badge.model-luna:hover::before,
+  .sessions-table tbody tr:focus-within .badge.model-luna::before {
+    animation-duration: 2.4s;
+  }
+
+  .badge.model-luna:hover::after,
+  .sessions-table tbody tr:focus-within .badge.model-luna::after {
+    animation-duration: 2.8s;
+  }
+}
+
+@keyframes model-star-twinkle {
+  from {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes model-sol-flicker {
+  from {
+    opacity: 0.55;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 0.92;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes model-sol-embers {
+  from {
+    opacity: 0.6;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 0.15;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes model-luna-pulse {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 0.85;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge.model-astra::before,
+  .badge.model-astra::after,
+  .badge.model-sol::before,
+  .badge.model-sol::after,
+  .badge.model-luna::before,
+  .badge.model-luna::after {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .badge.tone-gemini {
   background: color-mix(in oklab, var(--gemini) 12%, transparent);
 }

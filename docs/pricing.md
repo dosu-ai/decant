@@ -1,14 +1,18 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-Anthropic and current OpenAI coding-agent rates were last verified on
-September 9, 2026 against the sources below. Legacy OpenAI rates retain their
-September 2, 2026 verification, and Gemini rates were checked September 5, 2026.
+Claude Opus 5.5 and GPT-6 Sol and Luna rates were verified on September 22, 2026
+against their provider model pages below. Other Anthropic and current OpenAI
+coding-agent rates retain their September 9, 2026 verification. Legacy OpenAI
+rates were checked September 2, 2026, and Gemini rates September 5, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+- [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
 - [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
+- [OpenAI GPT-6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6-sol)
+- [OpenAI GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
 - [OpenAI Codex pricing](https://developers.openai.com/codex/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
@@ -24,6 +28,7 @@ provider does not publish a first-party API token price for that model slug.
 | --- | ---: | ---: | ---: | ---: |
 | Claude Fable 5.1, Mythos 5.1 | $10.00 | $0.25 | $12.50 / $20.00 | $50.00 |
 | Claude Fable 5, Mythos 5 | $10.00 | $1.00 | $12.50 / $20.00 | $50.00 |
+| Claude Opus 5.5 | $4.00 | $0.20 | $5.00 / $8.00 | $20.00 |
 | Claude Opus 5, 4.8, 4.7, 4.6, 4.5 | $5.00 | $0.50 | $6.25 / $10.00 | $25.00 |
 | Claude Opus 4.1, 4 | $15.00 | $1.50 | $18.75 / $30.00 | $75.00 |
 | Claude Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
@@ -31,6 +36,8 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
+| GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
+| GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
 | GPT-5.6 Sol, GPT-5.6, Daybreak Blue | $4.00 | $0.40 | $5.00 | $20.00 |
 | GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
 | GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
@@ -56,14 +63,15 @@ provider does not publish a first-party API token price for that model slug.
 | Gemini image, TTS, live, transcribe, native-audio, computer-use variants | — | — | — | — |
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
-cache writes before GPT-5.6 have no additional fee; GPT-5.6 and GPT-6 Astra
-bill cache writes at 1.25 times the uncached-input rate. Gemini bills cache storage
-by the token-hour, so Decant maps the equivalent write charge to approximately
-the input rate for typical session-length holds.
+cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
+models above bill cache writes at 1.25 times the uncached-input rate. Gemini
+bills cache storage by the token-hour, so Decant maps the equivalent write
+charge to approximately the input rate for typical session-length holds.
 
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
-effect. Claude Fable 5.1 and Mythos 5.1 keep Fable 5's input, cache-write, and
+effect. Claude Opus 5.5 has a lower input, output, and cache-read rate than
+Opus 5. Claude Fable 5.1 and Mythos 5.1 keep Fable 5's input, cache-write, and
 output rates but reduce cache reads from $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
 Google's Gemini 3.7 Flash and 3.6 Flash listed above carry a promotional rate

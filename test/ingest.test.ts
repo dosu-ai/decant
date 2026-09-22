@@ -1496,6 +1496,55 @@ describe("sync", () => {
     db.close();
   });
 
+  test("ingests new model costs consistently across recorded effort levels", () => {
+    for (const [model, tool, effort, expectedCost, expectedCacheWrite] of [
+      ["claude-opus-5-5", "claude", "medium", 0.0262, 5],
+      ["claude-opus-5-5", "claude", "max", 0.0262, 5],
+      ["gpt-6-sol", "codex", "low", 0.00258, 2.5],
+      ["gpt-6-sol", "codex", "xhigh", 0.00258, 2.5],
+      ["gpt-6-luna", "codex", "none", 0.000129, 0.125],
+      ["gpt-6-luna", "codex", "high", 0.000129, 0.125],
+    ] as const) {
+      const dir = freshCase();
+      const config: IngestConfig = {
+        claudeDir: join(dir, "claude"),
+        codexDir: join(dir, "codex"),
+      };
+      const source = fixture(tool, "sample.jsonl")
+        .replaceAll(tool === "claude" ? '"claude-opus-4-7"' : '"gpt-5.4"', `"${model}"`)
+        .replaceAll(
+          tool === "claude" ? '"type":"assistant","uuid"' : '"effort":"high"',
+          tool === "claude"
+            ? `"type":"assistant","effort":"${effort}","uuid"`
+            : `"effort":"${effort}"`,
+        );
+      write(
+        tool === "claude"
+          ? join(config.claudeDir, "proj", "sess.jsonl")
+          : join(config.codexDir, "sessions", `rollout-${model}.jsonl`),
+        source,
+      );
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(
+        db
+          .query(
+            "SELECT model, reasoning_effort, reasoning_effort_levels, estimated_cost_usd FROM session",
+          )
+          .get(),
+      ).toEqual({
+        model,
+        reasoning_effort: effort,
+        reasoning_effort_levels: JSON.stringify([effort]),
+        estimated_cost_usd: expect.closeTo(expectedCost, 8),
+      });
+      expect(
+        db.query("SELECT cache_write_per_mtok FROM model_pricing WHERE model = ?1").get(model),
+      ).toEqual({ cache_write_per_mtok: expectedCacheWrite });
+      db.close();
+    }
+  });
+
   test("reprices retained sessions and activity costs atomically without replacing user state", () => {
     const dir = freshCase();
     const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };

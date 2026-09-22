@@ -59,6 +59,7 @@ export function defaultPricing(): Map<string, Price> {
   return new Map<string, Price>([
     ["claude-fable-5-1", claudePrice(10.0, 50.0, 0.025)],
     ["claude-fable", claudePrice(10.0, 50.0)],
+    ["claude-opus-5-5", claudePrice(4.0, 20.0, 0.05)],
     ["claude-opus", claudePrice(5.0, 25.0)],
     ["claude-opus-4.1", claudePrice(15.0, 75.0)],
     ["claude-opus-4", claudePrice(15.0, 75.0)],
@@ -67,6 +68,8 @@ export function defaultPricing(): Map<string, Price> {
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
     ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
+    ["gpt-6-sol", openAiPrice(2.0, 0.2, 10.0, 1.25)],
+    ["gpt-6-luna", openAiPrice(0.1, 0.01, 0.5, 1.25)],
     ["gpt-5.6-sol", openAiPrice(4.0, 0.4, 20.0, 1.25)],
     ["gpt-5.6-terra", openAiPrice(2.0, 0.2, 12.0, 1.25)],
     ["gpt-5.6-luna", openAiPrice(0.2, 0.02, 1.2, 1.25)],
@@ -154,6 +157,9 @@ function canonicalModel(raw: string): string | null {
       return "claude-fable";
     }
     if (model.includes("opus")) {
+      if (/(?:opus-5(?:-|\.)5)(?:$|-|\[)/.test(model)) {
+        return "claude-opus-5-5";
+      }
       if (model.includes("opus-4-1") || model.includes("opus-4.1")) {
         return "claude-opus-4.1";
       }
@@ -208,8 +214,8 @@ function canonicalModel(raw: string): string | null {
     return "gpt-5.6-cyber";
   }
 
-  if (model === "gpt-6-astra") {
-    return "gpt-6-astra";
+  if (model === "gpt-6-astra" || model === "gpt-6-sol" || model === "gpt-6-luna") {
+    return model;
   }
 
   for (const key of [

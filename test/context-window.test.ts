@@ -199,6 +199,8 @@ function seeded(): { db: Database; sessionId: number } {
 describe("contextWindowForSession", () => {
   test("uses published model limits for Claude sessions whose logs omit the window", () => {
     for (const model of [
+      "claude-opus-5-5",
+      "anthropic.claude-opus-5-5-v1:0",
       "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-7",

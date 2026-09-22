@@ -626,6 +626,42 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("source filters scope the economics rollup", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    const codexId = upsertSession(
+      db,
+      parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
+      "/x/codex.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    db.query("UPDATE session SET raw_meta = ?1 WHERE id = ?2").run(
+      JSON.stringify({ originator: "Codex Desktop", source: "vscode" }),
+      codexId,
+    );
+
+    const all = tokenEconomics(db);
+    const claude = tokenEconomics(db, { source: "claude_code" });
+    const codexApp = tokenEconomics(db, { source: "codex_app" });
+
+    expect(claude.totals.estimated_cost_usd).toBeGreaterThan(0);
+    expect(codexApp.totals.estimated_cost_usd).toBeGreaterThan(0);
+    expect(claude.totals.estimated_cost_usd + codexApp.totals.estimated_cost_usd).toBeCloseTo(
+      all.totals.estimated_cost_usd,
+      12,
+    );
+    db.close();
+  });
+
   test("session scope includes nested subagents", () => {
     const db = freshDb();
     const rootId = upsertSession(

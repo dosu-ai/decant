@@ -120,6 +120,42 @@ describe("activity bucket classifier", () => {
   });
 });
 
+describe("Codex JavaScript exec wrapper", () => {
+  test("classifies nested shell commands and patch calls", () => {
+    expect(toolBucket("exec", 'const r = await tools.exec_command({cmd:"rg auth src"});')).toBe(
+      "context",
+    );
+    expect(toolBucket("exec", 'const r = await tools.exec_command({cmd:"pnpm test"});')).toBe(
+      "code",
+    );
+    expect(toolBucket("exec", "text(await tools.apply_patch(patch));")).toBe("code");
+    expect(toolBucket("exec", "const r = await tools.write_stdin({session_id: 1});")).toBe("code");
+    expect(toolBucket("exec", "const r = await tools.web__run({search_query: []});")).toBe(
+      "context",
+    );
+    expect(toolBucket("mcp__posthog__exec", 'tools.exec_command({cmd:"pnpm test"})')).toBe(
+      "context",
+    );
+  });
+
+  test("finds the first edit but not a read-only command", () => {
+    expect(isCodeEditTool("exec", "text(await tools.apply_patch(patch));")).toBe(true);
+    expect(isCodeEditTool("exec", 'const r = await tools.exec_command({cmd:"rg auth src"});')).toBe(
+      false,
+    );
+    expect(
+      isCodeEditTool("exec", 'const r = await tools.exec_command({cmd:"sed -i s/a/b/ src/x.ts"});'),
+    ).toBe(true);
+  });
+
+  test("counts searches inside nested literal commands", () => {
+    expect(countSearches("exec", 'const r = await tools.exec_command({cmd:"rg auth src"});')).toBe(
+      1,
+    );
+    expect(countSearches("exec", 'const r = await tools.exec_command({cmd:"pnpm test"});')).toBe(0);
+  });
+});
+
 describe("Gemini CLI tool names", () => {
   test("classify shell, edit, and plan tools like their Claude and Codex peers", () => {
     expect(toolBucket("run_shell_command", { command: "cargo test --workspace" })).toBe("code");

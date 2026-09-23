@@ -91,6 +91,14 @@ Shell classification is deliberately conservative. Read-only commands such as
 are code. A bucket is an analytical attribution, not a provider billing field
 or a quality judgment.
 
+Current Codex rollouts can wrap tool calls in a JavaScript `exec` program.
+Decant reads literal commands passed to nested `tools.exec_command` calls and
+classifies them with the same shell rules. `tools.apply_patch` counts as code,
+and `tools.write_stdin` polls count as code because they usually retrieve output
+from a long-running build or test. Dynamic command expressions cannot be read
+reliably and default to context. A single `exec` call containing several nested
+tools gets one bucket, with code taking precedence over context.
+
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
@@ -110,10 +118,11 @@ rather than searching a repository, so it does not count.
 
 Search binaries count only when they are the leading command. Searches wrapped
 by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
-Codex also records some shell activity inside a JavaScript `exec` program, and
-those inner commands do not count yet. The statement splitter does not parse
-shell quoting, so text such as `echo "a; grep b"` can add a false search. These
-cases can make the reported shell and Codex search volume too low or too high.
+For Codex JavaScript `exec` programs, literal nested `tools.exec_command`
+commands are counted; dynamic expressions and other nested tools are not.
+The statement splitter does not parse shell quoting, so text such as
+`echo "a; grep b"` can add a false search. These cases can make the reported
+search volume too low or too high.
 
 ## Orientation and implementation
 

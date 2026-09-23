@@ -85,6 +85,12 @@ export function countSearches(toolName: string, input: string | null): number {
     return 0;
   }
   const normalized = localToolName(toolName).toLowerCase();
+  if (toolName === "exec") {
+    return codexExecCommands(input).reduce(
+      (total, command) => total + countSearches("shell", command),
+      0,
+    );
+  }
   if (SEARCH_TOOLS.has(normalized)) {
     return 1;
   }
@@ -111,6 +117,17 @@ export function toolBucket(
   const name = toolName ?? "";
   const baseName = localToolName(name);
   const normalized = baseName.toLowerCase();
+  if (name === "exec") {
+    if (codexExecAppliesPatch(input)) {
+      return "code";
+    }
+    const commands = codexExecCommands(input);
+    if (commands.length > 0) {
+      return commands.some((command) => bashBucket(command) === "code") ? "code" : "context";
+    }
+    // Polls commonly retrieve output from a long-running build or test.
+    return codexExecSource(input).includes("tools.write_stdin(") ? "code" : "context";
+  }
   if (SHELL_TOOLS.has(normalized)) {
     return bashBucket(commandFromInput(input));
   }
@@ -150,6 +167,14 @@ export function isCodeEditTool(
   input?: string | Json,
 ): boolean {
   const normalized = localToolName(toolName ?? "").toLowerCase();
+  if (toolName === "exec") {
+    return (
+      codexExecAppliesPatch(input) ||
+      codexExecCommands(input).some((command) =>
+        SHELL_EDIT_PATTERNS.some((pattern) => pattern.test(command)),
+      )
+    );
+  }
   if (CODE_TOOLS.has(normalized)) {
     return true;
   }
@@ -209,6 +234,49 @@ function commandFromInput(input: string | Json | undefined): string | null {
     }
   }
   return null;
+}
+
+function codexExecSource(input: string | Json | undefined): string {
+  if (input == null) {
+    return "";
+  }
+  const parsed = typeof input === "string" ? parseJson(input) : input;
+  return typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+}
+
+function codexExecAppliesPatch(input: string | Json | undefined): boolean {
+  return /(?:^|[;(\s])(?:await\s+)?tools\.apply_patch\s*\(/m.test(codexExecSource(input));
+}
+
+/** Codex's `exec` payload is JavaScript wrapping tool calls. Extract only
+ * literal `cmd` values from nested `tools.exec_command` calls; dynamic command
+ * expressions stay unclassified rather than guessing from unrelated JS text. */
+function codexExecCommands(input: string | Json | undefined): string[] {
+  const source = codexExecSource(input);
+  const commands: string[] = [];
+  const commandLiteral =
+    /tools\.exec_command\s*\(\s*\{[\s\S]*?\bcmd\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+  for (const match of source.matchAll(commandLiteral)) {
+    const literal = match[1];
+    if (literal == null) {
+      continue;
+    }
+    if (literal.startsWith('"')) {
+      try {
+        const parsed: unknown = JSON.parse(literal);
+        if (typeof parsed === "string") {
+          commands.push(parsed);
+        }
+      } catch {
+        // Malformed literals are source data, not a reason to fail analytics.
+      }
+    } else if (literal.startsWith("'") && !literal.includes("${")) {
+      commands.push(literal.slice(1, -1).replace(/\\'/g, "'").replace(/\\n/g, "\n"));
+    } else if (literal.startsWith("`") && !literal.includes("${")) {
+      commands.push(literal.slice(1, -1).replace(/\\`/g, "`").replace(/\\n/g, "\n"));
+    }
+  }
+  return commands;
 }
 
 function parseJson(value: string): Json | string {

@@ -151,6 +151,35 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("search pages through more than one page of hits without repeating or dropping any", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES (1, 'codex', 'paged', 'Paged', '2026-05-01T10:00:00Z');
+      INSERT INTO message(id, session_id, seq, role, raw) VALUES (1, 1, 0, 'user', '{}');
+    `);
+    const insert = db.prepare(
+      "INSERT INTO block(message_id, session_id, ordinal, type, text) VALUES (1, 1, ?, 'text', ?)",
+    );
+    for (let index = 0; index < 230; index += 1) {
+      insert.run(index, `pagedneedle entry ${index}`);
+    }
+
+    const pages = [0, 100, 200].flatMap(
+      (offset) =>
+        searchPage(db, "pagedneedle", { includeSubagents: true, limit: 100, offset }).results,
+    );
+    expect(pages).toHaveLength(230);
+    const found = search(db, "pagedneedle", 1000);
+    expect(found.map((hit) => hit.block_id)).toEqual(pages.map((hit) => hit.block_id));
+    expect(search(db, "pagedneedle", 200)).toHaveLength(200);
+    expect(search(db, "pagedneedle", 150).map((hit) => hit.block_id)).toEqual(
+      pages.slice(0, 150).map((hit) => hit.block_id),
+    );
+    expect(search(db, "absentneedle", 250)).toEqual([]);
+    db.close();
+  });
+
   test("reads a session summary without the transcript", () => {
     const db = seeded();
     const id = listSessions(db)[0]?.id ?? 0;

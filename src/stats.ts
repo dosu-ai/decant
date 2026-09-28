@@ -135,6 +135,26 @@ function statsScope(
   };
 }
 
+/**
+ * Select-list columns adding nearest-rank duration ordering, for a relation
+ * of rows with a non-null duration_ms. Pair with NEAREST_RANK_PERCENTILES_SQL.
+ */
+export function durationRankSql(partitionBy?: string): string {
+  const partition = partitionBy == null ? "" : `PARTITION BY ${partitionBy}`;
+  return `ROW_NUMBER() OVER (${partition} ORDER BY duration_ms) AS duration_rank,
+                COUNT(*) OVER (${partition}) AS duration_count`;
+}
+
+/** Aggregate columns picking p50 and p95 out of a durationRankSql relation. */
+export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
+                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
+                  THEN duration_ms
+                END) AS p50_ms,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+                  THEN duration_ms
+                END) AS p95_ms`;
+
 export interface ToolStatRow {
   tool_name: string;
   tool_kind: string;
@@ -163,7 +183,7 @@ export function toolUsage(
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
   const statement = db.prepare(
-    `WITH scoped AS (
+    `WITH scoped AS MATERIALIZED (
          SELECT COALESCE(t.tool_name, '') AS tool_name,
                 COALESCE(t.tool_kind, '') AS tool_kind,
                 t.mcp_server, t.is_error,
@@ -173,26 +193,13 @@ export function toolUsage(
        ),
        ranked AS (
          SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                ROW_NUMBER() OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                  ORDER BY duration_ms
-                ) AS duration_rank,
-                COUNT(*) OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                ) AS duration_count
+                ${durationRankSql("tool_name, tool_kind, mcp_server")}
          FROM scoped
          WHERE duration_ms IS NOT NULL
        ),
        latency AS (
          SELECT tool_name, tool_kind, mcp_server,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms
+                ${NEAREST_RANK_PERCENTILES_SQL}
          FROM ranked
          GROUP BY tool_name, tool_kind, mcp_server
        ),
@@ -258,26 +265,13 @@ export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | nu
        ),
        ranked AS (
          SELECT mcp_server, duration_ms,
-                ROW_NUMBER() OVER (
-                  PARTITION BY mcp_server
-                  ORDER BY duration_ms
-                ) AS duration_rank,
-                COUNT(*) OVER (
-                  PARTITION BY mcp_server
-                ) AS duration_count
+                ${durationRankSql("mcp_server")}
          FROM scoped
          WHERE duration_ms IS NOT NULL
        ),
        latency AS (
          SELECT mcp_server,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms
+                ${NEAREST_RANK_PERCENTILES_SQL}
          FROM ranked
          GROUP BY mcp_server
        ),

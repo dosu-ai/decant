@@ -7,6 +7,7 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
+import type { Tool } from "./model.ts";
 import {
   bracketSearchMatches,
   buildFtsQuery,
@@ -20,11 +21,12 @@ import {
   sessionUserStatePredicateForDatabase,
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
+import { durationRankSql, NEAREST_RANK_PERCENTILES_SQL } from "./stats.ts";
 import { preview, previewHeadTail } from "./tools.ts";
 
 export interface SessionSummary {
   id: number;
-  tool: string;
+  tool: Tool;
   source_session_id: string;
   title: string | null;
   project_path: string | null;
@@ -84,7 +86,7 @@ export interface SessionSearchIndexRow {
   id: number;
   title: string | null;
   project: string | null;
-  tool: string;
+  tool: Tool;
   model: string | null;
   started_at: string | null;
 }
@@ -204,7 +206,7 @@ export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
 export interface SearchHit {
   session_id: number;
   session_title: string | null;
-  tool: string;
+  tool: Tool;
   block_id: number;
   snippet: string;
   message_seq: number;
@@ -218,14 +220,18 @@ export interface SearchHit {
 export function search(db: Database, query: string, limitValue = 30): SearchHit[] {
   const limit = normalizeLimit(limitValue, 30, 1000);
   const results: SearchHit[] = [];
+  let total: number | null = null;
   while (results.length < limit) {
+    const pageLimit = Math.min(100, limit - results.length);
     const page = searchPage(db, query, {
       includeSubagents: true,
-      limit: Math.min(100, limit - results.length),
+      includeTotal: total == null,
+      limit: pageLimit,
       offset: results.length,
     });
+    total ??= page.total;
     results.push(...page.results);
-    if (page.results.length === 0 || (page.total != null && results.length >= page.total)) {
+    if (page.results.length < pageLimit || (total != null && results.length >= total)) {
       break;
     }
   }
@@ -452,15 +458,14 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     offset === 0
       ? (db
           .query(
-            `WITH filtered AS (
+            `WITH filtered AS MATERIALIZED (
          SELECT t.is_error, t.duration_ms
          ${joins}
          ${where}
        ),
        ranked AS (
          SELECT duration_ms,
-                ROW_NUMBER() OVER (ORDER BY duration_ms) AS duration_rank,
-                COUNT(*) OVER () AS duration_count
+                ${durationRankSql()}
          FROM filtered
          WHERE duration_ms IS NOT NULL
        )
@@ -468,14 +473,7 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
          (SELECT COUNT(*) FROM filtered) AS calls,
          (SELECT COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
           FROM filtered) AS errors,
-         MAX(CASE
-           WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-           THEN duration_ms
-         END) AS p50_ms,
-         MAX(CASE
-           WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-           THEN duration_ms
-         END) AS p95_ms
+         ${NEAREST_RANK_PERCENTILES_SQL}
        FROM ranked`,
           )
           .get(...params) as ToolCallSummary)

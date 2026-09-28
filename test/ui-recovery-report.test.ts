@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
-import { readUiFile, readUiSource, sourceBetween } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
 const main = readUiSource();
 const server = readFileSync(join(import.meta.dir, "..", "src", "server", "sync.ts"), "utf8");
@@ -91,7 +91,7 @@ describe("coded UI recovery", () => {
   });
 
   test("file filters catch rejected requests and offer a retry", () => {
-    const filesView = sourceBetween(main, "function FilesView(", "function SettingsView(");
+    const filesView = sourceFrom(readUiFile("views/files.tsx"), "function FilesView(");
     expect(filesView).toContain(".catch((reason: unknown)");
     expect(filesView).toContain("<ApiFailureState");
     expect(filesView).toContain("setFilesRetryKey");

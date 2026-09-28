@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readUiSource, sourceBetween } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
 const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
@@ -27,7 +27,7 @@ describe("Tools and MCP presentation", () => {
   test("renders accessible icon-and-text statuses in the table and detail dialog", () => {
     const status = sourceBetween(main, "function ToolCallStatus(", "function DrilldownTableRow(");
     const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
-    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     expect(status).toContain("toolCallStatus(call.is_error, call.has_result)");
     expect(status).toContain("<Badge");
@@ -42,7 +42,7 @@ describe("Tools and MCP presentation", () => {
   });
 
   test("keeps tool and MCP drilldowns independent from stale call filters", () => {
-    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     expect(tools).toContain("const clearedCallFilters = clearToolCallFilters(locationFilters)");
     expect(tools.match(/\.\.\.clearedCallFilters/g)).toHaveLength(2);
@@ -67,7 +67,7 @@ describe("Tools and MCP presentation", () => {
   });
 
   test("uses normalized table colgroups and ellipsizes long tool and server names", () => {
-    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     expect(tools).toContain('toolTableColumns("mcp", durationAvailable)');
     expect(tools).toContain('toolTableColumns("tools", durationAvailable)');
@@ -87,7 +87,7 @@ describe("Tools and MCP presentation", () => {
   });
 
   test("server names are formatted for display only, never for identity", () => {
-    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     // Labels cover both tables, which are limited independently, so a server
     // in one but not the other still reads the same.

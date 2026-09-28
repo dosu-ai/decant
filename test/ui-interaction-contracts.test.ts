@@ -103,7 +103,7 @@ describe("UI interaction contracts", () => {
 
   test("exposes tool-call details as a focus-managed modal with a keyboard entry point", () => {
     const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
-    const tools = sourceBetween(main, "function ToolsView(", "function FilesView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     expect(detail).toContain("useDialogFocusTrap(true, dialogRef, onClose)");
     expect(detail).toContain('aria-modal="true"');

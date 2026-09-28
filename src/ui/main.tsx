@@ -8940,6 +8940,21 @@ function SessionDetailView({
   // that for every turn on the screen.
   const subagents = detail?.subagents;
   const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
+  const detailMessages = detail?.messages;
+  const messages = useMemo(() => renderableMessages(detailMessages ?? []), [detailMessages]);
+  const toc = useMemo(
+    () => (outline == null ? threadToc(messages) : threadTocFromOutline(outline)),
+    [messages, outline],
+  );
+  const compactions = contextWindow?.compactions;
+  const compactionBySeq = useMemo(
+    () => new Map((compactions ?? []).map((compaction) => [compaction.seq, compaction] as const)),
+    [compactions],
+  );
+  const compactionNumberBySeq = useMemo(
+    () => new Map((compactions ?? []).map((compaction, index) => [compaction.seq, index + 1])),
+    [compactions],
+  );
 
   if (error != null) {
     return (
@@ -8955,8 +8970,6 @@ function SessionDetailView({
     return <SessionDetailSkeleton />;
   }
 
-  const messages = renderableMessages(detail.messages);
-  const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
   const stats = threadStats(
     detail.summary,
     messages,
@@ -8965,12 +8978,6 @@ function SessionDetailView({
     detail.totals,
   );
   const subagentRuns = countSubagentRuns(detail.subagents);
-  const compactionBySeq = new Map(
-    (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
-  );
-  const compactionNumberBySeq = new Map(
-    (contextWindow?.compactions ?? []).map((compaction, index) => [compaction.seq, index + 1]),
-  );
   const windowTokens = contextWindow?.window_tokens ?? null;
   const detailTitle = sessionDisplayTitle(detail.summary);
   const archiveAction = archiveActionFor(detail.summary);
@@ -9170,33 +9177,13 @@ function SessionDetailView({
             </div>
             {toc.length === 0 ? <p>No prompts or Dosu calls to list</p> : null}
             {toc.map((item) => (
-              <a
-                aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
-                className={[
-                  item.kind === "dosu" ? "is-dosu" : null,
-                  jumpingToSeq === item.seq ? "is-loading" : null,
-                  activeMessageSeq === item.seq ? "is-current" : null,
-                ]
-                  .filter(isPresent)
-                  .join(" ")}
-                href={`#message-${item.seq}`}
+              <ThreadTocEntry
+                current={activeMessageSeq === item.seq}
+                item={item}
+                jumping={jumpingToSeq === item.seq}
                 key={item.key}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void jumpToMessage(item.seq);
-                }}
-              >
-                <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
-                  {item.kind === "dosu" ? (
-                    <img alt="" src={dosuOfficialUrl} />
-                  ) : (
-                    <Icon name={item.icon} />
-                  )}
-                </span>
-                <span>{item.label}</span>
-                {item.kind === "dosu" ? <em>Dosu</em> : null}
-                {jumpingToSeq === item.seq ? <b>loading</b> : null}
-              </a>
+                onJump={jumpToMessage}
+              />
             ))}
           </div>
         </aside>
@@ -9736,60 +9723,285 @@ function ContextWindowStrip({
   // hot-reloaded page whose effects did not re-run); the observer corrects it.
   const stripWidth = width > 0 ? width : 960;
 
-  const points = timeline.points;
-  const compactions = [...timeline.compactions].sort((a, b) => a.seq - b.seq);
-  const peakLabel =
-    timeline.peak_pct == null
-      ? compact(timeline.peak_tokens)
-      : `${Math.round(timeline.peak_pct * 100)}%`;
+  const layout = useMemo(() => {
+    const points = timeline.points;
+    const compactions = [...timeline.compactions].sort((a, b) => a.seq - b.seq);
+    const peakLabel =
+      timeline.peak_pct == null
+        ? compact(timeline.peak_tokens)
+        : `${Math.round(timeline.peak_pct * 100)}%`;
 
-  const plotLeft = STRIP_PAD_LEFT;
-  const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
-  const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
-  const yAt = (tokens: number) =>
-    STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
+    const plotLeft = STRIP_PAD_LEFT;
+    const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
+    const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
+    const yAt = (tokens: number) =>
+      STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
 
-  const curveLayout = layoutContextCurve(points, compactions, {
-    plotLeft,
-    plotRight,
-    yAt,
-  });
-  const { markerXs, segments, slotWidth, turnOrder, xs } = curveLayout;
-  const xOf = (index: number) => xs[index] ?? plotLeft;
+    const { markerXs, segments, slotWidth, turnOrder, xs } = layoutContextCurve(
+      points,
+      compactions,
+      { plotLeft, plotRight, yAt },
+    );
+    const xOf = (index: number) => xs[index] ?? plotLeft;
 
-  const compactionMarks = compactions.map((compaction, index) => ({
-    compaction,
-    x: markerXs[index] ?? plotLeft,
-  }));
-  const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
+    const compactionMarks = compactions.map((compaction, index) => ({
+      compaction,
+      x: markerXs[index] ?? plotLeft,
+    }));
+    const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
 
-  // Regular turn axis: a boundary tick at each slot edge, labels centered in
-  // their slot for every labelStep-th turn.
-  const labelStep = turnLabelStep(turnOrder.length);
-  const turnMarks = turnOrder.map((turn, index) => ({
-    turn,
-    boundaryX: plotLeft + index * slotWidth,
-    centerX: plotLeft + (index + 0.5) * slotWidth,
-    labeled: index === 0 || turn % labelStep === 0,
-  }));
+    // Regular turn axis: a boundary tick at each slot edge, labels centered in
+    // their slot for every labelStep-th turn.
+    const labelStep = turnLabelStep(turnOrder.length);
+    const turnMarks = turnOrder.map((turn, index) => ({
+      turn,
+      boundaryX: plotLeft + index * slotWidth,
+      centerX: plotLeft + (index + 0.5) * slotWidth,
+      labeled: index === 0 || turn % labelStep === 0,
+    }));
 
-  const lastIndex = points.length - 1;
-  const lastPoint = points[lastIndex];
-  const peakIndex = points.reduce(
-    (best, point, index) =>
-      point.context_tokens > (points[best]?.context_tokens ?? 0) ? index : best,
-    0,
-  );
-  const peakPoint = points[peakIndex];
-  const endX = xOf(lastIndex);
-  const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
-  const peakX = xOf(peakIndex);
-  const peakY = peakPoint == null ? baseY : yAt(peakPoint.context_tokens);
-  const peakLabelOnLeft = peakX > plotLeft + 70;
-  const peakLabelY = Math.max(STRIP_PLOT_TOP + 10, peakY - 7);
-  // The live readout sits inside the plot, above the line when there is room
-  // and below it when the session ended near the ceiling.
-  const endLabelAbove = endY > STRIP_PLOT_TOP + 30;
+    const lastIndex = points.length - 1;
+    const lastPoint = points[lastIndex];
+    const peakIndex = points.reduce(
+      (best, point, index) =>
+        point.context_tokens > (points[best]?.context_tokens ?? 0) ? index : best,
+      0,
+    );
+    const peakPoint = points[peakIndex];
+    const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
+    const peakX = xOf(peakIndex);
+    const peakY = peakPoint == null ? baseY : yAt(peakPoint.context_tokens);
+    return {
+      baseY,
+      compactionGroups,
+      compactionMarks,
+      compactions,
+      endX: xOf(lastIndex),
+      endY,
+      // The live readout sits inside the plot, above the line when there is
+      // room and below it when the session ended near the ceiling.
+      endLabelAbove: endY > STRIP_PLOT_TOP + 30,
+      lastIndex,
+      lastPoint,
+      peakIndex,
+      peakLabel,
+      peakLabelOnLeft: peakX > plotLeft + 70,
+      peakLabelY: Math.max(STRIP_PLOT_TOP + 10, peakY - 7),
+      peakPoint,
+      peakX,
+      peakY,
+      plotLeft,
+      plotRight,
+      points,
+      segments,
+      turnMarks,
+      xOf,
+      xs,
+      yAt,
+    };
+  }, [timeline, stripWidth, windowTokens]);
+  const { baseY, compactionGroups, compactions, lastPoint, peakLabel, points, xOf, xs, yAt } =
+    layout;
+
+  // The static plot depends only on the layout; keeping its elements stable
+  // lets React skip them while the pointer moves and only the hover overlay
+  // and tooltip change. The handlers below only call state setters and onJump.
+  const plot = useMemo(() => {
+    const {
+      baseY,
+      compactionGroups,
+      compactionMarks,
+      compactions,
+      endLabelAbove,
+      endX,
+      endY,
+      lastIndex,
+      lastPoint,
+      peakIndex,
+      peakLabel,
+      peakLabelOnLeft,
+      peakLabelY,
+      peakPoint,
+      peakX,
+      peakY,
+      plotLeft,
+      plotRight,
+      segments,
+      turnMarks,
+      yAt,
+    } = layout;
+    let previousTickLabelX = Number.NEGATIVE_INFINITY;
+    return (
+      <>
+        <rect
+          className="ctx-strip-band"
+          height={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - yAt(windowTokens)}
+          width={plotRight - plotLeft}
+          x={plotLeft}
+          y={yAt(windowTokens)}
+        />
+        <text
+          className="ctx-strip-band-label"
+          x={plotLeft + 4}
+          y={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - 4}
+        >
+          auto-compact zone
+        </text>
+        {[0.25, 0.5, 0.75].map((fraction) => (
+          <g className="ctx-strip-grid" key={`grid-${fraction}`}>
+            <line
+              x1={plotLeft}
+              x2={plotRight}
+              y1={yAt(windowTokens * fraction)}
+              y2={yAt(windowTokens * fraction)}
+            />
+            <text textAnchor="end" x={plotLeft - 8} y={yAt(windowTokens * fraction) + 3.5}>
+              {compact(windowTokens * fraction)}
+            </text>
+          </g>
+        ))}
+        <line
+          className="ctx-strip-window"
+          x1={plotLeft}
+          x2={plotRight}
+          y1={yAt(windowTokens)}
+          y2={yAt(windowTokens)}
+        />
+        <text className="ctx-strip-label" x={plotLeft + 4} y={STRIP_WINDOW_LABEL_Y}>
+          window · {compact(windowTokens)}
+          {timeline.window_inferred ? " (inferred)" : ""}
+        </text>
+        {segments.map((coords) => (
+          <g key={`seg-${coords[0]?.[0] ?? 0}`}>
+            <path className="ctx-strip-area" d={contextCurveAreaPath(coords, baseY)} />
+            <path className="ctx-strip-line" d={contextCurveLinePath(coords)} />
+          </g>
+        ))}
+        <g className="ctx-strip-rug">
+          {turnMarks.slice(1).map((mark) => (
+            <line
+              key={`tick-${mark.turn}`}
+              x1={mark.boundaryX}
+              x2={mark.boundaryX}
+              y1={baseY + 3}
+              y2={baseY + 8}
+            />
+          ))}
+          {turnMarks.map((mark) => {
+            if (!mark.labeled || mark.centerX - previousTickLabelX < 44) {
+              return null;
+            }
+            previousTickLabelX = mark.centerX;
+            return (
+              <text
+                key={`tick-label-${mark.turn}`}
+                textAnchor="middle"
+                x={mark.centerX}
+                y={baseY + 20}
+              >
+                turn {mark.turn}
+              </text>
+            );
+          })}
+        </g>
+        {compactionMarks.map(({ compaction, x }) => (
+          <g className="ctx-strip-compaction" key={`compaction-mark-${compaction.seq}`}>
+            <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
+            <rect
+              fill="transparent"
+              height={baseY - STRIP_PLOT_TOP}
+              width={16}
+              x={x - 8}
+              y={STRIP_PLOT_TOP}
+            >
+              <title>{compactionLabel(compaction)}</title>
+            </rect>
+          </g>
+        ))}
+        {compactionGroups.map((group, groupIndex) => {
+          const first = (group.indexes[0] ?? 0) + 1;
+          const last = (group.indexes.at(-1) ?? 0) + 1;
+          const firstCompaction = compactions[group.indexes[0] ?? 0];
+          const label = first === last ? `${first}` : `${first}–${last}`;
+          const markerWidth = first === last ? 18 : Math.max(28, label.length * 6 + 10);
+          return (
+            <a
+              aria-label={
+                first === last && firstCompaction != null
+                  ? `Compaction ${first}: ${compactionTokenRange(firstCompaction)} tokens`
+                  : `Compactions ${first} through ${last}`
+              }
+              href={`#message-${firstCompaction?.seq ?? 0}`}
+              key={`compaction-group-${first}-${last}`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const seq = firstCompaction?.seq;
+                if (group.indexes.length > 1) {
+                  setHoverIndex(null);
+                  setSelectedCompactionGroup(groupIndex);
+                } else if (seq != null) {
+                  setSelectedCompactionGroup(null);
+                  void onJump(seq);
+                }
+              }}
+              onFocus={() => {
+                setHoverIndex(null);
+                setHoverCompactionGroup(groupIndex);
+                if (group.indexes.length > 1) {
+                  setSelectedCompactionGroup(groupIndex);
+                }
+              }}
+              onMouseEnter={() => {
+                setHoverIndex(null);
+                setHoverCompactionGroup(groupIndex);
+              }}
+              onMouseMove={(event) => event.stopPropagation()}
+            >
+              <g className="ctx-strip-compaction-marker">
+                <rect
+                  height={18}
+                  rx={9}
+                  width={markerWidth}
+                  x={group.x - markerWidth / 2}
+                  y={STRIP_PLOT_TOP - 21}
+                />
+                <text textAnchor="middle" x={group.x} y={STRIP_PLOT_TOP - 8}>
+                  {label}
+                </text>
+              </g>
+            </a>
+          );
+        })}
+        {peakPoint != null && peakIndex !== lastIndex ? (
+          <g className="ctx-strip-peak">
+            <circle cx={peakX} cy={peakY} r={2.5}>
+              <title>
+                Peak {peakLabel} · {compact(peakPoint.context_tokens)} tokens
+              </title>
+            </circle>
+            <text
+              textAnchor={peakLabelOnLeft ? "end" : "start"}
+              x={peakX + (peakLabelOnLeft ? -6 : 6)}
+              y={peakLabelY}
+            >
+              peak {peakLabel}
+            </text>
+          </g>
+        ) : null}
+        <g className="ctx-strip-end">
+          <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
+          <circle cx={endX} cy={endY} r={3}>
+            <title>End · {compact(lastPoint?.context_tokens ?? 0)} tokens</title>
+          </circle>
+          <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
+            {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
+            {compact(lastPoint?.context_tokens ?? 0)}
+          </text>
+        </g>
+      </>
+    );
+  }, [layout, onJump, timeline.window_inferred, windowTokens]);
 
   const handleMove = (event: { clientX: number; currentTarget: SVGSVGElement }) => {
     setHoverCompactionGroup(null);
@@ -9849,8 +10061,6 @@ function ContextWindowStrip({
     void onJump(hovered.seq);
   };
 
-  let previousTickLabelX = Number.NEGATIVE_INFINITY;
-
   return (
     <section className="panel context-window-panel">
       <div className="panel-heading">
@@ -9900,172 +10110,7 @@ function ContextWindowStrip({
                 onMouseMove={handleMove}
                 width={stripWidth}
               >
-                <rect
-                  className="ctx-strip-band"
-                  height={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - yAt(windowTokens)}
-                  width={plotRight - plotLeft}
-                  x={plotLeft}
-                  y={yAt(windowTokens)}
-                />
-                <text
-                  className="ctx-strip-band-label"
-                  x={plotLeft + 4}
-                  y={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - 4}
-                >
-                  auto-compact zone
-                </text>
-                {[0.25, 0.5, 0.75].map((fraction) => (
-                  <g className="ctx-strip-grid" key={`grid-${fraction}`}>
-                    <line
-                      x1={plotLeft}
-                      x2={plotRight}
-                      y1={yAt(windowTokens * fraction)}
-                      y2={yAt(windowTokens * fraction)}
-                    />
-                    <text textAnchor="end" x={plotLeft - 8} y={yAt(windowTokens * fraction) + 3.5}>
-                      {compact(windowTokens * fraction)}
-                    </text>
-                  </g>
-                ))}
-                <line
-                  className="ctx-strip-window"
-                  x1={plotLeft}
-                  x2={plotRight}
-                  y1={yAt(windowTokens)}
-                  y2={yAt(windowTokens)}
-                />
-                <text className="ctx-strip-label" x={plotLeft + 4} y={STRIP_WINDOW_LABEL_Y}>
-                  window · {compact(windowTokens)}
-                  {timeline.window_inferred ? " (inferred)" : ""}
-                </text>
-                {segments.map((coords) => (
-                  <g key={`seg-${coords[0]?.[0] ?? 0}`}>
-                    <path className="ctx-strip-area" d={contextCurveAreaPath(coords, baseY)} />
-                    <path className="ctx-strip-line" d={contextCurveLinePath(coords)} />
-                  </g>
-                ))}
-                <g className="ctx-strip-rug">
-                  {turnMarks.slice(1).map((mark) => (
-                    <line
-                      key={`tick-${mark.turn}`}
-                      x1={mark.boundaryX}
-                      x2={mark.boundaryX}
-                      y1={baseY + 3}
-                      y2={baseY + 8}
-                    />
-                  ))}
-                  {turnMarks.map((mark) => {
-                    if (!mark.labeled || mark.centerX - previousTickLabelX < 44) {
-                      return null;
-                    }
-                    previousTickLabelX = mark.centerX;
-                    return (
-                      <text
-                        key={`tick-label-${mark.turn}`}
-                        textAnchor="middle"
-                        x={mark.centerX}
-                        y={baseY + 20}
-                      >
-                        turn {mark.turn}
-                      </text>
-                    );
-                  })}
-                </g>
-                {compactionMarks.map(({ compaction, x }) => (
-                  <g className="ctx-strip-compaction" key={`compaction-mark-${compaction.seq}`}>
-                    <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
-                    <rect
-                      fill="transparent"
-                      height={baseY - STRIP_PLOT_TOP}
-                      width={16}
-                      x={x - 8}
-                      y={STRIP_PLOT_TOP}
-                    >
-                      <title>{compactionLabel(compaction)}</title>
-                    </rect>
-                  </g>
-                ))}
-                {compactionGroups.map((group, groupIndex) => {
-                  const first = (group.indexes[0] ?? 0) + 1;
-                  const last = (group.indexes.at(-1) ?? 0) + 1;
-                  const firstCompaction = compactions[group.indexes[0] ?? 0];
-                  const label = first === last ? `${first}` : `${first}–${last}`;
-                  const markerWidth = first === last ? 18 : Math.max(28, label.length * 6 + 10);
-                  return (
-                    <a
-                      aria-label={
-                        first === last && firstCompaction != null
-                          ? `Compaction ${first}: ${compactionTokenRange(firstCompaction)} tokens`
-                          : `Compactions ${first} through ${last}`
-                      }
-                      href={`#message-${firstCompaction?.seq ?? 0}`}
-                      key={`compaction-group-${first}-${last}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        const seq = firstCompaction?.seq;
-                        if (group.indexes.length > 1) {
-                          setHoverIndex(null);
-                          setSelectedCompactionGroup(groupIndex);
-                        } else if (seq != null) {
-                          setSelectedCompactionGroup(null);
-                          void onJump(seq);
-                        }
-                      }}
-                      onFocus={() => {
-                        setHoverIndex(null);
-                        setHoverCompactionGroup(groupIndex);
-                        if (group.indexes.length > 1) {
-                          setSelectedCompactionGroup(groupIndex);
-                        }
-                      }}
-                      onMouseEnter={() => {
-                        setHoverIndex(null);
-                        setHoverCompactionGroup(groupIndex);
-                      }}
-                      onMouseMove={(event) => event.stopPropagation()}
-                    >
-                      <g className="ctx-strip-compaction-marker">
-                        <rect
-                          height={18}
-                          rx={9}
-                          width={markerWidth}
-                          x={group.x - markerWidth / 2}
-                          y={STRIP_PLOT_TOP - 21}
-                        />
-                        <text textAnchor="middle" x={group.x} y={STRIP_PLOT_TOP - 8}>
-                          {label}
-                        </text>
-                      </g>
-                    </a>
-                  );
-                })}
-                {peakPoint != null && peakIndex !== lastIndex ? (
-                  <g className="ctx-strip-peak">
-                    <circle cx={peakX} cy={peakY} r={2.5}>
-                      <title>
-                        Peak {peakLabel} · {compact(peakPoint.context_tokens)} tokens
-                      </title>
-                    </circle>
-                    <text
-                      textAnchor={peakLabelOnLeft ? "end" : "start"}
-                      x={peakX + (peakLabelOnLeft ? -6 : 6)}
-                      y={peakLabelY}
-                    >
-                      peak {peakLabel}
-                    </text>
-                  </g>
-                ) : null}
-                <g className="ctx-strip-end">
-                  <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
-                  <circle cx={endX} cy={endY} r={3}>
-                    <title>End · {compact(lastPoint?.context_tokens ?? 0)} tokens</title>
-                  </circle>
-                  <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
-                    {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
-                    {compact(lastPoint?.context_tokens ?? 0)}
-                  </text>
-                </g>
+                {plot}
                 {hovered != null && hoverIndex != null ? (
                   <g className="ctx-strip-hover">
                     <line
@@ -10863,6 +10908,43 @@ function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[
         },
   );
 }
+
+const ThreadTocEntry = memo(function ThreadTocEntry({
+  current,
+  item,
+  jumping,
+  onJump,
+}: {
+  current: boolean;
+  item: ThreadTocItem;
+  jumping: boolean;
+  onJump: (seq: number) => Promise<unknown>;
+}) {
+  return (
+    <a
+      aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
+      className={[
+        item.kind === "dosu" ? "is-dosu" : null,
+        jumping ? "is-loading" : null,
+        current ? "is-current" : null,
+      ]
+        .filter(isPresent)
+        .join(" ")}
+      href={`#message-${item.seq}`}
+      onClick={(event) => {
+        event.preventDefault();
+        void onJump(item.seq);
+      }}
+    >
+      <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
+        {item.kind === "dosu" ? <img alt="" src={dosuOfficialUrl} /> : <Icon name={item.icon} />}
+      </span>
+      <span>{item.label}</span>
+      {item.kind === "dosu" ? <em>Dosu</em> : null}
+      {jumping ? <b>loading</b> : null}
+    </a>
+  );
+});
 
 type ThreadTocItem = {
   key: string;

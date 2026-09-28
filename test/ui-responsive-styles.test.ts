@@ -25,7 +25,7 @@ describe("responsive session detail styles", () => {
   });
 
   test("wraps unbroken transcript content instead of widening the page", () => {
-    expect(rule(".text-block,\n.thinking-block p")).toContain("overflow-wrap: anywhere");
+    expect(rule(".thinking-block p")).toContain("overflow-wrap: anywhere");
     expect(rule(".special-block p")).toContain("overflow-wrap: anywhere");
     expect(rule(".special-block .realtime-line p")).toContain("overflow-wrap: anywhere");
     expect(rule(".tool-shell .transcript-code-pre")).toContain("white-space: pre-wrap");

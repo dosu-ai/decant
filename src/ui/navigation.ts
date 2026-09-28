@@ -13,14 +13,13 @@ export interface NavDestination {
 }
 
 /** The landing route. Analytics answers the question the tool exists for. */
-export const HOME_LABEL = "Analytics";
-export const HOME_KEY = "analytics";
-export const NOT_FOUND_LABEL = "Not found";
-export const NOT_FOUND_KEY = "not-found";
-export const ANALYTICS_REPORT_LABEL = "Analytics report";
-export const ANALYTICS_REPORT_KEY = "analytics-report";
-export const SESSION_REPORT_LABEL = "Session report";
-export const SESSION_REPORT_KEY = "session-report";
+const HOME_KEY = "analytics";
+const NOT_FOUND_LABEL = "Not found";
+const NOT_FOUND_KEY = "not-found";
+const ANALYTICS_REPORT_LABEL = "Analytics report";
+const ANALYTICS_REPORT_KEY = "analytics-report";
+const SESSION_REPORT_LABEL = "Session report";
+const SESSION_REPORT_KEY = "session-report";
 
 // Keep `/analytics` as an explicit alias for existing links and bookmarks.
 const ALIASES: Record<string, string> = { "/analytics": HOME_KEY };

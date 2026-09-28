@@ -152,7 +152,7 @@ export function TranscriptCodeBlock({
   );
 }
 
-export function currentTranscriptTheme(): TranscriptTheme {
+function currentTranscriptTheme(): TranscriptTheme {
   if (typeof document === "undefined") {
     return "light";
   }

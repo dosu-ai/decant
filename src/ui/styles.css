@@ -3540,11 +3540,6 @@ mark {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.chart-stack {
-  display: grid;
-  gap: 18px;
-}
-
 .chart-panel-body {
   padding: 16px 18px 12px;
 }
@@ -3732,51 +3727,6 @@ mark {
   color: var(--faint);
   font-size: 12px;
   text-align: right;
-}
-
-.analytics-chart .chart-grid {
-  stroke: var(--line);
-  stroke-dasharray: 3 5;
-  stroke-width: 1;
-}
-
-.analytics-chart .chart-axis {
-  stroke: var(--line);
-  stroke-width: 1;
-}
-
-.analytics-chart .chart-x-label,
-.analytics-chart .chart-y-label {
-  fill: var(--faint);
-  font-size: var(--text-micro-size);
-  font-weight: var(--font-weight-medium);
-  vector-effect: non-scaling-stroke;
-}
-
-.analytics-chart .chart-x-label {
-  text-anchor: middle;
-}
-
-.analytics-chart .chart-y-label {
-  text-anchor: end;
-}
-
-.analytics-chart .chart-bar {
-  fill: var(--accent);
-}
-
-.analytics-chart .chart-area {
-  fill: currentColor;
-  opacity: 0.1;
-}
-
-.analytics-chart .chart-line {
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
 }
 
 .activity-summary {
@@ -3993,39 +3943,6 @@ mark {
   color: var(--muted);
   font-size: 12px;
   text-align: right;
-}
-
-.histogram {
-  display: grid;
-  align-items: end;
-  grid-template-columns: repeat(auto-fit, minmax(12px, 1fr));
-  gap: 3px;
-  min-height: 190px;
-}
-
-.histogram span {
-  display: grid;
-  min-width: 0;
-  grid-template-rows: 1fr auto;
-  gap: 6px;
-}
-
-.histogram i {
-  align-self: end;
-  display: block;
-  width: 100%;
-  min-height: 3px;
-  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
-  background: var(--accent);
-}
-
-.histogram b {
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 12px;
-  font-weight: var(--font-weight-strong);
-  text-align: center;
-  text-overflow: clip;
 }
 
 .sparkline {
@@ -5321,7 +5238,6 @@ mark {
   min-width: 0;
 }
 
-.text-block,
 .thinking-block p {
   margin: 0;
   color: var(--fg);

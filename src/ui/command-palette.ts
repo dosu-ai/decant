@@ -66,11 +66,7 @@ export interface CommandPaletteGroupInput<TItem extends CommandPaletteItem = Com
   contentSearch: TItem | null;
 }
 
-/**
- * Assemble groups in their rendered navigation order. Callers may compute each
- * group's items independently; this function owns empty-group removal and the
- * rule that recent searches appear only before the user starts typing.
- */
+/** Recent searches are shown only before the user starts typing. */
 export function buildCommandPaletteGroups<TItem extends CommandPaletteItem>(
   input: CommandPaletteGroupInput<TItem>,
 ): CommandPaletteGroup<TItem>[] {
@@ -97,10 +93,8 @@ export function flattenCommandPaletteItems<TItem extends CommandPaletteItem>(
 }
 
 /**
- * Keep the user's current choice stable when an async session index changes the
- * rendered order. This is especially important for transcript search: rows
- * arriving after the user typed must not silently replace that action with the
- * first session match.
+ * Async session rows arriving after the user typed must not displace the
+ * current choice (notably the transcript-search action).
  */
 export function reconcileCommandPaletteActiveIndex(
   activeItemId: string | null,
@@ -123,10 +117,7 @@ export interface PointerMovement {
   movementY: number;
 }
 
-/**
- * Programmatic scrollIntoView calls can move an option underneath a stationary
- * pointer. Only real pointer movement may replace a keyboard selection.
- */
+/** scrollIntoView can slide an option under a stationary pointer; only real movement may override the keyboard selection. */
 export function pointerMovementChangesSelection(event: PointerMovement): boolean {
   return event.movementX !== 0 || event.movementY !== 0;
 }
@@ -148,11 +139,7 @@ export interface CommandPaletteKeyResult extends CommandPaletteKeyState {
   handled: boolean;
 }
 
-/**
- * Keyboard state transition over the flattened rendered item list. Arrow keys
- * wrap so moving between visual groups has the same behavior as moving within
- * one group; Enter and Escape are returned as effects for the React layer.
- */
+/** Enter and Escape are returned as effects for the React layer to perform. */
 export function reduceCommandPaletteKey(
   state: CommandPaletteKeyState,
   input: CommandPaletteKeyInput,

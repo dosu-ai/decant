@@ -3481,12 +3481,7 @@ function fileSortValue(row: FileRow, key: FileSortKey): SortValue {
   }
 }
 
-/**
- * Shown when the archive holds nothing at all, which is what a first run looks
- * like now that Analytics is the landing route. Distinct from the per-panel
- * "No data in range" state: telling someone with no sessions to widen a date
- * range sends them to a control that cannot help.
- */
+/** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
 function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boolean }) {
   return (
     <section className="panel first-run">
@@ -5685,11 +5680,7 @@ function StatCard({
   label,
   value,
 }: {
-  /** Renders the value and icon in the danger colour. Redundant emphasis on a
-   * number that already states the problem, so colour never carries meaning
-   * alone. Deliberately narrow: stat icons are muted by design (see the
-   * `.stat-card .stat-icon` note in styles.css), so this is a semantic state,
-   * not a reopening of decorative tones. */
+  /** Danger colour is redundant emphasis on a number that already states the problem; stat icons are otherwise muted by design. */
   alert?: boolean;
   icon: IconName;
   label: string;
@@ -8590,14 +8581,7 @@ function SessionDetailView({
     return request;
   }, [id]);
 
-  /**
-   * Fill in the gap in front of the loaded window.
-   *
-   * A window only starts partway into a session when the reader arrived by deep
-   * link, outline click, or compaction jump. Without this, everything before
-   * that landing point is unreachable by keyboard: ArrowUp hits the top of the
-   * window and stops, even though earlier messages exist.
-   */
+  /** A deep link, outline click or compaction jump lands mid-session; without this ArrowUp stops at the window's top. */
   const loadPreviousMessages = useCallback((): Promise<boolean> => {
     const sessionVersion = sessionVersionRef.current;
     return runWithTranscriptRequestSlot(
@@ -8632,15 +8616,10 @@ function SessionDetailView({
             if (page.messages.length === 0) {
               return false;
             }
-            // Inserting above the viewport shifts everything below it down by
-            // the height of the new content. Browser scroll anchoring does not
-            // rescue this: measured in Chromium, a page's worth of prepended
-            // turns moved the anchor by its full height, so the correction below
-            // is doing the work rather than duplicating the browser's.
-            //
-            // Anchor on how far a surviving turn moved rather than on
-            // scrollHeight, which would misread the content-visibility
-            // placeholders: their height stays an estimate until they render.
+            // Browser scroll anchoring does not compensate for prepended turns
+            // (measured in Chromium), so the correction below is required.
+            // Anchor on a surviving turn rather than scrollHeight: the
+            // content-visibility placeholders only estimate their height.
             let anchorSeq: number | null = null;
             let anchorTop: number | null = null;
             for (const message of latest.messages) {
@@ -8659,11 +8638,8 @@ function SessionDetailView({
               message_offset: request.offset,
             };
             detailRef.current = nextDetail;
-            // flushSync commits the prepend before it returns, so the
-            // measurement below is guaranteed to see the new DOM. Deferring to
-            // requestAnimationFrame would be both less certain -- React commits
-            // on its own schedule -- and a frame late, long enough for the
-            // browser to paint the shifted position before it was corrected.
+            // flushSync so the measurement sees the new DOM and the shifted
+            // position is never painted before it is corrected.
             flushSync(() => {
               setDetail(nextDetail);
             });
@@ -9235,10 +9211,8 @@ function SessionDetailView({
         <div className="transcript-column">
           {(detail.message_offset ?? 0) > 0 ? (
             <div className="transcript-window-start">
-              {/* Counts what is missing rather than naming the first loaded
-                  message. The offset is a zero-based row index, so printing it
-                  as a 1-based ordinal contradicted the #message-<seq> anchor
-                  for that very message. */}
+              {/* Count of missing messages: the offset is a zero-based row
+                  index and would contradict the #message-<seq> anchor as an ordinal. */}
               <span>
                 {formatInt(detail.message_offset ?? 0)} earlier{" "}
                 {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
@@ -9507,13 +9481,9 @@ type TranscriptBlockData = {
   tool_result: string | null;
 };
 
-// tabIndex={-1} makes each turn programmatically focusable without adding it to
-// the tab order, so arrow-key navigation can move focus and a screen reader
-// announces the turn it scrolled to. Without it the highlight is visual only.
-//
-// Memoized: a transcript loads an unbounded number of turns, and every arrow
-// keypress changes `active` on exactly two of them. Without this, each keypress
-// re-renders every loaded turn.
+// tabIndex={-1} lets arrow-key navigation move focus (and screen readers
+// announce the turn) without joining the tab order. Memoized because a
+// transcript can hold unbounded turns and each keypress changes `active` on two.
 const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
@@ -10918,11 +10888,9 @@ function tocPresentation(text: string): { label: string; icon: IconName } {
 }
 
 /**
- * Header stats are all whole-session figures. Counting `messages` here would
- * mix scopes: turns and tokens cover the session, so replies and tool calls
- * counted from the loaded window would silently shrink the moment a transcript
- * paginates. `totals` comes from the server aggregated over the session; the
- * window fallback only applies to a payload that predates it.
+ * Header stats are whole-session figures, so `totals` (server-aggregated) is
+ * used; counting the loaded window would shrink as a transcript paginates. The
+ * window fallback only covers payloads that predate `totals`.
  */
 function threadStats(
   summary: SessionSummary,

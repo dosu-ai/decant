@@ -49,8 +49,8 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  type AnchorHTMLAttributes,
   type CSSProperties,
-  type MouseEvent,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -110,6 +110,7 @@ import {
   type SessionSearchIndexRow,
 } from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
+import { shouldInterceptLinkClick } from "./link-click.ts";
 import {
   planSessionPageLoad,
   sessionPageExhausted,
@@ -1178,12 +1179,12 @@ function App() {
       />
       <aside className={`sidebar${menuOpen ? " is-open" : ""}`}>
         <div className="brand-row">
-          <a className="brand" href="/" onClick={(event) => navigate(event, "/", setPath)}>
+          <Link className="brand" href="/" setPath={setPath}>
             <span className="brand-icon">
               <img alt="" src={dosuDecantUrl} />
             </span>
             <span>Decant</span>
-          </a>
+          </Link>
           <button
             aria-label="Close menu"
             className="icon-button mobile-only"
@@ -1204,17 +1205,15 @@ function App() {
               <ul aria-labelledby={`nav-group-${group.label.toLowerCase()}`}>
                 {group.items.map((item) => (
                   <li key={item.href}>
-                    <a
+                    <Link
                       aria-current={activeKey === item.key ? "page" : undefined}
                       href={item.href}
-                      onClick={(event) => {
-                        setMenuOpen(false);
-                        navigate(event, item.href, setPath);
-                      }}
+                      onClick={() => setMenuOpen(false)}
+                      setPath={setPath}
                     >
                       <Icon name={item.icon} />
                       <span>{item.label}</span>
-                    </a>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -1315,15 +1314,15 @@ function App() {
                 ? `Sync complete${syncProgress?.ingested ? `, ${syncProgress.ingested} ingested` : ""}`
                 : ""}
           </span>
-          <a
+          <Link
             aria-label="Settings"
             className="icon-button"
             href="/settings"
-            onClick={(event) => navigate(event, "/settings", setPath)}
+            setPath={setPath}
             title="Settings"
           >
             <Icon name="settings" />
-          </a>
+          </Link>
           <fieldset className="theme-toggle">
             <legend>Theme</legend>
             {(["system", "light", "dark"] as const).map((choice) => (
@@ -1515,9 +1514,9 @@ function NotFoundView({ pathname }: { pathname: string }) {
   return (
     <ErrorState
       action={
-        <a className="primary-button" href="/">
+        <Link className="primary-button" href="/">
           Back to Analytics
-        </a>
+        </Link>
       }
       detail={`There is no page at ${pathname}.`}
       icon="inbox"
@@ -1695,12 +1694,12 @@ function SessionsView({
           <div className="active-filter-row">
             <span className="filter-pill">
               Project: <strong>{basename(project)}</strong>
-              <a
+              <Link
                 aria-label="Clear project filter"
                 href={sessionsArchivedHref("/sessions", includeArchived)}
               >
                 <Icon name="x" />
-              </a>
+              </Link>
             </span>
           </div>
         ) : null}
@@ -1931,10 +1930,10 @@ function ProjectsView({
                 {sorted.map((project) => (
                   <tr key={project.id}>
                     <td className="truncate-cell" title={project.path}>
-                      <a className="path-stack" href={projectSessionsHref(project.path)}>
+                      <Link className="path-stack" href={projectSessionsHref(project.path)}>
                         <strong>{projectName(project)}</strong>
                         <small>{project.path}</small>
-                      </a>
+                      </Link>
                     </td>
                     <td>
                       <ProjectKind project={project} />
@@ -2147,9 +2146,9 @@ const SessionTableRow = memo(function SessionTableRow({
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
           <span className="session-title-line">
-            <a href={`/sessions/${session.id}`} title={title}>
+            <Link href={`/sessions/${session.id}`} title={title}>
               {title}
-            </a>
+            </Link>
             {session.is_user_archived ? <Badge tone="neutral">Archived</Badge> : null}
             <DosuProvenanceBadge session={session} />
           </span>
@@ -2160,9 +2159,9 @@ const SessionTableRow = memo(function SessionTableRow({
         {session.project_path == null ? (
           <span className="faint">-</span>
         ) : (
-          <a href={projectSessionsHref(session.project_path)} title={session.project_path}>
+          <Link href={projectSessionsHref(session.project_path)} title={session.project_path}>
             {basename(session.project_path)}
-          </a>
+          </Link>
         )}
       </td>
       <td>
@@ -3217,7 +3216,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                 {group.hits.map((hit) => {
                   const index = orderedHits.indexOf(hit);
                   return (
-                    <a
+                    <Link
                       aria-current={index === activeIndex ? "true" : undefined}
                       aria-selected={index === activeIndex}
                       className="result-card search-hit-row"
@@ -3226,7 +3225,6 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                       id={`search-hit-${hit.block_id}`}
                       key={hit.block_id}
                       onMouseEnter={() => setActiveIndex(index)}
-                      onClick={(event) => navigate(event, hit.href)}
                       role="option"
                     >
                       <div className="result-card-heading">
@@ -3236,7 +3234,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                       <p>
                         <HighlightedSnippet snippet={hit.snippet} />
                       </p>
-                    </a>
+                    </Link>
                   );
                 })}
               </div>
@@ -3934,17 +3932,10 @@ function ReportExportButton({
               <Icon name="fileCode" />
               Download HTML
             </a>
-            <a
-              className="primary-button"
-              href={previewHref}
-              onClick={(event) => {
-                closeReview();
-                navigate(event, previewHref);
-              }}
-            >
+            <Link className="primary-button" href={previewHref} onClick={closeReview}>
               <Icon name="eye" />
               View report
-            </a>
+            </Link>
           </>
         }
         excluded={excluded}
@@ -4088,14 +4079,10 @@ function ReportRouteView({
           zIndex: 2,
         }}
       >
-        <a
-          className="secondary-button"
-          href={backHref}
-          onClick={(event) => navigate(event, backHref)}
-        >
+        <Link className="secondary-button" href={backHref}>
           <Icon name="arrowLeft" />
           Back
-        </a>
+        </Link>
         <strong style={{ marginRight: "auto" }}>{title}</strong>
         <ReportRouteExportActions
           downloadHref={downloadHref}
@@ -4453,7 +4440,7 @@ function AnalyticsView({
                 {projectRows.map((row) => (
                   <tr key={row.key}>
                     <td className="mono truncate-cell" title={row.key}>
-                      <a href={projectSessionsHref(row.key)}>{basename(row.key)}</a>
+                      <Link href={projectSessionsHref(row.key)}>{basename(row.key)}</Link>
                     </td>
                     <td className="numeric muted">{formatInt(row.sessions)}</td>
                     <td className="numeric">{money(row.estimated_cost_usd)}</td>
@@ -6055,14 +6042,14 @@ function ApiFailureState({
     !recovery.useSync && recovery.actionHref == null && recovery.retry && onRetry != null;
   const action =
     recovery.actionHref != null && recovery.actionLabel != null ? (
-      <a
+      <Link
         className="primary-button"
         href={recovery.actionHref}
         rel={recovery.actionHref.startsWith("http") ? "noopener" : undefined}
         target={recovery.actionHref.startsWith("http") ? "_blank" : undefined}
       >
         {recovery.actionLabel}
-      </a>
+      </Link>
     ) : recovery.useSync && onSync != null ? (
       <button className="primary-button" onClick={onSync} type="button">
         Sync now
@@ -7267,11 +7254,11 @@ function ToolCallDetail({
               {call.session_title ?? `Session ${call.session_id}`}
             </strong>
           </div>
-          <a className="secondary-button tool-detail-transcript-link" href={transcriptHref}>
+          <Link className="secondary-button tool-detail-transcript-link" href={transcriptHref}>
             <Icon name="messages" />
             View in transcript
             <Icon name="chevronRight" />
-          </a>
+          </Link>
         </footer>
       </section>
     </>
@@ -7761,13 +7748,9 @@ function ToolsView({
           locationFilters.server !== "" ||
           locationFilters.errorsOnly ||
           locationFilters.minMs > 0 ? (
-            <a
-              className="secondary-button"
-              href={clearedFiltersHref}
-              onClick={(event) => navigate(event, clearedFiltersHref)}
-            >
+            <Link className="secondary-button" href={clearedFiltersHref}>
               Clear filters
-            </a>
+            </Link>
           ) : null}
         </div>
         {callError != null ? (
@@ -7848,12 +7831,12 @@ function ToolsView({
                       <td className="numeric muted">{formatBytes(call.output_bytes)}</td>
                       <td className="numeric muted">{relativeTime(call.timestamp)}</td>
                       <td>
-                        <a
+                        <Link
                           href={`/sessions/${call.session_id}`}
                           onClick={(event) => event.stopPropagation()}
                         >
                           {call.session_title ?? `Session ${call.session_id}`} →
-                        </a>
+                        </Link>
                       </td>
                     </tr>
                   ))}
@@ -8098,14 +8081,18 @@ function FilesView({
                 {sortedFileRows.map((row) => (
                   <tr key={`${group}-${row.project ?? ""}-${row.key}`}>
                     <td className="mono truncate-cell">
-                      <a href={`/search?q=${encodeURIComponent(`"${row.key}"`)}`}>{row.key}</a>
+                      <Link href={`/search?q=${encodeURIComponent(`"${row.key}"`)}`}>
+                        {row.key}
+                      </Link>
                     </td>
                     {group === "path" ? (
                       <td className="muted" title={row.project ?? ""}>
                         {row.project == null ? (
                           <span className="faint">-</span>
                         ) : (
-                          <a href={projectSessionsHref(row.project)}>{basename(row.project)}</a>
+                          <Link href={projectSessionsHref(row.project)}>
+                            {basename(row.project)}
+                          </Link>
                         )}
                       </td>
                     ) : null}
@@ -9046,14 +9033,14 @@ function SessionDetailView({
               </button>
             ) : null}
             {detail.summary.project_path != null ? (
-              <a
+              <Link
                 className="project-chip"
                 href={projectSessionsHref(detail.summary.project_path)}
                 title={detail.summary.project_path}
               >
                 <Icon name="folder" />
                 {basename(detail.summary.project_path)}
-              </a>
+              </Link>
             ) : null}
           </div>
           <div className="thread-stats">
@@ -9125,14 +9112,10 @@ function SessionDetailView({
         />
       ) : null}
 
-      <a
-        className="back-link"
-        href={sessionsHref}
-        onClick={(event) => navigate(event, sessionsHref)}
-      >
+      <Link className="back-link" href={sessionsHref}>
         <Icon name="arrowLeft" />
         Sessions
-      </a>
+      </Link>
 
       <DeleteSessionDialog
         error={deleteDialogOpen ? sessionStateError : null}
@@ -10739,7 +10722,7 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         <div className="subagent-summary">
           <span>{formatInt(subagent.summary.message_count)} messages</span>
           <span>{formatInt(subagent.summary.subagent_count)} nested</span>
-          <a href={`/sessions/${subagent.summary.id}`}>Open session</a>
+          <Link href={`/sessions/${subagent.summary.id}`}>Open session</Link>
         </div>
       ) : (
         <div className="subagent-transcript">
@@ -11270,13 +11253,31 @@ function updateSearchRoute(query: string, setPath?: (path: string) => void) {
   }
 }
 
-function navigate(
-  event: MouseEvent<HTMLAnchorElement>,
-  href: string,
-  setPath?: (path: string) => void,
-) {
-  event.preventDefault();
-  visit(href, setPath);
+type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+  href: string;
+  setPath?: (path: string) => void;
+};
+
+function Link({ href, setPath, onClick, ...rest }: LinkProps) {
+  return (
+    <a
+      {...rest}
+      href={href}
+      onClick={(event) => {
+        onClick?.(event);
+        if (
+          shouldInterceptLinkClick(event, {
+            href,
+            target: rest.target,
+            download: rest.download != null && rest.download !== false,
+          })
+        ) {
+          event.preventDefault();
+          visit(href, setPath);
+        }
+      }}
+    />
+  );
 }
 
 function visit(href: string, setPath?: (path: string) => void) {

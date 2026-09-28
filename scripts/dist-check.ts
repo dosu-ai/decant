@@ -199,18 +199,9 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   }
 }
 
-// --minify rewrites the UI bundle and leaves the server untouched, so every
-// other check in this file could pass against a bundle that fails to parse.
-// This is the one check that fetches the bundle's actual bytes from the
-// running binary rather than an API route.
-//
-// It proves the bytes are intact and syntactically valid JavaScript, not that
-// the app renders: `new Function(code)` compiles the source without invoking
-// it, so it catches truncation or minifier corruption but not a runtime throw
-// from `createRoot(root).render(...)`, which needs a real DOM (canvas, for
-// echarts) that nothing in this repo currently emulates. Closing that gap
-// means either a real browser or a DOM/canvas shim, and that's a dependency
-// decision for whoever picks it up, not something to fake here.
+// --minify rewrites only the UI bundle, so API checks alone could pass against
+// a bundle that fails to parse. `new Function(code)` proves the served bytes
+// compile; it cannot catch a render-time throw, which would need a real DOM.
 async function assertCompiledUiBundle(port: number): Promise<void> {
   const page = await fetch(`http://127.0.0.1:${port}/`);
   if (!page.ok) {

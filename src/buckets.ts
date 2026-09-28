@@ -4,20 +4,6 @@ export const ACTIVITY_BUCKETS = ["context", "planning", "code", "communicating"]
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
 const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "run_shell_command", "shell"]);
-const CONTEXT_TOOLS = new Set([
-  "read",
-  "grep",
-  "glob",
-  "ls",
-  "notebookread",
-  "webfetch",
-  "websearch",
-  "task",
-  "toolsearch",
-  "bashoutput",
-  "listmcpresourcestool",
-  "readmcpresourcetool",
-]);
 const CODE_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -136,9 +122,6 @@ export function toolBucket(
   }
   if (CODE_TOOLS.has(normalized)) {
     return "code";
-  }
-  if (CONTEXT_TOOLS.has(normalized) || name.startsWith("mcp__")) {
-    return "context";
   }
   return "context";
 }

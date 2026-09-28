@@ -115,7 +115,7 @@ const sessionScoped =
       return result == null ? sessionNotFound(db) : json(result);
     });
 
-const ROUTES: Record<ApiRoutePath, RouteSpec> = {
+export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/health": { GET: () => json({ ok: true }) },
   "/api/openapi.json": { GET: () => json(openApiDocument(DECANT_VERSION)) },
   "/api/events": { GET: () => eventStream() },

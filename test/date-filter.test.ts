@@ -1,7 +1,13 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { dayRangePredicate, sessionDatePredicate } from "../src/date-filter.ts";
 import { openDb } from "../src/db.ts";
+
+const workDir = mkdtempSync(join(tmpdir(), "decant-date-filter-test-"));
+afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 const TIMESTAMPS = [
   "2024-02-28T23:59:59.999Z",
@@ -104,7 +110,7 @@ describe("date filter", () => {
   });
 
   test("lets the session start index serve a date filter", () => {
-    const db = openDb(":memory:");
+    const db = openDb(join(workDir, "date-filter.db"));
     const date = sessionDatePredicate("s", { from: "2026-01-01", to: "2026-02-01" });
     const plan = (
       db

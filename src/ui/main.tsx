@@ -44,7 +44,6 @@ import {
   Zap,
 } from "lucide-react";
 import {
-  type AnchorHTMLAttributes,
   type CSSProperties,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -89,6 +88,15 @@ import {
   layoutContextTooltip,
 } from "./context-window-layout.ts";
 import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
+import {
+  ALL_DATE_RANGE,
+  applyDatePreset,
+  dateRangeLabel,
+  dateRangeQuery,
+  RANGE_PRESETS,
+  shiftDateRange,
+  withDateQuery,
+} from "./date-range.ts";
 import { fullDateTime, relativeTime, sessionListDate } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
@@ -98,6 +106,28 @@ import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
+import {
+  basename,
+  capitalize,
+  clampNumber,
+  compact,
+  compactAxis,
+  duration,
+  durationPrecise,
+  errorMessage,
+  field,
+  firstLine,
+  formatBytes,
+  formatDay,
+  formatInt,
+  isPresent,
+  latestSessionDay,
+  matchText,
+  money,
+  shortDate,
+  shortPath,
+  versionLabel,
+} from "./format.ts";
 import { isFramed } from "./frame-guard.ts";
 import {
   createSessionSearchIndex,
@@ -108,7 +138,7 @@ import {
 } from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
-import { shouldInterceptLinkClick } from "./link-click.ts";
+import { Link, locationPath, updateSearchRoute, visit } from "./link.tsx";
 import {
   planSessionPageLoad,
   sessionPageExhausted,
@@ -449,20 +479,6 @@ const SESSION_TABLE_SKELETON_KEYS = Array.from(
   (_, index) => `session-row-skeleton-${index}`,
 );
 const EMPTY_SESSION_IDS = new Set<number>();
-
-function versionLabel(version: string | null | undefined): string {
-  if (version == null || version === "") {
-    return "local checkout";
-  }
-  return version === "dev" || version.startsWith("v") ? version : `v${version}`;
-}
-
-const RANGE_PRESETS = [
-  { key: "7d", label: "7d", days: 7 },
-  { key: "30d", label: "30d", days: 30 },
-  { key: "90d", label: "90d", days: 90 },
-] as const;
-const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
 
 const SESSION_PAGE_CACHE_LIMIT = 12;
 
@@ -5367,25 +5383,6 @@ function activityTone(bucket: ActivityBucket): BadgeTone {
   }
 }
 
-function compactAxis(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) {
-    return `${trimNumber(value / 1_000_000)}M`;
-  }
-  if (abs >= 1_000) {
-    return `${trimNumber(value / 1_000)}K`;
-  }
-  return trimNumber(value);
-}
-
-function trimNumber(value: number): string {
-  return Number.isInteger(value) ? formatInt(value) : value.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 function StatCard({
   alert = false,
   icon,
@@ -6323,10 +6320,6 @@ function promotionText(row: Recommendation): string {
     .join("\n");
 }
 
-function field(label: string, value: string | null): string | null {
-  return isPresent(value) ? `${label}: ${value}` : null;
-}
-
 function modelBrandIcon(model: string, tone: BadgeTone): BrandIconName | null {
   if (tone === "openai") {
     return "openai";
@@ -6380,81 +6373,6 @@ function toneName(tone: string | null | undefined): BadgeTone {
 
 function fileTotal(row: FileRow): number {
   return row.reads + row.edits + row.writes + row.deletes;
-}
-
-function isPresent(value: string | null | undefined): value is string {
-  return value != null && value.trim() !== "";
-}
-
-function firstLine(value: string, maxLength: number): string {
-  const line = value.trim().split("\n", 1)[0] ?? "";
-  return line.length > maxLength ? `${line.slice(0, maxLength - 1)}...` : line;
-}
-
-const intFormatter = new Intl.NumberFormat();
-
-function formatInt(value: number): string {
-  return intFormatter.format(Math.round(value));
-}
-
-function compact(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`;
-  }
-  if (abs >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}K`;
-  }
-  return formatInt(value);
-}
-
-function money(value: number): string {
-  return `$${value.toFixed(2)}`;
-}
-
-function duration(ms: number): string {
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ${totalSeconds % 60}s`;
-  }
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function capitalize(value: string): string {
-  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
-}
-
-function latestSessionDay(sessions: SessionSummary[]): string | null {
-  const latest = sessions.find((session) => session.started_at != null)?.started_at;
-  return latest == null ? null : formatDay(latest);
-}
-
-const dayFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit" });
-const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "2-digit",
-  year: "numeric",
-});
-const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-});
-
-function formatDay(value: string | null): string | null {
-  if (value == null) {
-    return null;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return dayFormatter.format(date);
 }
 
 function InsightsView({
@@ -6748,32 +6666,6 @@ function toolAggregate(tools: ToolRow[], summary: ToolCallPage["summary"]) {
     p95: resolvedSummary.p95_ms,
     topTool: tools.slice().sort((left, right) => right.calls - left.calls)[0]?.tool_name ?? null,
   };
-}
-
-function durationPrecise(value: number | null): string {
-  if (value == null) {
-    return "—";
-  }
-  if (value < 1000) {
-    return `${Math.round(value)} ms`;
-  }
-  if (value < 60_000) {
-    return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)} s`;
-  }
-  return duration(value);
-}
-
-function formatBytes(value: number | null): string {
-  if (value == null) {
-    return "—";
-  }
-  if (value < 1024) {
-    return `${formatInt(value)} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function toolCallInputLabel(value: string | null): string {
@@ -10375,15 +10267,6 @@ function structuredTranscriptTooltip(kind: StructuredTranscriptKind): string {
   return "Agent coordination instructions supplied by the runtime, summarized without the raw internal boilerplate.";
 }
 
-function matchText(value: string, pattern: RegExp): string | null {
-  return value.match(pattern)?.[1]?.trim() ?? null;
-}
-
-function shortPath(value: string): string {
-  const parts = value.split("/").filter((part) => part !== "");
-  return parts.length <= 2 ? value : `.../${parts.slice(-2).join("/")}`;
-}
-
 function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
   const messages = renderableMessages(subagent.messages);
   const nested = subagentMap(subagent.subagents);
@@ -10799,110 +10682,6 @@ function scrollTranscriptMessage(seq: number, stabilize = false, isCurrent = () 
   requestAnimationFrame(() => requestAnimationFrame(realign));
 }
 
-function applyDatePreset(
-  key: (typeof RANGE_PRESETS)[number]["key"],
-  bounds: DateBounds | null,
-): DateRangeSelection {
-  const preset = RANGE_PRESETS.find((item) => item.key === key);
-  const to = validIsoDate(bounds?.max) ?? todayIsoDate();
-  if (preset == null) {
-    return ALL_DATE_RANGE;
-  }
-  return {
-    preset: key,
-    from: addDays(to, -(preset.days - 1)),
-    to,
-  };
-}
-
-function shiftDateRange(range: DateRangeSelection, direction: -1 | 1): DateRangeSelection {
-  if (range.from == null || range.to == null) {
-    return range;
-  }
-  const span = Math.max(1, daysBetween(range.from, range.to) + 1);
-  return {
-    preset: "custom",
-    from: addDays(range.from, span * direction),
-    to: addDays(range.to, span * direction),
-  };
-}
-
-function dateRangeQuery(range: DateRangeSelection): string {
-  const params = new URLSearchParams();
-  if (range.from != null) {
-    params.set("from", range.from);
-  }
-  if (range.to != null) {
-    params.set("to", range.to);
-  }
-  return params.toString();
-}
-
-function withDateQuery(path: string, dateQuery: string): string {
-  if (dateQuery === "") {
-    return path;
-  }
-  return `${path}${path.includes("?") ? "&" : "?"}${dateQuery}`;
-}
-
-function dateRangeLabel(range: DateRangeSelection): string {
-  if (range.from == null && range.to == null) {
-    return "All time";
-  }
-  if (range.from == null) {
-    return `Through ${formatDateLabel(range.to ?? "")}`;
-  }
-  if (range.to == null) {
-    return `From ${formatDateLabel(range.from)}`;
-  }
-  return range.from === range.to
-    ? formatDateLabel(range.from)
-    : `${formatDateLabel(range.from)} to ${formatDateLabel(range.to)}`;
-}
-
-function addDays(isoDate: string, days: number): string {
-  const date = parseIsoDate(isoDate) ?? new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(from: string, to: string): number {
-  const start = parseIsoDate(from)?.getTime() ?? 0;
-  const end = parseIsoDate(to)?.getTime() ?? start;
-  return Math.round((end - start) / 86_400_000);
-}
-
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function validIsoDate(value: string | null | undefined): string | null {
-  if (value == null || parseIsoDate(value) == null) {
-    return null;
-  }
-  return value;
-}
-
-function parseIsoDate(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
-}
-
-function formatDateLabel(value: string): string {
-  const date = parseIsoDate(value);
-  if (date == null) {
-    return value;
-  }
-  return dateLabelFormatter.format(date);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function copyTextToClipboard(value: string): Promise<void> {
   let clipboardError: unknown = null;
   if (navigator.clipboard?.writeText != null) {
@@ -10939,85 +10718,9 @@ async function copyTextToClipboard(value: string): Promise<void> {
   }
 }
 
-function shortDate(value: string): string {
-  const time = Date.parse(value);
-  if (!Number.isFinite(time)) {
-    return value;
-  }
-  return shortDateFormatter.format(new Date(time));
-}
-
 function implementedTimestamp(row: Recommendation): number {
   const time = Date.parse(row.implemented_at ?? "");
   return Number.isFinite(time) ? time : 0;
-}
-
-function basename(path: string | null | undefined): string {
-  if (path == null || path === "") {
-    return "-";
-  }
-  return path.split("/").filter(Boolean).at(-1) ?? path;
-}
-
-function locationPath(): string {
-  return `${window.location.pathname}${window.location.search}`;
-}
-
-function updateSearchRoute(query: string, setPath?: (path: string) => void) {
-  const href = searchRouteHref(query, locationPath());
-  if (pathOnly(locationPath()) === "/search") {
-    window.history.replaceState(null, "", href);
-  } else {
-    window.history.pushState(null, "", href);
-  }
-  const next = locationPath();
-  if (setPath != null) {
-    setPath(next);
-  } else {
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }
-}
-
-type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
-  href: string;
-  setPath?: (path: string) => void;
-};
-
-function Link({ href, setPath, onClick, ...rest }: LinkProps) {
-  return (
-    <a
-      {...rest}
-      href={href}
-      onClick={(event) => {
-        onClick?.(event);
-        if (
-          shouldInterceptLinkClick(event, {
-            href,
-            target: rest.target,
-            download: rest.download != null && rest.download !== false,
-          })
-        ) {
-          event.preventDefault();
-          visit(href, setPath);
-        }
-      }}
-    />
-  );
-}
-
-function visit(href: string, setPath?: (path: string) => void) {
-  const previousPathname = window.location.pathname;
-  window.history.pushState(null, "", href);
-  // pushState keeps the old scroll offset, which a full page load used to reset.
-  if (window.location.pathname !== previousPathname) {
-    window.scrollTo(0, 0);
-  }
-  const next = locationPath();
-  if (setPath != null) {
-    setPath(next);
-  } else {
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }
 }
 
 /** Rendered instead of the app when decant is loaded inside a frame, so that no

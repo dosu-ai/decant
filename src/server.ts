@@ -272,7 +272,7 @@ export async function handleRequest(
       if (key != null && typeof key !== "string") {
         return errorResponse("invalid_request", "key must be a string or null", { ok: false }, 400);
       }
-      const result = launchAgent(agent, prompt, key ?? null, getSettings(), {
+      const result = await launchAgent(agent, prompt, key ?? null, getSettings(), {
         platform: context.launchPlatform,
       });
       if (result.ok) {
@@ -301,7 +301,7 @@ export async function handleRequest(
       if (typeof dir !== "string" || dir.trim() === "") {
         return errorResponse("invalid_request", "dir is required", { ok: false }, 400);
       }
-      const result = openIde(dir, getSettings(), { platform: context.launchPlatform });
+      const result = await openIde(dir, getSettings(), { platform: context.launchPlatform });
       return result.ok
         ? json(result)
         : errorResponse(

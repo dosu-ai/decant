@@ -53,14 +53,20 @@ the local guard can read or mutate the whole archive.
   `172.16.0.0/12`. It fails closed for host networking, macvlan/ipvlan,
   multi-homed hosts, and other unproven shapes. See
   [distribution.md](../distribution.md#docker).
+- A write that sends `Origin` must name a loopback origin whose host and port
+  equal the request's `Host` header, so a page on another localhost port gets
+  `403 cross_origin_write`. `localhost`, `127.0.0.1`, and `[::1]` are distinct
+  hosts here, and a missing port means the scheme's default. The bound port is
+  not consulted, so a published port such as `-p 8080:3000` works when the
+  browser's `Host` and `Origin` agree.
 - The `Host` check is not authentication: a non-browser client can send
   `Host: localhost`. The `Origin` and `Sec-Fetch-Site` checks on writes are
   browser-drive protections, not credentials.
 
 On a loopback bind, a command-line write may omit `Origin`. On a non-loopback
 bind, a write that supplies neither `Origin` nor `Sec-Fetch-Site` is rejected
-even when the source is trusted. Supply a loopback `Origin` for an explicit
-command-line write; for example:
+even when the source is trusted. Supply an `Origin` that matches the URL you
+connect to for an explicit command-line write; for example:
 
 ```bash
 curl --fail --silent --show-error \

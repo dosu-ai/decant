@@ -27,7 +27,7 @@ jobs:
       is_prerelease: ${{ steps.v.outputs.is_prerelease }}
       is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # zizmor: ignore[artipacked]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
       - name: Derive, validate, and guard VERSION
         id: v
@@ -71,12 +71,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
           no-cache: true
@@ -108,12 +108,12 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
           no-cache: true
@@ -237,7 +237,7 @@ jobs:
 
       - name: Attest build provenance (tarballs, raw binaries, SHA256SUMS)
         id: attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             dist/release/decant-*.tar.gz
@@ -253,21 +253,21 @@ jobs:
           cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
 
       - name: Upload pre-signing hashes
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: presign-sha256s
           path: presign-sha256s.txt
           if-no-files-found: error
 
       - name: Upload release tarballs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-tarballs
           path: dist/release/
           if-no-files-found: error
 
       - name: Upload signed binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: signed-binaries
           path: dist/bin/
@@ -291,7 +291,7 @@ jobs:
       SIGNED: ${{ needs.build.outputs.signed }}
     steps:
       - name: Download release tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-tarballs
           path: dist/release
@@ -342,12 +342,12 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
           no-cache: true
@@ -359,7 +359,7 @@ jobs:
         run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
 
       - name: Download pre-signing hashes
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: presign-sha256s
 
@@ -384,12 +384,12 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
           no-cache: true
@@ -398,7 +398,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Download signed binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: signed-binaries
           path: dist/bin
@@ -419,7 +419,7 @@ jobs:
           done
 
       - name: Set up Node for npm publish
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -432,27 +432,28 @@ jobs:
         run: |
           set -euo pipefail
           platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
-          for launcher_dir in decant; do
-            launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${launcher_dir}/package.json','utf8')).name")"
-            launcher_tgz="$(cd "dist/npm/${launcher_dir}" && npm pack --silent | tail -n1)"
-            smoke_dir="$(mktemp -d)"
-            ( cd "$smoke_dir"
-              npm init -y >/dev/null
-              npm install --ignore-scripts --no-audit --no-fund \
-                "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
-                "$GITHUB_WORKSPACE/dist/npm/${launcher_dir}/$launcher_tgz"
-              out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
-              echo "staged launcher ${launcher_pkg} reports: $out"
-              [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher ${launcher_pkg} reported '$out', expected version $VERSION"; exit 1; }
-            )
-            rm -rf "$smoke_dir" "dist/npm/${launcher_dir}/${launcher_tgz}"
-          done
+          launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/decant/package.json','utf8')).name")"
+          launcher_tgz="$(cd dist/npm/decant && npm pack --silent | tail -n1)"
+          smoke_dir="$(mktemp -d)"
+          ( cd "$smoke_dir"
+            npm init -y >/dev/null
+            npm install --ignore-scripts --no-audit --no-fund \
+              "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
+              "$GITHUB_WORKSPACE/dist/npm/decant/$launcher_tgz"
+            out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
+            echo "staged launcher ${launcher_pkg} reports: $out"
+            [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher ${launcher_pkg} reported '$out', expected version $VERSION"; exit 1; }
+          )
+          rm -rf "$smoke_dir" "dist/npm/decant/${launcher_tgz}"
           rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
 
       - name: Derive npm dist-tag channel
+        env:
+          IS_PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
         run: |
-          if [[ "${{ needs.meta.outputs.is_prerelease }}" == "true" ]]; then CHANNEL=next
-          elif [[ "${{ needs.meta.outputs.is_latest }}" == "true" ]]; then CHANNEL=latest
+          if [[ "$IS_PRERELEASE" == "true" ]]; then CHANNEL=next
+          elif [[ "$IS_LATEST" == "true" ]]; then CHANNEL=latest
           else CHANNEL=previous; fi
           echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
 
@@ -490,7 +491,7 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           package-manager-cache: false
@@ -516,12 +517,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download release tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-tarballs
           path: dist/release
@@ -563,18 +564,18 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -594,7 +595,7 @@ jobs:
 
       - name: Build and push
         id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -606,7 +607,7 @@ jobs:
           sbom: true
 
       - name: Attest image provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/dosu-ai/decant
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -637,12 +638,12 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download release tarballs (for SHA256SUMS)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-tarballs
           path: dist/release
@@ -673,7 +674,7 @@ jobs:
             packaging/homebrew/decant.rb.template > dist/homebrew/decant.rb
 
       - name: Upload rendered formula
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: homebrew-formula
           path: dist/homebrew/decant.rb
@@ -702,10 +703,10 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
 
       - name: Download rendered formula
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: homebrew-formula
           path: Formula
@@ -736,14 +737,14 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Check out dosu-ai/homebrew-dosu # zizmor: ignore[artipacked]
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dosu-ai/homebrew-dosu
           token: ${{ secrets.HOMEBREW_TOKEN }}
           path: homebrew-dosu
 
       - name: Download tested formula
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: homebrew-formula
           path: homebrew-dosu/Formula

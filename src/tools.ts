@@ -1,4 +1,4 @@
-// Tool-name classification and text previews (port of tools.rs).
+// Tool-name classification and text previews.
 import type { ToolKind } from "./model.ts";
 
 export interface ClassifiedTool {

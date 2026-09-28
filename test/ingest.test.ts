@@ -1500,6 +1500,7 @@ describe("sync", () => {
     for (const [model, tool, effort, expectedCost, expectedCacheWrite] of [
       ["claude-opus-5-5", "claude", "medium", 0.0262, 5],
       ["claude-opus-5-5", "claude", "max", 0.0262, 5],
+      ["claude-sonnet-5-5", "claude", "medium", 0.0142, 2.5],
       ["gpt-6-sol", "codex", "low", 0.00258, 2.5],
       ["gpt-6-sol", "codex", "xhigh", 0.00258, 2.5],
       ["gpt-6-luna", "codex", "none", 0.000129, 0.125],

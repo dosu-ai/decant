@@ -63,6 +63,7 @@ export function defaultPricing(): Map<string, Price> {
     ["claude-opus", claudePrice(5.0, 25.0)],
     ["claude-opus-4.1", claudePrice(15.0, 75.0)],
     ["claude-opus-4", claudePrice(15.0, 75.0)],
+    ["claude-sonnet-5-5", claudePrice(2.0, 10.0)],
     ["claude-sonnet-5", claudePrice(2.0, 10.0)],
     ["claude-sonnet", claudePrice(3.0, 15.0)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
@@ -124,8 +125,8 @@ export function defaultPricing(): Map<string, Price> {
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
     // Gemini text rates (standard paid tier, per 1M tokens, ≤200k prompt).
-    // 3.7-flash and 3.6-flash carry a promo price through 2026-12-31.
-    ["gemini-3.8-flash", geminiPrice(1.5, 0.15, 9.0)],
+    // 3.8-flash, 3.7-flash, and 3.6-flash carry a promo price through 2026-12-31.
+    ["gemini-3.8-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.6-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.5-flash", geminiPrice(1.5, 0.15, 9.0)],
@@ -150,6 +151,12 @@ function canonicalModel(raw: string): string | null {
     model === "haiku" ||
     model === "fable"
   ) {
+    // Claude 3 IDs put the tier after the version. Opus 3 and Haiku 3 are
+    // retired with no published first-party rate, so they must not fall
+    // through to a current tier's price.
+    if (model.includes("claude-3-opus") || model.includes("claude-3-haiku")) {
+      return null;
+    }
     if (model.includes("fable") || model.includes("mythos")) {
       if (/(?:fable|mythos)-5(?:-|\.)1(?:$|-|\[)/.test(model)) {
         return "claude-fable-5-1";
@@ -181,13 +188,21 @@ function canonicalModel(raw: string): string | null {
       return "claude-opus";
     }
     if (model.includes("sonnet")) {
+      if (/sonnet-5(?:-|\.)5(?:$|-|\[)/.test(model)) {
+        return "claude-sonnet-5-5";
+      }
       if (model.includes("sonnet-5")) {
         return "claude-sonnet-5";
       }
       return "claude-sonnet";
     }
     if (model.includes("haiku")) {
-      if (model.includes("haiku-3-5") || model.includes("haiku-3.5")) {
+      if (
+        model.includes("haiku-3-5") ||
+        model.includes("haiku-3.5") ||
+        model.includes("3-5-haiku") ||
+        model.includes("3.5-haiku")
+      ) {
         return "claude-haiku-3.5";
       }
       return "claude-haiku";

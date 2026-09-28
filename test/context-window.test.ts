@@ -205,6 +205,8 @@ describe("contextWindowForSession", () => {
       "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-opus-4-6",
+      "claude-sonnet-5-5",
+      "anthropic.claude-sonnet-5-5-v1:0",
       "claude-sonnet-5",
       "claude-sonnet-4-6",
       "claude-fable-5",

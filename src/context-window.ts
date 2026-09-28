@@ -67,7 +67,7 @@ export interface ContextWindowCompaction {
 export interface ContextWindowTimeline {
   session_id: number;
   tool: string;
-  /** Null when the session has no usable usage data (e.g. Codex until Phase 2). */
+  /** Null when the session has no usable usage data. */
   window_tokens: number | null;
   /** True when window_tokens comes from the model's published capacity rather
    *  than the log. Claude and Gemini infer it; Codex logs an explicit window. */

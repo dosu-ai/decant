@@ -180,6 +180,7 @@ describe("estimateCost", () => {
       "claude-opus-5-5",
       "claude-opus-5.5",
       "claude-opus-5-5[1m]",
+      "claude-opus-5-5@20260922",
       "anthropic.claude-opus-5-5-v1:0",
     ]) {
       expect(isPriceable(model)).toBe(true);
@@ -192,6 +193,59 @@ describe("estimateCost", () => {
       expect(estimateCost(model, usage, pricing)).toBeCloseTo(42.4, 6);
     }
     expect(estimateCost("claude-opus-5", usage, pricing)).toBeCloseTo(53.5, 6);
+  });
+
+  test("Sonnet 5.5 uses its published input, cache, and output rates", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    expect(pricing.get("claude-sonnet-5-5")).toEqual({
+      inputPerMtok: 2,
+      outputPerMtok: 10,
+      cacheReadPerMtok: 0.2,
+      cacheWritePerMtok: 2.5,
+      cacheWrite1hPerMtok: 4,
+    });
+    for (const model of [
+      "claude-sonnet-5-5",
+      "claude-sonnet-5.5",
+      "claude-sonnet-5-5[1m]",
+      "claude-sonnet-5-5@20260928",
+      "anthropic.claude-sonnet-5-5-v1:0",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input: 2,
+        output: 10,
+        cacheRead: 0.4,
+        cacheCreation: 9,
+      });
+    }
+  });
+
+  test("Claude 3 IDs price Haiku 3.5 and leave retired models unpriced", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    for (const model of ["claude-3-5-haiku-20241022", "anthropic.claude-3-5-haiku-20241022-v1:0"]) {
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(4.8, 6);
+    }
+    for (const model of [
+      "claude-3-opus-20240229",
+      "claude-3-haiku-20240307",
+      "anthropic.claude-3-haiku-20240307-v1:0",
+      "claude-3-sonnet-20240229",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-7-sonnet-20250219",
+      "claude-3.7-sonnet",
+      "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, u, pricing)).toBe(0);
+    }
   });
 
   test("GPT-6 Sol and Luna use their published input, cache, and output rates", () => {
@@ -413,6 +467,7 @@ describe("isPriceable", () => {
       "gemini-3.2-flash",
       "gemini-flash-latest",
       "gemini-4-pro",
+      "gemini-3-pro-preview",
     ]) {
       expect(estimateCost(model, u, pricing)).toBe(0);
       expect(isPriceable(model)).toBe(false);
@@ -423,9 +478,11 @@ describe("isPriceable", () => {
     const pricing = defaultPricing();
     const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
     expect(estimateCost("gemini-3.5-flash", u, pricing)).toBeCloseTo(10.5, 6);
+    for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(4.5, 6);
+    }
     expect(estimateCost("gemini-2.5-flash", u, pricing)).toBeCloseTo(2.8, 6);
     expect(estimateCost("gemini-2.5-pro", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
-    expect(estimateCost("gemini-3-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
 });

@@ -1,23 +1,26 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-Claude Opus 5.5 and GPT-6 Sol and Luna rates were verified on September 22, 2026
-against their provider model pages below. Other Anthropic and current OpenAI
+All Anthropic rates, including Claude Sonnet 5.5, were verified on September 28,
+2026 against the Anthropic pricing and model deprecation pages below. GPT-6 Sol
+and Luna rates were verified on September 22, 2026, and other current OpenAI
 coding-agent rates retain their September 9, 2026 verification. Legacy OpenAI
-rates were checked September 2, 2026, and Gemini rates September 5, 2026.
+rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
+- [Claude Sonnet 5.5 model details](https://www.anthropic.com/claude-sonnet-5-5)
+- [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
 - [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 - [OpenAI GPT-6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6-sol)
 - [OpenAI GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
-- [OpenAI Codex pricing](https://developers.openai.com/codex/pricing)
+- [OpenAI Codex credit pricing](https://learn.chatgpt.com/docs/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
-- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked September 5, 2026)
+- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked September 28, 2026)
 
 All dollar amounts below are USD per million tokens. A dash means that the
 provider does not publish a first-party API token price for that model slug.
@@ -31,10 +34,11 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Opus 5.5 | $4.00 | $0.20 | $5.00 / $8.00 | $20.00 |
 | Claude Opus 5, 4.8, 4.7, 4.6, 4.5 | $5.00 | $0.50 | $6.25 / $10.00 | $25.00 |
 | Claude Opus 4.1, 4 | $15.00 | $1.50 | $18.75 / $30.00 | $75.00 |
-| Claude Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
+| Claude Sonnet 5.5, Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
 | Claude Sonnet 4.6, 4.5, 4 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
+| Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
 | GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
@@ -50,12 +54,11 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
-| Gemini 3.8 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
-| Gemini 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
+| Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
 | Gemini 3 Flash Preview | $0.50 | $0.05 | $0.50-equiv | $3.00 |
-| Gemini 3.1 Pro Preview, 3 Pro Preview | $2.00 | $0.20 | $2.00-equiv | $12.00 |
+| Gemini 3.1 Pro Preview | $2.00 | $0.20 | $2.00-equiv | $12.00 |
 | Gemini 3.1 Flash-Lite | $0.25 | $0.025 | $0.25-equiv | $1.50 |
 | Gemini 2.5 Pro | $1.25 | $0.125 | $1.25-equiv | $10.00 |
 | Gemini 2.5 Flash | $0.30 | $0.03 | $0.30-equiv | $2.50 |
@@ -70,15 +73,24 @@ charge to approximately the input rate for typical session-length holds.
 
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
-effect. Claude Opus 5.5 has a lower input, output, and cache-read rate than
+effect. Claude Sonnet 5.5 launched on September 28, 2026 at the same rates as
+Sonnet 5. Claude Opus 5.5 has a lower input, output, and cache-read rate than
 Opus 5. Claude Fable 5.1 and Mythos 5.1 keep Fable 5's input, cache-write, and
 output rates but reduce cache reads from $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
-Google's Gemini 3.7 Flash and 3.6 Flash listed above carry a promotional rate
+Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
-output on January 1, 2027. Google no longer lists the Gemini 2.0 line on the
-pricing page, and Gemini versions without a published rate stay unpriced
+output on January 1, 2027. Google no longer lists the Gemini 2.0 line or Gemini 3
+Pro Preview on the pricing page, and Gemini versions without a published rate stay unpriced
 rather than inheriting a neighbor's rate.
+
+Claude 3 model IDs such as `claude-3-5-haiku-20241022` place the tier after
+the version, so Decant recognizes that form as well as tier-first IDs like
+`claude-haiku-4-5`. Anthropic's pricing page no longer lists the fully retired
+Claude Opus 3, Sonnet 3.7, Sonnet 3.5, Sonnet 3, or Haiku 3, so Decant leaves
+them unpriced instead of assigning a current tier's rate. Haiku 3.5, Opus 4.1,
+Opus 4, and Sonnet 4 are retired on the Claude API but remain listed because
+partner clouds still serve them.
 
 `codex-auto-review` is a hidden routing slug, not a public billable model ID.
 OpenAI does not document which underlying model or rate applies. Decant leaves

@@ -58,6 +58,13 @@ import {
   Tooltip,
 } from "./common.tsx";
 import {
+  EMPTY_SESSION_IDS,
+  SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+  SESSION_PAGE_SIZE,
+  SESSION_TABLE_SKELETON_KEYS,
+  TABLE_ROW_LIMIT,
+} from "./constants.ts";
+import {
   contextCurveAreaPath,
   contextCurveLinePath,
   groupContextMarkers,
@@ -65,15 +72,9 @@ import {
   layoutContextTooltip,
 } from "./context-window-layout.ts";
 import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
-import {
-  ALL_DATE_RANGE,
-  applyDatePreset,
-  dateRangeLabel,
-  dateRangeQuery,
-  RANGE_PRESETS,
-  shiftDateRange,
-  withDateQuery,
-} from "./date-range.ts";
+import { emptyData, SLICE_LOADERS, slicesForView } from "./data-slices.ts";
+import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "./date-range.ts";
+import { DateRangeControl } from "./date-range-control.tsx";
 import { fullDateTime, relativeTime, sessionListDate } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
@@ -115,12 +116,9 @@ import { BrandMark, Icon } from "./icons.tsx";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
 import { Link, locationPath, updateSearchRoute, visit } from "./link.tsx";
-import {
-  planSessionPageLoad,
-  sessionPageExhausted,
-  shouldShowSessionSkeleton,
-} from "./loading-state.ts";
+import { shouldShowSessionSkeleton } from "./loading-state.ts";
 import { mcpServerLabel, mcpServerLabels } from "./mcp-server.ts";
+import { navGroups, navItems } from "./nav-items.ts";
 import {
   documentTitleFor,
   isKnownRoute,
@@ -140,6 +138,7 @@ import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
 import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
+import { useSessionPage } from "./session-page.ts";
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
@@ -250,10 +249,6 @@ import type {
   DimensionRow,
   FileRow,
   IconName,
-  LoadedSessionPage,
-  McpRow,
-  ModelSparklines,
-  NavItem,
   ProjectSummary,
   Recommendation,
   SearchHit,
@@ -282,282 +277,6 @@ const LIVE_DISCONNECT_GRACE_MS = 15_000;
 // Every other view renders its own <h1>; the topbar title is then a plain label.
 const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
-
-const emptyData: DashboardData = {
-  summary: null,
-  byModel: [],
-  byProject: [],
-  byDay: [],
-  projects: [],
-  tools: [],
-  mcp: [],
-  files: [],
-  recommendations: [],
-  config: null,
-  settings: null,
-  activity: null,
-  modelSparklines: null,
-  tokenEconomics: null,
-  dateBounds: null,
-};
-
-// Each page fetches only the slices it renders; fetching everything for every
-// page made first paint wait on the slowest analytics endpoint. Slices are
-// cached per (date filter, reload generation), so navigating back is free and
-// SSE-triggered refreshes only refetch what the active page shows.
-const SLICE_LOADERS: Record<
-  DataSlice,
-  { dateScoped: boolean; load: (dateQuery: string) => Promise<Partial<DashboardData>> }
-> = {
-  summary: {
-    dateScoped: true,
-    load: async (q) => ({
-      summary: await getJson<Summary>(withDateQuery("/api/stats/summary", q)),
-    }),
-  },
-  byModel: {
-    dateScoped: true,
-    load: async (q) => ({
-      byModel: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", q)),
-    }),
-  },
-  byProject: {
-    dateScoped: true,
-    load: async (q) => ({
-      byProject: await getJson<DimensionRow[]>(
-        withDateQuery("/api/stats/by-dimension?dim=project", q),
-      ),
-    }),
-  },
-  byDay: {
-    dateScoped: true,
-    load: async (q) => ({
-      byDay: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", q)),
-    }),
-  },
-  projects: {
-    dateScoped: false,
-    load: async () => ({ projects: await getJson<ProjectSummary[]>("/api/projects") }),
-  },
-  tools: {
-    dateScoped: true,
-    load: async (q) => ({
-      tools: await getJson<ToolRow[]>(
-        withDateQuery(`/api/tools/usage?limit=${TABLE_ROW_LIMIT}`, q),
-      ),
-    }),
-  },
-  mcp: {
-    dateScoped: true,
-    load: async (q) => ({
-      mcp: await getJson<McpRow[]>(
-        withDateQuery(`/api/tools/mcp-usage?limit=${TABLE_ROW_LIMIT}`, q),
-      ),
-    }),
-  },
-  files: {
-    dateScoped: true,
-    load: async (q) => ({
-      files: await getJson<FileRow[]>(
-        withDateQuery(`/api/files?group=path&limit=${TABLE_ROW_LIMIT}`, q),
-      ),
-    }),
-  },
-  recommendations: {
-    // Recommendations are archive-wide. If they become date-scoped, the
-    // recommendations loading key and layout effect must include dateQuery too.
-    dateScoped: false,
-    load: async () => ({
-      recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),
-    }),
-  },
-  config: {
-    dateScoped: false,
-    load: async () => ({ config: await getJson<ConfigView>("/api/config") }),
-  },
-  settings: {
-    dateScoped: false,
-    load: async () => ({ settings: await getJson<SettingsInfo>("/api/settings") }),
-  },
-  activity: {
-    dateScoped: true,
-    load: async (q) => ({
-      activity: await getJson<Activity>(withDateQuery("/api/analytics/activity", q)),
-    }),
-  },
-  modelSparklines: {
-    dateScoped: true,
-    load: async (q) => ({
-      modelSparklines: await getJson<ModelSparklines>(
-        withDateQuery("/api/analytics/model-sparklines", q),
-      ),
-    }),
-  },
-  tokenEconomics: {
-    dateScoped: true,
-    load: async (q) => ({
-      tokenEconomics: await getJson<TokenEconomics>(
-        withDateQuery("/api/analytics/token-economics", q),
-      ),
-    }),
-  },
-  dateBounds: {
-    dateScoped: false,
-    load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
-  },
-};
-
-// Slices the app shell itself renders (sidebar stats, sync button, pickers).
-const SHELL_SLICES: DataSlice[] = ["summary", "dateBounds", "config"];
-
-const ROUTE_SLICES: Record<string, DataSlice[]> = {
-  sessions: [],
-  projects: ["projects"],
-  search: [],
-  analytics: [
-    "byDay",
-    "byModel",
-    "byProject",
-    "activity",
-    "modelSparklines",
-    "tokenEconomics",
-    "settings",
-  ],
-  insights: ["recommendations", "settings"],
-  tools: ["tools", "mcp"],
-  files: ["files"],
-  settings: ["config", "settings"],
-};
-
-function slicesForView(routeKey: string): DataSlice[] {
-  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[routeKey] ?? [])])];
-}
-
-/**
- * Two sections: what the archive adds up to, then the archive itself. Analytics
- * leads because it answers the question the tool exists for -- what the sessions
- * cost and where the context went -- and it is what `/` serves.
- */
-const navGroups: { label: string; items: NavItem[] }[] = [
-  {
-    label: "Overview",
-    items: [
-      { key: "analytics", href: "/", label: "Analytics", icon: "chart" },
-      { key: "insights", href: "/insights", label: "Insights", icon: "lightbulb" },
-    ],
-  },
-  {
-    label: "Browse",
-    items: [
-      { key: "sessions", href: "/sessions", label: "Sessions", icon: "sessions" },
-      { key: "search", href: "/search", label: "Search", icon: "search" },
-      { key: "projects", href: "/projects", label: "Projects", icon: "folder" },
-      { key: "files", href: "/files", label: "Files", icon: "file" },
-      { key: "tools", href: "/tools", label: "Tools & MCP", icon: "tools" },
-    ],
-  },
-];
-
-const navItems: NavItem[] = navGroups.flatMap((group) => group.items);
-
-const SESSION_PAGE_SIZE = 50;
-// The Files view refetches with filters but must match the route slice's page of rows.
-const TABLE_ROW_LIMIT = 100;
-const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
-const SESSION_TABLE_SKELETON_KEYS = Array.from(
-  { length: SESSION_PAGE_SIZE },
-  (_, index) => `session-row-skeleton-${index}`,
-);
-const EMPTY_SESSION_IDS = new Set<number>();
-
-const SESSION_PAGE_CACHE_LIMIT = 12;
-
-function rememberSessionPage(cache: Map<string, LoadedSessionPage>, page: LoadedSessionPage): void {
-  cache.delete(page.requestKey);
-  cache.set(page.requestKey, page);
-  while (cache.size > SESSION_PAGE_CACHE_LIMIT) {
-    const oldest = cache.keys().next().value;
-    if (oldest == null) {
-      return;
-    }
-    cache.delete(oldest);
-  }
-}
-
-function useSessionPage({
-  dateQuery,
-  enabled,
-  includeArchived,
-  page,
-  project,
-  reloadKey,
-}: {
-  dateQuery: string;
-  enabled: boolean;
-  includeArchived: boolean;
-  page: number;
-  project: string | null;
-  reloadKey: number;
-}): SessionPageState {
-  const cacheRef = useRef(new Map<string, LoadedSessionPage>());
-  const [settled, setSettled] = useState<{
-    failed: { error: unknown; requestKey: string } | null;
-    loaded: LoadedSessionPage | null;
-  }>({ failed: null, loaded: null });
-  const scopeKey = JSON.stringify([dateQuery, project, includeArchived, reloadKey]);
-  const requestKey = `${scopeKey}:${page}`;
-  const cached = cacheRef.current.get(requestKey) ?? null;
-  const visible = cached ?? (settled.loaded?.scopeKey === scopeKey ? settled.loaded : null);
-  const currentError = settled.failed?.requestKey === requestKey ? settled.failed.error : null;
-  const loading = enabled && cached == null && currentError == null;
-
-  useEffect(() => {
-    if (!enabled || cacheRef.current.has(requestKey)) {
-      return;
-    }
-    const controller = new AbortController();
-    const plan = planSessionPageLoad({ page, pageSize: SESSION_PAGE_SIZE });
-    const projectParam = project == null ? "" : `&project=${encodeURIComponent(project)}`;
-    const archivedParam = includeArchived ? "&include_archived=true" : "";
-    void getJson<SessionSummary[]>(
-      withDateQuery(
-        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}` +
-          `&with_subagents=true${projectParam}${archivedParam}`,
-        dateQuery,
-      ),
-      { signal: controller.signal },
-    )
-      .then((sessions) => {
-        const loaded: LoadedSessionPage = {
-          exhausted: sessionPageExhausted({
-            receivedRows: sessions.length,
-            requestedRows: plan.limit,
-          }),
-          page: plan.page,
-          requestKey,
-          scopeKey,
-          sessions: sessions.slice(0, SESSION_PAGE_SIZE),
-        };
-        rememberSessionPage(cacheRef.current, loaded);
-        setSettled({ failed: null, loaded });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setSettled((current) => ({ ...current, failed: { error, requestKey } }));
-      });
-    return () => controller.abort();
-  }, [dateQuery, enabled, includeArchived, page, project, requestKey, scopeKey]);
-
-  return {
-    error: currentError,
-    exhausted: visible?.exhausted ?? false,
-    loadedPage: visible?.page ?? null,
-    loading,
-    sessions: visible?.sessions ?? [],
-  };
-}
 
 function App() {
   const [path, setPath] = useState(locationPath);
@@ -4708,64 +4427,6 @@ function activityTone(bucket: ActivityBucket): BadgeTone {
     case "code":
       return "success";
   }
-}
-
-function DateRangeControl({
-  bounds,
-  range,
-  onChange,
-}: {
-  bounds: DateBounds | null;
-  range: DateRangeSelection;
-  onChange: (range: DateRangeSelection) => void;
-}) {
-  return (
-    <div className="date-range-control">
-      <div className="date-range-buttons">
-        {range.from != null && range.to != null ? (
-          <button
-            aria-label="Previous period"
-            className="icon-period-button"
-            onClick={() => onChange(shiftDateRange(range, -1))}
-            type="button"
-          >
-            <Icon name="chevronLeft" />
-          </button>
-        ) : null}
-        <button
-          aria-pressed={range.preset === "all"}
-          onClick={() => onChange(ALL_DATE_RANGE)}
-          type="button"
-        >
-          All time
-        </button>
-        {RANGE_PRESETS.map((preset) => (
-          <button
-            aria-pressed={range.preset === preset.key}
-            key={preset.key}
-            onClick={() => onChange(applyDatePreset(preset.key, bounds))}
-            type="button"
-          >
-            {preset.label}
-          </button>
-        ))}
-        {range.from != null && range.to != null ? (
-          <button
-            aria-label="Next period"
-            className="icon-period-button"
-            onClick={() => onChange(shiftDateRange(range, 1))}
-            type="button"
-          >
-            <Icon name="chevronRight" />
-          </button>
-        ) : null}
-      </div>
-      {/* The label spells out a custom range ("Jun 3 to Jun 17"). For "all" it
-       * returns "All time", which is now exactly what the selected button reads,
-       * so showing it twice just looks like a bug. */}
-      {range.preset === "all" ? null : <span>{dateRangeLabel(range)}</span>}
-    </div>
-  );
 }
 
 function RecommendationHero({

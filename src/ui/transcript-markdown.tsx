@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TranscriptHighlight } from "./shiki-highlighter.ts";
@@ -29,7 +29,13 @@ export interface TranscriptCodeBlockProps {
  * Existing special transcript cards should be checked before this component is
  * called; this renderer is the ordinary-text fallback.
  */
-export function TranscriptMarkdown({
+const REMARK_PLUGINS = [remarkGfm];
+
+function transformMarkdownUrl(url: string, key: string): string | null {
+  return key === "src" ? null : (safeMarkdownUrl(url) ?? null);
+}
+
+export const TranscriptMarkdown = memo(function TranscriptMarkdown({
   children,
   className,
   defaultLanguage = null,
@@ -75,15 +81,15 @@ export function TranscriptMarkdown({
     <div className={className == null ? "transcript-markdown" : className}>
       <Markdown
         components={components}
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         skipHtml
-        urlTransform={(url, key) => (key === "src" ? null : (safeMarkdownUrl(url) ?? null))}
+        urlTransform={transformMarkdownUrl}
       >
         {children}
       </Markdown>
     </div>
   );
-}
+});
 
 export function TranscriptCodeBlock({
   code,
@@ -166,21 +172,39 @@ function currentTranscriptTheme(): TranscriptTheme {
     : "light";
 }
 
-function useTranscriptTheme(): TranscriptTheme {
-  const [theme, setTheme] = useState<TranscriptTheme>(currentTranscriptTheme);
+// One shared subscription for every code block on the page, instead of a
+// window listener and a matchMedia listener per block.
+const themeListeners = new Set<() => void>();
+let detachThemeListeners: (() => void) | null = null;
 
-  useEffect(() => {
-    const update = () => setTheme(currentTranscriptTheme());
+function notifyThemeListeners() {
+  for (const listener of themeListeners) {
+    listener();
+  }
+}
+
+function subscribeToTranscriptTheme(listener: () => void): () => void {
+  themeListeners.add(listener);
+  if (detachThemeListeners == null) {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
-    window.addEventListener("decant:set-theme", update);
-    media?.addEventListener("change", update);
-    return () => {
-      window.removeEventListener("decant:set-theme", update);
-      media?.removeEventListener("change", update);
+    window.addEventListener("decant:set-theme", notifyThemeListeners);
+    media?.addEventListener("change", notifyThemeListeners);
+    detachThemeListeners = () => {
+      window.removeEventListener("decant:set-theme", notifyThemeListeners);
+      media?.removeEventListener("change", notifyThemeListeners);
     };
-  }, []);
+  }
+  return () => {
+    themeListeners.delete(listener);
+    if (themeListeners.size === 0) {
+      detachThemeListeners?.();
+      detachThemeListeners = null;
+    }
+  };
+}
 
-  return theme;
+function useTranscriptTheme(): TranscriptTheme {
+  return useSyncExternalStore(subscribeToTranscriptTheme, currentTranscriptTheme, () => "light");
 }
 
 function useVisible(ref: { current: HTMLElement | null }, defer: boolean): boolean {

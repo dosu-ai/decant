@@ -73,7 +73,8 @@ describe("UI interaction contracts", () => {
     expect(app).toContain('className="topbar-search"');
     expect(app).toContain('className="icon-button topbar-search-mobile"');
     expect(palette).toContain("createPortal(");
-    expect(palette).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");
+    expect(palette).toContain("useDialogFocusTrap(true, dialogRef, requestClose)");
+    expect(palette).toContain("return open ? (\n    <CommandPaletteDialog");
     expect(palette).toContain('aria-modal="true"');
     expect(palette).toContain('role="dialog"');
     expect(palette).toContain('role="combobox"');

@@ -1136,6 +1136,15 @@ function App() {
         setSyncError(err);
       });
   };
+  const handleDateRangeChange = useCallback(
+    (next: DateRangeSelection) => {
+      if (sessionPageFromPath(path) > 1) {
+        visit(sessionsPageHref(path, 1), setPath);
+      }
+      setDateRangeSelection(next);
+    },
+    [path],
+  );
   const loadArchiveUpdates = () => {
     setArchiveUpdateAvailable(false);
     requestRefresh();
@@ -1385,12 +1394,7 @@ function App() {
             ) : (
               renderView(active, path, data, {
                 dateRange: dateRangeSelection,
-                onDateRangeChange: (next) => {
-                  if (sessionPageFromPath(path) > 1) {
-                    visit(sessionsPageHref(path, 1), setPath);
-                  }
-                  setDateRangeSelection(next);
-                },
+                onDateRangeChange: handleDateRangeChange,
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
@@ -2379,14 +2383,9 @@ interface PaletteItem extends CommandPaletteItem {
 }
 
 function CommandPalette({
-  analyticsReportHref,
-  onClose,
-  onNavigate,
-  onRunSync,
-  onToggleTheme,
   open,
   refreshKey,
-  syncing,
+  ...dialogProps
 }: {
   analyticsReportHref: string;
   onClose: () => void;
@@ -2397,31 +2396,10 @@ function CommandPalette({
   refreshKey: number;
   syncing: boolean;
 }) {
-  const [query, setQuery] = useState("");
   const [rows, setRows] = useState<SessionSearchIndexRow[]>([]);
   const [loadedRefreshKey, setLoadedRefreshKey] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [indexError, setIndexError] = useState<unknown>(null);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const activeItemIdRef = useRef<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const closeRef = useRef(onClose);
-  const titleId = useId();
-  const listboxId = useId();
-  closeRef.current = onClose;
-  const requestClose = useCallback(() => closeRef.current(), []);
-  useDialogFocusTrap(open, dialogRef, requestClose);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setQuery("");
-    setRecentSearches(readRecentSearches());
-    activeItemIdRef.current = null;
-    setActiveIndex(null);
-  }, [open]);
 
   useEffect(() => {
     if (!open || loadedRefreshKey === refreshKey) {
@@ -2454,6 +2432,55 @@ function CommandPalette({
   }, [loadedRefreshKey, open, refreshKey]);
 
   const fuzzyIndex: SessionSearchIndex = useMemo(() => createSessionSearchIndex(rows), [rows]);
+
+  // The index survives here across open and close; only the dialog body, which
+  // builds every item on each render, is unmounted while the palette is shut.
+  return open ? (
+    <CommandPaletteDialog
+      {...dialogProps}
+      fuzzyIndex={fuzzyIndex}
+      indexError={indexError}
+      loading={loading}
+      rows={rows}
+    />
+  ) : null;
+}
+
+function CommandPaletteDialog({
+  analyticsReportHref,
+  fuzzyIndex,
+  indexError,
+  loading,
+  onClose,
+  onNavigate,
+  onRunSync,
+  onToggleTheme,
+  rows,
+  syncing,
+}: {
+  analyticsReportHref: string;
+  fuzzyIndex: SessionSearchIndex;
+  indexError: unknown;
+  loading: boolean;
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+  onRunSync: () => void;
+  onToggleTheme: () => void;
+  rows: SessionSearchIndexRow[];
+  syncing: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
+  const activeItemIdRef = useRef<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  const titleId = useId();
+  const listboxId = useId();
+  closeRef.current = onClose;
+  const requestClose = useCallback(() => closeRef.current(), []);
+  useDialogFocusTrap(true, dialogRef, requestClose);
+
   const normalizedQuery = query.trim();
   const matches = useMemo(
     () => (normalizedQuery === "" ? [] : fuzzyIndex.search(normalizedQuery, 10)),
@@ -2575,14 +2602,11 @@ function CommandPalette({
   const renderedItemKey = items.map((item) => item.id).join("\u0000");
 
   useLayoutEffect(() => {
-    if (!open) {
-      return;
-    }
     void renderedItemKey;
     const nextIndex = reconcileCommandPaletteActiveIndex(activeItemIdRef.current, items);
     activeItemIdRef.current = nextIndex == null ? null : (items[nextIndex]?.id ?? null);
     setActiveIndex(nextIndex);
-  }, [items, open, renderedItemKey]);
+  }, [items, renderedItemKey]);
 
   const selectPaletteIndex = (index: number | null) => {
     const nextIndex = index != null && items[index] != null ? index : null;
@@ -2598,10 +2622,6 @@ function CommandPalette({
       ?.querySelector<HTMLElement>(`[data-palette-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
-
-  if (!open) {
-    return null;
-  }
 
   const renderedActiveIndex =
     activeIndex != null && items[activeIndex] != null ? activeIndex : null;
@@ -4199,10 +4219,14 @@ function AnalyticsView({
     key: "cost",
     direction: "desc",
   });
-  const byDay = data.byDay
-    .filter((row) => row.key !== "")
-    .slice()
-    .sort((left, right) => left.key.localeCompare(right.key));
+  const byDay = useMemo(
+    () =>
+      data.byDay
+        .filter((row) => row.key !== "")
+        .sort((left, right) => left.key.localeCompare(right.key)),
+    [data.byDay],
+  );
+  const rangeLabels = useMemo(() => byDay.map((row) => row.key), [byDay]);
   const modelRows = useMemo(
     () => sortRows(data.byModel, modelSort, modelSortValue),
     [data.byModel, modelSort],
@@ -4285,8 +4309,8 @@ function AnalyticsView({
       </div>
 
       <div className="split">
-        <ActivityPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
-        <WeekdayPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
+        <ActivityPanel activity={data.activity} rangeLabels={rangeLabels} />
+        <WeekdayPanel activity={data.activity} rangeLabels={rangeLabels} />
       </div>
 
       {shouldShowDosuCta({
@@ -4472,13 +4496,14 @@ function ActivityPanel({
   activity: Activity | null;
   rangeLabels: string[];
 }) {
-  const labels = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
+  const labels = HOUR_LABELS;
+  const values = activity?.by_hour ?? NO_VALUES;
   const peak = activity?.peak_hour ?? peakIndex(activity?.by_hour ?? []);
   const range = shareRange(rangeLabels);
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_hours",
     labels,
-    values: activity?.by_hour ?? [],
+    values,
     start: range.start,
     end: range.end,
     timezone: activity?.timezone ?? localTimezone(),
@@ -4502,12 +4527,7 @@ function ActivityPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart
-          labels={labels}
-          metric="int"
-          values={activity?.by_hour ?? []}
-          variant="bar"
-        />
+        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
       </div>
     </section>
   );
@@ -4840,13 +4860,14 @@ function WeekdayPanel({
   activity: Activity | null;
   rangeLabels: string[];
 }) {
-  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const labels = WEEKDAY_LABELS;
+  const values = activity?.by_weekday ?? NO_VALUES;
   const peak = activity?.peak_weekday ?? peakIndex(activity?.by_weekday ?? []);
   const range = shareRange(rangeLabels);
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_days",
     labels,
-    values: activity?.by_weekday ?? [],
+    values,
     start: range.start,
     end: range.end,
     timezone: activity?.timezone ?? localTimezone(),
@@ -4866,12 +4887,7 @@ function WeekdayPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart
-          labels={labels}
-          metric="int"
-          values={activity?.by_weekday ?? []}
-          variant="bar"
-        />
+        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
       </div>
     </section>
   );
@@ -4890,8 +4906,11 @@ function DailyPanel({
   timezone: string | undefined;
   title: string;
 }) {
-  const labels = rows.map((row) => row.key);
-  const values = rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd));
+  const labels = useMemo(() => rows.map((row) => row.key), [rows]);
+  const values = useMemo(
+    () => rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd)),
+    [rows, metric],
+  );
   const range = shareRange(labels);
   const shareInput: ShareCardCopyInput = {
     kind: metric === "sessions" ? "sessions_per_day" : "estimated_cost_per_day",
@@ -5322,7 +5341,11 @@ function localTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
 }
 
-function AnalyticsChart({
+const HOUR_LABELS = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const NO_VALUES: number[] = [];
+
+const AnalyticsChart = memo(function AnalyticsChart({
   labels,
   metric,
   values,
@@ -5336,7 +5359,10 @@ function AnalyticsChart({
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<EChartsInstance | null>(null);
   const lastDrawnKeyRef = useRef<string | null>(null);
-  const chartState = prepareAnalyticsChartState({ labels, metric, values, variant });
+  const chartState = useMemo(
+    () => prepareAnalyticsChartState({ labels, metric, values, variant }),
+    [labels, metric, values, variant],
+  );
   const chartStateRef = useRef<AnalyticsChartState>(chartState);
   chartStateRef.current = chartState;
 
@@ -5402,7 +5428,7 @@ function AnalyticsChart({
   }, [chartState.key]);
 
   return <div aria-label="Analytics chart" className="analytics-chart" ref={chartRef} role="img" />;
-}
+});
 
 function buildChartOption({
   labels,
@@ -6676,8 +6702,10 @@ function firstLine(value: string, maxLength: number): string {
   return line.length > maxLength ? `${line.slice(0, maxLength - 1)}...` : line;
 }
 
+const intFormatter = new Intl.NumberFormat();
+
 function formatInt(value: number): string {
-  return Math.round(value).toLocaleString();
+  return intFormatter.format(Math.round(value));
 }
 
 function compact(value: number): string {
@@ -6717,6 +6745,18 @@ function latestSessionDay(sessions: SessionSummary[]): string | null {
   return latest == null ? null : formatDay(latest);
 }
 
+const dayFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit" });
+const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "2-digit",
+  year: "numeric",
+});
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
 function formatDay(value: string | null): string | null {
   if (value == null) {
     return null;
@@ -6725,7 +6765,7 @@ function formatDay(value: string | null): string | null {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
+  return dayFormatter.format(date);
 }
 
 function InsightsView({
@@ -10341,11 +10381,7 @@ function ToolCallPresentation({
       return (
         <div className="tool-presentation tool-shell">
           {presentation.caption != null ? <p>{presentation.caption}</p> : null}
-          <TranscriptCodeBlock
-            code={`$ ${presentation.command}`}
-            deferUntilVisible={false}
-            language="bash"
-          />
+          <TranscriptCodeBlock code={`$ ${presentation.command}`} language="bash" />
         </div>
       );
     case "file":
@@ -10353,11 +10389,7 @@ function ToolCallPresentation({
         <div className="tool-presentation tool-file">
           <ToolPathHeader operation={presentation.operation} path={presentation.path} />
           {presentation.content != null ? (
-            <TranscriptCodeBlock
-              code={presentation.content}
-              deferUntilVisible={false}
-              language={presentation.language}
-            />
+            <TranscriptCodeBlock code={presentation.content} language={presentation.language} />
           ) : (
             <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
           )}
@@ -10443,7 +10475,7 @@ function CollapsedToolArguments({
   return (
     <details className="tool-arguments" open={forceOpen || argumentsText.length <= 240}>
       <summary>arguments</summary>
-      <TranscriptCodeBlock code={argumentsText} deferUntilVisible={false} language="json" />
+      <TranscriptCodeBlock code={argumentsText} language="json" />
     </details>
   );
 }
@@ -11259,7 +11291,7 @@ function formatDateLabel(value: string): string {
   if (date == null) {
     return value;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
+  return dateLabelFormatter.format(date);
 }
 
 function errorMessage(error: unknown): string {
@@ -11307,11 +11339,7 @@ function shortDate(value: string): string {
   if (!Number.isFinite(time)) {
     return value;
   }
-  return new Date(time).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return shortDateFormatter.format(new Date(time));
 }
 
 function implementedTimestamp(row: Recommendation): number {

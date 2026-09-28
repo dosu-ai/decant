@@ -43,6 +43,9 @@ the local guard can read or mutate the whole archive.
   present source wins: `--trusted-peer`, then `DECANT_TRUSTED_PEERS` whenever
   the variable is set, then `DECANT_TRUST_DEFAULT_GATEWAY=1`.
   `DECANT_TRUSTED_PEERS=` therefore means “trust nobody,” not “fall through.”
+- Every trusted peer must be an IP address or an IPv4 CIDR. `decant serve`
+  exits with an error at startup on an entry that could never match, such as
+  `10.0.0.0/33` or a hostname, instead of silently trusting nobody.
 - The gateway option contributes one address only when Decant proves the
   default route is a container veth to an on-link gateway inside
   `172.16.0.0/12`. It fails closed for host networking, macvlan/ipvlan,
@@ -94,6 +97,11 @@ does not restore the session. Neither operation modifies the source JSONL file.
 Deletion removes the live rows. SQLite may leave deleted text recoverable in
 freed pages until `decant db vacuum` rewrites the archive. See
 [What the archive stores](../data-lifecycle.md#what-the-archive-stores).
+
+`POST /api/launch/agent` accepts a `key` only when it uses the characters
+recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
+`POST /api/launch/ide` requires an absolute `dir` that matches a project path or
+root path in the archive. Both answer `400 invalid_request` otherwise.
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.

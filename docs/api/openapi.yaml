@@ -206,7 +206,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/LaunchResult"
         "400":
-          description: Invalid request, unsupported platform, or launch failure
+          description: Invalid request or key, unsupported platform, or launch failure
           content:
             application/json:
               schema:
@@ -225,7 +225,9 @@ paths:
       tags: [Launch]
       operationId: launchIde
       summary: Open a local project directory in the configured IDE
-      description: Launching is supported only on macOS.
+      description: >-
+        Launching is supported only on macOS. `dir` must be an absolute path that
+        matches a project path or root path already in the archive.
       requestBody:
         required: true
         content:
@@ -240,7 +242,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/LaunchResult"
         "400":
-          description: Invalid request, unsupported platform, missing directory, or launch failure
+          description: Invalid request, relative or unknown directory, unsupported platform, missing directory, or launch failure
           content:
             application/json:
               schema:
@@ -1519,6 +1521,8 @@ components:
           minLength: 1
         key:
           type: string
+          description: Recommendation key appended to the prompt as a mark instruction.
+          pattern: "^[A-Za-z0-9._:/-]{1,256}$"
       additionalProperties: false
     IdeLaunchRequest:
       type: object
@@ -1527,6 +1531,7 @@ components:
         dir:
           type: string
           minLength: 1
+          description: Absolute path of a project known to the archive.
       additionalProperties: false
     LaunchResult:
       type: object

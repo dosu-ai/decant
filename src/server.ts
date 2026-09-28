@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { isIP } from "node:net";
+import { dirname, isAbsolute, join } from "node:path";
 import { SESSION_LIST_MAX_LIMIT, USAGE_LIST_MAX_LIMIT } from "./api-limits.ts";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
@@ -16,7 +17,13 @@ import { refreshDerivedMetadata } from "./derived.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
-import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
+import {
+  canLaunch,
+  isSafeRecommendationKey,
+  launchAgent,
+  command as launchCommand,
+  openIde,
+} from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { openApiDocument } from "./openapi.ts";
 import {
@@ -279,6 +286,14 @@ export async function handleRequest(
       if (key != null && typeof key !== "string") {
         return errorResponse("invalid_request", "key must be a string or null", { ok: false }, 400);
       }
+      if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
+        return errorResponse(
+          "invalid_request",
+          "key contains unsupported characters",
+          { ok: false },
+          400,
+        );
+      }
       const result = await launchAgent(agent, prompt, key ?? null, getSettings(), {
         platform: context.launchPlatform,
       });
@@ -307,6 +322,17 @@ export async function handleRequest(
       const { dir } = body;
       if (typeof dir !== "string" || dir.trim() === "") {
         return errorResponse("invalid_request", "dir is required", { ok: false }, 400);
+      }
+      if (!isAbsolute(dir)) {
+        return errorResponse("invalid_request", "dir must be an absolute path", { ok: false }, 400);
+      }
+      if (!isKnownProjectDir(config, context, dir)) {
+        return errorResponse(
+          "invalid_request",
+          "dir is not a project in the archive",
+          { ok: false },
+          400,
+        );
       }
       const result = await openIde(dir, getSettings(), { platform: context.launchPlatform });
       return result.ok
@@ -1245,6 +1271,16 @@ function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
   }
 }
 
+function isKnownProjectDir(config: Config, context: RequestContext, dir: string): boolean {
+  let known = false;
+  withDb(config, context, (db) => {
+    known =
+      db.query("SELECT 1 FROM project WHERE path = ?1 OR root_path = ?1 LIMIT 1").get(dir) != null;
+    return json(null);
+  });
+  return known;
+}
+
 function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
   if (context.db != null) {
     ensureDerivedMetadata(context.db);
@@ -1430,6 +1466,31 @@ function isTrustedPeer(address: string | null | undefined, trustedPeers: string[
   return false;
 }
 
+function assertValidPeers(peers: string[]): string[] {
+  for (const peer of peers) {
+    if (!isValidPeer(peer)) {
+      throw new Error(
+        `invalid trusted peer ${JSON.stringify(peer)}: expected an IP address ` +
+          "or an IPv4 CIDR such as 203.0.113.0/24",
+      );
+    }
+  }
+  return peers;
+}
+
+function isValidPeer(peer: string): boolean {
+  if (!peer.includes("/")) {
+    return isIP(normalizeHost(peer)) !== 0;
+  }
+  const [address, bits, ...extra] = peer.split("/");
+  return (
+    extra.length === 0 &&
+    ipv4ToInt(address ?? "") != null &&
+    /^\d{1,2}$/.test(bits ?? "") &&
+    Number(bits) <= 32
+  );
+}
+
 export function parsePeerList(value: string | null | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -1476,10 +1537,10 @@ export function resolveTrustedPeers(
   sources: TrustedPeerSources = {},
 ): string[] {
   if (configured != null) {
-    return configured;
+    return assertValidPeers(configured);
   }
   if (env.DECANT_TRUSTED_PEERS != null) {
-    return parsePeerList(env.DECANT_TRUSTED_PEERS);
+    return assertValidPeers(parsePeerList(env.DECANT_TRUSTED_PEERS));
   }
   if (!isEnvEnabled(env.DECANT_TRUST_DEFAULT_GATEWAY)) {
     return [];

@@ -32,6 +32,19 @@ describe("launcher", () => {
     expect(result.command).toContain("decant recommendations mark catalog:skills");
   });
 
+  test("launchAgent refuses keys that could inject prompt text", async () => {
+    const calls: string[] = [];
+    const result = await launchAgent("claude", "go", "x\nrm -rf ~", settings, {
+      platform: "darwin",
+      run: (bin) => {
+        calls.push(bin);
+        return { ok: true };
+      },
+    });
+    expect(result).toEqual({ ok: false, error: "Invalid recommendation key." });
+    expect(calls).toEqual([]);
+  });
+
   test("launchAgent builds whitelisted terminal invocations on macOS", async () => {
     const calls: { bin: string; args: string[] }[] = [];
     const result = await launchAgent("claude", "ship it", null, settings, {

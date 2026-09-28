@@ -34,11 +34,19 @@ export interface LaunchOptions {
   warpConsumed?: (configDir: string) => boolean | Promise<boolean>;
 }
 
+// Mirrors the characters recommendation keys are generated from; the key is
+// spliced into the agent prompt, so anything else could inject instructions.
+const RECOMMENDATION_KEY_PATTERN = /^[A-Za-z0-9._:/-]{1,256}$/;
+
 const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
 const WARP_CONSUME_TIMEOUT_MS = 1_500;
 
 export function canLaunch(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
+}
+
+export function isSafeRecommendationKey(key: string): boolean {
+  return RECOMMENDATION_KEY_PATTERN.test(key);
 }
 
 export function command(agent: string, prompt: string): string | null {
@@ -56,6 +64,9 @@ export async function launchAgent(
   const got = agents[agent as AgentKey];
   if (got == null) {
     return { ok: false, error: "Unknown agent." };
+  }
+  if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
+    return { ok: false, error: "Invalid recommendation key." };
   }
   const fullPrompt = withMarkInstruction(prompt, key);
   if (!canLaunch(options.platform)) {

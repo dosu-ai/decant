@@ -746,6 +746,26 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("--trusted-peer");
     expect(serve.stdout).toContain("(default: 3000)");
   });
+
+  test("serve refuses to start with a trusted peer that could never match", async () => {
+    const fixtureCase = freshCase();
+    const result = await runCli(
+      [
+        "--db",
+        fixtureCase.dbPath,
+        "--no-sync",
+        "serve",
+        "--port",
+        "0",
+        "--no-open",
+        "--trusted-peer",
+        "10.0.0.0/33",
+      ],
+      { env: { DECANT_NO_SYNC: "1" } },
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('invalid trusted peer "10.0.0.0/33"');
+  });
 });
 
 describe("db info discloses what the archive stores", () => {

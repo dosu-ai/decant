@@ -101,6 +101,14 @@ export function defaultScriptOpts(): ScriptOpts {
   return { format: "sh", minFrequency: 0.25, exemplar: false };
 }
 
+const COMMAND_KEY_BY_TOOL: ReadonlyMap<string, string> = new Map([
+  ["Bash", "command"],
+  ["run_shell_command", "command"],
+  ["exec_command", "cmd"],
+  ["shell", "cmd"],
+  ["local_shell", "cmd"],
+]);
+
 export function decodeCommand(toolName: string, input: string | null | undefined): string | null {
   if (input == null) {
     return null;
@@ -118,12 +126,7 @@ export function decodeCommand(toolName: string, input: string | null | undefined
     return null;
   }
   const object = value as Record<string, unknown>;
-  const key =
-    toolName === "Bash" || toolName === "run_shell_command"
-      ? "command"
-      : toolName === "exec_command" || toolName === "shell" || toolName === "local_shell"
-        ? "cmd"
-        : null;
+  const key = COMMAND_KEY_BY_TOOL.get(toolName);
   if (key == null) {
     return null;
   }
@@ -258,6 +261,7 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
     date_from: string | null;
     date_to: string | null;
   };
+  const commandTools = [...COMMAND_KEY_BY_TOOL.keys()];
   const rows = db
     .query(
       `SELECT tc.session_id, tc.ordinal, tc.tool_name, tc.input, tc.is_error, s.cwd
@@ -265,9 +269,10 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
        JOIN session s ON s.id = tc.session_id
        LEFT JOIN project p ON p.id = s.project_id
        WHERE ${visibleSession}${scoped.sql}
+         AND tc.tool_name IN (${commandTools.map(() => "?").join(", ")})
        ORDER BY tc.session_id, tc.ordinal`,
     )
-    .all(...scoped.values) as ToolCallRow[];
+    .all(...scoped.values, ...commandTools) as ToolCallRow[];
 
   const raws = rows.flatMap((row) => {
     if (row.tool_name == null) {

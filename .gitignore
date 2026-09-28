@@ -2,9 +2,6 @@
 *.db-shm
 *.db-wal
 
-# Local build artifacts
-/target/
-
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
 

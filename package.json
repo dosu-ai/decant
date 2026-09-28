@@ -5,7 +5,7 @@
   "description": "Local-first analytics for Claude Code and Codex sessions, built by Dosu.",
   "license": "Apache-2.0",
   "repository": "https://github.com/dosu-ai/decant",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.2",
   "type": "module",
   "bin": {
     "decant": "./src/cli.ts"
@@ -19,15 +19,7 @@
   "scripts": {
     "predev": "bun install --frozen-lockfile",
     "dev": "bun run src/cli.ts serve",
-    "start": "bun run src/cli.ts serve",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome check .",
-    "format": "biome check --write .",
-    "check": "bun run test && bun run typecheck && bun run lint && bun run distcheck",
-    "distcheck": "bun run scripts/dist-check.ts",
-    "build:binary": "bun run scripts/build-binaries.ts",
-    "build:npm": "bun run scripts/build-npm.ts"
+    "test": "bun test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",

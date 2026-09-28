@@ -25,6 +25,16 @@ describe("distribution helpers", () => {
     expect(existsSync(join(root, "scripts", "dev.ts"))).toBe(false);
   });
 
+  test("pins packageManager to the Bun version CI and Docker build with", () => {
+    const root = join(import.meta.dir, "..");
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      packageManager?: string;
+    };
+    const bunVersion = readFileSync(join(root, ".bun-version"), "utf8").trim();
+
+    expect(pkg.packageManager).toBe(`bun@${bunVersion}`);
+  });
+
   test("loads the npm binary target matrix", () => {
     const targets = readTargets();
     expect(targets.map((target) => target.key)).toEqual([

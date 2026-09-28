@@ -1,8 +1,10 @@
--- decant:schema_version=23
--- Effective decant schema (migrations 1..23 applied), frozen as the current
+-- decant:schema_version=24
+-- Effective decant schema (migrations 1..24 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
--- indexes tool_call in the order the tool-call list pages through.
+-- indexes tool_call in the order the tool-call list pages through. v24 indexes
+-- tool-use blocks by tool_use_id and drops two session indexes that duplicate
+-- UNIQUE(tool, source_session_id).
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -205,7 +207,6 @@ CREATE TABLE recommendation (
   implemented_at TEXT
 );
 CREATE INDEX idx_session_project ON session(project_id);
-CREATE INDEX idx_session_tool ON session(tool);
 CREATE INDEX idx_session_started ON session(started_at);
 CREATE INDEX idx_session_model ON session(model);
 CREATE INDEX idx_session_parent ON session(parent_session_id);
@@ -222,7 +223,6 @@ CREATE INDEX idx_toolcall_server ON tool_call(mcp_server);
 CREATE INDEX idx_toolcall_name ON tool_call(tool_name);
 CREATE INDEX idx_fileref_session ON file_ref(session_id);
 CREATE INDEX idx_fileref_path ON file_ref(rel_path, operation);
-CREATE INDEX idx_session_source ON session(tool, source_session_id);
 CREATE INDEX idx_message_parent ON message(parent_id);
 CREATE INDEX idx_toolcall_message ON tool_call(message_id);
 CREATE INDEX idx_toolcall_call_block ON tool_call(call_block_id);
@@ -231,6 +231,7 @@ CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
 CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
+CREATE INDEX idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use';
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id',

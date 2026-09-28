@@ -118,6 +118,7 @@ import { formatMcpServer, mcpServerLabel, mcpServerLabels } from "./mcp-server.t
 import {
   documentTitleFor,
   isKnownRoute,
+  isSessionDetailPath,
   pathOnly,
   projectSessionsHref,
   activeRoute as resolveActiveRoute,
@@ -552,19 +553,25 @@ const SLICE_LOADERS: Record<
   tools: {
     dateScoped: true,
     load: async (q) => ({
-      tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", q)),
+      tools: await getJson<ToolRow[]>(
+        withDateQuery(`/api/tools/usage?limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   mcp: {
     dateScoped: true,
     load: async (q) => ({
-      mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", q)),
+      mcp: await getJson<McpRow[]>(
+        withDateQuery(`/api/tools/mcp-usage?limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   files: {
     dateScoped: true,
     load: async (q) => ({
-      files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", q)),
+      files: await getJson<FileRow[]>(
+        withDateQuery(`/api/files?group=path&limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   recommendations: {
@@ -615,10 +622,10 @@ const SLICE_LOADERS: Record<
 const SHELL_SLICES: DataSlice[] = ["summary", "dateBounds", "config"];
 
 const ROUTE_SLICES: Record<string, DataSlice[]> = {
-  Sessions: [],
-  Projects: ["projects"],
-  Search: [],
-  Analytics: [
+  sessions: [],
+  projects: ["projects"],
+  search: [],
+  analytics: [
     "byDay",
     "byModel",
     "byProject",
@@ -627,14 +634,14 @@ const ROUTE_SLICES: Record<string, DataSlice[]> = {
     "tokenEconomics",
     "settings",
   ],
-  Insights: ["recommendations", "settings"],
-  "Tools & MCP": ["tools", "mcp"],
-  Files: ["files"],
-  Settings: ["config", "settings"],
+  insights: ["recommendations", "settings"],
+  tools: ["tools", "mcp"],
+  files: ["files"],
+  settings: ["config", "settings"],
 };
 
-function slicesForView(activeView: string): DataSlice[] {
-  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+function slicesForView(routeKey: string): DataSlice[] {
+  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[routeKey] ?? [])])];
 }
 
 type NavItem = {
@@ -681,6 +688,8 @@ const GEMINI_ICON_PATH =
   "M12 2a.75.75 0 0 1 .67.42l1.93 3.86 3.86 1.93a.75.75 0 0 1 0 1.34l-3.86 1.93-1.93 3.86a.75.75 0 0 1-1.34 0l-1.93-3.86-3.86-1.93a.75.75 0 0 1 0-1.34l3.86-1.93 1.93-3.86a.75.75 0 0 1 .67-.42Zm7.5 12a.75.75 0 0 1 .67.42l1.05 2.1 2.1 1.05a.75.75 0 0 1 0 1.34l-2.1 1.05-1.05 2.1a.75.75 0 0 1-1.34 0l-1.05-2.1-2.1-1.05a.75.75 0 0 1 0-1.34l2.1-1.05 1.05-2.1a.75.75 0 0 1 .67-.42Z";
 
 const SESSION_PAGE_SIZE = 50;
+// The Files view refetches with filters but must match the route slice's page of rows.
+const TABLE_ROW_LIMIT = 100;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: SESSION_PAGE_SIZE },
@@ -843,8 +852,8 @@ function App() {
   const sessionPage = sessionPageFromPath(path);
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
-  const activeView = resolveActiveRoute(path, navItems);
-  const showsSessions = activeView === "Sessions";
+  const activeView = resolveActiveRouteKey(path, navItems);
+  const showsSessions = activeView === "sessions";
   const sessionPageState = useSessionPage({
     dateQuery,
     enabled: showsSessions,
@@ -902,7 +911,7 @@ function App() {
 
   useLayoutEffect(() => {
     setRecommendationsLoading(
-      activeView === "Insights" &&
+      activeView === "insights" &&
         loadedSlicesRef.current.get("recommendations") !== `${reloadKey}`,
     );
   }, [activeView, reloadKey]);
@@ -1096,8 +1105,7 @@ function App() {
     return () => window.removeEventListener("keydown", openSearch);
   }, []);
 
-  const active = activeView;
-  const activeKey = resolveActiveRouteKey(path, navItems);
+  const activeLabel = resolveActiveRoute(path, navItems);
   const activeFailedSlices = failedSlices.filter((slice) =>
     slicesForView(activeView).includes(slice),
   );
@@ -1229,7 +1237,7 @@ function App() {
                 {group.items.map((item) => (
                   <li key={item.href}>
                     <Link
-                      aria-current={activeKey === item.key ? "page" : undefined}
+                      aria-current={activeView === item.key ? "page" : undefined}
                       href={item.href}
                       onClick={() => setMenuOpen(false)}
                       setPath={setPath}
@@ -1293,10 +1301,10 @@ function App() {
           >
             <Icon name="menu" />
           </button>
-          {VIEWS_WITHOUT_HEADING.has(activeKey) ? (
-            <h1 className="topbar-title">{titleFor(active)}</h1>
+          {VIEWS_WITHOUT_HEADING.has(activeView) ? (
+            <h1 className="topbar-title">{titleFor(activeLabel)}</h1>
           ) : (
-            <p className="topbar-title">{titleFor(active)}</p>
+            <p className="topbar-title">{titleFor(activeLabel)}</p>
           )}
           <button
             aria-expanded={commandPaletteOpen}
@@ -1393,14 +1401,14 @@ function App() {
                 </button>
               </div>
             ) : null}
-            {active === "Sessions" && sessionPageState.error != null ? (
+            {activeView === "sessions" && sessionPageState.error != null ? (
               <ApiFailureState
                 error={sessionPageState.error}
                 onRetry={requestRefresh}
                 onSync={runSync}
               />
             ) : (
-              renderView(active, path, data, {
+              renderView(activeView, path, data, {
                 dateRange: dateRangeSelection,
                 onDateRangeChange: handleDateRangeChange,
                 refresh: requestRefresh,
@@ -1440,7 +1448,7 @@ function App() {
 }
 
 function renderView(
-  active: string,
+  routeKey: string,
   path: string,
   data: DashboardData,
   actions: {
@@ -1456,7 +1464,7 @@ function renderView(
   },
 ) {
   const pathname = pathOnly(path);
-  if (/^\/sessions\/\d+$/.test(pathname)) {
+  if (isSessionDetailPath(pathname)) {
     return (
       <SessionDetailView
         id={Number(pathname.split("/").at(-1))}
@@ -1468,8 +1476,8 @@ function renderView(
   if (!isKnownRoute(path, navItems)) {
     return <NotFoundView pathname={pathname} />;
   }
-  switch (active) {
-    case "Sessions":
+  switch (routeKey) {
+    case "sessions":
       return (
         <SessionsView
           data={data}
@@ -1480,13 +1488,13 @@ function renderView(
           sessionPageState={actions.sessionPageState}
         />
       );
-    case "Projects":
+    case "projects":
       return (
         <ProjectsView onSync={actions.runSync} projects={data.projects} syncing={actions.syncing} />
       );
-    case "Search":
+    case "search":
       return <SearchView dateRange={actions.dateRange} path={path} />;
-    case "Analytics":
+    case "analytics":
       return (
         <AnalyticsView
           data={data}
@@ -1496,7 +1504,7 @@ function renderView(
           syncing={actions.syncing}
         />
       );
-    case "Insights":
+    case "insights":
       return (
         <InsightsView
           loading={actions.recommendationsLoading}
@@ -1506,7 +1514,7 @@ function renderView(
           onMarked={actions.refresh}
         />
       );
-    case "Tools & MCP":
+    case "tools":
       return (
         <ToolsView
           data={data}
@@ -1514,7 +1522,7 @@ function renderView(
           onDateRangeChange={actions.onDateRangeChange}
         />
       );
-    case "Files":
+    case "files":
       return (
         <FilesView
           dateBounds={data.dateBounds}
@@ -1523,7 +1531,7 @@ function renderView(
           rows={data.files}
         />
       );
-    case "Settings":
+    case "settings":
       return (
         <SettingsView config={data.config} onSaved={actions.refresh} settingsInfo={data.settings} />
       );
@@ -7984,7 +7992,10 @@ function FilesView({
     setFileError(null);
     setFilesLoading(true);
     void getJson<FileRow[]>(
-      withDateQuery(`/api/files?group=${group}&limit=100${opParam}`, dateRangeQuery(dateRange)),
+      withDateQuery(
+        `/api/files?group=${group}&limit=${TABLE_ROW_LIMIT}${opParam}`,
+        dateRangeQuery(dateRange),
+      ),
       { signal: controller.signal },
     )
       .then(setFileRows)

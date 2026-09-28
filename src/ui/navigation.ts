@@ -24,6 +24,10 @@ const SESSION_REPORT_KEY = "session-report";
 // Keep `/analytics` as an explicit alias for existing links and bookmarks.
 const ALIASES: Record<string, string> = { "/analytics": HOME_KEY };
 
+export function isSessionDetailPath(pathname: string): boolean {
+  return /^\/sessions\/\d+$/.test(pathname);
+}
+
 export function pathOnly(path: string): string {
   // `split` always yields at least one element, so the empty case needs an
   // explicit check rather than a `??` fallback that can never fire.
@@ -92,7 +96,7 @@ function sessionParams(path: string): URLSearchParams {
  */
 function resolve(path: string, items: readonly NavDestination[]): NavDestination | null {
   const pathname = pathOnly(path);
-  if (pathname === "/sessions" || /^\/sessions\/\d+$/.test(pathname)) {
+  if (pathname === "/sessions" || isSessionDetailPath(pathname)) {
     return items.find((item) => item.key === "sessions") ?? null;
   }
   if (pathname === "/reports/analytics") {
@@ -138,7 +142,7 @@ export function titleFor(active: string): string {
 
 export function documentTitleFor(path: string, items: readonly NavDestination[]): string {
   const pathname = pathOnly(path);
-  if (/^\/sessions\/\d+$/.test(pathname)) {
+  if (isSessionDetailPath(pathname)) {
     return "Session detail · Decant";
   }
   if (pathname === "/reports/analytics") {

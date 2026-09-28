@@ -59,7 +59,7 @@ describe("coded UI recovery", () => {
       "const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice))",
     );
     expect(main).toContain("failed: { error: unknown; requestKey: string } | null");
-    expect(main).toContain('active === "Sessions" && sessionPageState.error != null');
+    expect(main).toContain('activeView === "sessions" && sessionPageState.error != null');
   });
 
   test("refreshes failed slices on reconnect without replacing healthy data", () => {

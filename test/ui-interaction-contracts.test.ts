@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readUiSource, sourceBetween } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
 const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
@@ -187,7 +187,7 @@ describe("UI interaction contracts", () => {
   });
 
   test("exposes session state actions through the shared accessible overflow menu", () => {
-    const overflow = sourceBetween(main, "function OverflowMenu(", "function PromotionPanel(");
+    const overflow = sourceFrom(readUiFile("common.tsx"), "function OverflowMenu(");
     const session = sourceBetween(
       main,
       "function SessionDetailView(",

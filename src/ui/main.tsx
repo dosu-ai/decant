@@ -1,48 +1,3 @@
-import type { LucideIcon } from "lucide-react";
-import {
-  Archive,
-  ArrowLeft,
-  BarChart3,
-  ChartNoAxesCombined,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  CircleDollarSign,
-  Clock3,
-  Copy,
-  Cpu,
-  Download,
-  Ellipsis,
-  Eye,
-  FileCode2,
-  FileText,
-  FileType2,
-  FlaskConical,
-  Folder,
-  Inbox,
-  Info,
-  Lightbulb,
-  Menu,
-  MessageSquare,
-  Minus,
-  Monitor,
-  Moon,
-  Plus,
-  RefreshCw,
-  Rows3,
-  Search,
-  Settings,
-  Share2,
-  ShieldCheck,
-  Sun,
-  Trash2,
-  Upload,
-  Wrench,
-  X,
-  Zap,
-} from "lucide-react";
 import {
   type CSSProperties,
   memo,
@@ -60,8 +15,19 @@ import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
+import { ApiFailureState } from "./api-failure.tsx";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
+import {
+  Badge,
+  brandTone,
+  displayModelLabel,
+  ModelBadge,
+  providerIdentity,
+  ReasoningBadge,
+  ToolBadge,
+  toneName,
+} from "./badges.tsx";
 import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
@@ -69,6 +35,7 @@ import {
   type AnalyticsChartVariant,
   prepareAnalyticsChartState,
 } from "./chart-state.ts";
+import { copyTextToClipboard } from "./clipboard.ts";
 import {
   buildCommandPaletteGroups,
   type CommandPaletteItem,
@@ -80,6 +47,16 @@ import {
   reduceCommandPaletteKey,
   shouldOpenCommandPalette,
 } from "./command-palette.ts";
+import {
+  Bar,
+  EmptyState,
+  ErrorState,
+  OverflowMenu,
+  PrivacyReviewLists,
+  Sparkline,
+  StatCard,
+  Tooltip,
+} from "./common.tsx";
 import {
   contextCurveAreaPath,
   contextCurveLinePath,
@@ -102,14 +79,12 @@ import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from ".
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
-import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { errorRateDisplay } from "./error-rate.ts";
-import { nearestUsableIndex } from "./focus-rescue.ts";
+import { useDialogFocusTrap, useDisabledFocusRescue } from "./focus.ts";
 import {
   basename,
   capitalize,
-  clampNumber,
   compact,
   compactAxis,
   duration,
@@ -136,6 +111,7 @@ import {
   type SessionSearchIndex,
   type SessionSearchIndexRow,
 } from "./fuzzy.ts";
+import { BrandMark, Icon } from "./icons.tsx";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
 import { Link, locationPath, updateSearchRoute, visit } from "./link.tsx";
@@ -144,7 +120,7 @@ import {
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "./loading-state.ts";
-import { formatMcpServer, mcpServerLabel, mcpServerLabels } from "./mcp-server.ts";
+import { mcpServerLabel, mcpServerLabels } from "./mcp-server.ts";
 import {
   documentTitleFor,
   isKnownRoute,
@@ -178,6 +154,13 @@ import {
   sessionThreadCost,
 } from "./session-summary.ts";
 import {
+  cleanSessionTitle,
+  isPermissionsText,
+  sessionDisplayTitle,
+  subagentDescriptor,
+  tagAttribute,
+} from "./session-title.ts";
+import {
   hasShareCardValues,
   SHARE_CARD_HEIGHT,
   SHARE_CARD_SCALE,
@@ -194,6 +177,23 @@ import {
   shareCardTitle,
 } from "./share-card.ts";
 import { collectSliceResults } from "./slice-loading.ts";
+import {
+  type FileSortKey,
+  fileSortValue,
+  fileTotal,
+  type McpSortKey,
+  type ModelSortKey,
+  mcpSortValue,
+  modelSortValue,
+  nextSort,
+  type ProjectSortKey,
+  projectSortValue,
+  SortableHeader,
+  type SortState,
+  sortRows,
+  type ToolSortKey,
+  toolSortValue,
+} from "./sorting.tsx";
 import { toolCallStatus } from "./tool-call-status.ts";
 import {
   clearToolCallFilters,
@@ -240,7 +240,6 @@ import type {
   Activity,
   ActivityBucket,
   BadgeTone,
-  BrandIconName,
   ConfigView,
   ContextWindowCompactionData,
   ContextWindowTimelineData,
@@ -460,15 +459,6 @@ const navGroups: { label: string; items: NavItem[] }[] = [
 ];
 
 const navItems: NavItem[] = navGroups.flatMap((group) => group.items);
-
-const CLAUDE_ICON_PATH =
-  "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z";
-const OPENAI_ICON_PATH =
-  "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
-const ANTHROPIC_ICON_PATH =
-  "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
-const GEMINI_ICON_PATH =
-  "M12 2a.75.75 0 0 1 .67.42l1.93 3.86 3.86 1.93a.75.75 0 0 1 0 1.34l-3.86 1.93-1.93 3.86a.75.75 0 0 1-1.34 0l-1.93-3.86-3.86-1.93a.75.75 0 0 1 0-1.34l3.86-1.93 1.93-3.86a.75.75 0 0 1 .67-.42Zm7.5 12a.75.75 0 0 1 .67.42l1.05 2.1 2.1 1.05a.75.75 0 0 1 0 1.34l-2.1 1.05-1.05 2.1a.75.75 0 0 1-1.34 0l-1.05-2.1-2.1-1.05a.75.75 0 0 1 0-1.34l2.1-1.05 1.05-2.1a.75.75 0 0 1 .67-.42Z";
 
 const SESSION_PAGE_SIZE = 50;
 // The Files view refetches with filters but must match the route slice's page of rows.
@@ -2049,90 +2039,6 @@ function SubagentRollup({ session }: { session: SessionSummary }) {
   );
 }
 
-function sessionDisplayTitle(session: SessionSummary): string {
-  return cleanSessionTitle(session.title) ?? session.source_session_id ?? "(untitled)";
-}
-
-function cleanSessionTitle(value: string | null | undefined): string | null {
-  if (value == null || value.trim() === "") {
-    return null;
-  }
-  const text = stripAnsi(value).trim();
-  if (isPermissionsText(text)) {
-    return "Execution permissions";
-  }
-  if (/^<local-command-caveat>/i.test(text)) {
-    return "Command context";
-  }
-  if (/^<local-command-std(?:out|err)>/i.test(text) || /^<local-command-output>/i.test(text)) {
-    return "Command output";
-  }
-  if (/^<command-name>/i.test(text)) {
-    return "Command context";
-  }
-  if (/^<teammate-message\b/i.test(text)) {
-    return tagAttribute(text, "summary") ?? "Subagent request";
-  }
-  if (/^<environment_context>/i.test(text)) {
-    return "Environment context";
-  }
-  const withoutMarkup = stripMarkupTags(text);
-  if (withoutMarkup !== text && withoutMarkup !== "") {
-    return firstLine(withoutMarkup.replace(/^Caveat:\s*/i, ""), 96);
-  }
-  const tag = text.match(/^<([a-z][a-z0-9_-]*)\b[^>]*>/i);
-  if (tag == null) {
-    return text;
-  }
-  const remainder = text.slice(tag[0].length).trim();
-  if (remainder !== "" && !remainder.startsWith("<")) {
-    return firstLine(remainder.replace(/^Caveat:\s*/i, ""), 96);
-  }
-  return readableTagLabel(tag[1] ?? "");
-}
-
-function stripMarkupTags(value: string): string {
-  return value
-    .replace(/<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function stripAnsi(value: string): string {
-  const pattern = `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`;
-  return value.replace(new RegExp(pattern, "g"), "");
-}
-
-function isPermissionsText(value: string): boolean {
-  return (
-    /^<permissions instructions>/i.test(value) || value.includes("Filesystem sandboxing defines")
-  );
-}
-
-function tagAttribute(value: string, name: string): string | null {
-  const pattern = new RegExp(`${name}=(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
-  const match = value.match(pattern);
-  return match == null ? null : (match[1] ?? match[2] ?? match[3] ?? null);
-}
-
-function readableTagLabel(tag: string): string {
-  switch (tag.toLowerCase()) {
-    case "environment_context":
-      return "Environment context";
-    case "permissions":
-    case "permissions-instructions":
-    case "permissions_instructions":
-      return "Execution permissions";
-    default:
-      return "Agent context";
-  }
-}
-
-function subagentDescriptor(session: SessionSummary): string {
-  const kind = session.agent_type ?? "subagent";
-  return session.agent_id != null ? `${kind} · ${session.agent_id}` : kind;
-}
-
 type PaletteItemKind = "recent" | "session" | "page" | "action" | "content-search";
 
 interface PaletteItem extends CommandPaletteItem {
@@ -3125,152 +3031,6 @@ function HighlightedSnippet({ snippet }: { snippet: string }) {
   );
 }
 
-type SortDirection = "asc" | "desc";
-type SortValue = number | string | null | undefined;
-type SortState<Key extends string> = { direction: SortDirection; key: Key };
-type ModelSortKey =
-  | "cost"
-  | "input_tokens"
-  | "key"
-  | "output_tokens"
-  | "reasoning_tokens"
-  | "sessions";
-type ProjectSortKey = "cost" | "key" | "sessions";
-type McpSortKey = "calls" | "errors" | "last_used" | "p50" | "server" | "tools";
-type ToolSortKey = "calls" | "errors" | "kind" | "last_used" | "p50" | "server" | "tool";
-type FileSortKey =
-  | "deletes"
-  | "edits"
-  | "key"
-  | "last_touched_at"
-  | "project"
-  | "reads"
-  | "sessions"
-  | "total"
-  | "writes";
-
-function nextSort<Key extends string>(sort: SortState<Key>, key: Key): SortState<Key> {
-  return {
-    key,
-    direction: sort.key === key && sort.direction === "desc" ? "asc" : "desc",
-  };
-}
-
-function sortRows<Row, Key extends string>(
-  rows: Row[],
-  sort: SortState<Key>,
-  valueFor: (row: Row, key: Key) => SortValue,
-): Row[] {
-  return rows
-    .slice()
-    .sort((left, right) =>
-      compareSortValue(valueFor(left, sort.key), valueFor(right, sort.key), sort.direction),
-    );
-}
-
-function compareSortValue(left: SortValue, right: SortValue, direction: SortDirection): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-  if (typeof left === "number" || typeof right === "number") {
-    return multiplier * ((Number(left) || 0) - (Number(right) || 0));
-  }
-  return (
-    multiplier * String(left ?? "").localeCompare(String(right ?? ""), undefined, { numeric: true })
-  );
-}
-
-function modelSortValue(row: DimensionRow, key: ModelSortKey): SortValue {
-  switch (key) {
-    case "cost":
-      return row.estimated_cost_usd;
-    case "input_tokens":
-      return row.input_tokens;
-    case "key":
-      return row.key;
-    case "output_tokens":
-      return row.output_tokens;
-    case "reasoning_tokens":
-      return row.reasoning_tokens || row.est_reasoning_tokens;
-    case "sessions":
-      return row.sessions;
-  }
-}
-
-function projectSortValue(row: DimensionRow, key: ProjectSortKey): SortValue {
-  switch (key) {
-    case "cost":
-      return row.estimated_cost_usd;
-    case "key":
-      return row.key;
-    case "sessions":
-      return row.sessions;
-  }
-}
-
-function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
-  switch (key) {
-    case "calls":
-      return row.calls;
-    case "errors":
-      return row.errors;
-    case "last_used":
-      return row.last_used_at == null ? 0 : Date.parse(row.last_used_at);
-    case "p50":
-      return row.p50_ms;
-    case "server":
-      // The short name on purpose, not the disambiguated label: two
-      // registrations of one server sort adjacently, which is where a reader
-      // expects to find them.
-      return formatMcpServer(row.mcp_server);
-    case "tools":
-      return row.tools;
-  }
-}
-
-function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
-  switch (key) {
-    case "calls":
-      return row.calls;
-    case "errors":
-      return row.errors;
-    case "kind":
-      return row.tool_kind;
-    case "last_used":
-      return row.last_used_at == null ? 0 : Date.parse(row.last_used_at);
-    case "p50":
-      return row.p50_ms;
-    case "server":
-      // The short name on purpose, not the disambiguated label: two
-      // registrations of one server sort adjacently, which is where a reader
-      // expects to find them.
-      return formatMcpServer(row.mcp_server);
-    case "tool":
-      return row.tool_name;
-  }
-}
-
-function fileSortValue(row: FileRow, key: FileSortKey): SortValue {
-  switch (key) {
-    case "deletes":
-      return row.deletes;
-    case "edits":
-      return row.edits;
-    case "key":
-      return row.key;
-    case "last_touched_at":
-      return row.last_touched_at == null ? 0 : Date.parse(row.last_touched_at);
-    case "project":
-      return row.project;
-    case "reads":
-      return row.reads;
-    case "sessions":
-      return row.sessions;
-    case "total":
-      return fileTotal(row);
-    case "writes":
-      return row.writes;
-  }
-}
-
 /** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
 function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boolean }) {
   return (
@@ -3326,257 +3086,6 @@ const SESSION_REPORT_NEVER_INCLUDES = [
   "Credentials, source-file contents, or the session-log database",
   "Remote scripts, fonts, or tracking pixels",
 ] as const;
-
-const FOCUS_CANDIDATE_SELECTOR =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
-function dialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
-  if (dialog == null) {
-    return [];
-  }
-  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUS_CANDIDATE_SELECTOR)).filter(
-    (element) => !element.matches(":disabled") && element.getClientRects().length > 0,
-  );
-}
-
-function useDialogFocusTrap(
-  open: boolean,
-  dialogRef: { current: HTMLElement | null },
-  onClose: () => void,
-) {
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const returnFocus =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusFrame = window.requestAnimationFrame(() => {
-      const dialog = dialogRef.current;
-      (dialogFocusTargets(dialog)[0] ?? dialog)?.focus();
-    });
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-      const dialog = dialogRef.current;
-      const focusTargets = dialogFocusTargets(dialog);
-      const first = focusTargets[0];
-      const last = focusTargets.at(-1);
-      if (dialog == null) {
-        return;
-      }
-      if (first == null || last == null) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !dialog.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", onKeyDown);
-      if (returnFocus?.isConnected === true) {
-        returnFocus.focus();
-      }
-    };
-  }, [dialogRef, onClose, open]);
-}
-
-/**
- * One rescue for every button that disables itself while focused. React writes
- * `disabled` as an attribute, so a single observer sees all of them and the fix
- * does not have to be repeated at each `disabled={...ing}` call site.
- */
-function useDisabledFocusRescue() {
-  useEffect(() => {
-    let lastFocused: HTMLElement | null = null;
-    let pendingRescue: WeakRef<HTMLElement> | null = null;
-    // A busy control may come back, while a redundant control (for example,
-    // Next on the last page) may never re-enable. Keep both elements weak so a
-    // pending restore cannot retain a detached subtree for the life of the app.
-    let pendingRestore: {
-      control: WeakRef<HTMLElement>;
-      landed: WeakRef<HTMLElement>;
-    } | null = null;
-    const remember = (event: FocusEvent) => {
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      pendingRescue = null;
-      if (pendingRestore?.landed.deref() !== target) {
-        pendingRestore = null;
-      }
-      lastFocused = target;
-    };
-    const focusNeedsRescue = (control: HTMLElement) => {
-      const landed = document.activeElement;
-      return (
-        landed === null ||
-        (landed === control && control.matches(":disabled")) ||
-        landed === document.body ||
-        landed === document.documentElement
-      );
-    };
-    const rescueTarget = (control: HTMLElement) => {
-      // Landing outside the region the reader was working in, or outside an open
-      // dialog, is more disorienting than leaving focus where it fell.
-      const boundary = control.closest('dialog, [role="dialog"], main, nav, form');
-      for (let scope = control.parentElement; scope != null; scope = scope.parentElement) {
-        const candidates = Array.from(
-          scope.querySelectorAll<HTMLElement>(FOCUS_CANDIDATE_SELECTOR),
-        ).filter((element) => element === control || element.getClientRects().length > 0);
-        const enabled = candidates.map((element) => !element.matches(":disabled"));
-        const next = candidates[nearestUsableIndex(candidates.indexOf(control), enabled) ?? -1];
-        if (next != null) {
-          return next;
-        }
-        if (scope === boundary) {
-          return null;
-        }
-      }
-      return null;
-    };
-    const retryPending = () => {
-      const control = pendingRescue?.deref();
-      if (control == null || !control.isConnected || !focusNeedsRescue(control)) {
-        pendingRescue = null;
-        return;
-      }
-      // If the original control re-enabled before the rest of its group offered
-      // a safe landing place, it is itself the least surprising destination.
-      if (!control.matches(":disabled")) {
-        pendingRescue = null;
-        control.focus();
-        return;
-      }
-      const next = rescueTarget(control);
-      if (next != null) {
-        // Set this before focus(): focusin fires synchronously and must recognize
-        // the landing as ours rather than treating it as reader navigation.
-        pendingRestore = {
-          control: new WeakRef(control),
-          landed: new WeakRef(next),
-        };
-        next.focus();
-        if (document.activeElement !== next) {
-          pendingRestore = null;
-        }
-      }
-    };
-    const observer = new MutationObserver((records) => {
-      const restoreControl = pendingRestore?.control.deref();
-      const restoreLanding = pendingRestore?.landed.deref();
-      if (
-        restoreControl == null ||
-        restoreLanding == null ||
-        !restoreControl.isConnected ||
-        !restoreLanding.isConnected ||
-        document.activeElement !== restoreLanding
-      ) {
-        pendingRestore = null;
-      } else if (!restoreControl.matches(":disabled")) {
-        pendingRestore = null;
-        restoreControl.focus();
-      }
-
-      for (const record of records) {
-        const control = record.target;
-        if (
-          control !== lastFocused ||
-          !(control instanceof HTMLElement) ||
-          !control.matches(":disabled") ||
-          !focusNeedsRescue(control)
-        ) {
-          continue;
-        }
-        lastFocused = null;
-        pendingRescue = new WeakRef(control);
-        break;
-      }
-      // A pagination group can remain entirely disabled for longer than any
-      // safe timer. Every relevant control becoming usable changes its disabled
-      // attribute, so retry from that mutation instead of racing the request.
-      retryPending();
-    });
-    // Focus leaving a control that is still enabled means the reader moved on,
-    // so a later disable on that control is not ours to rescue.
-    const forget = (event: FocusEvent) => {
-      if (
-        event.target === lastFocused &&
-        event.target instanceof HTMLElement &&
-        !event.target.matches(":disabled")
-      ) {
-        lastFocused = null;
-      }
-    };
-    const cancelPending = () => {
-      pendingRescue = null;
-      pendingRestore = null;
-    };
-    document.addEventListener("focusin", remember);
-    document.addEventListener("focusout", forget);
-    document.addEventListener("keydown", cancelPending, true);
-    document.addEventListener("pointerdown", cancelPending, true);
-    observer.observe(document.body, {
-      attributeFilter: ["disabled"],
-      attributes: true,
-      subtree: true,
-    });
-    return () => {
-      document.removeEventListener("focusin", remember);
-      document.removeEventListener("focusout", forget);
-      document.removeEventListener("keydown", cancelPending, true);
-      document.removeEventListener("pointerdown", cancelPending, true);
-      observer.disconnect();
-    };
-  }, []);
-}
-
-function PrivacyReviewLists({
-  className,
-  excluded,
-  excludedLabel,
-  included,
-  includedLabel,
-}: {
-  className: string;
-  excluded: readonly string[];
-  excludedLabel: string;
-  included: readonly string[];
-  includedLabel: string;
-}) {
-  return (
-    <div className={className}>
-      <div>
-        <h3>{includedLabel}</h3>
-        <ul>
-          {included.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </div>
-      <div>
-        <h3>{excludedLabel}</h3>
-        <ul>
-          {excluded.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
 
 function ExportReviewSheet({
   actions,
@@ -4465,156 +3974,6 @@ function TokenEconomicsPanel({
   );
 }
 
-type TooltipTriggerProps = {
-  ref: (node: HTMLElement | null) => void;
-  onBlur: () => void;
-  onFocus: () => void;
-  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
-  tabIndex: number;
-  "aria-describedby"?: string;
-};
-
-function Tooltip({
-  children,
-  content,
-}: {
-  children: (props: TooltipTriggerProps) => ReactNode;
-  content: ReactNode;
-}) {
-  const id = useId();
-  const triggerRef = useRef<HTMLElement | null>(null);
-  const tooltipRef = useRef<HTMLDivElement | null>(null);
-  const closeTimer = useRef<number | null>(null);
-  const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-
-  const clearCloseTimer = useCallback(() => {
-    if (closeTimer.current != null) {
-      window.clearTimeout(closeTimer.current);
-      closeTimer.current = null;
-    }
-  }, []);
-
-  const openTooltip = () => {
-    clearCloseTimer();
-    setOpen(true);
-  };
-
-  const closeTooltip = () => {
-    clearCloseTimer();
-    closeTimer.current = window.setTimeout(() => setOpen(false), 80);
-  };
-
-  const updatePosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (trigger == null) {
-      return;
-    }
-    const triggerRect = trigger.getBoundingClientRect();
-    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
-    const width = tooltipRect?.width ?? 320;
-    const height = tooltipRect?.height ?? 44;
-    const padding = 12;
-    const maxLeft = Math.max(padding, window.innerWidth - width - padding);
-    const left = clampNumber(
-      triggerRect.left + triggerRect.width / 2 - width / 2,
-      padding,
-      maxLeft,
-    );
-    let top = triggerRect.top - height - 8;
-    if (top < padding) {
-      top = triggerRect.bottom + 8;
-    }
-    top = clampNumber(top, padding, Math.max(padding, window.innerHeight - height - padding));
-    setPosition((current) =>
-      current != null && current.left === left && current.top === top ? current : { left, top },
-    );
-  }, []);
-
-  useLayoutEffect(() => {
-    if (open) {
-      updatePosition();
-    }
-  });
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onScrollOrResize = () => updatePosition();
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (triggerRef.current?.contains(target) === true || tooltipRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-    window.addEventListener("resize", onScrollOrResize);
-    window.addEventListener("scroll", onScrollOrResize, true);
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => {
-      window.removeEventListener("resize", onScrollOrResize);
-      window.removeEventListener("scroll", onScrollOrResize, true);
-      document.removeEventListener("pointerdown", onPointerDown, true);
-    };
-  }, [open, updatePosition]);
-
-  useEffect(
-    () => () => {
-      clearCloseTimer();
-    },
-    [clearCloseTimer],
-  );
-
-  const triggerProps: TooltipTriggerProps = {
-    ref: (node) => {
-      triggerRef.current = node;
-    },
-    onBlur: closeTooltip,
-    onFocus: openTooltip,
-    onKeyDown: (event) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    },
-    onMouseEnter: openTooltip,
-    onMouseLeave: closeTooltip,
-    tabIndex: 0,
-    "aria-describedby": open ? id : undefined,
-  };
-
-  return (
-    <>
-      {children(triggerProps)}
-      {open
-        ? createPortal(
-            <div
-              className="floating-tooltip"
-              id={id}
-              onMouseEnter={openTooltip}
-              onMouseLeave={closeTooltip}
-              ref={tooltipRef}
-              role="tooltip"
-              style={
-                position == null
-                  ? { left: 0, top: 0, visibility: "hidden" }
-                  : { left: position.left, top: position.top }
-              }
-            >
-              {content}
-            </div>,
-            document.body,
-          )
-        : null}
-    </>
-  );
-}
-
 function WeekdayPanel({
   activity,
   rangeLabels,
@@ -5284,38 +4643,6 @@ function chartColors() {
   };
 }
 
-function Sparkline({ tone = "accent", values }: { tone?: BadgeTone; values: number[] }) {
-  const points = sparkPoints(values);
-  if (points == null) {
-    return <span className="spark-empty">-</span>;
-  }
-  return (
-    <svg
-      aria-hidden="true"
-      className={`sparkline tone-${tone}`}
-      preserveAspectRatio="none"
-      viewBox="0 0 100 24"
-    >
-      <polyline points={points} />
-    </svg>
-  );
-}
-
-function sparkPoints(values: number[]): string | null {
-  const cleanValues = values.map((value) => Math.max(0, value));
-  if (cleanValues.length < 2) {
-    return null;
-  }
-  const max = Math.max(1, ...cleanValues);
-  return cleanValues
-    .map((value, index) => {
-      const x = (index / (cleanValues.length - 1)) * 100;
-      const y = 23 - (value / max) * 22;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-}
-
 function hourLabel(hour: number): string {
   if (hour === 0) {
     return "12a";
@@ -5383,453 +4710,6 @@ function activityTone(bucket: ActivityBucket): BadgeTone {
   }
 }
 
-function StatCard({
-  alert = false,
-  icon,
-  label,
-  value,
-}: {
-  /** Danger colour is redundant emphasis on a number that already states the problem; stat icons are otherwise muted by design. */
-  alert?: boolean;
-  icon: IconName;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="stat-card" data-alert={alert ? "true" : undefined}>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-      <span className="stat-icon">
-        <Icon name={icon} />
-      </span>
-    </div>
-  );
-}
-
-function Badge({
-  children,
-  className,
-  mono = false,
-  title,
-  tone = "neutral",
-}: {
-  children: ReactNode;
-  className?: string;
-  mono?: boolean;
-  title?: string;
-  tone?: BadgeTone;
-}) {
-  return (
-    <span
-      className={`badge tone-${tone}${mono ? " is-mono" : ""}${className ? ` ${className}` : ""}`}
-      title={title}
-    >
-      {children}
-    </span>
-  );
-}
-
-function ToolBadge({ tool }: { tool: string | null | undefined }) {
-  if (tool === "claude_code") {
-    return (
-      <Badge tone="claude">
-        <BrandMark name="claude" />
-        Claude
-      </Badge>
-    );
-  }
-  if (tool === "codex") {
-    return (
-      <Badge tone="openai">
-        <BrandMark name="openai" />
-        Codex
-      </Badge>
-    );
-  }
-  if (tool === "gemini") {
-    return (
-      <Badge tone="gemini">
-        <BrandMark name="gemini" />
-        Gemini
-      </Badge>
-    );
-  }
-  return <Badge>{tool ?? "-"}</Badge>;
-}
-
-function ModelBadge({ model }: { model: string | null | undefined }) {
-  const label = displayModelLabel(model);
-  if (label == null) {
-    return <span className="faint">-</span>;
-  }
-  const tone = brandTone(label);
-  const theme = modelTheme(label);
-  const icon = theme == null ? modelBrandIcon(label, tone) : null;
-  return (
-    <Badge
-      mono
-      title={model?.trim() ?? label}
-      tone={tone}
-      className={theme == null ? undefined : `model-${theme}`}
-    >
-      {icon == null ? null : <BrandMark name={icon} />}
-      <span className="model-label">{label}</span>
-    </Badge>
-  );
-}
-
-type ModelTheme = "astra" | "sol" | "luna";
-
-function modelTheme(model: string): ModelTheme | null {
-  const tier = /(?:^|[/:])gpt-(?:5\.6|6(?:\.1)?)-(astra|sol|luna)$/i.exec(model)?.[1];
-  return tier == null ? null : (tier.toLowerCase() as ModelTheme);
-}
-
-function EffortBadge({
-  effort,
-  labeled = false,
-  levels = [],
-}: {
-  effort: string | null | undefined;
-  labeled?: boolean;
-  levels?: string[];
-}) {
-  const label = effort?.trim().toLowerCase();
-  const displayLabel = effortDisplayLabel(effort, labeled);
-  if (label == null || label === "") {
-    return (
-      <span className="faint" title={effortTooltip(effort, levels)}>
-        {displayLabel}
-      </span>
-    );
-  }
-  return (
-    <Badge
-      mono
-      title={effortTooltip(effort, levels) ?? effortDisplayLabel(effort)}
-      tone={label === "mixed" ? "warning" : "info"}
-    >
-      {displayLabel}
-    </Badge>
-  );
-}
-
-function ThinkingBadge({ tokens, source }: { tokens: number; source: string | null }) {
-  const observed =
-    source === "inferred"
-      ? `Reasoning estimated from output: ~${formatInt(tokens)} tokens`
-      : `Extended thinking observed: ${formatInt(tokens)} reported reasoning tokens`;
-  return (
-    <Badge
-      mono
-      title={`${observed}. This source does not record a discrete effort level.`}
-      tone="info"
-    >
-      thinking on
-    </Badge>
-  );
-}
-
-/** The Effort cell shows the recorded level when the source logs one. When
- * the source logs reasoning tokens but no level, as Gemini does, it shows the
- * derived thinking state instead of an empty dash. */
-function ReasoningBadge({
-  effort,
-  levels,
-  totalReasoningTokens,
-  reasoningSource,
-  labeled = false,
-}: {
-  effort: string | null | undefined;
-  levels: string[];
-  totalReasoningTokens: number;
-  reasoningSource: string | null;
-  labeled?: boolean;
-}) {
-  if ((effort ?? "").trim() === "" && totalReasoningTokens > 0) {
-    return <ThinkingBadge tokens={totalReasoningTokens} source={reasoningSource} />;
-  }
-  return <EffortBadge effort={effort} labeled={labeled} levels={levels} />;
-}
-
-function displayModelLabel(model: string | null | undefined): string | null {
-  if (model == null) {
-    return null;
-  }
-  const trimmed = model.trim();
-  if (trimmed === "") {
-    return null;
-  }
-  const tagOnly = trimmed.match(/^<([a-z][a-z0-9_-]*)>$/i);
-  if (tagOnly != null) {
-    return capitalize((tagOnly[1] ?? "").replace(/[-_]+/g, " "));
-  }
-  const stripped = stripMarkupTags(trimmed);
-  return stripped === "" ? null : stripped;
-}
-
-function EmptyState({
-  action,
-  icon,
-  message,
-  title,
-}: {
-  action?: ReactNode;
-  icon: IconName;
-  message: string;
-  title: string;
-}) {
-  return (
-    <div className="empty-state">
-      <span>
-        <Icon name={icon} />
-      </span>
-      <h3>{title}</h3>
-      <p>{message}</p>
-      {action != null ? <div className="state-actions">{action}</div> : null}
-    </div>
-  );
-}
-
-function ErrorState({
-  action,
-  detail,
-  icon = "info",
-  secondaryAction,
-  title,
-}: {
-  action?: ReactNode;
-  detail: string;
-  icon?: IconName;
-  secondaryAction?: ReactNode;
-  title: string;
-}) {
-  return (
-    <div className="error-state" role="alert">
-      <span>
-        <Icon name={icon} />
-      </span>
-      <div>
-        <h3>{title}</h3>
-        <p>{detail}</p>
-        {action != null || secondaryAction != null ? (
-          <div className="state-actions">
-            {action}
-            {secondaryAction}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-type RecoveryPresentation = {
-  actionHref?: string;
-  actionLabel?: string;
-  command?: string;
-  detail: string;
-  icon: IconName;
-  retry: boolean;
-  title: string;
-  useSync?: boolean;
-};
-
-function recoveryPresentation(error: unknown): RecoveryPresentation {
-  if (!(error instanceof ApiError)) {
-    return {
-      detail:
-        "Decant could not reach the local server. Restart `decant serve` if needed, then retry.",
-      icon: "info",
-      retry: true,
-      title: "Request failed",
-    };
-  }
-  switch (error.code) {
-    case "session_not_found":
-      return error.extras.archive_empty === true
-        ? {
-            actionHref: "/sessions",
-            actionLabel: "Back to sessions",
-            detail: "There are no session logs on this device yet. Sync to import them.",
-            icon: "sessions",
-            retry: false,
-            title: "No session logs yet",
-            useSync: true,
-          }
-        : {
-            actionHref: "/sessions",
-            actionLabel: "Back to sessions",
-            detail: "This session log is no longer available. It may have moved after a rebuild.",
-            icon: "inbox",
-            retry: false,
-            title: "Session not found",
-            useSync: true,
-          };
-    case "schema_too_new":
-      return {
-        actionHref: "https://github.com/dosu-ai/decant/releases",
-        actionLabel: "Update Decant",
-        detail:
-          "These session logs were indexed by a newer Decant build. Update Decant, then retry.",
-        icon: "info",
-        retry: true,
-        title: "Decant is out of date",
-      };
-    case "schema_too_old":
-      return {
-        actionHref: "https://github.com/dosu-ai/decant#configuration",
-        actionLabel: "View rebuild guide",
-        detail:
-          "The session log index predates the supported schema baseline. Back it up, rebuild it, and sync the source logs again.",
-        icon: "info",
-        retry: false,
-        title: "Session log index rebuild required",
-      };
-    case "launch_unsupported_platform":
-      return {
-        command: typeof error.extras.command === "string" ? error.extras.command : undefined,
-        detail:
-          "Native agent and editor launching is available on macOS. Copy the prompt or command and run it manually here.",
-        icon: "info",
-        retry: false,
-        title: "Native launch is unavailable",
-      };
-    case "launch_failed":
-      return {
-        command: typeof error.extras.command === "string" ? error.extras.command : undefined,
-        actionHref: "/settings",
-        actionLabel: "Check launcher settings",
-        detail:
-          "Decant could not open the selected app. Check the launcher setting, then try again.",
-        icon: "info",
-        retry: true,
-        title: "Launch failed",
-      };
-    case "archive_locked":
-      return {
-        detail:
-          "Another Decant operation is using the session log index. Wait a moment, then retry.",
-        icon: "clock",
-        retry: true,
-        title: "Session logs are busy",
-      };
-    case "service_starting":
-      return {
-        detail: "Decant is finishing local startup. Try again in a moment.",
-        icon: "clock",
-        retry: true,
-        title: "Decant is starting",
-      };
-    case "internal_error":
-      return {
-        detail:
-          "Decant hit an unexpected local error. Restart `decant serve`, then retry. If it continues, check the server log for the private diagnostic.",
-        icon: "info",
-        retry: true,
-        title: "Decant could not complete the request",
-      };
-    default:
-      if (error.status >= 500) {
-        return {
-          detail:
-            "Decant hit an unexpected local error. Restart `decant serve`, then retry. If it continues, check the server log.",
-          icon: "info",
-          retry: true,
-          title: "Decant could not complete the request",
-        };
-      }
-      return {
-        detail: "Decant could not complete this request. Check the input and try again.",
-        icon: "info",
-        retry: true,
-        title: "Request failed",
-      };
-  }
-}
-
-function ApiFailureState({
-  error,
-  onRetry,
-  onSync,
-}: {
-  error: unknown;
-  onRetry?: () => void;
-  onSync?: () => void;
-}) {
-  const [commandCopied, setCommandCopied] = useState(false);
-  const recovery = recoveryPresentation(error);
-  const retryIsPrimary =
-    !recovery.useSync && recovery.actionHref == null && recovery.retry && onRetry != null;
-  const action =
-    recovery.actionHref != null && recovery.actionLabel != null ? (
-      <Link
-        className="primary-button"
-        href={recovery.actionHref}
-        rel={recovery.actionHref.startsWith("http") ? "noopener" : undefined}
-        target={recovery.actionHref.startsWith("http") ? "_blank" : undefined}
-      >
-        {recovery.actionLabel}
-      </Link>
-    ) : recovery.useSync && onSync != null ? (
-      <button className="primary-button" onClick={onSync} type="button">
-        Sync now
-      </button>
-    ) : retryIsPrimary ? (
-      <button className="primary-button" onClick={onRetry} type="button">
-        Retry
-      </button>
-    ) : null;
-  const secondaryAction =
-    recovery.useSync && onSync != null && action != null ? (
-      <button className="secondary-button" onClick={onSync} type="button">
-        Sync now
-      </button>
-    ) : recovery.retry && onRetry != null && action != null && !retryIsPrimary ? (
-      <button className="secondary-button" onClick={onRetry} type="button">
-        Retry
-      </button>
-    ) : null;
-  return (
-    <div className="api-failure">
-      <ErrorState
-        action={action}
-        detail={recovery.detail}
-        icon={recovery.icon}
-        secondaryAction={secondaryAction}
-        title={recovery.title}
-      />
-      {recovery.command != null ? (
-        <div className="recovery-command">
-          <code>{recovery.command}</code>
-          <button
-            className="secondary-button"
-            onClick={() => {
-              void copyTextToClipboard(recovery.command ?? "")
-                .then(() => setCommandCopied(true))
-                .catch(() => setCommandCopied(false));
-            }}
-            type="button"
-          >
-            <Icon name={commandCopied ? "check" : "copy"} />
-            {commandCopied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Bar({ fraction, tone }: { fraction: number; tone: BadgeTone }) {
-  const pct = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0)) * 100;
-  return (
-    <div className="bar">
-      <span className={`tone-${tone}`} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
 function DateRangeControl({
   bounds,
   range,
@@ -5885,37 +4765,6 @@ function DateRangeControl({
        * so showing it twice just looks like a bug. */}
       {range.preset === "all" ? null : <span>{dateRangeLabel(range)}</span>}
     </div>
-  );
-}
-
-function SortableHeader<Key extends string>({
-  align = "left",
-  label,
-  onSort,
-  sort,
-  sortKey,
-}: {
-  align?: "left" | "right";
-  label: string;
-  onSort: (key: Key) => void;
-  sort: SortState<Key>;
-  sortKey: Key;
-}) {
-  const active = sort.key === sortKey;
-  return (
-    <th
-      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-      className={align === "right" ? "numeric" : undefined}
-    >
-      <button
-        className={`sort-header${align === "right" ? " is-right" : ""}${active ? " is-active" : ""}`}
-        onClick={() => onSort(sortKey)}
-        type="button"
-      >
-        <span>{label}</span>
-        <Icon name={active && sort.direction === "asc" ? "chevronUp" : "chevronDown"} />
-      </button>
-    </th>
   );
 }
 
@@ -6074,49 +4923,6 @@ function RecommendationActions({
   );
 }
 
-function OverflowMenu({ children, label }: { children: ReactNode; label: string }) {
-  const menuRef = useRef<HTMLDetailsElement | null>(null);
-  return (
-    <details
-      className="overflow-menu"
-      onBlur={(event) => {
-        if (
-          !(event.relatedTarget instanceof Node) ||
-          !event.currentTarget.contains(event.relatedTarget)
-        ) {
-          event.currentTarget.open = false;
-        }
-      }}
-      onClick={(event) => {
-        if (
-          event.target instanceof Element &&
-          event.target.closest(".overflow-menu-popover :is(a, button)") != null &&
-          menuRef.current != null
-        ) {
-          menuRef.current.open = false;
-          menuRef.current.querySelector("summary")?.focus();
-        }
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") {
-          return;
-        }
-        event.preventDefault();
-        if (menuRef.current != null) {
-          menuRef.current.open = false;
-          menuRef.current.querySelector("summary")?.focus();
-        }
-      }}
-      ref={menuRef}
-    >
-      <summary aria-label={label} title="More actions">
-        <Icon name="ellipsis" />
-      </summary>
-      <div className="overflow-menu-popover">{children}</div>
-    </details>
-  );
-}
-
 function PromotionPanel({ compact = false, row }: { compact?: boolean; row: Recommendation }) {
   if (!hasPromotion(row)) {
     return null;
@@ -6152,121 +4958,6 @@ function PromotionPanel({ compact = false, row }: { compact?: boolean; row: Reco
       </dl>
     </div>
   );
-}
-
-function Icon({ name }: { name: IconName }) {
-  const Component = iconComponent(name);
-  return <Component aria-hidden="true" focusable="false" strokeWidth={2} />;
-}
-
-function BrandMark({ name }: { name: BrandIconName }) {
-  return (
-    <svg aria-hidden="true" className="brand-mark" focusable="false" viewBox="0 0 24 24">
-      <path d={brandIconPath(name)} />
-    </svg>
-  );
-}
-
-function iconComponent(name: IconName): LucideIcon {
-  switch (name) {
-    case "archive":
-      return Archive;
-    case "arrowLeft":
-      return ArrowLeft;
-    case "beaker":
-      return FlaskConical;
-    case "bolt":
-      return Zap;
-    case "chart":
-      return BarChart3;
-    case "check":
-      return Check;
-    case "chevronDown":
-      return ChevronDown;
-    case "chevronLeft":
-      return ChevronLeft;
-    case "chevronRight":
-      return ChevronRight;
-    case "chevronUp":
-      return ChevronUp;
-    case "clock":
-      return Clock3;
-    case "copy":
-      return Copy;
-    case "cpu":
-      return Cpu;
-    case "desktop":
-      return Monitor;
-    case "download":
-      return Download;
-    case "ellipsis":
-      return Ellipsis;
-    case "eye":
-      return Eye;
-    case "file":
-      return FileText;
-    case "fileCode":
-      return FileCode2;
-    case "filePdf":
-      return FileType2;
-    case "folder":
-      return Folder;
-    case "info":
-      return Info;
-    case "inbox":
-      return Inbox;
-    case "lightbulb":
-      return Lightbulb;
-    case "menu":
-      return Menu;
-    case "messages":
-      return MessageSquare;
-    case "minus":
-      return Minus;
-    case "money":
-      return CircleDollarSign;
-    case "moon":
-      return Moon;
-    case "plus":
-      return Plus;
-    case "refresh":
-      return RefreshCw;
-    case "search":
-      return Search;
-    case "share":
-      return Share2;
-    case "sessions":
-      return Rows3;
-    case "settings":
-      return Settings;
-    case "shield":
-      return ShieldCheck;
-    case "sun":
-      return Sun;
-    case "trend":
-      return ChartNoAxesCombined;
-    case "trash":
-      return Trash2;
-    case "tools":
-      return Wrench;
-    case "upload":
-      return Upload;
-    case "x":
-      return X;
-  }
-}
-
-function brandIconPath(name: BrandIconName): string {
-  switch (name) {
-    case "anthropic":
-      return ANTHROPIC_ICON_PATH;
-    case "claude":
-      return CLAUDE_ICON_PATH;
-    case "openai":
-      return OPENAI_ICON_PATH;
-    case "gemini":
-      return GEMINI_ICON_PATH;
-  }
 }
 
 function recommendationIcon(row: Recommendation): IconName {
@@ -6318,61 +5009,6 @@ function promotionText(row: Recommendation): string {
   ]
     .filter(isPresent)
     .join("\n");
-}
-
-function modelBrandIcon(model: string, tone: BadgeTone): BrandIconName | null {
-  if (tone === "openai") {
-    return "openai";
-  }
-  if (tone === "claude") {
-    return model.toLowerCase().includes("anthropic") && !model.toLowerCase().includes("claude")
-      ? "anthropic"
-      : "claude";
-  }
-  if (tone === "gemini") {
-    return "gemini";
-  }
-  return null;
-}
-
-function brandTone(model: string | null | undefined): BadgeTone {
-  const normalized = (model ?? "").toLowerCase();
-  if (
-    normalized.includes("claude") ||
-    normalized.includes("anthropic") ||
-    normalized.includes("opus") ||
-    normalized.includes("sonnet") ||
-    normalized.includes("haiku")
-  ) {
-    return "claude";
-  }
-  if (
-    normalized.includes("gpt") ||
-    normalized.includes("openai") ||
-    normalized.includes("codex") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3")
-  ) {
-    return "openai";
-  }
-  if (normalized.includes("gemini") || normalized.includes("gemma")) {
-    return "gemini";
-  }
-  return "neutral";
-}
-
-function toneName(tone: string | null | undefined): BadgeTone {
-  return tone === "success" ||
-    tone === "warning" ||
-    tone === "danger" ||
-    tone === "info" ||
-    tone === "accent"
-    ? tone
-    : "neutral";
-}
-
-function fileTotal(row: FileRow): number {
-  return row.reads + row.edits + row.writes + row.deletes;
 }
 
 function InsightsView({
@@ -10618,24 +9254,6 @@ function messageSpecialKind(
   return kind;
 }
 
-function providerIdentity(tool: string): {
-  key: "assistant" | "claude" | "openai" | "gemini";
-  label: string;
-  tone: BadgeTone;
-  icon: BrandIconName | null;
-} {
-  if (tool === "claude_code") {
-    return { key: "claude", label: "Claude", tone: "claude", icon: "claude" };
-  }
-  if (tool === "codex") {
-    return { key: "openai", label: "Codex", tone: "openai", icon: "openai" };
-  }
-  if (tool === "gemini") {
-    return { key: "gemini", label: "Gemini", tone: "gemini", icon: "gemini" };
-  }
-  return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
-}
-
 function nearestTranscriptSeq(sequences: readonly number[]): number | null {
   let nearest: { distance: number; seq: number } | null = null;
   const readingLine = 184;
@@ -10680,42 +9298,6 @@ function scrollTranscriptMessage(seq: number, stabilize = false, isCurrent = () 
     }
   };
   requestAnimationFrame(() => requestAnimationFrame(realign));
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  let clipboardError: unknown = null;
-  if (navigator.clipboard?.writeText != null) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch (error) {
-      clipboardError = error;
-    }
-  }
-
-  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("aria-hidden", "true");
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
-  document.body.append(textarea);
-  textarea.focus();
-  textarea.select();
-  try {
-    if (!document.execCommand("copy")) {
-      throw clipboardError instanceof Error
-        ? clipboardError
-        : new Error("Clipboard access is unavailable.");
-    }
-  } finally {
-    textarea.remove();
-    if (returnFocus?.isConnected === true) {
-      returnFocus.focus({ preventScroll: true });
-    }
-  }
 }
 
 function implementedTimestamp(row: Recommendation): number {

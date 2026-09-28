@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readUiSource, sourceBetween } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceBetween } from "./ui-source.ts";
 
 const main = readUiSource();
 
@@ -17,9 +17,9 @@ describe("report export privacy review", () => {
 
   test("uses one accessible review shell with trapped and restored focus", () => {
     const focusTrap = sourceBetween(
-      main,
+      readUiFile("focus.ts"),
       "function useDialogFocusTrap(",
-      "function PrivacyReviewLists(",
+      "function useDisabledFocusRescue(",
     );
     const reviewSheet = sourceBetween(
       main,

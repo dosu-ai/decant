@@ -296,6 +296,18 @@ export function sync(
     }
   }
 
+  refreshDerivedState(db, report, repriced, lineageMayHaveChanged);
+
+  return report;
+}
+
+/** Work that follows the ingest loop, each step gated on the change that can invalidate it. */
+function refreshDerivedState(
+  db: Database,
+  report: SyncReport,
+  repriced: number,
+  lineageMayHaveChanged: boolean,
+): void {
   // Lineage depends only on session rows and blocks, which change only through
   // ingest. An unchanged archive keeps the links the last ingest resolved, so
   // skipping here saves an O(archive) pass on every watcher sweep. A change to
@@ -331,8 +343,6 @@ export function sync(
     // query planner picks pathological join orders on multi-GB archives.
     db.exec("PRAGMA optimize;");
   }
-
-  return report;
 }
 
 /**
@@ -354,6 +364,39 @@ export function upsertSession(
 }
 
 export function seedModelPricing(db: Database): void {
+  const stored = new Map(
+    ingestRows<{
+      model: string;
+      input_per_mtok: number | null;
+      output_per_mtok: number | null;
+      cache_read_per_mtok: number | null;
+      cache_write_per_mtok: number | null;
+      cache_write_1h_per_mtok: number | null;
+      source: string | null;
+    }>(
+      db,
+      `SELECT model, input_per_mtok, output_per_mtok, cache_read_per_mtok,
+              cache_write_per_mtok, cache_write_1h_per_mtok, source
+         FROM model_pricing`,
+    ).map((row) => [row.model, row]),
+  );
+  // Most syncs change nothing, so skip the write lock unless a seed row is
+  // missing or differs. The upsert below repeats the comparison under the lock.
+  const pending = [...defaultPricing()].filter(([model, price]) => {
+    const row = stored.get(model);
+    return (
+      row == null ||
+      (row.source === "seed" &&
+        (row.input_per_mtok !== price.inputPerMtok ||
+          row.output_per_mtok !== price.outputPerMtok ||
+          row.cache_read_per_mtok !== price.cacheReadPerMtok ||
+          row.cache_write_per_mtok !== price.cacheWritePerMtok ||
+          row.cache_write_1h_per_mtok !== price.cacheWrite1hPerMtok))
+    );
+  });
+  if (pending.length === 0) {
+    return;
+  }
   const insert = db.prepare(
     `INSERT INTO model_pricing(
        model, input_per_mtok, output_per_mtok, cache_read_per_mtok,
@@ -376,7 +419,7 @@ export function seedModelPricing(db: Database): void {
   );
   try {
     withImmediateTransaction(db, () => {
-      for (const [model, price] of defaultPricing()) {
+      for (const [model, price] of pending) {
         insert.run(
           model,
           price.inputPerMtok,
@@ -1333,8 +1376,12 @@ function mtimeSecs(stats: Stats): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 
+// Buffer.byteLength counts a lone surrogate as 2 bytes; SQLite stores it as
+// U+FFFD (3), which is what the encoder reports.
+const utf8 = new TextEncoder();
+
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+  return utf8.encode(value).length;
 }
 
 function durationBetween(start: string | null, end: string | null): number | null {

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import {
   computeSessionEconomicsVectors,
   economicsVectorMatchesFilter,
   materializeMissingSessionEconomics,
+  refreshSessionCosts,
   SESSION_ECONOMICS_FORMAT_VERSION,
   tokenEconomics,
   tokenEconomicsForSession,
@@ -807,6 +808,65 @@ describe("token economics", () => {
     );
     expect(bounded.map((vector) => vector.id)).toEqual([1]);
     expect(aggregateEconomicsVectors([])).toEqual(tokenEconomics(db, { from: "2030-01-01" }));
+    db.close();
+  });
+});
+
+describe("refreshSessionCosts", () => {
+  function seeded(): Database {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+    );
+    return db;
+  }
+
+  test("takes no write lock when every cost is current", () => {
+    const db = seeded();
+    const path = (db.query("PRAGMA database_list").get() as { file: string }).file;
+    const writer = new Database(path, { strict: true });
+    writer.exec("BEGIN IMMEDIATE;");
+    try {
+      db.exec("PRAGMA busy_timeout = 0;");
+      expect(refreshSessionCosts(db)).toBe(0);
+    } finally {
+      writer.exec("ROLLBACK;");
+      writer.close();
+    }
+    db.close();
+  });
+
+  test("repairs a stale session total and its cached activity cost together", () => {
+    const db = seeded();
+    const before = db
+      .query(
+        "SELECT s.estimated_cost_usd AS cost, e.vector_json FROM session s JOIN session_economics e ON e.session_id = s.id",
+      )
+      .get() as { cost: number; vector_json: string };
+    const vector = JSON.parse(before.vector_json) as { input_cost: number; output_cost: number };
+    expect(before.cost).toBeGreaterThan(0);
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    db.query("UPDATE session_economics SET vector_json = ?1").run(
+      JSON.stringify({ ...vector, input_cost: 0, output_cost: 0 }),
+    );
+
+    expect(refreshSessionCosts(db)).toBe(1);
+
+    const after = db
+      .query(
+        "SELECT s.estimated_cost_usd AS cost, e.vector_json FROM session s JOIN session_economics e ON e.session_id = s.id",
+      )
+      .get() as { cost: number; vector_json: string };
+    expect(after.cost).toBe(before.cost);
+    expect(JSON.parse(after.vector_json)).toMatchObject({
+      input_cost: vector.input_cost,
+      output_cost: vector.output_cost,
+    });
+    expect(refreshSessionCosts(db)).toBe(0);
     db.close();
   });
 });

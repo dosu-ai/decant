@@ -95,6 +95,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { ErrorBoundary } from "./error-boundary.tsx";
 import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
@@ -128,6 +129,7 @@ import {
   sessionsPageHref,
   titleFor,
 } from "./navigation.ts";
+import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
 import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
@@ -285,6 +287,8 @@ type ServerEventPayload = {
 };
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
+// Every other view renders its own <h1>; the topbar title is then a plain label.
+const VIEWS_WITHOUT_HEADING = new Set(["not-found", "analytics-report", "session-report"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
 
 type Activity = {
@@ -850,7 +854,7 @@ function App() {
     reloadKey,
   });
   const [theme, setTheme] = useState<ThemeChoice>(() => {
-    const stored = localStorage.getItem("decant-theme");
+    const stored = readStorage("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
   });
 
@@ -888,10 +892,10 @@ function App() {
   useEffect(() => {
     if (theme === "system") {
       document.documentElement.removeAttribute("data-theme");
-      localStorage.removeItem("decant-theme");
+      removeStorage("decant-theme");
     } else {
       document.documentElement.dataset.theme = theme;
-      localStorage.setItem("decant-theme", theme);
+      writeStorage("decant-theme", theme);
     }
     window.dispatchEvent(new CustomEvent("decant:set-theme"));
   }, [theme]);
@@ -1289,7 +1293,11 @@ function App() {
           >
             <Icon name="menu" />
           </button>
-          <h1>{titleFor(active)}</h1>
+          {VIEWS_WITHOUT_HEADING.has(activeKey) ? (
+            <h1 className="topbar-title">{titleFor(active)}</h1>
+          ) : (
+            <p className="topbar-title">{titleFor(active)}</p>
+          )}
           <button
             aria-expanded={commandPaletteOpen}
             aria-haspopup="dialog"
@@ -4209,7 +4217,7 @@ function AnalyticsView({
   syncing: boolean;
 }) {
   const [dosuDismissed, setDosuDismissed] = useState(
-    () => localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
+    () => readStorage(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
   );
   const [modelSort, setModelSort] = useState<SortState<ModelSortKey>>({
     key: "cost",
@@ -4330,7 +4338,7 @@ function AnalyticsView({
             aria-label="Dismiss Dosu suggestion"
             className="icon-button"
             onClick={() => {
-              localStorage.setItem(DOSU_ANALYTICS_DISMISSAL_KEY, "1");
+              writeStorage(DOSU_ANALYTICS_DISMISSAL_KEY, "1");
               setDosuDismissed(true);
             }}
             type="button"
@@ -11401,7 +11409,12 @@ function Link({ href, setPath, onClick, ...rest }: LinkProps) {
 }
 
 function visit(href: string, setPath?: (path: string) => void) {
+  const previousPathname = window.location.pathname;
   window.history.pushState(null, "", href);
+  // pushState keeps the old scroll offset, which a full page load used to reset.
+  if (window.location.pathname !== previousPathname) {
+    window.scrollTo(0, 0);
+  }
   const next = locationPath();
   if (setPath != null) {
     setPath(next);
@@ -11427,4 +11440,12 @@ const root = document.getElementById("root");
 if (root == null) {
   throw new Error("missing #root");
 }
-createRoot(root).render(isFramed(window) ? <FramedNotice /> : <App />);
+createRoot(root).render(
+  isFramed(window) ? (
+    <FramedNotice />
+  ) : (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  ),
+);

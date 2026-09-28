@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
+import { DAY_END, type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
@@ -470,9 +470,11 @@ export function todayTotals(db: Database): Totals {
          SELECT *
          FROM session s
          ${whereClause({
-           sql: [visible.sql, "substr(s.started_at, 1, 10) = date('now', 'localtime')"].join(
-             " AND ",
-           ),
+           sql: [
+             visible.sql,
+             `s.started_at >= date('now', 'localtime')
+              AND s.started_at < date('now', 'localtime') || char(${DAY_END.codePointAt(0)})`,
+           ].join(" AND "),
            params: visible.params,
          })}
        )

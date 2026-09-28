@@ -5,7 +5,7 @@ import {
   MESSAGE_RAW_META_SQL,
   parseMessageRawMeta,
 } from "./context-window.ts";
-import { sessionDatePredicate } from "./date-filter.ts";
+import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
 import {
   bracketSearchMatches,
@@ -433,13 +433,10 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     clauses.push("p.path = ?");
     params.push(filter.project);
   }
-  if (filter.from != null) {
-    clauses.push("substr(t.timestamp, 1, 10) >= ?");
-    params.push(filter.from);
-  }
-  if (filter.to != null) {
-    clauses.push("substr(t.timestamp, 1, 10) <= ?");
-    params.push(filter.to);
+  const date = dayRangePredicate("t.timestamp", filter.from, filter.to);
+  if (date.sql !== "") {
+    clauses.push(date.sql);
+    params.push(...date.params);
   }
   if (filter.minMs != null) {
     clauses.push("t.duration_ms >= ?");

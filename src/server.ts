@@ -14,8 +14,8 @@ import {
   SchemaTooOldError,
 } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
+import { parseFileOperation } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
-import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
 import {
   canLaunch,
@@ -198,7 +198,7 @@ const syncStatus = {
 const eventClients = new Set<EventClient>();
 const metadataHydrated = new WeakSet<Db>();
 
-export function publishServerEvent<T extends ServerEvent>(event: T): void {
+function publishServerEvent<T extends ServerEvent>(event: T): void {
   for (const client of [...eventClients]) {
     try {
       client.send(event);
@@ -638,7 +638,8 @@ export async function handleRequest(
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");
-      const op = parseOperation(url.searchParams.get("op"));
+      const opParam = url.searchParams.get("op");
+      const op = opParam == null || opParam === "" ? null : (parseFileOperation(opParam) ?? false);
       if (group == null || op === false) {
         return errorResponse("invalid_files_query", "invalid files query", {}, 400);
       }
@@ -1292,7 +1293,7 @@ function ensureDerivedMetadata(db: Db): void {
   metadataHydrated.add(db);
 }
 
-export function errorResponse(
+function errorResponse(
   code: ApiErrorCode,
   message: string,
   extras: Record<string, unknown> = {},
@@ -1502,23 +1503,9 @@ export interface TrustedPeerSources {
   sysClassNetPath?: string;
 }
 
-/** Peers the local API guard admits when `serve` is bound to a non-loopback
- * host, resolved once at startup.
- *
- * Precedence, highest first. The first source that is present wins outright and
- * the rest are not consulted, so explicit configuration always *replaces* the
- * gateway default rather than adding to it:
- *
- * 1. `--trusted-peer` (`configured`), when the CLI collected any.
- * 2. `DECANT_TRUSTED_PEERS`, whenever the variable is set at all -- setting it
- *    to an empty string means "trust nobody", not "fall through".
- * 3. `DECANT_TRUST_DEFAULT_GATEWAY=1`, which trusts exactly one address: this
- *    container's own bridge gateway, and only when `containerBridgeGateway`
- *    can prove that is what the default route points at. Every other value,
- *    including `0` and an unset variable, trusts nobody.
- *
- * Nothing re-resolves afterwards: a host whose default route changes keeps the
- * address resolved at startup until `serve` restarts. */
+/** Peers admitted on a non-loopback bind, resolved once at startup. The first
+ * present source replaces the rest (an empty DECANT_TRUSTED_PEERS trusts
+ * nobody); precedence is documented in docs/api/routes.md. */
 export function resolveTrustedPeers(
   configured?: string[],
   env: Record<string, string | undefined> = process.env,
@@ -1542,26 +1529,12 @@ export function resolveTrustedPeers(
 
 /** This container's own bridge gateway, or `null` when that cannot be proven.
  *
- * That single address is worth trusting only because container runtimes rewrite
- * the source address of `-p`-published host traffic to it: it stands in for the
- * host that started the container, while a sibling container on the same bridge
- * keeps its own source address and stays denied. The reasoning holds only for a
- * bridge-networked container, so all of the following must hold and anything
- * unexpected -- including a non-Linux host, where `/proc/net/route` is absent --
- * fails closed:
- *
- * - exactly one usable IPv4 default route, so a multi-homed host cannot
- *   contribute a gateway from some other network;
- * - the gateway is on-link on that route's interface;
- * - the gateway is inside `GATEWAY_AUTO_TRUST_RANGE`;
- * - the interface is a veth into another network namespace: it publishes no
- *   device kind other than `veth`, has no backing bus device, is not stacked on
- *   a local parent, and its link peer does not resolve here. That rules out
- *   sharing the host's namespace (`--network host`, where the default route
- *   runs over a physical NIC, bridge, bond or tunnel) and a container attached
- *   straight to the LAN (macvlan, ipvlan). In those shapes the "default
- *   gateway" is the LAN or VPC router, which must never be trusted
- *   implicitly. */
+ * Runtimes rewrite the source of `-p`-published host traffic to this address,
+ * so it stands in for the host while sibling containers stay denied. That only
+ * holds for a veth into another network namespace: on host networking, macvlan
+ * or ipvlan the default gateway is a LAN or VPC router that must never be
+ * trusted implicitly, so every unproven shape (and any non-Linux host) fails
+ * closed. See docs/distribution.md#docker. */
 function containerBridgeGateway(routeTablePath: string, sysClassNetPath: string): string | null {
   const routes = readRouteTable(routeTablePath);
   if (routes == null) {
@@ -1859,15 +1832,6 @@ function integerParam(url: URL, name: string, fallback: number, allowZero = fals
 
 function usageLimit(url: URL, fallback: number): number {
   return Math.min(integerParam(url, "limit", fallback), USAGE_LIST_MAX_LIMIT);
-}
-
-function parseOperation(value: string | null): Operation | null | false {
-  if (value == null || value === "") {
-    return null;
-  }
-  return value === "read" || value === "edit" || value === "write" || value === "delete"
-    ? value
-    : false;
 }
 
 function isValidSessionId(value: string): boolean {

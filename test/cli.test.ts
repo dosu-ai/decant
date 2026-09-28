@@ -13,10 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { defaultArgv, runCli } from "../src/cli.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
-import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));

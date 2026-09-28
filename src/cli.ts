@@ -8,6 +8,7 @@ import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
   defaultScriptOpts,
   hotContext,
+  parseFileOperation,
   parseScriptFormat,
   parseSkillKind,
   renderReplay,
@@ -17,7 +18,6 @@ import {
   shellQuote,
   timeline,
 } from "./distill.ts";
-import type { Operation } from "./enrich.ts";
 import { exportTrajectory, toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
 import { configureLogging, getDecantLogger, logWatchEvent } from "./logging.ts";
@@ -390,13 +390,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             codexDir: commandOptions.codexDir,
             geminiDir: commandOptions.geminiDir,
           });
-          // Without this, --no-sync (and DECANT_NO_SYNC) were accepted here and
-          // silently ignored: serve's watcher kept ingesting the source
-          // directories, so pointing serve at a scratch archive filled it with
-          // whatever was in the real ~/.claude and ~/.codex. Omitting `watch`
-          // entirely is what serve() checks to decide whether to run a watcher
-          // at all. POST /api/sync is deliberately untouched -- this turns off
-          // syncing decant starts on its own, not a sync the operator asks for.
+          // --no-sync must stop the watcher, or serving a scratch archive would
+          // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how
+          // serve() knows; POST /api/sync stays available for explicit syncs.
           const syncEnabled = shouldSync(globals(), options.env);
           // Loaded here so other commands skip the server's chart and report
           // dependencies at startup.
@@ -407,10 +403,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               config,
               hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
               port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-              // Omit entirely (rather than passing []) when no --trusted-peer was
-              // given, so serve()'s resolveTrustedPeers() can still fall through
-              // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
-              // passed here replaces both.
+              // Omitted rather than [] so resolveTrustedPeers() can still fall
+              // through to DECANT_TRUSTED_PEERS and the gateway default.
               trustedPeers:
                 commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
                   ? commandOptions.trustedPeer.flatMap((value) => parsePeerList(value))
@@ -1099,7 +1093,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           );
           return 2;
         }
-        const op = commandOptions.op == null ? null : parseOperation(commandOptions.op);
+        const op = commandOptions.op == null ? null : parseFileOperation(commandOptions.op);
         if (commandOptions.op != null && op == null) {
           io.writeErr(
             `error: unknown --op value ${JSON.stringify(commandOptions.op)} ` +
@@ -1391,12 +1385,6 @@ function formatDuration(ms: number): string {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function parseOperation(value: string): Operation | null {
-  return value === "read" || value === "edit" || value === "write" || value === "delete"
-    ? value
-    : null;
 }
 
 function emitArtifact(

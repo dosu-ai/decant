@@ -1,14 +1,13 @@
 import type { Database } from "bun:sqlite";
+import type { Operation } from "./enrich.ts";
 import { compareCodePoints } from "./order.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { DECANT_VERSION } from "./version.ts";
 
-export { DECANT_VERSION };
-
-export const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
+const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
 export type OpKind = (typeof OP_KINDS)[number];
 
-export const PHASES = ["setup", "build", "test", "lint", "run", "deploy", "vcs", "other"] as const;
+const PHASES = ["setup", "build", "test", "lint", "run", "deploy", "vcs", "other"] as const;
 export type Phase = (typeof PHASES)[number];
 
 export interface Op {
@@ -78,7 +77,7 @@ const redactors: [RegExp, string][] = (() => {
   ];
 })();
 
-export function phaseLabel(phase: Phase): string {
+function phaseLabel(phase: Phase): string {
   return phase;
 }
 
@@ -91,6 +90,12 @@ export function parseScriptFormat(value: string): ScriptFormat | null {
     return "sh";
   }
   return value === "just" || value === "make" ? value : null;
+}
+
+export function parseFileOperation(value: string): Operation | null {
+  return value === "read" || value === "edit" || value === "write" || value === "delete"
+    ? value
+    : null;
 }
 
 export function parseSkillKind(value: string): SkillKind | null {

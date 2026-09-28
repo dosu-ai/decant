@@ -8,7 +8,7 @@ import {
 } from "@logtape/logtape";
 import type { WatchEvent } from "./watch.ts";
 
-export const DEFAULT_LOG_LEVEL: LogLevel = "info";
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
 export type StructuredLogger = Logger;
 
 export interface StructuredLogRecord extends Record<string, unknown> {

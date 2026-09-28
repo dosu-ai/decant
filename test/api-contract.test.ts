@@ -5,12 +5,12 @@ import { join } from "node:path";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020.js";
 import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
-import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
 import { serve, serviceStartingResponse } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 type HttpMethod = "get" | "post";
 

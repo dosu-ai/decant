@@ -51,28 +51,33 @@ export interface SessionUserStateMutationOptions {
 const CLAUDE_SPAWN_TOMBSTONE_TOOL = "__decant_internal_claude_spawn__";
 
 /**
+ * Ids of sessions in the given user states plus everything descended from them.
+ * Uncorrelated, so SQLite materializes it once per statement instead of walking
+ * each candidate row's ancestry.
+ */
+function stateLineageIds(states: string): string {
+  return `WITH RECURSIVE state_lineage(id) AS (
+    SELECT state_session.id
+    FROM session_user_state lineage_user_state
+    JOIN session state_session
+      ON state_session.tool = lineage_user_state.tool
+     AND state_session.source_session_id = lineage_user_state.source_session_id
+    WHERE lineage_user_state.state IN (${states})
+    UNION
+    SELECT lineage_child.id
+    FROM session lineage_child
+    JOIN state_lineage ON lineage_child.parent_session_id = state_lineage.id
+  )
+  SELECT id FROM state_lineage`;
+}
+
+/**
  * SQL predicate for user-controlled visibility. Callers compose this with
  * source/session predicates and supply an internal, trusted table alias.
  */
 export function sessionUserStatePredicate(alias: string, includeArchived = false): string {
   const hiddenStates = includeArchived ? "'deleted'" : "'archived', 'deleted'";
-  return `NOT EXISTS (
-    WITH RECURSIVE visibility_lineage(id, tool, source_session_id, parent_session_id) AS (
-      SELECT ${alias}.id, ${alias}.tool, ${alias}.source_session_id, ${alias}.parent_session_id
-      UNION
-      SELECT visibility_parent.id, visibility_parent.tool,
-             visibility_parent.source_session_id, visibility_parent.parent_session_id
-      FROM session visibility_parent
-      JOIN visibility_lineage visibility_child
-        ON visibility_parent.id = visibility_child.parent_session_id
-    )
-    SELECT 1
-    FROM visibility_lineage
-    JOIN session_user_state visibility_user_state
-      ON visibility_user_state.tool = visibility_lineage.tool
-     AND visibility_user_state.source_session_id = visibility_lineage.source_session_id
-    WHERE visibility_user_state.state IN (${hiddenStates})
-  )`;
+  return `${alias}.id NOT IN (${stateLineageIds(hiddenStates)})`;
 }
 
 /**
@@ -100,23 +105,7 @@ export function sessionUserStatePredicateForDatabase(
 
 /** SQL expression returning 1 when this row or any current ancestor is archived. */
 export function sessionIsUserArchivedExpression(alias: string): string {
-  return `EXISTS (
-    WITH RECURSIVE archive_lineage(id, tool, source_session_id, parent_session_id) AS (
-      SELECT ${alias}.id, ${alias}.tool, ${alias}.source_session_id, ${alias}.parent_session_id
-      UNION
-      SELECT archive_parent.id, archive_parent.tool,
-             archive_parent.source_session_id, archive_parent.parent_session_id
-      FROM session archive_parent
-      JOIN archive_lineage archive_child
-        ON archive_parent.id = archive_child.parent_session_id
-    )
-    SELECT 1
-    FROM archive_lineage
-    JOIN session_user_state archive_user_state
-      ON archive_user_state.tool = archive_lineage.tool
-     AND archive_user_state.source_session_id = archive_lineage.source_session_id
-    WHERE archive_user_state.state = 'archived'
-  )`;
+  return `(${alias}.id IN (${stateLineageIds("'archived'")}))`;
 }
 
 /** SQL expression returning the direct persisted state for one session row. */

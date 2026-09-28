@@ -1199,9 +1199,11 @@ components:
     FileLimit:
       name: limit
       in: query
+      description: Maximum aggregate rows, capped by the server at 1000
       schema:
         type: integer
         minimum: 1
+        maximum: 1000
         default: 25
     McpServer:
       name: server
@@ -1240,10 +1242,11 @@ components:
     UsageLimit:
       name: limit
       in: query
-      description: Maximum aggregate rows; defaults to 50
+      description: Maximum aggregate rows; defaults to 50 and is capped by the server at 1000
       schema:
         type: integer
         minimum: 1
+        maximum: 1000
         default: 50
     RecommendationStatus:
       name: status

@@ -211,6 +211,67 @@ describe("server routes", () => {
     expect((await route(config, "/api/sessions?limit=10000&offset=100")).body).toBeArrayOfSize(10);
   });
 
+  test("caps aggregate usage limits at the server boundary", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    db.exec(`
+      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent)
+      VALUES ('codex', 'usage-cap', 'Usage cap', '2026-07-29T12:00:00Z', 0);
+      WITH RECURSIVE numbered(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM numbered WHERE value < 1010
+      )
+      INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, timestamp)
+      SELECT (SELECT id FROM session WHERE source_session_id = 'usage-cap'),
+             'mcp', 'mcp__srv' || value || '__tool', 'srv' || value, '2026-07-29T12:00:00Z'
+      FROM numbered;
+      WITH RECURSIVE numbered(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM numbered WHERE value < 1010
+      )
+      INSERT INTO file_ref(session_id, path, rel_path, ext, operation, timestamp)
+      SELECT (SELECT id FROM session WHERE source_session_id = 'usage-cap'),
+             '/repo/file' || value || '.ts', 'file' || value || '.ts', 'ts', 'read',
+             '2026-07-29T12:00:00Z'
+      FROM numbered;
+    `);
+    db.close();
+
+    for (const path of ["/api/tools/usage", "/api/tools/mcp-usage", "/api/files?group=path"]) {
+      const separator = path.includes("?") ? "&" : "?";
+      expect((await route(config, `${path}${separator}limit=100000`)).body).toBeArrayOfSize(1000);
+      expect((await route(config, `${path}${separator}limit=7`)).body).toBeArrayOfSize(7);
+    }
+  });
+
+  test("rejects request bodies over the size cap", async () => {
+    const config = freshConfig();
+    const server = serve({ config, port: 0 });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const headers = {
+        "content-type": "application/json",
+        origin: base,
+      };
+      const small = await fetch(`${base}/api/search`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "x" }),
+      });
+      expect(small.status).toBe(200);
+      const oversized = await fetch(`${base}/api/search`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "x".repeat(2 * 1024 * 1024) }),
+      });
+      expect(oversized.status).toBe(413);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("app routes fall back to the React shell and config is exposed locally", async () => {
     const config = freshConfig();
 

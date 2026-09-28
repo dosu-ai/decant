@@ -106,6 +106,12 @@ maximum of 100. Increment `offset` by the number of rows received; a final short
 or empty page marks the end. When the result count is an exact multiple of the
 page size, one empty request is required to confirm the end.
 
+`GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
+aggregate rows. Their `limit` has an effective maximum of 1000.
+
+Request bodies larger than 1 MiB are rejected before they reach a route handler.
+No documented request comes close to that size.
+
 `GET /api/sessions/search-index` returns lightweight metadata for every visible,
 non-archived top-level session. It is the command palette's local fuzzy-search
 haystack and intentionally omits transcript content.

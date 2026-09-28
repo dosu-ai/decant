@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { SESSION_LIST_MAX_LIMIT } from "./api-limits.ts";
+import { SESSION_LIST_MAX_LIMIT, USAGE_LIST_MAX_LIMIT } from "./api-limits.ts";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
@@ -67,6 +67,8 @@ import {
   type WatchHandle,
 } from "./watch.ts";
 import { workerError, workerUrl } from "./worker-runtime.ts";
+
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
 export interface ServeWatchOptions {
   intervalMs?: number;
@@ -617,7 +619,7 @@ export async function handleRequest(
         return errorResponse("invalid_files_query", "invalid files query", {}, 400);
       }
       return withDb(config, context, (db) =>
-        json(fileHotspots(db, group, op, integerParam(url, "limit", 25), dateFilter)),
+        json(fileHotspots(db, group, op, usageLimit(url, 25), dateFilter)),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/calls") {
@@ -655,16 +657,14 @@ export async function handleRequest(
           toolUsage(
             db,
             url.searchParams.get("errors_only") === "true",
-            integerParam(url, "limit", 50),
+            usageLimit(url, 50),
             dateFilter,
           ),
         ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/mcp-usage") {
-      return withDb(config, context, (db) =>
-        json(mcpUsage(db, integerParam(url, "limit", 50), dateFilter)),
-      );
+      return withDb(config, context, (db) => json(mcpUsage(db, usageLimit(url, 50), dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");
@@ -1053,6 +1053,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const server = Bun.serve({
     hostname,
     port,
+    maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
     routes: {
       "/favicon.ico": new Response(Bun.file(faviconPath), {
         headers: { "cache-control": "public, max-age=86400", "content-type": "image/x-icon" },
@@ -1329,7 +1330,7 @@ function isArchiveLockedError(error: unknown, normalizedMessage: string): boolea
 }
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value, null, 2), {
+  return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
@@ -1815,6 +1816,10 @@ function integerParam(url: URL, name: string, fallback: number, allowZero = fals
   }
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && (parsed > 0 || (allowZero && parsed === 0)) ? parsed : fallback;
+}
+
+function usageLimit(url: URL, fallback: number): number {
+  return Math.min(integerParam(url, "limit", fallback), USAGE_LIST_MAX_LIMIT);
 }
 
 function parseOperation(value: string | null): Operation | null | false {

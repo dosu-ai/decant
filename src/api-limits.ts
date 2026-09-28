@@ -1,1 +1,2 @@
 export const SESSION_LIST_MAX_LIMIT = 100;
+export const USAGE_LIST_MAX_LIMIT = 1000;

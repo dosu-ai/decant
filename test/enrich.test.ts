@@ -126,6 +126,15 @@ describe("fileRefs", () => {
     expect(fileRefs(shell)).toEqual([]);
   });
 
+  test("tool names inherited from Object.prototype never produce refs", () => {
+    for (const tool of ["claude_code", "gemini"] as const) {
+      for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+        const inherited = oneBlockSession(tool, toolUse(name, { undefined: "/w/leak.ts" }));
+        expect(fileRefs(inherited)).toEqual([]);
+      }
+    }
+  });
+
   test("Codex apply_patch with non-string input is skipped", () => {
     const objectInput = oneBlockSession("codex", toolUse("apply_patch", { patch: "x" }));
     expect(fileRefs(objectInput)).toEqual([]);

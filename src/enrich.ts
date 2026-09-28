@@ -72,7 +72,10 @@ function keyedRef(
   cwd: string | null,
   refs: FileRef[],
 ): void {
-  const pair = block.toolName == null ? undefined : table[block.toolName];
+  const pair =
+    block.toolName != null && Object.hasOwn(table, block.toolName)
+      ? table[block.toolName]
+      : undefined;
   if (pair == null || !isObject(block.toolInput)) {
     return;
   }

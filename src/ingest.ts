@@ -112,7 +112,7 @@ export function discover(config: IngestConfig): SourceFile[] {
   }
 
   const out: SourceFile[] = [];
-  collect(config.claudeDir, "claude_code", false, isClaudeSessionFile, out);
+  collect(config.claudeDir, "claude_code", false, isSessionJsonl, out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
   if (config.geminiDir != null) {
@@ -1162,7 +1162,7 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
 
 function sourceFileForPath(path: string): SourceFile | null {
   const name = pathBasename(path);
-  if (!name.endsWith(".jsonl") || name === "session_index.jsonl" || name === "journal.jsonl") {
+  if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }
   if (isCodexRollout(name)) {
@@ -1191,7 +1191,7 @@ function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
  * one today is the dynamic-workflow orchestration journal
  * (subagents/workflows/<runId>/journal.jsonl). Session transcripts are
  * <uuid>.jsonl mains and agent-*.jsonl subagents, which must keep flowing. */
-function isClaudeSessionFile(name: string): boolean {
+function isSessionJsonl(name: string): boolean {
   return name.endsWith(".jsonl") && name !== "journal.jsonl";
 }
 

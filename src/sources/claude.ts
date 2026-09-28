@@ -25,6 +25,13 @@ import {
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
+import {
+  block,
+  countUnknown,
+  parseJsonLine,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
 const TITLE_META = new Set(["summary", "ai-title"]);
 
@@ -84,23 +91,11 @@ export function parseClaudeSession(
   let promptTitle: string | null = null;
   let metadataTitle: string | null = null;
   let seq = 0;
-  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
+  const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo: index + 1,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
+    const value = parseJsonLine(line, index + 1, issues);
+    if (value === undefined) {
       continue;
     }
 
@@ -164,22 +159,13 @@ export function parseClaudeSession(
         }
       }
     } else if (!IGNORED_JOURNAL_META.has(typ)) {
-      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
-      seen.count += 1;
-      unknownTypes.set(typ, seen);
+      countUnknown(unknownTypes, typ, index + 1);
       messages.push(simpleMessage(value, "other", seq));
       seq += 1;
     }
   }
 
-  for (const [typ, seen] of unknownTypes) {
-    issues.push({
-      code: "unknown_record_type",
-      lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); kept as role "other"`,
-      rawLine: null,
-    });
-  }
+  issues.push(...unknownTypeIssues(unknownTypes, 'kept as role "other"'));
 
   const messageTotals = emptyUsage();
   for (const message of messages) {
@@ -349,16 +335,13 @@ function parseUser(value: Json, seq: number): NormalizedMessage {
         blocks.push(textBlock(ordinal, asString(get(item, "text")) ?? ""));
       } else if (blockType === "tool_result") {
         hasToolResult = true;
-        blocks.push({
-          ordinal,
-          blockType: "tool_result",
-          text: null,
-          toolName: null,
-          toolUseId: asString(get(item, "tool_use_id")),
-          toolInput: undefined,
-          toolResult: stringifyContent(get(item, "content")),
-          isError: asBoolean(get(item, "is_error")),
-        });
+        blocks.push(
+          block(ordinal, "tool_result", {
+            toolUseId: asString(get(item, "tool_use_id")),
+            toolResult: stringifyContent(get(item, "content")),
+            isError: asBoolean(get(item, "is_error")),
+          }),
+        );
       } else {
         blocks.push(otherBlock(ordinal, item));
       }
@@ -389,27 +372,15 @@ function parseAssistant(value: Json, seq: number): NormalizedMessage {
       if (blockType === "text") {
         blocks.push(textBlock(ordinal, asString(get(item, "text")) ?? ""));
       } else if (blockType === "thinking") {
-        blocks.push({
-          ordinal,
-          blockType: "thinking",
-          text: asString(get(item, "thinking")),
-          toolName: null,
-          toolUseId: null,
-          toolInput: undefined,
-          toolResult: null,
-          isError: null,
-        });
+        blocks.push(block(ordinal, "thinking", { text: asString(get(item, "thinking")) }));
       } else if (blockType === "tool_use") {
-        blocks.push({
-          ordinal,
-          blockType: "tool_use",
-          text: null,
-          toolName: asString(get(item, "name")),
-          toolUseId: asString(get(item, "id")),
-          toolInput: hasKey(item, "input") ? get(item, "input") : undefined,
-          toolResult: null,
-          isError: null,
-        });
+        blocks.push(
+          block(ordinal, "tool_use", {
+            toolName: asString(get(item, "name")),
+            toolUseId: asString(get(item, "id")),
+            toolInput: hasKey(item, "input") ? get(item, "input") : undefined,
+          }),
+        );
       } else {
         blocks.push(otherBlock(ordinal, item));
       }
@@ -486,29 +457,11 @@ function previousOutput(messages: NormalizedMessage[], index: number): number {
 }
 
 function textBlock(ordinal: number, text: string): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "text",
-    text,
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
+  return block(ordinal, "text", { text });
 }
 
 function otherBlock(ordinal: number, item: Json): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "other",
-    text: canonicalJson(item),
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
+  return block(ordinal, "other", { text: canonicalJson(item) });
 }
 
 function stringifyContent(content: Json | undefined): string {

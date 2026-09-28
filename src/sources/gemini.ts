@@ -10,6 +10,13 @@ import {
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
+import {
+  block,
+  countUnknown,
+  parseJsonLine,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
 export interface GeminiParseOptions {
   /** Source id of the parent chat when the file lives under `chats/<parent>/`. */
@@ -25,8 +32,6 @@ interface Replay {
   metadata: JsonObject;
   messages: ReplayedRecord[];
 }
-
-type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
 /**
  * Gemini CLI session format (`.gemini/tmp/<project>/chats/session-<ts>-<hash>.jsonl`;
@@ -156,14 +161,7 @@ export function parseGeminiSession(
     }
   }
 
-  for (const [typ, seen] of unknownTypes) {
-    issues.push({
-      code: "unknown_record_type",
-      lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); ignored`,
-      rawLine: null,
-    });
-  }
+  issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
   const parentSessionId = options.parentSessionId ?? null;
   const isSubagent = asString(metadata.kind) === "subagent" || parentSessionId != null;
@@ -211,20 +209,8 @@ function replay(
 
   for (const [index, line] of content.split(/\n/).entries()) {
     const lineNo = index + 1;
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
+    const value = parseJsonLine(line, lineNo, issues);
+    if (value === undefined) {
       continue;
     }
     if (!isObject(value)) {
@@ -298,12 +284,6 @@ function setCheckpoint(
   }
 }
 
-function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: number): void {
-  const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: lineNo };
-  seen.count += 1;
-  unknownTypes.set(typ, seen);
-}
-
 function rawMetaFrom(metadata: JsonObject, parentSessionId: string | null): Json {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(metadata)) {
@@ -358,16 +338,13 @@ function parseUserContent(
       if (callId != null) {
         seenToolResultIds.add(callId);
       }
-      blocks.push({
-        ordinal: ordinal++,
-        blockType: "tool_result",
-        text: null,
-        toolName: null,
-        toolUseId: callId,
-        toolInput: undefined,
-        toolResult: canonicalJson(response ?? null),
-        isError: toolResultIsError(response),
-      });
+      blocks.push(
+        block(ordinal++, "tool_result", {
+          toolUseId: callId,
+          toolResult: canonicalJson(response ?? null),
+          isError: toolResultIsError(response),
+        }),
+      );
     }
   }
 
@@ -408,16 +385,9 @@ function parseToolCalls(toolCalls: Json | undefined, startOrdinal: number): Norm
     const name = normalizedToolName(call);
     const args = get(call, "args") ?? get(call, "function_args") ?? get(call, "input");
     const callId = asString(get(call, "id")) ?? name;
-    blocks.push({
-      ordinal: ordinal++,
-      blockType: "tool_use",
-      text: null,
-      toolName: name,
-      toolUseId: callId,
-      toolInput: args,
-      toolResult: null,
-      isError: null,
-    });
+    blocks.push(
+      block(ordinal++, "tool_use", { toolName: name, toolUseId: callId, toolInput: args }),
+    );
   }
   return blocks;
 }
@@ -460,16 +430,7 @@ function parseThoughts(thoughts: Json | undefined, startOrdinal: number): Normal
   for (const thought of thoughts) {
     const text = thoughtText(thought);
     if (text != null && text !== "") {
-      blocks.push({
-        ordinal: ordinal++,
-        blockType: "thinking",
-        text,
-        toolName: null,
-        toolUseId: null,
-        toolInput: undefined,
-        toolResult: null,
-        isError: null,
-      });
+      blocks.push(block(ordinal++, "thinking", { text }));
     }
   }
   return blocks;
@@ -486,29 +447,11 @@ function thoughtText(thought: Json): string | null {
 }
 
 function textBlock(ordinal: number, text: string): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "text",
-    text,
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
+  return block(ordinal, "text", { text });
 }
 
 function otherBlock(ordinal: number, value: Json): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "other",
-    text: canonicalJson(value),
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
+  return block(ordinal, "other", { text: canonicalJson(value) });
 }
 
 function usageFrom(tokens: Json | undefined): TokenUsage {

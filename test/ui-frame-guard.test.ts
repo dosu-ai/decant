@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { type FrameContext, isFramed } from "../src/ui/frame-guard.ts";
+import { readUiSource, sourceFrom } from "./ui-source.ts";
 
 function fakeWindow(top?: FrameContext): FrameContext {
   const view = { self: null as unknown, top: null as unknown };
@@ -30,8 +29,8 @@ describe("frame guard", () => {
   });
 
   test("the SPA entry mounts the framed notice instead of the app", () => {
-    const entry = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
-    const mount = entry.slice(entry.indexOf("createRoot(root)"));
+    const entry = readUiSource();
+    const mount = sourceFrom(entry, "createRoot(root)");
     expect(mount).toContain("isFramed(window)");
     expect(mount).toContain("<FramedNotice />");
   });

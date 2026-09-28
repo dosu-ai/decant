@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource, sourceFrom } from "./ui-source.ts";
 
 const uiDir = join(import.meta.dir, "..", "src", "ui");
-const main = readFileSync(join(uiDir, "main.tsx"), "utf8");
+const main = readUiSource(["chart-runtime.ts"]);
 
 test("ECharts is only ever reached through the lazy chart runtime", () => {
   // Bun's compiled binary does not split chunks, so laziness only defers module
@@ -52,7 +53,7 @@ test("the chart effect survives unmounting mid-import", () => {
   // useEffect has to return its cleanup synchronously, but the chart does not
   // exist until the import settles. If the component unmounts in that window the
   // cleanup must still prevent an orphaned chart holding a canvas and listeners.
-  const effect = main.slice(main.indexOf("function AnalyticsChart"));
+  const effect = sourceFrom(main, "function AnalyticsChart");
   expect(effect).toContain("let cancelled = false;");
   expect(effect).toContain("let disposeChart: (() => void) | null = null;");
   // Bails before init when we already unmounted...

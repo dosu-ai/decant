@@ -6,16 +6,13 @@ import {
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "../src/ui/loading-state.ts";
+import { readUiSource, sourceBetween } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
 function sessionsViewSource(): string {
-  const start = main.indexOf("function SessionsView(");
-  const end = main.indexOf("function SessionTableSkeletonRows()", start);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return main.slice(start, end);
+  return sourceBetween(main, "function SessionsView(", "function SessionTableSkeletonRows()");
 }
 
 describe("session loading state", () => {
@@ -111,9 +108,11 @@ describe("session table skeleton", () => {
   });
 
   test("keeps one placeholder aligned with each of the eleven session columns", () => {
-    const start = main.indexOf("function SessionTableSkeletonRows()");
-    const end = main.indexOf("function ProjectsView(", start);
-    const skeleton = main.slice(start, end);
+    const skeleton = sourceBetween(
+      main,
+      "function SessionTableSkeletonRows()",
+      "function ProjectsView(",
+    );
     expect(skeleton.match(/<td(?:\s|>)/g)).toHaveLength(11);
     expect([...skeleton.matchAll(/table-skeleton-line ([^"]+)/g)].map((match) => match[1])).toEqual(
       [
@@ -133,9 +132,11 @@ describe("session table skeleton", () => {
   });
 
   test("keeps the Started cell as a precise semantic time element", () => {
-    const start = main.indexOf("function SessionStartedAt(");
-    const end = main.indexOf("function SessionContextPeak(", start);
-    const startedCell = main.slice(start, end);
+    const startedCell = sourceBetween(
+      main,
+      "function SessionStartedAt(",
+      "function SessionContextPeak(",
+    );
     expect(startedCell).toContain("const display = sessionListDate(value)");
     expect(startedCell).toContain("<time dateTime={value} title={fullDateTime(value) ?? display}>");
   });

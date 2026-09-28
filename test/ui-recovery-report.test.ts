@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
+import { readUiSource, sourceBetween } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const server = readFileSync(join(import.meta.dir, "..", "src", "server", "sync.ts"), "utf8");
 
 describe("coded UI recovery", () => {
@@ -28,9 +29,10 @@ describe("coded UI recovery", () => {
     expect(main).toContain('actionLabel: "Back to sessions"');
     expect(main).toMatch(/case "session_not_found":[\s\S]*?useSync: true/);
     expect(main).toContain('actionLabel: "View rebuild guide"');
-    const schemaTooOld = main.slice(
-      main.indexOf('case "schema_too_old":'),
-      main.indexOf('case "launch_unsupported_platform":'),
+    const schemaTooOld = sourceBetween(
+      main,
+      'case "schema_too_old":',
+      'case "launch_unsupported_platform":',
     );
     expect(schemaTooOld).not.toContain('actionHref: "/settings"');
     expect(main).toContain('typeof error.extras.command === "string"');
@@ -87,9 +89,7 @@ describe("coded UI recovery", () => {
   });
 
   test("file filters catch rejected requests and offer a retry", () => {
-    const start = main.indexOf("function FilesView(");
-    const end = main.indexOf("function SettingsView(", start);
-    const filesView = main.slice(start, end);
+    const filesView = sourceBetween(main, "function FilesView(", "function SettingsView(");
     expect(filesView).toContain(".catch((reason: unknown)");
     expect(filesView).toContain("<ApiFailureState");
     expect(filesView).toContain("setFilesRetryKey");

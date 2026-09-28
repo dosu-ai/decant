@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { type LinkClick, shouldInterceptLinkClick } from "../src/ui/link-click.ts";
+import { readUiSource } from "./ui-source.ts";
 
 const plain: LinkClick = {
   button: 0,
@@ -51,7 +50,7 @@ describe("shouldInterceptLinkClick", () => {
 });
 
 describe("internal links in the UI source", () => {
-  const source = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+  const source = readUiSource();
 
   test("route through Link instead of a bare anchor or a hand-rolled navigate", () => {
     expect(source).toContain("function Link(");

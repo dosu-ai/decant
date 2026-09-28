@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
 const styles = readFileSync(join(root, "src", "ui", "styles.css"), "utf8");
-const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 
 const CHART_TOKENS = [
   "--fg",

@@ -1,8 +1,3 @@
-// Type-only, so this erases at build time. ECharts is ~1.1MB minified and is
-// reachable from exactly two call sites, both of which import() it on demand:
-// eagerly importing it here put the whole library on every route, including
-// /settings and /search, which never draw a chart.
-import type { ECharts as EChartsInstance, EChartsOption } from "echarts";
 import type { LucideIcon } from "lucide-react";
 import {
   Archive,
@@ -68,6 +63,7 @@ import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
+import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
   type AnalyticsChartState,
@@ -5196,7 +5192,7 @@ async function renderShareCardPng(
   chartNode.style.cssText =
     "position:fixed;left:-10000px;top:-10000px;width:1080px;height:310px;pointer-events:none";
   document.body.append(chartNode);
-  const echarts = await import("echarts");
+  const echarts = await import("./chart-runtime.ts");
   const chart = echarts.init(chartNode, null, {
     renderer: "canvas",
     width: 1080,
@@ -5338,7 +5334,7 @@ function AnalyticsChart({
     let cancelled = false;
     let disposeChart: (() => void) | null = null;
     void (async () => {
-      const echarts = await import("echarts");
+      const echarts = await import("./chart-runtime.ts");
       if (cancelled) {
         return;
       }
@@ -5404,7 +5400,7 @@ function buildChartOption({
   metric: AnalyticsChartMetric;
   values: number[];
   variant: AnalyticsChartVariant;
-}): EChartsOption {
+}): AnalyticsChartOption {
   const colors = chartColors();
   const moneyMetric = metric === "money";
   const seriesType = variant;

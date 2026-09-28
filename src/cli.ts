@@ -6,7 +6,6 @@ import { decideOpen, displayUrl, openBrowser } from "./browser.ts";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
-  DECANT_VERSION,
   defaultScriptOpts,
   hotContext,
   parseScriptFormat,
@@ -28,12 +27,7 @@ import {
   markImplemented,
   parseStatusFilter,
 } from "./recommendations.ts";
-import {
-  DEFAULT_SERVE_HOST,
-  DEFAULT_SERVE_PORT,
-  parsePeerList,
-  serve as serveApp,
-} from "./server.ts";
+import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { setSessionUserState } from "./session-user-state.ts";
 import {
   byDimension,
@@ -45,6 +39,7 @@ import {
   totals,
 } from "./stats.ts";
 import { tokenEconomics } from "./token-economics.ts";
+import { DECANT_VERSION } from "./version.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
@@ -403,6 +398,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           // at all. POST /api/sync is deliberately untouched -- this turns off
           // syncing decant starts on its own, not a sync the operator asks for.
           const syncEnabled = shouldSync(globals(), options.env);
+          // Loaded here so other commands skip the server's chart and report
+          // dependencies at startup.
+          const { parsePeerList, serve: serveApp } = await import("./server.ts");
           let server: ReturnType<typeof serveApp>;
           try {
             server = serveApp({
@@ -415,7 +413,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               // passed here replaces both.
               trustedPeers:
                 commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
-                  ? trustedPeers(commandOptions.trustedPeer)
+                  ? commandOptions.trustedPeer.flatMap((value) => parsePeerList(value))
                   : undefined,
               logger: globals().quiet ? undefined : serverLogger,
               watch: syncEnabled
@@ -1380,10 +1378,6 @@ function optionalInteger(value: string | undefined): number | undefined {
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
-}
-
-function trustedPeers(values: string[] | undefined): string[] {
-  return (values ?? []).flatMap((value) => parsePeerList(value));
 }
 
 function formatNumber(value: number): string {

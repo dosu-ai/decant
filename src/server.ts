@@ -6,7 +6,6 @@ import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb, SchemaDriftError } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
-import { DECANT_VERSION } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
@@ -30,12 +29,7 @@ import {
   refreshForSessionStateChange,
   STATUS_FILTERS,
 } from "./recommendations.ts";
-import {
-  assembleAnalyticsReport,
-  assembleSessionReport,
-  renderAnalyticsReport,
-  renderSessionReport,
-} from "./report/index.ts";
+import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { type SessionUserStateUpdate, setSessionUserState } from "./session-user-state.ts";
 import {
   agentOptions,
@@ -63,6 +57,7 @@ import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
+import { DECANT_VERSION } from "./version.ts";
 import {
   type SyncRunnerFailure,
   type SyncRunnerResult,
@@ -72,9 +67,6 @@ import {
   type WatchHandle,
 } from "./watch.ts";
 import { workerError, workerUrl } from "./worker-runtime.ts";
-
-export const DEFAULT_SERVE_HOST = "127.0.0.1";
-export const DEFAULT_SERVE_PORT = 3000;
 
 export interface ServeWatchOptions {
   intervalMs?: number;
@@ -580,6 +572,7 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
+      const { assembleAnalyticsReport, renderAnalyticsReport } = await import("./report/index.ts");
       return withDb(config, context, (db) =>
         reportHtmlResponse(
           renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter })),
@@ -599,6 +592,7 @@ export async function handleRequest(
     }
     const sessionReportMatch = url.pathname.match(/^\/api\/reports\/session\/(\d+)\.html$/);
     if (request.method === "GET" && sessionReportMatch != null) {
+      const { assembleSessionReport, renderSessionReport } = await import("./report/index.ts");
       return withDb(config, context, (db) => {
         const report = assembleSessionReport(db, Number(sessionReportMatch[1]));
         if (report == null) {

@@ -220,15 +220,6 @@ export async function handleRequest(
   }
   const dateFilter = dateFilterFromSearch(url.searchParams);
   try {
-    if (request.method === "GET" && url.pathname === "/favicon.ico") {
-      return embeddedAsset(faviconPath, "image/x-icon");
-    }
-    if (request.method === "GET" && url.pathname === "/apple-touch-icon.png") {
-      return embeddedAsset(appleTouchIconPath, "image/png");
-    }
-    if (request.method === "GET" && url.pathname === "/") {
-      return html(indexHtml());
-    }
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
     }
@@ -736,9 +727,6 @@ export async function handleRequest(
               404,
             );
       });
-    }
-    if (request.method === "GET" && isUiPath(url.pathname)) {
-      return html(indexHtml());
     }
     return errorResponse("not_found", "not found", {}, 404);
   } catch (error) {
@@ -1402,7 +1390,7 @@ function validateLocalRequest(
 }
 
 function isProtectedPath(pathname: string): boolean {
-  return pathname === "/api/events" || pathname.startsWith("/api/");
+  return pathname.startsWith("/api/");
 }
 
 function isMutatingMethod(method: string): boolean {
@@ -1826,20 +1814,6 @@ function requireJsonRequest(request: Request): Response | null {
     : errorResponse("unsupported_media_type", "content-type must be application/json", {}, 415);
 }
 
-/** Shells returned from here deny framing. Note this covers only the fallback
- * shell built by this handler: `serve()` answers the UI paths from Bun's
- * HTMLBundle routes, which emit their own fixed headers and cannot carry these,
- * so the SPA itself refuses to render when framed (src/ui/frame-guard.ts). */
-function html(value: string): Response {
-  return new Response(value, {
-    headers: {
-      "content-security-policy": "frame-ancestors 'none'",
-      "content-type": "text/html; charset=utf-8",
-      "x-frame-options": "DENY",
-    },
-  });
-}
-
 function reportHtmlResponse(value: string, filename: string): Response {
   return new Response(value, {
     headers: {
@@ -1929,39 +1903,4 @@ function sessionNotFound(db: Db): Response {
 
 function isUnsupportedLaunchError(error: string | undefined): boolean {
   return error?.includes("only supported on macOS") ?? false;
-}
-
-function isUiPath(pathname: string): boolean {
-  return !pathname.startsWith("/api/") && !/\/[^/]*\.[^/]+$/.test(pathname);
-}
-
-function indexHtml(): string {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Local-first analytics for Claude Code, Codex, and Gemini CLI sessions. Search transcripts, inspect cost and context, and turn repeated work into durable agent knowledge."
-    />
-    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 256x256" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
-    <title>Decant</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/ui/main.tsx"></script>
-  </body>
-</html>
-`;
-}
-
-function embeddedAsset(path: string, contentType: string): Response {
-  return new Response(Bun.file(path), {
-    headers: {
-      "cache-control": "public, max-age=86400",
-      "content-type": contentType,
-    },
-  });
 }

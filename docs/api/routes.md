@@ -26,6 +26,8 @@ This page records the operational semantics around that contract.
 - `GET /reports/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /reports/session/:id`
 
+Any other non-API path returns `404` with the standard `not_found` error body.
+
 The report UI routes render a light, print-ready preview with Back, Download
 HTML, and Save as PDF controls. They read the local-only report operations;
 the session preview intentionally omits transcript content.

@@ -111,7 +111,7 @@ async function route(
 }
 
 describe("server routes", () => {
-  test("health and shell routes respond without opening the archive", async () => {
+  test("health responds without opening the archive and the source shell declares its icons", async () => {
     const config = freshConfig();
 
     const health = await route(config, "/api/health");
@@ -121,20 +121,6 @@ describe("server routes", () => {
       contentType: "application/json; charset=utf-8",
     });
 
-    const root = await route(config, "/");
-    expect(root.status).toBe(200);
-    expect(root.contentType).toBe("text/html; charset=utf-8");
-    expect(root.body).toContain('<div id="root"></div>');
-    expect(root.body).toContain("/src/ui/main.tsx");
-    expect(root.body).toContain('rel="icon" href="/favicon.ico"');
-    expect(root.body).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
-    expect(root.body).toContain('name="description"');
-    for (const path of ["/reports/analytics", "/reports/session/42"]) {
-      const reportShell = await route(config, path);
-      expect(reportShell.status).toBe(200);
-      expect(reportShell.contentType).toBe("text/html; charset=utf-8");
-      expect(reportShell.body).toContain('<div id="root"></div>');
-    }
     const sourceHead = readFileSync(
       join(import.meta.dir, "..", "src", "ui", "index.html"),
       "utf8",
@@ -144,15 +130,42 @@ describe("server routes", () => {
     expect(sourceHead).toContain(
       "Local-first analytics for Claude Code, Codex, and Gemini CLI sessions.",
     );
+  });
 
-    const favicon = await route(config, "/favicon.ico");
-    expect(favicon.status).toBe(200);
-    expect(favicon.contentType).toBe("image/x-icon");
-    expect(typeof favicon.body).toBe("string");
+  test("serve answers UI paths and icons itself and returns 404 for unknown pages", async () => {
+    const config = freshConfig();
+    const server = serve({ config, port: 0 });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      for (const path of [
+        "/",
+        "/search",
+        "/sessions/123",
+        "/reports/analytics",
+        "/reports/session/42",
+      ]) {
+        const response = await fetch(`${base}${path}`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toStartWith("text/html");
+        const body = await response.text();
+        expect(body).toContain('<div id="root"></div>');
+        expect(body).toContain('rel="icon"');
+        expect(body).toContain('name="description"');
+      }
 
-    const touchIcon = await route(config, "/apple-touch-icon.png");
-    expect(touchIcon.status).toBe(200);
-    expect(touchIcon.contentType).toBe("image/png");
+      const favicon = await fetch(`${base}/favicon.ico`);
+      expect(favicon.status).toBe(200);
+      expect(favicon.headers.get("content-type")).toBe("image/x-icon");
+      const touchIcon = await fetch(`${base}/apple-touch-icon.png`);
+      expect(touchIcon.status).toBe(200);
+      expect(touchIcon.headers.get("content-type")).toBe("image/png");
+
+      const unknown = await fetch(`${base}/no-page-here`);
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toMatchObject({ code: "not_found" });
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("serves a lightweight visible non-archived session search index", async () => {
@@ -272,20 +285,15 @@ describe("server routes", () => {
     }
   });
 
-  test("app routes fall back to the React shell and config is exposed locally", async () => {
+  test("config is exposed locally and page paths are left to the server's bundle routes", async () => {
     const config = freshConfig();
 
-    const search = await route(config, "/search");
-    expect(search.status).toBe(200);
-    expect(search.contentType).toBe("text/html; charset=utf-8");
-
-    const detail = await route(config, "/sessions/123");
-    expect(detail.status).toBe(200);
-    expect(detail.contentType).toBe("text/html; charset=utf-8");
-
-    const unknownView = await route(config, "/no-page-here");
-    expect(unknownView.status).toBe(200);
-    expect(unknownView.contentType).toBe("text/html; charset=utf-8");
+    for (const path of ["/", "/search", "/sessions/123", "/no-page-here", "/favicon.ico"]) {
+      expect(await route(config, path)).toMatchObject({
+        status: 404,
+        body: { code: "not_found" },
+      });
+    }
 
     const localConfig = await route(config, "/api/config");
     expect(localConfig.status).toBe(200);
@@ -295,15 +303,6 @@ describe("server routes", () => {
       codexDir: config.codexDir,
       geminiDir: config.geminiDir,
     });
-  });
-
-  test("the HTML shell built by handleRequest denies framing", async () => {
-    const config = freshConfig();
-
-    const response = await handleRequest(new Request("http://127.0.0.1:3000/insights"), config);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-frame-options")).toBe("DENY");
-    expect(response.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
   });
 
   test("events route streams sync worker progress", async () => {

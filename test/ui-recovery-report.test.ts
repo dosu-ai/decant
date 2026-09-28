@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
-const server = readFileSync(join(import.meta.dir, "..", "src", "server.ts"), "utf8");
+const server = readFileSync(join(import.meta.dir, "..", "src", "server", "sync.ts"), "utf8");
 
 describe("coded UI recovery", () => {
   test("maps server codes to actions without rendering raw exception messages", () => {

@@ -36,12 +36,12 @@ index plus local user state such as recommendations and session tombstones.
 | Economics | `src/cost.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
 | Reads | `src/query.ts`, `src/stats.ts`, `src/recommendations.ts`, `src/distill.ts` | Session retrieval, aggregates, recommendations, and deterministic artifacts. |
-| Serve | `src/server.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
+| Serve | `src/server.ts`, `src/server/`, `src/route-paths.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
 | Presentation | `src/ui/`, `src/report/` | The local React application and self-contained HTML reports. |
 
 Core modules return data or structured failures. Human-readable output and exit
-codes belong in `src/cli.ts` and `src/cli/`; HTTP status and error-envelope policy belong in
-`src/server.ts`.
+codes belong in `src/cli.ts` and `src/cli/`; HTTP status and error-envelope
+policy belong in `src/server/`.
 
 ## Parsing and ingest
 

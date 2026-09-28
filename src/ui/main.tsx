@@ -206,291 +206,53 @@ import {
   type TranscriptToolPresentation,
   transcriptCollapseLabel,
 } from "./transcript-rendering.ts";
+import type {
+  Activity,
+  ActivityBucket,
+  BadgeTone,
+  BrandIconName,
+  ConfigView,
+  ContextWindowCompactionData,
+  ContextWindowTimelineData,
+  DashboardData,
+  DataSlice,
+  DateBounds,
+  DateRangeSelection,
+  DimensionRow,
+  FileRow,
+  IconName,
+  LoadedSessionPage,
+  McpRow,
+  ModelSparklines,
+  NavItem,
+  ProjectSummary,
+  Recommendation,
+  SearchHit,
+  SearchResponse,
+  ServerEventPayload,
+  SessionDetailData,
+  SessionIngestIssue,
+  SessionOutlineItemData,
+  SessionPageState,
+  SessionSummary,
+  SettingsInfo,
+  SubagentDetailData,
+  Summary,
+  SyncProgress,
+  ThemeChoice,
+  TokenEconomics,
+  ToolCallPage,
+  ToolCallRow,
+  ToolRow,
+  TranscriptBlockData,
+  UserSettings,
+} from "./types.ts";
 import "./styles.css";
-
-type Summary = {
-  sessions: number;
-  messages: number;
-  tool_calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  estimated_cost_usd: number;
-};
-
-type SessionSummary = {
-  id: number;
-  tool: string;
-  source_session_id: string;
-  title: string | null;
-  project_path: string | null;
-  model: string | null;
-  reasoning_effort: string | null;
-  reasoning_effort_levels: string[];
-  total_reasoning_tokens: number;
-  reasoning_source: string | null;
-  started_at: string | null;
-  message_count: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  estimated_cost_usd: number;
-  user_state: "archived" | null;
-  is_user_archived: boolean;
-  is_subagent: boolean;
-  parent_session_id: number | null;
-  spawn_tool_use_id: string | null;
-  agent_id: string | null;
-  agent_type: string | null;
-  spawn_depth: number | null;
-  context_window_tokens: number | null;
-  peak_context_tokens: number | null;
-  compaction_count: number;
-  subagent_count: number;
-  subagent_estimated_cost_usd: number;
-  /** Ingest diagnostics recorded against this session's source file. */
-  ingest_issue_count: number;
-  informational_ingest_issue_count: number;
-  dosu_mcp_direct_calls: number;
-  dosu_mcp_tree_calls: number;
-  subagents?: SessionSummary[];
-};
-
-type SearchHit = {
-  block_id: number;
-  block_type: string;
-  href: string;
-  message_seq: number;
-  project: string | null;
-  role: string;
-  session_id: number;
-  session_title: string | null;
-  snippet: string;
-  timestamp: string | null;
-  tool: string;
-};
-
-type SearchResponse = {
-  elapsed_ms: number;
-  results: SearchHit[];
-  total: number | null;
-  total_is_capped: boolean;
-};
-
-type SyncProgress = {
-  failed: number;
-  ingested: number;
-  scanned: number;
-  skipped: number;
-  total: number;
-};
-
-type ServerEventPayload = {
-  reason?: string;
-};
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
 // Every other view renders its own <h1>; the topbar title is then a plain label.
 const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
-
-type Activity = {
-  by_hour: number[];
-  by_weekday: number[];
-  timezone: string;
-  peak_hour: number | null;
-  peak_weekday: number | null;
-};
-
-type ModelSparklines = {
-  models: Record<string, number[]>;
-  days: string[];
-};
-
-type DateBounds = {
-  min: string | null;
-  max: string | null;
-};
-
-type ActivityBucket = "context" | "planning" | "code" | "communicating";
-
-type TokenEconomics = {
-  buckets: {
-    bucket: ActivityBucket;
-    generation_tokens: number;
-    context_window_tokens: number;
-    estimated_cost_usd: number;
-    tool_calls: number;
-    sessions: number;
-    cost_share: number;
-    active_ms: number;
-  }[];
-  totals: {
-    generation_tokens: number;
-    context_window_tokens: number;
-    estimated_cost_usd: number;
-    input_cost_usd: number;
-    output_cost_usd: number;
-    active_ms: number;
-    waiting_on_user_ms: number;
-    attributed_ms: number;
-  };
-};
-
-type DimensionRow = {
-  key: string;
-  sessions: number;
-  input_tokens: number;
-  output_tokens: number;
-  reasoning_tokens: number;
-  est_reasoning_tokens: number;
-  estimated_cost_usd: number;
-};
-
-type ProjectSummary = {
-  id: number;
-  path: string;
-  name: string | null;
-  sessions: number;
-  estimated_cost_usd: number;
-  last_seen_at: string | null;
-  is_worktree: boolean;
-  root_path: string | null;
-  worktree_label: string | null;
-  worktree_tool: string | null;
-  root_source: string | null;
-  worktree_count: number;
-  session_tools: string[];
-};
-
-type ToolRow = {
-  tool_name: string;
-  tool_kind: string;
-  mcp_server: string | null;
-  calls: number;
-  errors: number;
-  p50_ms: number | null;
-  p95_ms: number | null;
-  last_used_at: string | null;
-};
-
-type McpRow = {
-  mcp_server: string;
-  tools: number;
-  calls: number;
-  errors: number;
-  p50_ms: number | null;
-  p95_ms: number | null;
-  last_used_at: string | null;
-};
-
-type ToolCallRow = {
-  id: number;
-  session_id: number;
-  session_title: string | null;
-  project: string | null;
-  tool_name: string | null;
-  tool_kind: string | null;
-  mcp_server: string | null;
-  input_preview: string | null;
-  input_bytes: number | null;
-  output_preview: string | null;
-  output_bytes: number | null;
-  is_error: boolean | null;
-  has_result: boolean | null;
-  duration_ms: number | null;
-  timestamp: string | null;
-  seq: number | null;
-};
-
-type ToolCallPage = {
-  calls: ToolCallRow[];
-  total: number;
-  limit: number;
-  offset: number;
-  summary: {
-    calls: number;
-    errors: number;
-    p50_ms: number | null;
-    p95_ms: number | null;
-  } | null;
-};
-
-type FileRow = {
-  key: string;
-  project: string | null;
-  reads: number;
-  edits: number;
-  writes: number;
-  deletes: number;
-  sessions: number;
-  last_touched_at: string | null;
-};
-
-type Recommendation = {
-  key: string;
-  kind: "signal" | "catalog";
-  status: string;
-  category: string | null;
-  title: string;
-  detail: string | null;
-  suggestion: string | null;
-  prompt: string | null;
-  url: string | null;
-  link_label: string | null;
-  icon: string | null;
-  impact_label?: string | null;
-  tone: string | null;
-  score: number;
-  action: string | null;
-  memory_layer: string | null;
-  promotion_target: string | null;
-  trigger: string | null;
-  evidence: string | null;
-  success_metric: string | null;
-  note: string | null;
-  implemented_at: string | null;
-};
-
-type ConfigView = {
-  dbPath: string;
-  claudeDir: string;
-  codexDir: string;
-  version: string;
-};
-
-type UserSettings = {
-  agent: string;
-  terminal: string;
-  ide: string;
-};
-
-type SettingsInfo = {
-  settings: UserSettings;
-  path: string;
-  can_launch: boolean;
-  options: {
-    agents: [string, string][];
-    terminals: [string, string][];
-    ides: [string, string][];
-  };
-};
-
-type DashboardData = {
-  summary: Summary | null;
-  byModel: DimensionRow[];
-  byProject: DimensionRow[];
-  byDay: DimensionRow[];
-  projects: ProjectSummary[];
-  tools: ToolRow[];
-  mcp: McpRow[];
-  files: FileRow[];
-  recommendations: Recommendation[];
-  config: ConfigView | null;
-  settings: SettingsInfo | null;
-  activity: Activity | null;
-  modelSparklines: ModelSparklines | null;
-  tokenEconomics: TokenEconomics | null;
-  dateBounds: DateBounds | null;
-};
 
 const emptyData: DashboardData = {
   summary: null,
@@ -509,8 +271,6 @@ const emptyData: DashboardData = {
   tokenEconomics: null,
   dateBounds: null,
 };
-
-type DataSlice = keyof DashboardData;
 
 // Each page fetches only the slices it renders; fetching everything for every
 // page made first paint wait on the slowest analytics endpoint. Slices are
@@ -644,13 +404,6 @@ function slicesForView(routeKey: string): DataSlice[] {
   return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[routeKey] ?? [])])];
 }
 
-type NavItem = {
-  key: string;
-  href: string;
-  label: string;
-  icon: IconName;
-};
-
 /**
  * Two sections: what the archive adds up to, then the archive itself. Analytics
  * leads because it answers the question the tool exists for -- what the sessions
@@ -696,13 +449,6 @@ const SESSION_TABLE_SKELETON_KEYS = Array.from(
   (_, index) => `session-row-skeleton-${index}`,
 );
 const EMPTY_SESSION_IDS = new Set<number>();
-type ThemeChoice = "system" | "light" | "dark";
-type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
-type DateRangeSelection = {
-  preset: RangePreset;
-  from: string | null;
-  to: string | null;
-};
 
 function versionLabel(version: string | null | undefined): string {
   if (version == null || version === "") {
@@ -717,22 +463,6 @@ const RANGE_PRESETS = [
   { key: "90d", label: "90d", days: 90 },
 ] as const;
 const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
-
-type LoadedSessionPage = {
-  exhausted: boolean;
-  page: number;
-  requestKey: string;
-  scopeKey: string;
-  sessions: SessionSummary[];
-};
-
-type SessionPageState = {
-  error: unknown;
-  exhausted: boolean;
-  loadedPage: number | null;
-  loading: boolean;
-  sessions: SessionSummary[];
-};
 
 const SESSION_PAGE_CACHE_LIMIT = 12;
 
@@ -5656,63 +5386,6 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-type BadgeTone =
-  | "neutral"
-  | "accent"
-  | "success"
-  | "warning"
-  | "danger"
-  | "info"
-  | "claude"
-  | "openai"
-  | "gemini";
-
-type BrandIconName = "anthropic" | "claude" | "openai" | "gemini";
-
-type IconName =
-  | "archive"
-  | "arrowLeft"
-  | "beaker"
-  | "bolt"
-  | "chart"
-  | "check"
-  | "chevronDown"
-  | "chevronLeft"
-  | "chevronRight"
-  | "chevronUp"
-  | "clock"
-  | "copy"
-  | "cpu"
-  | "desktop"
-  | "download"
-  | "ellipsis"
-  | "eye"
-  | "file"
-  | "fileCode"
-  | "filePdf"
-  | "folder"
-  | "info"
-  | "inbox"
-  | "lightbulb"
-  | "menu"
-  | "messages"
-  | "minus"
-  | "money"
-  | "moon"
-  | "plus"
-  | "refresh"
-  | "search"
-  | "share"
-  | "sessions"
-  | "settings"
-  | "shield"
-  | "sun"
-  | "trend"
-  | "trash"
-  | "tools"
-  | "upload"
-  | "x";
-
 function StatCard({
   alert = false,
   icon,
@@ -9432,93 +9105,6 @@ function IngestIssuesPanel({
     </section>
   );
 }
-
-type SessionDetailData = {
-  summary: SessionSummary;
-  messages: {
-    seq: number;
-    role: string;
-    timestamp: string | null;
-    model: string | null;
-    context_tokens: number | null;
-    output_tokens: number | null;
-    is_sidechain: boolean;
-    is_compact_boundary: boolean;
-    compact_trigger: string | null;
-    compact_pre_tokens: number | null;
-    is_compact_summary: boolean;
-    blocks: TranscriptBlockData[];
-  }[];
-  subagents: SubagentDetailData[];
-  totals?: { reply_count: number; tool_call_count: number };
-  message_offset?: number;
-  message_limit?: number | null;
-  has_more_messages?: boolean;
-};
-
-type SessionOutlineItemData = {
-  seq: number;
-  text: string;
-  kind: "prompt" | "dosu";
-  ordinal: number;
-};
-
-/** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
- * this panel never renders the raw transcript line (see docs/logging.md and
- * the sessionIngestIssues docstring in src/query.ts). */
-type SessionIngestIssue = {
-  code: string;
-  line_no: number | null;
-  error: string;
-};
-
-type ContextWindowPointData = {
-  seq: number;
-  timestamp: string | null;
-  turn: number;
-  context_tokens: number;
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  output_tokens: number;
-};
-
-type ContextWindowCompactionData = {
-  seq: number;
-  timestamp: string | null;
-  trigger: string | null;
-  pre_tokens: number | null;
-  post_tokens: number | null;
-};
-
-type ContextWindowTimelineData = {
-  session_id: number;
-  tool: string;
-  window_tokens: number | null;
-  window_inferred: boolean;
-  peak_tokens: number;
-  peak_pct: number | null;
-  turn_count: number;
-  points: ContextWindowPointData[];
-  compactions: ContextWindowCompactionData[];
-};
-
-type SubagentDetailData = SessionDetailData & {
-  spawn_tool_use_id: string | null;
-  agent_id: string | null;
-  agent_type: string | null;
-  spawn_depth: number | null;
-};
-
-type TranscriptBlockData = {
-  ordinal: number;
-  block_type: string;
-  text: string | null;
-  tool_name: string | null;
-  tool_use_id: string | null;
-  tool_input: string | null;
-  tool_result: string | null;
-};
 
 // tabIndex={-1} lets arrow-key navigation move focus (and screen readers
 // announce the turn) without joining the tab order. Memoized because a

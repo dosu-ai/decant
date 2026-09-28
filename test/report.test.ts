@@ -305,6 +305,39 @@ describe("report charts", () => {
     ).toThrow(/event-handler attribute/);
   });
 
+  test("attribute-like text in labels is not mistaken for an attribute", () => {
+    const label = "my-src=2 onload=1 href=x url(https://example.com/a) style='//'";
+    const svg = renderSessionsByDayChart([{ ...firstDay, key: label }]);
+    expect(svg).toContain("my-src=2");
+    expect(sanitizeReportSvg('<svg><text x="1">src=2 onclick=3 url(x)</text></svg>')).toContain(
+      "src=2 onclick=3",
+    );
+  });
+
+  test("still rejects active markup, handlers, external URLs and paint servers", () => {
+    const attacks: [string, RegExp][] = [
+      ['<svg><rect onclick="x()"/></svg>', /event-handler/],
+      ["<svg><rect ONLOAD=x /></svg>", /event-handler/],
+      ["<svg><rect/onload=x></svg>", /event-handler/],
+      ['<svg><rect fill="a>b" onload=x /></svg>', /event-handler/],
+      ['<svg><text>ok</text><rect fill=a"b onload=x y="/></svg>', /event-handler/],
+      ['<svg><rect href="javascript:alert(1)"/></svg>', /external or active URL/],
+      ['<svg><rect xlink:href="https://example.com/x"/></svg>', /external or active URL/],
+      ['<svg><rect src="https://example.com/x"/></svg>', /external or active URL/],
+      ['<svg><rect fill="url(https://example.com/x)"/></svg>', /external paint server/],
+      ['<svg><rect style="fill:url(//example.com/x)"/></svg>', /external paint server/],
+      ['<svg><rect style="fill:red;behavior:expression(x)"/></svg>', /active style attribute/],
+      ["<svg><script>alert(1)</script></svg>", /unsupported <script>/],
+      ["<svg><foreignObject><div/></foreignObject></svg>", /unsupported <foreignobject>/],
+      ["<svg><!-- x --><rect/></svg>", /active markup/],
+      ["<svg><rect", /unterminated/],
+    ];
+    for (const [svg, message] of attacks) {
+      expect(() => sanitizeReportSvg(svg)).toThrow(message);
+    }
+    expect(sanitizeReportSvg('<svg><rect fill="url(#grad)" x="1"/></svg>')).toContain("#grad");
+  });
+
   test("rejects injected style tags and external CSS references", () => {
     expect(() =>
       renderChartSvg({

@@ -1,6 +1,15 @@
 import { isPriceable } from "../cost.ts";
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import {
+  asBoolean,
+  asInteger,
+  asString,
+  byteLength,
+  canonicalJson,
+  get,
+  hasKey,
+  isObject,
+} from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -37,15 +46,12 @@ const IGNORED_JOURNAL_META = new Set([
 ]);
 
 const CHARS_PER_TOKEN = 4;
-const encoder = new TextEncoder();
 
 interface TurnAcc {
   output: number;
   visible: number;
   hasThinking: boolean;
 }
-
-type JsonObject = { [key: string]: Json };
 
 export interface ClaudeParseOptions {
   sourcePath?: string;
@@ -523,13 +529,6 @@ function stringifyContent(content: Json | undefined): string {
   return "";
 }
 
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
-}
-
 function stringAt(value: Json | undefined, ...keys: string[]): string | null {
   for (const key of keys) {
     const got = asString(get(value, key));
@@ -538,30 +537,6 @@ function stringAt(value: Json | undefined, ...keys: string[]): string | null {
     }
   }
   return null;
-}
-
-function hasKey(value: Json, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asBoolean(value: Json | undefined): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
-}
-
-function byteLength(value: string): number {
-  return encoder.encode(value).length;
 }
 
 function isSubagentPath(path: string | undefined): boolean {

@@ -17,7 +17,7 @@ import { materializeContextWindow, materializeMissingContextWindows } from "./co
 import { defaultPricing, estimateCost } from "./cost.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
-import { canonicalJson } from "./json.ts";
+import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
 import {
   type IngestIssueCode,
@@ -35,13 +35,14 @@ import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
+import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
   refreshSessionCosts,
 } from "./token-economics.ts";
 import { classifyTool, previewHeadTail } from "./tools.ts";
-import { resolveWorktreeRoots } from "./worktree.ts";
+import { basename, resolveWorktreeRoots } from "./worktree.ts";
 
 const logger = getDecantLogger("ingest");
 
@@ -103,35 +104,6 @@ interface ToolUseBlock {
   callBlockId: number;
   timestamp: string | null;
   block: NormalizedBlock;
-}
-
-type IngestQueryParam = string | number | bigint | boolean | null;
-
-function ingestRows<T>(db: Database, sql: string, params: IngestQueryParam[] = []): T[] {
-  const statement = db.prepare<T, IngestQueryParam[]>(sql);
-  try {
-    return statement.all(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function ingestRow<T>(db: Database, sql: string, params: IngestQueryParam[] = []): T | null {
-  const statement = db.prepare<T, IngestQueryParam[]>(sql);
-  try {
-    return statement.get(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function runIngestStatement(db: Database, sql: string, params: IngestQueryParam[] = []): number {
-  const statement = db.prepare<unknown, IngestQueryParam[]>(sql);
-  try {
-    return Number(statement.run(...params).lastInsertRowid);
-  } finally {
-    statement.finalize();
-  }
 }
 
 export function discover(config: IngestConfig): SourceFile[] {
@@ -218,7 +190,7 @@ export function sync(
       let content: string;
       try {
         stats = fstatSync(fd);
-        const prior = ingestRow<{ size: number; mtime: number; ingest_revision: number }>(
+        const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
           db,
           "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
           [file.path],
@@ -365,7 +337,7 @@ export function upsertSession(
 
 export function seedModelPricing(db: Database): void {
   const stored = new Map(
-    ingestRows<{
+    queryRows<{
       model: string;
       input_per_mtok: number | null;
       output_per_mtok: number | null;
@@ -436,7 +408,7 @@ export function seedModelPricing(db: Database): void {
 }
 
 export function resolveSubagentParents(db: Database): void {
-  const rows = ingestRows<{
+  const rows = queryRows<{
     id: number;
     tool: Tool;
     source_session_id: string;
@@ -783,18 +755,16 @@ function writeIngestedFile(
   parsed: ParsedSession,
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
-    runIngestStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
+    runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
     const sessionId = writeSession(db, parsed, prepared.file.path, prepared.mtime, prepared.size);
     if (sessionId == null) {
-      runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [
-        prepared.file.path,
-      ]);
+      runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
       writeIngestSource(db, prepared, null, "skipped_deleted");
       return "tombstoned";
     }
-    runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
+    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
     const insertIssue = db.prepare(
       `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
        VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
@@ -818,7 +788,7 @@ function writeIngestSource(
   sessionId: number | null,
   status: "ok" | "ok_with_issues" | "skipped_deleted",
 ): void {
-  runIngestStatement(
+  runStatement(
     db,
     `INSERT INTO ingest_source(
        path, tool, size, mtime, ingest_revision, session_id, line_count, status,
@@ -868,7 +838,7 @@ function writeSession(
   }
   let projectId: number | null = null;
   if (s.projectPath != null) {
-    runIngestStatement(
+    runStatement(
       db,
       `INSERT INTO project(path, name, first_seen_at, last_seen_at)
        VALUES (?1, ?2, datetime('now'), datetime('now'))
@@ -876,23 +846,21 @@ function writeSession(
       [s.projectPath, basename(s.projectPath)],
     );
     projectId =
-      ingestRow<{ id: number }>(db, "SELECT id FROM project WHERE path = ?1", [s.projectPath])
-        ?.id ?? null;
+      queryRow<{ id: number }>(db, "SELECT id FROM project WHERE path = ?1", [s.projectPath])?.id ??
+      null;
   }
 
-  const existing = ingestRow<{ id: number }>(
+  const existing = queryRow<{ id: number }>(
     db,
     "SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2",
     [s.tool, s.sourceSessionId],
   );
   if (existing != null) {
-    runIngestStatement(
-      db,
-      "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1",
-      [existing.id],
-    );
+    runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
+      existing.id,
+    ]);
   }
-  runIngestStatement(db, "DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2", [
+  runStatement(db, "DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2", [
     s.tool,
     s.sourceSessionId,
   ]);
@@ -903,7 +871,7 @@ function writeSession(
   const gotWorkType = workType(s, refs);
   const cost = estimateCost(s.model, s.totals, defaultPricing());
 
-  const sessionId = runIngestStatement(
+  const sessionId = runStatement(
     db,
     `INSERT INTO session(
        tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
@@ -1350,10 +1318,6 @@ function codexTitles(config: IngestConfig): Map<string, string> {
   return titles;
 }
 
-function basename(path: string): string {
-  return path.replace(/\/+$/, "").split("/").filter(Boolean).at(-1) ?? path;
-}
-
 function fileStem(path: string): string {
   const base = pathBasename(path);
   const ext = extname(base);
@@ -1376,14 +1340,6 @@ function mtimeSecs(stats: Stats): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 
-// Buffer.byteLength counts a lone surrogate as 2 bytes; SQLite stores it as
-// U+FFFD (3), which is what the encoder reports.
-const utf8 = new TextEncoder();
-
-function byteLength(value: string): number {
-  return utf8.encode(value).length;
-}
-
 function durationBetween(start: string | null, end: string | null): number | null {
   if (start == null || end == null) {
     return null;
@@ -1394,18 +1350,6 @@ function durationBetween(start: string | null, end: string | null): number | nul
     return null;
   }
   return endMs - startMs;
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asBoolean(value: Json | undefined): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 /** Multi-path json_extract keeps JSON types, so `true` stays distinct from `1`. */
@@ -1430,10 +1374,4 @@ function parseObject(value: string | null): Json | undefined {
   } catch {
     return undefined;
   }
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value[key] as Json | undefined)
-    : undefined;
 }

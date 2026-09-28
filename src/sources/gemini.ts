@@ -1,5 +1,5 @@
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import { asString, canonicalJson, get, hasKey, isObject, type JsonObject } from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -10,8 +10,6 @@ import {
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
-
-type JsonObject = { [key: string]: Json };
 
 export interface GeminiParseOptions {
   /** Source id of the parent chat when the file lives under `chats/<parent>/`. */
@@ -542,25 +540,6 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheCreation1h: a.cacheCreation1h + b.cacheCreation1h,
     reasoning: a.reasoning + b.reasoning,
   };
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
-}
-
-function hasKey(value: Json | undefined, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value as JsonObject, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
 }
 
 function getInteger(value: JsonObject, key: string): number {

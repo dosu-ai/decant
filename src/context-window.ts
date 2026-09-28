@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { withImmediateTransaction } from "./db.ts";
+import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 /** Baseline for Claude models whose published limit is still 200k. */
 const DEFAULT_WINDOW_TOKENS = 200_000;
@@ -170,40 +171,11 @@ interface TimelineRow {
   has_text: number;
 }
 
-type ContextQueryParam = string | number | null;
-
-function contextRows<T>(db: Database, sql: string, params: ContextQueryParam[] = []): T[] {
-  const statement = db.prepare<T, ContextQueryParam[]>(sql);
-  try {
-    return statement.all(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function contextRow<T>(db: Database, sql: string, params: ContextQueryParam[] = []): T | null {
-  const statement = db.prepare<T, ContextQueryParam[]>(sql);
-  try {
-    return statement.get(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function runContextStatement(db: Database, sql: string, params: ContextQueryParam[] = []): void {
-  const statement = db.prepare<unknown, ContextQueryParam[]>(sql);
-  try {
-    statement.run(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
 export function contextWindowForSession(
   db: Database,
   sessionId: number,
 ): ContextWindowTimeline | null {
-  const session = contextRow<{
+  const session = queryRow<{
     id: number;
     tool: string;
     is_subagent: number;
@@ -228,7 +200,7 @@ export function contextWindowForSession(
   // has_text mirrors enrich's hasRealText turn rule (a text block that is not
   // an interruption marker and not a slash-command wrapper) so per-point turn
   // numbers line up with the session's stored turn_count.
-  const rows = contextRows<TimelineRow>(
+  const rows = queryRows<TimelineRow>(
     db,
     `SELECT m.seq, m.timestamp, m.role,
               m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
@@ -342,7 +314,7 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
   if (timeline == null) {
     return false;
   }
-  runContextStatement(
+  runStatement(
     db,
     `UPDATE session
      SET context_window_tokens = ?2, peak_context_tokens = ?3,
@@ -362,7 +334,7 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
 /** One-time upgrade/backfill path, mirroring the economics materializer: sync
  * calls this so sessions ingested before v11 gain rollups without re-ingest. */
 export function materializeMissingContextWindows(db: Database): number {
-  const rows = contextRows<{ id: number }>(
+  const rows = queryRows<{ id: number }>(
     db,
     "SELECT id FROM session WHERE peak_context_tokens IS NULL",
   );

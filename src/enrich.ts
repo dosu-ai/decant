@@ -1,3 +1,4 @@
+import { byteLength, isObject } from "./json.ts";
 import type { NormalizedBlock, NormalizedMessage, NormalizedSession } from "./model.ts";
 
 export type Operation = "read" | "edit" | "write" | "delete";
@@ -28,7 +29,6 @@ export interface Facets {
 const ACTIVE_GAP_CAP_SECONDS = 300;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
-const encoder = new TextEncoder();
 
 export function fileRefs(session: NormalizedSession): FileRef[] {
   const refs: FileRef[] = [];
@@ -227,10 +227,6 @@ export function facets(session: NormalizedSession): Facets {
   return got;
 }
 
-function byteLength(value: string): number {
-  return encoder.encode(value).length;
-}
-
 export function epochSecs(timestamp: string): number | null {
   if (!timestamp.endsWith("Z")) {
     return null;
@@ -260,10 +256,6 @@ export function epochSecs(timestamp: string): number | null {
     return null;
   }
   return Math.trunc(Date.UTC(year, month - 1, day, hour, minute, second) / 1000);
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function rawBoolean(raw: unknown, key: string): boolean | null {

@@ -1,5 +1,5 @@
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import { asInteger, asString, canonicalJson, get, hasKey, isObject } from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -14,8 +14,6 @@ import {
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
-
-type JsonObject = { [key: string]: Json };
 
 export function parseCodexSession(
   fallbackId: string,
@@ -551,29 +549,6 @@ function callInput(payload: Json): Json | undefined {
     return get(payload, "input");
   }
   return undefined;
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
-}
-
-function hasKey(value: Json, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 function getInteger(value: Json | undefined, key: string): number {

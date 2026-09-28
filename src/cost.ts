@@ -150,9 +150,8 @@ function canonicalModel(raw: string): string | null {
     model === "haiku" ||
     model === "fable"
   ) {
-    // Claude 3 IDs put the tier after the version. Every Claude 3 model except
-    // Haiku 3.5 is retired with no published first-party rate, so they must not
-    // fall through to a current tier's price.
+    // Claude 3 IDs put the tier after the version, so the tier checks below
+    // would bill them at current rates. Haiku 3.5 is the only one still listed.
     if (/claude-3(?:[-.][57])?-(?:opus|sonnet)|claude-3-haiku/.test(model)) {
       return null;
     }

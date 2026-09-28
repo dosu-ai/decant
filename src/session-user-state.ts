@@ -81,11 +81,9 @@ export function sessionUserStatePredicate(alias: string, includeArchived = false
 }
 
 /**
- * Avoid installing the correlated recursive lineage program in rollup SQL
- * when no hidden state of the requested kind exists. Rollups call this once
- * while building each statement; the indexed one-row probe is constant work,
- * while returning `1` lets SQLite scan the session table without evaluating a
- * recursive CTE for every row.
+ * Skip the hidden-set subquery when no hidden state of the requested kind
+ * exists. The one-row probe runs once per statement build and returning `1`
+ * leaves the session scan unfiltered.
  */
 export function sessionUserStatePredicateForDatabase(
   db: Database,
@@ -200,14 +198,13 @@ const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
  )`;
 
 /**
- * Apply direct user archive state, or delete a session's existing descendant
- * tree.
+ * Apply direct user archive state, or delete a session's descendant tree.
  *
- * Deleted rows keep source-identity tombstones while the session subtree is
- * physically removed. Archive and visible affect only the selected identity;
- * reads derive effective archive state from current ancestry. This preserves
- * an independently archived child when a parent is archived and restored.
- * Source-derived session.is_archived remains untouched.
+ * Deleted rows keep source-identity tombstones after the subtree is removed.
+ * Archive and visible touch only the selected identity; effective archive state
+ * derives from ancestry, so an independently archived child survives its parent
+ * being archived and restored. session.is_archived is source-derived and stays
+ * untouched.
  */
 export function setSessionUserState(
   db: Database,

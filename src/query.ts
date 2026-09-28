@@ -1116,18 +1116,13 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   }
   const placeholders = sessions.map(() => "?").join(", ");
   const ids = sessions.map((session) => session.id);
-  // Pass 1: fetch only the first plausibly-usable candidate text per session.
-  // The correlated subquery stops at the first hit instead of walking every
-  // user message, and CROSS JOIN + INDEXED BY pin the plan to messages ->
-  // blocks; left to its own devices SQLite starts from every text block in the
-  // archive, which turns each title lookup into a multi-hundred-ms full scan.
+  // Pass 1 takes only the first plausible candidate per session. CROSS JOIN +
+  // INDEXED BY pin the plan to messages -> blocks; otherwise SQLite starts from
+  // every text block in the archive.
   //
   // AGENT_CONTEXT_SQL must skip a subset (never a superset) of what
-  // isAgentContextText skips: anything it wrongly lets through is re-checked in
-  // JS and handled by pass 2, but anything it wrongly skips would silently
-  // change which prompt becomes the title. That is why the case-sensitive JS
-  // rules use GLOB here and the \b in the teammate rule is narrowed to the two
-  // separators that occur in practice.
+  // isAgentContextText skips: a wrong pass-through is re-checked in JS by pass
+  // 2, but a wrong skip silently changes which prompt becomes the title.
   const firstCandidates = db
     .query(
       `SELECT s.id AS session_id, s.is_subagent,
@@ -1236,12 +1231,9 @@ function subagentTaskTitle(text: string): string | null {
   return normalized === "" ? null : preview(normalized, 180);
 }
 
-// Source-level constraints for a title candidate. Codex stores developer
-// messages as normalized user rows for transcript fidelity, so consult the raw
-// payload role here. Claude parent files can contain copied sidechain rows;
-// those belong to child agents unless the selected session is itself a
-// standalone subagent. Compact summaries are machine continuations, not human
-// prompts.
+// Codex stores developer messages as user rows, so check the raw payload role.
+// Claude parent files can hold copied sidechain rows that belong to child
+// agents, and compact summaries are machine continuations, not prompts.
 const HUMAN_TITLE_MESSAGE_SQL = `
   COALESCE(json_extract(m.raw, '$.payload.role'), 'user') = 'user'
   AND COALESCE(json_extract(m.raw, '$.isCompactSummary'), 0) != 1
@@ -1251,12 +1243,10 @@ const HUMAN_TITLE_MESSAGE_SQL = `
   )
 `;
 
-// SQL twin of isAgentContextText, used to early-exit title candidate scans.
-// Keep the two in sync when adding rules, and keep this side conservative:
-// LIKE mirrors the case-insensitive /^.../i prefixes, GLOB mirrors the
-// case-sensitive includes/startsWith rules, and JS stripAnsi/trimStart nuances
-// intentionally fall through to the JS check (pass 2) rather than being
-// approximated here.
+// SQL twin of isAgentContextText for early-exiting title scans. Keep the two in
+// sync and this side conservative: LIKE mirrors the case-insensitive prefixes,
+// GLOB the case-sensitive ones, and stripAnsi/trimStart nuances fall through
+// to the JS check rather than being approximated.
 const AGENT_CONTEXT_SQL = `
   LTRIM(b.text) LIKE '<permissions instructions>%'
   OR LTRIM(b.text) LIKE '<local-command-caveat>%'

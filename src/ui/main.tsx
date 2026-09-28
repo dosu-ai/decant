@@ -106,6 +106,7 @@ import {
   type SessionSearchIndexRow,
 } from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
+import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
 import { shouldInterceptLinkClick } from "./link-click.ts";
 import {
   planSessionPageLoad,
@@ -284,6 +285,7 @@ type ServerEventPayload = {
 };
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
+const SYNC_PROGRESS_RENDER_MS = 150;
 
 type Activity = {
   by_hour: number[];
@@ -827,6 +829,7 @@ function App() {
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
   const syncCompleteTimerRef = useRef<number | null>(null);
+  const syncProgressThrottleRef = useRef<LatestThrottle<SyncProgress> | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
@@ -943,6 +946,11 @@ function App() {
     // user asks to reconnect immediately instead of waiting for its backoff.
     void liveConnectionKey;
     const events = new EventSource("/api/events");
+    const progressThrottle = createLatestThrottle<SyncProgress>(
+      setSyncProgress,
+      SYNC_PROGRESS_RENDER_MS,
+    );
+    syncProgressThrottleRef.current = progressThrottle;
     const markConnected = () => {
       if (liveDroppedRef.current) {
         liveDroppedRef.current = false;
@@ -969,7 +977,7 @@ function App() {
           return;
         }
         if (payload.progress != null) {
-          setSyncProgress(payload.progress);
+          progressThrottle.push(payload.progress);
           setLocalSyncing(true);
         }
       } catch {
@@ -988,6 +996,7 @@ function App() {
       if (payload.reason !== "manual") {
         return;
       }
+      progressThrottle.flush();
       setArchiveUpdateAvailable(false);
       setLocalSyncing(false);
       setSyncError(null);
@@ -1047,6 +1056,8 @@ function App() {
       events.removeEventListener("archive_updated", handleArchiveUpdated as EventListener);
       events.removeEventListener("error", handleError);
       events.close();
+      progressThrottle.cancel();
+      syncProgressThrottleRef.current = null;
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
         liveDisconnectTimerRef.current = null;
@@ -1099,11 +1110,13 @@ function App() {
     }
     setSyncError(null);
     setSyncComplete(false);
+    syncProgressThrottleRef.current?.cancel();
     setSyncProgress(null);
     setArchiveUpdateAvailable(false);
     setLocalSyncing(true);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
       .then(() => {
+        syncProgressThrottleRef.current?.flush();
         setArchiveUpdateAvailable(false);
         setLocalSyncing(false);
         setSyncComplete(true);
@@ -1117,6 +1130,7 @@ function App() {
         }, 1_500);
       })
       .catch((err: unknown) => {
+        syncProgressThrottleRef.current?.cancel();
         setLocalSyncing(false);
         setSyncProgress(null);
         setSyncError(err);

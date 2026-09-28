@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
 const server = readFileSync(join(import.meta.dir, "..", "src", "server.ts"), "utf8");
@@ -127,8 +128,8 @@ describe("report preview routes", () => {
     );
     expect(main).toContain("first user-prompt preview (up to 180 characters)");
     expect(main).toContain("Transcript messages beyond the disclosed prompt preview");
-    expect(server).toContain('"/reports/analytics": uiBundle');
-    expect(server).toContain('"/reports/session/:id": uiBundle');
+    expect(UI_ROUTE_PATHS).toContain("/reports/analytics");
+    expect(UI_ROUTE_PATHS).toContain("/reports/session/{id}");
   });
 });
 

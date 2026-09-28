@@ -49,6 +49,7 @@ import {
   type ApiRoutePath,
   compileRoutePath,
   type RouteMatcher,
+  UI_ROUTE_PATHS,
 } from "./route-paths.ts";
 import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { type SessionUserStateUpdate, setSessionUserState } from "./session-user-state.ts";
@@ -1132,18 +1133,9 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/apple-touch-icon.png": new Response(Bun.file(appleTouchIconPath), {
         headers: { "cache-control": "public, max-age=86400", "content-type": "image/png" },
       }),
-      "/": uiBundle,
-      "/projects": uiBundle,
-      "/sessions": uiBundle,
-      "/sessions/:id": uiBundle,
-      "/search": uiBundle,
-      "/analytics": uiBundle,
-      "/insights": uiBundle,
-      "/tools": uiBundle,
-      "/files": uiBundle,
-      "/settings": uiBundle,
-      "/reports/analytics": uiBundle,
-      "/reports/session/:id": uiBundle,
+      ...Object.fromEntries(
+        UI_ROUTE_PATHS.map((path) => [path.replace("{id}", ":id"), uiBundle] as const),
+      ),
     },
     fetch: async (request, bunServer) => {
       const startedAt = performance.now();

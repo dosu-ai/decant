@@ -634,18 +634,65 @@ const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
   ) END
 )`;
 
-export function getSession(
-  db: Database,
-  id: number,
-  options: SessionReadOptions = {},
-): SessionDetail | null {
-  const summaryRow = db
+function sessionSummaryRow(db: Database, id: number): SessionSummaryRow | null {
+  return db
     .query(
       `${sessionSummarySelect(
         sessionUserStatePredicateForDatabase(db, "summary_child", true),
       )} WHERE s.id = ?1`,
     )
     .get(id) as SessionSummaryRow | null;
+}
+
+// Titles for the root and its whole descendant tree resolve in one batch so a
+// session with many subagents costs two queries, not two per subagent.
+function sessionTreeSummaries(
+  db: Database,
+  id: number,
+  summaryRow: SessionSummaryRow,
+): SessionSummary[] {
+  const descendantRows = db
+    .query(
+      `${sessionSummarySelect(sessionUserStatePredicateForDatabase(db, "summary_child", true))}
+       WHERE s.id IN (
+         WITH RECURSIVE subtree(id, depth) AS (
+           SELECT detail_child.id, 1
+           FROM session detail_child
+           WHERE detail_child.parent_session_id = ?1
+             AND ${visibleSessionPredicate("detail_child")}
+             AND ${sessionUserStatePredicateForDatabase(db, "detail_child", true)}
+           UNION ALL
+           SELECT child.id, subtree.depth + 1
+           FROM session child
+           JOIN subtree ON subtree.id = child.parent_session_id
+           WHERE subtree.depth < 5
+             AND ${visibleSessionPredicate("child")}
+             AND ${sessionUserStatePredicateForDatabase(db, "child", true)}
+         )
+         SELECT id FROM subtree
+       )
+       ORDER BY COALESCE(s.spawn_depth, 0), s.started_at, s.id`,
+    )
+    .all(id) as SessionSummaryRow[];
+  const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
+  return withDosuMcpEvidence(db, titled, true);
+}
+
+/** A session's summary without reading its transcript. */
+export function getSessionSummary(db: Database, id: number): SessionSummary | null {
+  const summaryRow = sessionSummaryRow(db, id);
+  if (summaryRow == null) {
+    return null;
+  }
+  return sessionTreeSummaries(db, id, summaryRow)[0] ?? mapSessionSummary(summaryRow);
+}
+
+export function getSession(
+  db: Database,
+  id: number,
+  options: SessionReadOptions = {},
+): SessionDetail | null {
+  const summaryRow = sessionSummaryRow(db, id);
   if (summaryRow == null) {
     return null;
   }
@@ -725,33 +772,7 @@ export function getSession(
     }
   }
 
-  // Titles for the root and its whole descendant tree resolve in one batch so a
-  // session with many subagents costs two queries, not two per subagent.
-  const descendantRows = db
-    .query(
-      `${sessionSummarySelect(sessionUserStatePredicateForDatabase(db, "summary_child", true))}
-       WHERE s.id IN (
-         WITH RECURSIVE subtree(id, depth) AS (
-           SELECT detail_child.id, 1
-           FROM session detail_child
-           WHERE detail_child.parent_session_id = ?1
-             AND ${visibleSessionPredicate("detail_child")}
-             AND ${sessionUserStatePredicateForDatabase(db, "detail_child", true)}
-           UNION ALL
-           SELECT child.id, subtree.depth + 1
-           FROM session child
-           JOIN subtree ON subtree.id = child.parent_session_id
-           WHERE subtree.depth < 5
-             AND ${visibleSessionPredicate("child")}
-             AND ${sessionUserStatePredicateForDatabase(db, "child", true)}
-         )
-         SELECT id FROM subtree
-       )
-       ORDER BY COALESCE(s.spawn_depth, 0), s.started_at, s.id`,
-    )
-    .all(id) as SessionSummaryRow[];
-  const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
-  const evidenced = withDosuMcpEvidence(db, titled, true);
+  const evidenced = sessionTreeSummaries(db, id, summaryRow);
   const rootSummary = evidenced[0] ?? mapSessionSummary(summaryRow);
   const childrenByParent = new Map<number, SessionSummary[]>();
   for (const child of evidenced.slice(1)) {

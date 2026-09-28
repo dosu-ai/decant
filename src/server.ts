@@ -29,6 +29,7 @@ import { openApiDocument } from "./openapi.ts";
 import {
   getSession,
   getSessionOutline,
+  getSessionSummary,
   listProjects,
   listSessions,
   listToolCalls,
@@ -431,7 +432,7 @@ export async function handleRequest(
         if (state === "deleted") {
           return json({ ok: true, id, state });
         }
-        const summary = getSession(db, id)?.summary;
+        const summary = getSessionSummary(db, id);
         return json({
           ok: true,
           id,

@@ -8,6 +8,7 @@ import { upsertSession } from "../src/ingest.ts";
 import {
   getSession,
   getSessionOutline,
+  getSessionSummary,
   type ListFilter,
   listProjects,
   listSessions,
@@ -147,6 +148,19 @@ describe("query reads", () => {
       user_state: "archived",
       is_user_archived: true,
     });
+    db.close();
+  });
+
+  test("reads a session summary without the transcript", () => {
+    const db = seeded();
+    const id = listSessions(db)[0]?.id ?? 0;
+    expect(getSessionSummary(db, id)).toEqual(getSession(db, id)?.summary ?? null);
+    expect(setSessionUserState(db, id, "archived")).toBe(true);
+    expect(getSessionSummary(db, id)).toMatchObject({
+      user_state: "archived",
+      is_user_archived: true,
+    });
+    expect(getSessionSummary(db, id + 999)).toBeNull();
     db.close();
   });
 

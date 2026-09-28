@@ -31,7 +31,6 @@ const bundledLanguages = {
   bash: () => import("@shikijs/langs/bash"),
   diff: () => import("@shikijs/langs/diff"),
   go: () => import("@shikijs/langs/go"),
-  javascript: () => import("@shikijs/langs/javascript"),
   json: () => import("@shikijs/langs/json"),
   jsx: () => import("@shikijs/langs/jsx"),
   markdown: () => import("@shikijs/langs/markdown"),
@@ -42,6 +41,13 @@ const bundledLanguages = {
   typescript: () => import("@shikijs/langs/typescript"),
   yaml: () => import("@shikijs/langs/yaml"),
 };
+
+// The jsx grammar tokenizes plain JavaScript identically to the javascript
+// grammar (JSX is part of both), so one copy serves both. TypeScript cannot
+// share the tsx grammar: it misreads `<T>(x)` casts and `a < b > c` as JSX.
+function grammarFor(language: TranscriptLanguage): keyof typeof bundledLanguages {
+  return language === "javascript" ? "jsx" : language;
+}
 
 const bundledThemes = {
   "github-dark": () => import("@shikijs/themes/github-dark"),
@@ -69,7 +75,7 @@ export async function highlightTranscriptCode(
   }
   const themeName = theme === "dark" ? "github-dark" : "github-light";
   const result: TokensResult = await codeToTokens(code, {
-    lang: language,
+    lang: grammarFor(language),
     theme: themeName,
     tokenizeMaxLineLength: 20_000,
     tokenizeTimeLimit: 100,

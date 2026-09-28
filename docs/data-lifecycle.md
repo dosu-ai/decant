@@ -81,6 +81,12 @@ These are filesystem permissions, not encryption. The archive is a plain SQLite
 file, so anything that can read it can read every transcript in it, including a
 backup, a synced folder, or another process running as you.
 
+Terminal, agent, and IDE preferences saved from the UI live apart from the
+archive in `~/.config/decant/settings.json`, or under `DECANT_CONFIG_DIR` when
+set. The file is written at mode `0600`. When it exists but cannot be parsed,
+Decant uses the detected defaults and leaves it alone until the next save, which
+moves it aside as `settings.json.corrupt-<timestamp>` before writing a new one.
+
 ### Inspecting and removing it
 
 `decant db info` reports where the archive is, how large it is, and how much it

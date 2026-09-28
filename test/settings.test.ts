@@ -1,5 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { detectedSettings, getSettings, saveSettings, settingsPath } from "../src/settings.ts";
@@ -47,6 +57,65 @@ describe("settings", () => {
       agent: "codex",
       terminal: "wezterm",
     });
+  });
+
+  test("creates the settings file owner-only, even over a looser existing file", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "mode") };
+    const path = settingsPath({ env });
+    saveSettings({ agent: "codex" }, { env });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+
+    chmodSync(path, 0o644);
+    saveSettings({ terminal: "kitty" }, { env });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dirname(path))).toEqual(["settings.json"]);
+  });
+
+  test("a missing or empty file means defaults and saves without a backup", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "empty") };
+    const path = settingsPath({ env });
+    expect(getSettings({ env, appExists: () => false }).agent).toBe("claude");
+
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "  \n");
+    saveSettings({ agent: "codex" }, { env });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ agent: "codex" });
+    expect(readdirSync(dirname(path))).toEqual(["settings.json"]);
+  });
+
+  test("a corrupt file reads as defaults and is moved aside, not overwritten, on save", () => {
+    for (const [name, body] of [
+      ["truncated", '{"agent": "codex", "termi'],
+      ["array", '["codex"]'],
+      ["null", "null"],
+    ] as const) {
+      const env = { DECANT_CONFIG_DIR: join(workDir, `corrupt-${name}`) };
+      const path = settingsPath({ env });
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+
+      expect(getSettings({ env, appExists: () => false }).agent).toBe("claude");
+      expect(readFileSync(path, "utf8")).toBe(body);
+
+      saveSettings({ terminal: "warp" }, { env });
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ terminal: "warp" });
+      const backups = readdirSync(dirname(path)).filter((entry) =>
+        entry.startsWith("settings.json.corrupt-"),
+      );
+      expect(backups).toHaveLength(1);
+      expect(readFileSync(join(dirname(path), backups[0] ?? ""), "utf8")).toBe(body);
+    }
+  });
+
+  test("an unreadable file is neither replaced nor backed up", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "unreadable") };
+    const path = settingsPath({ env });
+    mkdirSync(path, { recursive: true });
+
+    expect(getSettings({ env, appExists: () => false }).agent).toBe("claude");
+    expect(() => saveSettings({ agent: "codex" }, { env })).toThrow();
+    expect(existsSync(path)).toBe(true);
+    expect(readdirSync(dirname(path))).toEqual(["settings.json"]);
   });
 
   test("saveSettings persists sanitized values over detected defaults", () => {

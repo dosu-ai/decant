@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -75,31 +75,68 @@ export function detectedSettings(options: SettingsOptions = {}): UserSettings {
   };
 }
 
-export function loadSettings(options: SettingsOptions = {}): Partial<UserSettings> {
+interface StoredSettings {
+  values: Partial<UserSettings>;
+  unparseable: boolean;
+}
+
+// A missing file means defaults. An unparseable one also yields defaults, but
+// is flagged so a save moves it aside instead of overwriting the only copy.
+// Other read failures (permissions, a directory in the way) throw.
+function readStoredSettings(options: SettingsOptions): StoredSettings {
+  let body: string;
   try {
-    const body = readFileSync(settingsPath(options), "utf8");
-    return sanitize(JSON.parse(body));
+    body = readFileSync(settingsPath(options), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { values: {}, unparseable: false };
+    }
+    throw error;
+  }
+  if (body.trim() === "") {
+    return { values: {}, unparseable: false };
+  }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { values: {}, unparseable: true };
+    }
+    return { values: sanitize(parsed), unparseable: false };
   } catch {
-    return {};
+    return { values: {}, unparseable: true };
   }
 }
 
 export function getSettings(options: SettingsOptions = {}): UserSettings {
-  return { ...detectedSettings(options), ...loadSettings(options) };
+  let values: Partial<UserSettings> = {};
+  try {
+    values = readStoredSettings(options).values;
+  } catch {
+    // An unreadable file must not take the UI down; defaults apply until it is fixed.
+  }
+  return { ...detectedSettings(options), ...values };
 }
 
 export function saveSettings(
   attrs: Record<string, unknown>,
   options: SettingsOptions = {},
 ): UserSettings {
-  const merged = { ...loadSettings(options), ...sanitize(attrs) };
+  const stored = readStoredSettings(options);
+  const merged = { ...stored.values, ...sanitize(attrs) };
   const path = settingsPath(options);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`);
+  if (stored.unparseable) {
+    renameSync(path, `${path}.corrupt-${Date.now()}`);
+  }
+  // Rename over the target so a crash mid-write cannot leave the truncated
+  // file that the unparseable branch above exists to protect.
+  const temp = `${path}.${process.pid}.tmp`;
   try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best effort on filesystems that do not support POSIX mode bits.
+    writeFileSync(temp, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
   }
   return { ...detectedSettings(options), ...merged };
 }

@@ -111,7 +111,7 @@ describe("session table skeleton", () => {
     const skeleton = sourceBetween(
       main,
       "function SessionTableSkeletonRows()",
-      "function ProjectsView(",
+      "function filterSessions(",
     );
     expect(skeleton.match(/<td(?:\s|>)/g)).toHaveLength(11);
     expect([...skeleton.matchAll(/table-skeleton-line ([^"]+)/g)].map((match) => match[1])).toEqual(

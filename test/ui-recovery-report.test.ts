@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
-import { readUiSource, sourceBetween } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceBetween } from "./ui-source.ts";
 
 const main = readUiSource();
 const server = readFileSync(join(import.meta.dir, "..", "src", "server", "sync.ts"), "utf8");
@@ -84,8 +84,10 @@ describe("coded UI recovery", () => {
   });
 
   test("adds recovery actions to empty Projects and Analytics states", () => {
-    expect(main).toMatch(/function ProjectsView[\s\S]*?Sync now/);
-    expect(main).toMatch(/function DailyPanel[\s\S]*?All time[\s\S]*?title="No data in range"/);
+    expect(readUiFile("views/projects.tsx")).toMatch(/function ProjectsView[\s\S]*?Sync now/);
+    expect(readUiFile("views/analytics.tsx")).toMatch(
+      /function DailyPanel[\s\S]*?All time[\s\S]*?title="No data in range"/,
+    );
   });
 
   test("file filters catch rejected requests and offer a retry", () => {

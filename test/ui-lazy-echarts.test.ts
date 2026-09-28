@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readUiSource, sourceFrom } from "./ui-source.ts";
+import { readUiFile, readUiSource, sourceFrom } from "./ui-source.ts";
 
 const uiDir = join(import.meta.dir, "..", "src", "ui");
 const main = readUiSource(["chart-runtime.ts"]);
@@ -53,7 +53,7 @@ test("the chart effect survives unmounting mid-import", () => {
   // useEffect has to return its cleanup synchronously, but the chart does not
   // exist until the import settles. If the component unmounts in that window the
   // cleanup must still prevent an orphaned chart holding a canvas and listeners.
-  const effect = sourceFrom(main, "function AnalyticsChart");
+  const effect = sourceFrom(readUiFile("charts.tsx"), "function AnalyticsChart");
   expect(effect).toContain("let cancelled = false;");
   expect(effect).toContain("let disposeChart: (() => void) | null = null;");
   // Bails before init when we already unmounted...

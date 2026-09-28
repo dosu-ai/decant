@@ -11,7 +11,6 @@ rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 - [Claude Sonnet 5.5 model details](https://www.anthropic.com/claude-sonnet-5-5)
 - [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
-- [Claude 3.7 Sonnet launch pricing](https://www.anthropic.com/news/claude-3-7-sonnet)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
 - [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
@@ -36,10 +35,10 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Opus 5, 4.8, 4.7, 4.6, 4.5 | $5.00 | $0.50 | $6.25 / $10.00 | $25.00 |
 | Claude Opus 4.1, 4 | $15.00 | $1.50 | $18.75 / $30.00 | $75.00 |
 | Claude Sonnet 5.5, Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
-| Claude Sonnet 4.6, 4.5, 4, 3.7 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
+| Claude Sonnet 4.6, 4.5, 4 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
-| Claude Opus 3, Haiku 3 | — | — | — | — |
+| Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
 | GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
@@ -86,10 +85,12 @@ Pro Preview on the pricing page, and Gemini versions without a published rate st
 rather than inheriting a neighbor's rate.
 
 Claude 3 model IDs such as `claude-3-5-haiku-20241022` place the tier after
-the version, and Decant matches both orderings. Anthropic's pricing page no
-longer lists the retired Claude Opus 3 and Haiku 3, so Decant leaves them
-unpriced instead of assigning a current tier's rate. Claude Sonnet 3.7 is also
-retired and keeps the $3.00 and $15.00 rate from its launch announcement.
+the version, so Decant recognizes that form as well as tier-first IDs like
+`claude-haiku-4-5`. Anthropic's pricing page no longer lists the fully retired
+Claude Opus 3, Sonnet 3.7, Sonnet 3.5, Sonnet 3, or Haiku 3, so Decant leaves
+them unpriced instead of assigning a current tier's rate. Haiku 3.5, Opus 4.1,
+Opus 4, and Sonnet 4 are retired on the Claude API but remain listed because
+partner clouds still serve them.
 
 `codex-auto-review` is a hidden routing slug, not a public billable model ID.
 OpenAI does not document which underlying model or rate applies. Decant leaves

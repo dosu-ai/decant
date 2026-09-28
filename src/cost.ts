@@ -150,20 +150,20 @@ function canonicalModel(raw: string): string | null {
     model === "haiku" ||
     model === "fable"
   ) {
-    // Claude 3 IDs put the tier after the version. Opus 3 and Haiku 3 are
-    // retired with no published first-party rate, so they must not fall
-    // through to a current tier's price.
-    if (model.includes("claude-3-opus") || model.includes("claude-3-haiku")) {
+    // Claude 3 IDs put the tier after the version. Every Claude 3 model except
+    // Haiku 3.5 is retired with no published first-party rate, so they must not
+    // fall through to a current tier's price.
+    if (/claude-3(?:[-.][57])?-(?:opus|sonnet)|claude-3-haiku/.test(model)) {
       return null;
     }
     if (model.includes("fable") || model.includes("mythos")) {
-      if (/(?:fable|mythos)-5(?:-|\.)1(?:$|-|\[)/.test(model)) {
+      if (/(?:fable|mythos)-5(?:-|\.)1(?:$|-|\[|@)/.test(model)) {
         return "claude-fable-5-1";
       }
       return "claude-fable";
     }
     if (model.includes("opus")) {
-      if (/(?:opus-5(?:-|\.)5)(?:$|-|\[)/.test(model)) {
+      if (/(?:opus-5(?:-|\.)5)(?:$|-|\[|@)/.test(model)) {
         return "claude-opus-5-5";
       }
       if (model.includes("opus-4-1") || model.includes("opus-4.1")) {
@@ -187,7 +187,7 @@ function canonicalModel(raw: string): string | null {
       return "claude-opus";
     }
     if (model.includes("sonnet")) {
-      if (/sonnet-5(?:-|\.)5(?:$|-|\[)/.test(model)) {
+      if (/sonnet-5(?:-|\.)5(?:$|-|\[|@)/.test(model)) {
         return "claude-sonnet-5-5";
       }
       if (model.includes("sonnet-5")) {

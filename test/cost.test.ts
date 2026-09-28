@@ -180,6 +180,7 @@ describe("estimateCost", () => {
       "claude-opus-5-5",
       "claude-opus-5.5",
       "claude-opus-5-5[1m]",
+      "claude-opus-5-5@20260922",
       "anthropic.claude-opus-5-5-v1:0",
     ]) {
       expect(isPriceable(model)).toBe(true);
@@ -213,6 +214,7 @@ describe("estimateCost", () => {
       "claude-sonnet-5-5",
       "claude-sonnet-5.5",
       "claude-sonnet-5-5[1m]",
+      "claude-sonnet-5-5@20260928",
       "anthropic.claude-sonnet-5-5-v1:0",
     ]) {
       expect(isPriceable(model)).toBe(true);
@@ -225,17 +227,21 @@ describe("estimateCost", () => {
     }
   });
 
-  test("Claude 3 IDs with the tier after the version keep their own rates", () => {
+  test("Claude 3 IDs price Haiku 3.5 and leave retired models unpriced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
     for (const model of ["claude-3-5-haiku-20241022", "anthropic.claude-3-5-haiku-20241022-v1:0"]) {
       expect(estimateCost(model, u, pricing)).toBeCloseTo(4.8, 6);
     }
-    expect(estimateCost("claude-3-7-sonnet-20250219", u, pricing)).toBeCloseTo(18.0, 6);
     for (const model of [
       "claude-3-opus-20240229",
       "claude-3-haiku-20240307",
       "anthropic.claude-3-haiku-20240307-v1:0",
+      "claude-3-sonnet-20240229",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-7-sonnet-20250219",
+      "claude-3.7-sonnet",
+      "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ]) {
       expect(isPriceable(model)).toBe(false);
       expect(estimateCost(model, u, pricing)).toBe(0);

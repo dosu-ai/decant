@@ -23,12 +23,17 @@ export interface StatsFilter extends DateFilter {
   tool?: string | null;
 }
 
+const TOTALS_COLUMNS = `s.id, s.is_subagent,
+         s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
+         s.total_cache_creation_tokens, s.total_reasoning_tokens, s.est_reasoning_tokens,
+         s.estimated_cost_usd`;
+
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(visible)}
+         SELECT ${TOTALS_COLUMNS} FROM session s ${whereClause(visible)}
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
@@ -80,7 +85,10 @@ export function byDimension(
   const visible = statsScope(db, "s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(visible)}
+         SELECT s.id, s.tool, s.model, s.project_id, s.started_at, s.is_subagent,
+                s.total_input_tokens, s.total_output_tokens, s.total_reasoning_tokens,
+                s.est_reasoning_tokens, s.estimated_cost_usd
+         FROM session s ${whereClause(visible)}
        )
        SELECT ${groupExpr} AS key,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
@@ -221,11 +229,11 @@ export function toolUsage(
        ${errorFilter}
        ORDER BY a.calls DESC, a.tool_name ASC, a.tool_kind ASC,
                 (a.mcp_server IS NOT NULL) ASC, COALESCE(a.mcp_server, '') ASC
-       LIMIT ${limit}`,
+       LIMIT ?`,
   );
   let rows: ToolStatDb[];
   try {
-    rows = statement.all(...visible.params) as ToolStatDb[];
+    rows = statement.all(...visible.params, limit) as ToolStatDb[];
   } finally {
     statement.finalize();
   }
@@ -347,8 +355,8 @@ export function fileHotspots(
                ${opFilter}
                GROUP BY key, project
                ORDER BY (reads + edits + writes + deletes) DESC, key ASC
-               LIMIT ${limit}`;
-  const rows = db.query(sql).all(...params) as FileStatDb[];
+               LIMIT ?`;
+  const rows = db.query(sql).all(...params, limit) as FileStatDb[];
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
@@ -461,7 +469,7 @@ export function todayTotals(db: Database): Totals {
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT *
+         SELECT ${TOTALS_COLUMNS}
          FROM session s
          ${whereClause({
            sql: [

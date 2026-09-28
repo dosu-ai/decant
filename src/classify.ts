@@ -1,5 +1,6 @@
 import type { FileRef } from "./enrich.ts";
 import type { NormalizedBlock, NormalizedSession } from "./model.ts";
+import { headScalars } from "./tools.ts";
 
 export type Outcome = "completed" | "failed" | "abandoned";
 export type WorkType = "debugging" | "feature" | "refactor" | "research" | "ops";
@@ -83,7 +84,7 @@ function firstUserPrompt(session: NormalizedSession): string | null {
 }
 
 function keywordWorkType(prompt: string): WorkType | null {
-  const head = [...prompt].slice(0, 400).join("");
+  const head = headScalars(prompt, 400);
   const words = new Set(head.split(/[^\p{L}\p{N}]+/u).filter((word) => word !== ""));
   const has = (keys: readonly string[]): boolean =>
     keys.some((key) => (key.includes(" ") ? head.includes(key) : words.has(key)));

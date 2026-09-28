@@ -175,6 +175,12 @@ describe("workType", () => {
     expect(workType(session([msg("user", [text("fixé login")])]), [])).toBeNull();
   });
 
+  test("reads the first 400 scalars of the prompt, counting astral characters once", () => {
+    const at = (emoji: number) => session([msg("user", [text(`${"🎉".repeat(emoji)} fix`)])]);
+    expect(workType(at(396), [])).toBe("debugging");
+    expect(workType(at(397), [])).toBeNull();
+  });
+
   test("keywords take priority", () => {
     const cases: [string, NonNullable<ReturnType<typeof workType>>][] = [
       ["Fix the failing auth test", "debugging"],

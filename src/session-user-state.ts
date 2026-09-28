@@ -118,11 +118,7 @@ export function directSessionUserStateExpression(alias: string): string {
   )`;
 }
 
-export function isDeletedSessionIdentity(
-  db: Database,
-  tool: string,
-  sourceSessionId: string,
-): boolean {
+function isDeletedSessionIdentity(db: Database, tool: string, sourceSessionId: string): boolean {
   return (
     db
       .query(

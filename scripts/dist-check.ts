@@ -218,10 +218,15 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
     throw new Error(`compiled binary returned ${bundle.status} for ${scriptSrc}`);
   }
   const code = await bundle.text();
-  // Comfortably under the measured minified size (3,211,476 B) and comfortably
-  // over an empty or stub response, so this only trips on real truncation.
+  // Well under the minified size and well over an empty or stub response, so
+  // this only trips on real truncation.
   if (code.length < 500_000) {
     throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
+  }
+  // A development-only React warning; its presence means NODE_ENV was not
+  // production when the embedded bundle was built.
+  if (code.includes('should have a unique "key" prop')) {
+    throw new Error(`compiled UI bundle at ${scriptSrc} ships React's development build`);
   }
   try {
     new Function(code);

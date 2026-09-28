@@ -200,8 +200,9 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
 }
 
 // --minify rewrites only the UI bundle, so API checks alone could pass against
-// a bundle that fails to parse. `new Function(code)` proves the served bytes
-// compile; it cannot catch a render-time throw, which would need a real DOM.
+// a bundle that fails to parse. Parsing it as an ES module proves the served
+// bytes are syntactically whole (the bundle uses import.meta, so `new Function`
+// cannot); it cannot catch a render-time throw, which would need a real DOM.
 async function assertCompiledUiBundle(port: number): Promise<void> {
   const page = await fetch(`http://127.0.0.1:${port}/`);
   if (!page.ok) {
@@ -229,7 +230,7 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
     throw new Error(`compiled UI bundle at ${scriptSrc} ships React's development build`);
   }
   try {
-    new Function(code);
+    new Bun.Transpiler({ loader: "js" }).transformSync(code);
   } catch (error) {
     throw new Error(
       `compiled UI bundle at ${scriptSrc} does not parse: ${(error as Error).message}`,

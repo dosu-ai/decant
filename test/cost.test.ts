@@ -461,6 +461,7 @@ describe("isPriceable", () => {
       "gemini-3.2-flash",
       "gemini-flash-latest",
       "gemini-4-pro",
+      "gemini-3-pro-preview",
     ]) {
       expect(estimateCost(model, u, pricing)).toBe(0);
       expect(isPriceable(model)).toBe(false);
@@ -477,6 +478,5 @@ describe("isPriceable", () => {
     expect(estimateCost("gemini-2.5-flash", u, pricing)).toBeCloseTo(2.8, 6);
     expect(estimateCost("gemini-2.5-pro", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
-    expect(estimateCost("gemini-3-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
 });

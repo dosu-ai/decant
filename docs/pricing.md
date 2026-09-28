@@ -59,7 +59,7 @@ provider does not publish a first-party API token price for that model slug.
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
 | Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
 | Gemini 3 Flash Preview | $0.50 | $0.05 | $0.50-equiv | $3.00 |
-| Gemini 3.1 Pro Preview, 3 Pro Preview | $2.00 | $0.20 | $2.00-equiv | $12.00 |
+| Gemini 3.1 Pro Preview | $2.00 | $0.20 | $2.00-equiv | $12.00 |
 | Gemini 3.1 Flash-Lite | $0.25 | $0.025 | $0.25-equiv | $1.50 |
 | Gemini 2.5 Pro | $1.25 | $0.125 | $1.25-equiv | $10.00 |
 | Gemini 2.5 Flash | $0.30 | $0.03 | $0.30-equiv | $2.50 |
@@ -81,8 +81,8 @@ output rates but reduce cache reads from $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
 Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
-output on January 1, 2027. Google no longer lists the Gemini 2.0 line on the
-pricing page, and Gemini versions without a published rate stay unpriced
+output on January 1, 2027. Google no longer lists the Gemini 2.0 line or Gemini 3
+Pro Preview on the pricing page, and Gemini versions without a published rate stay unpriced
 rather than inheriting a neighbor's rate.
 
 Claude 3 model IDs such as `claude-3-5-haiku-20241022` place the tier after

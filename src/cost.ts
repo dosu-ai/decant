@@ -134,7 +134,6 @@ export function defaultPricing(): Map<string, Price> {
     ["gemini-3.1-flash-lite", geminiPrice(0.25, 0.025, 1.5)],
     ["gemini-3-flash-preview", geminiPrice(0.5, 0.05, 3.0)],
     ["gemini-3.1-pro", geminiPrice(2.0, 0.2, 12.0)],
-    ["gemini-3-pro-preview", geminiPrice(2.0, 0.2, 12.0)],
     ["gemini-2.5-pro", geminiPrice(1.25, 0.125, 10.0)],
     ["gemini-2.5-flash-lite", geminiPrice(0.1, 0.01, 0.4)],
     ["gemini-2.5-flash", geminiPrice(0.3, 0.03, 2.5)],
@@ -323,9 +322,6 @@ function canonicalModel(raw: string): string | null {
     if (model.includes("pro")) {
       if (model.includes("3.1")) {
         return "gemini-3.1-pro";
-      }
-      if (model.includes("3-pro")) {
-        return "gemini-3-pro-preview";
       }
       if (model.includes("2.5")) {
         return "gemini-2.5-pro";

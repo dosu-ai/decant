@@ -1331,10 +1331,6 @@ function isPortInUse(error: unknown): boolean {
 function openArchive(config: Config): Archive {
   mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
-  // Keep archive opens read-only once the schema is current. Sync/watch repair
-  // derived metadata on their write paths, and serve hydrates it once for its
-  // long-lived connection; a --no-sync CLI read must not acquire SQLite's
-  // single writer lock merely to list or search existing rows.
   return { db, config };
 }
 

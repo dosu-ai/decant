@@ -4,7 +4,14 @@ import { SESSION_LIST_MAX_LIMIT, USAGE_LIST_MAX_LIMIT } from "./api-limits.ts";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
-import { ARCHIVE_DIR_MODE, closeDb, openDb, SchemaDriftError } from "./db.ts";
+import {
+  ARCHIVE_DIR_MODE,
+  closeDb,
+  openDb,
+  SchemaDriftError,
+  SchemaTooNewError,
+  SchemaTooOldError,
+} from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
@@ -1293,13 +1300,10 @@ function classifyError(error: unknown): ApiError {
   if (error instanceof SchemaDriftError) {
     return { code: "schema_drift", message, status: 409 };
   }
+  if (error instanceof SchemaTooNewError || error instanceof SchemaTooOldError) {
+    return { code: error.code, message, status: 409 };
+  }
   const normalized = message.toLowerCase();
-  if (normalized.includes("is newer than this build supports")) {
-    return { code: "schema_too_new", message, status: 409 };
-  }
-  if (normalized.includes("predates this build's baseline")) {
-    return { code: "schema_too_old", message, status: 409 };
-  }
   if (isArchiveLockedError(error, normalized)) {
     return {
       code: "archive_locked",

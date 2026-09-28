@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
-import { openDb } from "../src/db.ts";
+import { openDb, SchemaTooNewError, SchemaTooOldError } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { listSessions } from "../src/query.ts";
@@ -1301,9 +1301,9 @@ describe("server routes", () => {
   });
 
   test("maps unsupported archive schema versions to actionable conflicts", async () => {
-    for (const [version, code, message] of [
-      [999, "schema_too_new", "is newer than this build supports"],
-      [7, "schema_too_old", "predates this build's baseline"],
+    for (const [version, code, message, errorClass] of [
+      [999, "schema_too_new", "is newer than this build supports", SchemaTooNewError],
+      [7, "schema_too_old", "predates this build's baseline", SchemaTooOldError],
     ] as const) {
       const config = freshConfig();
       const db = new Database(config.dbPath, { create: true });
@@ -1313,6 +1313,7 @@ describe("server routes", () => {
       );
       db.close();
 
+      expect(() => openDb(config.dbPath)).toThrow(errorClass);
       const response = await route(config, "/api/sessions");
       expect(response.status).toBe(409);
       expect(response.body).toMatchObject({ code });

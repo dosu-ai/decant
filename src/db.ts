@@ -43,6 +43,41 @@ export class SchemaDriftError extends Error {
   }
 }
 
+export class SchemaTooNewError extends Error {
+  readonly code = "schema_too_new";
+
+  constructor(readonly version: number) {
+    super(
+      `archive schema version ${version} is newer than this build supports ` +
+        `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
+    );
+    this.name = "SchemaTooNewError";
+  }
+}
+
+export class SchemaTooOldError extends Error {
+  readonly code = "schema_too_old";
+
+  constructor(readonly version: number) {
+    super(
+      `archive schema version ${version} predates this build's baseline ` +
+        "(8); back up or move the archive aside before rebuilding it because " +
+        "manual recommendation state and source-pruned sessions may exist only in the database; " +
+        "then re-ingest from the source directories",
+    );
+    this.name = "SchemaTooOldError";
+  }
+}
+
+function assertSupportedSchemaVersion(version: number): void {
+  if (version > LATEST_SCHEMA_VERSION) {
+    throw new SchemaTooNewError(version);
+  }
+  if (version < 8) {
+    throw new SchemaTooOldError(version);
+  }
+}
+
 /// Owner-only mode for the archive and its SQLite sidecars. The transcripts
 /// decant ingests sit in 0600 files under 0700 directories; the aggregate of
 /// all of them must not be readable by anyone the sources were not.
@@ -272,20 +307,7 @@ function ensureSchema(db: Database): void {
       if (hasTable(db, "schema_migrations")) {
         const versions = readMigrationHistory(db);
         const current = versions.at(-1) ?? 0;
-        if (current > LATEST_SCHEMA_VERSION) {
-          throw new Error(
-            `archive schema version ${current} is newer than this build supports ` +
-              `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-          );
-        }
-        if (current < 8) {
-          throw new Error(
-            `archive schema version ${current} predates this build's baseline ` +
-              "(8); back up or move the archive aside before rebuilding it because " +
-              "manual recommendation state and source-pruned sessions may exist only in the database; " +
-              "then re-ingest from the source directories",
-          );
-        }
+        assertSupportedSchemaVersion(current);
         assertVersionSequence(db, versions, current);
         if (current === LATEST_SCHEMA_VERSION) {
           assertSchemaMatchesBaseline(db);
@@ -332,20 +354,7 @@ function ensureSchema(db: Database): void {
 
   const versions = readMigrationHistory(db);
   const current = versions.at(-1) ?? 0;
-  if (current > LATEST_SCHEMA_VERSION) {
-    throw new Error(
-      `archive schema version ${current} is newer than this build supports ` +
-        `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-    );
-  }
-  if (current < 8) {
-    throw new Error(
-      `archive schema version ${current} predates this build's baseline ` +
-        "(8); back up or move the archive aside before rebuilding it because " +
-        "manual recommendation state and source-pruned sessions may exist only in the database; " +
-        "then re-ingest from the source directories",
-    );
-  }
+  assertSupportedSchemaVersion(current);
   assertVersionSequence(db, versions, current);
   if (current < LATEST_SCHEMA_VERSION) {
     migrate(db, current);
@@ -362,20 +371,7 @@ function migrate(db: Database, current: number): void {
     // applied and stamped at most once.
     const lockedVersions = readMigrationHistory(db);
     const lockedCurrent = lockedVersions.at(-1) ?? 0;
-    if (lockedCurrent > LATEST_SCHEMA_VERSION) {
-      throw new Error(
-        `archive schema version ${lockedCurrent} is newer than this build supports ` +
-          `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-      );
-    }
-    if (lockedCurrent < 8) {
-      throw new Error(
-        `archive schema version ${lockedCurrent} predates this build's baseline ` +
-          "(8); back up or move the archive aside before rebuilding it because " +
-          "manual recommendation state and source-pruned sessions may exist only in the database; " +
-          "then re-ingest from the source directories",
-      );
-    }
+    assertSupportedSchemaVersion(lockedCurrent);
     assertVersionSequence(db, lockedVersions, lockedCurrent);
     current = lockedCurrent;
     if (current < 9) {

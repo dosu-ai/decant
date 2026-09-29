@@ -46,6 +46,9 @@ jobs:
       - name: Stage npm package matrix
         run: bun run scripts/build-npm.ts --target all --binary-dir /tmp/decant-bin --out-dir /tmp/decant-npm --no-build --clean --version 0.0.0-ci
 
+      - name: Smoke native binary and npm install (dist-check)
+        run: bun run scripts/dist-check.ts
+
   docker:
     name: Docker (multi-arch)
     runs-on: ubuntu-latest

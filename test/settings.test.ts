@@ -2,12 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -105,6 +107,21 @@ describe("settings", () => {
       expect(backups).toHaveLength(1);
       expect(readFileSync(join(dirname(path), backups[0] ?? ""), "utf8")).toBe(body);
     }
+  });
+
+  test("a symlinked settings file is written through to its target", () => {
+    const env = { DECANT_CONFIG_DIR: join(workDir, "linked") };
+    const path = settingsPath({ env });
+    const target = join(workDir, "dotfiles", "decant-settings.json");
+    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, '{"agent": "codex"}\n');
+    symlinkSync(target, path);
+
+    saveSettings({ terminal: "warp" }, { env });
+
+    expect(lstatSync(path).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ agent: "codex", terminal: "warp" });
   });
 
   test("an unreadable file is neither replaced nor backed up", () => {

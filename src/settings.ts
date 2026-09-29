@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -123,7 +131,7 @@ export function saveSettings(
 ): UserSettings {
   const stored = readStoredSettings(options);
   const merged = { ...stored.values, ...sanitize(attrs) };
-  const path = settingsPath(options);
+  const path = writeTarget(settingsPath(options));
   mkdirSync(dirname(path), { recursive: true });
   if (stored.unparseable) {
     renameSync(path, `${path}.corrupt-${Date.now()}`);
@@ -139,6 +147,17 @@ export function saveSettings(
     throw error;
   }
   return { ...detectedSettings(options), ...merged };
+}
+
+// Renaming over a symlink would replace it with a regular file, so a settings
+// file managed from a dotfiles checkout is written through to its target.
+function writeTarget(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return path;
+    throw error;
+  }
 }
 
 function sanitize(attrs: unknown): Partial<UserSettings> {

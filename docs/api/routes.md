@@ -119,7 +119,8 @@ page size, one empty request is required to confirm the end.
 `GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
 aggregate rows. Their `limit` has an effective maximum of 1000.
 
-Request bodies larger than 1 MiB are rejected before they reach a route handler.
+Request bodies larger than 1 MiB get a `413` with an empty body before they
+reach a route handler.
 No documented request comes close to that size.
 
 `GET /api/sessions/search-index` returns lightweight metadata for every visible,

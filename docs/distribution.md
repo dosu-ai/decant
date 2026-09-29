@@ -109,6 +109,13 @@ at the run's commit and then publishes every release the same way:
 - `ghcr.io/dosu-ai/decant:<version>` and `ghcr.io/dosu-ai/decant:latest`
 - an updated formula in the `dosu-ai/homebrew-dosu` tap
 
+The workflow only orchestrates. Release logic lives in `scripts/release/*.ts`,
+where each script reads its inputs from environment variables and has unit
+tests in `test/release-*.test.ts`. Outside Actions, a script prints the outputs
+it would record, so steps can be rerun locally, for example
+`VERSION=1.2.3 bun run scripts/release/render-homebrew-formula.ts` after
+placing a `SHA256SUMS` in `dist/release/`.
+
 Re-running a failed release is safe: already-published npm versions are
 skipped and an existing GitHub Release only has its assets refreshed.
 

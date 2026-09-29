@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
@@ -1789,6 +1790,31 @@ describe("write origin must match the Host header", () => {
       const other = await post(`http://127.0.0.1:${server.port === 5173 ? 5174 : 5173}`);
       expect(other.status).toBe(403);
       expect(await other.json()).toEqual(rejected.body);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a live listener answers an unparseable Host with JSON, not a crash page", async () => {
+    const server = serve({ config: freshConfig(), port: 0 });
+    try {
+      for (const host of ["a@b", "a/b", ""]) {
+        const raw = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          const socket = connect(server.port ?? 0, "127.0.0.1", () => {
+            socket.write(
+              `GET /api/sessions HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`,
+            );
+          });
+          socket.on("data", (chunk) => {
+            data += chunk.toString();
+          });
+          socket.on("end", () => resolve(data));
+          socket.on("error", reject);
+        });
+        expect(raw.split("\r\n")[0]).toBe("HTTP/1.1 403 Forbidden");
+        expect(raw).toContain('"code":"forbidden_host"');
+      }
     } finally {
       await server.stop(true);
     }

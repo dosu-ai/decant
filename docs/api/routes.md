@@ -65,8 +65,8 @@ the local guard can read or mutate the whole archive.
 
 On a loopback bind, a command-line write may omit `Origin`. On a non-loopback
 bind, a write that supplies neither `Origin` nor `Sec-Fetch-Site` is rejected
-even when the source is trusted. Supply an `Origin` that matches the URL you
-connect to for an explicit command-line write; for example:
+even when the source is trusted. For an explicit command-line write, supply an
+`Origin` whose host and port match the `Host` header you send; for example:
 
 ```bash
 curl --fail --silent --show-error \

@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
-const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const styles = readFileSync(join(root, "src", "ui", "styles.css"), "utf8");
 
 test("sync stays visually icon-led while retaining a hidden live announcement", () => {

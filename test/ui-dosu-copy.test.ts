@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
-const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const badge = readFileSync(join(root, "src", "ui", "dosu-badge.ts"), "utf8");
 const readme = readFileSync(join(root, "README.md"), "utf8");
 const npmReadme = readFileSync(join(root, "npm", "decant", "README.md"), "utf8");

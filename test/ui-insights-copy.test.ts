@@ -1,13 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
-const insightsView = main.slice(
-  main.indexOf("function InsightsView("),
-  main.indexOf("function DosuInsightsRow()"),
-);
+const insightsView = sourceBetween(main, "function InsightsView(", "function DosuInsightsRow()");
 
 describe("Insights information hierarchy", () => {
   test("explains how archive evidence becomes future-agent improvements", () => {
@@ -78,8 +76,8 @@ describe("Insights information hierarchy", () => {
   });
 
   test("keeps recommendations archive-wide so date changes cannot latch the skeleton", () => {
-    const loaderStart = main.indexOf("  recommendations: {", main.indexOf("const SLICE_LOADERS"));
-    const loader = main.slice(loaderStart, main.indexOf("  config: {", loaderStart));
+    const loaders = sourceFrom(main, "const SLICE_LOADERS");
+    const loader = sourceBetween(loaders, "  recommendations: {", "  config: {");
     expect(loader).toContain("dateScoped: false");
     expect(loader).toContain("Recommendations are archive-wide.");
     expect(loader).toContain('getJson<Recommendation[]>("/api/recommendations?status=all")');

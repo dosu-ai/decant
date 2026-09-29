@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ErrorBoundary } from "../src/ui/error-boundary.tsx";
+import { readUiSource } from "./ui-source.ts";
 
 describe("root error boundary", () => {
   test("renders its children while nothing has failed", () => {
@@ -28,7 +27,7 @@ describe("root error boundary", () => {
   });
 
   test("wraps the whole app at the render root", () => {
-    const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+    const main = readUiSource();
     expect(main).toContain("<ErrorBoundary>");
     expect(main).toMatch(/<ErrorBoundary>\s*<App \/>\s*<\/ErrorBoundary>/);
   });

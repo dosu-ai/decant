@@ -14,7 +14,8 @@ recommendations, watch mode, and the React UI served by `decant serve`.
 
 Start with these files and guides:
 
-- `src/cli.ts` handles command composition, output, and exit-code policy.
+- `src/cli.ts` and `src/cli/` handle command composition, output, and exit-code
+  policy.
 - `src/sources/` contains source parsers and the primary extension point.
 - `src/db.ts`, `src/schema.sql`, and `src/schema-manifest.ts` manage storage
   and schema.
@@ -66,7 +67,7 @@ A change is ready when:
 
 1. **Core modules stay print-free.** Parsing, ingest, query, stats, distill,
    recommendations, and database helpers return data or structured errors.
-   Human-readable CLI output and exit codes belong in `src/cli.ts`.
+   Human-readable CLI output and exit codes belong in `src/cli.ts` and `src/cli/`.
 2. **One process owns SQLite.** The CLI process opens the archive directly. WAL
    mode allows reads and ingest to coexist, so do not add another process that
    opens the database behind a separate contract.

@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readUiSource } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 
 describe("Gemini CLI source copy", () => {
   test("labels Gemini sessions instead of falling back to the wire string", () => {

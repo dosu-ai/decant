@@ -1,8 +1,3 @@
-// Type-only, so this erases at build time. ECharts is ~1.1MB minified and is
-// reachable from exactly two call sites, both of which import() it on demand:
-// eagerly importing it here put the whole library on every route, including
-// /settings and /search, which never draw a chart.
-import type { ECharts as EChartsInstance, EChartsOption } from "echarts";
 import type { LucideIcon } from "lucide-react";
 import {
   Archive,
@@ -49,8 +44,8 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  type AnchorHTMLAttributes,
   type CSSProperties,
-  type MouseEvent,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -68,6 +63,7 @@ import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
+import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
   type AnalyticsChartState,
@@ -99,6 +95,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { ErrorBoundary } from "./error-boundary.tsx";
 import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
@@ -110,6 +107,8 @@ import {
   type SessionSearchIndexRow,
 } from "./fuzzy.ts";
 import { formatIssueBadge, unknownRecordTypeSummary } from "./ingest-issues.ts";
+import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
+import { shouldInterceptLinkClick } from "./link-click.ts";
 import {
   planSessionPageLoad,
   sessionPageExhausted,
@@ -119,6 +118,7 @@ import { formatMcpServer, mcpServerLabel, mcpServerLabels } from "./mcp-server.t
 import {
   documentTitleFor,
   isKnownRoute,
+  isSessionDetailPath,
   pathOnly,
   projectSessionsHref,
   activeRoute as resolveActiveRoute,
@@ -130,6 +130,7 @@ import {
   sessionsPageHref,
   titleFor,
 } from "./navigation.ts";
+import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
 import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
@@ -287,6 +288,9 @@ type ServerEventPayload = {
 };
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
+// Every other view renders its own <h1>; the topbar title is then a plain label.
+const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
+const SYNC_PROGRESS_RENDER_MS = 150;
 
 type Activity = {
   by_hour: number[];
@@ -549,19 +553,25 @@ const SLICE_LOADERS: Record<
   tools: {
     dateScoped: true,
     load: async (q) => ({
-      tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", q)),
+      tools: await getJson<ToolRow[]>(
+        withDateQuery(`/api/tools/usage?limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   mcp: {
     dateScoped: true,
     load: async (q) => ({
-      mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", q)),
+      mcp: await getJson<McpRow[]>(
+        withDateQuery(`/api/tools/mcp-usage?limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   files: {
     dateScoped: true,
     load: async (q) => ({
-      files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", q)),
+      files: await getJson<FileRow[]>(
+        withDateQuery(`/api/files?group=path&limit=${TABLE_ROW_LIMIT}`, q),
+      ),
     }),
   },
   recommendations: {
@@ -612,10 +622,10 @@ const SLICE_LOADERS: Record<
 const SHELL_SLICES: DataSlice[] = ["summary", "dateBounds", "config"];
 
 const ROUTE_SLICES: Record<string, DataSlice[]> = {
-  Sessions: [],
-  Projects: ["projects"],
-  Search: [],
-  Analytics: [
+  sessions: [],
+  projects: ["projects"],
+  search: [],
+  analytics: [
     "byDay",
     "byModel",
     "byProject",
@@ -624,14 +634,14 @@ const ROUTE_SLICES: Record<string, DataSlice[]> = {
     "tokenEconomics",
     "settings",
   ],
-  Insights: ["recommendations", "settings"],
-  "Tools & MCP": ["tools", "mcp"],
-  Files: ["files"],
-  Settings: ["config", "settings"],
+  insights: ["recommendations", "settings"],
+  tools: ["tools", "mcp"],
+  files: ["files"],
+  settings: ["config", "settings"],
 };
 
-function slicesForView(activeView: string): DataSlice[] {
-  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+function slicesForView(routeKey: string): DataSlice[] {
+  return [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[routeKey] ?? [])])];
 }
 
 type NavItem = {
@@ -678,6 +688,8 @@ const GEMINI_ICON_PATH =
   "M12 2a.75.75 0 0 1 .67.42l1.93 3.86 3.86 1.93a.75.75 0 0 1 0 1.34l-3.86 1.93-1.93 3.86a.75.75 0 0 1-1.34 0l-1.93-3.86-3.86-1.93a.75.75 0 0 1 0-1.34l3.86-1.93 1.93-3.86a.75.75 0 0 1 .67-.42Zm7.5 12a.75.75 0 0 1 .67.42l1.05 2.1 2.1 1.05a.75.75 0 0 1 0 1.34l-2.1 1.05-1.05 2.1a.75.75 0 0 1-1.34 0l-1.05-2.1-2.1-1.05a.75.75 0 0 1 0-1.34l2.1-1.05 1.05-2.1a.75.75 0 0 1 .67-.42Z";
 
 const SESSION_PAGE_SIZE = 50;
+// The Files view refetches with filters but must match the route slice's page of rows.
+const TABLE_ROW_LIMIT = 100;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: SESSION_PAGE_SIZE },
@@ -830,6 +842,7 @@ function App() {
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
   const syncCompleteTimerRef = useRef<number | null>(null);
+  const syncProgressThrottleRef = useRef<LatestThrottle<SyncProgress> | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
@@ -839,8 +852,8 @@ function App() {
   const sessionPage = sessionPageFromPath(path);
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
-  const activeView = resolveActiveRoute(path, navItems);
-  const showsSessions = activeView === "Sessions";
+  const activeView = resolveActiveRouteKey(path, navItems);
+  const showsSessions = activeView === "sessions";
   const sessionPageState = useSessionPage({
     dateQuery,
     enabled: showsSessions,
@@ -850,7 +863,7 @@ function App() {
     reloadKey,
   });
   const [theme, setTheme] = useState<ThemeChoice>(() => {
-    const stored = localStorage.getItem("decant-theme");
+    const stored = readStorage("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
   });
 
@@ -888,17 +901,17 @@ function App() {
   useEffect(() => {
     if (theme === "system") {
       document.documentElement.removeAttribute("data-theme");
-      localStorage.removeItem("decant-theme");
+      removeStorage("decant-theme");
     } else {
       document.documentElement.dataset.theme = theme;
-      localStorage.setItem("decant-theme", theme);
+      writeStorage("decant-theme", theme);
     }
     window.dispatchEvent(new CustomEvent("decant:set-theme"));
   }, [theme]);
 
   useLayoutEffect(() => {
     setRecommendationsLoading(
-      activeView === "Insights" &&
+      activeView === "insights" &&
         loadedSlicesRef.current.get("recommendations") !== `${reloadKey}`,
     );
   }, [activeView, reloadKey]);
@@ -946,6 +959,11 @@ function App() {
     // user asks to reconnect immediately instead of waiting for its backoff.
     void liveConnectionKey;
     const events = new EventSource("/api/events");
+    const progressThrottle = createLatestThrottle<SyncProgress>(
+      setSyncProgress,
+      SYNC_PROGRESS_RENDER_MS,
+    );
+    syncProgressThrottleRef.current = progressThrottle;
     const markConnected = () => {
       if (liveDroppedRef.current) {
         liveDroppedRef.current = false;
@@ -972,7 +990,7 @@ function App() {
           return;
         }
         if (payload.progress != null) {
-          setSyncProgress(payload.progress);
+          progressThrottle.push(payload.progress);
           setLocalSyncing(true);
         }
       } catch {
@@ -991,6 +1009,7 @@ function App() {
       if (payload.reason !== "manual") {
         return;
       }
+      progressThrottle.flush();
       setArchiveUpdateAvailable(false);
       setLocalSyncing(false);
       setSyncError(null);
@@ -1050,6 +1069,8 @@ function App() {
       events.removeEventListener("archive_updated", handleArchiveUpdated as EventListener);
       events.removeEventListener("error", handleError);
       events.close();
+      progressThrottle.cancel();
+      syncProgressThrottleRef.current = null;
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
         liveDisconnectTimerRef.current = null;
@@ -1084,8 +1105,7 @@ function App() {
     return () => window.removeEventListener("keydown", openSearch);
   }, []);
 
-  const active = activeView;
-  const activeKey = resolveActiveRouteKey(path, navItems);
+  const activeLabel = resolveActiveRoute(path, navItems);
   const activeFailedSlices = failedSlices.filter((slice) =>
     slicesForView(activeView).includes(slice),
   );
@@ -1102,11 +1122,13 @@ function App() {
     }
     setSyncError(null);
     setSyncComplete(false);
+    syncProgressThrottleRef.current?.cancel();
     setSyncProgress(null);
     setArchiveUpdateAvailable(false);
     setLocalSyncing(true);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
       .then(() => {
+        syncProgressThrottleRef.current?.flush();
         setArchiveUpdateAvailable(false);
         setLocalSyncing(false);
         setSyncComplete(true);
@@ -1120,11 +1142,21 @@ function App() {
         }, 1_500);
       })
       .catch((err: unknown) => {
+        syncProgressThrottleRef.current?.cancel();
         setLocalSyncing(false);
         setSyncProgress(null);
         setSyncError(err);
       });
   };
+  const handleDateRangeChange = useCallback(
+    (next: DateRangeSelection) => {
+      if (sessionPageFromPath(path) > 1) {
+        visit(sessionsPageHref(path, 1), setPath);
+      }
+      setDateRangeSelection(next);
+    },
+    [path],
+  );
   const loadArchiveUpdates = () => {
     setArchiveUpdateAvailable(false);
     requestRefresh();
@@ -1178,12 +1210,12 @@ function App() {
       />
       <aside className={`sidebar${menuOpen ? " is-open" : ""}`}>
         <div className="brand-row">
-          <a className="brand" href="/" onClick={(event) => navigate(event, "/", setPath)}>
+          <Link className="brand" href="/" setPath={setPath}>
             <span className="brand-icon">
               <img alt="" src={dosuDecantUrl} />
             </span>
             <span>Decant</span>
-          </a>
+          </Link>
           <button
             aria-label="Close menu"
             className="icon-button mobile-only"
@@ -1204,17 +1236,15 @@ function App() {
               <ul aria-labelledby={`nav-group-${group.label.toLowerCase()}`}>
                 {group.items.map((item) => (
                   <li key={item.href}>
-                    <a
-                      aria-current={activeKey === item.key ? "page" : undefined}
+                    <Link
+                      aria-current={activeView === item.key ? "page" : undefined}
                       href={item.href}
-                      onClick={(event) => {
-                        setMenuOpen(false);
-                        navigate(event, item.href, setPath);
-                      }}
+                      onClick={() => setMenuOpen(false)}
+                      setPath={setPath}
                     >
                       <Icon name={item.icon} />
                       <span>{item.label}</span>
-                    </a>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -1271,7 +1301,11 @@ function App() {
           >
             <Icon name="menu" />
           </button>
-          <h1>{titleFor(active)}</h1>
+          {VIEWS_WITHOUT_HEADING.has(activeView) ? (
+            <h1 className="topbar-title">{titleFor(activeLabel)}</h1>
+          ) : (
+            <p className="topbar-title">{titleFor(activeLabel)}</p>
+          )}
           <button
             aria-expanded={commandPaletteOpen}
             aria-haspopup="dialog"
@@ -1315,15 +1349,15 @@ function App() {
                 ? `Sync complete${syncProgress?.ingested ? `, ${syncProgress.ingested} ingested` : ""}`
                 : ""}
           </span>
-          <a
+          <Link
             aria-label="Settings"
             className="icon-button"
             href="/settings"
-            onClick={(event) => navigate(event, "/settings", setPath)}
+            setPath={setPath}
             title="Settings"
           >
             <Icon name="settings" />
-          </a>
+          </Link>
           <fieldset className="theme-toggle">
             <legend>Theme</legend>
             {(["system", "light", "dark"] as const).map((choice) => (
@@ -1367,21 +1401,16 @@ function App() {
                 </button>
               </div>
             ) : null}
-            {active === "Sessions" && sessionPageState.error != null ? (
+            {activeView === "sessions" && sessionPageState.error != null ? (
               <ApiFailureState
                 error={sessionPageState.error}
                 onRetry={requestRefresh}
                 onSync={runSync}
               />
             ) : (
-              renderView(active, path, data, {
+              renderView(activeView, path, data, {
                 dateRange: dateRangeSelection,
-                onDateRangeChange: (next) => {
-                  if (sessionPageFromPath(path) > 1) {
-                    visit(sessionsPageHref(path, 1), setPath);
-                  }
-                  setDateRangeSelection(next);
-                },
+                onDateRangeChange: handleDateRangeChange,
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
@@ -1419,7 +1448,7 @@ function App() {
 }
 
 function renderView(
-  active: string,
+  routeKey: string,
   path: string,
   data: DashboardData,
   actions: {
@@ -1435,7 +1464,7 @@ function renderView(
   },
 ) {
   const pathname = pathOnly(path);
-  if (/^\/sessions\/\d+$/.test(pathname)) {
+  if (isSessionDetailPath(pathname)) {
     return (
       <SessionDetailView
         id={Number(pathname.split("/").at(-1))}
@@ -1447,8 +1476,8 @@ function renderView(
   if (!isKnownRoute(path, navItems)) {
     return <NotFoundView pathname={pathname} />;
   }
-  switch (active) {
-    case "Sessions":
+  switch (routeKey) {
+    case "sessions":
       return (
         <SessionsView
           data={data}
@@ -1459,13 +1488,13 @@ function renderView(
           sessionPageState={actions.sessionPageState}
         />
       );
-    case "Projects":
+    case "projects":
       return (
         <ProjectsView onSync={actions.runSync} projects={data.projects} syncing={actions.syncing} />
       );
-    case "Search":
+    case "search":
       return <SearchView dateRange={actions.dateRange} path={path} />;
-    case "Analytics":
+    case "analytics":
       return (
         <AnalyticsView
           data={data}
@@ -1475,7 +1504,7 @@ function renderView(
           syncing={actions.syncing}
         />
       );
-    case "Insights":
+    case "insights":
       return (
         <InsightsView
           loading={actions.recommendationsLoading}
@@ -1485,7 +1514,7 @@ function renderView(
           onMarked={actions.refresh}
         />
       );
-    case "Tools & MCP":
+    case "tools":
       return (
         <ToolsView
           data={data}
@@ -1493,7 +1522,7 @@ function renderView(
           onDateRangeChange={actions.onDateRangeChange}
         />
       );
-    case "Files":
+    case "files":
       return (
         <FilesView
           dateBounds={data.dateBounds}
@@ -1502,7 +1531,7 @@ function renderView(
           rows={data.files}
         />
       );
-    case "Settings":
+    case "settings":
       return (
         <SettingsView config={data.config} onSaved={actions.refresh} settingsInfo={data.settings} />
       );
@@ -1515,9 +1544,9 @@ function NotFoundView({ pathname }: { pathname: string }) {
   return (
     <ErrorState
       action={
-        <a className="primary-button" href="/">
+        <Link className="primary-button" href="/">
           Back to Analytics
-        </a>
+        </Link>
       }
       detail={`There is no page at ${pathname}.`}
       icon="inbox"
@@ -1695,12 +1724,12 @@ function SessionsView({
           <div className="active-filter-row">
             <span className="filter-pill">
               Project: <strong>{basename(project)}</strong>
-              <a
+              <Link
                 aria-label="Clear project filter"
                 href={sessionsArchivedHref("/sessions", includeArchived)}
               >
                 <Icon name="x" />
-              </a>
+              </Link>
             </span>
           </div>
         ) : null}
@@ -1931,10 +1960,10 @@ function ProjectsView({
                 {sorted.map((project) => (
                   <tr key={project.id}>
                     <td className="truncate-cell" title={project.path}>
-                      <a className="path-stack" href={projectSessionsHref(project.path)}>
+                      <Link className="path-stack" href={projectSessionsHref(project.path)}>
                         <strong>{projectName(project)}</strong>
                         <small>{project.path}</small>
-                      </a>
+                      </Link>
                     </td>
                     <td>
                       <ProjectKind project={project} />
@@ -2147,9 +2176,9 @@ const SessionTableRow = memo(function SessionTableRow({
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
           <span className="session-title-line">
-            <a href={`/sessions/${session.id}`} title={title}>
+            <Link href={`/sessions/${session.id}`} title={title}>
               {title}
-            </a>
+            </Link>
             {session.is_user_archived ? <Badge tone="neutral">Archived</Badge> : null}
             <DosuProvenanceBadge session={session} />
           </span>
@@ -2160,9 +2189,9 @@ const SessionTableRow = memo(function SessionTableRow({
         {session.project_path == null ? (
           <span className="faint">-</span>
         ) : (
-          <a href={projectSessionsHref(session.project_path)} title={session.project_path}>
+          <Link href={projectSessionsHref(session.project_path)} title={session.project_path}>
             {basename(session.project_path)}
-          </a>
+          </Link>
         )}
       </td>
       <td>
@@ -2370,14 +2399,9 @@ interface PaletteItem extends CommandPaletteItem {
 }
 
 function CommandPalette({
-  analyticsReportHref,
-  onClose,
-  onNavigate,
-  onRunSync,
-  onToggleTheme,
   open,
   refreshKey,
-  syncing,
+  ...dialogProps
 }: {
   analyticsReportHref: string;
   onClose: () => void;
@@ -2388,31 +2412,10 @@ function CommandPalette({
   refreshKey: number;
   syncing: boolean;
 }) {
-  const [query, setQuery] = useState("");
   const [rows, setRows] = useState<SessionSearchIndexRow[]>([]);
   const [loadedRefreshKey, setLoadedRefreshKey] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [indexError, setIndexError] = useState<unknown>(null);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const activeItemIdRef = useRef<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const closeRef = useRef(onClose);
-  const titleId = useId();
-  const listboxId = useId();
-  closeRef.current = onClose;
-  const requestClose = useCallback(() => closeRef.current(), []);
-  useDialogFocusTrap(open, dialogRef, requestClose);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setQuery("");
-    setRecentSearches(readRecentSearches());
-    activeItemIdRef.current = null;
-    setActiveIndex(null);
-  }, [open]);
 
   useEffect(() => {
     if (!open || loadedRefreshKey === refreshKey) {
@@ -2445,6 +2448,55 @@ function CommandPalette({
   }, [loadedRefreshKey, open, refreshKey]);
 
   const fuzzyIndex: SessionSearchIndex = useMemo(() => createSessionSearchIndex(rows), [rows]);
+
+  // The index survives here across open and close; only the dialog body, which
+  // builds every item on each render, is unmounted while the palette is shut.
+  return open ? (
+    <CommandPaletteDialog
+      {...dialogProps}
+      fuzzyIndex={fuzzyIndex}
+      indexError={indexError}
+      loading={loading}
+      rows={rows}
+    />
+  ) : null;
+}
+
+function CommandPaletteDialog({
+  analyticsReportHref,
+  fuzzyIndex,
+  indexError,
+  loading,
+  onClose,
+  onNavigate,
+  onRunSync,
+  onToggleTheme,
+  rows,
+  syncing,
+}: {
+  analyticsReportHref: string;
+  fuzzyIndex: SessionSearchIndex;
+  indexError: unknown;
+  loading: boolean;
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+  onRunSync: () => void;
+  onToggleTheme: () => void;
+  rows: SessionSearchIndexRow[];
+  syncing: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
+  const activeItemIdRef = useRef<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  const titleId = useId();
+  const listboxId = useId();
+  closeRef.current = onClose;
+  const requestClose = useCallback(() => closeRef.current(), []);
+  useDialogFocusTrap(true, dialogRef, requestClose);
+
   const normalizedQuery = query.trim();
   const matches = useMemo(
     () => (normalizedQuery === "" ? [] : fuzzyIndex.search(normalizedQuery, 10)),
@@ -2566,14 +2618,11 @@ function CommandPalette({
   const renderedItemKey = items.map((item) => item.id).join("\u0000");
 
   useLayoutEffect(() => {
-    if (!open) {
-      return;
-    }
     void renderedItemKey;
     const nextIndex = reconcileCommandPaletteActiveIndex(activeItemIdRef.current, items);
     activeItemIdRef.current = nextIndex == null ? null : (items[nextIndex]?.id ?? null);
     setActiveIndex(nextIndex);
-  }, [items, open, renderedItemKey]);
+  }, [items, renderedItemKey]);
 
   const selectPaletteIndex = (index: number | null) => {
     const nextIndex = index != null && items[index] != null ? index : null;
@@ -2589,10 +2638,6 @@ function CommandPalette({
       ?.querySelector<HTMLElement>(`[data-palette-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
-
-  if (!open) {
-    return null;
-  }
 
   const renderedActiveIndex =
     activeIndex != null && items[activeIndex] != null ? activeIndex : null;
@@ -3217,7 +3262,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                 {group.hits.map((hit) => {
                   const index = orderedHits.indexOf(hit);
                   return (
-                    <a
+                    <Link
                       aria-current={index === activeIndex ? "true" : undefined}
                       aria-selected={index === activeIndex}
                       className="result-card search-hit-row"
@@ -3226,7 +3271,6 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                       id={`search-hit-${hit.block_id}`}
                       key={hit.block_id}
                       onMouseEnter={() => setActiveIndex(index)}
-                      onClick={(event) => navigate(event, hit.href)}
                       role="option"
                     >
                       <div className="result-card-heading">
@@ -3236,7 +3280,7 @@ function SearchView({ dateRange, path }: { dateRange: DateRangeSelection; path: 
                       <p>
                         <HighlightedSnippet snippet={hit.snippet} />
                       </p>
-                    </a>
+                    </Link>
                   );
                 })}
               </div>
@@ -3481,12 +3525,7 @@ function fileSortValue(row: FileRow, key: FileSortKey): SortValue {
   }
 }
 
-/**
- * Shown when the archive holds nothing at all, which is what a first run looks
- * like now that Analytics is the landing route. Distinct from the per-panel
- * "No data in range" state: telling someone with no sessions to widen a date
- * range sends them to a control that cannot help.
- */
+/** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
 function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boolean }) {
   return (
     <section className="panel first-run">
@@ -3939,17 +3978,10 @@ function ReportExportButton({
               <Icon name="fileCode" />
               Download HTML
             </a>
-            <a
-              className="primary-button"
-              href={previewHref}
-              onClick={(event) => {
-                closeReview();
-                navigate(event, previewHref);
-              }}
-            >
+            <Link className="primary-button" href={previewHref} onClick={closeReview}>
               <Icon name="eye" />
               View report
-            </a>
+            </Link>
           </>
         }
         excluded={excluded}
@@ -4093,14 +4125,10 @@ function ReportRouteView({
           zIndex: 2,
         }}
       >
-        <a
-          className="secondary-button"
-          href={backHref}
-          onClick={(event) => navigate(event, backHref)}
-        >
+        <Link className="secondary-button" href={backHref}>
           <Icon name="arrowLeft" />
           Back
-        </a>
+        </Link>
         <strong style={{ marginRight: "auto" }}>{title}</strong>
         <ReportRouteExportActions
           downloadHref={downloadHref}
@@ -4197,7 +4225,7 @@ function AnalyticsView({
   syncing: boolean;
 }) {
   const [dosuDismissed, setDosuDismissed] = useState(
-    () => localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
+    () => readStorage(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
   );
   const [modelSort, setModelSort] = useState<SortState<ModelSortKey>>({
     key: "cost",
@@ -4207,10 +4235,14 @@ function AnalyticsView({
     key: "cost",
     direction: "desc",
   });
-  const byDay = data.byDay
-    .filter((row) => row.key !== "")
-    .slice()
-    .sort((left, right) => left.key.localeCompare(right.key));
+  const byDay = useMemo(
+    () =>
+      data.byDay
+        .filter((row) => row.key !== "")
+        .sort((left, right) => left.key.localeCompare(right.key)),
+    [data.byDay],
+  );
+  const rangeLabels = useMemo(() => byDay.map((row) => row.key), [byDay]);
   const modelRows = useMemo(
     () => sortRows(data.byModel, modelSort, modelSortValue),
     [data.byModel, modelSort],
@@ -4293,8 +4325,8 @@ function AnalyticsView({
       </div>
 
       <div className="split">
-        <ActivityPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
-        <WeekdayPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
+        <ActivityPanel activity={data.activity} rangeLabels={rangeLabels} />
+        <WeekdayPanel activity={data.activity} rangeLabels={rangeLabels} />
       </div>
 
       {shouldShowDosuCta({
@@ -4314,7 +4346,7 @@ function AnalyticsView({
             aria-label="Dismiss Dosu suggestion"
             className="icon-button"
             onClick={() => {
-              localStorage.setItem(DOSU_ANALYTICS_DISMISSAL_KEY, "1");
+              writeStorage(DOSU_ANALYTICS_DISMISSAL_KEY, "1");
               setDosuDismissed(true);
             }}
             type="button"
@@ -4458,7 +4490,7 @@ function AnalyticsView({
                 {projectRows.map((row) => (
                   <tr key={row.key}>
                     <td className="mono truncate-cell" title={row.key}>
-                      <a href={projectSessionsHref(row.key)}>{basename(row.key)}</a>
+                      <Link href={projectSessionsHref(row.key)}>{basename(row.key)}</Link>
                     </td>
                     <td className="numeric muted">{formatInt(row.sessions)}</td>
                     <td className="numeric">{money(row.estimated_cost_usd)}</td>
@@ -4480,13 +4512,14 @@ function ActivityPanel({
   activity: Activity | null;
   rangeLabels: string[];
 }) {
-  const labels = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
+  const labels = HOUR_LABELS;
+  const values = activity?.by_hour ?? NO_VALUES;
   const peak = activity?.peak_hour ?? peakIndex(activity?.by_hour ?? []);
   const range = shareRange(rangeLabels);
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_hours",
     labels,
-    values: activity?.by_hour ?? [],
+    values,
     start: range.start,
     end: range.end,
     timezone: activity?.timezone ?? localTimezone(),
@@ -4510,12 +4543,7 @@ function ActivityPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart
-          labels={labels}
-          metric="int"
-          values={activity?.by_hour ?? []}
-          variant="bar"
-        />
+        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
       </div>
     </section>
   );
@@ -4848,13 +4876,14 @@ function WeekdayPanel({
   activity: Activity | null;
   rangeLabels: string[];
 }) {
-  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const labels = WEEKDAY_LABELS;
+  const values = activity?.by_weekday ?? NO_VALUES;
   const peak = activity?.peak_weekday ?? peakIndex(activity?.by_weekday ?? []);
   const range = shareRange(rangeLabels);
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_days",
     labels,
-    values: activity?.by_weekday ?? [],
+    values,
     start: range.start,
     end: range.end,
     timezone: activity?.timezone ?? localTimezone(),
@@ -4874,12 +4903,7 @@ function WeekdayPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart
-          labels={labels}
-          metric="int"
-          values={activity?.by_weekday ?? []}
-          variant="bar"
-        />
+        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
       </div>
     </section>
   );
@@ -4898,8 +4922,11 @@ function DailyPanel({
   timezone: string | undefined;
   title: string;
 }) {
-  const labels = rows.map((row) => row.key);
-  const values = rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd));
+  const labels = useMemo(() => rows.map((row) => row.key), [rows]);
+  const values = useMemo(
+    () => rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd)),
+    [rows, metric],
+  );
   const range = shareRange(labels);
   const shareInput: ShareCardCopyInput = {
     kind: metric === "sessions" ? "sessions_per_day" : "estimated_cost_per_day",
@@ -5214,7 +5241,7 @@ async function renderShareCardPng(
   chartNode.style.cssText =
     "position:fixed;left:-10000px;top:-10000px;width:1080px;height:310px;pointer-events:none";
   document.body.append(chartNode);
-  const echarts = await import("echarts");
+  const echarts = await import("./chart-runtime.ts");
   const chart = echarts.init(chartNode, null, {
     renderer: "canvas",
     width: 1080,
@@ -5330,7 +5357,11 @@ function localTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
 }
 
-function AnalyticsChart({
+const HOUR_LABELS = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const NO_VALUES: number[] = [];
+
+const AnalyticsChart = memo(function AnalyticsChart({
   labels,
   metric,
   values,
@@ -5344,7 +5375,10 @@ function AnalyticsChart({
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<EChartsInstance | null>(null);
   const lastDrawnKeyRef = useRef<string | null>(null);
-  const chartState = prepareAnalyticsChartState({ labels, metric, values, variant });
+  const chartState = useMemo(
+    () => prepareAnalyticsChartState({ labels, metric, values, variant }),
+    [labels, metric, values, variant],
+  );
   const chartStateRef = useRef<AnalyticsChartState>(chartState);
   chartStateRef.current = chartState;
 
@@ -5356,7 +5390,7 @@ function AnalyticsChart({
     let cancelled = false;
     let disposeChart: (() => void) | null = null;
     void (async () => {
-      const echarts = await import("echarts");
+      const echarts = await import("./chart-runtime.ts");
       if (cancelled) {
         return;
       }
@@ -5410,7 +5444,7 @@ function AnalyticsChart({
   }, [chartState.key]);
 
   return <div aria-label="Analytics chart" className="analytics-chart" ref={chartRef} role="img" />;
-}
+});
 
 function buildChartOption({
   labels,
@@ -5422,7 +5456,7 @@ function buildChartOption({
   metric: AnalyticsChartMetric;
   values: number[];
   variant: AnalyticsChartVariant;
-}): EChartsOption {
+}): AnalyticsChartOption {
   const colors = chartColors();
   const moneyMetric = metric === "money";
   const seriesType = variant;
@@ -5685,11 +5719,7 @@ function StatCard({
   label,
   value,
 }: {
-  /** Renders the value and icon in the danger colour. Redundant emphasis on a
-   * number that already states the problem, so colour never carries meaning
-   * alone. Deliberately narrow: stat icons are muted by design (see the
-   * `.stat-card .stat-icon` note in styles.css), so this is a semantic state,
-   * not a reopening of decorative tones. */
+  /** Danger colour is redundant emphasis on a number that already states the problem; stat icons are otherwise muted by design. */
   alert?: boolean;
   icon: IconName;
   label: string;
@@ -6064,14 +6094,14 @@ function ApiFailureState({
     !recovery.useSync && recovery.actionHref == null && recovery.retry && onRetry != null;
   const action =
     recovery.actionHref != null && recovery.actionLabel != null ? (
-      <a
+      <Link
         className="primary-button"
         href={recovery.actionHref}
         rel={recovery.actionHref.startsWith("http") ? "noopener" : undefined}
         target={recovery.actionHref.startsWith("http") ? "_blank" : undefined}
       >
         {recovery.actionLabel}
-      </a>
+      </Link>
     ) : recovery.useSync && onSync != null ? (
       <button className="primary-button" onClick={onSync} type="button">
         Sync now
@@ -6688,8 +6718,10 @@ function firstLine(value: string, maxLength: number): string {
   return line.length > maxLength ? `${line.slice(0, maxLength - 1)}...` : line;
 }
 
+const intFormatter = new Intl.NumberFormat();
+
 function formatInt(value: number): string {
-  return Math.round(value).toLocaleString();
+  return intFormatter.format(Math.round(value));
 }
 
 function compact(value: number): string {
@@ -6729,6 +6761,18 @@ function latestSessionDay(sessions: SessionSummary[]): string | null {
   return latest == null ? null : formatDay(latest);
 }
 
+const dayFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit" });
+const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "2-digit",
+  year: "numeric",
+});
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
 function formatDay(value: string | null): string | null {
   if (value == null) {
     return null;
@@ -6737,7 +6781,7 @@ function formatDay(value: string | null): string | null {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
+  return dayFormatter.format(date);
 }
 
 function InsightsView({
@@ -7276,11 +7320,11 @@ function ToolCallDetail({
               {call.session_title ?? `Session ${call.session_id}`}
             </strong>
           </div>
-          <a className="secondary-button tool-detail-transcript-link" href={transcriptHref}>
+          <Link className="secondary-button tool-detail-transcript-link" href={transcriptHref}>
             <Icon name="messages" />
             View in transcript
             <Icon name="chevronRight" />
-          </a>
+          </Link>
         </footer>
       </section>
     </>
@@ -7770,13 +7814,9 @@ function ToolsView({
           locationFilters.server !== "" ||
           locationFilters.errorsOnly ||
           locationFilters.minMs > 0 ? (
-            <a
-              className="secondary-button"
-              href={clearedFiltersHref}
-              onClick={(event) => navigate(event, clearedFiltersHref)}
-            >
+            <Link className="secondary-button" href={clearedFiltersHref}>
               Clear filters
-            </a>
+            </Link>
           ) : null}
         </div>
         {callError != null ? (
@@ -7857,12 +7897,12 @@ function ToolsView({
                       <td className="numeric muted">{formatBytes(call.output_bytes)}</td>
                       <td className="numeric muted">{relativeTime(call.timestamp)}</td>
                       <td>
-                        <a
+                        <Link
                           href={`/sessions/${call.session_id}`}
                           onClick={(event) => event.stopPropagation()}
                         >
                           {call.session_title ?? `Session ${call.session_id}`} →
-                        </a>
+                        </Link>
                       </td>
                     </tr>
                   ))}
@@ -7952,7 +7992,10 @@ function FilesView({
     setFileError(null);
     setFilesLoading(true);
     void getJson<FileRow[]>(
-      withDateQuery(`/api/files?group=${group}&limit=100${opParam}`, dateRangeQuery(dateRange)),
+      withDateQuery(
+        `/api/files?group=${group}&limit=${TABLE_ROW_LIMIT}${opParam}`,
+        dateRangeQuery(dateRange),
+      ),
       { signal: controller.signal },
     )
       .then(setFileRows)
@@ -8107,14 +8150,18 @@ function FilesView({
                 {sortedFileRows.map((row) => (
                   <tr key={`${group}-${row.project ?? ""}-${row.key}`}>
                     <td className="mono truncate-cell">
-                      <a href={`/search?q=${encodeURIComponent(`"${row.key}"`)}`}>{row.key}</a>
+                      <Link href={`/search?q=${encodeURIComponent(`"${row.key}"`)}`}>
+                        {row.key}
+                      </Link>
                     </td>
                     {group === "path" ? (
                       <td className="muted" title={row.project ?? ""}>
                         {row.project == null ? (
                           <span className="faint">-</span>
                         ) : (
-                          <a href={projectSessionsHref(row.project)}>{basename(row.project)}</a>
+                          <Link href={projectSessionsHref(row.project)}>
+                            {basename(row.project)}
+                          </Link>
                         )}
                       </td>
                     ) : null}
@@ -8590,14 +8637,7 @@ function SessionDetailView({
     return request;
   }, [id]);
 
-  /**
-   * Fill in the gap in front of the loaded window.
-   *
-   * A window only starts partway into a session when the reader arrived by deep
-   * link, outline click, or compaction jump. Without this, everything before
-   * that landing point is unreachable by keyboard: ArrowUp hits the top of the
-   * window and stops, even though earlier messages exist.
-   */
+  /** A deep link, outline click or compaction jump lands mid-session; without this ArrowUp stops at the window's top. */
   const loadPreviousMessages = useCallback((): Promise<boolean> => {
     const sessionVersion = sessionVersionRef.current;
     return runWithTranscriptRequestSlot(
@@ -8632,15 +8672,10 @@ function SessionDetailView({
             if (page.messages.length === 0) {
               return false;
             }
-            // Inserting above the viewport shifts everything below it down by
-            // the height of the new content. Browser scroll anchoring does not
-            // rescue this: measured in Chromium, a page's worth of prepended
-            // turns moved the anchor by its full height, so the correction below
-            // is doing the work rather than duplicating the browser's.
-            //
-            // Anchor on how far a surviving turn moved rather than on
-            // scrollHeight, which would misread the content-visibility
-            // placeholders: their height stays an estimate until they render.
+            // Browser scroll anchoring does not compensate for prepended turns
+            // (measured in Chromium), so the correction below is required.
+            // Anchor on a surviving turn rather than scrollHeight: the
+            // content-visibility placeholders only estimate their height.
             let anchorSeq: number | null = null;
             let anchorTop: number | null = null;
             for (const message of latest.messages) {
@@ -8659,11 +8694,8 @@ function SessionDetailView({
               message_offset: request.offset,
             };
             detailRef.current = nextDetail;
-            // flushSync commits the prepend before it returns, so the
-            // measurement below is guaranteed to see the new DOM. Deferring to
-            // requestAnimationFrame would be both less certain -- React commits
-            // on its own schedule -- and a frame late, long enough for the
-            // browser to paint the shifted position before it was corrected.
+            // flushSync so the measurement sees the new DOM and the shifted
+            // position is never painted before it is corrected.
             flushSync(() => {
               setDetail(nextDetail);
             });
@@ -8967,6 +8999,21 @@ function SessionDetailView({
   // that for every turn on the screen.
   const subagents = detail?.subagents;
   const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
+  const detailMessages = detail?.messages;
+  const messages = useMemo(() => renderableMessages(detailMessages ?? []), [detailMessages]);
+  const toc = useMemo(
+    () => (outline == null ? threadToc(messages) : threadTocFromOutline(outline)),
+    [messages, outline],
+  );
+  const compactions = contextWindow?.compactions;
+  const compactionBySeq = useMemo(
+    () => new Map((compactions ?? []).map((compaction) => [compaction.seq, compaction] as const)),
+    [compactions],
+  );
+  const compactionNumberBySeq = useMemo(
+    () => new Map((compactions ?? []).map((compaction, index) => [compaction.seq, index + 1])),
+    [compactions],
+  );
 
   if (error != null) {
     return (
@@ -8982,8 +9029,6 @@ function SessionDetailView({
     return <SessionDetailSkeleton />;
   }
 
-  const messages = renderableMessages(detail.messages);
-  const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
   const stats = threadStats(
     detail.summary,
     messages,
@@ -8992,12 +9037,6 @@ function SessionDetailView({
     detail.totals,
   );
   const subagentRuns = countSubagentRuns(detail.subagents);
-  const compactionBySeq = new Map(
-    (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
-  );
-  const compactionNumberBySeq = new Map(
-    (contextWindow?.compactions ?? []).map((compaction, index) => [compaction.seq, index + 1]),
-  );
   const windowTokens = contextWindow?.window_tokens ?? null;
   const detailTitle = sessionDisplayTitle(detail.summary);
   const archiveAction = archiveActionFor(detail.summary);
@@ -9070,14 +9109,14 @@ function SessionDetailView({
               </button>
             ) : null}
             {detail.summary.project_path != null ? (
-              <a
+              <Link
                 className="project-chip"
                 href={projectSessionsHref(detail.summary.project_path)}
                 title={detail.summary.project_path}
               >
                 <Icon name="folder" />
                 {basename(detail.summary.project_path)}
-              </a>
+              </Link>
             ) : null}
           </div>
           <div className="thread-stats">
@@ -9149,14 +9188,10 @@ function SessionDetailView({
         />
       ) : null}
 
-      <a
-        className="back-link"
-        href={sessionsHref}
-        onClick={(event) => navigate(event, sessionsHref)}
-      >
+      <Link className="back-link" href={sessionsHref}>
         <Icon name="arrowLeft" />
         Sessions
-      </a>
+      </Link>
 
       <DeleteSessionDialog
         error={deleteDialogOpen ? sessionStateError : null}
@@ -9201,33 +9236,13 @@ function SessionDetailView({
             </div>
             {toc.length === 0 ? <p>No prompts or Dosu calls to list</p> : null}
             {toc.map((item) => (
-              <a
-                aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
-                className={[
-                  item.kind === "dosu" ? "is-dosu" : null,
-                  jumpingToSeq === item.seq ? "is-loading" : null,
-                  activeMessageSeq === item.seq ? "is-current" : null,
-                ]
-                  .filter(isPresent)
-                  .join(" ")}
-                href={`#message-${item.seq}`}
+              <ThreadTocEntry
+                current={activeMessageSeq === item.seq}
+                item={item}
+                jumping={jumpingToSeq === item.seq}
                 key={item.key}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void jumpToMessage(item.seq);
-                }}
-              >
-                <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
-                  {item.kind === "dosu" ? (
-                    <img alt="" src={dosuOfficialUrl} />
-                  ) : (
-                    <Icon name={item.icon} />
-                  )}
-                </span>
-                <span>{item.label}</span>
-                {item.kind === "dosu" ? <em>Dosu</em> : null}
-                {jumpingToSeq === item.seq ? <b>loading</b> : null}
-              </a>
+                onJump={jumpToMessage}
+              />
             ))}
           </div>
         </aside>
@@ -9235,10 +9250,8 @@ function SessionDetailView({
         <div className="transcript-column">
           {(detail.message_offset ?? 0) > 0 ? (
             <div className="transcript-window-start">
-              {/* Counts what is missing rather than naming the first loaded
-                  message. The offset is a zero-based row index, so printing it
-                  as a 1-based ordinal contradicted the #message-<seq> anchor
-                  for that very message. */}
+              {/* Count of missing messages: the offset is a zero-based row
+                  index and would contradict the #message-<seq> anchor as an ordinal. */}
               <span>
                 {formatInt(detail.message_offset ?? 0)} earlier{" "}
                 {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
@@ -9507,13 +9520,9 @@ type TranscriptBlockData = {
   tool_result: string | null;
 };
 
-// tabIndex={-1} makes each turn programmatically focusable without adding it to
-// the tab order, so arrow-key navigation can move focus and a screen reader
-// announces the turn it scrolled to. Without it the highlight is visual only.
-//
-// Memoized: a transcript loads an unbounded number of turns, and every arrow
-// keypress changes `active` on exactly two of them. Without this, each keypress
-// re-renders every loaded turn.
+// tabIndex={-1} lets arrow-key navigation move focus (and screen readers
+// announce the turn) without joining the tab order. Memoized because a
+// transcript can hold unbounded turns and each keypress changes `active` on two.
 const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
@@ -9773,60 +9782,285 @@ function ContextWindowStrip({
   // hot-reloaded page whose effects did not re-run); the observer corrects it.
   const stripWidth = width > 0 ? width : 960;
 
-  const points = timeline.points;
-  const compactions = [...timeline.compactions].sort((a, b) => a.seq - b.seq);
-  const peakLabel =
-    timeline.peak_pct == null
-      ? compact(timeline.peak_tokens)
-      : `${Math.round(timeline.peak_pct * 100)}%`;
+  const layout = useMemo(() => {
+    const points = timeline.points;
+    const compactions = [...timeline.compactions].sort((a, b) => a.seq - b.seq);
+    const peakLabel =
+      timeline.peak_pct == null
+        ? compact(timeline.peak_tokens)
+        : `${Math.round(timeline.peak_pct * 100)}%`;
 
-  const plotLeft = STRIP_PAD_LEFT;
-  const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
-  const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
-  const yAt = (tokens: number) =>
-    STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
+    const plotLeft = STRIP_PAD_LEFT;
+    const plotRight = Math.max(plotLeft + 40, stripWidth - STRIP_PAD_RIGHT);
+    const baseY = STRIP_HEIGHT - STRIP_RUG_HEIGHT;
+    const yAt = (tokens: number) =>
+      STRIP_PLOT_TOP + (1 - Math.min(1, tokens / windowTokens)) * (baseY - STRIP_PLOT_TOP);
 
-  const curveLayout = layoutContextCurve(points, compactions, {
-    plotLeft,
-    plotRight,
-    yAt,
-  });
-  const { markerXs, segments, slotWidth, turnOrder, xs } = curveLayout;
-  const xOf = (index: number) => xs[index] ?? plotLeft;
+    const { markerXs, segments, slotWidth, turnOrder, xs } = layoutContextCurve(
+      points,
+      compactions,
+      { plotLeft, plotRight, yAt },
+    );
+    const xOf = (index: number) => xs[index] ?? plotLeft;
 
-  const compactionMarks = compactions.map((compaction, index) => ({
-    compaction,
-    x: markerXs[index] ?? plotLeft,
-  }));
-  const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
+    const compactionMarks = compactions.map((compaction, index) => ({
+      compaction,
+      x: markerXs[index] ?? plotLeft,
+    }));
+    const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
 
-  // Regular turn axis: a boundary tick at each slot edge, labels centered in
-  // their slot for every labelStep-th turn.
-  const labelStep = turnLabelStep(turnOrder.length);
-  const turnMarks = turnOrder.map((turn, index) => ({
-    turn,
-    boundaryX: plotLeft + index * slotWidth,
-    centerX: plotLeft + (index + 0.5) * slotWidth,
-    labeled: index === 0 || turn % labelStep === 0,
-  }));
+    // Regular turn axis: a boundary tick at each slot edge, labels centered in
+    // their slot for every labelStep-th turn.
+    const labelStep = turnLabelStep(turnOrder.length);
+    const turnMarks = turnOrder.map((turn, index) => ({
+      turn,
+      boundaryX: plotLeft + index * slotWidth,
+      centerX: plotLeft + (index + 0.5) * slotWidth,
+      labeled: index === 0 || turn % labelStep === 0,
+    }));
 
-  const lastIndex = points.length - 1;
-  const lastPoint = points[lastIndex];
-  const peakIndex = points.reduce(
-    (best, point, index) =>
-      point.context_tokens > (points[best]?.context_tokens ?? 0) ? index : best,
-    0,
-  );
-  const peakPoint = points[peakIndex];
-  const endX = xOf(lastIndex);
-  const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
-  const peakX = xOf(peakIndex);
-  const peakY = peakPoint == null ? baseY : yAt(peakPoint.context_tokens);
-  const peakLabelOnLeft = peakX > plotLeft + 70;
-  const peakLabelY = Math.max(STRIP_PLOT_TOP + 10, peakY - 7);
-  // The live readout sits inside the plot, above the line when there is room
-  // and below it when the session ended near the ceiling.
-  const endLabelAbove = endY > STRIP_PLOT_TOP + 30;
+    const lastIndex = points.length - 1;
+    const lastPoint = points[lastIndex];
+    const peakIndex = points.reduce(
+      (best, point, index) =>
+        point.context_tokens > (points[best]?.context_tokens ?? 0) ? index : best,
+      0,
+    );
+    const peakPoint = points[peakIndex];
+    const endY = lastPoint == null ? baseY : yAt(lastPoint.context_tokens);
+    const peakX = xOf(peakIndex);
+    const peakY = peakPoint == null ? baseY : yAt(peakPoint.context_tokens);
+    return {
+      baseY,
+      compactionGroups,
+      compactionMarks,
+      compactions,
+      endX: xOf(lastIndex),
+      endY,
+      // The live readout sits inside the plot, above the line when there is
+      // room and below it when the session ended near the ceiling.
+      endLabelAbove: endY > STRIP_PLOT_TOP + 30,
+      lastIndex,
+      lastPoint,
+      peakIndex,
+      peakLabel,
+      peakLabelOnLeft: peakX > plotLeft + 70,
+      peakLabelY: Math.max(STRIP_PLOT_TOP + 10, peakY - 7),
+      peakPoint,
+      peakX,
+      peakY,
+      plotLeft,
+      plotRight,
+      points,
+      segments,
+      turnMarks,
+      xOf,
+      xs,
+      yAt,
+    };
+  }, [timeline, stripWidth, windowTokens]);
+  const { baseY, compactionGroups, compactions, lastPoint, peakLabel, points, xOf, xs, yAt } =
+    layout;
+
+  // The static plot depends only on the layout; keeping its elements stable
+  // lets React skip them while the pointer moves and only the hover overlay
+  // and tooltip change. The handlers below only call state setters and onJump.
+  const plot = useMemo(() => {
+    const {
+      baseY,
+      compactionGroups,
+      compactionMarks,
+      compactions,
+      endLabelAbove,
+      endX,
+      endY,
+      lastIndex,
+      lastPoint,
+      peakIndex,
+      peakLabel,
+      peakLabelOnLeft,
+      peakLabelY,
+      peakPoint,
+      peakX,
+      peakY,
+      plotLeft,
+      plotRight,
+      segments,
+      turnMarks,
+      yAt,
+    } = layout;
+    let previousTickLabelX = Number.NEGATIVE_INFINITY;
+    return (
+      <>
+        <rect
+          className="ctx-strip-band"
+          height={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - yAt(windowTokens)}
+          width={plotRight - plotLeft}
+          x={plotLeft}
+          y={yAt(windowTokens)}
+        />
+        <text
+          className="ctx-strip-band-label"
+          x={plotLeft + 4}
+          y={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - 4}
+        >
+          auto-compact zone
+        </text>
+        {[0.25, 0.5, 0.75].map((fraction) => (
+          <g className="ctx-strip-grid" key={`grid-${fraction}`}>
+            <line
+              x1={plotLeft}
+              x2={plotRight}
+              y1={yAt(windowTokens * fraction)}
+              y2={yAt(windowTokens * fraction)}
+            />
+            <text textAnchor="end" x={plotLeft - 8} y={yAt(windowTokens * fraction) + 3.5}>
+              {compact(windowTokens * fraction)}
+            </text>
+          </g>
+        ))}
+        <line
+          className="ctx-strip-window"
+          x1={plotLeft}
+          x2={plotRight}
+          y1={yAt(windowTokens)}
+          y2={yAt(windowTokens)}
+        />
+        <text className="ctx-strip-label" x={plotLeft + 4} y={STRIP_WINDOW_LABEL_Y}>
+          window · {compact(windowTokens)}
+          {timeline.window_inferred ? " (inferred)" : ""}
+        </text>
+        {segments.map((coords) => (
+          <g key={`seg-${coords[0]?.[0] ?? 0}`}>
+            <path className="ctx-strip-area" d={contextCurveAreaPath(coords, baseY)} />
+            <path className="ctx-strip-line" d={contextCurveLinePath(coords)} />
+          </g>
+        ))}
+        <g className="ctx-strip-rug">
+          {turnMarks.slice(1).map((mark) => (
+            <line
+              key={`tick-${mark.turn}`}
+              x1={mark.boundaryX}
+              x2={mark.boundaryX}
+              y1={baseY + 3}
+              y2={baseY + 8}
+            />
+          ))}
+          {turnMarks.map((mark) => {
+            if (!mark.labeled || mark.centerX - previousTickLabelX < 44) {
+              return null;
+            }
+            previousTickLabelX = mark.centerX;
+            return (
+              <text
+                key={`tick-label-${mark.turn}`}
+                textAnchor="middle"
+                x={mark.centerX}
+                y={baseY + 20}
+              >
+                turn {mark.turn}
+              </text>
+            );
+          })}
+        </g>
+        {compactionMarks.map(({ compaction, x }) => (
+          <g className="ctx-strip-compaction" key={`compaction-mark-${compaction.seq}`}>
+            <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
+            <rect
+              fill="transparent"
+              height={baseY - STRIP_PLOT_TOP}
+              width={16}
+              x={x - 8}
+              y={STRIP_PLOT_TOP}
+            >
+              <title>{compactionLabel(compaction)}</title>
+            </rect>
+          </g>
+        ))}
+        {compactionGroups.map((group, groupIndex) => {
+          const first = (group.indexes[0] ?? 0) + 1;
+          const last = (group.indexes.at(-1) ?? 0) + 1;
+          const firstCompaction = compactions[group.indexes[0] ?? 0];
+          const label = first === last ? `${first}` : `${first}–${last}`;
+          const markerWidth = first === last ? 18 : Math.max(28, label.length * 6 + 10);
+          return (
+            <a
+              aria-label={
+                first === last && firstCompaction != null
+                  ? `Compaction ${first}: ${compactionTokenRange(firstCompaction)} tokens`
+                  : `Compactions ${first} through ${last}`
+              }
+              href={`#message-${firstCompaction?.seq ?? 0}`}
+              key={`compaction-group-${first}-${last}`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const seq = firstCompaction?.seq;
+                if (group.indexes.length > 1) {
+                  setHoverIndex(null);
+                  setSelectedCompactionGroup(groupIndex);
+                } else if (seq != null) {
+                  setSelectedCompactionGroup(null);
+                  void onJump(seq);
+                }
+              }}
+              onFocus={() => {
+                setHoverIndex(null);
+                setHoverCompactionGroup(groupIndex);
+                if (group.indexes.length > 1) {
+                  setSelectedCompactionGroup(groupIndex);
+                }
+              }}
+              onMouseEnter={() => {
+                setHoverIndex(null);
+                setHoverCompactionGroup(groupIndex);
+              }}
+              onMouseMove={(event) => event.stopPropagation()}
+            >
+              <g className="ctx-strip-compaction-marker">
+                <rect
+                  height={18}
+                  rx={9}
+                  width={markerWidth}
+                  x={group.x - markerWidth / 2}
+                  y={STRIP_PLOT_TOP - 21}
+                />
+                <text textAnchor="middle" x={group.x} y={STRIP_PLOT_TOP - 8}>
+                  {label}
+                </text>
+              </g>
+            </a>
+          );
+        })}
+        {peakPoint != null && peakIndex !== lastIndex ? (
+          <g className="ctx-strip-peak">
+            <circle cx={peakX} cy={peakY} r={2.5}>
+              <title>
+                Peak {peakLabel} · {compact(peakPoint.context_tokens)} tokens
+              </title>
+            </circle>
+            <text
+              textAnchor={peakLabelOnLeft ? "end" : "start"}
+              x={peakX + (peakLabelOnLeft ? -6 : 6)}
+              y={peakLabelY}
+            >
+              peak {peakLabel}
+            </text>
+          </g>
+        ) : null}
+        <g className="ctx-strip-end">
+          <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
+          <circle cx={endX} cy={endY} r={3}>
+            <title>End · {compact(lastPoint?.context_tokens ?? 0)} tokens</title>
+          </circle>
+          <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
+            {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
+            {compact(lastPoint?.context_tokens ?? 0)}
+          </text>
+        </g>
+      </>
+    );
+  }, [layout, onJump, timeline.window_inferred, windowTokens]);
 
   const handleMove = (event: { clientX: number; currentTarget: SVGSVGElement }) => {
     setHoverCompactionGroup(null);
@@ -9886,8 +10120,6 @@ function ContextWindowStrip({
     void onJump(hovered.seq);
   };
 
-  let previousTickLabelX = Number.NEGATIVE_INFINITY;
-
   return (
     <section className="panel context-window-panel">
       <div className="panel-heading">
@@ -9937,172 +10169,7 @@ function ContextWindowStrip({
                 onMouseMove={handleMove}
                 width={stripWidth}
               >
-                <rect
-                  className="ctx-strip-band"
-                  height={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - yAt(windowTokens)}
-                  width={plotRight - plotLeft}
-                  x={plotLeft}
-                  y={yAt(windowTokens)}
-                />
-                <text
-                  className="ctx-strip-band-label"
-                  x={plotLeft + 4}
-                  y={yAt(windowTokens * STRIP_AUTO_COMPACT_ZONE) - 4}
-                >
-                  auto-compact zone
-                </text>
-                {[0.25, 0.5, 0.75].map((fraction) => (
-                  <g className="ctx-strip-grid" key={`grid-${fraction}`}>
-                    <line
-                      x1={plotLeft}
-                      x2={plotRight}
-                      y1={yAt(windowTokens * fraction)}
-                      y2={yAt(windowTokens * fraction)}
-                    />
-                    <text textAnchor="end" x={plotLeft - 8} y={yAt(windowTokens * fraction) + 3.5}>
-                      {compact(windowTokens * fraction)}
-                    </text>
-                  </g>
-                ))}
-                <line
-                  className="ctx-strip-window"
-                  x1={plotLeft}
-                  x2={plotRight}
-                  y1={yAt(windowTokens)}
-                  y2={yAt(windowTokens)}
-                />
-                <text className="ctx-strip-label" x={plotLeft + 4} y={STRIP_WINDOW_LABEL_Y}>
-                  window · {compact(windowTokens)}
-                  {timeline.window_inferred ? " (inferred)" : ""}
-                </text>
-                {segments.map((coords) => (
-                  <g key={`seg-${coords[0]?.[0] ?? 0}`}>
-                    <path className="ctx-strip-area" d={contextCurveAreaPath(coords, baseY)} />
-                    <path className="ctx-strip-line" d={contextCurveLinePath(coords)} />
-                  </g>
-                ))}
-                <g className="ctx-strip-rug">
-                  {turnMarks.slice(1).map((mark) => (
-                    <line
-                      key={`tick-${mark.turn}`}
-                      x1={mark.boundaryX}
-                      x2={mark.boundaryX}
-                      y1={baseY + 3}
-                      y2={baseY + 8}
-                    />
-                  ))}
-                  {turnMarks.map((mark) => {
-                    if (!mark.labeled || mark.centerX - previousTickLabelX < 44) {
-                      return null;
-                    }
-                    previousTickLabelX = mark.centerX;
-                    return (
-                      <text
-                        key={`tick-label-${mark.turn}`}
-                        textAnchor="middle"
-                        x={mark.centerX}
-                        y={baseY + 20}
-                      >
-                        turn {mark.turn}
-                      </text>
-                    );
-                  })}
-                </g>
-                {compactionMarks.map(({ compaction, x }) => (
-                  <g className="ctx-strip-compaction" key={`compaction-mark-${compaction.seq}`}>
-                    <line x1={x} x2={x} y1={STRIP_PLOT_TOP} y2={baseY} />
-                    <rect
-                      fill="transparent"
-                      height={baseY - STRIP_PLOT_TOP}
-                      width={16}
-                      x={x - 8}
-                      y={STRIP_PLOT_TOP}
-                    >
-                      <title>{compactionLabel(compaction)}</title>
-                    </rect>
-                  </g>
-                ))}
-                {compactionGroups.map((group, groupIndex) => {
-                  const first = (group.indexes[0] ?? 0) + 1;
-                  const last = (group.indexes.at(-1) ?? 0) + 1;
-                  const firstCompaction = compactions[group.indexes[0] ?? 0];
-                  const label = first === last ? `${first}` : `${first}–${last}`;
-                  const markerWidth = first === last ? 18 : Math.max(28, label.length * 6 + 10);
-                  return (
-                    <a
-                      aria-label={
-                        first === last && firstCompaction != null
-                          ? `Compaction ${first}: ${compactionTokenRange(firstCompaction)} tokens`
-                          : `Compactions ${first} through ${last}`
-                      }
-                      href={`#message-${firstCompaction?.seq ?? 0}`}
-                      key={`compaction-group-${first}-${last}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        const seq = firstCompaction?.seq;
-                        if (group.indexes.length > 1) {
-                          setHoverIndex(null);
-                          setSelectedCompactionGroup(groupIndex);
-                        } else if (seq != null) {
-                          setSelectedCompactionGroup(null);
-                          void onJump(seq);
-                        }
-                      }}
-                      onFocus={() => {
-                        setHoverIndex(null);
-                        setHoverCompactionGroup(groupIndex);
-                        if (group.indexes.length > 1) {
-                          setSelectedCompactionGroup(groupIndex);
-                        }
-                      }}
-                      onMouseEnter={() => {
-                        setHoverIndex(null);
-                        setHoverCompactionGroup(groupIndex);
-                      }}
-                      onMouseMove={(event) => event.stopPropagation()}
-                    >
-                      <g className="ctx-strip-compaction-marker">
-                        <rect
-                          height={18}
-                          rx={9}
-                          width={markerWidth}
-                          x={group.x - markerWidth / 2}
-                          y={STRIP_PLOT_TOP - 21}
-                        />
-                        <text textAnchor="middle" x={group.x} y={STRIP_PLOT_TOP - 8}>
-                          {label}
-                        </text>
-                      </g>
-                    </a>
-                  );
-                })}
-                {peakPoint != null && peakIndex !== lastIndex ? (
-                  <g className="ctx-strip-peak">
-                    <circle cx={peakX} cy={peakY} r={2.5}>
-                      <title>
-                        Peak {peakLabel} · {compact(peakPoint.context_tokens)} tokens
-                      </title>
-                    </circle>
-                    <text
-                      textAnchor={peakLabelOnLeft ? "end" : "start"}
-                      x={peakX + (peakLabelOnLeft ? -6 : 6)}
-                      y={peakLabelY}
-                    >
-                      peak {peakLabel}
-                    </text>
-                  </g>
-                ) : null}
-                <g className="ctx-strip-end">
-                  <circle className="ctx-strip-end-halo" cx={endX} cy={endY} r={6.5} />
-                  <circle cx={endX} cy={endY} r={3}>
-                    <title>End · {compact(lastPoint?.context_tokens ?? 0)} tokens</title>
-                  </circle>
-                  <text textAnchor="end" x={endX - 9} y={endLabelAbove ? endY - 9 : endY + 18}>
-                    {Math.round(((lastPoint?.context_tokens ?? 0) / windowTokens) * 100)}% ·{" "}
-                    {compact(lastPoint?.context_tokens ?? 0)}
-                  </text>
-                </g>
+                {plot}
                 {hovered != null && hoverIndex != null ? (
                   <g className="ctx-strip-hover">
                     <line
@@ -10333,11 +10400,7 @@ function ToolCallPresentation({
       return (
         <div className="tool-presentation tool-shell">
           {presentation.caption != null ? <p>{presentation.caption}</p> : null}
-          <TranscriptCodeBlock
-            code={`$ ${presentation.command}`}
-            deferUntilVisible={false}
-            language="bash"
-          />
+          <TranscriptCodeBlock code={`$ ${presentation.command}`} language="bash" />
         </div>
       );
     case "file":
@@ -10345,11 +10408,7 @@ function ToolCallPresentation({
         <div className="tool-presentation tool-file">
           <ToolPathHeader operation={presentation.operation} path={presentation.path} />
           {presentation.content != null ? (
-            <TranscriptCodeBlock
-              code={presentation.content}
-              deferUntilVisible={false}
-              language={presentation.language}
-            />
+            <TranscriptCodeBlock code={presentation.content} language={presentation.language} />
           ) : (
             <CollapsedToolArguments argumentsText={presentation.arguments} forceOpen={forceOpen} />
           )}
@@ -10435,7 +10494,7 @@ function CollapsedToolArguments({
   return (
     <details className="tool-arguments" open={forceOpen || argumentsText.length <= 240}>
       <summary>arguments</summary>
-      <TranscriptCodeBlock code={argumentsText} deferUntilVisible={false} language="json" />
+      <TranscriptCodeBlock code={argumentsText} language="json" />
     </details>
   );
 }
@@ -10769,7 +10828,7 @@ function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         <div className="subagent-summary">
           <span>{formatInt(subagent.summary.message_count)} messages</span>
           <span>{formatInt(subagent.summary.subagent_count)} nested</span>
-          <a href={`/sessions/${subagent.summary.id}`}>Open session</a>
+          <Link href={`/sessions/${subagent.summary.id}`}>Open session</Link>
         </div>
       ) : (
         <div className="subagent-transcript">
@@ -10901,6 +10960,43 @@ function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[
   );
 }
 
+const ThreadTocEntry = memo(function ThreadTocEntry({
+  current,
+  item,
+  jumping,
+  onJump,
+}: {
+  current: boolean;
+  item: ThreadTocItem;
+  jumping: boolean;
+  onJump: (seq: number) => Promise<unknown>;
+}) {
+  return (
+    <a
+      aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
+      className={[
+        item.kind === "dosu" ? "is-dosu" : null,
+        jumping ? "is-loading" : null,
+        current ? "is-current" : null,
+      ]
+        .filter(isPresent)
+        .join(" ")}
+      href={`#message-${item.seq}`}
+      onClick={(event) => {
+        event.preventDefault();
+        void onJump(item.seq);
+      }}
+    >
+      <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
+        {item.kind === "dosu" ? <img alt="" src={dosuOfficialUrl} /> : <Icon name={item.icon} />}
+      </span>
+      <span>{item.label}</span>
+      {item.kind === "dosu" ? <em>Dosu</em> : null}
+      {jumping ? <b>loading</b> : null}
+    </a>
+  );
+});
+
 type ThreadTocItem = {
   key: string;
   seq: number;
@@ -10918,11 +11014,9 @@ function tocPresentation(text: string): { label: string; icon: IconName } {
 }
 
 /**
- * Header stats are all whole-session figures. Counting `messages` here would
- * mix scopes: turns and tokens cover the session, so replies and tool calls
- * counted from the loaded window would silently shrink the moment a transcript
- * paginates. `totals` comes from the server aggregated over the session; the
- * window fallback only applies to a payload that predates it.
+ * Header stats are whole-session figures, so `totals` (server-aggregated) is
+ * used; counting the loaded window would shrink as a transcript paginates. The
+ * window fallback only covers payloads that predate `totals`.
  */
 function threadStats(
   summary: SessionSummary,
@@ -11216,7 +11310,7 @@ function formatDateLabel(value: string): string {
   if (date == null) {
     return value;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
+  return dateLabelFormatter.format(date);
 }
 
 function errorMessage(error: unknown): string {
@@ -11264,11 +11358,7 @@ function shortDate(value: string): string {
   if (!Number.isFinite(time)) {
     return value;
   }
-  return new Date(time).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return shortDateFormatter.format(new Date(time));
 }
 
 function implementedTimestamp(row: Recommendation): number {
@@ -11302,17 +11392,40 @@ function updateSearchRoute(query: string, setPath?: (path: string) => void) {
   }
 }
 
-function navigate(
-  event: MouseEvent<HTMLAnchorElement>,
-  href: string,
-  setPath?: (path: string) => void,
-) {
-  event.preventDefault();
-  visit(href, setPath);
+type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+  href: string;
+  setPath?: (path: string) => void;
+};
+
+function Link({ href, setPath, onClick, ...rest }: LinkProps) {
+  return (
+    <a
+      {...rest}
+      href={href}
+      onClick={(event) => {
+        onClick?.(event);
+        if (
+          shouldInterceptLinkClick(event, {
+            href,
+            target: rest.target,
+            download: rest.download != null && rest.download !== false,
+          })
+        ) {
+          event.preventDefault();
+          visit(href, setPath);
+        }
+      }}
+    />
+  );
 }
 
 function visit(href: string, setPath?: (path: string) => void) {
+  const previousPathname = window.location.pathname;
   window.history.pushState(null, "", href);
+  // pushState keeps the old scroll offset, which a full page load used to reset.
+  if (window.location.pathname !== previousPathname) {
+    window.scrollTo(0, 0);
+  }
   const next = locationPath();
   if (setPath != null) {
     setPath(next);
@@ -11338,4 +11451,12 @@ const root = document.getElementById("root");
 if (root == null) {
   throw new Error("missing #root");
 }
-createRoot(root).render(isFramed(window) ? <FramedNotice /> : <App />);
+createRoot(root).render(
+  isFramed(window) ? (
+    <FramedNotice />
+  ) : (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  ),
+);

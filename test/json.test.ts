@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { canonicalJson } from "../src/json.ts";
+import {
+  asBoolean,
+  asInteger,
+  asString,
+  byteLength,
+  canonicalJson,
+  get,
+  hasKey,
+  isObject,
+} from "../src/json.ts";
 
 // canonicalJson must reproduce serde_json's default serialization byte-for-byte
 // (BTreeMap ⇒ recursively sorted keys, compact separators): every JSON TEXT
@@ -58,5 +67,40 @@ describe("canonicalJson", () => {
       checked += 1;
     }
     expect(checked).toBeGreaterThan(45);
+  });
+});
+
+describe("JSON accessors", () => {
+  test("isObject rejects arrays, null, and primitives", () => {
+    expect(isObject({})).toBe(true);
+    expect(isObject([])).toBe(false);
+    expect(isObject(null)).toBe(false);
+    expect(isObject("x")).toBe(false);
+    expect(isObject(undefined)).toBe(false);
+  });
+
+  test("get and hasKey only read own properties of objects", () => {
+    expect(get({ a: 1 }, "a")).toBe(1);
+    expect(get([1], "0")).toBeUndefined();
+    expect(get(null, "a")).toBeUndefined();
+    expect(hasKey({ a: null }, "a")).toBe(true);
+    expect(hasKey({}, "toString")).toBe(false);
+    expect(hasKey(undefined, "a")).toBe(false);
+  });
+
+  test("typed readers return null on a type mismatch and reject floats", () => {
+    expect(asString("x")).toBe("x");
+    expect(asString(1)).toBeNull();
+    expect(asBoolean(false)).toBe(false);
+    expect(asBoolean("false")).toBeNull();
+    expect(asInteger(3)).toBe(3);
+    expect(asInteger(3.5)).toBeNull();
+    expect(asInteger("3")).toBeNull();
+  });
+
+  test("byteLength counts a lone surrogate as the 3-byte replacement character", () => {
+    expect(byteLength("abc")).toBe(3);
+    expect(byteLength("é")).toBe(2);
+    expect(byteLength("\ud800")).toBe(3);
   });
 });

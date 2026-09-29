@@ -1,5 +1,5 @@
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import { asInteger, asString, canonicalJson, get, hasKey, isObject } from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -14,8 +14,13 @@ import {
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
-
-type JsonObject = { [key: string]: Json };
+import {
+  block,
+  countUnknown,
+  parseJsonLine,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
 export function parseCodexSession(
   fallbackId: string,
@@ -42,23 +47,11 @@ export function parseCodexSession(
   let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
-  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
+  const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo: index + 1,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
+    const value = parseJsonLine(line, index + 1, issues);
+    if (value === undefined) {
       continue;
     }
 
@@ -142,20 +135,11 @@ export function parseCodexSession(
       // handled above — MCP calls have no response_item in current rollouts.
       // Anything else is a top-level record type this parser has never seen —
       // the drift sensor.
-      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
-      seen.count += 1;
-      unknownTypes.set(typ, seen);
+      countUnknown(unknownTypes, typ, index + 1);
     }
   }
 
-  for (const [typ, seen] of unknownTypes) {
-    issues.push({
-      code: "unknown_record_type",
-      lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); ignored`,
-      rawLine: null,
-    });
-  }
+  issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
   title = titles.get(sourceSessionId) ?? title;
   if (contextWindow != null) {
@@ -252,21 +236,7 @@ function compactedMessage(
     timestamp,
     usage: null,
     raw: line,
-    blocks:
-      summary === ""
-        ? []
-        : [
-            {
-              ordinal: 0,
-              blockType: "text",
-              text: summary,
-              toolName: null,
-              toolUseId: null,
-              toolInput: undefined,
-              toolResult: null,
-              isError: null,
-            },
-          ],
+    blocks: summary === "" ? [] : [block(0, "text", { text: summary })],
   };
 }
 
@@ -302,16 +272,7 @@ function parseItem(
   if (payloadType === "message") {
     const role = messageRole(asString(get(payload, "role")));
     const text = collectText(get(payload, "content"));
-    const parsed = mk(role, {
-      ordinal: 0,
-      blockType: "text",
-      text,
-      toolName: null,
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    const parsed = mk(role, block(0, "text", { text }));
     if (role === "user" && currentTitle == null && text !== "") {
       parsed.nextTitle = preview(text.trim(), 120);
     }
@@ -320,16 +281,12 @@ function parseItem(
 
   if (payloadType === "reasoning") {
     const summary = collectText(get(payload, "summary")).trim();
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "thinking",
-      text: summary === "" ? collectText(get(payload, "content")) : summary,
-      toolName: null,
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    return mk(
+      "assistant",
+      block(0, "thinking", {
+        text: summary === "" ? collectText(get(payload, "content")) : summary,
+      }),
+    );
   }
 
   if (
@@ -338,16 +295,14 @@ function parseItem(
     payloadType === "tool_search_call" ||
     payloadType === "mcp_tool_call"
   ) {
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "tool_use",
-      text: null,
-      toolName: qualifiedToolName(payload),
-      toolUseId: asString(get(payload, "call_id")),
-      toolInput: callInput(payload),
-      toolResult: null,
-      isError: null,
-    });
+    return mk(
+      "assistant",
+      block(0, "tool_use", {
+        toolName: qualifiedToolName(payload),
+        toolUseId: asString(get(payload, "call_id")),
+        toolInput: callInput(payload),
+      }),
+    );
   }
 
   if (
@@ -355,41 +310,20 @@ function parseItem(
     payloadType === "custom_tool_call_output" ||
     payloadType === "tool_search_output"
   ) {
-    return mk("tool", {
-      ordinal: 0,
-      blockType: "tool_result",
-      text: null,
-      toolName: null,
-      toolUseId: asString(get(payload, "call_id")),
-      toolInput: undefined,
-      toolResult: stringify(get(payload, "output")),
-      isError: null,
-    });
+    return mk(
+      "tool",
+      block(0, "tool_result", {
+        toolUseId: asString(get(payload, "call_id")),
+        toolResult: stringify(get(payload, "output")),
+      }),
+    );
   }
 
   if (payloadType === "web_search_call") {
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "web_search",
-      text: null,
-      toolName: "web_search",
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    return mk("assistant", block(0, "web_search", { toolName: "web_search" }));
   }
 
-  return mk("other", {
-    ordinal: 0,
-    blockType: "other",
-    text: canonicalJson(payload),
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  });
+  return mk("other", block(0, "other", { text: canonicalJson(payload) }));
 }
 
 function qualifiedToolName(payload: Json): string | null {
@@ -432,16 +366,11 @@ function mcpEventMessages(
       usage: null,
       raw: value,
       blocks: [
-        {
-          ordinal: 0,
-          blockType: "tool_use",
-          text: null,
+        block(0, "tool_use", {
           toolName: name,
           toolUseId: callId,
           toolInput: get(invocation, "arguments"),
-          toolResult: null,
-          isError: null,
-        },
+        }),
       ],
     },
     result: {
@@ -454,18 +383,7 @@ function mcpEventMessages(
       timestamp,
       usage: null,
       raw: value,
-      blocks: [
-        {
-          ordinal: 0,
-          blockType: "tool_result",
-          text: null,
-          toolName: null,
-          toolUseId: callId,
-          toolInput: undefined,
-          toolResult: text,
-          isError,
-        },
-      ],
+      blocks: [block(0, "tool_result", { toolUseId: callId, toolResult: text, isError })],
     },
   };
 }
@@ -551,29 +469,6 @@ function callInput(payload: Json): Json | undefined {
     return get(payload, "input");
   }
   return undefined;
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
-}
-
-function hasKey(value: Json, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 function getInteger(value: Json | undefined, key: string): number {

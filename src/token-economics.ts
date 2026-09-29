@@ -9,10 +9,11 @@ import {
 import { defaultPricing, estimateCostParts } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { byteLength } from "./json.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
+import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
-const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
 export const SESSION_ECONOMICS_FORMAT_VERSION = 3;
 
@@ -117,33 +118,6 @@ interface MutableLatency {
 }
 
 type QueryParam = string | number;
-
-function economicsRows<T>(db: Database, sql: string, params: QueryParam[] = []): T[] {
-  const statement = db.prepare<T, QueryParam[]>(sql);
-  try {
-    return statement.all(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function economicsRow<T>(db: Database, sql: string, params: QueryParam[] = []): T | null {
-  const statement = db.prepare<T, QueryParam[]>(sql);
-  try {
-    return statement.get(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function runEconomicsStatement(db: Database, sql: string, params: QueryParam[] = []): void {
-  const statement = db.prepare<unknown, QueryParam[]>(sql);
-  try {
-    statement.run(...params);
-  } finally {
-    statement.finalize();
-  }
-}
 
 export interface SessionEconomicsVector {
   id: number;
@@ -355,7 +329,7 @@ interface CostRefresh {
  * rates. Check the components too: a rate change can leave the total unchanged. */
 function pendingCostRefreshes(db: Database): CostRefresh[] {
   const pricing = defaultPricing();
-  const rows = economicsRows<
+  const rows = queryRows<
     SessionRow & {
       estimated_cost_usd: number;
       format_version: number | null;
@@ -414,7 +388,7 @@ export function refreshSessionCosts(db: Database): number {
     const pending = pendingCostRefreshes(db);
     for (const refresh of pending) {
       if (refresh.totalChanged) {
-        runEconomicsStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
+        runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
           refresh.total,
           refresh.id,
         ]);
@@ -430,7 +404,7 @@ export function refreshSessionCosts(db: Database): number {
 /** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
  * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
 export function materializeMissingSessionEconomics(db: Database): number {
-  const rows = economicsRows<{
+  const rows = queryRows<{
     id: number;
     format_version: number | null;
     vector_json: string | null;
@@ -486,7 +460,7 @@ function vectorsForScopeWithCache(
 
 function scopeCount(db: Database, scopeCte: string, params: QueryParam[]): number {
   return (
-    economicsRow<{ count: number }>(
+    queryRow<{ count: number }>(
       db,
       `${scopeCte} SELECT COUNT(*) AS count FROM scoped_session`,
       params,
@@ -502,7 +476,7 @@ function cachedVectorsForScope(
 ): SessionEconomicsVector[] {
   throwIfEconomicsCancelled(cancelled);
   const versionParam = `?${params.length + 1}`;
-  const rows = economicsRows<{
+  const rows = queryRows<{
     session_id: number;
     vector_json: string;
     started_at: string | null;
@@ -573,7 +547,7 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
 }
 
 function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
-  runEconomicsStatement(
+  runStatement(
     db,
     `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)
      VALUES (?1, ?2, ?3, datetime('now'))
@@ -590,7 +564,7 @@ function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): voi
  * the ingest-time tool_call linkage. The scope-first join is intentional: it
  * prevents SQLite from scanning the whole block table for a single session. */
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
-  return economicsRows<BlockRow>(
+  return queryRows<BlockRow>(
     db,
     `${scopeCte}
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
@@ -617,7 +591,7 @@ function vectorsForScope(
   scopeCte: string,
   params: QueryParam[],
 ): SessionEconomicsVector[] {
-  const sessions = economicsRows<SessionRow>(
+  const sessions = queryRows<SessionRow>(
     db,
     `${scopeCte}
        SELECT s.id, s.tool, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
@@ -664,7 +638,7 @@ function vectorsForScope(
     }
   }
 
-  const results = economicsRows<ResultRow>(
+  const results = queryRows<ResultRow>(
     db,
     `${scopeCte}
        SELECT t.session_id, t.tool_name, t.input,
@@ -1204,8 +1178,4 @@ function groupBy<T, K>(items: T[], keyFor: (item: T) => K): Map<K, T[]> {
     }
   }
   return groups;
-}
-
-function byteLength(value: string): number {
-  return encoder.encode(value).length;
 }

@@ -17,8 +17,8 @@ conversation does not cover a new tag.
 1. On `main`, clean tree, up to date with `origin/main`.
 2. `just check` passes locally (needs network for the npm pack smoke).
 3. CI is green on the exact commit you will tag.
-4. Pick the version: semver without a leading `v`. Pre-release suffixes publish
-   to the `next` npm dist-tag.
+4. Pick the version: semver without a leading `v`. A suffix such as `-beta.1`
+   runs the same pipeline and publishes under the `latest` npm dist-tag.
 
 ## Tag
 

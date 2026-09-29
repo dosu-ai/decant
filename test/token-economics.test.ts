@@ -75,6 +75,56 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("attributes Codex exec programs to their inner tools, not all to context", () => {
+    const at = (s: number) => `2026-09-29T20:00:${String(s).padStart(2, "0")}.000Z`;
+    const exec = (id: string, s: number, program: string) =>
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(s),
+        payload: { type: "custom_tool_call", name: "exec", call_id: id, input: program },
+      });
+    const output = (id: string, s: number, text: string) =>
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(s),
+        payload: { type: "custom_tool_call_output", call_id: id, output: text },
+      });
+    const lines = [
+      '{"type":"session_meta","timestamp":"2026-09-29T20:00:00.000Z","payload":{"id":"sess-codex-exec","cwd":"/w","originator":"codex_exec","cli_version":"0.159.0","source":"exec","model_provider":"openai"}}',
+      '{"type":"turn_context","timestamp":"2026-09-29T20:00:01.000Z","payload":{"cwd":"/w","model":"gpt-6.1-sol","effort":"low"}}',
+      '{"type":"response_item","timestamp":"2026-09-29T20:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix add() in calc.py"}]}}',
+      exec("c1", 3, 'text(await tools.exec_command({cmd:"cat calc.py"}));'),
+      output("c1", 4, "def add(a, b):\n    return a - b\n"),
+      exec(
+        "c2",
+        10,
+        'const patch = "*** Begin Patch\\n*** Update File: calc.py\\n@@\\n-    return a - b\\n+    return a + b\\n*** End Patch";\ntext(await tools.apply_patch(patch));',
+      ),
+      output("c2", 11, "Done. 1 file changed."),
+      exec("c3", 14, 'text(await tools.exec_command({cmd:"python3 -m pytest -q"}));'),
+      output("c3", 18, "1 passed"),
+      '{"type":"event_msg","timestamp":"2026-09-29T20:00:19.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":6000,"output_tokens":300,"reasoning_output_tokens":0,"total_tokens":9300}}}}',
+      '{"type":"response_item","timestamp":"2026-09-29T20:00:20.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed add() and the test passes."}]}}',
+    ];
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseCodexSession("sess-codex-exec", `${lines.join("\n")}\n`, new Map()),
+      "/x/exec.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    const economics = tokenEconomicsForSession(db, sessionId);
+    const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
+    expect(bucket("context")?.tool_calls).toBe(1);
+    expect(bucket("code")?.tool_calls).toBe(2);
+    expect(bucket("code")?.active_ms).toBeGreaterThan(0);
+    // The patch is the first edit, so the session is not all orientation.
+    expect(bucket("code")?.phases?.implementation.estimated_cost_usd).toBeGreaterThan(0);
+    db.close();
+  });
+
   test("splits each bucket into orientation/implementation phases that sum to the whole", () => {
     const db = freshDb();
     const sessionId = upsertSession(

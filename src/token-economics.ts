@@ -16,7 +16,8 @@ const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
 // Version 2 includes corrected wall-clock attribution plus the billed-input
 // and waiting-on-user fields required by the current activity model.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 2;
+// Version 3 buckets and phase-splits the inner calls of Codex `exec` programs.
+export const SESSION_ECONOMICS_FORMAT_VERSION = 3;
 
 // Cap every inter-message gap so long model, tool, or human pauses do not
 // dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for

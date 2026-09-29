@@ -84,6 +84,18 @@ export function countSearches(toolName: string, input: string | null): number {
   if (toolName.startsWith("mcp__")) {
     return 0;
   }
+  const inner = codexExecCalls(toolName, input ?? undefined);
+  if (inner.length > 0) {
+    return inner.reduce(
+      (total, call) =>
+        total +
+        countSearches(
+          call.name,
+          call.command == null ? null : JSON.stringify({ cmd: call.command }),
+        ),
+      0,
+    );
+  }
   const normalized = localToolName(toolName).toLowerCase();
   if (SEARCH_TOOLS.has(normalized)) {
     return 1;
@@ -109,6 +121,11 @@ export function toolBucket(
   input?: string | Json,
 ): ActivityBucket {
   const name = toolName ?? "";
+  const inner = codexExecCalls(name, input);
+  if (inner.length > 0) {
+    const buckets = new Set(inner.map((call) => toolBucket(call.name, innerInput(call))));
+    return EXEC_BUCKET_PRECEDENCE.find((bucket) => buckets.has(bucket)) ?? "context";
+  }
   const baseName = localToolName(name);
   const normalized = baseName.toLowerCase();
   if (SHELL_TOOLS.has(normalized)) {
@@ -149,6 +166,10 @@ export function isCodeEditTool(
   toolName: string | null | undefined,
   input?: string | Json,
 ): boolean {
+  const inner = codexExecCalls(toolName, input);
+  if (inner.length > 0) {
+    return inner.some((call) => isCodeEditTool(call.name, innerInput(call)));
+  }
   const normalized = localToolName(toolName ?? "").toLowerCase();
   if (CODE_TOOLS.has(normalized)) {
     return true;
@@ -247,4 +268,86 @@ function basename(value: string): string {
 
 function localToolName(name: string): string {
   return name.split(".").filter(Boolean).at(-1) ?? name;
+}
+
+/** One `tools.<name>(...)` call inside a Codex `exec` program. */
+export interface CodexExecCall {
+  name: string;
+  /** The literal `cmd` of an `exec_command` call; null when it is built at runtime. */
+  command: string | null;
+}
+
+const EXEC_INNER_CALL = /\btools\.([A-Za-z_]\w*)\s*\(/g;
+const EXEC_CMD_LITERAL =
+  /^\s*\{[^{}]*?["']?\bcmd["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/;
+
+// Recent Codex versions run every action through one `exec` tool whose input is a
+// JavaScript program calling `tools.exec_command(...)`, `tools.apply_patch(...)`, and so
+// on. Classifying that wrapper by its own name would file every edit and shell command
+// as context, so each inner call is classified on its own terms.
+function isCodexExec(toolName: string | null | undefined): boolean {
+  const name = toolName ?? "";
+  // Raw name check: an MCP server's tool may also be called `exec`.
+  return !name.startsWith("mcp__") && name.toLowerCase() === "exec";
+}
+
+function execProgram(input: string | Json | undefined): string | null {
+  if (input == null) {
+    return null;
+  }
+  if (typeof input !== "string") {
+    return typeof input === "object" && !Array.isArray(input) && typeof input.input === "string"
+      ? input.input
+      : null;
+  }
+  const parsed = parseJson(input);
+  return typeof parsed === "string" ? parsed : input;
+}
+
+function decodeJsString(literal: string): string {
+  if (literal.startsWith('"')) {
+    const parsed = parseJson(literal);
+    if (typeof parsed === "string") {
+      return parsed;
+    }
+  }
+  return literal.slice(1, -1).replace(/\\n/g, "\n").replace(/\\(.)/g, "$1");
+}
+
+/** The inner tool calls of a Codex `exec` program, in source order. Empty for any
+ * other tool, or for a program that calls no tools. */
+export function codexExecCalls(
+  toolName: string | null | undefined,
+  input?: string | Json,
+): CodexExecCall[] {
+  if (!isCodexExec(toolName)) {
+    return [];
+  }
+  const program = execProgram(input);
+  if (program == null) {
+    return [];
+  }
+  const calls: CodexExecCall[] = [];
+  for (const match of program.matchAll(EXEC_INNER_CALL)) {
+    const name = match[1] ?? "";
+    if (name.toLowerCase() === "exec") {
+      continue;
+    }
+    let command: string | null = null;
+    if (name === "exec_command") {
+      const rest = program.slice((match.index ?? 0) + match[0].length);
+      const literal = rest.match(EXEC_CMD_LITERAL)?.[1];
+      command = literal == null ? null : decodeJsString(literal);
+    }
+    calls.push({ name, command });
+  }
+  return calls;
+}
+
+// A program that reads and then patches is an implementation step, so the strongest
+// inner bucket labels the whole call.
+const EXEC_BUCKET_PRECEDENCE: ActivityBucket[] = ["code", "planning", "context"];
+
+function innerInput(call: CodexExecCall): Json | undefined {
+  return call.command == null ? undefined : { cmd: call.command };
 }

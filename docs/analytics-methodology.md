@@ -91,6 +91,17 @@ Shell classification is deliberately conservative. Read-only commands such as
 are code. A bucket is an analytical attribution, not a provider billing field
 or a quality judgment.
 
+Recent Codex CLI versions run most actions through one `exec` tool. Its input
+is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,
+`tools.update_plan`, MCP tools, and similar. Decant classifies each inner call
+like the tool it names:
+
+- The whole call takes the strongest inner bucket (code, then planning, then
+  context), so a program that reads a file and then patches it counts as code.
+- An `exec_command` whose command is assembled at runtime, rather than written
+  as a literal, is treated like an unrecognized shell command, which is code.
+- A program that calls no tools stays in context.
+
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
@@ -110,8 +121,9 @@ rather than searching a repository, so it does not count.
 
 Search binaries count only when they are the leading command. Searches wrapped
 by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
-Codex also records some shell activity inside a JavaScript `exec` program, and
-those inner commands do not count yet. The statement splitter does not parse
+Shell commands inside a Codex `exec` program count like any other shell
+statement when the command is a literal string. Commands assembled at runtime
+are invisible to the count. The statement splitter does not parse
 shell quoting, so text such as `echo "a; grep b"` can add a false search. These
 cases can make the reported shell and Codex search volume too low or too high.
 
@@ -123,7 +135,8 @@ Phases are orthogonal to activity buckets:
 - **Implementation** begins with that edit and includes everything after it.
 - A session that never edits a file is entirely orientation.
 
-Structured edit tools establish the boundary directly. Shell edits use narrow,
+Structured edit tools establish the boundary directly, including an
+`apply_patch` call inside a Codex `exec` program. Shell edits use narrow,
 high-confidence patterns such as `git apply`, `sed -i`, and explicit file-write
 APIs. The classifier prefers missing a weak signal over moving the boundary
 forward on a false positive.

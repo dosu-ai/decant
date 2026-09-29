@@ -46,6 +46,34 @@ describe("preview", () => {
   });
 });
 
+describe("preview against the spread-based reference", () => {
+  const reference = (s: string, max: number): string => {
+    const chars = [...s];
+    return chars.length <= max ? s : `${chars.slice(0, max).join("")}…`;
+  };
+
+  test("matches for astral, mixed, empty and boundary-length strings", () => {
+    const samples = [
+      "",
+      "a",
+      "abc",
+      "🎉",
+      "🎉🎉🎉",
+      "a🎉b🎉c",
+      "x".repeat(500),
+      "🎉".repeat(300),
+      `${"é".repeat(200)}${"🎉".repeat(200)}`,
+      "\ud83c",
+      "ab\ud83cc",
+    ];
+    for (const sample of samples) {
+      for (const max of [0, 1, 2, 3, 4, 5, 199, 200, 201, 299, 300, 301, 400, 500, 1000]) {
+        expect(preview(sample, max)).toBe(reference(sample, max));
+      }
+    }
+  });
+});
+
 describe("previewHeadTail", () => {
   test("returns short strings unchanged", () => {
     expect(previewHeadTail("all good", 500)).toBe("all good");

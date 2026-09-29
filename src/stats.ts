@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
+import { DAY_END, type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
@@ -23,12 +23,17 @@ export interface StatsFilter extends DateFilter {
   tool?: string | null;
 }
 
+const TOTALS_COLUMNS = `s.id, s.is_subagent,
+         s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
+         s.total_cache_creation_tokens, s.total_reasoning_tokens, s.est_reasoning_tokens,
+         s.estimated_cost_usd`;
+
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(visible)}
+         SELECT ${TOTALS_COLUMNS} FROM session s ${whereClause(visible)}
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
@@ -80,7 +85,10 @@ export function byDimension(
   const visible = statsScope(db, "s", filter);
   const statement = db.prepare(
     `WITH filtered_session AS (
-         SELECT * FROM session s ${whereClause(visible)}
+         SELECT s.id, s.tool, s.model, s.project_id, s.started_at, s.is_subagent,
+                s.total_input_tokens, s.total_output_tokens, s.total_reasoning_tokens,
+                s.est_reasoning_tokens, s.estimated_cost_usd
+         FROM session s ${whereClause(visible)}
        )
        SELECT ${groupExpr} AS key,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
@@ -135,6 +143,26 @@ function statsScope(
   };
 }
 
+/**
+ * Select-list columns adding nearest-rank duration ordering, for a relation
+ * of rows with a non-null duration_ms. Pair with NEAREST_RANK_PERCENTILES_SQL.
+ */
+export function durationRankSql(partitionBy?: string): string {
+  const partition = partitionBy == null ? "" : `PARTITION BY ${partitionBy}`;
+  return `ROW_NUMBER() OVER (${partition} ORDER BY duration_ms) AS duration_rank,
+                COUNT(*) OVER (${partition}) AS duration_count`;
+}
+
+/** Aggregate columns picking p50 and p95 out of a durationRankSql relation. */
+export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
+                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
+                  THEN duration_ms
+                END) AS p50_ms,
+                MAX(CASE
+                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+                  THEN duration_ms
+                END) AS p95_ms`;
+
 export interface ToolStatRow {
   tool_name: string;
   tool_kind: string;
@@ -163,7 +191,7 @@ export function toolUsage(
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
   const statement = db.prepare(
-    `WITH scoped AS (
+    `WITH scoped AS MATERIALIZED (
          SELECT COALESCE(t.tool_name, '') AS tool_name,
                 COALESCE(t.tool_kind, '') AS tool_kind,
                 t.mcp_server, t.is_error,
@@ -173,26 +201,13 @@ export function toolUsage(
        ),
        ranked AS (
          SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                ROW_NUMBER() OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                  ORDER BY duration_ms
-                ) AS duration_rank,
-                COUNT(*) OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                ) AS duration_count
+                ${durationRankSql("tool_name, tool_kind, mcp_server")}
          FROM scoped
          WHERE duration_ms IS NOT NULL
        ),
        latency AS (
          SELECT tool_name, tool_kind, mcp_server,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms
+                ${NEAREST_RANK_PERCENTILES_SQL}
          FROM ranked
          GROUP BY tool_name, tool_kind, mcp_server
        ),
@@ -214,11 +229,11 @@ export function toolUsage(
        ${errorFilter}
        ORDER BY a.calls DESC, a.tool_name ASC, a.tool_kind ASC,
                 (a.mcp_server IS NOT NULL) ASC, COALESCE(a.mcp_server, '') ASC
-       LIMIT ${limit}`,
+       LIMIT ?`,
   );
   let rows: ToolStatDb[];
   try {
-    rows = statement.all(...visible.params) as ToolStatDb[];
+    rows = statement.all(...visible.params, limit) as ToolStatDb[];
   } finally {
     statement.finalize();
   }
@@ -258,26 +273,13 @@ export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | nu
        ),
        ranked AS (
          SELECT mcp_server, duration_ms,
-                ROW_NUMBER() OVER (
-                  PARTITION BY mcp_server
-                  ORDER BY duration_ms
-                ) AS duration_rank,
-                COUNT(*) OVER (
-                  PARTITION BY mcp_server
-                ) AS duration_count
+                ${durationRankSql("mcp_server")}
          FROM scoped
          WHERE duration_ms IS NOT NULL
        ),
        latency AS (
          SELECT mcp_server,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms
+                ${NEAREST_RANK_PERCENTILES_SQL}
          FROM ranked
          GROUP BY mcp_server
        ),
@@ -353,8 +355,8 @@ export function fileHotspots(
                ${opFilter}
                GROUP BY key, project
                ORDER BY (reads + edits + writes + deletes) DESC, key ASC
-               LIMIT ${limit}`;
-  const rows = db.query(sql).all(...params) as FileStatDb[];
+               LIMIT ?`;
+  const rows = db.query(sql).all(...params, limit) as FileStatDb[];
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
@@ -467,12 +469,14 @@ export function todayTotals(db: Database): Totals {
   return db
     .query(
       `WITH filtered_session AS (
-         SELECT *
+         SELECT ${TOTALS_COLUMNS}
          FROM session s
          ${whereClause({
-           sql: [visible.sql, "substr(s.started_at, 1, 10) = date('now', 'localtime')"].join(
-             " AND ",
-           ),
+           sql: [
+             visible.sql,
+             `s.started_at >= date('now', 'localtime')
+              AND s.started_at < date('now', 'localtime') || char(${DAY_END.codePointAt(0)})`,
+           ].join(" AND "),
            params: visible.params,
          })}
        )

@@ -132,6 +132,16 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("row limits bound tool usage and file hotspots", () => {
+    const db = seededEnriched();
+    expect(toolUsage(db, false, 2)).toHaveLength(2);
+    expect(toolUsage(db, false, 2)).toEqual(toolUsage(db, false, 50).slice(0, 2));
+    expect(fileHotspots(db, "path", null, 3)).toEqual(
+      fileHotspots(db, "path", null, 50).slice(0, 3),
+    );
+    db.close();
+  });
+
   test("file hotspots op filter keeps only that operation", () => {
     const db = seededEnriched();
     const rows = fileHotspots(db, "path", "edit" satisfies Operation, 50);

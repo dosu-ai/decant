@@ -5,8 +5,9 @@ import {
   MESSAGE_RAW_META_SQL,
   parseMessageRawMeta,
 } from "./context-window.ts";
-import { sessionDatePredicate } from "./date-filter.ts";
+import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
+import type { Tool } from "./model.ts";
 import {
   bracketSearchMatches,
   buildFtsQuery,
@@ -20,11 +21,12 @@ import {
   sessionUserStatePredicateForDatabase,
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
+import { durationRankSql, NEAREST_RANK_PERCENTILES_SQL } from "./stats.ts";
 import { preview, previewHeadTail } from "./tools.ts";
 
 export interface SessionSummary {
   id: number;
-  tool: string;
+  tool: Tool;
   source_session_id: string;
   title: string | null;
   project_path: string | null;
@@ -84,7 +86,7 @@ export interface SessionSearchIndexRow {
   id: number;
   title: string | null;
   project: string | null;
-  tool: string;
+  tool: Tool;
   model: string | null;
   started_at: string | null;
 }
@@ -204,7 +206,7 @@ export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
 export interface SearchHit {
   session_id: number;
   session_title: string | null;
-  tool: string;
+  tool: Tool;
   block_id: number;
   snippet: string;
   message_seq: number;
@@ -218,14 +220,18 @@ export interface SearchHit {
 export function search(db: Database, query: string, limitValue = 30): SearchHit[] {
   const limit = normalizeLimit(limitValue, 30, 1000);
   const results: SearchHit[] = [];
+  let total: number | null = null;
   while (results.length < limit) {
+    const pageLimit = Math.min(100, limit - results.length);
     const page = searchPage(db, query, {
       includeSubagents: true,
-      limit: Math.min(100, limit - results.length),
+      includeTotal: total == null,
+      limit: pageLimit,
       offset: results.length,
     });
+    total ??= page.total;
     results.push(...page.results);
-    if (page.results.length === 0 || (page.total != null && results.length >= page.total)) {
+    if (page.results.length < pageLimit || (total != null && results.length >= total)) {
       break;
     }
   }
@@ -433,13 +439,10 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     clauses.push("p.path = ?");
     params.push(filter.project);
   }
-  if (filter.from != null) {
-    clauses.push("substr(t.timestamp, 1, 10) >= ?");
-    params.push(filter.from);
-  }
-  if (filter.to != null) {
-    clauses.push("substr(t.timestamp, 1, 10) <= ?");
-    params.push(filter.to);
+  const date = dayRangePredicate("t.timestamp", filter.from, filter.to);
+  if (date.sql !== "") {
+    clauses.push(date.sql);
+    params.push(...date.params);
   }
   if (filter.minMs != null) {
     clauses.push("t.duration_ms >= ?");
@@ -455,15 +458,14 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     offset === 0
       ? (db
           .query(
-            `WITH filtered AS (
+            `WITH filtered AS MATERIALIZED (
          SELECT t.is_error, t.duration_ms
          ${joins}
          ${where}
        ),
        ranked AS (
          SELECT duration_ms,
-                ROW_NUMBER() OVER (ORDER BY duration_ms) AS duration_rank,
-                COUNT(*) OVER () AS duration_count
+                ${durationRankSql()}
          FROM filtered
          WHERE duration_ms IS NOT NULL
        )
@@ -471,14 +473,7 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
          (SELECT COUNT(*) FROM filtered) AS calls,
          (SELECT COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
           FROM filtered) AS errors,
-         MAX(CASE
-           WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-           THEN duration_ms
-         END) AS p50_ms,
-         MAX(CASE
-           WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-           THEN duration_ms
-         END) AS p95_ms
+         ${NEAREST_RANK_PERCENTILES_SQL}
        FROM ranked`,
           )
           .get(...params) as ToolCallSummary)
@@ -634,18 +629,65 @@ const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
   ) END
 )`;
 
-export function getSession(
-  db: Database,
-  id: number,
-  options: SessionReadOptions = {},
-): SessionDetail | null {
-  const summaryRow = db
+function sessionSummaryRow(db: Database, id: number): SessionSummaryRow | null {
+  return db
     .query(
       `${sessionSummarySelect(
         sessionUserStatePredicateForDatabase(db, "summary_child", true),
       )} WHERE s.id = ?1`,
     )
     .get(id) as SessionSummaryRow | null;
+}
+
+// Titles for the root and its whole descendant tree resolve in one batch so a
+// session with many subagents costs two queries, not two per subagent.
+function sessionTreeSummaries(
+  db: Database,
+  id: number,
+  summaryRow: SessionSummaryRow,
+): SessionSummary[] {
+  const descendantRows = db
+    .query(
+      `${sessionSummarySelect(sessionUserStatePredicateForDatabase(db, "summary_child", true))}
+       WHERE s.id IN (
+         WITH RECURSIVE subtree(id, depth) AS (
+           SELECT detail_child.id, 1
+           FROM session detail_child
+           WHERE detail_child.parent_session_id = ?1
+             AND ${visibleSessionPredicate("detail_child")}
+             AND ${sessionUserStatePredicateForDatabase(db, "detail_child", true)}
+           UNION ALL
+           SELECT child.id, subtree.depth + 1
+           FROM session child
+           JOIN subtree ON subtree.id = child.parent_session_id
+           WHERE subtree.depth < 5
+             AND ${visibleSessionPredicate("child")}
+             AND ${sessionUserStatePredicateForDatabase(db, "child", true)}
+         )
+         SELECT id FROM subtree
+       )
+       ORDER BY COALESCE(s.spawn_depth, 0), s.started_at, s.id`,
+    )
+    .all(id) as SessionSummaryRow[];
+  const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
+  return withDosuMcpEvidence(db, titled, true);
+}
+
+/** A session's summary without reading its transcript. */
+export function getSessionSummary(db: Database, id: number): SessionSummary | null {
+  const summaryRow = sessionSummaryRow(db, id);
+  if (summaryRow == null) {
+    return null;
+  }
+  return sessionTreeSummaries(db, id, summaryRow)[0] ?? mapSessionSummary(summaryRow);
+}
+
+export function getSession(
+  db: Database,
+  id: number,
+  options: SessionReadOptions = {},
+): SessionDetail | null {
+  const summaryRow = sessionSummaryRow(db, id);
   if (summaryRow == null) {
     return null;
   }
@@ -725,33 +767,7 @@ export function getSession(
     }
   }
 
-  // Titles for the root and its whole descendant tree resolve in one batch so a
-  // session with many subagents costs two queries, not two per subagent.
-  const descendantRows = db
-    .query(
-      `${sessionSummarySelect(sessionUserStatePredicateForDatabase(db, "summary_child", true))}
-       WHERE s.id IN (
-         WITH RECURSIVE subtree(id, depth) AS (
-           SELECT detail_child.id, 1
-           FROM session detail_child
-           WHERE detail_child.parent_session_id = ?1
-             AND ${visibleSessionPredicate("detail_child")}
-             AND ${sessionUserStatePredicateForDatabase(db, "detail_child", true)}
-           UNION ALL
-           SELECT child.id, subtree.depth + 1
-           FROM session child
-           JOIN subtree ON subtree.id = child.parent_session_id
-           WHERE subtree.depth < 5
-             AND ${visibleSessionPredicate("child")}
-             AND ${sessionUserStatePredicateForDatabase(db, "child", true)}
-         )
-         SELECT id FROM subtree
-       )
-       ORDER BY COALESCE(s.spawn_depth, 0), s.started_at, s.id`,
-    )
-    .all(id) as SessionSummaryRow[];
-  const titled = withDisplayTitles(db, [summaryRow, ...descendantRows].map(mapSessionSummary));
-  const evidenced = withDosuMcpEvidence(db, titled, true);
+  const evidenced = sessionTreeSummaries(db, id, summaryRow);
   const rootSummary = evidenced[0] ?? mapSessionSummary(summaryRow);
   const childrenByParent = new Map<number, SessionSummary[]>();
   for (const child of evidenced.slice(1)) {
@@ -1100,18 +1116,13 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   }
   const placeholders = sessions.map(() => "?").join(", ");
   const ids = sessions.map((session) => session.id);
-  // Pass 1: fetch only the first plausibly-usable candidate text per session.
-  // The correlated subquery stops at the first hit instead of walking every
-  // user message, and CROSS JOIN + INDEXED BY pin the plan to messages ->
-  // blocks; left to its own devices SQLite starts from every text block in the
-  // archive, which turns each title lookup into a multi-hundred-ms full scan.
+  // Pass 1 takes only the first plausible candidate per session. CROSS JOIN +
+  // INDEXED BY pin the plan to messages -> blocks; otherwise SQLite starts from
+  // every text block in the archive.
   //
   // AGENT_CONTEXT_SQL must skip a subset (never a superset) of what
-  // isAgentContextText skips: anything it wrongly lets through is re-checked in
-  // JS and handled by pass 2, but anything it wrongly skips would silently
-  // change which prompt becomes the title. That is why the case-sensitive JS
-  // rules use GLOB here and the \b in the teammate rule is narrowed to the two
-  // separators that occur in practice.
+  // isAgentContextText skips: a wrong pass-through is re-checked in JS by pass
+  // 2, but a wrong skip silently changes which prompt becomes the title.
   const firstCandidates = db
     .query(
       `SELECT s.id AS session_id, s.is_subagent,
@@ -1220,12 +1231,9 @@ function subagentTaskTitle(text: string): string | null {
   return normalized === "" ? null : preview(normalized, 180);
 }
 
-// Source-level constraints for a title candidate. Codex stores developer
-// messages as normalized user rows for transcript fidelity, so consult the raw
-// payload role here. Claude parent files can contain copied sidechain rows;
-// those belong to child agents unless the selected session is itself a
-// standalone subagent. Compact summaries are machine continuations, not human
-// prompts.
+// Codex stores developer messages as user rows, so check the raw payload role.
+// Claude parent files can hold copied sidechain rows that belong to child
+// agents, and compact summaries are machine continuations, not prompts.
 const HUMAN_TITLE_MESSAGE_SQL = `
   COALESCE(json_extract(m.raw, '$.payload.role'), 'user') = 'user'
   AND COALESCE(json_extract(m.raw, '$.isCompactSummary'), 0) != 1
@@ -1235,12 +1243,10 @@ const HUMAN_TITLE_MESSAGE_SQL = `
   )
 `;
 
-// SQL twin of isAgentContextText, used to early-exit title candidate scans.
-// Keep the two in sync when adding rules, and keep this side conservative:
-// LIKE mirrors the case-insensitive /^.../i prefixes, GLOB mirrors the
-// case-sensitive includes/startsWith rules, and JS stripAnsi/trimStart nuances
-// intentionally fall through to the JS check (pass 2) rather than being
-// approximated here.
+// SQL twin of isAgentContextText for early-exiting title scans. Keep the two in
+// sync and this side conservative: LIKE mirrors the case-insensitive prefixes,
+// GLOB the case-sensitive ones, and stripAnsi/trimStart nuances fall through
+// to the JS check rather than being approximated.
 const AGENT_CONTEXT_SQL = `
   LTRIM(b.text) LIKE '<permissions instructions>%'
   OR LTRIM(b.text) LIKE '<local-command-caveat>%'

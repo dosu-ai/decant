@@ -8,7 +8,9 @@ import {
   activity,
   byDimension,
   type DimRow,
+  durationRankSql,
   type FileStatRow,
+  NEAREST_RANK_PERCENTILES_SQL,
   type SessionFacetRow,
   sessionFacets,
   type Totals,
@@ -146,26 +148,13 @@ function sessionToolSummary(db: Database, sessionId: number): SessionToolReportR
        ),
        ranked AS (
          SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                ROW_NUMBER() OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                  ORDER BY duration_ms
-                ) AS duration_rank,
-                COUNT(*) OVER (
-                  PARTITION BY tool_name, tool_kind, mcp_server
-                ) AS duration_count
+                ${durationRankSql("tool_name, tool_kind, mcp_server")}
          FROM calls
          WHERE duration_ms IS NOT NULL
        ),
        percentiles AS (
          SELECT tool_name, tool_kind, mcp_server,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MAX(CASE
-                  WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms
+                ${NEAREST_RANK_PERCENTILES_SQL}
          FROM ranked
          GROUP BY tool_name, tool_kind, mcp_server
        )

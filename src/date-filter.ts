@@ -15,22 +15,35 @@ export function dateFilterFromSearch(searchParams: URLSearchParams): DateFilter 
   };
 }
 
-export function sessionDatePredicate(alias: string, filter?: DateFilter | null): SqlFragment {
+// U+10FFFF sorts after every character that can follow a date, so
+// `column < date || DAY_END` keeps the whole day without date arithmetic.
+export const DAY_END = "\u{10FFFF}";
+
+/**
+ * Bounds on the YYYY-MM-DD prefix of an ISO timestamp column, written as plain
+ * comparisons so the column's index can serve them. Dates must be valid
+ * YYYY-MM-DD strings.
+ */
+export function dayRangePredicate(
+  column: string,
+  from: string | null | undefined,
+  to: string | null | undefined,
+): SqlFragment {
   const clauses: string[] = [];
   const params: string[] = [];
-  const from = isoDate(filter?.from);
-  const to = isoDate(filter?.to);
-
   if (from != null) {
-    clauses.push(`substr(${alias}.started_at, 1, 10) >= ?`);
+    clauses.push(`${column} >= ?`);
     params.push(from);
   }
   if (to != null) {
-    clauses.push(`substr(${alias}.started_at, 1, 10) <= ?`);
-    params.push(to);
+    clauses.push(`${column} < ?`);
+    params.push(`${to}${DAY_END}`);
   }
-
   return { sql: clauses.join(" AND "), params };
+}
+
+export function sessionDatePredicate(alias: string, filter?: DateFilter | null): SqlFragment {
+  return dayRangePredicate(`${alias}.started_at`, isoDate(filter?.from), isoDate(filter?.to));
 }
 
 export function whereClause(fragment: SqlFragment): string {

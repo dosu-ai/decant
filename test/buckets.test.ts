@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   bashBucket,
   blockBucket,
+  codexExecCalls,
   countSearches,
   isCodeEditTool,
   toolBucket,
@@ -117,6 +118,74 @@ describe("activity bucket classifier", () => {
       expect(countSearches("mcp__posthog__exec", '{"command":"rg foo"}')).toBe(0);
       expect(countSearches("mcp__codex_apps__x.shell", '{"command":"rg foo"}')).toBe(0);
     });
+  });
+});
+
+describe("Codex exec programs", () => {
+  // Codex stores the custom tool's JavaScript program as a JSON-encoded string.
+  const exec = (program: string) => JSON.stringify(program);
+  const read = exec(
+    'text(await tools.exec_command({cmd:"rg --files -g AGENTS.md","max_output_tokens":2000}));',
+  );
+  const patch = exec(
+    'const patch = "*** Begin Patch\\n*** Update File: calc.py\\n*** End Patch";\ntext(await tools.apply_patch(patch));',
+  );
+  const test_ = exec("text(await tools.exec_command({cmd:'bun test test/cost.test.ts'}));");
+  const plan = exec('await tools.update_plan({plan:[{step:"a",status:"in_progress"}]});');
+  const mixed = exec(
+    'text(await tools.exec_command({cmd:"cat calc.py"}));\ntext(await tools.apply_patch(p));',
+  );
+
+  test("extracts inner calls and literal shell commands", () => {
+    expect(codexExecCalls("exec", read)).toEqual([
+      { name: "exec_command", command: "rg --files -g AGENTS.md" },
+    ]);
+    expect(codexExecCalls("exec", test_)).toEqual([
+      { name: "exec_command", command: "bun test test/cost.test.ts" },
+    ]);
+    expect(codexExecCalls("exec", exec("await tools.exec_command({cmd: command});"))).toEqual([
+      { name: "exec_command", command: null },
+    ]);
+    expect(codexExecCalls("exec", exec("const x = 1;"))).toEqual([]);
+    expect(codexExecCalls("Bash", read)).toEqual([]);
+  });
+
+  test("buckets each program by its inner calls instead of defaulting to context", () => {
+    expect(toolBucket("exec", read)).toBe("context");
+    expect(toolBucket("exec", patch)).toBe("code");
+    expect(toolBucket("exec", test_)).toBe("code");
+    expect(toolBucket("exec", plan)).toBe("planning");
+    expect(toolBucket("exec", exec("await tools.mcp__exa__web_search_exa({query:'x'});"))).toBe(
+      "context",
+    );
+    expect(toolBucket("exec", exec("const x = 1;"))).toBe("context");
+  });
+
+  test("a program that reads and patches counts as code", () => {
+    expect(toolBucket("exec", mixed)).toBe("code");
+    expect(blockBucket("tool_use", "exec", mixed)).toBe("code");
+  });
+
+  test("apply_patch inside exec marks the first edit", () => {
+    expect(isCodeEditTool("exec", patch)).toBe(true);
+    expect(
+      isCodeEditTool("exec", exec('await tools.exec_command({cmd:"sed -i s/a/b/ f.py"});')),
+    ).toBe(true);
+    expect(isCodeEditTool("exec", read)).toBe(false);
+  });
+
+  test("shell searches inside exec count toward discovery", () => {
+    expect(countSearches("exec", read)).toBe(1);
+    expect(
+      countSearches("exec", exec('await tools.exec_command({cmd:"rg a; grep -n b src"});')),
+    ).toBe(2);
+    expect(countSearches("exec", patch)).toBe(0);
+  });
+
+  test("an MCP tool named exec is not treated as a Codex program", () => {
+    expect(toolBucket("mcp__posthog__exec", patch)).toBe("context");
+    expect(isCodeEditTool("mcp__posthog__exec", patch)).toBe(false);
+    expect(countSearches("mcp__posthog__exec", read)).toBe(0);
   });
 });
 

@@ -76,11 +76,14 @@ bun test
 bunx tsc --noEmit
 bunx biome check .
 just check
+bun run scripts/dist-check.ts
 ```
 
 `just check` also builds and installs staged native/npm artifacts, so it needs
-network access. If Docker is in scope and available, also run a local image
-build and `--help` smoke.
+network access. `bun run scripts/dist-check.ts` validates that the compiled
+binary ships React's production build and passes distribution smoke tests. If
+Docker is in scope and available, also run a local image build and `--help`
+smoke.
 
 Do not weaken or remove tests to make a change pass.
 

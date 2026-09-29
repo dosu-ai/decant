@@ -3,6 +3,7 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 import type { Operation } from "./enrich.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
+import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
 
 export interface Totals {
   sessions: number;
@@ -20,6 +21,7 @@ export interface Totals {
 export interface StatsFilter extends DateFilter {
   includeArchived?: boolean;
   project?: string | null;
+  source?: SessionSource | null;
   tool?: string | null;
 }
 
@@ -128,6 +130,11 @@ function statsScope(
   if (filter?.tool != null) {
     clauses.push(`${alias}.tool = ?`);
     params.push(filter.tool);
+  }
+  const source = sessionSourcePredicate(alias, filter?.source);
+  if (source.sql !== "") {
+    clauses.push(source.sql);
+    params.push(...source.params);
   }
   return {
     sql: clauses.filter((clause) => clause !== "").join(" AND "),
@@ -393,7 +400,7 @@ export interface Activity {
   peak_weekday: number | null;
 }
 
-export function activity(db: Database, filter?: DateFilter | null): Activity {
+export function activity(db: Database, filter?: StatsFilter | null): Activity {
   const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24, filter);
   const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7, filter);
   return {
@@ -410,7 +417,7 @@ export interface ModelSparklines {
   days: string[];
 }
 
-export function modelSparklines(db: Database, filter?: DateFilter | null): ModelSparklines {
+export function modelSparklines(db: Database, filter?: StatsFilter | null): ModelSparklines {
   const visible = statsScope(db, "s", filter);
   const rows = db
     .query(

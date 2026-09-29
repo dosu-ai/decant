@@ -5,14 +5,26 @@ import { join } from "node:path";
 import { ReleaseFailure } from "../scripts/release/actions.ts";
 import { missingLicenseFile, stagedPackageDirs } from "../scripts/release/assert-npm-packages.ts";
 import { ghcrVisibility, manifestUrl } from "../scripts/release/check-ghcr-public.ts";
+import type { ReleaseChannel } from "../scripts/release/meta.ts";
 import { npxArgs, waitForNpx } from "../scripts/release/npx-smoke.ts";
 import {
   attestationBundleName,
+  ghChannelFlags,
   ghReleaseArgs,
   type ReleasePlan,
 } from "../scripts/release/publish-github-release.ts";
-import { publishArgs, publishPackages } from "../scripts/release/publish-npm.ts";
+import {
+  type NpmDistTag,
+  npmDistTag,
+  publishArgs,
+  publishPackages,
+} from "../scripts/release/publish-npm.ts";
+
 import { launcherVersionProblem } from "../scripts/release/smoke-npm-staged.ts";
+
+const LATEST: ReleaseChannel = { isPrerelease: false, isLatest: true };
+const BACKPORT: ReleaseChannel = { isPrerelease: false, isLatest: false };
+const PRERELEASE: ReleaseChannel = { isPrerelease: true, isLatest: false };
 
 let stdout: Mock<typeof process.stdout.write>;
 
@@ -60,8 +72,14 @@ describe("npm package assertions", () => {
 });
 
 describe("npm publishing", () => {
-  test("passes npm an explicit latest tag with public access and provenance", () => {
-    expect(publishArgs("decant")).toEqual([
+  test("maps the release channel to next, latest or previous", () => {
+    expect(npmDistTag(LATEST)).toBe("latest");
+    expect(npmDistTag(BACKPORT)).toBe("previous");
+    expect(npmDistTag(PRERELEASE)).toBe("next");
+  });
+
+  test("passes npm an explicit dist-tag with public access and provenance", () => {
+    expect(publishArgs("decant", "latest")).toEqual([
       "publish",
       "dist/npm/decant",
       "--access",
@@ -70,12 +88,16 @@ describe("npm publishing", () => {
       "latest",
       "--provenance",
     ]);
+    expect(publishArgs("decant", "next")).toContain("next");
+    expect(() => publishArgs("decant", "beta" as NpmDistTag)).toThrow(
+      "npm dist-tag must be one of next, latest, previous, got 'beta'",
+    );
   });
 
   test("publishes platform packages before the launcher and skips published versions", () => {
     const published: string[][] = [];
     const notices: string[] = [];
-    publishPackages("1.2.3-beta.1", {
+    publishPackages("1.2.3-beta.1", "next", {
       packageName: (dir) => `@dosu/${dir.replace("dist/npm/", "")}`,
       isPublished: (spec) => spec === "@dosu/decant-darwin-x64@1.2.3-beta.1",
       publish: (args) => published.push(args),
@@ -96,7 +118,7 @@ describe("npm publishing", () => {
       "--access",
       "public",
       "--tag",
-      "latest",
+      "next",
       "--provenance",
     ]);
   });
@@ -158,8 +180,14 @@ describe("GitHub Release publishing", () => {
     "install.sh",
   ];
 
-  test("creates every release as latest with generated notes", () => {
-    expect(ghReleaseArgs(plan, false)).toEqual([
+  test("marks only the highest stable release latest", () => {
+    expect(ghChannelFlags(LATEST)).toEqual(["--latest"]);
+    expect(ghChannelFlags(BACKPORT)).toEqual(["--latest=false"]);
+    expect(ghChannelFlags(PRERELEASE)).toEqual(["--prerelease", "--latest=false"]);
+  });
+
+  test("creates a release with generated notes and its channel flags", () => {
+    expect(ghReleaseArgs(plan, false, LATEST)).toEqual([
       "release",
       "create",
       "--verify-tag",
@@ -170,10 +198,11 @@ describe("GitHub Release publishing", () => {
       ...assets,
     ]);
     const beta = { ...plan, tag: "v1.2.3-beta.1", bundle: attestationBundleName("v1.2.3-beta.1") };
-    expect(ghReleaseArgs(beta, false).slice(2, 8)).toEqual([
+    expect(ghReleaseArgs(beta, false, PRERELEASE).slice(2, 9)).toEqual([
       "--verify-tag",
       "--generate-notes",
-      "--latest",
+      "--prerelease",
+      "--latest=false",
       "--",
       "v1.2.3-beta.1",
       "./decant-darwin-arm64.tar.gz",
@@ -182,7 +211,7 @@ describe("GitHub Release publishing", () => {
   });
 
   test("refreshes assets on an existing release instead of recreating it", () => {
-    expect(ghReleaseArgs(plan, true)).toEqual([
+    expect(ghReleaseArgs(plan, true, BACKPORT)).toEqual([
       "release",
       "upload",
       "--clobber",

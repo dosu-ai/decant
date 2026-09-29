@@ -28,8 +28,12 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.v.outputs.version }}
+      is_prerelease: ${{ steps.v.outputs.is_prerelease }}
+      is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-bun
         with:
@@ -275,6 +279,9 @@ jobs:
         run: bun run scripts/release/smoke-npm-staged.ts
 
       - name: Publish packages (OIDC trusted publishing)
+        env:
+          IS_PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
         run: bun run scripts/release/publish-npm.ts
 
   npm-smoke:
@@ -347,6 +354,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: v${{ needs.meta.outputs.version }}
           RELEASE_DIR: dist/release
+          IS_PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
         run: bun run scripts/release/publish-github-release.ts
 
   docker:
@@ -390,7 +399,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.meta.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.meta.outputs.is_latest == 'true' }}
 
       - name: Build and push
         id: push
@@ -421,6 +430,7 @@ jobs:
   homebrew-formula:
     name: Render Homebrew formula
     needs: [meta, build, github-release]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -455,6 +465,7 @@ jobs:
   homebrew-smoke:
     name: Homebrew install smoke (${{ matrix.target }})
     needs: [meta, homebrew-formula]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -506,6 +517,7 @@ jobs:
   tap-update:
     name: Update Homebrew tap
     needs: [meta, github-release, homebrew-formula, homebrew-smoke]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

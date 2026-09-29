@@ -96,18 +96,27 @@ bun run scripts/build-binaries.ts --target native
 ## Cut a release
 
 Releases are cut by pushing a signed `vMAJOR.MINOR.PATCH` tag from `main`
-(`just release 1.2.3`). A suffix such as `-beta.1` is allowed and runs the same
-pipeline. There are no separate prerelease or channel paths.
+(`just release 1.2.3`). A suffix such as `-beta.1` makes it a prerelease.
 
 The tag triggers `.github/workflows/release.yml`, which verifies the tag points
-at the run's commit and then publishes every release the same way:
+at the run's commit and then publishes:
 
-- a GitHub Release, marked latest, with the tarballs, `SHA256SUMS`, the
-  Sigstore bundle, and `install.sh`
-- the npm launcher and platform packages under the `latest` dist-tag, with
-  provenance, including suffixed versions
-- `ghcr.io/dosu-ai/decant:<version>` and `ghcr.io/dosu-ai/decant:latest`
-- an updated formula in the `dosu-ai/homebrew-dosu` tap
+- a GitHub Release with the tarballs, `SHA256SUMS`, the Sigstore bundle, and
+  `install.sh`
+- the npm launcher and platform packages, with provenance
+- `ghcr.io/dosu-ai/decant:<version>`
+- an updated formula in the `dosu-ai/homebrew-dosu` tap, for a stable latest
+  release only
+
+Only a stable tag that is the highest stable version on the remote moves the
+default channels that `npx`, `install.sh`, `brew install`, and `docker pull`
+read:
+
+| Tag | npm dist-tag | GitHub Release | GHCR `:latest` | Homebrew tap |
+| --- | --- | --- | --- | --- |
+| Highest stable, such as `v1.2.3` | `latest` | latest | moved | updated |
+| Older stable backport, such as `v1.1.4` after `v1.2.3` | `previous` | not latest | unchanged | unchanged |
+| Prerelease, such as `v1.3.0-beta.1` | `next` | prerelease, not latest | unchanged | unchanged |
 
 The workflow only orchestrates. Release logic lives in `scripts/release/*.ts`,
 where each script reads its inputs from environment variables and has unit

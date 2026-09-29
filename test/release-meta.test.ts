@@ -4,7 +4,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseFailure } from "../scripts/release/actions.ts";
-import { parseReleaseVersion } from "../scripts/release/meta.ts";
+import {
+  channelFromEnv,
+  compareStableVersions,
+  parseReleaseVersion,
+  releaseChannel,
+  stableVersionsFromLsRemote,
+} from "../scripts/release/meta.ts";
 
 const script = join(import.meta.dir, "..", "scripts", "release", "meta.ts");
 const dirs: string[] = [];
@@ -40,6 +46,67 @@ describe("release version parsing", () => {
     }
     expect(() => parseReleaseVersion("vv1.2.3")).toThrow("'v1.2.3' is not semver");
     expect(() => parseReleaseVersion("")).toThrow("'' is not semver");
+  });
+});
+
+describe("release channel", () => {
+  const remote = [
+    "aaa\trefs/tags/v0.2.1",
+    "bbb\trefs/tags/v0.3.0",
+    "ccc\trefs/tags/v0.3.0^{}",
+    "ddd\trefs/tags/v0.10.0",
+    "eee\trefs/tags/v0.11.0-beta.1",
+    "fff\trefs/tags/v0.11.0-beta.1^{}",
+    "ggg\trefs/tags/vnext",
+    "hhh\trefs/tags/release-1.0.0",
+    "",
+  ].join("\n");
+
+  test("keeps only stable vX.Y.Z tags and folds peeled refs", () => {
+    expect(stableVersionsFromLsRemote(remote).sort(compareStableVersions)).toEqual([
+      "0.2.1",
+      "0.3.0",
+      "0.10.0",
+    ]);
+    expect(stableVersionsFromLsRemote("")).toEqual([]);
+  });
+
+  test("compares versions numerically, not lexically", () => {
+    expect(compareStableVersions("0.10.0", "0.9.9")).toBeGreaterThan(0);
+    expect(compareStableVersions("1.2.3", "1.2.3")).toBe(0);
+    expect(compareStableVersions("1.2.3", "1.10.0")).toBeLessThan(0);
+  });
+
+  test("a stable release is latest only when no higher stable tag exists", () => {
+    const tags = stableVersionsFromLsRemote(remote);
+    expect(releaseChannel("0.10.1", tags)).toEqual({ isPrerelease: false, isLatest: true });
+    expect(releaseChannel("0.10.0", tags)).toEqual({ isPrerelease: false, isLatest: true });
+    expect(releaseChannel("0.3.1", tags)).toEqual({ isPrerelease: false, isLatest: false });
+    expect(releaseChannel("1.0.0", [])).toEqual({ isPrerelease: false, isLatest: true });
+  });
+
+  test("a suffixed release is a prerelease and never latest", () => {
+    const tags = stableVersionsFromLsRemote(remote);
+    expect(releaseChannel("0.11.0-beta.1", tags)).toEqual({ isPrerelease: true, isLatest: false });
+    expect(releaseChannel("9.0.0-rc.2", [])).toEqual({ isPrerelease: true, isLatest: false });
+  });
+
+  test("reads the channel back from job env and rejects anything but true or false", () => {
+    expect(channelFromEnv({ IS_PRERELEASE: "false", IS_LATEST: "true" })).toEqual({
+      isPrerelease: false,
+      isLatest: true,
+    });
+    expect(channelFromEnv({ IS_PRERELEASE: "true", IS_LATEST: "false" })).toEqual({
+      isPrerelease: true,
+      isLatest: false,
+    });
+    expect(() => channelFromEnv({ IS_PRERELEASE: "yes", IS_LATEST: "true" })).toThrow(
+      "IS_PRERELEASE must be one of true, false, got 'yes'",
+    );
+    expect(() => channelFromEnv({ IS_PRERELEASE: "false" })).toThrow("IS_LATEST is not set");
+    expect(() => channelFromEnv({ IS_PRERELEASE: "true", IS_LATEST: "true" })).toThrow(
+      "IS_PRERELEASE and IS_LATEST cannot both be true",
+    );
   });
 });
 
@@ -98,16 +165,18 @@ describe("meta CLI", () => {
     return { ...result, outputs: existsSync(output) ? readFileSync(output, "utf8") : "" };
   }
 
-  test("writes only the version for any tag at the run commit", () => {
+  test("writes the version and channel for any tag at the run commit", () => {
     const { work, head } = fixture();
-    for (const [raw, version] of [
-      ["v0.4.0", "0.4.0"],
-      ["0.2.1", "0.2.1"],
-      ["v0.5.0-beta.1", "0.5.0-beta.1"],
+    for (const [raw, version, prerelease, latest] of [
+      ["v0.4.0", "0.4.0", false, true],
+      ["0.2.1", "0.2.1", false, false],
+      ["v0.5.0-beta.1", "0.5.0-beta.1", true, false],
     ] as const) {
       const result = runMeta(work, raw, head);
       expect(result.status).toBe(0);
-      expect(result.outputs).toBe(`version=${version}\n`);
+      expect(result.outputs).toBe(
+        `version=${version}\nis_prerelease=${prerelease}\nis_latest=${latest}\n`,
+      );
     }
   });
 

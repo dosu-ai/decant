@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { appendFileSync } from "node:fs";
 
 export type Env = Record<string, string | undefined>;
 
@@ -154,29 +152,26 @@ export function capture(
   return result.stdout;
 }
 
-/** Runs a command with stdout and stderr interleaved into one string, like `2>&1`. */
+/**
+ * Runs a command and returns its stdout followed by its stderr. The streams are
+ * read from separate pipes, so unlike `2>&1` their relative order is lost;
+ * callers may search the combined text but must not depend on line order.
+ */
 export function captureMerged(
   command: string,
   args: readonly string[],
   options: CommandOptions = {},
 ): { status: number; output: string } {
-  const dir = mkdtempSync(join(tmpdir(), "decant-release-"));
-  const path = join(dir, "output");
-  const fd = openSync(path, "w");
-  try {
-    const result = spawnSync(command, args, {
-      cwd: options.cwd,
-      env: childEnv(options.env),
-      stdio: ["ignore", fd, fd],
-    });
-    if (result.error != null) {
-      throw result.error;
-    }
-    return { status: result.status ?? 1, output: readFileSync(path, "utf8") };
-  } finally {
-    closeSync(fd);
-    rmSync(dir, { recursive: true, force: true });
+  const result = spawnSync(command, args, {
+    cwd: options.cwd,
+    env: childEnv(options.env),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error != null) {
+    throw result.error;
   }
+  return { status: result.status ?? 1, output: result.stdout + result.stderr };
 }
 
 /** Strips trailing newlines the way shell command substitution does. */

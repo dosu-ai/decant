@@ -94,9 +94,20 @@ describe("release action helpers", () => {
     }
   });
 
-  test("captures stdout and stderr interleaved in order", () => {
+  test("captures all of stdout, then all of stderr, with the exit status", () => {
     const result = captureMerged("sh", ["-c", "echo one; echo two >&2; echo three; exit 2"]);
-    expect(result).toEqual({ status: 2, output: "one\ntwo\nthree\n" });
+    expect(result).toEqual({ status: 2, output: "one\nthree\ntwo\n" });
+  });
+
+  test("captures a report written only to stderr, the way spctl assesses", () => {
+    const result = captureMerged("sh", [
+      "-c",
+      "echo 'smoke/decant: accepted' >&2; echo 'source=Notarized Developer ID' >&2",
+    ]);
+    expect(result).toEqual({
+      status: 0,
+      output: "smoke/decant: accepted\nsource=Notarized Developer ID\n",
+    });
   });
 
   test("retries with a delay after every failed attempt", async () => {

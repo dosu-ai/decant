@@ -224,9 +224,9 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
   if (code.length < 500_000) {
     throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
   }
-  // A development-only React warning; its presence means NODE_ENV was not
-  // production when the embedded bundle was built.
-  if (code.includes('should have a unique "key" prop')) {
+  // The dev-only key warning and the prod-only minified error text each pin
+  // NODE_ENV; checking both keeps a reworded warning from passing silently.
+  if (code.includes('should have a unique "key" prop') || !code.includes("Minified React error")) {
     throw new Error(`compiled UI bundle at ${scriptSrc} ships React's development build`);
   }
   try {

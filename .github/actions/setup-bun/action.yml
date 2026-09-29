@@ -1,0 +1,22 @@
+name: Set up Bun
+description: Install the Bun version pinned in .bun-version and, by default, the locked dependencies.
+
+inputs:
+  install:
+    description: Run `bun install --frozen-lockfile` after installing Bun.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: .bun-version
+        no-cache: true
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: bun install --frozen-lockfile

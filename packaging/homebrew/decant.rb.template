@@ -1,11 +1,11 @@
 ## Template for Formula/decant.rb in the dosu-ai/homebrew-dosu tap.
 ##
-## Rendered and smoke-tested by .github/workflows/release.yml, then pushed by
-## tap-update on every stable is_latest release. The placeholder scheme is
-## deliberately simple: each placeholder is a unique literal token replaced
-## with plain `sed s///g` (values are semver strings and lowercase-hex digests,
-## so no sed escaping is ever needed), and `##` doc lines like this one are
-## stripped from the rendered formula (`/^##/d`).
+## Rendered by scripts/release/render-homebrew-formula.ts, smoke-tested by
+## .github/workflows/release.yml, then pushed by tap-update on every release.
+## The placeholder scheme is deliberately simple: each placeholder is a unique
+## literal token replaced verbatim (values are semver strings and
+## lowercase-hex digests), and lines starting with `##`, like this one, are
+## stripped from the rendered formula.
 ## Homebrew infers the formula version from the release URLs; an explicit
 ## `version` stanza is redundant and fails the tap-wide audit.
 ##

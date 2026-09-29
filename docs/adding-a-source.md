@@ -44,9 +44,10 @@ Use this checklist when adding support for another coding-agent CLI.
 | Tool call/result linkage | by ID / by adjacency / absent |
 
 Decant can only report economics where usage data exists. Costs are calculated
-with `estimateCost` in `src/cost.ts` and stored at ingest. Later pricing
-changes do not rewrite historical rows. If a source has no usage data, cost
-must be unavailable rather than zero.
+with `estimateCost` in `src/cost.ts` and stored at ingest. Every sync
+reconciles stored costs with current rates, so a pricing change reprices
+historical rows without a rebuild. If a source has no usage data, cost must be
+unavailable rather than zero.
 
 ## Parser behavior
 

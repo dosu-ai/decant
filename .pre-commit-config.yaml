@@ -8,7 +8,6 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-      - id: check-toml
       - id: check-json
       - id: check-merge-conflict
       - id: mixed-line-ending
@@ -23,7 +22,7 @@ repos:
         name: biome check
         entry: bunx biome check .
         language: system
-        files: '^(src|test|scripts|npm)/.*\.(ts|tsx|cjs|json|sql|html|css|md)$|^(package\.json|tsconfig\.json|biome\.json|bun\.lock|README\.md|AGENTS\.md|CONTRIBUTING\.md|SECURITY\.md)$'
+        files: '^(src|test|scripts|npm)/.*\.(ts|tsx|cjs|json|html|css)$|^[^/]+\.json$'
         pass_filenames: false
 
       - id: ts-typecheck

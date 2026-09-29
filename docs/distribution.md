@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
 
 Optional environment variables:
 
-- `DECANT_VERSION`: release to install; defaults to the latest stable release.
+- `DECANT_VERSION`: release to install; defaults to the latest release.
 - `DECANT_INSTALL_DIR`: destination; defaults to `~/.local/bin`.
 - `DECANT_NO_MODIFY_PATH=1`: do not edit a shell startup file.
 - `DECANT_BASE_URL`: release mirror with the same asset layout as GitHub.
@@ -92,6 +92,41 @@ Build a native binary for the current platform with:
 ```sh
 bun run scripts/build-binaries.ts --target native
 ```
+
+## Cut a release
+
+Releases are cut by pushing a signed `vMAJOR.MINOR.PATCH` tag from `main`
+(`just release 1.2.3`). A suffix such as `-beta.1` makes it a prerelease.
+
+The tag triggers `.github/workflows/release.yml`, which verifies the tag points
+at the run's commit and then publishes:
+
+- a GitHub Release with the tarballs, `SHA256SUMS`, the Sigstore bundle, and
+  `install.sh`
+- the npm launcher and platform packages, with provenance
+- `ghcr.io/dosu-ai/decant:<version>`
+- an updated formula in the `dosu-ai/homebrew-dosu` tap, for a stable latest
+  release only
+
+Only a stable tag that is the highest stable version on the remote moves the
+default channels that `npx`, `install.sh`, `brew install`, and `docker pull`
+read:
+
+| Tag | npm dist-tag | GitHub Release | GHCR `:latest` | Homebrew tap |
+| --- | --- | --- | --- | --- |
+| Highest stable, such as `v1.2.3` | `latest` | latest | moved | updated |
+| Older stable backport, such as `v1.1.4` after `v1.2.3` | `previous` | not latest | unchanged | unchanged |
+| Prerelease, such as `v1.3.0-beta.1` | `next` | prerelease, not latest | unchanged | unchanged |
+
+The workflow only orchestrates. Release logic lives in `scripts/release/*.ts`,
+where each script reads its inputs from environment variables and has unit
+tests in `test/release-*.test.ts`. Outside Actions, a script prints the outputs
+it would record, so steps can be rerun locally, for example
+`VERSION=1.2.3 bun run scripts/release/render-homebrew-formula.ts` after
+placing a `SHA256SUMS` in `dist/release/`.
+
+Re-running a failed release is safe: already-published npm versions are
+skipped and an existing GitHub Release only has its assets refreshed.
 
 ## Verify a release
 

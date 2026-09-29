@@ -4,13 +4,14 @@ FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52
 
 WORKDIR /app
 
-COPY package.json bun.lock tsconfig.json ./
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+COPY tsconfig.json ./
 COPY npm ./npm
 COPY scripts ./scripts
 COPY src ./src
 COPY docs/api/openapi.yaml ./docs/api/openapi.yaml
-
-RUN bun install --frozen-lockfile
 
 ARG TARGETPLATFORM
 ARG DECANT_VERSION=0.0.0-dev

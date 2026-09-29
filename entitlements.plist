@@ -3,8 +3,8 @@
 <!--
   Bun's documented JIT entitlements for compiled executables signed under the
   hardened runtime (JavaScriptCore needs them; keys verified against
-  bun.com/docs/bundler/executables). Consumed by the rcodesign sign step in
-  .github/workflows/release.yml via `-e entitlements.plist`.
+  bun.com/docs/bundler/executables). Passed to `rcodesign sign` via
+  `-e entitlements.plist` by scripts/release/sign-darwin.ts.
 -->
 <plist version="1.0">
 <dict>

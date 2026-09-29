@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -45,7 +45,9 @@ jobs:
         run: shellcheck -s sh install.sh
 
       - name: zizmor
+        env:
+          ZIZMOR_VERSION: 1.30.1
         run: |
           set -euo pipefail
-          pipx install zizmor
-          zizmor --persona=regular --min-severity=medium --no-online-audits .github/workflows/
+          pipx install "zizmor==${ZIZMOR_VERSION}"
+          zizmor --persona=regular --min-severity=medium --no-online-audits .github/workflows/ .github/actions/

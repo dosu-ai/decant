@@ -5783,7 +5783,7 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
 type ModelTheme = "astra" | "sol" | "luna";
 
 function modelTheme(model: string): ModelTheme | null {
-  const tier = /(?:^|[/:])gpt-(?:5\.6|6)-(astra|sol|luna)$/i.exec(model)?.[1];
+  const tier = /(?:^|[/:])gpt-(?:5\.6|6(?:\.1)?)-(astra|sol|luna)$/i.exec(model)?.[1];
   return tier == null ? null : (tier.toLowerCase() as ModelTheme);
 }
 

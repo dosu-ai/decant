@@ -2,9 +2,10 @@
 
 Decant estimates token costs at ingest using published first-party API rates.
 All Anthropic rates, including Claude Sonnet 5.5, were verified on September 28,
-2026 against the Anthropic pricing and model deprecation pages below. GPT-6 Sol
-and Luna rates were verified on September 22, 2026, and other current OpenAI
-coding-agent rates retain their September 9, 2026 verification. Legacy OpenAI
+2026 against the Anthropic pricing and model deprecation pages below. GPT-6.1
+Sol rates were verified on September 29, 2026, GPT-6 Sol and Luna rates on
+September 22, 2026, and other current OpenAI coding-agent rates retain their
+September 9, 2026 verification. Legacy OpenAI
 rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
@@ -15,6 +16,8 @@ rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
 - [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 - [OpenAI GPT-6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6-sol)
+- [OpenAI GPT-6.1 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+- [Introducing GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/)
 - [OpenAI GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
 - [OpenAI Codex credit pricing](https://learn.chatgpt.com/docs/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
@@ -41,6 +44,7 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
+| GPT-6.1 Sol | $2.00 | $0.10 | $2.50 | $10.00 |
 | GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
 | GPT-5.6 Sol, GPT-5.6, Daybreak Blue | $4.00 | $0.40 | $5.00 | $20.00 |
 | GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
@@ -67,7 +71,7 @@ provider does not publish a first-party API token price for that model slug.
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
 cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
-models above bill cache writes at 1.25 times the uncached-input rate. Gemini
+and GPT-6.1 models above bill cache writes at 1.25 times the uncached-input rate. Gemini
 bills cache storage by the token-hour, so Decant maps the equivalent write
 charge to approximately the input rate for typical session-length holds.
 

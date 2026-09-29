@@ -248,7 +248,7 @@ describe("estimateCost", () => {
     }
   });
 
-  test("GPT-6 Sol and Luna use their published input, cache, and output rates", () => {
+  test("GPT-6 Sol, GPT-6.1 Sol, and Luna use their published input, cache, and output rates", () => {
     const pricing = defaultPricing();
     const usage = {
       ...usage1m(),
@@ -258,6 +258,7 @@ describe("estimateCost", () => {
     };
     for (const [model, expected] of [
       ["gpt-6-sol", { input: 2, output: 10, cacheRead: 0.4, cacheCreation: 7.5 }],
+      ["gpt-6.1-sol", { input: 2, output: 10, cacheRead: 0.2, cacheCreation: 7.5 }],
       ["gpt-6-luna", { input: 0.1, output: 0.5, cacheRead: 0.02, cacheCreation: 0.375 }],
     ] as const) {
       for (const alias of [model, `openai/${model}`, `OpenAI:${model.toUpperCase()}`]) {
@@ -265,7 +266,14 @@ describe("estimateCost", () => {
         expect(estimateCostParts(alias, usage, pricing)).toEqual(expected);
       }
     }
-    for (const model of ["gpt-6", "gpt-6-sol-preview", "gpt-6-solar", "gpt-6-luna-pro"]) {
+    for (const model of [
+      "gpt-6",
+      "gpt-6.1",
+      "gpt-6-sol-preview",
+      "gpt-6.1-sol-ultrafast",
+      "gpt-6-solar",
+      "gpt-6-luna-pro",
+    ]) {
       expect(isPriceable(model)).toBe(false);
       expect(estimateCost(model, usage, pricing)).toBe(0);
     }

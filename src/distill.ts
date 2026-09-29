@@ -1,14 +1,13 @@
 import type { Database } from "bun:sqlite";
+import type { Operation } from "./enrich.ts";
 import { compareCodePoints } from "./order.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { DECANT_VERSION } from "./version.ts";
 
-export { DECANT_VERSION };
-
-export const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
+const OP_KINDS = ["command", "file_write", "file_edit", "file_delete", "patch"] as const;
 export type OpKind = (typeof OP_KINDS)[number];
 
-export const PHASES = ["setup", "build", "test", "lint", "run", "deploy", "vcs", "other"] as const;
+const PHASES = ["setup", "build", "test", "lint", "run", "deploy", "vcs", "other"] as const;
 export type Phase = (typeof PHASES)[number];
 
 export interface Op {
@@ -78,7 +77,7 @@ const redactors: [RegExp, string][] = (() => {
   ];
 })();
 
-export function phaseLabel(phase: Phase): string {
+function phaseLabel(phase: Phase): string {
   return phase;
 }
 
@@ -93,6 +92,12 @@ export function parseScriptFormat(value: string): ScriptFormat | null {
   return value === "just" || value === "make" ? value : null;
 }
 
+export function parseFileOperation(value: string): Operation | null {
+  return value === "read" || value === "edit" || value === "write" || value === "delete"
+    ? value
+    : null;
+}
+
 export function parseSkillKind(value: string): SkillKind | null {
   return value === "skill" || value === "agents" || value === "command" ? value : null;
 }
@@ -100,6 +105,14 @@ export function parseSkillKind(value: string): SkillKind | null {
 export function defaultScriptOpts(): ScriptOpts {
   return { format: "sh", minFrequency: 0.25, exemplar: false };
 }
+
+const COMMAND_KEY_BY_TOOL: ReadonlyMap<string, string> = new Map([
+  ["Bash", "command"],
+  ["run_shell_command", "command"],
+  ["exec_command", "cmd"],
+  ["shell", "cmd"],
+  ["local_shell", "cmd"],
+]);
 
 export function decodeCommand(toolName: string, input: string | null | undefined): string | null {
   if (input == null) {
@@ -118,12 +131,7 @@ export function decodeCommand(toolName: string, input: string | null | undefined
     return null;
   }
   const object = value as Record<string, unknown>;
-  const key =
-    toolName === "Bash" || toolName === "run_shell_command"
-      ? "command"
-      : toolName === "exec_command" || toolName === "shell" || toolName === "local_shell"
-        ? "cmd"
-        : null;
+  const key = COMMAND_KEY_BY_TOOL.get(toolName);
   if (key == null) {
     return null;
   }
@@ -258,6 +266,7 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
     date_from: string | null;
     date_to: string | null;
   };
+  const commandTools = [...COMMAND_KEY_BY_TOOL.keys()];
   const rows = db
     .query(
       `SELECT tc.session_id, tc.ordinal, tc.tool_name, tc.input, tc.is_error, s.cwd
@@ -265,9 +274,10 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
        JOIN session s ON s.id = tc.session_id
        LEFT JOIN project p ON p.id = s.project_id
        WHERE ${visibleSession}${scoped.sql}
+         AND tc.tool_name IN (${commandTools.map(() => "?").join(", ")})
        ORDER BY tc.session_id, tc.ordinal`,
     )
-    .all(...scoped.values) as ToolCallRow[];
+    .all(...scoped.values, ...commandTools) as ToolCallRow[];
 
   const raws = rows.flatMap((row) => {
     if (row.tool_name == null) {

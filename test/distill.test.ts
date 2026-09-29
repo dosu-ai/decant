@@ -7,11 +7,11 @@ import { openDb } from "../src/db.ts";
 import {
   classifyPhase,
   commentSafe,
-  DECANT_VERSION,
   decodeCommand,
   hotContext,
   isDestructive,
   normalize,
+  parseFileOperation,
   patchBlock,
   redact,
   renderReplay,
@@ -26,6 +26,7 @@ import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-distill-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -125,6 +126,14 @@ describe("distill pure helpers", () => {
     expect(decodeCommand("exec_command", JSON.stringify(inner))).toBe("cargo test");
     expect(decodeCommand("Read", '{"file_path":"a"}')).toBeNull();
     expect(decodeCommand("Bash", "not json")).toBeNull();
+  });
+
+  test("parses file operations and rejects unknown ones", () => {
+    for (const op of ["read", "edit", "write", "delete"] as const) {
+      expect(parseFileOperation(op)).toBe(op);
+    }
+    expect(parseFileOperation("rename")).toBeNull();
+    expect(parseFileOperation("")).toBeNull();
   });
 
   test("normalizes paths, whitespace, and sibling boundaries", () => {

@@ -26,6 +26,8 @@ This page records the operational semantics around that contract.
 - `GET /reports/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /reports/session/:id`
 
+Any other non-API path returns `404` with the standard `not_found` error body.
+
 The report UI routes render a light, print-ready preview with Back, Download
 HTML, and Save as PDF controls. They read the local-only report operations;
 the session preview intentionally omits transcript content.
@@ -43,6 +45,9 @@ the local guard can read or mutate the whole archive.
   present source wins: `--trusted-peer`, then `DECANT_TRUSTED_PEERS` whenever
   the variable is set, then `DECANT_TRUST_DEFAULT_GATEWAY=1`.
   `DECANT_TRUSTED_PEERS=` therefore means “trust nobody,” not “fall through.”
+- Every trusted peer must be an IP address or an IPv4 CIDR. `decant serve`
+  exits with an error at startup on an entry that could never match, such as
+  `10.0.0.0/33` or a hostname, instead of silently trusting nobody.
 - The gateway option contributes one address only when Decant proves the
   default route is a container veth to an on-link gateway inside
   `172.16.0.0/12`. It fails closed for host networking, macvlan/ipvlan,
@@ -95,6 +100,11 @@ Deletion removes the live rows. SQLite may leave deleted text recoverable in
 freed pages until `decant db vacuum` rewrites the archive. See
 [What the archive stores](../data-lifecycle.md#what-the-archive-stores).
 
+`POST /api/launch/agent` accepts a `key` only when it uses the characters
+recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
+`POST /api/launch/ide` requires an absolute `dir` that matches a project path or
+root path in the archive. Both answer `400 invalid_request` otherwise.
+
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.
 
@@ -105,6 +115,13 @@ total or continuation token. Its `limit` defaults to 50 and has an effective
 maximum of 100. Increment `offset` by the number of rows received; a final short
 or empty page marks the end. When the result count is an exact multiple of the
 page size, one empty request is required to confirm the end.
+
+`GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
+aggregate rows. Their `limit` has an effective maximum of 1000.
+
+Request bodies larger than 1 MiB get a `413` with an empty body before they
+reach a route handler.
+No documented request comes close to that size.
 
 `GET /api/sessions/search-index` returns lightweight metadata for every visible,
 non-archived top-level session. It is the command palette's local fuzzy-search

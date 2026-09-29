@@ -22,8 +22,8 @@ describe("launcher", () => {
     expect(command("unknown", "x")).toBeNull();
   });
 
-  test("launchAgent returns a copyable command off macOS", () => {
-    const result = launchAgent("codex", "make it so", "catalog:skills", settings, {
+  test("launchAgent returns a copyable command off macOS", async () => {
+    const result = await launchAgent("codex", "make it so", "catalog:skills", settings, {
       platform: "linux",
     });
     expect(result.ok).toBe(false);
@@ -32,9 +32,22 @@ describe("launcher", () => {
     expect(result.command).toContain("decant recommendations mark catalog:skills");
   });
 
-  test("launchAgent builds whitelisted terminal invocations on macOS", () => {
+  test("launchAgent refuses keys that could inject prompt text", async () => {
+    const calls: string[] = [];
+    const result = await launchAgent("claude", "go", "x\nrm -rf ~", settings, {
+      platform: "darwin",
+      run: (bin) => {
+        calls.push(bin);
+        return { ok: true };
+      },
+    });
+    expect(result).toEqual({ ok: false, error: "Invalid recommendation key." });
+    expect(calls).toEqual([]);
+  });
+
+  test("launchAgent builds whitelisted terminal invocations on macOS", async () => {
     const calls: { bin: string; args: string[] }[] = [];
-    const result = launchAgent("claude", "ship it", null, settings, {
+    const result = await launchAgent("claude", "ship it", null, settings, {
       platform: "darwin",
       env: { DECANT_SKILLS_DIR: "/tmp/skills", SHELL: "/bin/zsh" },
       tempName: () => "decant-launcher-test-prompt.txt",
@@ -70,10 +83,10 @@ describe("launcher", () => {
     });
   });
 
-  test("Warp removes private launch files and tries the cwd-only fallback when open fails", () => {
+  test("Warp removes private launch files and tries the cwd-only fallback when open fails", async () => {
     let configPath = "";
     const calls: string[] = [];
-    const result = launchAgent(
+    const result = await launchAgent(
       "claude",
       "ship it",
       null,
@@ -97,9 +110,9 @@ describe("launcher", () => {
     expect(existsSync(configPath)).toBe(false);
   });
 
-  test("Warp returns a self-contained copyable command when only its cwd fallback opens", () => {
+  test("Warp returns a self-contained copyable command when only its cwd fallback opens", async () => {
     let call = 0;
-    const result = launchAgent(
+    const result = await launchAgent(
       "claude",
       "ship it",
       null,
@@ -119,9 +132,9 @@ describe("launcher", () => {
     expect(result.command).toBe("claude 'ship it'");
   });
 
-  test("Warp reports success only after the private launch config is consumed", () => {
+  test("Warp reports success only after the private launch config is consumed", async () => {
     let configDir = "";
-    const result = launchAgent(
+    const result = await launchAgent(
       "claude",
       "ship it",
       null,
@@ -148,14 +161,14 @@ describe("launcher", () => {
     expect(existsSync(configDir)).toBe(false);
   });
 
-  test("openIde validates platform and directory before running open", () => {
-    expect(openIde("/missing", settings, { platform: "linux" }).error).toContain("macOS");
-    expect(openIde("/missing", settings, { platform: "darwin" }).error).toContain("folder");
+  test("openIde validates platform and directory before running open", async () => {
+    expect((await openIde("/missing", settings, { platform: "linux" })).error).toContain("macOS");
+    expect((await openIde("/missing", settings, { platform: "darwin" })).error).toContain("folder");
 
     const dir = join(workDir, "project");
     mkdirSync(dir);
     const calls: { bin: string; args: string[] }[] = [];
-    const result = openIde(dir, settings, {
+    const result = await openIde(dir, settings, {
       platform: "darwin",
       run: (bin, args) => {
         calls.push({ bin, args });

@@ -6,9 +6,9 @@ import { decideOpen, displayUrl, openBrowser } from "./browser.ts";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
-  DECANT_VERSION,
   defaultScriptOpts,
   hotContext,
+  parseFileOperation,
   parseScriptFormat,
   parseSkillKind,
   renderReplay,
@@ -18,7 +18,6 @@ import {
   shellQuote,
   timeline,
 } from "./distill.ts";
-import type { Operation } from "./enrich.ts";
 import { exportTrajectory, toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
 import { configureLogging, getDecantLogger, logWatchEvent } from "./logging.ts";
@@ -28,12 +27,7 @@ import {
   markImplemented,
   parseStatusFilter,
 } from "./recommendations.ts";
-import {
-  DEFAULT_SERVE_HOST,
-  DEFAULT_SERVE_PORT,
-  parsePeerList,
-  serve as serveApp,
-} from "./server.ts";
+import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { setSessionUserState } from "./session-user-state.ts";
 import {
   byDimension,
@@ -45,6 +39,7 @@ import {
   totals,
 } from "./stats.ts";
 import { tokenEconomics } from "./token-economics.ts";
+import { DECANT_VERSION } from "./version.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
@@ -395,27 +390,24 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             codexDir: commandOptions.codexDir,
             geminiDir: commandOptions.geminiDir,
           });
-          // Without this, --no-sync (and DECANT_NO_SYNC) were accepted here and
-          // silently ignored: serve's watcher kept ingesting the source
-          // directories, so pointing serve at a scratch archive filled it with
-          // whatever was in the real ~/.claude and ~/.codex. Omitting `watch`
-          // entirely is what serve() checks to decide whether to run a watcher
-          // at all. POST /api/sync is deliberately untouched -- this turns off
-          // syncing decant starts on its own, not a sync the operator asks for.
+          // --no-sync must stop the watcher, or serving a scratch archive would
+          // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how
+          // serve() knows; POST /api/sync stays available for explicit syncs.
           const syncEnabled = shouldSync(globals(), options.env);
+          // Loaded here so other commands skip the server's chart and report
+          // dependencies at startup.
+          const { parsePeerList, serve: serveApp } = await import("./server.ts");
           let server: ReturnType<typeof serveApp>;
           try {
             server = serveApp({
               config,
               hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
               port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-              // Omit entirely (rather than passing []) when no --trusted-peer was
-              // given, so serve()'s resolveTrustedPeers() can still fall through
-              // to DECANT_TRUSTED_PEERS and then the gateway default. Any value
-              // passed here replaces both.
+              // Omitted rather than [] so resolveTrustedPeers() can still fall
+              // through to DECANT_TRUSTED_PEERS and the gateway default.
               trustedPeers:
                 commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
-                  ? trustedPeers(commandOptions.trustedPeer)
+                  ? commandOptions.trustedPeer.flatMap((value) => parsePeerList(value))
                   : undefined,
               logger: globals().quiet ? undefined : serverLogger,
               watch: syncEnabled
@@ -1101,7 +1093,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           );
           return 2;
         }
-        const op = commandOptions.op == null ? null : parseOperation(commandOptions.op);
+        const op = commandOptions.op == null ? null : parseFileOperation(commandOptions.op);
         if (commandOptions.op != null && op == null) {
           io.writeErr(
             `error: unknown --op value ${JSON.stringify(commandOptions.op)} ` +
@@ -1333,10 +1325,6 @@ function isPortInUse(error: unknown): boolean {
 function openArchive(config: Config): Archive {
   mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
   const db = openDb(config.dbPath);
-  // Keep archive opens read-only once the schema is current. Sync/watch repair
-  // derived metadata on their write paths, and serve hydrates it once for its
-  // long-lived connection; a --no-sync CLI read must not acquire SQLite's
-  // single writer lock merely to list or search existing rows.
   return { db, config };
 }
 
@@ -1382,10 +1370,6 @@ function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
-function trustedPeers(values: string[] | undefined): string[] {
-  return (values ?? []).flatMap((value) => parsePeerList(value));
-}
-
 function formatNumber(value: number): string {
   return String(Math.round(value));
 }
@@ -1401,12 +1385,6 @@ function formatDuration(ms: number): string {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function parseOperation(value: string): Operation | null {
-  return value === "read" || value === "edit" || value === "write" || value === "delete"
-    ? value
-    : null;
 }
 
 function emitArtifact(

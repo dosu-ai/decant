@@ -48,9 +48,8 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   codex: "codex",
 };
 
-/** Their core.ts NOISE_PREFIXES, applied to user text so downstream consumers
- * see the cleaning trajectory-native pipelines expect. The last entry has no
- * closing ">" by design — it matches attribute forms. */
+/** Stripped from user text so downstream trajectory pipelines see it cleaned.
+ * The last entry has no closing ">" by design — it matches attribute forms. */
 const TRAJECTORY_NOISE_PREFIXES = [
   "<local-command-caveat>",
   "<command-name>",
@@ -167,13 +166,9 @@ function trajectoryCollectLeaves(value: unknown, leaves: TrajectoryLeaf[]): void
  * string leaves (many small fields, or bulk in the keys) and only a `_raw` wrap
  * can help. `parsed` is mutated either way.
  *
- * Their core.ts has two of these; this follows the strictly decreasing one
- * (`shrinkObjectArgsSafely`), not the legacy loop whose hard 2 000-character
- * per-leaf floor can spin forever or return an over-cap object — the bug their
- * PARITY.md records as a 21,560-character object escaping a 20,000 cap. Two
- * things make termination unconditional here: a leaf no longer than the marker
- * cannot shrink usefully, so shrinking stops rather than retrying it, and an
- * iteration that shortens nothing gives up instead of looping. */
+ * Termination is unconditional: a leaf no longer than the marker cannot shrink
+ * usefully, so shrinking stops rather than retrying it, and an iteration that
+ * shortens nothing gives up instead of looping. */
 function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
   const leaves: TrajectoryLeaf[] = [];
   trajectoryCollectLeaves(parsed, leaves);
@@ -306,9 +301,9 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   };
 
   // Pass 1: assign globally unique call ids in appearance order. A name already
-  // taken is renamed by probing `__dup<n>` upward until the candidate is unused
-  // (their core.ts move): a fixed `__dup2` would collide when the source itself
-  // contains an id that already looks like one of our renames. Each original id
+  // taken is renamed by probing `__dup<n>` upward until the candidate is unused:
+  // a fixed `__dup2` would collide when the source itself contains an id that
+  // already looks like one of our renames. Each original id
   // keeps a queue of the names it was assigned, so pass 2 reads the strings back
   // instead of recomputing a suffix it can no longer predict.
   const assignedByOriginal = new Map<string, string[]>();

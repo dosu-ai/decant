@@ -126,7 +126,7 @@ function assertSafeReportSvg(svg: string): void {
   if (!svg.startsWith("<svg")) {
     throw new Error("report chart did not render an SVG");
   }
-  if (/<!doctype|<!entity|<\?xml-stylesheet/i.test(svg)) {
+  if (/<!|<\?/.test(svg)) {
     throw new Error("report chart contains active markup");
   }
   for (const match of svg.matchAll(/<\/?([a-z][\w:-]*)\b/gi)) {
@@ -135,20 +135,86 @@ function assertSafeReportSvg(svg: string): void {
       throw new Error(`report chart contains unsupported <${tag}> markup`);
     }
   }
-  if (/(?:^|[\s<])on[a-z][\w:.-]*\s*=/i.test(svg)) {
-    throw new Error("report chart contains an event-handler attribute");
-  }
-  if (/(?:href|src)\s*=/i.test(svg)) {
-    throw new Error("report chart contains an external or active URL");
-  }
-  const withoutInternalPaintServers = svg.replace(/url\(\s*#[-\w:.]+\s*\)/gi, "");
-  if (/url\s*\(/i.test(withoutInternalPaintServers)) {
-    throw new Error("report chart contains an external paint server");
-  }
-  for (const match of svg.matchAll(/\sstyle\s*=\s*(["'])([\s\S]*?)\1/gi)) {
-    const style = match[2] ?? "";
-    if (/&|@import|expression\s*\(|(?:javascript|data|https?):|\/\//i.test(style)) {
+  for (const [name, value] of svgAttributes(svg)) {
+    if (/^on/i.test(name)) {
+      throw new Error("report chart contains an event-handler attribute");
+    }
+    if (/^(?:[\w-]+:)?(?:href|src)$/i.test(name)) {
+      throw new Error("report chart contains an external or active URL");
+    }
+    if (/url\s*\(/i.test(value.replace(/url\(\s*#[-\w:.]+\s*\)/gi, ""))) {
+      throw new Error("report chart contains an external paint server");
+    }
+    if (
+      name.toLowerCase() === "style" &&
+      /&|@import|expression\s*\(|(?:javascript|data|https?):|\/\//i.test(value)
+    ) {
       throw new Error("report chart contains an active style attribute");
+    }
+  }
+}
+
+/**
+ * Attributes of every tag, split the way an HTML parser splits them: quotes
+ * only delimit a value that starts with one, and `/` separates attributes.
+ * Text nodes are skipped, so a label such as `my-src=2` is not an attribute.
+ */
+function* svgAttributes(svg: string): Generator<[string, string]> {
+  let index = 0;
+  while (index < svg.length) {
+    const open = svg.indexOf("<", index);
+    if (open === -1) {
+      return;
+    }
+    index = open + 1;
+    if (svg[index] === "/") {
+      index += 1;
+    }
+    while (index < svg.length && /[^\s/>]/.test(svg[index] ?? "")) {
+      index += 1;
+    }
+    for (;;) {
+      while (index < svg.length && /[\s/]/.test(svg[index] ?? "")) {
+        index += 1;
+      }
+      if (index >= svg.length) {
+        throw new Error("report chart contains an unterminated tag");
+      }
+      if (svg[index] === ">") {
+        index += 1;
+        break;
+      }
+      const nameStart = index;
+      while (index < svg.length && /[^\s/>=]/.test(svg[index] ?? "")) {
+        index += 1;
+      }
+      const name = svg.slice(nameStart, index) || (svg[index++] ?? "");
+      while (index < svg.length && /\s/.test(svg[index] ?? "")) {
+        index += 1;
+      }
+      let value = "";
+      if (svg[index] === "=") {
+        index += 1;
+        while (index < svg.length && /\s/.test(svg[index] ?? "")) {
+          index += 1;
+        }
+        const quote = svg[index];
+        if (quote === '"' || quote === "'") {
+          const close = svg.indexOf(quote, index + 1);
+          if (close === -1) {
+            throw new Error("report chart contains an unterminated tag");
+          }
+          value = svg.slice(index + 1, close);
+          index = close + 1;
+        } else {
+          const valueStart = index;
+          while (index < svg.length && /[^\s>]/.test(svg[index] ?? "")) {
+            index += 1;
+          }
+          value = svg.slice(valueStart, index);
+        }
+      }
+      yield [name, value];
     }
   }
 }

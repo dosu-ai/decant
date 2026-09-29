@@ -75,7 +75,8 @@ The image trusts a verified container bridge gateway so host traffic forwarded
 through that loopback port can reach it. Custom Docker networks, Podman,
 Kubernetes, and host networking can return `403 forbidden remote`. In those
 environments, set `DECANT_TRUSTED_PEERS` to the exact forwarding IP or a narrow
-IPv4 CIDR. Every trusted address can read and mutate the archive.
+IPv4 CIDR. Every trusted address can read and mutate the archive. Decant
+refuses to start when an entry is neither an IP address nor an IPv4 CIDR.
 
 ## Source
 

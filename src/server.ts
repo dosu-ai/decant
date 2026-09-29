@@ -1,16 +1,29 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { SESSION_LIST_MAX_LIMIT } from "./api-limits.ts";
+import { isIP } from "node:net";
+import { dirname, isAbsolute, join } from "node:path";
+import { SESSION_LIST_MAX_LIMIT, USAGE_LIST_MAX_LIMIT } from "./api-limits.ts";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
-import { ARCHIVE_DIR_MODE, closeDb, openDb, SchemaDriftError } from "./db.ts";
+import {
+  ARCHIVE_DIR_MODE,
+  closeDb,
+  openDb,
+  SchemaDriftError,
+  SchemaTooNewError,
+  SchemaTooOldError,
+} from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
-import { DECANT_VERSION } from "./distill.ts";
+import { parseFileOperation } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
-import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
-import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
+import {
+  canLaunch,
+  isSafeRecommendationKey,
+  launchAgent,
+  command as launchCommand,
+  openIde,
+} from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { openApiDocument } from "./openapi.ts";
 import {
@@ -30,12 +43,7 @@ import {
   refreshForSessionStateChange,
   STATUS_FILTERS,
 } from "./recommendations.ts";
-import {
-  assembleAnalyticsReport,
-  assembleSessionReport,
-  renderAnalyticsReport,
-  renderSessionReport,
-} from "./report/index.ts";
+import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { type SessionUserStateUpdate, setSessionUserState } from "./session-user-state.ts";
 import {
   agentOptions,
@@ -63,6 +71,7 @@ import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
+import { DECANT_VERSION } from "./version.ts";
 import {
   type SyncRunnerFailure,
   type SyncRunnerResult,
@@ -73,8 +82,7 @@ import {
 } from "./watch.ts";
 import { workerError, workerUrl } from "./worker-runtime.ts";
 
-export const DEFAULT_SERVE_HOST = "127.0.0.1";
-export const DEFAULT_SERVE_PORT = 3000;
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
 export interface ServeWatchOptions {
   intervalMs?: number;
@@ -190,7 +198,7 @@ const syncStatus = {
 const eventClients = new Set<EventClient>();
 const metadataHydrated = new WeakSet<Db>();
 
-export function publishServerEvent<T extends ServerEvent>(event: T): void {
+function publishServerEvent<T extends ServerEvent>(event: T): void {
   for (const client of [...eventClients]) {
     try {
       client.send(event);
@@ -212,15 +220,6 @@ export async function handleRequest(
   }
   const dateFilter = dateFilterFromSearch(url.searchParams);
   try {
-    if (request.method === "GET" && url.pathname === "/favicon.ico") {
-      return embeddedAsset(faviconPath, "image/x-icon");
-    }
-    if (request.method === "GET" && url.pathname === "/apple-touch-icon.png") {
-      return embeddedAsset(appleTouchIconPath, "image/png");
-    }
-    if (request.method === "GET" && url.pathname === "/") {
-      return html(indexHtml());
-    }
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
     }
@@ -278,7 +277,15 @@ export async function handleRequest(
       if (key != null && typeof key !== "string") {
         return errorResponse("invalid_request", "key must be a string or null", { ok: false }, 400);
       }
-      const result = launchAgent(agent, prompt, key ?? null, getSettings(), {
+      if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
+        return errorResponse(
+          "invalid_request",
+          "key contains unsupported characters",
+          { ok: false },
+          400,
+        );
+      }
+      const result = await launchAgent(agent, prompt, key ?? null, getSettings(), {
         platform: context.launchPlatform,
       });
       if (result.ok) {
@@ -307,7 +314,18 @@ export async function handleRequest(
       if (typeof dir !== "string" || dir.trim() === "") {
         return errorResponse("invalid_request", "dir is required", { ok: false }, 400);
       }
-      const result = openIde(dir, getSettings(), { platform: context.launchPlatform });
+      if (!isAbsolute(dir)) {
+        return errorResponse("invalid_request", "dir must be an absolute path", { ok: false }, 400);
+      }
+      if (!isKnownProjectDir(config, context, dir)) {
+        return errorResponse(
+          "invalid_request",
+          "dir is not a project in the archive",
+          { ok: false },
+          400,
+        );
+      }
+      const result = await openIde(dir, getSettings(), { platform: context.launchPlatform });
       return result.ok
         ? json(result)
         : errorResponse(
@@ -580,6 +598,7 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
+      const { assembleAnalyticsReport, renderAnalyticsReport } = await import("./report/index.ts");
       return withDb(config, context, (db) =>
         reportHtmlResponse(
           renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter })),
@@ -599,6 +618,7 @@ export async function handleRequest(
     }
     const sessionReportMatch = url.pathname.match(/^\/api\/reports\/session\/(\d+)\.html$/);
     if (request.method === "GET" && sessionReportMatch != null) {
+      const { assembleSessionReport, renderSessionReport } = await import("./report/index.ts");
       return withDb(config, context, (db) => {
         const report = assembleSessionReport(db, Number(sessionReportMatch[1]));
         if (report == null) {
@@ -618,12 +638,13 @@ export async function handleRequest(
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");
-      const op = parseOperation(url.searchParams.get("op"));
+      const opParam = url.searchParams.get("op");
+      const op = opParam == null || opParam === "" ? null : (parseFileOperation(opParam) ?? false);
       if (group == null || op === false) {
         return errorResponse("invalid_files_query", "invalid files query", {}, 400);
       }
       return withDb(config, context, (db) =>
-        json(fileHotspots(db, group, op, integerParam(url, "limit", 25), dateFilter)),
+        json(fileHotspots(db, group, op, usageLimit(url, 25), dateFilter)),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/calls") {
@@ -661,16 +682,14 @@ export async function handleRequest(
           toolUsage(
             db,
             url.searchParams.get("errors_only") === "true",
-            integerParam(url, "limit", 50),
+            usageLimit(url, 50),
             dateFilter,
           ),
         ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/mcp-usage") {
-      return withDb(config, context, (db) =>
-        json(mcpUsage(db, integerParam(url, "limit", 50), dateFilter)),
-      );
+      return withDb(config, context, (db) => json(mcpUsage(db, usageLimit(url, 50), dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");
@@ -709,9 +728,6 @@ export async function handleRequest(
               404,
             );
       });
-    }
-    if (request.method === "GET" && isUiPath(url.pathname)) {
-      return html(indexHtml());
     }
     return errorResponse("not_found", "not found", {}, 404);
   } catch (error) {
@@ -1059,6 +1075,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const server = Bun.serve({
     hostname,
     port,
+    maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
     routes: {
       "/favicon.ico": new Response(Bun.file(faviconPath), {
         headers: { "cache-control": "public, max-age=86400", "content-type": "image/x-icon" },
@@ -1243,6 +1260,16 @@ function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
   }
 }
 
+function isKnownProjectDir(config: Config, context: RequestContext, dir: string): boolean {
+  let known = false;
+  withDb(config, context, (db) => {
+    known =
+      db.query("SELECT 1 FROM project WHERE path = ?1 OR root_path = ?1 LIMIT 1").get(dir) != null;
+    return json(null);
+  });
+  return known;
+}
+
 function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
   if (context.db != null) {
     ensureDerivedMetadata(context.db);
@@ -1266,7 +1293,7 @@ function ensureDerivedMetadata(db: Db): void {
   metadataHydrated.add(db);
 }
 
-export function errorResponse(
+function errorResponse(
   code: ApiErrorCode,
   message: string,
   extras: Record<string, unknown> = {},
@@ -1298,13 +1325,10 @@ function classifyError(error: unknown): ApiError {
   if (error instanceof SchemaDriftError) {
     return { code: "schema_drift", message, status: 409 };
   }
+  if (error instanceof SchemaTooNewError || error instanceof SchemaTooOldError) {
+    return { code: error.code, message, status: 409 };
+  }
   const normalized = message.toLowerCase();
-  if (normalized.includes("is newer than this build supports")) {
-    return { code: "schema_too_new", message, status: 409 };
-  }
-  if (normalized.includes("predates this build's baseline")) {
-    return { code: "schema_too_old", message, status: 409 };
-  }
   if (isArchiveLockedError(error, normalized)) {
     return {
       code: "archive_locked",
@@ -1335,7 +1359,7 @@ function isArchiveLockedError(error: unknown, normalizedMessage: string): boolea
 }
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value, null, 2), {
+  return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
@@ -1367,7 +1391,7 @@ function validateLocalRequest(
 }
 
 function isProtectedPath(pathname: string): boolean {
-  return pathname === "/api/events" || pathname.startsWith("/api/");
+  return pathname.startsWith("/api/");
 }
 
 function isMutatingMethod(method: string): boolean {
@@ -1431,6 +1455,31 @@ function isTrustedPeer(address: string | null | undefined, trustedPeers: string[
   return false;
 }
 
+function assertValidPeers(peers: string[]): string[] {
+  for (const peer of peers) {
+    if (!isValidPeer(peer)) {
+      throw new Error(
+        `invalid trusted peer ${JSON.stringify(peer)}: expected an IP address ` +
+          "or an IPv4 CIDR such as 203.0.113.0/24",
+      );
+    }
+  }
+  return peers;
+}
+
+function isValidPeer(peer: string): boolean {
+  if (!peer.includes("/")) {
+    return isIP(normalizeHost(peer)) !== 0;
+  }
+  const [address, bits, ...extra] = peer.split("/");
+  return (
+    extra.length === 0 &&
+    ipv4ToInt(address ?? "") != null &&
+    /^\d{1,2}$/.test(bits ?? "") &&
+    Number(bits) <= 32
+  );
+}
+
 export function parsePeerList(value: string | null | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -1454,33 +1503,19 @@ export interface TrustedPeerSources {
   sysClassNetPath?: string;
 }
 
-/** Peers the local API guard admits when `serve` is bound to a non-loopback
- * host, resolved once at startup.
- *
- * Precedence, highest first. The first source that is present wins outright and
- * the rest are not consulted, so explicit configuration always *replaces* the
- * gateway default rather than adding to it:
- *
- * 1. `--trusted-peer` (`configured`), when the CLI collected any.
- * 2. `DECANT_TRUSTED_PEERS`, whenever the variable is set at all -- setting it
- *    to an empty string means "trust nobody", not "fall through".
- * 3. `DECANT_TRUST_DEFAULT_GATEWAY=1`, which trusts exactly one address: this
- *    container's own bridge gateway, and only when `containerBridgeGateway`
- *    can prove that is what the default route points at. Every other value,
- *    including `0` and an unset variable, trusts nobody.
- *
- * Nothing re-resolves afterwards: a host whose default route changes keeps the
- * address resolved at startup until `serve` restarts. */
+/** Peers admitted on a non-loopback bind, resolved once at startup. The first
+ * present source replaces the rest (an empty DECANT_TRUSTED_PEERS trusts
+ * nobody); precedence is documented in docs/api/routes.md. */
 export function resolveTrustedPeers(
   configured?: string[],
   env: Record<string, string | undefined> = process.env,
   sources: TrustedPeerSources = {},
 ): string[] {
   if (configured != null) {
-    return configured;
+    return assertValidPeers(configured);
   }
   if (env.DECANT_TRUSTED_PEERS != null) {
-    return parsePeerList(env.DECANT_TRUSTED_PEERS);
+    return assertValidPeers(parsePeerList(env.DECANT_TRUSTED_PEERS));
   }
   if (!isEnvEnabled(env.DECANT_TRUST_DEFAULT_GATEWAY)) {
     return [];
@@ -1494,26 +1529,12 @@ export function resolveTrustedPeers(
 
 /** This container's own bridge gateway, or `null` when that cannot be proven.
  *
- * That single address is worth trusting only because container runtimes rewrite
- * the source address of `-p`-published host traffic to it: it stands in for the
- * host that started the container, while a sibling container on the same bridge
- * keeps its own source address and stays denied. The reasoning holds only for a
- * bridge-networked container, so all of the following must hold and anything
- * unexpected -- including a non-Linux host, where `/proc/net/route` is absent --
- * fails closed:
- *
- * - exactly one usable IPv4 default route, so a multi-homed host cannot
- *   contribute a gateway from some other network;
- * - the gateway is on-link on that route's interface;
- * - the gateway is inside `GATEWAY_AUTO_TRUST_RANGE`;
- * - the interface is a veth into another network namespace: it publishes no
- *   device kind other than `veth`, has no backing bus device, is not stacked on
- *   a local parent, and its link peer does not resolve here. That rules out
- *   sharing the host's namespace (`--network host`, where the default route
- *   runs over a physical NIC, bridge, bond or tunnel) and a container attached
- *   straight to the LAN (macvlan, ipvlan). In those shapes the "default
- *   gateway" is the LAN or VPC router, which must never be trusted
- *   implicitly. */
+ * Runtimes rewrite the source of `-p`-published host traffic to this address,
+ * so it stands in for the host while sibling containers stay denied. That only
+ * holds for a veth into another network namespace: on host networking, macvlan
+ * or ipvlan the default gateway is a LAN or VPC router that must never be
+ * trusted implicitly, so every unproven shape (and any non-Linux host) fails
+ * closed. See docs/distribution.md#docker. */
 function containerBridgeGateway(routeTablePath: string, sysClassNetPath: string): string | null {
   const routes = readRouteTable(routeTablePath);
   if (routes == null) {
@@ -1766,20 +1787,6 @@ function requireJsonRequest(request: Request): Response | null {
     : errorResponse("unsupported_media_type", "content-type must be application/json", {}, 415);
 }
 
-/** Shells returned from here deny framing. Note this covers only the fallback
- * shell built by this handler: `serve()` answers the UI paths from Bun's
- * HTMLBundle routes, which emit their own fixed headers and cannot carry these,
- * so the SPA itself refuses to render when framed (src/ui/frame-guard.ts). */
-function html(value: string): Response {
-  return new Response(value, {
-    headers: {
-      "content-security-policy": "frame-ancestors 'none'",
-      "content-type": "text/html; charset=utf-8",
-      "x-frame-options": "DENY",
-    },
-  });
-}
-
 function reportHtmlResponse(value: string, filename: string): Response {
   return new Response(value, {
     headers: {
@@ -1823,13 +1830,8 @@ function integerParam(url: URL, name: string, fallback: number, allowZero = fals
   return Number.isFinite(parsed) && (parsed > 0 || (allowZero && parsed === 0)) ? parsed : fallback;
 }
 
-function parseOperation(value: string | null): Operation | null | false {
-  if (value == null || value === "") {
-    return null;
-  }
-  return value === "read" || value === "edit" || value === "write" || value === "delete"
-    ? value
-    : false;
+function usageLimit(url: URL, fallback: number): number {
+  return Math.min(integerParam(url, "limit", fallback), USAGE_LIST_MAX_LIMIT);
 }
 
 function isValidSessionId(value: string): boolean {
@@ -1865,39 +1867,4 @@ function sessionNotFound(db: Db): Response {
 
 function isUnsupportedLaunchError(error: string | undefined): boolean {
   return error?.includes("only supported on macOS") ?? false;
-}
-
-function isUiPath(pathname: string): boolean {
-  return !pathname.startsWith("/api/") && !/\/[^/]*\.[^/]+$/.test(pathname);
-}
-
-function indexHtml(): string {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Local-first analytics for Claude Code, Codex, and Gemini CLI sessions. Search transcripts, inspect cost and context, and turn repeated work into durable agent knowledge."
-    />
-    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 256x256" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
-    <title>Decant</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/ui/main.tsx"></script>
-  </body>
-</html>
-`;
-}
-
-function embeddedAsset(path: string, contentType: string): Response {
-  return new Response(Bun.file(path), {
-    headers: {
-      "cache-control": "public, max-age=86400",
-      "content-type": contentType,
-    },
-  });
 }

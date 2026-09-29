@@ -9,7 +9,7 @@ import {
 } from "./charts.ts";
 import type { AnalyticsReportData, SessionReportData, SessionToolReportRow } from "./data.ts";
 import { DosuOptimizedMark, reportDosuLink } from "./dosu.tsx";
-import { REPORT_FONT_CSS } from "./fonts.ts";
+import { reportFontCss } from "./fonts.ts";
 import { REPORT_CSS } from "./styles.ts";
 
 export interface ReportRenderOptions {
@@ -433,7 +433,7 @@ function normalizeOptions(options: ReportRenderOptions): NormalizedRenderOptions
   return {
     generatedAt: options.generatedAt ?? new Date(),
     version: options.version ?? DECANT_VERSION,
-    fontCss: options.fontCss ?? REPORT_FONT_CSS,
+    fontCss: options.fontCss ?? reportFontCss(),
   };
 }
 

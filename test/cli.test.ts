@@ -13,10 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { defaultArgv, runCli } from "../src/cli.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
-import { DECANT_VERSION } from "../src/distill.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -745,6 +745,26 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("--port");
     expect(serve.stdout).toContain("--trusted-peer");
     expect(serve.stdout).toContain("(default: 3000)");
+  });
+
+  test("serve refuses to start with a trusted peer that could never match", async () => {
+    const fixtureCase = freshCase();
+    const result = await runCli(
+      [
+        "--db",
+        fixtureCase.dbPath,
+        "--no-sync",
+        "serve",
+        "--port",
+        "0",
+        "--no-open",
+        "--trusted-peer",
+        "10.0.0.0/33",
+      ],
+      { env: { DECANT_NO_SYNC: "1" } },
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('invalid trusted peer "10.0.0.0/33"');
   });
 });
 

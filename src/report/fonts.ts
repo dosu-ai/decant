@@ -8,8 +8,16 @@ function fontData(path: string): string {
   return readFileSync(path).toString("base64");
 }
 
+let cachedFontCss: string | undefined;
+
 /** Trusted, bundled font declarations for static report documents. */
-export const REPORT_FONT_CSS = `
+export function reportFontCss(): string {
+  cachedFontCss ??= buildFontCss();
+  return cachedFontCss;
+}
+
+function buildFontCss(): string {
+  return `
 @font-face {
   font-family: "IBM Plex Sans";
   font-style: normal;
@@ -39,3 +47,4 @@ export const REPORT_FONT_CSS = `
   src: url("data:font/woff2;base64,${fontData(sourceSerifSemiboldPath)}") format("woff2");
 }
 `;
+}

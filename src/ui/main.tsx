@@ -289,7 +289,7 @@ type ServerEventPayload = {
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
 // Every other view renders its own <h1>; the topbar title is then a plain label.
-const VIEWS_WITHOUT_HEADING = new Set(["not-found", "analytics-report", "session-report"]);
+const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
 
 type Activity = {

@@ -26,11 +26,18 @@ test("the chart runtime imports only the modular ECharts entry points", () => {
     "echarts/charts",
     "echarts/components",
     "echarts/core",
+    "echarts/features",
     "echarts/renderers",
   ]);
-  expect(runtime).toContain(
-    "use([BarChart, LineChart, GridComponent, TooltipComponent, CanvasRenderer]);",
-  );
+  const registered = /use\(\[([^\]]+)\]\)/.exec(runtime)?.[1]?.match(/\b[A-Z]\w+/g) ?? [];
+  expect(registered.sort()).toEqual([
+    "BarChart",
+    "CanvasRenderer",
+    "GridComponent",
+    "LegacyGridContainLabel",
+    "LineChart",
+    "TooltipComponent",
+  ]);
 });
 
 test("no UI module pulls in the whole ECharts bundle", () => {

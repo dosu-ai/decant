@@ -24,8 +24,6 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.v.outputs.version }}
-      is_prerelease: ${{ steps.v.outputs.is_prerelease }}
-      is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
 
@@ -45,24 +43,7 @@ jobs:
           [ "$TAG_COMMIT" = "$GITHUB_SHA" ] \
             || { echo "::error::tag $TAG points at $TAG_COMMIT but this run builds $GITHUB_SHA — dispatch with the tag as the run ref"; exit 1; }
 
-          if [[ "$VERSION" == *-* ]]; then IS_PRERELEASE=true; else IS_PRERELEASE=false; fi
-
-          IS_LATEST=false
-          if [[ "$IS_PRERELEASE" == false ]]; then
-            TAGS="$(git ls-remote --tags origin 'v*')"
-            HIGHEST=$(
-              { printf '%s\n' "$TAGS" \
-                  | awk '{print $2}' | sed -e 's#^refs/tags/##' -e 's/\^{}$//' \
-                  | sort -u | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//'
-                echo "$VERSION"
-              } | sort -V | tail -n1)
-            [[ "$HIGHEST" == "$VERSION" ]] && IS_LATEST=true
-          fi
-
-          { echo "version=$VERSION"
-            echo "is_prerelease=$IS_PRERELEASE"
-            echo "is_latest=$IS_LATEST"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   verify:
     name: Verify (biome, tsc, test)
@@ -447,16 +428,6 @@ jobs:
           rm -rf "$smoke_dir" "dist/npm/decant/${launcher_tgz}"
           rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
 
-      - name: Derive npm dist-tag channel
-        env:
-          IS_PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
-          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
-        run: |
-          if [[ "$IS_PRERELEASE" == "true" ]]; then CHANNEL=next
-          elif [[ "$IS_LATEST" == "true" ]]; then CHANNEL=latest
-          else CHANNEL=previous; fi
-          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
-
       - name: Publish packages (OIDC trusted publishing)
         run: |
           set -euo pipefail
@@ -466,7 +437,7 @@ jobs:
               echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
               continue
             fi
-            npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
+            npm publish "dist/npm/${dir}" --access public --tag latest --provenance
           done
 
   npm-smoke:
@@ -536,8 +507,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: v${{ needs.meta.outputs.version }}
-          PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
-          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
         run: |
           set -euo pipefail
           bundle="decant-${TAG#v}.sigstore.json"
@@ -546,10 +515,7 @@ jobs:
             echo "::notice::$TAG already has a release — refreshing assets only (gh release create would 422)"
             gh release upload "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh --clobber
           else
-            flags=(--verify-tag --generate-notes)
-            [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
-            [ "$IS_LATEST" = "true" ] || flags+=(--latest=false)
-            gh release create "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh "${flags[@]}"
+            gh release create "$TAG" ./*.tar.gz "$bundle" SHA256SUMS install.sh --verify-tag --generate-notes --latest
           fi
 
   docker:
@@ -584,12 +550,11 @@ jobs:
       - name: Compute tag list
         id: tags
         env:
-          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           { echo "list<<TAGS_EOF"
             echo "ghcr.io/dosu-ai/decant:${VERSION}"
-            [[ "$IS_LATEST" == "true" ]] && echo "ghcr.io/dosu-ai/decant:latest"
+            echo "ghcr.io/dosu-ai/decant:latest"
             echo "TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -630,7 +595,6 @@ jobs:
   homebrew-formula:
     name: Render Homebrew formula
     needs: [meta, build, github-release]
-    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -683,7 +647,6 @@ jobs:
   homebrew-smoke:
     name: Homebrew install smoke (${{ matrix.target }})
     needs: [meta, homebrew-formula]
-    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -728,7 +691,6 @@ jobs:
   tap-update:
     name: Update Homebrew tap
     needs: [meta, github-release, homebrew-formula, homebrew-smoke]
-    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

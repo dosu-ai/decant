@@ -55,7 +55,7 @@ docker-build *ARGS:
 docker-buildx *ARGS:
     docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly {{ARGS}} .
 
-# Cut and push a signed release tag. VERSION is semver, no leading "v".
+# Cut and push a signed release tag. VERSION is semver without a leading "v"; suffixes like -beta.1 run the same pipeline.
 [group('dist')]
 release VERSION:
     #!/usr/bin/env bash

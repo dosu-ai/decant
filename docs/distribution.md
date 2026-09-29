@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
 
 Optional environment variables:
 
-- `DECANT_VERSION`: release to install; defaults to the latest stable release.
+- `DECANT_VERSION`: release to install; defaults to the latest release.
 - `DECANT_INSTALL_DIR`: destination; defaults to `~/.local/bin`.
 - `DECANT_NO_MODIFY_PATH=1`: do not edit a shell startup file.
 - `DECANT_BASE_URL`: release mirror with the same asset layout as GitHub.
@@ -92,6 +92,25 @@ Build a native binary for the current platform with:
 ```sh
 bun run scripts/build-binaries.ts --target native
 ```
+
+## Cut a release
+
+Releases are cut by pushing a signed `vMAJOR.MINOR.PATCH` tag from `main`
+(`just release 1.2.3`). A suffix such as `-beta.1` is allowed and runs the same
+pipeline. There are no separate prerelease or channel paths.
+
+The tag triggers `.github/workflows/release.yml`, which verifies the tag points
+at the run's commit and then publishes every release the same way:
+
+- a GitHub Release, marked latest, with the tarballs, `SHA256SUMS`, the
+  Sigstore bundle, and `install.sh`
+- the npm launcher and platform packages under the `latest` dist-tag, with
+  provenance, including suffixed versions
+- `ghcr.io/dosu-ai/decant:<version>` and `ghcr.io/dosu-ai/decant:latest`
+- an updated formula in the `dosu-ai/homebrew-dosu` tap
+
+Re-running a failed release is safe: already-published npm versions are
+skipped and an existing GitHub Release only has its assets refreshed.
 
 ## Verify a release
 

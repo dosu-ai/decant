@@ -7,6 +7,7 @@
 
 # Per-developer coding-agent configuration may contain credentials.
 .claude/settings.local.json
+.claude/worktrees/
 .mcp.json
 
 # Browser-automation artifacts

@@ -8,29 +8,33 @@ description: Cut a Decant release (signed vX.Y.Z tag that triggers the release w
 Publishing is irreversible: npm versions cannot be reused and the Homebrew tap
 updates for every user.
 
-**Stop and ask the user for explicit approval before pushing any tag, merging
-with `--admin`, or re-running a release job.** An earlier approval in the same
-conversation does not cover a new tag.
+**Stop and ask the user for explicit approval before running `just release`,
+pushing any tag, dispatching `release.yml`, merging with `--admin`, or
+re-running a release job.** An earlier approval in the same conversation does
+not cover a new tag.
 
 ## Preflight
 
 1. On `main`, clean tree, up to date with `origin/main`.
 2. `just check` passes locally (needs network for the npm pack smoke).
 3. CI is green on the exact commit you will tag.
-4. Pick the version: semver without a leading `v`. A suffix such as `-beta.1`
-   runs the same pipeline and publishes under the `latest` npm dist-tag.
+4. Pick the version: semver without a leading `v`. Prerelease suffixes such as
+   `-beta.1` and backport tags below the newest release publish to narrower
+   channels; `docs/distribution.md` describes which.
 
 ## Tag
 
-`just release VERSION` re-checks the preflight, creates a signed annotated tag
-`vVERSION`, and pushes it. Signing is required; do not bypass it.
+`just release VERSION` re-checks step 1 of the preflight only, then creates a
+signed annotated tag `vVERSION` and pushes it, so the approval above must come
+first. Signing is required; do not bypass it.
 
 ## What the tag triggers
 
 `.github/workflows/release.yml` builds the platform binaries (codesigned when
-signing secrets are configured), attests them, publishes GitHub Release assets with `SHA256SUMS`, publishes the
-npm launcher and platform packages with provenance, pushes the GHCR image, and
-updates the formula in `dosu-ai/homebrew-dosu`.
+signing secrets are configured), attests them, publishes GitHub Release assets
+with `SHA256SUMS`, publishes the npm launcher and platform packages with
+provenance, pushes the GHCR image, and updates the formula in
+`dosu-ai/homebrew-dosu`.
 
 ## Afterwards
 

@@ -22,10 +22,12 @@ editing; this skill only lists the steps that are easy to miss.
    plus a source-directory env override documented in `README.md`.
 2. `src/sources/<tool>.ts`: pure and print-free, returns a `ParsedSession`,
    turns malformed lines into `unparsed_line` issues and unknown record types
-   into one `unknown_record_type` issue per type, calls `linkageIssues`.
+   into one `unknown_record_type` issue per type, calls `linkageIssues`. Reuse
+   the JSONL line parser, unknown-type issue builders and block factory in
+   `src/sources/shared.ts`.
 3. The tool ID in `TOOLS` in `src/model.ts` (persisted; choose it once).
 4. `watchDirs()` in `src/watch.ts`.
-5. The capability table from the doc, filled in for the pull request.
+5. The capability report from the doc, filled in for the pull request.
 
 ## Tests and goldens
 

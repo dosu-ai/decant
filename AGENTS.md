@@ -120,6 +120,9 @@ Keep the public repository useful to users and outside contributors. Prefer
 current behavior and durable constraints over migration history, private
 runbooks, project-specific agent setup, or stale release notes. The README is
 the product entry point, and detailed operational behavior belongs in `docs/`.
+The skills in `.claude/skills/` are the one exception to the agent-setup rule:
+each stays a thin pointer to the doc that owns its procedure, so update the doc
+first and the skill only when a path or rule it names changes.
 
 When changing:
 

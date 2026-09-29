@@ -10,9 +10,10 @@ of `docs/data-lifecycle.md`. Read both before editing.
 
 ## Rules
 
-- A migration is frozen once it is on `main`: someone may already have opened
-  an archive with it. Never edit an existing `if (current < N)` block; add a new
-  one, even to fix a mistake in the previous one.
+- A migration is frozen once it is committed, because someone may already have
+  opened an archive with that branch. Never edit an existing `if (current < N)`
+  block, on `main` or on a feature branch; add a new one, even to fix a mistake
+  in the previous one.
 - Bump `LATEST_SCHEMA_VERSION` in `src/db.ts`. Refer to that constant in docs
   instead of writing the number.
 - Guard each statement so a partially-migrated or operator-modified archive

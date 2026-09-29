@@ -50,4 +50,4 @@ jobs:
         run: |
           set -euo pipefail
           pipx install "zizmor==${ZIZMOR_VERSION}"
-          zizmor --persona=regular --min-severity=medium --no-online-audits .github/workflows/
+          zizmor --persona=regular --min-severity=medium --no-online-audits .github/workflows/ .github/actions/

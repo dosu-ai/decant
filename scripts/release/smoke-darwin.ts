@@ -11,6 +11,8 @@ import {
   runMain,
   warning,
 } from "./actions.ts";
+import { DARWIN_TARGETS } from "./sign-darwin.ts";
+import { oneOf } from "./validate.ts";
 
 export interface SpctlVerdict {
   accepted: boolean;
@@ -37,7 +39,7 @@ export function judgeSpctl(status: number, output: string): SpctlVerdict {
 }
 
 function main(): void {
-  const target = requireEnv("TARGET");
+  const target = oneOf("TARGET", requireEnv("TARGET"), DARWIN_TARGETS);
   const binary = "smoke/decant";
   const spctlArgs = ["-a", "-t", "exec", "-vv", binary];
 

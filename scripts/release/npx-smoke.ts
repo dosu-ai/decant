@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fail, log, requireEnv, retry, run, runMain } from "./actions.ts";
+import { releaseVersion } from "./validate.ts";
 
 export const NPX_ATTEMPTS = 20;
 export const NPX_RETRY_DELAY_MS = 30_000;
@@ -34,7 +35,7 @@ export async function waitForNpx(options: {
 }
 
 async function main(): Promise<void> {
-  const version = requireEnv("VERSION");
+  const version = releaseVersion(requireEnv("VERSION"));
   // Outside the checkout, so npm cannot resolve the spec against this repo's own package.json.
   const cwd = mkdtempSync(join(tmpdir(), "decant-npx-smoke-"));
   try {

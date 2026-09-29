@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { log, requireEnv, runMain, warning } from "./actions.ts";
+import { releaseVersion } from "./validate.ts";
 
 export function manifestUrl(version: string): string {
   return `https://ghcr.io/v2/dosu-ai/decant/manifests/${version}`;
@@ -19,7 +20,7 @@ export function ghcrVisibility(
 }
 
 async function main(): Promise<void> {
-  const version = requireEnv("VERSION");
+  const version = releaseVersion(requireEnv("VERSION"));
   const response = await fetch(manifestUrl(version), { redirect: "manual" });
   const visibility = ghcrVisibility(response.status, version);
   if (visibility.public) {

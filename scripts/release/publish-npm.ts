@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { notice, requireEnv, runChecked, runMain, runQuiet } from "./actions.ts";
 import { packageName } from "./npm.ts";
+import { releaseVersion } from "./validate.ts";
 
 /** Platform packages publish before the launcher so its optional dependencies resolve. */
 export const NPM_PACKAGE_DIRS = [
@@ -40,9 +41,9 @@ export function publishPackages(version: string, deps: PublishDeps): void {
 }
 
 function main(): void {
-  publishPackages(requireEnv("VERSION"), {
+  publishPackages(releaseVersion(requireEnv("VERSION")), {
     packageName,
-    isPublished: (spec) => runQuiet("npm", ["view", spec, "version"]) === 0,
+    isPublished: (spec) => runQuiet("npm", ["view", "--", spec, "version"]) === 0,
     publish: (args) => runChecked("npm", args),
     notice,
   });

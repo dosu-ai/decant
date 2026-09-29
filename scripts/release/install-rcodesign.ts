@@ -3,6 +3,7 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { addPath, log, requireEnv, runChecked, runMain } from "./actions.ts";
 import { sha256Matches } from "./checksums.ts";
+import { absolutePath } from "./validate.ts";
 
 export const RCODESIGN_VERSION = "0.29.0";
 export const RCODESIGN_SHA256 = "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002";
@@ -14,7 +15,7 @@ export function rcodesignUrl(version = RCODESIGN_VERSION): string {
 }
 
 function main(): void {
-  const runnerTemp = requireEnv("RUNNER_TEMP");
+  const runnerTemp = absolutePath("RUNNER_TEMP", requireEnv("RUNNER_TEMP"));
   const archive = join(runnerTemp, "rcodesign.tar.gz");
 
   runChecked("curl", ["-fsSL", "--retry", "3", "-o", archive, rcodesignUrl()]);
@@ -25,7 +26,7 @@ function main(): void {
 
   runChecked(
     "tar",
-    ["-xzf", "rcodesign.tar.gz", "--strip-components=1", `${ARCHIVE_ROOT}/rcodesign`],
+    ["-xzf", "rcodesign.tar.gz", "--strip-components=1", "--", `${ARCHIVE_ROOT}/rcodesign`],
     { cwd: runnerTemp },
   );
   const binDir = join(runnerTemp, "bin");

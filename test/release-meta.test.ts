@@ -118,6 +118,13 @@ describe("meta CLI", () => {
     expect(bad.status).toBe(1);
     expect(bad.stdout).toContain("::error::'1.2' is not semver");
 
+    const badSha = runMeta(work, "v0.4.0", "--upload-pack=touch pwned");
+    expect(badSha.status).toBe(1);
+    expect(badSha.stdout).toContain(
+      "::error::GITHUB_SHA must be a 40-character lowercase hex commit SHA",
+    );
+    expect(badSha.outputs).toBe("");
+
     const missing = runMeta(work, "v9.9.9", head);
     expect(missing.status).toBe(1);
     expect(missing.stdout).toContain(

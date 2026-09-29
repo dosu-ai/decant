@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { capture, chomp, fail, lastLine, log, requireEnv, runChecked, runMain } from "./actions.ts";
 import { packageName } from "./npm.ts";
+import { absolutePath, releaseFileName, releaseVersion } from "./validate.ts";
 
 export function launcherVersionProblem(
   launcher: string,
@@ -16,13 +17,13 @@ export function launcherVersionProblem(
 }
 
 function npmPack(packageDir: string): string {
-  return lastLine(capture("npm", ["pack", "--silent"], { cwd: packageDir }));
+  return releaseFileName(lastLine(capture("npm", ["pack", "--silent"], { cwd: packageDir })));
 }
 
 function main(): void {
-  const version = requireEnv("VERSION");
-  const platformDir = resolve("dist/npm/decant-linux-x64");
-  const launcherDir = resolve("dist/npm/decant");
+  const version = releaseVersion(requireEnv("VERSION"));
+  const platformDir = absolutePath("platform package dir", resolve("dist/npm/decant-linux-x64"));
+  const launcherDir = absolutePath("launcher package dir", resolve("dist/npm/decant"));
 
   const platformTgz = npmPack(platformDir);
   const launcher = packageName(launcherDir);
@@ -37,6 +38,7 @@ function main(): void {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--",
         join(platformDir, platformTgz),
         join(launcherDir, launcherTgz),
       ],

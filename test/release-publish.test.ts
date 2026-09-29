@@ -162,18 +162,21 @@ describe("GitHub Release publishing", () => {
     expect(ghReleaseArgs(plan, false)).toEqual([
       "release",
       "create",
+      "--verify-tag",
+      "--generate-notes",
+      "--latest",
+      "--",
       "v1.2.3",
       ...assets,
-      "--verify-tag",
-      "--generate-notes",
-      "--latest",
     ]);
     const beta = { ...plan, tag: "v1.2.3-beta.1", bundle: attestationBundleName("v1.2.3-beta.1") };
-    expect(ghReleaseArgs(beta, false).slice(-4)).toEqual([
-      "install.sh",
+    expect(ghReleaseArgs(beta, false).slice(2, 8)).toEqual([
       "--verify-tag",
       "--generate-notes",
       "--latest",
+      "--",
+      "v1.2.3-beta.1",
+      "./decant-darwin-arm64.tar.gz",
     ]);
     expect(beta.bundle).toBe("decant-1.2.3-beta.1.sigstore.json");
   });
@@ -182,9 +185,10 @@ describe("GitHub Release publishing", () => {
     expect(ghReleaseArgs(plan, true)).toEqual([
       "release",
       "upload",
+      "--clobber",
+      "--",
       "v1.2.3",
       ...assets,
-      "--clobber",
     ]);
   });
 });

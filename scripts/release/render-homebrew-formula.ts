@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fail, requireEnv, runMain } from "./actions.ts";
 import { isSha256Hex, sha256For } from "./checksums.ts";
+import { releaseVersion } from "./validate.ts";
 
 export const FORMULA_TARGETS = {
   __SHA256_DARWIN_ARM64__: "darwin-arm64",
@@ -38,7 +39,7 @@ export function renderFormula(template: string, version: string, sums: string): 
 }
 
 function main(): void {
-  const version = requireEnv("VERSION");
+  const version = releaseVersion(requireEnv("VERSION"));
   const output = "dist/homebrew/decant.rb";
   const formula = renderFormula(
     readFileSync("packaging/homebrew/decant.rb.template", "utf8"),

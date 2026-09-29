@@ -2,8 +2,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fail, requireEnv, retry, run, runChecked, runMain, warning } from "./actions.ts";
+import { absolutePath, ascIssuerId, ascKeyId, oneOf } from "./validate.ts";
 
 export const DARWIN_TARGETS = ["darwin-arm64", "darwin-x64"] as const;
+export const SIGN_MODES = ["developer-id", "ad-hoc"] as const;
 export const NOTARY_ATTEMPTS = 3;
 export const NOTARY_RETRY_DELAY_MS = 30_000;
 
@@ -48,13 +50,14 @@ export function binaryPath(target: string): string {
 async function signDeveloperId(): Promise<void> {
   const certP12 = requireEnv("MACOS_CERT_P12_B64");
   const certPassword = requireEnv("MACOS_CERT_PASSWORD");
-  const issuerId = requireEnv("ASC_ISSUER_ID");
-  const keyId = requireEnv("ASC_KEY_ID");
+  const issuerId = ascIssuerId("ASC_ISSUER_ID", requireEnv("ASC_ISSUER_ID"));
+  const keyId = ascKeyId("ASC_KEY_ID", requireEnv("ASC_KEY_ID"));
   const keyP8 = requireEnv("ASC_KEY_P8");
 
   // Applies to every file this step creates, including rcodesign and zip output.
   process.umask(0o077);
-  await withPrivateDir(requireEnv("RUNNER_TEMP"), async (keysDir) => {
+  const runnerTemp = absolutePath("RUNNER_TEMP", requireEnv("RUNNER_TEMP"));
+  await withPrivateDir(runnerTemp, async (keysDir) => {
     const cert = join(keysDir, "cert.p12");
     const password = join(keysDir, "p12-password");
     const ascKey = join(keysDir, "asc-key.p8");
@@ -84,7 +87,7 @@ async function signDeveloperId(): Promise<void> {
         binaryPath(target),
       ]);
       const zip = join(keysDir, `decant-${target}.zip`);
-      runChecked("zip", ["-j", "-q", zip, binaryPath(target)]);
+      runChecked("zip", ["-j", "-q", zip, "--", binaryPath(target)]);
       await notarizeWithRetry({
         target,
         submit: () =>
@@ -104,13 +107,11 @@ function signAdHoc(): void {
 }
 
 async function main(): Promise<void> {
-  const mode = requireEnv("SIGN_MODE");
+  const mode = oneOf("SIGN_MODE", requireEnv("SIGN_MODE"), SIGN_MODES);
   if (mode === "developer-id") {
     await signDeveloperId();
-  } else if (mode === "ad-hoc") {
-    signAdHoc();
   } else {
-    throw new Error(`SIGN_MODE must be developer-id or ad-hoc, got ${JSON.stringify(mode)}`);
+    signAdHoc();
   }
 }
 

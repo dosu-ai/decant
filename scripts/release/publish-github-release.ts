@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fail, notice, requireEnv, runChecked, runMain, runQuiet } from "./actions.ts";
+import { releaseFileName, releaseTag, safePath } from "./validate.ts";
 
 export interface ReleasePlan {
   tag: string;
@@ -24,22 +25,23 @@ export function releaseAssets(plan: ReleasePlan): string[] {
  */
 export function ghReleaseArgs(plan: ReleasePlan, releaseExists: boolean): string[] {
   if (releaseExists) {
-    return ["release", "upload", plan.tag, ...releaseAssets(plan), "--clobber"];
+    return ["release", "upload", "--clobber", "--", plan.tag, ...releaseAssets(plan)];
   }
   return [
     "release",
     "create",
-    plan.tag,
-    ...releaseAssets(plan),
     "--verify-tag",
     "--generate-notes",
     "--latest",
+    "--",
+    plan.tag,
+    ...releaseAssets(plan),
   ];
 }
 
 function main(): void {
-  const releaseDir = requireEnv("RELEASE_DIR");
-  const tag = requireEnv("TAG");
+  const releaseDir = safePath("RELEASE_DIR", requireEnv("RELEASE_DIR"));
+  const tag = releaseTag("TAG", requireEnv("TAG"));
   const bundle = attestationBundleName(tag);
   const bundlePath = join(releaseDir, bundle);
   if (!existsSync(bundlePath) || !statSync(bundlePath).isFile()) {
@@ -47,13 +49,14 @@ function main(): void {
   }
   const tarballs = readdirSync(releaseDir)
     .filter((name) => !name.startsWith(".") && name.endsWith(".tar.gz"))
-    .sort();
+    .sort()
+    .map(releaseFileName);
   if (tarballs.length === 0) {
     fail(`no release tarballs found in ${releaseDir}`);
   }
   const plan: ReleasePlan = { tag, tarballs, bundle };
 
-  const exists = runQuiet("gh", ["release", "view", tag], { cwd: releaseDir }) === 0;
+  const exists = runQuiet("gh", ["release", "view", "--", tag], { cwd: releaseDir }) === 0;
   if (exists) {
     notice(`${tag} already has a release — refreshing assets only (gh release create would 422)`);
   }

@@ -238,6 +238,11 @@ archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
 
+Subagent parent links are resolved at the end of any sync that wrote or
+tombstoned a session. A sync that finds every source unchanged leaves the
+existing links alone, so a change to the inference rules ships with an ingest
+pipeline revision bump that re-derives them.
+
 Costs are materialized at ingest and reconciled with current pricing on every
 sync. This includes unchanged and archived sessions, even when their source
 files are no longer available. Session costs and cached activity cost components

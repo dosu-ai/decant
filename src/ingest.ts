@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
   closeSync,
@@ -19,7 +18,9 @@ import { defaultPricing, estimateCost } from "./cost.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
+import { getDecantLogger } from "./logging.ts";
 import {
+  type IngestIssueCode,
   type Json,
   type NormalizedBlock,
   type ParsedSession,
@@ -41,6 +42,8 @@ import {
 } from "./token-economics.ts";
 import { classifyTool, previewHeadTail } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
+
+const logger = getDecantLogger("ingest");
 
 export interface IngestConfig {
   claudeDir: string;
@@ -65,7 +68,7 @@ export interface SyncReport {
   issues: number;
   /** `issues` split by IngestIssueCode; only codes actually seen appear. Lets
    * callers separate data loss (`unparsed_line`) from informational sensors. */
-  issuesByCode: Record<string, number>;
+  issuesByCode: Partial<Record<IngestIssueCode, number>>;
   failed: number;
   cancelled: boolean;
 }
@@ -93,7 +96,6 @@ interface Prepared {
   lineCount: number;
   mtime: number;
   size: number;
-  hash: string;
 }
 
 interface ToolUseBlock {
@@ -176,6 +178,9 @@ export function sync(
     cancelled: false,
   };
   let inspected = 0;
+  // A tombstoned file writes no session but can delete lineage descendants and
+  // null their parent links, so it counts as a lineage change like an ingest.
+  let lineageMayHaveChanged = false;
   const emitProgress = (): void =>
     onProgress?.({
       scanned: inspected,
@@ -231,8 +236,14 @@ export function sync(
         // than the content read, so the next sync re-ingests instead of
         // silently skipping the tail.
         content = readFileSync(fd, "utf8");
-      } catch {
+      } catch (error) {
         report.failed += 1;
+        logger.warning("Source file could not be read.", {
+          "event.name": "decant.ingest.source_read_failed",
+          "file.path": file.path,
+          "error.type": (error as { code?: string }).code ?? "unknown",
+          "error.message": error instanceof Error ? error.message : String(error),
+        });
         continue;
       } finally {
         try {
@@ -266,12 +277,12 @@ export function sync(
         lineCount: lineCount(content),
         mtime: mtimeSecs(stats),
         size: stats.size,
-        hash: hashContent(content),
       };
 
       const outcome = writeIngestedFile(db, prepared, parsed);
       if (outcome === "tombstoned") {
         report.skipped += 1;
+        lineageMayHaveChanged = true;
       } else {
         report.ingested += 1;
         report.issues += parsed.issues.length;
@@ -285,7 +296,25 @@ export function sync(
     }
   }
 
-  resolveSubagentParents(db);
+  refreshDerivedState(db, report, repriced, lineageMayHaveChanged);
+
+  return report;
+}
+
+/** Work that follows the ingest loop, each step gated on the change that can invalidate it. */
+function refreshDerivedState(
+  db: Database,
+  report: SyncReport,
+  repriced: number,
+  lineageMayHaveChanged: boolean,
+): void {
+  // Lineage depends only on session rows and blocks, which change only through
+  // ingest. An unchanged archive keeps the links the last ingest resolved, so
+  // skipping here saves an O(archive) pass on every watcher sweep. A change to
+  // the inference rules must bump INGEST_PIPELINE_REVISION to re-ingest.
+  if (report.ingested > 0 || lineageMayHaveChanged) {
+    resolveSubagentParents(db);
+  }
   const materializedEconomics = materializeMissingSessionEconomics(db);
   const materializedWindows = materializeMissingContextWindows(db);
   const materializedEfforts = materializeMissingReasoningEfforts(db);
@@ -314,8 +343,6 @@ export function sync(
     // query planner picks pathological join orders on multi-GB archives.
     db.exec("PRAGMA optimize;");
   }
-
-  return report;
 }
 
 /**
@@ -329,7 +356,7 @@ export function upsertSession(
   sourcePath: string,
   mtime: number,
   size: number,
-  hash: string,
+  hash: string | null = null,
 ): number {
   return (
     withImmediateTransaction(db, () => writeSession(db, parsed, sourcePath, mtime, size, hash)) ?? 0
@@ -337,6 +364,39 @@ export function upsertSession(
 }
 
 export function seedModelPricing(db: Database): void {
+  const stored = new Map(
+    ingestRows<{
+      model: string;
+      input_per_mtok: number | null;
+      output_per_mtok: number | null;
+      cache_read_per_mtok: number | null;
+      cache_write_per_mtok: number | null;
+      cache_write_1h_per_mtok: number | null;
+      source: string | null;
+    }>(
+      db,
+      `SELECT model, input_per_mtok, output_per_mtok, cache_read_per_mtok,
+              cache_write_per_mtok, cache_write_1h_per_mtok, source
+         FROM model_pricing`,
+    ).map((row) => [row.model, row]),
+  );
+  // Most syncs change nothing, so skip the write lock unless a seed row is
+  // missing or differs. The upsert below repeats the comparison under the lock.
+  const pending = [...defaultPricing()].filter(([model, price]) => {
+    const row = stored.get(model);
+    return (
+      row == null ||
+      (row.source === "seed" &&
+        (row.input_per_mtok !== price.inputPerMtok ||
+          row.output_per_mtok !== price.outputPerMtok ||
+          row.cache_read_per_mtok !== price.cacheReadPerMtok ||
+          row.cache_write_per_mtok !== price.cacheWritePerMtok ||
+          row.cache_write_1h_per_mtok !== price.cacheWrite1hPerMtok))
+    );
+  });
+  if (pending.length === 0) {
+    return;
+  }
   const insert = db.prepare(
     `INSERT INTO model_pricing(
        model, input_per_mtok, output_per_mtok, cache_read_per_mtok,
@@ -350,11 +410,16 @@ export function seedModelPricing(db: Database): void {
        cache_write_per_mtok = excluded.cache_write_per_mtok,
        cache_write_1h_per_mtok = excluded.cache_write_1h_per_mtok,
        updated_at = excluded.updated_at
-     WHERE model_pricing.source = 'seed'`,
+     WHERE model_pricing.source = 'seed'
+       AND (model_pricing.input_per_mtok IS NOT excluded.input_per_mtok
+         OR model_pricing.output_per_mtok IS NOT excluded.output_per_mtok
+         OR model_pricing.cache_read_per_mtok IS NOT excluded.cache_read_per_mtok
+         OR model_pricing.cache_write_per_mtok IS NOT excluded.cache_write_per_mtok
+         OR model_pricing.cache_write_1h_per_mtok IS NOT excluded.cache_write_1h_per_mtok)`,
   );
   try {
     withImmediateTransaction(db, () => {
-      for (const [model, price] of defaultPricing()) {
+      for (const [model, price] of pending) {
         insert.run(
           model,
           price.inputPerMtok,
@@ -382,17 +447,20 @@ export function resolveSubagentParents(db: Database): void {
     agent_type: string | null;
     spawn_depth: number | null;
     is_subagent: number;
-    first_raw: string | null;
+    parent_session_id: number | null;
+    first_fields: string | null;
   }>(
     db,
     `SELECT s.id, s.source_session_id, s.raw_meta, s.source_path, s.spawn_tool_use_id,
-              s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent,
+              s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent, s.parent_session_id,
               s.tool,
-              (SELECT m.raw
+              (SELECT CASE WHEN json_valid(m.raw)
+                           THEN json_extract(m.raw, '$.isSidechain', '$.sessionId', '$.agentId')
+                      END
                FROM message m
                WHERE m.session_id = s.id
                ORDER BY m.seq
-               LIMIT 1) AS first_raw
+               LIMIT 1) AS first_fields
        FROM session s
        WHERE s.tool IN ('claude_code', 'codex', 'gemini')`,
   );
@@ -435,15 +503,18 @@ export function resolveSubagentParents(db: Database): void {
      ORDER BY s.is_subagent DESC, b.id DESC
      LIMIT 1`,
   );
+  // Driving from spawn_agent calls keeps the LIKE off every tool_result in the
+  // root session; the planner otherwise walks idx_block_session and reads each
+  // result's text.
   const findCodexSpawner = db.prepare(
     `SELECT call.tool_use_id AS tool_use_id
-     FROM block result
-     JOIN block call
-       ON call.session_id = result.session_id
-      AND call.tool_use_id = result.tool_use_id
-      AND call.type = 'tool_use'
-     WHERE result.session_id = ?1
-       AND result.type = 'tool_result'
+     FROM block call INDEXED BY idx_block_tool
+     JOIN block result
+       ON result.session_id = call.session_id
+      AND result.tool_use_id = call.tool_use_id
+      AND result.type = 'tool_result'
+     WHERE call.session_id = ?1
+       AND call.type = 'tool_use'
        AND call.tool_name = 'spawn_agent'
        AND result.tool_result LIKE ?2
      ORDER BY call.id DESC
@@ -482,9 +553,22 @@ export function resolveSubagentParents(db: Database): void {
           }
         }
         parentId ??= rootId;
+        const nextParent = parentId === row.id ? null : parentId;
+        // Rewriting identical values still dirties the session pages, so a
+        // resolved archive would log a WAL write per subagent on every pass.
+        if (
+          row.is_subagent === 1 &&
+          row.parent_session_id === nextParent &&
+          row.spawn_tool_use_id === (row.spawn_tool_use_id ?? spawnToolUseId) &&
+          row.agent_id === (row.agent_id ?? info.agentId) &&
+          row.agent_type === (row.agent_type ?? info.agentType) &&
+          row.spawn_depth === (row.spawn_depth ?? info.spawnDepth)
+        ) {
+          continue;
+        }
         update.run(
           1,
-          parentId === row.id ? null : parentId,
+          nextParent,
           spawnToolUseId,
           info.agentId,
           info.agentType,
@@ -525,17 +609,25 @@ export function materializeMissingReasoningEfforts(db: Database): number {
     return 0;
   }
 
-  const efforts = rows.map((row) => {
-    let effort: ReasoningEffortSummary = { summary: null, levels: [] };
-    if (row.source_path != null) {
-      try {
-        effort = reasoningEffortFromSource(row.tool, row.source_path);
-      } catch {
-        // Missing/unreadable source files are a stable unavailable state.
+  const efforts: ({ id: number } & ReasoningEffortSummary)[] = [];
+  for (const row of rows) {
+    if (row.source_path == null) {
+      efforts.push({ id: row.id, summary: null, levels: [] });
+      continue;
+    }
+    try {
+      efforts.push({ id: row.id, ...reasoningEffortFromSource(row.tool, row.source_path) });
+    } catch (error) {
+      // Only a missing file is a stable answer; a permission or I/O failure
+      // leaves the row unchecked so a later sync retries it.
+      if ((error as { code?: string }).code === "ENOENT") {
+        efforts.push({ id: row.id, summary: null, levels: [] });
       }
     }
-    return { id: row.id, ...effort };
-  });
+  }
+  if (efforts.length === 0) {
+    return 0;
+  }
 
   const update = db.prepare(
     `UPDATE session
@@ -551,17 +643,17 @@ export function materializeMissingReasoningEfforts(db: Database): number {
   } finally {
     update.finalize();
   }
-  return rows.length;
+  return efforts.length;
 }
 
-/** Narrow source scan for the one-time effort backfill. It avoids rebuilding
- * every message/block/tool object from a potentially multi-GB archive and
- * leaves the database write transaction for the small update batch only. */
 interface ReasoningEffortSummary {
   summary: string | null;
   levels: string[];
 }
 
+/** Narrow source scan for the one-time effort backfill. It avoids rebuilding
+ * every message/block/tool object from a potentially multi-GB archive and
+ * leaves the database write transaction for the small update batch only. */
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
   const efforts = new Set<string>();
   const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -638,10 +730,10 @@ function inferSubagent(row: {
   agent_type: string | null;
   spawn_depth: number | null;
   is_subagent: number;
-  first_raw: string | null;
+  first_fields: string | null;
 }): InferredSubagent {
   const meta = parseObject(row.raw_meta);
-  const first = parseObject(row.first_raw);
+  const first = firstMessageFields(row.first_fields);
   const source = get(meta, "source");
   const subagentSource = get(source, "subagent");
   const threadSpawn = get(subagentSource, "thread_spawn");
@@ -694,14 +786,7 @@ function writeIngestedFile(
     runIngestStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
-    const sessionId = writeSession(
-      db,
-      parsed,
-      prepared.file.path,
-      prepared.mtime,
-      prepared.size,
-      prepared.hash,
-    );
+    const sessionId = writeSession(db, parsed, prepared.file.path, prepared.mtime, prepared.size);
     if (sessionId == null) {
       runIngestStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [
         prepared.file.path,
@@ -731,25 +816,24 @@ function writeIngestSource(
   db: Database,
   prepared: Prepared,
   sessionId: number | null,
-  status: string,
+  status: "ok" | "ok_with_issues" | "skipped_deleted",
 ): void {
   runIngestStatement(
     db,
     `INSERT INTO ingest_source(
-       path, tool, size, mtime, hash, ingest_revision, session_id, line_count, status,
+       path, tool, size, mtime, ingest_revision, session_id, line_count, status,
        last_ingested_at
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
      ON CONFLICT(path) DO UPDATE SET
-       tool = ?2, size = ?3, mtime = ?4, hash = ?5, ingest_revision = ?6,
-       session_id = ?7, line_count = ?8, status = ?9, error = NULL,
+       tool = ?2, size = ?3, mtime = ?4, hash = NULL, ingest_revision = ?5,
+       session_id = ?6, line_count = ?7, status = ?8, error = NULL,
        last_ingested_at = datetime('now')`,
     [
       prepared.file.path,
       prepared.file.tool,
       prepared.size,
       prepared.mtime,
-      prepared.hash,
       INGEST_PIPELINE_REVISION,
       sessionId,
       prepared.lineCount,
@@ -764,7 +848,7 @@ function writeSession(
   sourcePath: string,
   mtime: number,
   size: number,
-  hash: string,
+  hash: string | null = null,
 ): number | null {
   const s = parsed.session;
   if (
@@ -1276,24 +1360,28 @@ function fileStem(path: string): string {
   return ext === "" ? base : base.slice(0, -ext.length);
 }
 
-function lineCount(content: string): number {
+/** Lines as `split(/\r?\n/)` counts them after dropping one trailing newline. */
+export function lineCount(content: string): number {
   if (content === "") {
     return 0;
   }
-  const trimmed = content.endsWith("\n") ? content.slice(0, -1) : content;
-  return trimmed.split(/\r?\n/).length;
+  let newlines = 0;
+  for (let at = content.indexOf("\n"); at !== -1; at = content.indexOf("\n", at + 1)) {
+    newlines += 1;
+  }
+  return content.endsWith("\n") ? newlines : newlines + 1;
 }
 
 function mtimeSecs(stats: Stats): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 
-function hashContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
+// Buffer.byteLength counts a lone surrogate as 2 bytes; SQLite stores it as
+// U+FFFD (3), which is what the encoder reports.
+const utf8 = new TextEncoder();
 
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+  return utf8.encode(value).length;
 }
 
 function durationBetween(start: string | null, end: string | null): number | null {
@@ -1318,6 +1406,19 @@ function asBoolean(value: Json | undefined): boolean | null {
 
 function asInteger(value: Json | undefined): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+/** Multi-path json_extract keeps JSON types, so `true` stays distinct from `1`. */
+function firstMessageFields(value: string | null): Json | undefined {
+  const fields = parseObject(value);
+  if (!Array.isArray(fields)) {
+    return undefined;
+  }
+  return {
+    isSidechain: fields[0] ?? null,
+    sessionId: fields[1] ?? null,
+    agentId: fields[2] ?? null,
+  };
 }
 
 function parseObject(value: string | null): Json | undefined {

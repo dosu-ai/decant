@@ -21,6 +21,12 @@ function usage1m(): TokenUsage {
   };
 }
 
+describe("defaultPricing", () => {
+  test("shares one table across callers", () => {
+    expect(defaultPricing()).toBe(defaultPricing());
+  });
+});
+
 describe("estimateCost", () => {
   test("opus input+output costs add up", () => {
     const cost = estimateCost("claude-opus-4-7", usage1m(), defaultPricing());

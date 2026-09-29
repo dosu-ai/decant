@@ -94,10 +94,18 @@ export function parseStatusFilter(value: string): StatusFilter | null {
   return STATUS_FILTERS.includes(value as StatusFilter) ? (value as StatusFilter) : null;
 }
 
-export function signals(db: Database): Recommendation[] {
+/**
+ * `recentTools` is the uncapped recent-window tool ranking when the caller
+ * already has it; the signals use its first 500 rows, exactly what the capped
+ * query would return.
+ */
+export function signals(
+  db: Database,
+  recentTools?: ReturnType<typeof toolUsage>,
+): Recommendation[] {
   const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   const recent = { from: recentWindowStart() };
-  const tools = toolUsage(db, false, 500, recent);
+  const tools = recentTools?.slice(0, 500) ?? toolUsage(db, false, 500, recent);
   const mcp = mcpUsage(db, 500, recent);
   const models = byDimension(db, "model", recent).sort(
     (left, right) =>
@@ -237,13 +245,14 @@ export function current(db: Database): Recommendation[] {
 }
 
 export function regenerate(db: Database): void {
-  const recs = current(db);
-  // `current()` is capped at twelve signals. Migration attribution must inspect
+  const recentTools = toolUsage(db, false, Number.MAX_SAFE_INTEGER, {
+    from: recentWindowStart(),
+  });
+  const recs = [...signals(db, recentTools), ...catalog()];
+  // The signals are capped at twelve. Migration attribution must inspect
   // every eligible hotspot or a same-name sibling just below that cap can make
   // a legacy name-only identity look uniquely attributable when it is not.
-  const allErrorHotspots = errorHotspots(
-    toolUsage(db, false, Number.MAX_SAFE_INTEGER, { from: recentWindowStart() }),
-  );
+  const allErrorHotspots = errorHotspots(recentTools);
   const now = nowRfc3339();
   withImmediateTransaction(db, () => {
     type LegacyErrorState = {

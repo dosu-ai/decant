@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { DateFilter } from "./date-filter.ts";
+import { exceptionAttributes, getDecantLogger } from "./logging.ts";
 import {
   aggregateEconomicsVectors,
   economicsVectorMatchesFilter,
@@ -8,17 +9,8 @@ import {
 } from "./token-economics.ts";
 import { workerError, workerUrl } from "./worker-runtime.ts";
 
-/**
- * Serves /api/analytics/token-economics from precomputed per-session vectors.
- *
- * Ingest persists versioned per-session vectors, so warming this cache reads
- * compact derived rows instead of walking every transcript block. The cache
- * then answers any date filter by summing vectors in memory.
- * `PRAGMA data_version` cheaply detects archive writes from other connections
- * (sync workers, CLI runs); a stale cache serves the previous model while a
- * refresh runs in the background, and onRebuilt lets the server nudge clients
- * to refetch.
- */
+const logger = getDecantLogger("economics-cache");
+
 export interface ComputeVectorsOptions {
   signal: AbortSignal;
 }
@@ -35,6 +27,13 @@ export interface EconomicsCacheOptions {
   settleTimeoutMs?: number;
 }
 
+/**
+ * Serves /api/analytics/token-economics from the per-session vectors ingest
+ * persists, summing them in memory for any date filter. `PRAGMA data_version`
+ * detects writes from other connections (sync workers, CLI runs); a stale cache
+ * answers from the previous model while a background refresh runs, and
+ * onRebuilt lets the server nudge clients to refetch.
+ */
 export class EconomicsCache {
   #vectors: SessionEconomicsVector[] | null = null;
   #builtDataVersion: number | null = null;
@@ -147,9 +146,15 @@ export class EconomicsCache {
           this.#options.onRebuilt?.();
         }
       })
-      .catch(() => {
-        // Aborted (dispose) or a genuine compute failure: keep serving
-        // whatever model (possibly none) is already cached.
+      .catch((error) => {
+        // Keep serving whatever model (possibly none) is cached; only a genuine
+        // failure is worth a log line, not the abort dispose() causes.
+        if (!abort.signal.aborted && !this.#disposed) {
+          logger.warning("Token economics rebuild failed; keeping the previous model.", {
+            "event.name": "decant.economics.rebuild_failed",
+            ...exceptionAttributes(error),
+          });
+        }
       })
       .finally(() => {
         this.#building = null;

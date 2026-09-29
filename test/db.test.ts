@@ -123,7 +123,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 27;
+const BASELINE_INDEX_COUNT = 26;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -275,6 +275,68 @@ describe("openDb", () => {
       .join("\n");
     expect(plan).toContain("idx_toolcall_timestamp");
     expect(plan).not.toContain("TEMP B-TREE");
+    closeDb(db);
+  });
+
+  test("reindexes tool-use blocks and drops the duplicate session indexes when upgrading a v23 archive", () => {
+    const path = freshPath();
+    const fresh = openDb(path);
+    const expected = buildSchemaManifest(fresh);
+    fresh.exec(`
+      DROP INDEX idx_block_call_tool_use_id;
+      CREATE INDEX idx_session_tool ON session(tool);
+      CREATE INDEX idx_session_source ON session(tool, source_session_id);
+      DELETE FROM schema_migrations WHERE version > 23;
+    `);
+    closeDb(fresh);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    const names = (
+      migrated
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('block', 'session')",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(names).toContain("idx_block_call_tool_use_id");
+    expect(names).not.toContain("idx_session_tool");
+    expect(names).not.toContain("idx_session_source");
+    closeDb(migrated);
+  });
+
+  test("keeps the message parent index that backs the foreign key", () => {
+    // parent_id is never written, but every deleted message still checks for
+    // children referencing it. Without this index that check scans the whole
+    // message table per deleted row (minutes for a 60-message session on a
+    // 125k-message archive).
+    const db = openDb(freshPath());
+    expect(
+      db
+        .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_message_parent'")
+        .get(),
+    ).not.toBeNull();
+    closeDb(db);
+  });
+
+  test("looks up a tool-use spawner by tool_use_id through the partial index", () => {
+    const db = openDb(freshPath());
+    const plan = (
+      db
+        .query(
+          `EXPLAIN QUERY PLAN
+           SELECT b.session_id AS session_id
+           FROM block b
+           JOIN session s ON s.id = b.session_id
+           WHERE b.type = 'tool_use' AND b.tool_use_id = ?1
+           ORDER BY s.is_subagent DESC, b.id DESC
+           LIMIT 1`,
+        )
+        .all("call-1") as { detail: string }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(plan).toContain("idx_block_call_tool_use_id");
     closeDb(db);
   });
 

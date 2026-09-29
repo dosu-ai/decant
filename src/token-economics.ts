@@ -14,27 +14,20 @@ import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-// Version 2 includes corrected wall-clock attribution plus the billed-input
-// and waiting-on-user fields required by the current activity model.
-// Version 3 buckets and phase-splits the inner calls of Codex `exec` programs.
 export const SESSION_ECONOMICS_FORMAT_VERSION = 3;
 
-// Cap every inter-message gap so long model, tool, or human pauses do not
-// dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for
-// session active_seconds in enrich.ts.
+// Caps each inter-message gap so long pauses do not dominate the timing
+// breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
 const ACTIVE_GAP_CAP_MS = 300_000;
 
-/** A run splits into two phases at the first file edit: "orientation" (reading
- * and planning HOW to change the code) and "implementation" (writing it). The
- * phase breakdown is orthogonal to the activity buckets -- every bucket carries
- * how much of it happened before vs after the first edit. */
+/** A run splits at the first file edit into "orientation" (reading, planning)
+ * and "implementation" (writing); every bucket carries both halves. */
 export type Phase = "orientation" | "implementation";
 
 export interface PhaseAmounts {
   generation_tokens: number;
   context_window_tokens: number;
   estimated_cost_usd: number;
-  // Wall-clock time attributed to this phase, from capped inter-message gaps.
   active_ms: number;
 }
 
@@ -46,14 +39,9 @@ export interface TokenEconomicsBucket {
   tool_calls: number;
   sessions: number;
   cost_share: number;
-  // Wall-clock time spent on this activity, in milliseconds. Measured as the
-  // sum of capped gaps between consecutive messages, charged to the activity
-  // mix of the message that closed each gap (see allocateLatency). Answers
-  // "how much *time* went to orientation/planning/etc.", not just tokens.
-  // User-authored response gaps are reported separately in totals.
+  // Capped gaps charged to the activity mix of the message that closed each
+  // one (see allocateLatency); user-response gaps are totalled separately.
   active_ms: number;
-  // Ordered block allocation places each contribution before/after the first
-  // edit for both archive-wide and per-session results.
   phases?: Record<Phase, PhaseAmounts>;
 }
 
@@ -65,11 +53,10 @@ export interface TokenEconomics {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
-    // Time attributed to the four agent activity buckets.
     active_ms: number;
-    // Capped gaps closed by user-authored text, kept separate from agent time.
+    // Gaps closed by user-authored text, kept apart from agent time.
     waiting_on_user_ms: number;
-    // All timing captured from block-bearing messages: agent time plus waiting.
+    // Agent time plus waiting.
     attributed_ms: number;
     phases?: Record<Phase, PhaseAmounts>;
   };
@@ -116,15 +103,11 @@ interface MutableBucket {
   cost: number;
   toolCalls: number;
   sessions: Set<number>;
-  // Orientation-phase portions (pre-first-edit). Implementation = total - these.
-  // genOrientation feeds windowOrientation the same way generation feeds
-  // contextWindow, so the phase cost split mirrors the whole-bucket formula.
+  // Pre-first-edit portions; implementation is the total minus these.
   // costOrientation is derived at aggregation only (the builder leaves it 0).
   genOrientation: number;
   windowOrientation: number;
   costOrientation: number;
-  // Wall-clock ms attributed to this bucket, and the orientation-phase portion
-  // (pre-first-edit). Implementation = activeMs - activeMsOrientation.
   activeMs: number;
   activeMsOrientation: number;
 }
@@ -167,7 +150,6 @@ export interface SessionEconomicsVector {
   started_at: string | null;
   input_cost: number;
   output_cost: number;
-  // Total billed input volume, including cache reads and cache creation.
   billed_input_tokens: number;
   waiting_on_user_ms: number;
   buckets: Record<
@@ -177,12 +159,10 @@ export interface SessionEconomicsVector {
       context_window: number;
       tool_calls: number;
       touched: boolean;
-      // Pre-first-edit portions. context_window_orientation holds the
-      // tool-result orientation window only (before generation is folded in),
-      // matching how context_window excludes folded-in generation.
+      // Pre-first-edit portions; context_window_orientation excludes folded-in
+      // generation, like context_window.
       generation_orientation: number;
       context_window_orientation: number;
-      // Wall-clock ms on this activity, and its orientation-phase portion.
       active_ms: number;
       active_ms_orientation: number;
     }
@@ -364,62 +344,86 @@ export function materializeSessionEconomics(db: Database, sessionId: number): bo
   return true;
 }
 
-/** Reprice stored usage without rereading transcripts or replacing user state.
- * Check the components too: a rate change can leave the total unchanged. */
-export function refreshSessionCosts(db: Database): number {
-  return withImmediateTransaction(db, () => {
-    const pricing = defaultPricing();
-    const rows = economicsRows<
-      SessionRow & {
-        estimated_cost_usd: number;
-        format_version: number | null;
-        vector_json: string | null;
-      }
-    >(
-      db,
-      `SELECT s.id, s.model, s.estimated_cost_usd,
-               s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
-               s.total_cache_creation_tokens, s.total_cache_creation_1h_tokens,
-               s.total_reasoning_tokens, e.format_version, e.vector_json
-             FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
+interface CostRefresh {
+  id: number;
+  total: number;
+  totalChanged: boolean;
+  staleVector: SessionEconomicsVector | null;
+}
+
+/** Sessions whose stored cost or cached activity cost differs from current
+ * rates. Check the components too: a rate change can leave the total unchanged. */
+function pendingCostRefreshes(db: Database): CostRefresh[] {
+  const pricing = defaultPricing();
+  const rows = economicsRows<
+    SessionRow & {
+      estimated_cost_usd: number;
+      format_version: number | null;
+      vector_json: string | null;
+    }
+  >(
+    db,
+    `SELECT s.id, s.model, s.estimated_cost_usd,
+             s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
+             s.total_cache_creation_tokens, s.total_cache_creation_1h_tokens,
+             s.total_reasoning_tokens, e.format_version, e.vector_json
+           FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
+  );
+  const pending: CostRefresh[] = [];
+  for (const row of rows) {
+    const parts = estimateCostParts(
+      row.model,
+      {
+        input: row.total_input_tokens,
+        output: row.total_output_tokens,
+        cacheRead: row.total_cache_read_tokens,
+        cacheCreation: row.total_cache_creation_tokens,
+        cacheCreation1h: row.total_cache_creation_1h_tokens,
+        reasoning: row.total_reasoning_tokens,
+      },
+      pricing,
     );
-    let refreshed = 0;
-    for (const row of rows) {
-      const parts = estimateCostParts(
-        row.model,
-        {
-          input: row.total_input_tokens,
-          output: row.total_output_tokens,
-          cacheRead: row.total_cache_read_tokens,
-          cacheCreation: row.total_cache_creation_tokens,
-          cacheCreation1h: row.total_cache_creation_1h_tokens,
-          reasoning: row.total_reasoning_tokens,
-        },
-        pricing,
-      );
-      const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
-      const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
-      const vector =
-        row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
-          ? parseEconomicsVector(row.vector_json)
-          : null;
-      const staleVector =
-        vector != null &&
-        vector.id === row.id &&
-        (vector.input_cost !== inputCost || vector.output_cost !== parts.output);
-      if (row.estimated_cost_usd === total && !staleVector) continue;
-      if (row.estimated_cost_usd !== total) {
+    const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
+    const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+    const vector =
+      row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
+        ? parseEconomicsVector(row.vector_json)
+        : null;
+    const staleVector =
+      vector != null &&
+      vector.id === row.id &&
+      (vector.input_cost !== inputCost || vector.output_cost !== parts.output)
+        ? { ...vector, input_cost: inputCost, output_cost: parts.output }
+        : null;
+    const totalChanged = row.estimated_cost_usd !== total;
+    if (totalChanged || staleVector != null) {
+      pending.push({ id: row.id, total, totalChanged, staleVector });
+    }
+  }
+  return pending;
+}
+
+/** Reprice stored usage without rereading transcripts or replacing user state.
+ * The write lock is taken only when something changed, and the check reruns
+ * under it so a concurrent writer cannot make it stale. */
+export function refreshSessionCosts(db: Database): number {
+  if (pendingCostRefreshes(db).length === 0) {
+    return 0;
+  }
+  return withImmediateTransaction(db, () => {
+    const pending = pendingCostRefreshes(db);
+    for (const refresh of pending) {
+      if (refresh.totalChanged) {
         runEconomicsStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
-          total,
-          row.id,
+          refresh.total,
+          refresh.id,
         ]);
       }
-      if (staleVector) {
-        storeEconomicsVector(db, { ...vector, input_cost: inputCost, output_cost: parts.output });
+      if (refresh.staleVector != null) {
+        storeEconomicsVector(db, refresh.staleVector);
       }
-      refreshed += 1;
     }
-    return refreshed;
+    return pending.length;
   });
 }
 

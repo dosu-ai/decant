@@ -6,7 +6,7 @@ import { ReleaseFailure } from "../scripts/release/actions.ts";
 import { missingLicenseFile, stagedPackageDirs } from "../scripts/release/assert-npm-packages.ts";
 import { ghcrVisibility, manifestUrl } from "../scripts/release/check-ghcr-public.ts";
 import type { ReleaseChannel } from "../scripts/release/meta.ts";
-import { npxArgs, waitForNpx } from "../scripts/release/npx-smoke.ts";
+import { npxArgs, npxCacheDir, waitForNpx } from "../scripts/release/npx-smoke.ts";
 import {
   attestationBundleName,
   ghChannelFlags,
@@ -146,6 +146,22 @@ describe("npm publishing", () => {
       "attempt 1/20: @dosu/decant@1.2.3 not resolvable yet — waiting for registry propagation\n",
       "attempt 2/20: @dosu/decant@1.2.3 not resolvable yet — waiting for registry propagation\n",
     ]);
+  });
+
+  test("gives every attempt its own npm cache", async () => {
+    const attempts: number[] = [];
+    await waitForNpx({
+      version: "1.2.3",
+      exec: (attempt) => {
+        attempts.push(attempt);
+        return attempt === 3;
+      },
+      sleep: async () => {},
+    });
+    expect(attempts).toEqual([1, 2, 3]);
+    const dirs = attempts.map((attempt) => npxCacheDir("/tmp/smoke", attempt));
+    expect(new Set(dirs).size).toBe(3);
+    expect(dirs[0]).toBe("/tmp/smoke/npm-cache-1");
   });
 
   test("fails after twenty unresolvable attempts", async () => {

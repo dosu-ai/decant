@@ -590,6 +590,44 @@ describe("Codex exec programs", () => {
     ]);
     expect(codexExecCalls("exec", exec("await tools.apply_patch("))).toEqual([]);
   });
+  test.each([
+    {
+      name: "Unicode escape",
+      program: String.raw`await tools.exec_command({cmd:'\u0072g a src'});`,
+    },
+    { name: "hex escape", program: String.raw`await tools.exec_command({cmd:'\x72g a src'});` },
+  ])("decodes $name before counting searches and assigning buckets", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "exec_command", command: "rg a src" }]);
+    expect(toolBucket("exec", input)).toBe("context");
+    expect(countSearches("exec", input)).toBe(1);
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
+  test.each([
+    { name: "regex after a condition", program: 'if (true) /tools.apply_patch(foo)/.test("x");' },
+    { name: "different receiver", program: "await other.tools.apply_patch(patch);" },
+  ])("does not invent an edit from $name", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([]);
+    expect(toolBucket("exec", input)).toBe("context");
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
+  test.each([
+    { name: "parenthesized receiver", program: "await (tools).apply_patch(patch);" },
+    { name: "optional call", program: "await tools?.apply_patch?.(patch);" },
+  ])("recognizes a patch through a $name", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "apply_patch", command: null }]);
+    expect(toolBucket("exec", input)).toBe("code");
+    expect(isCodeEditTool("exec", input)).toBe(true);
+  });
+  test("a cmd example inside another property does not become a search", () => {
+    const input = exec(`await tools.exec_command({note:"cmd: 'rg fake'",cmd:command});`);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "exec_command", command: null }]);
+    expect(toolBucket("exec", input)).toBe("code");
+    expect(countSearches("exec", input)).toBe(0);
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
   const read = exec(
     'text(await tools.exec_command({cmd:"rg --files -g AGENTS.md","max_output_tokens":2000}));',
   );

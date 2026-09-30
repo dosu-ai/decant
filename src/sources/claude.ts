@@ -27,6 +27,7 @@ import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
 import {
   block,
+  contentText,
   countUnknown,
   parseJsonLine,
   type UnknownTypes,
@@ -338,7 +339,7 @@ function parseUser(value: Json, seq: number): NormalizedMessage {
         blocks.push(
           block(ordinal, "tool_result", {
             toolUseId: asString(get(item, "tool_use_id")),
-            toolResult: stringifyContent(get(item, "content")),
+            toolResult: contentText(get(item, "content")),
             isError: asBoolean(get(item, "is_error")),
           }),
         );
@@ -462,24 +463,6 @@ function textBlock(ordinal: number, text: string): NormalizedBlock {
 
 function otherBlock(ordinal: number, item: Json): NormalizedBlock {
   return block(ordinal, "other", { text: canonicalJson(item) });
-}
-
-function stringifyContent(content: Json | undefined): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => {
-        const text = asString(get(item, "text"));
-        return text ?? canonicalJson(item);
-      })
-      .join("\n");
-  }
-  if (content !== undefined) {
-    return canonicalJson(content);
-  }
-  return "";
 }
 
 function stringAt(value: Json | undefined, ...keys: string[]): string | null {

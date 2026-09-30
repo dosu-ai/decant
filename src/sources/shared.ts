@@ -1,3 +1,4 @@
+import { asString, canonicalJson, get } from "../json.ts";
 import type { BlockType, Issue, Json, NormalizedBlock } from "../model.ts";
 
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
@@ -57,4 +58,26 @@ export function block(
     isError: null,
     ...fields,
   };
+}
+
+/** Tool-result content as the model read it: text items joined by newlines,
+ * anything else (images, structured items) kept as canonical JSON. Claude and
+ * Codex both send arrays of content items, and storing the array's JSON would
+ * count the wrapper keys as window volume the model never saw. */
+export function contentText(content: Json | undefined): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        const text = asString(get(item, "text"));
+        return text ?? canonicalJson(item);
+      })
+      .join("\n");
+  }
+  if (content !== undefined) {
+    return canonicalJson(content);
+  }
+  return "";
 }

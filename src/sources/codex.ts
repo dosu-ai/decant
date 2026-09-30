@@ -16,6 +16,7 @@ import {
 import { preview } from "../tools.ts";
 import {
   block,
+  contentText,
   countUnknown,
   parseJsonLine,
   type UnknownTypes,
@@ -314,7 +315,7 @@ function parseItem(
       "tool",
       block(0, "tool_result", {
         toolUseId: asString(get(payload, "call_id")),
-        toolResult: stringify(get(payload, "output")),
+        toolResult: contentText(get(payload, "output")),
       }),
     );
   }
@@ -447,16 +448,6 @@ function collectText(content: Json | undefined): string {
         return text == null ? [] : [text];
       })
       .join("\n");
-  }
-  return "";
-}
-
-function stringify(value: Json | undefined): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value !== undefined) {
-    return canonicalJson(value);
   }
   return "";
 }

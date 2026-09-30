@@ -922,6 +922,12 @@ function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
   if (block.role === "other") {
     return MODEL_INPUT_KINDS.has(block.other_kind ?? "") ? "context" : "skip";
   }
+  if (block.role === "system") {
+    // Instructions the harness injects (Codex developer messages, AGENTS.md,
+    // the environment block). The gap before one belongs to whatever the next
+    // message is: the user's prompt it precedes, or the model's next step.
+    return "skip";
+  }
   if (block.type === "other") {
     if (block.other_kind === "fallback") {
       return "skip";

@@ -39,6 +39,9 @@ top-level session can coordinate many separately metered runs.
 Work type and outcome are lightweight transcript-shape heuristics, not evidence
 that a change shipped or achieved its goal. Work type starts with keywords in
 the first user prompt and can fall back to the mix of file and web activity.
+Codex `developer` messages and the AGENTS.md or environment context Codex
+injects as a user message are system rows, so they are neither the first prompt
+nor a turn.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -83,8 +86,8 @@ estimated cost, and active time to four buckets:
 | --- | --- |
 | `context` | Reading, searching, listing, web/MCP retrieval, read-only shell or Git commands, and messages from other agents. Unknown tools default here rather than overstating implementation. |
 | `planning` | Thinking/reasoning blocks and explicit plan-management tools (`TodoWrite`, Claude Code task-list tools, Codex `update_plan`). |
-| `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
-| `communicating` | Visible text and other non-tool, non-thinking model output. |
+| `code` | Structured edits, shell commands that clearly build, test, write, or otherwise mutate work, browser and desktop actions, REPL code, and note writes. |
+| `communicating` | Visible text and other non-tool, non-thinking model output, plus questions to the user (`AskUserQuestion`, Codex `request_user_input`). |
 
 Shell classification is deliberately conservative. Read-only commands such as
 `rg`, `cat`, `sed -n`, and `git diff` are context; mutating or unrecognized
@@ -118,6 +121,23 @@ its first word:
   retrieval; a download, a request body, or a probe of a local dev server is
   code.
 
+Browser, desktop-control, and REPL tools (Playwright, Claude in Chrome, computer
+use, and JavaScript REPL MCP servers) split by what they do. Looking at a page
+or screen (snapshots, screenshots, page text, console and network logs, tab
+lists, `find`) and going somewhere (`navigate`, `wait`) is context. Sending
+input or running code is code: clicks, typing, key presses, form fills,
+selects, drags, hovers and mouse moves, scrolling, uploads, dialog handling,
+resizing, `evaluate` and other in-page JavaScript, and every REPL call. Hover
+counts as input because it fires page handlers and opens menus. Batch tools are
+code when any action they carry is. Other MCP tools keep the context default.
+
+Agent orchestration (`Agent`/`Task`, `SendMessage`, Codex `collaboration__*`,
+`SubagentHandback`) stays in context: the parent reads what the other agent
+reports. Writing a note or checkpoint (Codex `notes__write_file` and
+`notes__append_to_file`, Obsidian `obsidian_append_content`, Dosu
+`write_knowledge`) is code, but it is the agent's memory rather than the work
+product, so it does not mark the first edit.
+
 A bucket is an analytical attribution, not a provider billing field or a
 quality judgment.
 
@@ -144,6 +164,10 @@ Some kept records are neither model output nor a tool call:
 - A message from another agent, or compacted history, is input the model
   reads, so its time is context.
 - An image or document the user attaches is part of the user's turn.
+- Instructions the harness injects, such as Codex `developer` messages and
+  the AGENTS.md and environment block Codex sends as a user message, are
+  stored as role `system`. The gap before one closes on the next message
+  instead, so it counts toward the user's prompt or the model's next step.
 - CLI notices, record types a parser keeps as role `other` without
   recognizing them, and model-fallback notices never reach the model. They
   carry no generation, window volume, or time.

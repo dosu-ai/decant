@@ -7,6 +7,7 @@ import {
   isCodeEditTool,
   toolBucket,
 } from "../src/buckets.ts";
+import type { Json } from "../src/model.ts";
 
 describe("activity bucket classifier", () => {
   test("classifies fixed tool families", () => {
@@ -24,6 +25,125 @@ describe("activity bucket classifier", () => {
     expect(isCodeEditTool("write_stdin")).toBe(false);
     expect(toolBucket("mcp__github__search_issues")).toBe("context");
     expect(toolBucket("UnknownFutureTool")).toBe("context");
+  });
+
+  test("splits browser, desktop, and REPL tools into reads and actions", () => {
+    for (const read of [
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_network_requests",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_wait_for",
+      "mcp__playwright____browser_snapshot",
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__get_page_text",
+      "mcp__claude-in-chrome__find",
+      "mcp__claude-in-chrome__navigate",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__read_console_messages",
+      "mcp__computer-use__screenshot",
+      "mcp__computer-use__zoom",
+      "mcp__computer-use__wait",
+      "mcp__computer_use____get_app_state",
+    ]) {
+      expect(toolBucket(read)).toBe("context");
+    }
+    for (const action of [
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_type",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_press_key",
+      "mcp__playwright__browser_hover",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_run_code_unsafe",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_handle_dialog",
+      "mcp__playwright____browser_click",
+      "mcp__plugin_playwright_playwright__browser_evaluate",
+      "mcp__claude-in-chrome__form_input",
+      "mcp__claude-in-chrome__file_upload",
+      "mcp__claude-in-chrome__javascript_tool",
+      "mcp__claude-in-chrome__resize_window",
+      "mcp__computer-use__left_click",
+      "mcp__computer-use__left_click_drag",
+      "mcp__computer-use__type",
+      "mcp__computer-use__key",
+      "mcp__computer-use__scroll",
+      "mcp__computer-use__mouse_move",
+      "mcp__computer-use__open_application",
+      "mcp__computer_use____click",
+      "mcp__repl__js",
+      "mcp__node_repl__js",
+    ]) {
+      expect(toolBucket(action)).toBe("code");
+    }
+    // Multi-action tools are judged by the actions they carry.
+    const chrome = "mcp__claude-in-chrome__computer";
+    expect(toolBucket(chrome, { action: "screenshot" })).toBe("context");
+    expect(toolBucket(chrome, JSON.stringify({ action: "left_click" }))).toBe("code");
+    const batch = "mcp__claude-in-chrome__browser_batch";
+    const step = (name: string, input: Json) => ({ name, input });
+    expect(
+      toolBucket(batch, {
+        actions: [
+          step("navigate", { url: "https://example.com" }),
+          step("computer", { action: "wait" }),
+        ],
+      }),
+    ).toBe("context");
+    expect(
+      toolBucket(batch, {
+        actions: [
+          step("navigate", { url: "https://example.com" }),
+          step("computer", { action: "type" }),
+        ],
+      }),
+    ).toBe("code");
+    const desktop = "mcp__computer-use__computer_batch";
+    expect(toolBucket(desktop, { actions: [{ action: "screenshot" }, { action: "zoom" }] })).toBe(
+      "context",
+    );
+    expect(toolBucket(desktop, { actions: [{ action: "screenshot" }, { action: "scroll" }] })).toBe(
+      "code",
+    );
+    // Other MCP tools keep the context default, and no UI action is a file edit.
+    expect(toolBucket("mcp__exa__web_search_exa")).toBe("context");
+    expect(toolBucket("mcp__excalidraw__take_screenshot")).toBe("context");
+    expect(isCodeEditTool("mcp__playwright__browser_click")).toBe(false);
+  });
+
+  test("keeps agent orchestration in context", () => {
+    for (const tool of [
+      "Agent",
+      "Task",
+      "SendMessage",
+      "SubagentHandback",
+      "collaboration__send_message",
+      "collaboration__spawn_agent",
+    ]) {
+      expect(toolBucket(tool)).toBe("context");
+    }
+  });
+
+  test("files questions to the user as communicating and note writes as code", () => {
+    expect(toolBucket("AskUserQuestion")).toBe("communicating");
+    expect(toolBucket("request_user_input")).toBe("communicating");
+    expect(toolBucket("request_user_input_async")).toBe("communicating");
+    expect(toolBucket("mcp__example__AskUserQuestion")).toBe("communicating");
+    for (const tool of [
+      "notes__write_file",
+      "notes__append_to_file",
+      "mcp__obsidian__obsidian_append_content",
+      "mcp__dosu__write_knowledge",
+    ]) {
+      expect(toolBucket(tool)).toBe("code");
+      // A note is the agent's memory, not the work product: no first edit.
+      expect(isCodeEditTool(tool)).toBe(false);
+    }
+    expect(toolBucket("notes__read_file")).toBe("context");
   });
 
   test("classifies Bash by command head and git subcommand", () => {

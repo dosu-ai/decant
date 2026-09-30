@@ -271,8 +271,9 @@ function parseItem(
   });
 
   if (payloadType === "message") {
-    const role = messageRole(asString(get(payload, "role")));
-    const text = collectText(get(payload, "content"));
+    const content = get(payload, "content");
+    const role = messageRole(asString(get(payload, "role")), content);
+    const text = collectText(content);
     const parsed = mk(role, block(0, "text", { text }));
     if (role === "user" && currentTitle == null && text !== "") {
       parsed.nextTitle = preview(text.trim(), 120);
@@ -430,11 +431,34 @@ function backdate(timestamp: string | null, duration: Json | undefined): string 
   return new Date(parsed - ms).toISOString();
 }
 
-function messageRole(role: string | null): Role {
+// Context Codex injects as a "user" message: the workspace's AGENTS.md, the
+// environment block, and app-supplied context. The user never typed it, so it is
+// neither a turn nor time spent waiting on the user.
+const INJECTED_CONTEXT =
+  /^\s*(?:# AGENTS\.md instructions\b|<(?:environment_context|user_instructions|recommended_plugins|codex_internal_context|in-app-browser-context)>)/;
+
+/** `developer` messages and injected context are harness instructions, so they
+ * are system rows; a user message is a turn only when the user wrote part of it. */
+function messageRole(role: string | null, content: Json | undefined): Role {
   if (role === "assistant" || role === "system") {
     return role;
   }
+  if (role === "developer" || isInjectedContext(content)) {
+    return "system";
+  }
   return "user";
+}
+
+function isInjectedContext(content: Json | undefined): boolean {
+  const parts = typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
+  // An attached image, or any part that is not injected text, is the user's.
+  return (
+    parts.length > 0 &&
+    parts.every((part) => {
+      const text = typeof part === "string" ? part : asString(get(part, "text"));
+      return text != null && INJECTED_CONTEXT.test(text);
+    })
+  );
 }
 
 function collectText(content: Json | undefined): string {

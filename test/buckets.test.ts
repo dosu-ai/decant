@@ -514,6 +514,20 @@ describe("activity bucket classifier", () => {
 describe("Codex exec programs", () => {
   // Codex stores the custom tool's JavaScript program as a JSON-encoded string.
   const exec = (program: string) => JSON.stringify(program);
+  test("serialized object inputs retain bucket, search, and edit attribution", () => {
+    const program = 'await tools.exec_command({cmd:"rg a src"}); await tools.apply_patch(patch);';
+    for (const input of [{ input: program }, JSON.stringify({ input: program })]) {
+      expect(codexExecCalls("exec", input)).toEqual([
+        { name: "exec_command", command: "rg a src" },
+        { name: "apply_patch", command: null },
+      ]);
+      expect(toolBucket("exec", input)).toBe("code");
+      expect(isCodeEditTool("exec", input)).toBe(true);
+      expect(countSearches("exec", typeof input === "string" ? input : JSON.stringify(input))).toBe(
+        1,
+      );
+    }
+  });
   test("ignores quoted and commented tool examples without inventing edits or searches", () => {
     const program = exec(
       [

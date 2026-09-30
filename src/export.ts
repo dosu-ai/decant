@@ -400,7 +400,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   const records: unknown[] = [];
   const callTaken = new Map<string, number>(); // original id -> calls emitted
   const resultTaken = new Map<string, number>(); // original id -> results consumed
-  const answered = new Set<string>(); // assigned ids with a result already
   let lastTimestamp: string | null = null;
   let synthIndex = 0;
   // Their library always emits Date#toISOString() output; normalize source
@@ -499,20 +498,20 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
         const queue = original == null ? undefined : assignedByOriginal.get(original);
-        if (original == null || queue == null) {
+        const emitted = original == null ? 0 : (callTaken.get(original) ?? 0);
+        if (original == null || queue == null || emitted === 0) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
         const taken = resultTaken.get(original) ?? 0;
-        // Pair with the call this result answers by position, reading back the
-        // name pass 1 assigned it. Queues are never empty, so the index holds.
-        const assigned = queue[Math.min(taken, queue.length - 1)] ?? original;
-        if (answered.has(assigned) && taken >= queue.length) {
+        // Only calls already emitted can receive a result. A surplus result
+        // must not consume the ID assigned to a future reuse of this call ID.
+        if (taken >= emitted) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }
+        const assigned = queue[taken] ?? original;
         resultTaken.set(original, taken + 1);
-        answered.add(assigned);
         const { text: content, truncated } = trajectoryTruncate(
           block.tool_result ?? "",
           TRAJECTORY_RESULT_MAX,

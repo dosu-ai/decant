@@ -95,6 +95,52 @@ function canonicalizeRows(value: unknown, dir: string): unknown {
 }
 
 describe("upsertSession", () => {
+  test("stray results cannot answer a later reuse of the same call id", () => {
+    const db = openFreshDb(freshCase());
+    try {
+      const parsed = parseClaudeSession(
+        "stray-results",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id-with-strays.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/strays.jsonl", 1, 2);
+      expect(
+        db
+          .query(
+            "SELECT tool_name, output_preview, is_error, has_result, duration_ms FROM tool_call WHERE session_id = ?1 ORDER BY id",
+          )
+          .all(id),
+      ).toEqual([
+        {
+          tool_name: "Read",
+          output_preview: "read",
+          is_error: 0,
+          has_result: 1,
+          duration_ms: 1000,
+        },
+        {
+          tool_name: "Edit",
+          output_preview: "bad edit",
+          is_error: 1,
+          has_result: 1,
+          duration_ms: 1000,
+        },
+        {
+          tool_name: "Write",
+          output_preview: null,
+          is_error: null,
+          has_result: 0,
+          duration_ms: null,
+        },
+      ]);
+      const results = getSession(db, id)
+        ?.messages.flatMap((m) => m.blocks)
+        .filter((b) => b.block_type === "tool_result");
+      expect(results?.map((b) => b.tool_name)).toEqual([null, "Read", null, "Edit"]);
+      expect(results).toHaveLength(4);
+    } finally {
+      db.close();
+    }
+  });
   test("pairs reused call ids one-to-one, preserving outcome, volume, time, and buckets", () => {
     const db = openFreshDb(freshCase());
     try {

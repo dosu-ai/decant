@@ -1395,13 +1395,16 @@ function execProgram(input: string | Json | undefined): string | null {
   if (input == null) {
     return null;
   }
-  if (typeof input !== "string") {
-    return typeof input === "object" && !Array.isArray(input) && typeof input.input === "string"
-      ? input.input
-      : null;
+  const parsed = typeof input === "string" ? parseJson(input) : input;
+  if (typeof parsed === "string") {
+    return parsed;
   }
-  const parsed = parseJson(input);
-  return typeof parsed === "string" ? parsed : input;
+  return parsed != null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    typeof parsed.input === "string"
+    ? parsed.input
+    : null;
 }
 
 function execCommandArgument(

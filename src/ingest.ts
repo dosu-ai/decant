@@ -58,7 +58,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 7;
+export const INGEST_PIPELINE_REVISION = 8;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -1041,8 +1041,14 @@ function writeSession(
       // IDs can recur in retained logs. Pair occurrences one-to-one; reusing
       // the last result for every call doubles volume and changes outcomes.
       const id = call.block.toolUseId;
-      const taken = id == null ? 0 : (resultTaken.get(id) ?? 0);
-      const result = id == null ? undefined : results.get(id)?.[taken];
+      let taken = id == null ? 0 : (resultTaken.get(id) ?? 0);
+      const queue = id == null ? undefined : results.get(id);
+      // Orphan and surplus results remain in the transcript but cannot answer
+      // a call that had not been emitted when those results were recorded.
+      while (queue?.[taken] != null && (queue[taken]?.blockId ?? 0) < call.callBlockId) {
+        taken += 1;
+      }
+      const result = queue?.[taken];
       if (id != null) resultTaken.set(id, taken + 1);
       const resultBlockId = result?.blockId ?? null;
       const isError = result?.isError ?? null;

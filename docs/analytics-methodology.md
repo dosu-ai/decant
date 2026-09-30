@@ -159,6 +159,8 @@ like the tool it names:
 
 Acorn parses these programs for static tool-call inspection. Decant does not
 execute the JavaScript or resolve variables, branches, or tool aliases.
+Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
+same attribution rules.
 
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume, and

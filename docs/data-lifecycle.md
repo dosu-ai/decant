@@ -48,8 +48,10 @@ send data to Letta. Source labels are `claude-code`, `codex`, and `gemini-cli`.
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
 Decant assigns unique IDs to repeated calls and pairs their results in
-occurrence order. The export report counts renamed IDs, orphan and surplus
-results, omitted blocks, truncated output, and filled timestamps. The archive
+occurrence order, pairing only with calls already recorded. Orphan and surplus
+results cannot consume a later call's result slot. The export report counts
+renamed IDs, orphan and surplus results, omitted blocks, truncated output, and
+filled timestamps. The archive
 retains the original records and full tool output.
 
 The exported format is intended for model consumption: it omits harness

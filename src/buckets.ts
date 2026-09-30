@@ -1,3 +1,5 @@
+import { type CallExpression, parse } from "acorn";
+import { simple } from "acorn-walk";
 import type { Json } from "./model.ts";
 
 export const ACTIVITY_BUCKETS = ["context", "planning", "code", "communicating"] as const;
@@ -1379,10 +1381,6 @@ export interface CodexExecCall {
   command: string | null;
 }
 
-const EXEC_INNER_CALL = /\btools\.([A-Za-z_]\w*)\s*\(/g;
-const EXEC_CMD_LITERAL =
-  /^\s*\{[^{}]*?["']?\bcmd["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/;
-
 // Recent Codex versions run every action through one `exec` tool whose input is a
 // JavaScript program calling `tools.exec_command(...)`, `tools.apply_patch(...)`, and so
 // on. Classifying that wrapper by its own name would file every edit and shell command
@@ -1406,18 +1404,31 @@ function execProgram(input: string | Json | undefined): string | null {
   return typeof parsed === "string" ? parsed : input;
 }
 
-function decodeJsString(literal: string): string {
-  if (literal.startsWith('"')) {
-    const parsed = parseJson(literal);
-    if (typeof parsed === "string") {
-      return parsed;
+function execCommandArgument(
+  argument: CallExpression["arguments"][number] | undefined,
+): string | null {
+  if (argument?.type !== "ObjectExpression") return null;
+  // Later properties win; a spread or computed key may overwrite cmd at runtime.
+  for (const property of argument.properties.toReversed()) {
+    if (property.type === "SpreadElement" || property.computed) return null;
+    const key = property.key;
+    if (
+      (key.type === "Identifier" ? key.name : key.type === "Literal" ? key.value : null) !== "cmd"
+    ) {
+      continue;
     }
+    const value = property.value;
+    if (property.kind !== "init") return null;
+    if (value.type === "Literal" && typeof value.value === "string") return value.value;
+    return value.type === "TemplateLiteral" && value.expressions.length === 0
+      ? (value.quasis[0]?.value.cooked ?? null)
+      : null;
   }
-  return literal.slice(1, -1).replace(/\\n/g, "\n").replace(/\\(.)/g, "$1");
+  return null;
 }
 
 /** The inner tool calls of a Codex `exec` program, in source order. Empty for any
- * other tool, or for a program that calls no tools. */
+ * other tool, or for a program that cannot be parsed or calls no tools. */
 export function codexExecCalls(
   toolName: string | null | undefined,
   input?: string | Json,
@@ -1429,88 +1440,39 @@ export function codexExecCalls(
   if (program == null) {
     return [];
   }
-  const calls: CodexExecCall[] = [];
-  for (const match of maskJsLiterals(program).matchAll(EXEC_INNER_CALL)) {
-    const name = match[1] ?? "";
-    if (name.toLowerCase() === "exec") {
-      continue;
-    }
-    let command: string | null = null;
-    if (name === "exec_command") {
-      const rest = program.slice((match.index ?? 0) + match[0].length);
-      const literal = rest.match(EXEC_CMD_LITERAL)?.[1];
-      command = literal == null ? null : decodeJsString(literal);
-    }
-    calls.push({ name, command });
-  }
-  return calls;
-}
-
-/** Keep offsets while excluding examples inside strings and comments. Those
- * strings often contain patches or tool documentation; they are not calls. */
-function maskJsLiterals(program: string): string {
-  // Work in UTF-16 offsets, as RegExp match.index and String.slice do.
-  const masked = program.split("");
-  const hide = (from: number, to: number): void => {
-    for (let i = from; i < to; i += 1) masked[i] = " ";
-  };
-  const code = (start: number, interpolation = false, nestingDepth = 0): number => {
-    if (nestingDepth >= MAX_NESTING) {
-      hide(start, program.length);
-      return program.length;
-    }
-    let depth = 0;
-    let i = start;
-    while (i < program.length) {
-      const ch = program[i];
-      if (interpolation && ch === "}" && depth === 0) return i;
-      if (ch === "{") depth += 1;
-      if (ch === "}") depth -= 1;
-      if (program.startsWith("//", i)) {
-        const end = program.indexOf("\n", i + 2);
-        const next = end === -1 ? program.length : end;
-        hide(i, next);
-        i = next;
-        continue;
-      }
-      if (program.startsWith("/*", i)) {
-        const end = program.indexOf("*/", i + 2);
-        const next = end === -1 ? program.length : end + 2;
-        hide(i, next);
-        i = next;
-        continue;
-      }
-      if (ch === "'" || ch === '"' || ch === "`") {
-        const quote = ch;
-        let from = i;
-        i += 1;
-        while (i < program.length) {
-          if (program[i] === "\\") {
-            i += 2;
-            continue;
-          }
-          if (quote === "`" && program.startsWith("${", i)) {
-            hide(from, i + 2);
-            i = code(i + 2, true, nestingDepth + 1);
-            from = i;
-            i += 1;
-            continue;
-          }
-          if (program[i] === quote) {
-            i += 1;
-            break;
-          }
-          i += 1;
+  try {
+    const ast = parse(program, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      allowReturnOutsideFunction: true,
+    });
+    const calls: (CodexExecCall & { start: number })[] = [];
+    simple(ast, {
+      CallExpression(node) {
+        const callee = node.callee;
+        if (
+          callee.type !== "MemberExpression" ||
+          callee.computed ||
+          callee.object.type !== "Identifier" ||
+          callee.object.name !== "tools" ||
+          callee.property.type !== "Identifier" ||
+          callee.property.name.toLowerCase() === "exec"
+        ) {
+          return;
         }
-        hide(from, Math.min(i, program.length));
-        continue;
-      }
-      i += 1;
-    }
-    return i;
-  };
-  code(0);
-  return masked.join("");
+        const name = callee.property.name;
+        calls.push({
+          name,
+          command: name === "exec_command" ? execCommandArgument(node.arguments[0]) : null,
+          start: node.start,
+        });
+      },
+    });
+    return calls.sort((a, b) => a.start - b.start).map(({ name, command }) => ({ name, command }));
+  } catch {
+    // Invalid or deeply nested source must not crash ingest or invent tool calls.
+    return [];
+  }
 }
 
 // A program that reads and then patches is an implementation step, so the strongest

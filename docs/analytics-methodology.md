@@ -149,13 +149,16 @@ like the tool it names:
 - The whole call takes the strongest inner bucket (code, then planning, then
   communicating, then context), so a program that reads a file and then patches
   it counts as code.
-- Tool examples inside JavaScript strings or comments do not count as calls.
+- Tool examples inside JavaScript strings, regex literals, or comments do not count as calls.
   Calls inside template interpolations do count.
 - An `exec_command` whose command is assembled at runtime, rather than written
   as a literal, is treated like an unrecognized shell command, which is code.
-- A program that calls no tools stays in context.
+- A program that calls no tools or cannot be parsed stays in context.
 - `write_stdin`, which polls or answers a running `exec_command`, is code:
   the commands agents leave running are nearly always builds and test runs.
+
+Acorn parses these programs for static tool-call inspection. Decant does not
+execute the JavaScript or resolve variables, branches, or tool aliases.
 
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume, and

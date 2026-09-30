@@ -50,10 +50,11 @@ records while mapping provider-specific roles, blocks, usage, tool calls, and
 lineage into shared tables. Malformed lines and unknown record types become
 diagnostics rather than aborting the file.
 
-Ingest uses file metadata and hashes to avoid unnecessary work. A changed
+Ingest uses file size and modification time to avoid unnecessary work. A changed
 session is replaced transactionally, then Decant materializes context-window
 rollups and versioned per-session economics vectors. Costs are also stored at
-ingest, so later pricing edits do not mutate history.
+ingest and reconciled with current rates on every sync while transcripts and
+user state remain intact.
 
 The supported extension point is a new parser under `src/sources/`. Follow
 [Add a source](adding-a-source.md); it defines the privacy, capability,

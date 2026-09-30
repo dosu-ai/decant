@@ -514,6 +514,134 @@ describe("activity bucket classifier", () => {
 describe("Codex exec programs", () => {
   // Codex stores the custom tool's JavaScript program as a JSON-encoded string.
   const exec = (program: string) => JSON.stringify(program);
+  test("serialized object inputs retain bucket, search, and edit attribution", () => {
+    const program = 'await tools.exec_command({cmd:"rg a src"}); await tools.apply_patch(patch);';
+    for (const input of [{ input: program }, JSON.stringify({ input: program })]) {
+      expect(codexExecCalls("exec", input)).toEqual([
+        { name: "exec_command", command: "rg a src" },
+        { name: "apply_patch", command: null },
+      ]);
+      expect(toolBucket("exec", input)).toBe("code");
+      expect(isCodeEditTool("exec", input)).toBe(true);
+      expect(countSearches("exec", typeof input === "string" ? input : JSON.stringify(input))).toBe(
+        1,
+      );
+    }
+  });
+  test("ignores quoted and commented tool examples without inventing edits or searches", () => {
+    const program = exec(
+      [
+        'const example = "tools.apply_patch(patch)";',
+        "// tools.exec_command({cmd: 'bun test'})",
+        "/* tools.exec_command({cmd: 'rg fake src'}) */",
+        "const docs = `tools.update_plan({})`;",
+        'await tools.exec_command({cmd: "rg actual src"});',
+      ].join("\n"),
+    );
+    expect(codexExecCalls("exec", program)).toEqual([
+      { name: "exec_command", command: "rg actual src" },
+    ]);
+    expect(toolBucket("exec", program)).toBe("context");
+    expect(isCodeEditTool("exec", program)).toBe(false);
+    expect(countSearches("exec", program)).toBe(1);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is source code for the parser.
+    expect(toolBucket("exec", exec("const output = `${await tools.apply_patch(patch)}`;"))).toBe(
+      "code",
+    );
+  });
+  test("keeps regex literals opaque without hiding later tool calls", () => {
+    const program = exec(
+      String.raw`const url = /https?:\/\//; const example = /tools.apply_patch(foo)/; await tools.exec_command({cmd:"rg actual src"});`,
+    );
+    expect(codexExecCalls("exec", program)).toEqual([
+      { name: "exec_command", command: "rg actual src" },
+    ]);
+    expect(isCodeEditTool("exec", program)).toBe(false);
+    expect(countSearches("exec", program)).toBe(1);
+    expect(
+      toolBucket(
+        "exec",
+        exec(String.raw`const url = /https?:\/\//; await tools.apply_patch(patch);`),
+      ),
+    ).toBe("code");
+    expect(
+      codexExecCalls("exec", exec("const ratio = value / 2; await tools.apply_patch(patch);")),
+    ).toEqual([{ name: "apply_patch", command: null }]);
+  });
+  test("reads literal commands from syntax without evaluating dynamic values", () => {
+    expect(
+      codexExecCalls(
+        "exec",
+        exec(
+          String.raw`await tools.exec_command({options: {cwd: "/tmp"}, "cmd": "rg \u0061 src"});` +
+            " await tools.exec_command({cmd: `cat a.ts`});",
+        ),
+      ),
+    ).toEqual([
+      { name: "exec_command", command: "rg a src" },
+      { name: "exec_command", command: "cat a.ts" },
+    ]);
+    for (const argument of [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: this is source code for the parser.
+      "{cmd: `rg ${pattern} src`}",
+      '{cmd: "rg a", ...options}',
+      '{cmd: "rg a", cmd: command}',
+    ]) {
+      expect(codexExecCalls("exec", exec(`await tools.exec_command(${argument});`))).toEqual([
+        { name: "exec_command", command: null },
+      ]);
+    }
+  });
+  test("preserves source order for nested calls and tolerates malformed programs", () => {
+    expect(
+      codexExecCalls(
+        "exec",
+        exec("await tools.apply_patch(await tools.exec_command({cmd:'cat a'}));"),
+      ),
+    ).toEqual([
+      { name: "apply_patch", command: null },
+      { name: "exec_command", command: "cat a" },
+    ]);
+    expect(codexExecCalls("exec", exec("await tools.apply_patch("))).toEqual([]);
+  });
+  test.each([
+    {
+      name: "Unicode escape",
+      program: String.raw`await tools.exec_command({cmd:'\u0072g a src'});`,
+    },
+    { name: "hex escape", program: String.raw`await tools.exec_command({cmd:'\x72g a src'});` },
+  ])("decodes $name before counting searches and assigning buckets", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "exec_command", command: "rg a src" }]);
+    expect(toolBucket("exec", input)).toBe("context");
+    expect(countSearches("exec", input)).toBe(1);
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
+  test.each([
+    { name: "regex after a condition", program: 'if (true) /tools.apply_patch(foo)/.test("x");' },
+    { name: "different receiver", program: "await other.tools.apply_patch(patch);" },
+  ])("does not invent an edit from $name", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([]);
+    expect(toolBucket("exec", input)).toBe("context");
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
+  test.each([
+    { name: "parenthesized receiver", program: "await (tools).apply_patch(patch);" },
+    { name: "optional call", program: "await tools?.apply_patch?.(patch);" },
+  ])("recognizes a patch through a $name", ({ program }) => {
+    const input = exec(program);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "apply_patch", command: null }]);
+    expect(toolBucket("exec", input)).toBe("code");
+    expect(isCodeEditTool("exec", input)).toBe(true);
+  });
+  test("a cmd example inside another property does not become a search", () => {
+    const input = exec(`await tools.exec_command({note:"cmd: 'rg fake'",cmd:command});`);
+    expect(codexExecCalls("exec", input)).toEqual([{ name: "exec_command", command: null }]);
+    expect(toolBucket("exec", input)).toBe("code");
+    expect(countSearches("exec", input)).toBe(0);
+    expect(isCodeEditTool("exec", input)).toBe(false);
+  });
   const read = exec(
     'text(await tools.exec_command({cmd:"rg --files -g AGENTS.md","max_output_tokens":2000}));',
   );

@@ -46,6 +46,7 @@ export function toMarkdown(detail: SessionDetail): string {
 const TRAJECTORY_SOURCES: Record<string, string> = {
   claude_code: "claude-code",
   codex: "codex",
+  gemini: "gemini-cli",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.
@@ -317,6 +318,15 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     .get(sessionId) as TrajectorySessionRow | null;
 
   const codex = detail.summary.tool === "codex";
+  const resultStatuses = new Map(
+    (
+      db
+        .query(`SELECT m.seq, b.ordinal, t.is_error FROM tool_call t
+      JOIN block b ON b.id = t.result_block_id JOIN message m ON m.id = b.message_id
+      WHERE t.session_id = ?1 AND t.is_error IS NOT NULL`)
+        .all(sessionId) as { seq: number; ordinal: number; is_error: number }[]
+    ).map((row) => [`${row.seq}:${row.ordinal}`, row.is_error === 0]),
+  );
   // Codex developer messages are stored under role `user`; only the raw payload
   // role tells them apart from what a person typed.
   const developerSeqs = new Set(
@@ -390,7 +400,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   const records: unknown[] = [];
   const callTaken = new Map<string, number>(); // original id -> calls emitted
   const resultTaken = new Map<string, number>(); // original id -> results consumed
-  const answered = new Set<string>(); // assigned ids with a result already
   let lastTimestamp: string | null = null;
   let synthIndex = 0;
   // Their library always emits Date#toISOString() output; normalize source
@@ -489,20 +498,20 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
         const queue = original == null ? undefined : assignedByOriginal.get(original);
-        if (original == null || queue == null) {
+        const emitted = original == null ? 0 : (callTaken.get(original) ?? 0);
+        if (original == null || queue == null || emitted === 0) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
         const taken = resultTaken.get(original) ?? 0;
-        // Pair with the call this result answers by position, reading back the
-        // name pass 1 assigned it. Queues are never empty, so the index holds.
-        const assigned = queue[Math.min(taken, queue.length - 1)] ?? original;
-        if (answered.has(assigned) && taken >= queue.length) {
+        // Only calls already emitted can receive a result. A surplus result
+        // must not consume the ID assigned to a future reuse of this call ID.
+        if (taken >= emitted) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }
+        const assigned = queue[taken] ?? original;
         resultTaken.set(original, taken + 1);
-        answered.add(assigned);
         const { text: content, truncated } = trajectoryTruncate(
           block.tool_result ?? "",
           TRAJECTORY_RESULT_MAX,
@@ -510,7 +519,14 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         if (truncated) {
           report.tool_results_truncated += 1;
         }
-        records.push({ role: "tool", tool_call_id: assigned, content, timestamp: timestamp() });
+        const ok = resultStatuses.get(`${message.seq}:${block.ordinal}`);
+        records.push({
+          role: "tool",
+          tool_call_id: assigned,
+          content,
+          ...(ok == null ? {} : { ok }),
+          timestamp: timestamp(),
+        });
       } else {
         // Empty text/thinking land here too: no wire content, so they are
         // dropped and counted under their own block type.

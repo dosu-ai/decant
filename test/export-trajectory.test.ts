@@ -8,6 +8,7 @@ import { exportTrajectory } from "../src/export.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { parseGeminiSession } from "../src/sources/gemini.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-trajectory-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -28,6 +29,96 @@ function assertBothLayers(records: unknown[]): void {
 }
 
 describe("exportTrajectory", () => {
+  test("stray results cannot shift exported call ids or outcomes", () => {
+    const db = openDb(join(workDir, "stray-results.db"));
+    try {
+      const parsed = parseClaudeSession(
+        "stray-results",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id-with-strays.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/strays.jsonl", 1, 2);
+      const out = exportTrajectory(db, id);
+      if (!out.ok) throw new Error(out.reason);
+      assertBothLayers(out.records);
+      expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toEqual([
+        {
+          role: "tool",
+          tool_call_id: "reused",
+          content: "read",
+          ok: true,
+          timestamp: "2026-06-01T10:00:03.000Z",
+        },
+        {
+          role: "tool",
+          tool_call_id: "reused__dup2",
+          content: "bad edit",
+          ok: false,
+          timestamp: "2026-06-01T10:00:06.000Z",
+        },
+      ]);
+      expect(out.report.orphan_tool_results_dropped).toBe(1);
+      expect(out.report.duplicate_tool_results_dropped).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+  test("preserves authoritative results and unique pairing for reused tool ids", () => {
+    const db = openDb(join(workDir, "reused-status.db"));
+    try {
+      const parsed = parseClaudeSession(
+        "reused-ids",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/reused.jsonl", 1, 2);
+      const out = exportTrajectory(db, id);
+      if (!out.ok) throw new Error(out.reason);
+      assertBothLayers(out.records);
+      expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toEqual([
+        {
+          role: "tool",
+          tool_call_id: "reused",
+          content: "read",
+          ok: true,
+          timestamp: "2026-06-01T10:00:03.000Z",
+        },
+        {
+          role: "tool",
+          tool_call_id: "reused__dup2",
+          content: "bad edit",
+          ok: false,
+          timestamp: "2026-06-01T10:00:09.000Z",
+        },
+      ]);
+      expect(out.report.tool_call_ids_renamed).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("exports Gemini with Trajectory's source label and preserved tool linkage", () => {
+    const db = openDb(join(workDir, "gemini.db"));
+    try {
+      const parsed = parseGeminiSession(
+        "gemini",
+        readFileSync(join(import.meta.dir, "..", "fixtures", "gemini", "sample.jsonl"), "utf8"),
+        "/synthetic/project",
+      );
+      const id = upsertSession(db, parsed, "/synthetic/gemini.jsonl", 1, 2);
+      const out = exportTrajectory(db, id);
+      if (!out.ok) throw new Error(out.reason);
+      assertBothLayers(out.records);
+      expect(out.records[0]).toEqual({
+        role: "meta",
+        source: "gemini-cli",
+        cwd: "/synthetic/project",
+        model: "example-model",
+      });
+      expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+
   test("emits a transcript both their validator and schema accept", () => {
     const db = openDb(join(workDir, "basic.db"));
     const sessionId = upsertSession(

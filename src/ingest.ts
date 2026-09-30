@@ -58,7 +58,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 5;
+export const INGEST_PIPELINE_REVISION = 8;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -945,10 +945,10 @@ function writeSession(
     ],
   );
 
-  const results = new Map<string, number>();
-  const resultErrors = new Map<string, boolean | null>();
-  const resultText = new Map<string, string>();
-  const resultTimestamps = new Map<string, string | null>();
+  const results = new Map<
+    string,
+    { blockId: number; isError: boolean | null; text: string; timestamp: string | null }[]
+  >();
   const toolUseBlocks: ToolUseBlock[] = [];
   const messageIds: number[] = [];
 
@@ -1009,10 +1009,14 @@ function writeSession(
             block,
           });
         } else if (block.blockType === "tool_result" && block.toolUseId != null) {
-          results.set(block.toolUseId, blockId);
-          resultErrors.set(block.toolUseId, block.isError);
-          resultText.set(block.toolUseId, block.toolResult ?? "");
-          resultTimestamps.set(block.toolUseId, message.timestamp);
+          const queue = results.get(block.toolUseId) ?? [];
+          queue.push({
+            blockId,
+            isError: block.isError,
+            text: block.toolResult ?? "",
+            timestamp: message.timestamp,
+          });
+          results.set(block.toolUseId, queue);
         }
       }
     }
@@ -1029,21 +1033,28 @@ function writeSession(
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
   );
+  const resultTaken = new Map<string, number>();
   try {
     for (const call of toolUseBlocks) {
       const name = call.block.toolName ?? "";
       const classified = classifyTool(name);
-      const resultBlockId =
-        call.block.toolUseId == null ? null : (results.get(call.block.toolUseId) ?? null);
-      const isError =
-        call.block.toolUseId == null || !resultErrors.has(call.block.toolUseId)
-          ? null
-          : resultErrors.get(call.block.toolUseId);
-      const output =
-        call.block.toolUseId == null ? null : (resultText.get(call.block.toolUseId) ?? null);
+      // IDs can recur in retained logs. Pair occurrences one-to-one; reusing
+      // the last result for every call doubles volume and changes outcomes.
+      const id = call.block.toolUseId;
+      let taken = id == null ? 0 : (resultTaken.get(id) ?? 0);
+      const queue = id == null ? undefined : results.get(id);
+      // Orphan and surplus results remain in the transcript but cannot answer
+      // a call that had not been emitted when those results were recorded.
+      while (queue?.[taken] != null && (queue[taken]?.blockId ?? 0) < call.callBlockId) {
+        taken += 1;
+      }
+      const result = queue?.[taken];
+      if (id != null) resultTaken.set(id, taken + 1);
+      const resultBlockId = result?.blockId ?? null;
+      const isError = result?.isError ?? null;
+      const output = result?.text ?? null;
       const input = call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput);
-      const resultTimestamp =
-        call.block.toolUseId == null ? null : (resultTimestamps.get(call.block.toolUseId) ?? null);
+      const resultTimestamp = result?.timestamp ?? null;
       insertToolCall.run(
         sessionId,
         call.messageId,

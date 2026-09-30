@@ -218,9 +218,12 @@ Active time is an attribution from message timestamps, not stopwatch time. The
 gap between two messages is charged to the later message, split across that
 message's blocks, and capped at five minutes. Gaps closed by user-authored text
 are reported separately as `waiting_on_user_ms`, including the share of an
-image or document attached to that prompt. A harness record between two
-messages does not split the gap; it closes on the next message the model or
-user produced.
+image or document attached to that prompt. A question the model asks through a
+tool (`AskUserQuestion`, including MCP copies, and Codex `request_user_input`)
+is communicating, but its result arrives when the user answers, so the gap
+before that result is waiting on the user too, like the time before a typed
+prompt. A harness record between two messages does not split the gap; it closes
+on the next message the model or user produced.
 
 Consequences:
 

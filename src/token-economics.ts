@@ -4,6 +4,7 @@ import {
   type ActivityBucket,
   blockBucket,
   isCodeEditTool,
+  isUserQuestionTool,
   toolBucket,
 } from "./buckets.ts";
 import { defaultPricing, estimateCostParts } from "./cost.ts";
@@ -915,6 +916,15 @@ const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
  * Skipped blocks are dropped before allocation, so they carry no generation,
  * window volume, or time, and the gap around them closes on the next message. */
 function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
+  if (
+    block.type === "tool_result" &&
+    isUserQuestionTool(block.tool_name, block.tool_input ?? undefined)
+  ) {
+    // A question's answer arrives when the user replies, so the gap before it
+    // is the user deciding, like the gap before a typed prompt. The question
+    // itself stays communicating.
+    return "waiting";
+  }
   if (block.role === "user" && block.type !== "tool_result") {
     // Text, and any image or document the user attached to the prompt.
     return "waiting";

@@ -516,6 +516,61 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("charges the wait for a question's answer to the user, not the agent", () => {
+    const line = (value: object) => JSON.stringify(value);
+    const content = [
+      line({
+        type: "user",
+        timestamp: "2026-09-29T10:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "Plan the migration." }] },
+      }),
+      line({
+        type: "assistant",
+        timestamp: "2026-09-29T10:00:02.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 10, output_tokens: 20 },
+          content: [
+            {
+              type: "tool_use",
+              id: "q1",
+              name: "AskUserQuestion",
+              input: { questions: [{ question: "Which database?" }] },
+            },
+          ],
+        },
+      }),
+      line({
+        type: "user",
+        timestamp: "2026-09-29T10:01:32.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "q1", content: "Postgres" }],
+        },
+      }),
+      line({
+        type: "assistant",
+        timestamp: "2026-09-29T10:01:35.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ type: "text", text: "Going with Postgres." }],
+        },
+      }),
+    ].join("\n");
+    const db = freshDb();
+    upsertSession(db, parseClaudeSession("sess-ask", `${content}\n`), "/x/ask.jsonl", 1, 2, "ask");
+    const economics = tokenEconomics(db);
+    // 90s from the question to the answer is the user deciding.
+    expect(economics.totals.waiting_on_user_ms).toBe(90_000);
+    // The question (2s) and the reply (3s) are the agent communicating.
+    expect(economics.totals.active_ms).toBe(5_000);
+    expect(economics.buckets.find((row) => row.bucket === "communicating")?.active_ms).toBe(5_000);
+    db.close();
+  });
+
   test("counts an agent run when it contributes only wall-clock activity", () => {
     const db = freshDb();
     const content = [

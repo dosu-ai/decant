@@ -5,6 +5,7 @@ import {
   codexExecCalls,
   countSearches,
   isCodeEditTool,
+  isUserQuestionTool,
   toolBucket,
 } from "../src/buckets.ts";
 import type { Json } from "../src/model.ts";
@@ -126,6 +127,28 @@ describe("activity bucket classifier", () => {
     ]) {
       expect(toolBucket(tool)).toBe("context");
     }
+  });
+
+  test("recognizes every spelling of a question to the user", () => {
+    for (const tool of [
+      "AskUserQuestion",
+      "mcp__example__AskUserQuestion",
+      "request_user_input",
+      "request_user_input_async",
+      "functions.request_user_input",
+    ]) {
+      expect(isUserQuestionTool(tool)).toBe(true);
+    }
+    expect(isUserQuestionTool("SendMessage")).toBe(false);
+    expect(isUserQuestionTool("mcp__docs__ask")).toBe(false);
+    // A Codex exec program counts only when all it does is ask.
+    const ask = JSON.stringify("await tools.request_user_input({questions:[]});");
+    const askAndRead = JSON.stringify(
+      'await tools.request_user_input({questions:[]}); text(await tools.exec_command({cmd:"ls"}));',
+    );
+    expect(isUserQuestionTool("exec", ask)).toBe(true);
+    expect(toolBucket("exec", ask)).toBe("communicating");
+    expect(isUserQuestionTool("exec", askAndRead)).toBe(false);
   });
 
   test("files questions to the user as communicating and note writes as code", () => {

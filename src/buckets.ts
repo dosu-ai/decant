@@ -291,6 +291,25 @@ const USER_QUESTION_TOOLS = new Set([
   "request_user_input",
   "request_user_input_async",
 ]);
+
+/** True for a tool that asks the user a question, in any spelling, including
+ * an MCP copy such as `mcp__<server>__AskUserQuestion`. Its result arrives
+ * when the user answers, so the time before it is the user's. */
+export function isUserQuestionTool(
+  toolName: string | null | undefined,
+  input?: string | Json,
+): boolean {
+  const inner = codexExecCalls(toolName, input);
+  if (inner.length > 0) {
+    // A Codex `exec` program that only asks the user something.
+    return inner.every((call) => isUserQuestionTool(call.name));
+  }
+  const name = toolName ?? "";
+  const tool = name.startsWith("mcp__")
+    ? (/^mcp__.+?__+(.+)$/.exec(name)?.[1] ?? "")
+    : localToolName(name);
+  return USER_QUESTION_TOOLS.has(tool.toLowerCase());
+}
 // Tools that write a note or checkpoint outside the workspace: Codex notes, an
 // Obsidian vault, a Dosu knowledge entry. Writing is code, but a note is the
 // agent's memory rather than the work product, so it never marks the first edit.
@@ -1428,8 +1447,8 @@ export function codexExecCalls(
 }
 
 // A program that reads and then patches is an implementation step, so the strongest
-// inner bucket labels the whole call.
-const EXEC_BUCKET_PRECEDENCE: ActivityBucket[] = ["code", "planning", "context"];
+// inner bucket labels the whole call. A program that asks the user is communicating.
+const EXEC_BUCKET_PRECEDENCE: ActivityBucket[] = ["code", "planning", "communicating", "context"];
 
 function innerInput(call: CodexExecCall): Json | undefined {
   return call.command == null ? undefined : { cmd: call.command };

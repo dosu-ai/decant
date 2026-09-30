@@ -7,6 +7,7 @@ import { openDb } from "../src/db.ts";
 import { exportTrajectory } from "../src/export.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
+import { parseCodexSession } from "../src/sources/codex.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-trajectory-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -187,7 +188,8 @@ describe("exportTrajectory", () => {
         tool_calls: { args: string }[];
       }
     ).tool_calls[0]?.args;
-    expect(JSON.parse(args ?? "{}")).toHaveProperty("_raw");
+    // The stored canonical JSON literal is unwrapped once: the raw text, not "\"not-an-object\"".
+    expect(JSON.parse(args ?? "{}")).toEqual({ _raw: "not-an-object" });
     db.close();
   });
 
@@ -540,6 +542,81 @@ describe("exportTrajectory", () => {
     expect(user?.timestamp).toBe("2026-06-30T18:30:00.000Z");
     expect(assistant?.timestamp).toBe("2026-06-30T18:30:00.000Z");
     expect(out.report.timestamps_filled).toBe(1);
+    db.close();
+  });
+
+  test("codex: drops harness context and emits arguments without double encoding", () => {
+    const db = openDb(join(workDir, "codex.db"));
+    const at = (n: number) => `2026-07-01T00:00:0${n}.000Z`;
+    const item = (n: number, payload: object) =>
+      JSON.stringify({ timestamp: at(n), type: "response_item", payload });
+    const program = 'const r = await tools.exec_command({ cmd: "ls" });\ntext(r);';
+    const lines = [
+      JSON.stringify({
+        timestamp: at(0),
+        type: "session_meta",
+        payload: { id: "codex-traj-1", cwd: "/work", cli_version: "0.0.0" },
+      }),
+      item(1, {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "<permissions instructions>sandboxed" }],
+      }),
+      item(1, {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "<environment_context><cwd>/work</cwd>" }],
+      }),
+      item(2, {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "list the files" }],
+      }),
+      item(3, {
+        type: "function_call",
+        name: "exec_command",
+        arguments: '{"cmd":"ls -la"}',
+        call_id: "fc1",
+      }),
+      item(4, { type: "function_call_output", call_id: "fc1", output: "a.txt" }),
+      item(5, { type: "custom_tool_call", name: "exec", input: program, call_id: "ct1" }),
+      item(6, {
+        type: "custom_tool_call_output",
+        call_id: "ct1",
+        output: [{ type: "input_text", text: "a.txt" }],
+      }),
+      item(7, {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "one file" }],
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseCodexSession("codex-traj-1", lines, new Map()),
+      "/c1.jsonl",
+      1,
+      2,
+      "h",
+    );
+    const out = exportTrajectory(db, sessionId);
+    if (!out.ok) throw new Error(`export failed: ${out.reason}`);
+    assertBothLayers(out.records);
+    const records = out.records as { role: string; content?: string | null }[];
+    expect(records.filter((r) => r.role === "user").map((r) => r.content)).toEqual([
+      "list the files",
+    ]);
+    expect(out.report.injected_context_dropped).toBe(2);
+    expect(out.report.tool_args_wrapped).toBe(0);
+    const calls = out.records.flatMap((r) =>
+      typeof r === "object" && r != null && "tool_calls" in r
+        ? (r as { tool_calls: { name: string; args: string }[] }).tool_calls
+        : [],
+    );
+    expect(calls.map((c) => [c.name, JSON.parse(c.args)])).toEqual([
+      ["exec_command", { cmd: "ls -la" }],
+      ["exec", { input: program }],
+    ]);
     db.close();
   });
 });

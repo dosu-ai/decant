@@ -59,6 +59,15 @@ const TRAJECTORY_NOISE_PREFIXES = [
   "<task-notification",
 ];
 
+/** Codex writes its harness context (developer instructions, environment
+ * snapshots) as `user` messages. Their adapter drops these, and so do we. */
+const CODEX_INJECTED_PREFIXES = [
+  "<environment_context>",
+  "<user_instructions>",
+  "<permissions instructions>",
+  "<turn_context>",
+];
+
 const TRAJECTORY_ARGS_MAX = 20_000;
 const TRAJECTORY_RESULT_MAX = 2_500;
 const TRAJECTORY_SYNTH_BASE_MS = Date.UTC(2026, 0, 1);
@@ -221,12 +230,33 @@ function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
  * over-cap object keeps its field structure by shrinking its string leaves, and
  * degrades to a truncated {"_raw": ...} wrap only if that cannot reach the
  * cap. */
-function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): string {
+function trajectoryArgs(
+  toolInput: string | null,
+  report: TrajectoryReport,
+  codex: boolean,
+): string {
   let parsed: unknown;
   try {
     parsed = toolInput == null ? {} : JSON.parse(toolInput);
   } catch {
     parsed = undefined;
+  }
+  // tool_input is stored as canonical JSON, so a string input arrives as a JSON
+  // string literal. Codex function_call arguments are themselves serialized
+  // JSON; custom tools (exec, apply_patch) carry free text, which their adapter
+  // files under `input`. Unwrap once so neither is emitted double-encoded.
+  let text: string | null = null;
+  if (typeof parsed === "string") {
+    text = parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    const isObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+    if (!isObject && codex) {
+      parsed = { input: text };
+    }
   }
   const isPlainObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
   const serialized = isPlainObject ? JSON.stringify(parsed) : null;
@@ -242,7 +272,7 @@ function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): str
   }
   report.tool_args_wrapped += 1;
   // `serialized` predates any leaf shrinking, so the wrap carries the original.
-  const raw = serialized ?? toolInput ?? "";
+  const raw = serialized ?? text ?? toolInput ?? "";
   // Budget for {"_raw":""} scaffolding + escaping: truncate the payload, then
   // shrink until the serialized wrapper fits (escaping can expand length).
   let budget = TRAJECTORY_ARGS_MAX - 12;
@@ -263,6 +293,7 @@ interface TrajectorySessionRow {
 export interface TrajectoryReport {
   dropped_blocks: Record<string, number>;
   noise_user_records_dropped: number;
+  injected_context_dropped: number;
   orphan_tool_results_dropped: number;
   duplicate_tool_results_dropped: number;
   tool_call_ids_synthesized: number;
@@ -285,9 +316,26 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     .query("SELECT cwd, git_branch FROM session WHERE id = ?1")
     .get(sessionId) as TrajectorySessionRow | null;
 
+  const codex = detail.summary.tool === "codex";
+  // Codex developer messages are stored under role `user`; only the raw payload
+  // role tells them apart from what a person typed.
+  const developerSeqs = new Set(
+    codex
+      ? (
+          db
+            .query(
+              `SELECT seq FROM message
+               WHERE session_id = ?1 AND json_extract(raw, '$.payload.role') = 'developer'`,
+            )
+            .all(sessionId) as { seq: number }[]
+        ).map((m) => m.seq)
+      : [],
+  );
+
   const report: TrajectoryReport = {
     dropped_blocks: {},
     noise_user_records_dropped: 0,
+    injected_context_dropped: 0,
     orphan_tool_results_dropped: 0,
     duplicate_tool_results_dropped: 0,
     tool_call_ids_synthesized: 0,
@@ -402,6 +450,13 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
             report.noise_user_records_dropped += 1;
             continue;
           }
+          if (
+            developerSeqs.has(message.seq) ||
+            (codex && CODEX_INJECTED_PREFIXES.some((prefix) => trimmed.startsWith(prefix)))
+          ) {
+            report.injected_context_dropped += 1;
+            continue;
+          }
           records.push({ role: "user", content: text, timestamp: timestamp() });
           userCount += 1;
         } else if (message.role === "assistant") {
@@ -425,7 +480,9 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         records.push({
           role: "assistant",
           content: null,
-          tool_calls: [{ id: assigned, name, args: trajectoryArgs(block.tool_input, report) }],
+          tool_calls: [
+            { id: assigned, name, args: trajectoryArgs(block.tool_input, report, codex) },
+          ],
           timestamp: timestamp(),
         });
         assistantCount += 1;

@@ -619,12 +619,8 @@ interface MessageBlockRow {
 const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
   b.tool_name,
   CASE WHEN b.type = 'tool_result' THEN (
-    SELECT call.tool_name
-    FROM block call
-    WHERE call.session_id = b.session_id
-      AND call.type = 'tool_use'
-      AND call.tool_use_id = b.tool_use_id
-    ORDER BY call.id
+    SELECT call.tool_name FROM tool_call call
+    WHERE call.session_id = b.session_id AND call.result_block_id = b.id
     LIMIT 1
   ) END
 )`;

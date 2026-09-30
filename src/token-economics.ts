@@ -16,7 +16,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 4;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 5;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.

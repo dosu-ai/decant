@@ -46,6 +46,7 @@ export function toMarkdown(detail: SessionDetail): string {
 const TRAJECTORY_SOURCES: Record<string, string> = {
   claude_code: "claude-code",
   codex: "codex",
+  gemini: "gemini-cli",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.
@@ -317,6 +318,15 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     .get(sessionId) as TrajectorySessionRow | null;
 
   const codex = detail.summary.tool === "codex";
+  const resultStatuses = new Map(
+    (
+      db
+        .query(`SELECT m.seq, b.ordinal, t.is_error FROM tool_call t
+      JOIN block b ON b.id = t.result_block_id JOIN message m ON m.id = b.message_id
+      WHERE t.session_id = ?1 AND t.is_error IS NOT NULL`)
+        .all(sessionId) as { seq: number; ordinal: number; is_error: number }[]
+    ).map((row) => [`${row.seq}:${row.ordinal}`, row.is_error === 0]),
+  );
   // Codex developer messages are stored under role `user`; only the raw payload
   // role tells them apart from what a person typed.
   const developerSeqs = new Set(
@@ -510,7 +520,14 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         if (truncated) {
           report.tool_results_truncated += 1;
         }
-        records.push({ role: "tool", tool_call_id: assigned, content, timestamp: timestamp() });
+        const ok = resultStatuses.get(`${message.seq}:${block.ordinal}`);
+        records.push({
+          role: "tool",
+          tool_call_id: assigned,
+          content,
+          ...(ok == null ? {} : { ok }),
+          timestamp: timestamp(),
+        });
       } else {
         // Empty text/thinking land here too: no wire content, so they are
         // dropped and counted under their own block type.

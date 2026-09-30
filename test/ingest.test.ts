@@ -95,6 +95,59 @@ function canonicalizeRows(value: unknown, dir: string): unknown {
 }
 
 describe("upsertSession", () => {
+  test("pairs reused call ids one-to-one, preserving outcome, volume, time, and buckets", () => {
+    const db = openFreshDb(freshCase());
+    try {
+      const parsed = parseClaudeSession(
+        "reused-ids",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/reused.jsonl", 1, 2);
+      expect(
+        db
+          .query(
+            "SELECT tool_name, output_bytes, is_error, has_result, duration_ms FROM tool_call WHERE session_id = ?1 ORDER BY id",
+          )
+          .all(id),
+      ).toEqual([
+        { tool_name: "Read", output_bytes: 4, is_error: 0, has_result: 1, duration_ms: 2000 },
+        { tool_name: "Edit", output_bytes: 8, is_error: 1, has_result: 1, duration_ms: 5000 },
+        {
+          tool_name: "Write",
+          output_bytes: null,
+          is_error: null,
+          has_result: 0,
+          duration_ms: null,
+        },
+      ]);
+      const detail = getSession(db, id);
+      expect(
+        detail?.messages
+          .flatMap((m) => m.blocks)
+          .filter((b) => b.block_type === "tool_result")
+          .map((b) => b.tool_name),
+      ).toEqual(["Read", "Edit"]);
+      const economics = tokenEconomicsForSession(db, id);
+      expect(economics?.totals.generation_tokens).toBe(60);
+      const context = economics?.buckets.find((b) => b.bucket === "context");
+      const code = economics?.buckets.find((b) => b.bucket === "code");
+      expect(context?.generation_tokens).toBe(10);
+      // Session Window includes the 600 billed input tokens, allocated over
+      // the 11 context and 52 code tokens of generation + result volume.
+      expect(context?.context_window_tokens).toBe(116);
+      expect(context?.tool_calls).toBe(1);
+      expect(code?.generation_tokens).toBe(50);
+      expect(code?.context_window_tokens).toBe(547);
+      expect(code?.tool_calls).toBe(2);
+      expect(economics?.totals.context_window_tokens).toBe(663);
+      // Replacing the session retains the same ID and derived totals.
+      expect(upsertSession(db, parsed, "/synthetic/reused.jsonl", 2, 3)).toBe(id);
+      expect(tokenEconomicsForSession(db, id)).toEqual(economics);
+    } finally {
+      db.close();
+    }
+  });
+
   test("classifies namespaced Codex MCP tool calls", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);

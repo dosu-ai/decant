@@ -1430,7 +1430,7 @@ export function codexExecCalls(
     return [];
   }
   const calls: CodexExecCall[] = [];
-  for (const match of program.matchAll(EXEC_INNER_CALL)) {
+  for (const match of maskJsLiterals(program).matchAll(EXEC_INNER_CALL)) {
     const name = match[1] ?? "";
     if (name.toLowerCase() === "exec") {
       continue;
@@ -1444,6 +1444,73 @@ export function codexExecCalls(
     calls.push({ name, command });
   }
   return calls;
+}
+
+/** Keep offsets while excluding examples inside strings and comments. Those
+ * strings often contain patches or tool documentation; they are not calls. */
+function maskJsLiterals(program: string): string {
+  // Work in UTF-16 offsets, as RegExp match.index and String.slice do.
+  const masked = program.split("");
+  const hide = (from: number, to: number): void => {
+    for (let i = from; i < to; i += 1) masked[i] = " ";
+  };
+  const code = (start: number, interpolation = false, nestingDepth = 0): number => {
+    if (nestingDepth >= MAX_NESTING) {
+      hide(start, program.length);
+      return program.length;
+    }
+    let depth = 0;
+    let i = start;
+    while (i < program.length) {
+      const ch = program[i];
+      if (interpolation && ch === "}" && depth === 0) return i;
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+      if (program.startsWith("//", i)) {
+        const end = program.indexOf("\n", i + 2);
+        const next = end === -1 ? program.length : end;
+        hide(i, next);
+        i = next;
+        continue;
+      }
+      if (program.startsWith("/*", i)) {
+        const end = program.indexOf("*/", i + 2);
+        const next = end === -1 ? program.length : end + 2;
+        hide(i, next);
+        i = next;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") {
+        const quote = ch;
+        let from = i;
+        i += 1;
+        while (i < program.length) {
+          if (program[i] === "\\") {
+            i += 2;
+            continue;
+          }
+          if (quote === "`" && program.startsWith("${", i)) {
+            hide(from, i + 2);
+            i = code(i + 2, true, nestingDepth + 1);
+            from = i;
+            i += 1;
+            continue;
+          }
+          if (program[i] === quote) {
+            i += 1;
+            break;
+          }
+          i += 1;
+        }
+        hide(from, Math.min(i, program.length));
+        continue;
+      }
+      i += 1;
+    }
+    return i;
+  };
+  code(0);
+  return masked.join("");
 }
 
 // A program that reads and then patches is an implementation step, so the strongest

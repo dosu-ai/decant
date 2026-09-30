@@ -147,7 +147,10 @@ is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,
 like the tool it names:
 
 - The whole call takes the strongest inner bucket (code, then planning, then
-  context), so a program that reads a file and then patches it counts as code.
+  communicating, then context), so a program that reads a file and then patches
+  it counts as code.
+- Tool examples inside JavaScript strings or comments do not count as calls.
+  Calls inside template interpolations do count.
 - An `exec_command` whose command is assembled at runtime, rather than written
   as a literal, is treated like an unrecognized shell command, which is code.
 - A program that calls no tools stays in context.
@@ -158,6 +161,12 @@ Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume, and
 so does the text of a message from another agent (a Codex `agent_message`),
 which the model reads the way it reads an Agent or SendMessage result.
+
+When a source repeats a tool-call ID, calls and results pair one-to-one in
+occurrence order. An unmatched call has no result volume, outcome, or duration;
+it does not borrow the last result of another call with the same ID. Parser
+diagnostics still report repeated IDs and surplus results, and the raw blocks
+remain in the transcript.
 
 Some kept records are neither model output nor a tool call:
 

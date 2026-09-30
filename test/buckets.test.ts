@@ -514,6 +514,27 @@ describe("activity bucket classifier", () => {
 describe("Codex exec programs", () => {
   // Codex stores the custom tool's JavaScript program as a JSON-encoded string.
   const exec = (program: string) => JSON.stringify(program);
+  test("ignores quoted and commented tool examples without inventing edits or searches", () => {
+    const program = exec(
+      [
+        'const example = "tools.apply_patch(patch)";',
+        "// tools.exec_command({cmd: 'bun test'})",
+        "/* tools.exec_command({cmd: 'rg fake src'}) */",
+        "const docs = `tools.update_plan({})`;",
+        'await tools.exec_command({cmd: "rg actual src"});',
+      ].join("\n"),
+    );
+    expect(codexExecCalls("exec", program)).toEqual([
+      { name: "exec_command", command: "rg actual src" },
+    ]);
+    expect(toolBucket("exec", program)).toBe("context");
+    expect(isCodeEditTool("exec", program)).toBe(false);
+    expect(countSearches("exec", program)).toBe(1);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is source code for the parser.
+    expect(toolBucket("exec", exec("const output = `${await tools.apply_patch(patch)}`;"))).toBe(
+      "code",
+    );
+  });
   const read = exec(
     'text(await tools.exec_command({cmd:"rg --files -g AGENTS.md","max_output_tokens":2000}));',
   );

@@ -44,6 +44,8 @@ describe("activity bucket classifier", () => {
     );
     expect(bashBucket("cd repo")).toBe("context");
     expect(bashBucket("git ls-files && git rev-parse HEAD")).toBe("context");
+    expect(bashBucket("cd $PWD; git stash list; git status --short")).toBe("context");
+    expect(bashBucket("git stash push src/cli.ts")).toBe("code");
     // One mutating statement or stage makes the whole command code.
     expect(bashBucket("ls -la scripts/lib; cat README.md; ./scripts/install.sh")).toBe("code");
     expect(bashBucket("cd $PWD; git stash push src/cli.ts -q && bun test")).toBe("code");

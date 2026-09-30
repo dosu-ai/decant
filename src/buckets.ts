@@ -306,6 +306,9 @@ function stageVerdict(stage: string): ActivityBucket | "neutral" {
     return "neutral";
   }
   if (head === "git") {
+    if (subcommand === "stash") {
+      return tokens[2] === "list" || tokens[2] === "show" ? "context" : "code";
+    }
     if (subcommand === "config") {
       return tokens.some((t) => t === "--list" || t === "-l" || t.startsWith("--get"))
         ? "context"

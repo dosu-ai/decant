@@ -7,7 +7,7 @@ import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./lo
 import { UI_ROUTE_PATHS } from "./route-paths.ts";
 import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { type Db, ensureDerivedMetadata } from "./server/context.ts";
-import { responseForError, serviceStartingResponse } from "./server/http.ts";
+import { errorResponse, responseForError, serviceStartingResponse } from "./server/http.ts";
 import { resolveTrustedPeers } from "./server/peers.ts";
 import { handleRequest } from "./server/router.ts";
 import { publishServerEvent } from "./server/sse.ts";
@@ -100,6 +100,11 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       const activeEconomics = economics;
       if (activeDb == null || activeEconomics == null) {
         return serviceStartingResponse();
+      }
+      // A Host carrying more than an authority leaves request.url unparseable,
+      // and every later step (routing, error logging) parses it again.
+      if (!URL.canParse(request.url)) {
+        return errorResponse("forbidden_host", "forbidden host", {}, 403);
       }
       try {
         const response = await handleRequest(request, options.config, {

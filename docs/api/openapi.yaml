@@ -26,9 +26,13 @@ x-access-control:
     - DECANT_TRUST_DEFAULT_GATEWAY=1
   precedence_mode: replace
   host_header: The request URL hostname must be loopback, even on a non-loopback bind.
+  write_origin: |
+    A write that sends Origin must use a loopback origin whose host and port
+    equal the request's Host header, with default ports normalised; a
+    mismatch returns 403 cross_origin_write.
   non_loopback_writes: |
-    A trusted non-loopback peer must also send a loopback Origin or acceptable
-    Sec-Fetch-Site value; writes with neither header are rejected.
+    A trusted non-loopback peer must also send a matching loopback Origin or an
+    acceptable Sec-Fetch-Site value; writes with neither header are rejected.
   cidr_support: IPv4 CIDRs and exact IPv4 or IPv6 peer addresses.
   warning: Any admitted client can read or mutate the entire local archive.
 tags:

@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Config } from "../src/config.ts";
@@ -1600,6 +1601,223 @@ describe("server routes", () => {
 
     expect(sawCancellation).toBe(true);
     await pendingRequest;
+  });
+});
+
+describe("write origin must match the Host header", () => {
+  const broadTrusted = {
+    boundHostname: "0.0.0.0",
+    remoteAddress: "172.17.0.1",
+    trustedPeers: ["172.16.0.0/12"],
+  };
+
+  async function write(
+    url: string,
+    headers: Record<string, string>,
+    context: Parameters<typeof handleRequest>[2] = {},
+  ): Promise<{ status: number; body: unknown }> {
+    const response = await handleRequest(
+      new Request(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ query: "x" }),
+      }),
+      freshConfig(),
+      context,
+    );
+    return { status: response.status, body: await response.json() };
+  }
+
+  const rejected = {
+    status: 403,
+    body: { error: "cross-origin writes are forbidden", code: "cross_origin_write" },
+  };
+
+  test("admits an origin whose authority equals the Host header", async () => {
+    expect(
+      await write("http://127.0.0.1:3000/api/search", { origin: "http://127.0.0.1:3000" }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://localhost:3000/api/search", {
+        host: "LocalHost:3000",
+        origin: "http://localhost:3000",
+      }),
+    ).toMatchObject({ status: 200 });
+  });
+
+  test("rejects an origin served from another loopback port", async () => {
+    expect(
+      await write("http://127.0.0.1:3000/api/search", { origin: "http://127.0.0.1:5173" }),
+    ).toEqual(rejected);
+    expect(
+      await write("http://localhost:3000/api/launch/agent", {
+        host: "localhost:3000",
+        origin: "http://localhost:5173",
+      }),
+    ).toEqual(rejected);
+  });
+
+  test("admits a mapped port when Host and Origin agree with each other", async () => {
+    const mapped = { host: "localhost:8080", origin: "http://localhost:8080" };
+    expect(await write("http://localhost:8080/api/search", mapped)).toMatchObject({
+      status: 200,
+    });
+    expect(await write("http://localhost:8080/api/search", mapped, broadTrusted)).toMatchObject({
+      status: 200,
+    });
+    expect(
+      await write(
+        "http://localhost:8080/api/search",
+        { host: "localhost:8080", origin: "http://localhost:3000" },
+        broadTrusted,
+      ),
+    ).toEqual(rejected);
+  });
+
+  test("treats localhost, 127.0.0.1 and [::1] as distinct authorities", async () => {
+    expect(
+      await write("http://127.0.0.1:3000/api/search", {
+        host: "127.0.0.1:3000",
+        origin: "http://localhost:3000",
+      }),
+    ).toEqual(rejected);
+    expect(
+      await write("http://localhost:3000/api/search", {
+        host: "localhost:3000",
+        origin: "http://127.0.0.1:3000",
+      }),
+    ).toEqual(rejected);
+    expect(
+      await write("http://[::1]:3000/api/search", {
+        host: "[::1]:3000",
+        origin: "http://127.0.0.1:3000",
+      }),
+    ).toEqual(rejected);
+  });
+
+  test("admits IPv6 loopback only on a matching port", async () => {
+    expect(
+      await write("http://[::1]:3000/api/search", {
+        host: "[::1]:3000",
+        origin: "http://[::1]:3000",
+      }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://[::1]:3000/api/search", {
+        host: "[0:0:0:0:0:0:0:1]:3000",
+        origin: "http://[::1]:3000",
+      }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://[::1]:3000/api/search", {
+        host: "[::1]:3000",
+        origin: "http://[::1]:5173",
+      }),
+    ).toEqual(rejected);
+  });
+
+  test("normalises default ports against the request scheme", async () => {
+    expect(
+      await write("http://localhost/api/search", { host: "localhost", origin: "http://localhost" }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://localhost/api/search", {
+        host: "localhost:80",
+        origin: "http://localhost",
+      }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://localhost/api/search", {
+        host: "localhost",
+        origin: "http://localhost:80",
+      }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await write("http://localhost/api/search", {
+        host: "localhost",
+        origin: "https://localhost",
+      }),
+    ).toEqual(rejected);
+  });
+
+  test("rejects a Host header that carries more than an authority", async () => {
+    expect(
+      await write("http://127.0.0.1:3000/api/search", {
+        host: "127.0.0.1:3000/elsewhere",
+        origin: "http://127.0.0.1:3000",
+      }),
+    ).toEqual(rejected);
+  });
+
+  test("leaves requests without an Origin header unchanged", async () => {
+    expect(await write("http://127.0.0.1:3000/api/search", {})).toMatchObject({ status: 200 });
+    expect(await write("http://127.0.0.1:3000/api/search", {}, { ...broadTrusted })).toEqual(
+      rejected,
+    );
+    expect(
+      await write(
+        "http://127.0.0.1:3000/api/search",
+        { "sec-fetch-site": "same-origin" },
+        broadTrusted,
+      ),
+    ).toMatchObject({ status: 200 });
+  });
+
+  test("still rejects non-loopback origins and untrusted peers", async () => {
+    expect(
+      await write("http://127.0.0.1:3000/api/search", { origin: "https://evil.example" }),
+    ).toEqual(rejected);
+    expect(
+      await write(
+        "http://127.0.0.1:3000/api/search",
+        { origin: "http://127.0.0.1:3000" },
+        { boundHostname: "0.0.0.0", remoteAddress: "192.168.1.20" },
+      ),
+    ).toEqual({ status: 403, body: { error: "forbidden remote", code: "forbidden_remote" } });
+  });
+
+  test("a live listener rejects a write from another loopback port", async () => {
+    const server = serve({ config: freshConfig(), port: 0 });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const post = (origin: string) =>
+        fetch(`${base}/api/search`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin },
+          body: JSON.stringify({ query: "x" }),
+        });
+      expect((await post(base)).status).toBe(200);
+      const other = await post(`http://127.0.0.1:${server.port === 5173 ? 5174 : 5173}`);
+      expect(other.status).toBe(403);
+      expect(await other.json()).toEqual(rejected.body);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a live listener answers an unparseable Host with JSON, not a crash page", async () => {
+    const server = serve({ config: freshConfig(), port: 0 });
+    try {
+      for (const host of ["a@b", "a/b", ""]) {
+        const raw = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          const socket = connect(server.port ?? 0, "127.0.0.1", () => {
+            socket.write(
+              `GET /api/sessions HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`,
+            );
+          });
+          socket.on("data", (chunk) => {
+            data += chunk.toString();
+          });
+          socket.on("end", () => resolve(data));
+          socket.on("error", reject);
+        });
+        expect(raw.split("\r\n")[0]).toBe("HTTP/1.1 403 Forbidden");
+        expect(raw).toContain('"code":"forbidden_host"');
+      }
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 

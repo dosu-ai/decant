@@ -39,6 +39,9 @@ top-level session can coordinate many separately metered runs.
 Work type and outcome are lightweight transcript-shape heuristics, not evidence
 that a change shipped or achieved its goal. Work type starts with keywords in
 the first user prompt and can fall back to the mix of file and web activity.
+Codex `developer` messages and the AGENTS.md or environment context Codex
+injects as a user message are system rows, so they are neither the first prompt
+nor a turn.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -81,15 +84,62 @@ estimated cost, and active time to four buckets:
 
 | Bucket | What it represents |
 | --- | --- |
-| `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. |
-| `planning` | Thinking/reasoning blocks and explicit plan-management tools. |
-| `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
-| `communicating` | Visible text and other non-tool, non-thinking output. |
+| `context` | Reading, searching, listing, web/MCP retrieval, read-only shell or Git commands, and messages from other agents. Unknown tools default here rather than overstating implementation. |
+| `planning` | Thinking/reasoning blocks and explicit plan-management tools (`TodoWrite`, Claude Code task-list tools, Codex `update_plan`). |
+| `code` | Structured edits, shell commands that clearly build, test, write, or otherwise mutate work, browser and desktop actions, REPL code, and note writes. |
+| `communicating` | Visible text and other non-tool, non-thinking model output, plus questions to the user (`AskUserQuestion`, Codex `request_user_input`). |
 
 Shell classification is deliberately conservative. Read-only commands such as
-`rg`, `cat`, and `git diff` are context; mutating or unrecognized shell commands
-are code. A bucket is an analytical attribution, not a provider billing field
-or a quality judgment.
+`rg`, `cat`, `sed -n`, and `git diff` are context; mutating or unrecognized
+shell commands are code. Decant judges a compound command by every part, not by
+its first word:
+
+- It splits on `;`, `&&`, `||`, a backgrounding `&`, newlines, and pipes,
+  ignoring separators inside quotes and `$(...)`, and the command is context
+  only when every part is read-only. Heredoc bodies are data, so the command
+  that reads them decides.
+- `cd`, `export`, variable assignments, and loop keywords such as `for` and
+  `done` change only the shell's state, so they never decide the bucket.
+  `cd repo; grep -n x src | head` is context. Waiting (`sleep`,
+  `gh pr checks --watch`) is code, because an agent waits on a build, a test
+  run, or CI, and that time belongs to the work.
+- Wrappers are classified by the command they run: `env X=1 git push`,
+  `timeout 60 bun test`, `xargs rm`, `bash -lc "<script>"`, and the body of
+  `$(...)`.
+- One mutating part makes the whole command code, and so does an output
+  redirect to a file (`>`, `>>`, `2>`, `&>`, `>&file`); `2>&1` and
+  `>/dev/null` don't count.
+- Some commands are read-only only with certain arguments. `git` reads through
+  global options (`git -C dir log`), and `branch`, `tag`, `remote`, and
+  `config` read only when they list or get. `gh pr view`, `gh run view`, and
+  `gh api` GET requests read; `gh pr merge` and `gh api -X POST` write.
+  `kubectl get`, `docker compose logs`, `find` or `fd` without `-delete` or a
+  mutating `-exec`/`-x`, `sed` without `-i` or a `w`/`e` command, and
+  `sqlite3 -readonly db '<sql>'` without `VACUUM INTO` or a file-writing
+  dot-command read. SQL piped or fed to `sqlite3` on stdin is not visible, so
+  it counts as code. A remote `curl` GET that prints its response is
+  retrieval; a download, a request body, or a probe of a local dev server is
+  code.
+
+Browser, desktop-control, and REPL tools (Playwright, Claude in Chrome, computer
+use, and JavaScript REPL MCP servers) split by what they do. Looking at a page
+or screen (snapshots, screenshots, page text, console and network logs, tab
+lists, `find`) and going somewhere (`navigate`, `wait`) is context. Sending
+input or running code is code: clicks, typing, key presses, form fills,
+selects, drags, hovers and mouse moves, scrolling, uploads, dialog handling,
+resizing, `evaluate` and other in-page JavaScript, and every REPL call. Hover
+counts as input because it fires page handlers and opens menus. Batch tools are
+code when any action they carry is. Other MCP tools keep the context default.
+
+Agent orchestration (`Agent`/`Task`, `SendMessage`, Codex `collaboration__*`,
+`SubagentHandback`) stays in context: the parent reads what the other agent
+reports. Writing a note or checkpoint (Codex `notes__write_file` and
+`notes__append_to_file`, Obsidian `obsidian_append_content`, Dosu
+`write_knowledge`) is code, but it is the agent's memory rather than the work
+product, so it does not mark the first edit.
+
+A bucket is an analytical attribution, not a provider billing field or a
+quality judgment.
 
 Recent Codex CLI versions run most actions through one `exec` tool. Its input
 is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,
@@ -101,31 +151,52 @@ like the tool it names:
 - An `exec_command` whose command is assembled at runtime, rather than written
   as a literal, is treated like an unrecognized shell command, which is code.
 - A program that calls no tools stays in context.
+- `write_stdin`, which polls or answers a running `exec_command`, is code:
+  the commands agents leave running are nearly always builds and test runs.
 
 Generation is allocated from per-message usage when available, then by block
-size when it is not. Tool-result bytes contribute to context-window volume.
+size when it is not. Tool-result bytes contribute to context-window volume, and
+so does the text of a message from another agent (a Codex `agent_message`),
+which the model reads the way it reads an Agent or SendMessage result.
+
+Some kept records are neither model output nor a tool call:
+
+- A message from another agent, or compacted history, is input the model
+  reads, so its time is context.
+- An image or document the user attaches is part of the user's turn.
+- Instructions the harness injects, such as Codex `developer` messages and
+  the AGENTS.md and environment block Codex sends as a user message, are
+  stored as role `system`. The gap before one closes on the next message
+  instead, so it counts toward the user's prompt or the model's next step.
+- CLI notices, record types a parser keeps as role `other` without
+  recognizing them, and model-fallback notices never reach the model. They
+  carry no generation, window volume, or time.
+
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
-provider charges.
+provider charges. Archive and date-range totals split each session's cost by
+that session's own activity and then add the sessions up, so an archive's
+bucket costs always equal the sum of its sessions' bucket costs.
 
 ### Search counting
 
 This defines the search count behind the "discovery is expensive"
 recommendation signal (`signal:search-heavy`). It is separate from activity
 buckets and does not change how shell commands are bucketed above. A search is
-a `Grep` or `Glob` tool call, or a shell statement whose leading command is a
-search binary such as `rg`, `grep`, or `find`. Compound commands are split on
-`;`, `&&`, `||`, and newlines. For example, `cd src && rg handler` counts.
-Pipelines are not split. A command such as `ps aux | grep node` filters output
-rather than searching a repository, so it does not count.
+a `Grep` or `Glob` tool call, or a shell statement whose command is a search
+binary such as `rg`, `grep`, or `find`, or `git grep`. Statements are split the
+same way as for activity buckets, outside quotes and heredoc bodies, so
+`cd src && rg handler` counts once and `rg 'a;b' src` is one search. The command
+is found the same way too, past variable assignments, `env`, `timeout`,
+`git -C dir`, and a `bash -lc "<script>"` wrapper.
 
-Search binaries count only when they are the leading command. Searches wrapped
-by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
-Shell commands inside a Codex `exec` program count like any other shell
-statement when the command is a literal string. Commands assembled at runtime
-are invisible to the count. The statement splitter does not parse
-shell quoting, so text such as `echo "a; grep b"` can add a false search. These
-cases can make the reported shell and Codex search volume too low or too high.
+Only the first stage of a pipeline counts. A command such as
+`ps aux | grep node` or `ls | xargs grep foo` filters or fans out another
+command's output rather than searching a repository, so it does not count, and
+neither does a search wrapped by `sudo`. Shell commands inside a Codex `exec`
+program count like any other shell statement when the command is a literal
+string. Commands assembled at runtime are invisible to the count. These cases
+can make the reported shell and Codex search volume too low.
 
 ## Orientation and implementation
 
@@ -146,7 +217,13 @@ forward on a false positive.
 Active time is an attribution from message timestamps, not stopwatch time. The
 gap between two messages is charged to the later message, split across that
 message's blocks, and capped at five minutes. Gaps closed by user-authored text
-are reported separately as `waiting_on_user_ms`.
+are reported separately as `waiting_on_user_ms`, including the share of an
+image or document attached to that prompt. A question the model asks through a
+tool (`AskUserQuestion`, including MCP copies, and Codex `request_user_input`)
+is communicating, but its result arrives when the user answers, so the gap
+before that result is waiting on the user too, like the time before a typed
+prompt. A harness record between two messages does not split the gap; it closes
+on the next message the model or user produced.
 
 Consequences:
 

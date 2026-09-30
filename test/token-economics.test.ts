@@ -410,6 +410,167 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("charges messages from other agents to context and skips harness records", () => {
+    const at = (s: number) => `2026-09-29T21:00:${String(s).padStart(2, "0")}.000Z`;
+    const report = "Message Type: MESSAGE\nSender: /root/reviewer\nPayload:\nNo issues found.";
+    const toolOutput = "spawned /root/reviewer";
+    const lines = [
+      `{"type":"session_meta","timestamp":"${at(0)}","payload":{"id":"sess-codex-agents","cwd":"/w","originator":"codex_exec","cli_version":"0.159.0","source":"exec","model_provider":"openai"}}`,
+      `{"type":"turn_context","timestamp":"${at(0)}","payload":{"cwd":"/w","model":"gpt-6.1-sol","effort":"low"}}`,
+      `{"type":"response_item","timestamp":"${at(0)}","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review the branch"}]}}`,
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(2),
+        payload: { type: "function_call", name: "spawn_agent", call_id: "s1", arguments: "{}" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(3),
+        payload: { type: "function_call_output", call_id: "s1", output: toolOutput },
+      }),
+      // A record type the parser keeps as role "other" but the model never sees.
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(30),
+        payload: { type: "ghost_snapshot", ghost_commit: { id: "abc" } },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: at(63),
+        payload: {
+          type: "agent_message",
+          author: "/root/reviewer",
+          recipient: "/root",
+          internal_chat_message_metadata_passthrough: { route: "x".repeat(400) },
+          content: [{ type: "input_text", text: report }],
+        },
+      }),
+      `{"type":"event_msg","timestamp":"${at(64)}","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":4000,"cached_input_tokens":0,"output_tokens":40,"reasoning_output_tokens":0,"total_tokens":4040}}}}`,
+      `{"type":"response_item","timestamp":"${at(65)}","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The reviewer found no issues."}]}}`,
+    ];
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseCodexSession("sess-codex-agents", `${lines.join("\n")}\n`, new Map()),
+      "/x/agents.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    // Archive totals, which keep window volume in content bytes.
+    const economics = tokenEconomics(db);
+    const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
+    // The 60s wait for the reviewer's report is delegated work, read as input;
+    // the harness record in the middle neither takes time nor splits the gap.
+    expect(bucket("context")?.active_ms).toBe(63_000);
+    expect(bucket("communicating")?.active_ms).toBe(2_000);
+    expect(economics?.totals.waiting_on_user_ms).toBe(0);
+    // The report's text, not its routing metadata, joins the tool output as input.
+    const context = bucket("context");
+    expect((context?.context_window_tokens ?? 0) - (context?.generation_tokens ?? 0)).toBeCloseTo(
+      (toolOutput.length + report.length) / 4,
+      9,
+    );
+    db.close();
+  });
+
+  test("charges time before an attached image to the user's turn", () => {
+    const content = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-09-29T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ type: "text", text: "Send me a screenshot." }],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-09-29T09:02:00.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Here." },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "A".repeat(4000) },
+            },
+          ],
+        },
+      }),
+    ].join("\n");
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-image", `${content}\n`),
+      "/x/image.jsonl",
+      1,
+      2,
+      "img",
+    );
+    const economics = tokenEconomics(db);
+    expect(economics.totals.waiting_on_user_ms).toBe(120_000);
+    expect(economics.totals.active_ms).toBe(0);
+    db.close();
+  });
+
+  test("charges the wait for a question's answer to the user, not the agent", () => {
+    const line = (value: object) => JSON.stringify(value);
+    const content = [
+      line({
+        type: "user",
+        timestamp: "2026-09-29T10:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "Plan the migration." }] },
+      }),
+      line({
+        type: "assistant",
+        timestamp: "2026-09-29T10:00:02.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 10, output_tokens: 20 },
+          content: [
+            {
+              type: "tool_use",
+              id: "q1",
+              name: "AskUserQuestion",
+              input: { questions: [{ question: "Which database?" }] },
+            },
+          ],
+        },
+      }),
+      line({
+        type: "user",
+        timestamp: "2026-09-29T10:01:32.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "q1", content: "Postgres" }],
+        },
+      }),
+      line({
+        type: "assistant",
+        timestamp: "2026-09-29T10:01:35.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ type: "text", text: "Going with Postgres." }],
+        },
+      }),
+    ].join("\n");
+    const db = freshDb();
+    upsertSession(db, parseClaudeSession("sess-ask", `${content}\n`), "/x/ask.jsonl", 1, 2, "ask");
+    const economics = tokenEconomics(db);
+    // 90s from the question to the answer is the user deciding.
+    expect(economics.totals.waiting_on_user_ms).toBe(90_000);
+    // The question (2s) and the reply (3s) are the agent communicating.
+    expect(economics.totals.active_ms).toBe(5_000);
+    expect(economics.buckets.find((row) => row.bucket === "communicating")?.active_ms).toBe(5_000);
+    db.close();
+  });
+
   test("counts an agent run when it contributes only wall-clock activity", () => {
     const db = freshDb();
     const content = [
@@ -868,5 +1029,52 @@ describe("refreshSessionCosts", () => {
     });
     expect(refreshSessionCosts(db)).toBe(0);
     db.close();
+  });
+});
+
+describe("archive aggregation", () => {
+  const part = (generation: number, context_window: number) => ({
+    generation,
+    context_window,
+    tool_calls: 1,
+    touched: generation + context_window > 0,
+    generation_orientation: 0,
+    context_window_orientation: 0,
+    active_ms: 1000,
+    active_ms_orientation: 0,
+  });
+  const vector = (id: number, cost: number, context: number, code: number) => ({
+    id,
+    started_at: "2026-09-29T00:00:00Z",
+    input_cost: cost,
+    output_cost: 0,
+    billed_input_tokens: 0,
+    waiting_on_user_ms: 0,
+    buckets: {
+      context: part(0, context),
+      planning: part(0, 0),
+      code: part(0, code),
+      communicating: part(0, 0),
+    },
+  });
+
+  test("splits each session's cost by its own activity before summing", () => {
+    // A $9 session that is all context and a $1 session that is all code, with
+    // the cheap one carrying most of the window volume.
+    const expensive = vector(1, 9, 100, 0);
+    const cheap = vector(2, 1, 0, 900);
+    const total = aggregateEconomicsVectors([expensive, cheap]);
+    const cost = Object.fromEntries(total.buckets.map((b) => [b.bucket, b.estimated_cost_usd]));
+    expect(cost.context).toBeCloseTo(9, 10);
+    expect(cost.code).toBeCloseTo(1, 10);
+    expect(total.totals.estimated_cost_usd).toBeCloseTo(10, 10);
+    const alone = [expensive, cheap].map((v) => aggregateEconomicsVectors([v]));
+    for (const bucket of ["context", "planning", "code", "communicating"] as const) {
+      const summed = alone.reduce(
+        (sum, e) => sum + (e.buckets.find((b) => b.bucket === bucket)?.estimated_cost_usd ?? 0),
+        0,
+      );
+      expect(cost[bucket]).toBeCloseTo(summed, 10);
+    }
   });
 });

@@ -10,6 +10,11 @@ export function parseOutputFormat(value: string): OutputFormat {
 }
 
 export function parseInteger(value: string): number {
+  // Number.parseInt reads a leading digit run and ignores the rest, which
+  // turned a UUID source session id into a small archive id.
+  if (!/^\s*[+-]?\d+\s*$/.test(value)) {
+    throw new InvalidArgumentError("expected an integer");
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) {
     throw new InvalidArgumentError("expected an integer");

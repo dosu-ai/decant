@@ -870,3 +870,50 @@ describe("refreshSessionCosts", () => {
     db.close();
   });
 });
+
+describe("archive aggregation", () => {
+  const part = (generation: number, context_window: number) => ({
+    generation,
+    context_window,
+    tool_calls: 1,
+    touched: generation + context_window > 0,
+    generation_orientation: 0,
+    context_window_orientation: 0,
+    active_ms: 1000,
+    active_ms_orientation: 0,
+  });
+  const vector = (id: number, cost: number, context: number, code: number) => ({
+    id,
+    started_at: "2026-09-29T00:00:00Z",
+    input_cost: cost,
+    output_cost: 0,
+    billed_input_tokens: 0,
+    waiting_on_user_ms: 0,
+    buckets: {
+      context: part(0, context),
+      planning: part(0, 0),
+      code: part(0, code),
+      communicating: part(0, 0),
+    },
+  });
+
+  test("splits each session's cost by its own activity before summing", () => {
+    // A $9 session that is all context and a $1 session that is all code, with
+    // the cheap one carrying most of the window volume.
+    const expensive = vector(1, 9, 100, 0);
+    const cheap = vector(2, 1, 0, 900);
+    const total = aggregateEconomicsVectors([expensive, cheap]);
+    const cost = Object.fromEntries(total.buckets.map((b) => [b.bucket, b.estimated_cost_usd]));
+    expect(cost.context).toBeCloseTo(9, 10);
+    expect(cost.code).toBeCloseTo(1, 10);
+    expect(total.totals.estimated_cost_usd).toBeCloseTo(10, 10);
+    const alone = [expensive, cheap].map((v) => aggregateEconomicsVectors([v]));
+    for (const bucket of ["context", "planning", "code", "communicating"] as const) {
+      const summed = alone.reduce(
+        (sum, e) => sum + (e.buckets.find((b) => b.bucket === bucket)?.estimated_cost_usd ?? 0),
+        0,
+      );
+      expect(cost[bucket]).toBeCloseTo(summed, 10);
+    }
+  });
+});

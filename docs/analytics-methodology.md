@@ -117,7 +117,9 @@ Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
-provider charges.
+provider charges. Archive and date-range totals split each session's cost by
+that session's own activity and then add the sessions up, so an archive's
+bucket costs always equal the sum of its sessions' bucket costs.
 
 ### Search counting
 

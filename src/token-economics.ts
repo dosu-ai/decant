@@ -210,42 +210,43 @@ export function aggregateEconomicsVectors(
     inputCost += vector.input_cost;
     outputCost += vector.output_cost;
     waitingOnUserMs += vector.waiting_on_user_ms;
+    // Each session's cost is split by its own activity before summing. Pooling
+    // first would let one expensive session's dollars follow another session's
+    // mix, so an archive total would not equal the sum of its sessions.
+    let generation = 0;
+    let window = 0;
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const part = vector.buckets[bucket];
+      generation += part.generation;
+      window += part.context_window + part.generation;
+    }
     for (const bucket of ACTIVITY_BUCKETS) {
       const entry = buckets.get(bucket);
       const part = vector.buckets[bucket];
       if (entry == null || part == null) {
         continue;
       }
+      // Generation is part of the window; mirror it into the orientation
+      // portion so the phase cost split uses the same window basis.
+      const partWindow = part.context_window + part.generation;
+      const partWindowOrientation = part.context_window_orientation + part.generation_orientation;
       entry.generation += part.generation;
-      entry.contextWindow += part.context_window;
+      entry.contextWindow += partWindow;
       entry.genOrientation += part.generation_orientation;
-      entry.windowOrientation += part.context_window_orientation;
+      entry.windowOrientation += partWindowOrientation;
       entry.activeMs += part.active_ms;
       entry.activeMsOrientation += part.active_ms_orientation;
       entry.toolCalls += part.tool_calls;
+      entry.cost +=
+        vector.output_cost * share(part.generation, generation) +
+        vector.input_cost * share(partWindow, window);
+      entry.costOrientation +=
+        vector.output_cost * share(part.generation_orientation, generation) +
+        vector.input_cost * share(partWindowOrientation, window);
       if (part.touched) {
         entry.sessions.add(vector.id);
       }
     }
-  }
-
-  const totalGeneration = sumBuckets(buckets, "generation");
-  const totalWindow = sumBuckets(buckets, "contextWindow");
-  for (const entry of buckets.values()) {
-    // Generation is part of the window; mirror it into the orientation portion
-    // so the phase cost split uses the same window basis as the whole bucket.
-    entry.contextWindow += entry.generation;
-    entry.windowOrientation += entry.genOrientation;
-  }
-  const totalWindowWithGeneration = sumBuckets(buckets, "contextWindow");
-  const windowBasis = totalWindowWithGeneration || totalWindow;
-  for (const entry of buckets.values()) {
-    entry.cost =
-      outputCost * share(entry.generation, totalGeneration) +
-      inputCost * share(entry.contextWindow, windowBasis);
-    entry.costOrientation =
-      outputCost * share(entry.genOrientation, totalGeneration) +
-      inputCost * share(entry.windowOrientation, windowBasis);
   }
   return finish(buckets, inputCost, outputCost, waitingOnUserMs);
 }

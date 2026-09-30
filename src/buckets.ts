@@ -39,8 +39,43 @@ const READONLY_BASH = new Set([
   "env",
   "printenv",
   "diff",
+  "nl",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "jq",
+  "du",
+  "realpath",
+  "readlink",
+  "basename",
+  "dirname",
+  "less",
+  "more",
+  "column",
 ]);
-const READONLY_GIT = new Set(["status", "diff", "log", "show", "branch", "remote", "blame"]);
+const READONLY_GIT = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "branch",
+  "remote",
+  "blame",
+  "ls-files",
+  "ls-tree",
+  "rev-parse",
+  "grep",
+  "describe",
+  "shortlog",
+]);
+// Commands that only change the shell's own state. A statement made of these
+// neither reads nor writes the repo, so it never decides a compound command.
+const NAVIGATION = new Set(["cd", "pushd", "popd", "true", ":"]);
+// `bash -lc "<script>"` and friends: classify the script, not the shell.
+const SHELL_WRAPPER = /^\s*(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+([\s\S]*?)\s*$/;
+// An output redirect writes a file unless it targets a descriptor or /dev/null.
+const WRITE_REDIRECT = /(?<![0-9&<>])>>?(?!&|\s*\/dev\/null)|&>>?(?!\s*\/dev\/null)/;
 
 const SEARCH_COMMANDS = new Set([
   "grep",
@@ -178,13 +213,110 @@ export function blockBucket(
   return "communicating";
 }
 
+/** A shell command is context only when every statement and pipeline stage
+ * in it is read-only; one mutating or unrecognized part makes it code. Agents
+ * routinely chain reads (`cd repo; grep -n x src; sed -n 1,40p f`), so judging
+ * the whole command by its first word filed that reading under code. */
 export function bashBucket(command: string | null): ActivityBucket {
-  const [head, subcommand] = commandHead(command);
-  if (head == null) {
+  const script = unwrapShell(command);
+  if (script == null || script.trim() === "") {
     return "code";
   }
+  for (const statement of splitUnquoted(script, STATEMENT_BREAK)) {
+    if (statement.trim() === "") {
+      continue;
+    }
+    if (WRITE_REDIRECT.test(stripQuoted(statement))) {
+      return "code";
+    }
+    if (splitUnquoted(statement, PIPE).some((stage) => stageVerdict(stage) === "code")) {
+      return "code";
+    }
+  }
+  return "context";
+}
+
+const STATEMENT_BREAK = /^(?:\n|;|&&|\|\|)/;
+const PIPE = /^\|(?!\|)/;
+
+/** Splits on `separator` outside single and double quotes, so a grep pattern
+ * like "a\\|b" or a sed script like 's/a;b/c/' stays one piece. */
+function splitUnquoted(text: string, separator: RegExp): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i] ?? "";
+    if (quote != null) {
+      if (char === "\\" && quote === '"') {
+        current += char + (text[i + 1] ?? "");
+        i += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    const match = separator.exec(text.slice(i));
+    if (match != null) {
+      parts.push(current);
+      current = "";
+      i += match[0].length - 1;
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+function stripQuoted(text: string): string {
+  return text.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
+}
+
+function unwrapShell(command: string | null): string | null {
+  let current = command;
+  for (let depth = 0; current != null && depth < 3; depth += 1) {
+    const match = SHELL_WRAPPER.exec(current);
+    if (match == null) {
+      return current;
+    }
+    const body = match[1] ?? "";
+    const quoted = /^(['"])([\s\S]*)\1$/.exec(body);
+    current = quoted != null ? (quoted[2] ?? "") : body;
+  }
+  return current;
+}
+
+function stageVerdict(stage: string): ActivityBucket | "neutral" {
+  const tokens = splitCommand(stage);
+  if (tokens.length === 0) {
+    return "neutral";
+  }
+  const head = basename(tokens[0] ?? "");
+  const subcommand = tokens[1] ?? null;
+  if (NAVIGATION.has(head)) {
+    return "neutral";
+  }
   if (head === "git") {
+    if (subcommand === "config") {
+      return tokens.some((t) => t === "--list" || t === "-l" || t.startsWith("--get"))
+        ? "context"
+        : "code";
+    }
     return subcommand != null && READONLY_GIT.has(subcommand) ? "context" : "code";
+  }
+  if (head === "sed") {
+    return tokens.some((t) => /^-[a-zA-Z]*i/.test(t) || t.startsWith("--in-place"))
+      ? "code"
+      : "context";
   }
   return READONLY_BASH.has(head) ? "context" : "code";
 }

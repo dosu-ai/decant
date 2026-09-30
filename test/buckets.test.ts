@@ -30,6 +30,45 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("bun test")).toBe("code");
   });
 
+  test("classifies compound shell commands by every statement, not the first word", () => {
+    // Real read-only chains from a Claude Opus 5.5 session: all context.
+    expect(bashBucket('cd $PWD; grep -n -i "sync\\|watch" src/cli.ts | head -80')).toBe("context");
+    expect(bashBucket("cd $PWD; sed -n 160,190p src/cli.ts; sed -n 45,70p src/server.ts")).toBe(
+      "context",
+    );
+    expect(
+      bashBucket('cd "$PWD"; ls -la; cat .githooks/* scripts/*; git config --local --list'),
+    ).toBe("context");
+    expect(bashBucket("cd . && grep -n gpt-6 -r src | head -50; wc -l src/cost.ts")).toBe(
+      "context",
+    );
+    expect(bashBucket("cd repo")).toBe("context");
+    expect(bashBucket("git ls-files && git rev-parse HEAD")).toBe("context");
+    // One mutating statement or stage makes the whole command code.
+    expect(bashBucket("ls -la scripts/lib; cat README.md; ./scripts/install.sh")).toBe("code");
+    expect(bashBucket("cd $PWD; git stash push src/cli.ts -q && bun test")).toBe("code");
+    expect(bashBucket("cd $PWD; sed -i '' 's/a/b/' src/cli.ts; grep -n b src/cli.ts")).toBe("code");
+    expect(bashBucket("git config --local core.hooksPath .githooks")).toBe("code");
+    expect(bashBucket("cat src/a.ts | tee out.ts")).toBe("code");
+    expect(bashBucket("python3 - <<'EOF'\np='src/cli.ts'\nEOF")).toBe("code");
+  });
+
+  test("treats output redirects to files as writes, but not descriptor or null redirects", () => {
+    expect(bashBucket("cat > src/money.ts <<'EOF'\nexport const x = 1;\nEOF")).toBe("code");
+    expect(bashBucket("echo hi >> notes.md")).toBe("code");
+    expect(bashBucket("grep -rn foo src 2>&1 | head")).toBe("context");
+    expect(bashBucket("cat package.json 2>/dev/null")).toBe("context");
+    expect(bashBucket("ls missing &>/dev/null")).toBe("context");
+  });
+
+  test("classifies the script inside a shell wrapper", () => {
+    expect(bashBucket('/bin/zsh -lc "rg auth src; sed -n 1,20p src/a.ts"')).toBe("context");
+    expect(bashBucket("bash -lc 'bun test'")).toBe("code");
+    expect(toolBucket("shell", JSON.stringify({ command: ["bash", "-lc", "cat a.ts"] }))).toBe(
+      "context",
+    );
+  });
+
   test("extracts Bash command from JSON input", () => {
     expect(toolBucket("Bash", { command: "ls -la" })).toBe("context");
     expect(toolBucket("Bash", '{"command":"npm install"}')).toBe("code");

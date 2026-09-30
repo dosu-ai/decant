@@ -87,9 +87,20 @@ estimated cost, and active time to four buckets:
 | `communicating` | Visible text and other non-tool, non-thinking output. |
 
 Shell classification is deliberately conservative. Read-only commands such as
-`rg`, `cat`, and `git diff` are context; mutating or unrecognized shell commands
-are code. A bucket is an analytical attribution, not a provider billing field
-or a quality judgment.
+`rg`, `cat`, `sed -n`, and `git diff` are context; mutating or unrecognized
+shell commands are code. Decant judges a compound command by every part, not by
+its first word:
+
+- It splits on `;`, `&&`, `||`, newlines, and pipes, ignoring separators inside
+  quotes, and the command is context only when every part is read-only.
+- `cd`, `pushd`, `popd`, and `true` change only the shell's state, so they
+  never decide the bucket. `cd repo; grep -n x src | head` is context.
+- One mutating part makes the whole command code, and so does an output
+  redirect to a file (`>`, `>>`); `2>&1` and `>/dev/null` don't count.
+- `bash -lc "<script>"` and similar wrappers are classified by their script.
+
+A bucket is an analytical attribution, not a provider billing field or a
+quality judgment.
 
 Recent Codex CLI versions run most actions through one `exec` tool. Its input
 is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,

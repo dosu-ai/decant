@@ -40,6 +40,11 @@ const TITLE_META = new Set(["summary", "ai-title"]);
 // sources. Keep their payloads opaque until Claude documents stable semantics.
 const IGNORED_JOURNAL_META = new Set([
   "agent-name",
+  "agent-setting",
+  "atis-latch",
+  "bridge-session",
+  "cost-state",
+  "fork-context-ref",
   "last-prompt",
   "permission-mode",
   "attachment",
@@ -50,8 +55,13 @@ const IGNORED_JOURNAL_META = new Set([
   "mode",
   "pr-link",
   "queue-operation",
+  "relocated",
   "world_state",
+  "worktree-state",
 ]);
+// Claude Code versions artifact ledgers by name (artifact-autoreact-ledger,
+// artifact-comment-monitor, ...); all of them are harness state.
+const IGNORED_JOURNAL_PREFIXES = ["artifact-"];
 
 const CHARS_PER_TOKEN = 4;
 
@@ -91,6 +101,7 @@ export function parseClaudeSession(
   let endedAt: string | null = null;
   let promptTitle: string | null = null;
   let metadataTitle: string | null = null;
+  let customTitle: string | null = null;
   let seq = 0;
   const unknownTypes: UnknownTypes = new Map();
 
@@ -152,6 +163,12 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "result") {
       resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
+    } else if (typ === "custom-title") {
+      // The user renamed the session; the latest rename wins over everything.
+      const renamed = stringAt(value, "customTitle", "title");
+      if (renamed != null && renamed.trim() !== "") {
+        customTitle = truncate(renamed, 120);
+      }
     } else if (TITLE_META.has(typ)) {
       if (metadataTitle == null) {
         const metaTitle = stringAt(value, "summary", "title");
@@ -159,7 +176,10 @@ export function parseClaudeSession(
           metadataTitle = truncate(metaTitle, 120);
         }
       }
-    } else if (!IGNORED_JOURNAL_META.has(typ)) {
+    } else if (
+      !IGNORED_JOURNAL_META.has(typ) &&
+      !IGNORED_JOURNAL_PREFIXES.some((prefix) => typ.startsWith(prefix))
+    ) {
       countUnknown(unknownTypes, typ, index + 1);
       messages.push(simpleMessage(value, "other", seq));
       seq += 1;
@@ -219,7 +239,7 @@ export function parseClaudeSession(
     // Claude emits ai-title after the first user record in normal sessions.
     // Keep the human prompt as the display title and use its metadata only
     // when the session has no usable prompt.
-    title: promptTitle ?? metadataTitle,
+    title: customTitle ?? promptTitle ?? metadataTitle,
     cwd,
     gitBranch,
     model,

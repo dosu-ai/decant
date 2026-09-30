@@ -88,6 +88,8 @@ interface BlockRow {
   tool_input: string | null;
   text_bytes: number;
   timestamp: string | null;
+  // The record type behind an `other` block, e.g. Codex `agent_message`.
+  other_kind: string | null;
 }
 
 interface ResultRow {
@@ -575,8 +577,16 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
                    THEN COALESCE(b.tool_input, tc.input) END AS tool_input,
               CASE WHEN b.type = 'tool_result'
                    THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
+                   -- An agent message's routing metadata outweighs its text,
+                   -- and only the text reaches the model.
+                   WHEN b.type = 'other' AND json_valid(b.text)
+                        AND json_extract(b.text, '$.type') = 'agent_message'
+                   THEN (SELECT COALESCE(SUM(length(CAST(json_extract(c.value, '$.text') AS BLOB))), 0)
+                         FROM json_each(b.text, '$.content') c)
                    ELSE COALESCE(length(CAST(b.text AS BLOB)), 0)
-              END AS text_bytes
+              END AS text_bytes,
+              CASE WHEN b.type = 'other' AND json_valid(b.text)
+                   THEN json_extract(b.text, '$.type') END AS other_kind
        FROM scoped_session fs
        CROSS JOIN block b INDEXED BY idx_block_session
        JOIN message m ON m.id = b.message_id
@@ -623,7 +633,9 @@ function vectorsForScope(
   // input for the block types whose bucket depends on the command being run.
   // Ordering (session, seq, ordinal) lets us place each block before/after the
   // session's first file edit.
-  const blocks = blockRowsForScope(db, scopeCte, params);
+  const blocks = blockRowsForScope(db, scopeCte, params).filter(
+    (block) => blockActivity(block) !== "skip",
+  );
   const boundaries = firstEditSeqBySession(blocks);
   const blocksBySession = groupBy(blocks, (block) => block.session_id);
   for (const [sessionId, sessionBlocks] of blocksBySession) {
@@ -631,6 +643,7 @@ function vectorsForScope(
     if (vector != null) {
       allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
       allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries, vector.latency);
+      allocateAgentMessages(sessionId, sessionBlocks, vector.buckets, boundaries);
     }
   }
   for (const vector of vectorBySession.values()) {
@@ -882,16 +895,67 @@ function distributeLatency(
   const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   for (const item of weighted) {
     const shareMs = ms * (item.weight / totalWeight);
-    if (item.block.role === "user" && item.block.type === "text") {
+    const activity = blockActivity(item.block);
+    if (activity === "waiting") {
       latency.waitingOnUserMs += shareMs;
+    } else if (activity !== "skip") {
+      addLatency(buckets, activity, shareMs, phase);
+    }
+  }
+}
+
+// Kept records that are neither model output nor a tool call. Messages from
+// other agents and compacted history are input the model reads, like an Agent or
+// SendMessage result. Anything else kept with role "other" (CLI notices, record
+// types the parser does not recognize) and model-fallback notices are harness
+// bookkeeping that never reached the model.
+const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
+
+/** Where a block's time goes: an activity bucket, the user's turn, or nowhere.
+ * Skipped blocks are dropped before allocation, so they carry no generation,
+ * window volume, or time, and the gap around them closes on the next message. */
+function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
+  if (block.role === "user" && block.type !== "tool_result") {
+    // Text, and any image or document the user attached to the prompt.
+    return "waiting";
+  }
+  if (block.role === "other") {
+    return MODEL_INPUT_KINDS.has(block.other_kind ?? "") ? "context" : "skip";
+  }
+  if (block.type === "other") {
+    if (block.other_kind === "fallback") {
+      return "skip";
+    }
+    if (block.role === "tool") {
+      // An image returned alongside a tool result.
+      return "context";
+    }
+  }
+  return blockBucket(block.type, block.tool_name, block.tool_input);
+}
+
+/** A message from another agent enters the window as input, like the result of
+ * an Agent or SendMessage call, so its text counts toward context volume. */
+function allocateAgentMessages(
+  sessionId: number,
+  blocks: BlockRow[],
+  buckets: Map<ActivityBucket, MutableBucket>,
+  boundaries: Map<number, number>,
+): void {
+  const entry = buckets.get("context");
+  if (entry == null) {
+    return;
+  }
+  for (const block of blocks) {
+    if (block.role !== "other" || block.other_kind !== "agent_message") {
       continue;
     }
-    addLatency(
-      buckets,
-      blockBucket(item.block.type, item.block.tool_name, item.block.tool_input),
-      shareMs,
-      phase,
-    );
+    const tokens = block.text_bytes / CHARS_PER_TOKEN;
+    entry.contextWindow += tokens;
+    entry.sessions.add(sessionId);
+    if (phaseOf(boundaries, sessionId, block.seq) === "orientation") {
+      entry.windowOrientation += tokens;
+    }
   }
 }
 

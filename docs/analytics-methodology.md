@@ -81,10 +81,10 @@ estimated cost, and active time to four buckets:
 
 | Bucket | What it represents |
 | --- | --- |
-| `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. |
+| `context` | Reading, searching, listing, web/MCP retrieval, read-only shell or Git commands, and messages from other agents. Unknown tools default here rather than overstating implementation. |
 | `planning` | Thinking/reasoning blocks and explicit plan-management tools (`TodoWrite`, Claude Code task-list tools, Codex `update_plan`). |
 | `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
-| `communicating` | Visible text and other non-tool, non-thinking output. |
+| `communicating` | Visible text and other non-tool, non-thinking model output. |
 
 Shell classification is deliberately conservative. Read-only commands such as
 `rg`, `cat`, `sed -n`, and `git diff` are context; mutating or unrecognized
@@ -135,7 +135,19 @@ like the tool it names:
   the commands agents leave running are nearly always builds and test runs.
 
 Generation is allocated from per-message usage when available, then by block
-size when it is not. Tool-result bytes contribute to context-window volume.
+size when it is not. Tool-result bytes contribute to context-window volume, and
+so does the text of a message from another agent (a Codex `agent_message`),
+which the model reads the way it reads an Agent or SendMessage result.
+
+Some kept records are neither model output nor a tool call:
+
+- A message from another agent, or compacted history, is input the model
+  reads, so its time is context.
+- An image or document the user attaches is part of the user's turn.
+- CLI notices, record types a parser keeps as role `other` without
+  recognizing them, and model-fallback notices never reach the model. They
+  carry no generation, window volume, or time.
+
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
 provider charges. Archive and date-range totals split each session's cost by
@@ -181,7 +193,10 @@ forward on a false positive.
 Active time is an attribution from message timestamps, not stopwatch time. The
 gap between two messages is charged to the later message, split across that
 message's blocks, and capped at five minutes. Gaps closed by user-authored text
-are reported separately as `waiting_on_user_ms`.
+are reported separately as `waiting_on_user_ms`, including the share of an
+image or document attached to that prompt. A harness record between two
+messages does not split the gap; it closes on the next message the model or
+user produced.
 
 Consequences:
 

@@ -606,7 +606,10 @@ describe("exportTrajectory", () => {
     expect(records.filter((r) => r.role === "user").map((r) => r.content)).toEqual([
       "list the files",
     ]);
-    expect(out.report.injected_context_dropped).toBe(2);
+    // The Codex parser now stores developer and injected-context messages as
+    // system, so none reach the export as user records. The export-side check
+    // still covers archives ingested before that parser change.
+    expect(out.report.injected_context_dropped).toBe(0);
     expect(out.report.tool_args_wrapped).toBe(0);
     const calls = out.records.flatMap((r) =>
       typeof r === "object" && r != null && "tool_calls" in r

@@ -23,6 +23,15 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
+// Top-level records Codex writes for its own bookkeeping. The model never sees
+// them and they carry no conversation, so they're skipped without a drift
+// diagnostic.
+const IGNORED_TOP_LEVEL = new Set([
+  "world_state",
+  "token_usage_record",
+  "inter_agent_communication_metadata",
+]);
+
 export function parseCodexSession(
   fallbackId: string,
   content: string,
@@ -33,6 +42,7 @@ export function parseCodexSession(
   let sourceSessionId = fallbackId;
   let cwd: string | null = null;
   let cliVersion: string | null = null;
+  let gitBranch: string | null = null;
   let model: string | null = null;
   const reasoningEfforts = new Set<string>();
   let startedAt: string | null = null;
@@ -66,6 +76,7 @@ export function parseCodexSession(
 
     if (typ === "session_meta") {
       sourceSessionId = asString(get(payload, "id")) ?? sourceSessionId;
+      gitBranch = asString(get(get(payload, "git"), "branch")) ?? gitBranch;
       cwd = asString(get(payload, "cwd")) ?? cwd;
       cliVersion = asString(get(payload, "cli_version")) ?? cliVersion;
       const source = get(payload, "source");
@@ -130,7 +141,7 @@ export function parseCodexSession(
         messages.push(message.message);
         seq += 1;
       }
-    } else if (typ !== "event_msg") {
+    } else if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
       // Remaining event_msg subtypes are stream noise whose durable copy is a
       // response_item. The exceptions are token_count and mcp_tool_call_end,
       // handled above — MCP calls have no response_item in current rollouts.
@@ -154,7 +165,7 @@ export function parseCodexSession(
     projectPath: cwd,
     title,
     cwd,
-    gitBranch: null,
+    gitBranch,
     model,
     reasoningEffort: summarizeReasoningEfforts(effortLevels),
     reasoningEffortLevels: effortLevels,

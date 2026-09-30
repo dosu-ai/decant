@@ -335,6 +335,18 @@ describe("parseCodexSession", () => {
     );
   });
 
+  test("reads the git branch from session_meta and skips bookkeeping records quietly", () => {
+    const content = [
+      '{"type":"session_meta","payload":{"id":"s1","cwd":"/w","git":{"branch":"feature/x","commit_hash":"abc"}}}',
+      '{"type":"world_state","payload":{}}',
+      '{"type":"token_usage_record","payload":{}}',
+      '{"type":"inter_agent_communication_metadata","payload":{}}',
+    ].join("\n");
+    const parsed = parseCodexSession("fallback", `${content}\n`, new Map());
+    expect(parsed.session.gitBranch).toBe("feature/x");
+    expect(parsed.issues).toEqual([]);
+  });
+
   test("response item variants cover every block kind", () => {
     const content = [
       '{"type":"response_item","timestamp":"2026-05-01T10:00:00Z","payload":{"type":"reasoning","summary":[],"content":[{"text":"deep thought"}]}}',

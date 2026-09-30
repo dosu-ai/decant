@@ -82,7 +82,7 @@ estimated cost, and active time to four buckets:
 | Bucket | What it represents |
 | --- | --- |
 | `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. |
-| `planning` | Thinking/reasoning blocks and explicit plan-management tools. |
+| `planning` | Thinking/reasoning blocks and explicit plan-management tools (`TodoWrite`, Claude Code task-list tools, Codex `update_plan`). |
 | `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
 | `communicating` | Visible text and other non-tool, non-thinking output. |
 
@@ -91,13 +91,32 @@ Shell classification is deliberately conservative. Read-only commands such as
 shell commands are code. Decant judges a compound command by every part, not by
 its first word:
 
-- It splits on `;`, `&&`, `||`, newlines, and pipes, ignoring separators inside
-  quotes, and the command is context only when every part is read-only.
-- `cd`, `pushd`, `popd`, and `true` change only the shell's state, so they
-  never decide the bucket. `cd repo; grep -n x src | head` is context.
+- It splits on `;`, `&&`, `||`, a backgrounding `&`, newlines, and pipes,
+  ignoring separators inside quotes and `$(...)`, and the command is context
+  only when every part is read-only. Heredoc bodies are data, so the command
+  that reads them decides.
+- `cd`, `export`, variable assignments, and loop keywords such as `for` and
+  `done` change only the shell's state, so they never decide the bucket.
+  `cd repo; grep -n x src | head` is context. Waiting (`sleep`,
+  `gh pr checks --watch`) is code, because an agent waits on a build, a test
+  run, or CI, and that time belongs to the work.
+- Wrappers are classified by the command they run: `env X=1 git push`,
+  `timeout 60 bun test`, `xargs rm`, `bash -lc "<script>"`, and the body of
+  `$(...)`.
 - One mutating part makes the whole command code, and so does an output
-  redirect to a file (`>`, `>>`); `2>&1` and `>/dev/null` don't count.
-- `bash -lc "<script>"` and similar wrappers are classified by their script.
+  redirect to a file (`>`, `>>`, `2>`, `&>`, `>&file`); `2>&1` and
+  `>/dev/null` don't count.
+- Some commands are read-only only with certain arguments. `git` reads through
+  global options (`git -C dir log`), and `branch`, `tag`, `remote`, and
+  `config` read only when they list or get. `gh pr view`, `gh run view`, and
+  `gh api` GET requests read; `gh pr merge` and `gh api -X POST` write.
+  `kubectl get`, `docker compose logs`, `find` or `fd` without `-delete` or a
+  mutating `-exec`/`-x`, `sed` without `-i` or a `w`/`e` command, and
+  `sqlite3 -readonly db '<sql>'` without `VACUUM INTO` or a file-writing
+  dot-command read. SQL piped or fed to `sqlite3` on stdin is not visible, so
+  it counts as code. A remote `curl` GET that prints its response is
+  retrieval; a download, a request body, or a probe of a local dev server is
+  code.
 
 A bucket is an analytical attribution, not a provider billing field or a
 quality judgment.
@@ -112,6 +131,8 @@ like the tool it names:
 - An `exec_command` whose command is assembled at runtime, rather than written
   as a literal, is treated like an unrecognized shell command, which is code.
 - A program that calls no tools stays in context.
+- `write_stdin`, which polls or answers a running `exec_command`, is code:
+  the commands agents leave running are nearly always builds and test runs.
 
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
@@ -126,19 +147,20 @@ bucket costs always equal the sum of its sessions' bucket costs.
 This defines the search count behind the "discovery is expensive"
 recommendation signal (`signal:search-heavy`). It is separate from activity
 buckets and does not change how shell commands are bucketed above. A search is
-a `Grep` or `Glob` tool call, or a shell statement whose leading command is a
-search binary such as `rg`, `grep`, or `find`. Compound commands are split on
-`;`, `&&`, `||`, and newlines. For example, `cd src && rg handler` counts.
-Pipelines are not split. A command such as `ps aux | grep node` filters output
-rather than searching a repository, so it does not count.
+a `Grep` or `Glob` tool call, or a shell statement whose command is a search
+binary such as `rg`, `grep`, or `find`, or `git grep`. Statements are split the
+same way as for activity buckets, outside quotes and heredoc bodies, so
+`cd src && rg handler` counts once and `rg 'a;b' src` is one search. The command
+is found the same way too, past variable assignments, `env`, `timeout`,
+`git -C dir`, and a `bash -lc "<script>"` wrapper.
 
-Search binaries count only when they are the leading command. Searches wrapped
-by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
-Shell commands inside a Codex `exec` program count like any other shell
-statement when the command is a literal string. Commands assembled at runtime
-are invisible to the count. The statement splitter does not parse
-shell quoting, so text such as `echo "a; grep b"` can add a false search. These
-cases can make the reported shell and Codex search volume too low or too high.
+Only the first stage of a pipeline counts. A command such as
+`ps aux | grep node` or `ls | xargs grep foo` filters or fans out another
+command's output rather than searching a repository, so it does not count, and
+neither does a search wrapped by `sudo`. Shell commands inside a Codex `exec`
+program count like any other shell statement when the command is a literal
+string. Commands assembled at runtime are invisible to the count. These cases
+can make the reported shell and Codex search volume too low.
 
 ## Orientation and implementation
 

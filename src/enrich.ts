@@ -223,7 +223,9 @@ export function facets(session: NormalizedSession): Facets {
           got.activeSeconds += Math.min(gap, ACTIVE_GAP_CAP_SECONDS);
         }
       }
-      previousTimestamp = timestamp;
+      // A backdated parallel call must not reopen time already counted.
+      previousTimestamp =
+        previousTimestamp == null ? timestamp : Math.max(previousTimestamp, timestamp);
     }
   }
 

@@ -177,13 +177,9 @@ describe("token economics", () => {
         )
         .get(sessionId) as { tokens: number }
     ).tokens;
-    expect(
-      Math.abs(
-        (scoped?.totals.context_window_tokens ?? 0) -
-          economics.totals.context_window_tokens -
-          billedInput,
-      ),
-    ).toBeLessThanOrEqual(2);
+    expect(scoped?.totals.context_window_tokens).toBe(
+      economics.totals.context_window_tokens + billedInput,
+    );
     expect(scoped?.totals.estimated_cost_usd).toBe(economics.totals.estimated_cost_usd);
     expect(scoped?.buckets.every((row) => row.phases !== undefined)).toBe(true);
     db.close();
@@ -218,16 +214,14 @@ describe("token economics", () => {
     expect(economics.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(60_000);
 
     // Buckets' time sums to the total, and each bucket's phase split sums back
-    // to the bucket (rounding can drift the two rounded halves by <=1ms).
+    // to the bucket.
     const bucketSum = economics.buckets.reduce((sum, row) => sum + row.active_ms, 0);
     expect(bucketSum).toBe(economics.totals.active_ms);
     for (const row of economics.buckets) {
       const { orientation, implementation } = row.phases as NonNullable<typeof row.phases>;
       expect(orientation.active_ms).toBeGreaterThanOrEqual(0);
       expect(implementation.active_ms).toBeGreaterThanOrEqual(0);
-      expect(
-        Math.abs(orientation.active_ms + implementation.active_ms - row.active_ms),
-      ).toBeLessThanOrEqual(1);
+      expect(orientation.active_ms + implementation.active_ms).toBe(row.active_ms);
     }
     const phases = economics.totals.phases as NonNullable<typeof economics.totals.phases>;
     expect(phases.orientation.active_ms + phases.implementation.active_ms).toBe(
@@ -249,6 +243,35 @@ describe("token economics", () => {
     expect(communicating?.generation_tokens).toBeGreaterThan(0);
     expect(communicating?.estimated_cost_usd).toBeGreaterThan(0);
     expect(communicating?.sessions).toBe(1);
+    db.close();
+  });
+
+  test("keeps output with no visible block in generation and reconciles to the session cost", () => {
+    const db = freshDb();
+    const content = [
+      '{"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"hi"}}',
+      '{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-05-01T10:00:05.000Z","message":{"id":"m1","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":100000,"output_tokens":20000}}}',
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-blockless-output", `${content}\n`),
+      "/x/blockless.jsonl",
+      1,
+      2,
+    );
+    const stored = (
+      db.query("SELECT estimated_cost_usd FROM session WHERE id = ?1").get(sessionId) as {
+        estimated_cost_usd: number;
+      }
+    ).estimated_cost_usd;
+    expect(stored).toBeCloseTo(0.6, 12);
+    for (const economics of [tokenEconomics(db), tokenEconomicsForSession(db, sessionId)]) {
+      expect(economics?.totals.estimated_cost_usd).toBeCloseTo(stored, 12);
+      expect(economics?.totals.generation_tokens).toBe(20_000);
+      const communicating = economics?.buckets.find((row) => row.bucket === "communicating");
+      expect(communicating?.generation_tokens).toBe(20_000);
+      expect(communicating?.phases?.orientation.generation_tokens).toBe(20_000);
+    }
     db.close();
   });
 
@@ -1076,5 +1099,78 @@ describe("archive aggregation", () => {
       );
       expect(cost[bucket]).toBeCloseTo(summed, 10);
     }
+  });
+
+  test("charges cost with no activity weight so buckets reconcile to the session", () => {
+    // Input and output priced, but nothing recorded to weight them by.
+    const idle = { ...vector(1, 0.3, 0, 0), output_cost: 0.3 };
+    for (const bucket of ["context", "planning", "code", "communicating"] as const) {
+      idle.buckets[bucket] = { ...part(0, 0), tool_calls: 0, active_ms: 0 };
+    }
+    const economics = aggregateEconomicsVectors([idle]);
+    const row = (name: string) => economics.buckets.find((b) => b.bucket === name);
+    expect(economics.totals.estimated_cost_usd).toBeCloseTo(0.6, 12);
+    expect(row("context")?.estimated_cost_usd).toBeCloseTo(0.3, 12);
+    expect(row("communicating")?.estimated_cost_usd).toBeCloseTo(0.3, 12);
+    expect(row("context")?.sessions).toBe(1);
+    // With no recorded edit, the whole run is orientation.
+    expect(economics.totals.phases?.orientation.estimated_cost_usd).toBeCloseTo(0.6, 12);
+    expect(economics.totals.phases?.implementation.estimated_cost_usd).toBe(0);
+
+    // Output with no generation follows the window's phase split.
+    const windowOnly = vector(2, 0, 30, 0);
+    windowOnly.output_cost = 0.4;
+    windowOnly.buckets.context.context_window_orientation = 10;
+    const split = aggregateEconomicsVectors([windowOnly]);
+    const communicating = split.buckets.find((b) => b.bucket === "communicating");
+    expect(communicating?.estimated_cost_usd).toBeCloseTo(0.4, 12);
+    expect(communicating?.phases?.orientation.estimated_cost_usd).toBeCloseTo(0.4 / 3, 12);
+    expect(split.totals.estimated_cost_usd).toBeCloseTo(0.4, 12);
+  });
+
+  test("rounds each total once and apportions it to rows and phases", () => {
+    const even = (amount: number, orientation: number) => ({
+      generation: amount,
+      context_window: amount,
+      tool_calls: 0,
+      touched: true,
+      generation_orientation: orientation,
+      context_window_orientation: orientation,
+      active_ms: amount,
+      active_ms_orientation: orientation,
+    });
+    const halves = vector(1, 1, 0, 0);
+    for (const bucket of ["context", "planning", "code", "communicating"] as const) {
+      halves.buckets[bucket] = even(1.5, 0.75);
+    }
+    const economics = aggregateEconomicsVectors([halves]);
+    const { totals } = economics;
+    // Four rows of 1.5 are 6 in all; rounding each row first would report 8.
+    expect(totals.generation_tokens).toBe(6);
+    // Window is context volume plus the generation folded into it: 4 x 3.
+    expect(totals.context_window_tokens).toBe(12);
+    expect(totals.active_ms).toBe(6);
+    for (const key of ["generation_tokens", "context_window_tokens", "active_ms"] as const) {
+      expect(economics.buckets.reduce((sum, row) => sum + row[key], 0)).toBe(totals[key]);
+      for (const row of economics.buckets) {
+        const phases = row.phases as NonNullable<typeof row.phases>;
+        expect(phases.orientation[key] + phases.implementation[key]).toBe(row[key]);
+      }
+      const phases = totals.phases as NonNullable<typeof totals.phases>;
+      expect(phases.orientation[key] + phases.implementation[key]).toBe(totals[key]);
+    }
+    expect(economics.buckets.map((row) => row.generation_tokens)).toEqual([2, 2, 1, 1]);
+
+    // One token split evenly across phases shows as one token, not one per phase.
+    const single = vector(2, 1, 0, 0);
+    single.buckets.context = even(1, 0.5);
+    const context = aggregateEconomicsVectors([single]).buckets.find(
+      (row) => row.bucket === "context",
+    );
+    expect(context?.generation_tokens).toBe(1);
+    expect(
+      (context?.phases?.orientation.generation_tokens ?? 0) +
+        (context?.phases?.implementation.generation_tokens ?? 0),
+    ).toBe(1);
   });
 });

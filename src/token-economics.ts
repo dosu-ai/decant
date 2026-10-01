@@ -16,7 +16,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 7;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 8;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
@@ -218,10 +218,12 @@ export function aggregateEconomicsVectors(
     // mix, so an archive total would not equal the sum of its sessions.
     let generation = 0;
     let window = 0;
+    let windowOrientation = 0;
     for (const bucket of ACTIVITY_BUCKETS) {
       const part = vector.buckets[bucket];
       generation += part.generation;
       window += part.context_window + part.generation;
+      windowOrientation += part.context_window_orientation + part.generation_orientation;
     }
     for (const bucket of ACTIVITY_BUCKETS) {
       const entry = buckets.get(bucket);
@@ -250,8 +252,34 @@ export function aggregateEconomicsVectors(
         entry.sessions.add(vector.id);
       }
     }
+    // Dollars with no activity weight to follow still belong to the session,
+    // so bucket costs reconcile to its estimate. A session with no recorded
+    // activity never edited a file, so it is orientation.
+    const orientationShare = window > 0 ? windowOrientation / window : 1;
+    if (generation <= 0) {
+      chargeUnattributed(buckets, "communicating", vector.id, vector.output_cost, orientationShare);
+    }
+    if (window <= 0) {
+      chargeUnattributed(buckets, "context", vector.id, vector.input_cost, orientationShare);
+    }
   }
   return finish(buckets, inputCost, outputCost, waitingOnUserMs);
+}
+
+function chargeUnattributed(
+  buckets: Map<ActivityBucket, MutableBucket>,
+  bucket: ActivityBucket,
+  sessionId: number,
+  cost: number,
+  orientationShare: number,
+): void {
+  const entry = buckets.get(bucket);
+  if (entry == null || cost <= 0) {
+    return;
+  }
+  entry.cost += cost;
+  entry.costOrientation += cost * orientationShare;
+  entry.sessions.add(sessionId);
 }
 
 export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
@@ -855,7 +883,10 @@ function allocateLatency(
         latency,
       );
     }
-    previous = at;
+    // Parallel work can log an earlier timestamp than the message before it
+    // (Codex backdates each MCP call by its duration). Measuring from the
+    // latest time seen keeps overlapping spans from being counted twice.
+    previous = previous == null ? at : Math.max(previous, at);
   }
 }
 
@@ -1078,7 +1109,20 @@ function distribute(
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
 ): void {
-  if (tokens <= 0 || blocks.length === 0) {
+  if (tokens <= 0) {
+    return;
+  }
+  if (blocks.length === 0) {
+    // Output with no visible block to carry it is still model output, so it
+    // stays in generation as communicating rather than disappearing. With no
+    // block to place it, it is orientation only when the session never edited.
+    addBucket(
+      buckets,
+      "communicating",
+      tokens,
+      sessionId,
+      boundaries.has(sessionId) ? "implementation" : "orientation",
+    );
     return;
   }
   const weighted = blocks.map((block) => ({
@@ -1146,30 +1190,21 @@ function emptyLatency(): MutableLatency {
   return { waitingOnUserMs: 0 };
 }
 
-function phasesFor(entry: MutableBucket | undefined): Record<Phase, PhaseAmounts> {
-  const gen = entry?.generation ?? 0;
-  const win = entry?.contextWindow ?? 0;
-  const cost = entry?.cost ?? 0;
-  const genO = entry?.genOrientation ?? 0;
-  const winO = entry?.windowOrientation ?? 0;
-  const costO = entry?.costOrientation ?? 0;
-  const active = entry?.activeMs ?? 0;
-  const activeO = entry?.activeMsOrientation ?? 0;
-  return {
-    orientation: {
-      generation_tokens: Math.round(genO),
-      context_window_tokens: Math.round(winO),
-      estimated_cost_usd: costO,
-      active_ms: Math.round(activeO),
-    },
-    implementation: {
-      generation_tokens: Math.round(gen - genO),
-      context_window_tokens: Math.round(win - winO),
-      estimated_cost_usd: cost - costO,
-      active_ms: Math.round(active - activeO),
-    },
-  };
-}
+type CountKey = "generation_tokens" | "context_window_tokens" | "active_ms";
+
+type MutableAmount =
+  | "generation"
+  | "contextWindow"
+  | "activeMs"
+  | "genOrientation"
+  | "windowOrientation"
+  | "activeMsOrientation";
+
+const COUNTS: { key: CountKey; total: MutableAmount; orientation: MutableAmount }[] = [
+  { key: "generation_tokens", total: "generation", orientation: "genOrientation" },
+  { key: "context_window_tokens", total: "contextWindow", orientation: "windowOrientation" },
+  { key: "active_ms", total: "activeMs", orientation: "activeMsOrientation" },
+];
 
 function finish(
   buckets: Map<ActivityBucket, MutableBucket>,
@@ -1178,26 +1213,57 @@ function finish(
   waitingOnUserMs = 0,
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
-  const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket) => {
-    const entry = buckets.get(bucket);
-    const row: TokenEconomicsBucket = {
+  const entries = ACTIVITY_BUCKETS.map((bucket) => buckets.get(bucket));
+  // Rounding each figure on its own lets rows and phases drift from the totals.
+  // Round each total once, then apportion it to rows and each row to phases.
+  const counts = {} as Record<CountKey, { total: number; rows: number[]; phases: number[][] }>;
+  for (const { key, total, orientation } of COUNTS) {
+    const raw = entries.map((entry) => Math.max(0, entry?.[total] ?? 0));
+    const sum = Math.round(raw.reduce((acc, value) => acc + value, 0));
+    const rows = apportion(raw, sum);
+    const phases = entries.map((entry, index) => {
+      const whole = raw[index] ?? 0;
+      const early = Math.min(whole, Math.max(0, entry?.[orientation] ?? 0));
+      return apportion([early, whole - early], rows[index] ?? 0);
+    });
+    counts[key] = { total: sum, rows, phases };
+  }
+  const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket, index) => {
+    const entry = entries[index];
+    const count = (key: CountKey) => counts[key].rows[index] ?? 0;
+    const phase = (key: CountKey, side: 0 | 1) => counts[key].phases[index]?.[side] ?? 0;
+    const cost = entry?.cost ?? 0;
+    const costOrientation = entry?.costOrientation ?? 0;
+    return {
       bucket,
-      generation_tokens: Math.round(entry?.generation ?? 0),
-      context_window_tokens: Math.round(entry?.contextWindow ?? 0),
-      estimated_cost_usd: entry?.cost ?? 0,
+      generation_tokens: count("generation_tokens"),
+      context_window_tokens: count("context_window_tokens"),
+      estimated_cost_usd: cost,
       tool_calls: entry?.toolCalls ?? 0,
       sessions: entry?.sessions.size ?? 0,
-      cost_share: share(entry?.cost ?? 0, totalCost),
-      active_ms: Math.round(entry?.activeMs ?? 0),
+      cost_share: share(cost, totalCost),
+      active_ms: count("active_ms"),
+      phases: {
+        orientation: {
+          generation_tokens: phase("generation_tokens", 0),
+          context_window_tokens: phase("context_window_tokens", 0),
+          estimated_cost_usd: costOrientation,
+          active_ms: phase("active_ms", 0),
+        },
+        implementation: {
+          generation_tokens: phase("generation_tokens", 1),
+          context_window_tokens: phase("context_window_tokens", 1),
+          estimated_cost_usd: cost - costOrientation,
+          active_ms: phase("active_ms", 1),
+        },
+      },
     };
-    row.phases = phasesFor(entry);
-    return row;
   });
-  const activeMs = rows.reduce((sum, row) => sum + row.active_ms, 0);
+  const activeMs = counts.active_ms.total;
   const waitingMs = Math.round(waitingOnUserMs);
   const totals: TokenEconomics["totals"] = {
-    generation_tokens: rows.reduce((sum, row) => sum + row.generation_tokens, 0),
-    context_window_tokens: rows.reduce((sum, row) => sum + row.context_window_tokens, 0),
+    generation_tokens: counts.generation_tokens.total,
+    context_window_tokens: counts.context_window_tokens.total,
     estimated_cost_usd: totalCost,
     input_cost_usd: inputCost,
     output_cost_usd: outputCost,
@@ -1210,6 +1276,24 @@ function finish(
     implementation: sumPhase(rows, "implementation"),
   };
   return { buckets: rows, totals };
+}
+
+/** Largest-remainder rounding of non-negative values to integers summing to
+ * `total`, which must be within one unit per value of their floors' sum. */
+function apportion(values: number[], total: number): number[] {
+  const floors = values.map(Math.floor);
+  let remaining = total - floors.reduce((sum, value) => sum + value, 0);
+  const order = values
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+  for (const { index } of order) {
+    if (remaining <= 0) {
+      break;
+    }
+    floors[index] = (floors[index] ?? 0) + 1;
+    remaining -= 1;
+  }
+  return floors;
 }
 
 function sumPhase(rows: TokenEconomicsBucket[], phase: Phase): PhaseAmounts {

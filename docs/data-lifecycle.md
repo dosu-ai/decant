@@ -259,6 +259,12 @@ archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
 
+Session facets such as `active_seconds` are derived from the source file at
+ingest, so a correction to them reaches existing sessions through the
+pipeline-revision re-ingest and needs the source to still exist. Persisted
+economics vectors are versioned separately and recompute from the archive's
+own rows, so they refresh even when the source is gone.
+
 Subagent parent links are resolved at the end of any sync that wrote or
 tombstoned a session. A sync that finds every source unchanged leaves the
 existing links alone, so a change to the inference rules ships with an ingest

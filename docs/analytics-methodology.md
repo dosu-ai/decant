@@ -177,7 +177,9 @@ Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
 same attribution rules.
 
 Generation is allocated from per-message usage when available, then by block
-size when it is not. Tool-result bytes contribute to context-window volume, and
+size when it is not. Output with no visible block to carry it, such as an
+assistant record whose content is empty, still counts as generation and goes
+to `communicating`. Tool-result bytes contribute to context-window volume, and
 so does the text of a message from another agent (a Codex `agent_message`),
 which the model reads the way it reads an Agent or SendMessage result.
 
@@ -205,6 +207,19 @@ output cost, so they reconcile to the total but should not be read as separate
 provider charges. Archive and date-range totals split each session's cost by
 that session's own activity and then add the sessions up, so an archive's
 bucket costs always equal the sum of its sessions' bucket costs.
+
+Some dollars have no activity to follow. Output cost from a session with no
+generation goes to `communicating`, since model output without a tool call or
+thinking block is what that bucket holds. Input cost from a session with no
+generation or window volume goes to `context`, the same default unknown work
+gets, rather than overstating implementation. These dollars take the phase
+split of the session's window volume, and a session with no recorded activity
+is orientation.
+
+Token counts and active time are rounded once per total. Each total is then
+apportioned to buckets by largest remainder, and each bucket to its phases the
+same way. Buckets add up to the total, and a bucket's phases add up to the
+bucket. Costs are not rounded.
 
 The API returns `cost_share` unrounded. The UI's whole-number cost and time
 percentages use largest-remainder rounding, so each column adds up to exactly
@@ -256,6 +271,13 @@ is communicating, but its result arrives when the user answers, so the gap
 before that result is waiting on the user too, like the time before a typed
 prompt. A harness record between two messages does not split the gap; it closes
 on the next message the model or user produced.
+
+Each gap is measured from the latest timestamp seen so far, not the previous
+message's. Parallel work can log a message earlier than the one before it:
+Codex records an MCP call when it ends and dates the call back by its duration.
+A step back in time adds nothing, so overlapping calls are not counted twice
+and active time never exceeds the session's span. Session `active_seconds` and
+bucket active time follow the same rule.
 
 Consequences:
 

@@ -56,6 +56,30 @@ export function compact(value: number): string {
   return formatInt(value);
 }
 
+// Rounding each share on its own lets a column total 99% or 101%. Largest
+// remainder keeps the visible labels summing to exactly 100.
+export function roundedPercents(values: number[]): number[] {
+  const weights = values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  if (total <= 0) {
+    return weights.map(() => 0);
+  }
+  const exact = weights.map((value) => (value / total) * 100);
+  const floors = exact.map(Math.floor);
+  let remaining = 100 - floors.reduce((sum, value) => sum + value, 0);
+  const order = exact
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+  for (const { index } of order) {
+    if (remaining <= 0) {
+      break;
+    }
+    floors[index] = (floors[index] ?? 0) + 1;
+    remaining -= 1;
+  }
+  return floors;
+}
+
 export function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }

@@ -99,7 +99,7 @@
       "is_error": false,
       "redacted": false,
       "sessions_seen": 1,
-      "success_rate": 1
+      "success_rate": null
     },
     {
       "ordinal": 0,
@@ -111,7 +111,7 @@
       "is_error": false,
       "redacted": false,
       "sessions_seen": 1,
-      "success_rate": 1
+      "success_rate": null
     },
     {
       "ordinal": 0,

@@ -110,7 +110,7 @@
       "is_error": false,
       "redacted": false,
       "sessions_seen": 1,
-      "success_rate": 1
+      "success_rate": null
     },
     {
       "ordinal": 0,
@@ -122,7 +122,7 @@
       "is_error": false,
       "redacted": false,
       "sessions_seen": 1,
-      "success_rate": 1
+      "success_rate": null
     }
   ],
   "artifact": "## /Users/dev/proj — distilled workflow\n\n_Decant 0.0.0-dev, from 8 session(s). Review before committing._\n\n### Commands\n\n```bash\ncargo build --workspace\ncargo test --workspace\n```\n\n### Where things live\n\n- `src/main.rs` — read in 2 session(s)\n- `auth_test.py` — read in 1 session(s), rarely edited\n"

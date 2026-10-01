@@ -12,7 +12,15 @@ to a window according to the date prefix of its `started_at` timestamp. Invalid
 date strings are ignored by the API, so callers that need a strict contract
 should validate dates before sending them.
 
-The live "today" totals are the exception. They cover the server's local
+Tool and MCP aggregates follow the same rule, so a call made just after midnight
+counts on the day its session started. The Tools page summary cards (total
+calls, error rate, median and p95 elapsed, top tool) share that scope with the
+tool and MCP tables. The page's tool and server filters narrow the cards, while
+the "Errors only" and minimum-elapsed filters narrow only the call list. The
+call list itself is the exception to the session rule: it filters each call by
+its own timestamp, so a call appears on the day it ran.
+
+The live "today" totals are another exception. They cover the server's local
 calendar day, converted to a UTC range before it is compared with
 `started_at`.
 

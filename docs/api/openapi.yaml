@@ -2460,6 +2460,7 @@ components:
       required: [today, active_sessions, last_sync_at, sync_in_progress]
       properties:
         today:
+          description: Totals for sessions started during the server's local calendar day.
           $ref: "#/components/schemas/Totals"
         active_sessions:
           type: array

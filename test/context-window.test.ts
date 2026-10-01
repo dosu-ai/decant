@@ -645,7 +645,7 @@ describe("contextWindowForSession (codex)", () => {
     db.close();
   });
 
-  test("infers Gemini windows from the recorded model, not from the log", () => {
+  test("infers Gemini windows from the recorded model and observed usage", () => {
     expect(inferGeminiContextWindowTokens("gemini-3.5-flash")).toBe(1_000_000);
     expect(inferGeminiContextWindowTokens("gemini-2.5-pro")).toBe(1_000_000);
     expect(inferGeminiContextWindowTokens("gemini-3-pro-preview")).toBe(1_000_000);
@@ -653,6 +653,25 @@ describe("contextWindowForSession (codex)", () => {
     expect(inferGeminiContextWindowTokens("gemini-2.5-flash-lite")).toBe(128_000);
     expect(inferGeminiContextWindowTokens("gemini-3.1-flash-lite-preview")).toBe(128_000);
     expect(inferGeminiContextWindowTokens("gemini-2.5-flash-image")).toBe(128_000);
+    expect(inferGeminiContextWindowTokens("gemini-2.5-flash-lite", 128_000)).toBe(128_000);
+    expect(inferGeminiContextWindowTokens("gemini-2.5-flash-lite", 200_000)).toBe(1_000_000);
+  });
+
+  test("never reports a small Gemini window below the observed peak", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, model)
+      VALUES (1, 'gemini', 'gemini-lite', '2026-07-01T00:00:00Z', 0, 'gemini-2.5-flash-lite');
+      INSERT INTO message(id, session_id, seq, role, timestamp,
+                          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, raw)
+      VALUES (1, 1, 0, 'user', '2026-07-01T00:00:00Z', NULL, NULL, NULL, NULL, '{}'),
+             (2, 1, 1, 'assistant', '2026-07-01T00:01:00Z', 200000, 100, 0, 0, '{}');
+    `);
+
+    const timeline = contextWindowForSession(db, 1);
+    expect(timeline?.window_tokens).toBe(1_000_000);
+    expect(timeline?.peak_pct).toBeCloseTo(0.2, 6);
+    db.close();
   });
 
   test("gives Gemini sessions a percentage without any explicit log value", () => {

@@ -192,6 +192,10 @@ provider charges. Archive and date-range totals split each session's cost by
 that session's own activity and then add the sessions up, so an archive's
 bucket costs always equal the sum of its sessions' bucket costs.
 
+The API returns `cost_share` unrounded. The UI's whole-number cost and time
+percentages use largest-remainder rounding, so each column adds up to exactly
+100% instead of drifting to 99% or 101%.
+
 ### Search counting
 
 This defines the search count behind the "discovery is expensive"

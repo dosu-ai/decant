@@ -12,6 +12,10 @@ to a window according to the date prefix of its `started_at` timestamp. Invalid
 date strings are ignored by the API, so callers that need a strict contract
 should validate dates before sending them.
 
+The live "today" totals are the exception. They cover the server's local
+calendar day, converted to a UTC range before it is compared with
+`started_at`.
+
 Archived and deleted sessions are excluded by default. Statistics endpoints
 that accept `include_archived=true` can include user-archived sessions; deleted
 sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
@@ -21,7 +25,9 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 A top-level session is a run that is not marked as a subagent. A subagent is a
 nested run linked to a parent session.
 
-- `sessions` in aggregate statistics counts top-level sessions only.
+- `sessions` in aggregate statistics counts top-level sessions only. So do the
+  hour and weekday histograms and the per-model daily sparklines, so each one
+  sums to the matching `sessions` count.
 - Message, tool-call, token, and estimated-cost totals include all visible
   sessions in scope, including subagents.
 - `GET /api/sessions` omits subagents as list rows by default.
@@ -259,11 +265,23 @@ For one model call, occupancy is:
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
 an explicit model window. Claude and Gemini infer the window from the model
-when the source does not record one, and the API marks inferred values.
+when the source does not record one, and the API marks inferred values. An
+inferred window grows to the next published tier when a call already exceeded
+the smaller one, so an inferred peak never reads above 100%.
 
 Compactions come from provider boundary records. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing
 values remain unavailable rather than being invented.
+
+## Distilled command success
+
+`decant distill` reports `success_rate` per normalized command across the
+sessions in scope. It counts only calls with a recorded result. Codex does not
+record per-call results, so those calls stay out of the rate, and a command no
+call recorded a result for has a `null` rate. Script comments floor the
+percentage, so a command that ever failed never reads `100% ok`, and they omit
+the percentage when the rate is `null`. Commands whose recorded calls all failed
+are left out of scripts.
 
 ## Data quality signals
 

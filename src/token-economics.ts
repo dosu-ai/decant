@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { apportion } from "./apportion.ts";
 import {
   ACTIVITY_BUCKETS,
   type ActivityBucket,
@@ -883,9 +884,8 @@ function allocateLatency(
         latency,
       );
     }
-    // Parallel work can log an earlier timestamp than the message before it
-    // (Codex backdates each MCP call by its duration). Measuring from the
-    // latest time seen keeps overlapping spans from being counted twice.
+    // Codex backdates parallel MCP calls, so measure from the latest time seen
+    // or overlapping spans count twice.
     previous = previous == null ? at : Math.max(previous, at);
   }
 }
@@ -1113,9 +1113,8 @@ function distribute(
     return;
   }
   if (blocks.length === 0) {
-    // Output with no visible block to carry it is still model output, so it
-    // stays in generation as communicating rather than disappearing. With no
-    // block to place it, it is orientation only when the session never edited.
+    // Blockless output is still model output, so it counts as communicating
+    // instead of vanishing from generation.
     addBucket(
       buckets,
       "communicating",
@@ -1276,24 +1275,6 @@ function finish(
     implementation: sumPhase(rows, "implementation"),
   };
   return { buckets: rows, totals };
-}
-
-/** Largest-remainder rounding of non-negative values to integers summing to
- * `total`, which must be within one unit per value of their floors' sum. */
-function apportion(values: number[], total: number): number[] {
-  const floors = values.map(Math.floor);
-  let remaining = total - floors.reduce((sum, value) => sum + value, 0);
-  const order = values
-    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
-  for (const { index } of order) {
-    if (remaining <= 0) {
-      break;
-    }
-    floors[index] = (floors[index] ?? 0) + 1;
-    remaining -= 1;
-  }
-  return floors;
 }
 
 function sumPhase(rows: TokenEconomicsBucket[], phase: Phase): PhaseAmounts {

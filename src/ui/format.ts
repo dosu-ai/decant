@@ -1,3 +1,4 @@
+import { apportion } from "../apportion.ts";
 import type { SessionSummary } from "./types.ts";
 
 export function versionLabel(version: string | null | undefined): string {
@@ -64,20 +65,10 @@ export function roundedPercents(values: number[]): number[] {
   if (total <= 0) {
     return weights.map(() => 0);
   }
-  const exact = weights.map((value) => (value / total) * 100);
-  const floors = exact.map(Math.floor);
-  let remaining = 100 - floors.reduce((sum, value) => sum + value, 0);
-  const order = exact
-    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
-  for (const { index } of order) {
-    if (remaining <= 0) {
-      break;
-    }
-    floors[index] = (floors[index] ?? 0) + 1;
-    remaining -= 1;
-  }
-  return floors;
+  return apportion(
+    weights.map((value) => (value / total) * 100),
+    100,
+  );
 }
 
 export function money(value: number): string {

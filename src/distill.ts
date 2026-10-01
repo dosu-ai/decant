@@ -399,14 +399,7 @@ export function replayOps(db: Database, sessionId: number): Op[] {
       });
       continue;
     }
-    const file = fileOp(
-      row.tool_name,
-      row.input,
-      cwd,
-      sessionId,
-      row.ordinal,
-      row.is_error,
-    );
+    const file = fileOp(row.tool_name, row.input, cwd, sessionId, row.ordinal, row.is_error);
     if (file != null) {
       ops.push(file);
     }

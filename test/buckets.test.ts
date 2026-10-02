@@ -435,6 +435,8 @@ describe("activity bucket classifier", () => {
       "patch -p1 < /tmp/x.patch",
       'node -e \'require("fs").writeFileSync("a.ts", body)\'',
       "python3 -c \"open('a.py','w').write(x)\"",
+      "python3 - <<'PY'\nfrom pathlib import Path\np = Path('a.ts')\np.write_text(p.read_text().replace('a', 'b'))\nPY",
+      "python3 -c \"from pathlib import Path; Path('a.bin').write_bytes(b)\"",
     ];
     for (const cmd of edits) {
       expect(isCodeEditTool("Bash", { command: cmd })).toBe(true);
@@ -454,6 +456,8 @@ describe("activity bucket classifier", () => {
       "rg -n writeFileSync src",
       'grep -rn "git apply" docs',
       "sed -n 1,20p a.ts; grep -i todo a.ts",
+      "rg -n write_text src",
+      "python3 -c \"from pathlib import Path; print(Path('a.ts').read_text())\"",
     ];
     for (const cmd of benign) {
       expect(isCodeEditTool("Bash", { command: cmd })).toBe(false);
@@ -632,6 +636,13 @@ describe("Codex exec programs", () => {
   ])("recognizes a patch through a $name", ({ program }) => {
     const input = exec(program);
     expect(codexExecCalls("exec", input)).toEqual([{ name: "apply_patch", command: null }]);
+    expect(toolBucket("exec", input)).toBe("code");
+    expect(isCodeEditTool("exec", input)).toBe(true);
+  });
+  test("a pathlib write in an exec_command heredoc is an edit", () => {
+    const input = exec(
+      String.raw`await tools.exec_command({cmd:"python3 - <<'PY'\nfrom pathlib import Path\np=Path('a.ts')\np.write_text(p.read_text().replace('a','b'))\nPY"});`,
+    );
     expect(toolBucket("exec", input)).toBe("code");
     expect(isCodeEditTool("exec", input)).toBe(true);
   });

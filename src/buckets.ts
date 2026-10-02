@@ -431,6 +431,7 @@ const SHELL_EDIT_PATTERNS: RegExp[] = [
   /\bpatch\b[^\n|]*-p\d/, // patch -p1 < ...
   /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/, // node fs writes (node -e ...)
   /\bopen\([^)]*['"][wa]\+?['"]/, // python open(..., "w"/"a")
+  /\.write_(?:text|bytes)\(/, // python pathlib Path.write_text / write_bytes
   /\bapplypatch\b/,
 ];
 

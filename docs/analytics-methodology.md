@@ -256,8 +256,9 @@ Phases are orthogonal to activity buckets:
 Structured edit tools establish the boundary directly, including an
 `apply_patch` call inside a Codex `exec` program. Shell edits use narrow,
 high-confidence patterns such as `git apply`, `sed -i`, and explicit file-write
-APIs. The classifier prefers missing a weak signal over moving the boundary
-forward on a false positive.
+APIs (Node `fs.writeFileSync`, Python `open(..., "w")`, and pathlib
+`Path.write_text`/`write_bytes`). The classifier prefers missing a weak signal
+over moving the boundary forward on a false positive.
 
 ## Active time and user wait
 

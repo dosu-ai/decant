@@ -154,6 +154,32 @@ describe("facets", () => {
     expect(facets(session).activeSeconds).toBe(0);
   });
 
+  test("active seconds measures from the latest timestamp so overlaps never exceed the span", () => {
+    const line = (role: "user" | "assistant", at: string) =>
+      role === "user"
+        ? `{"type":"user","timestamp":"2026-05-01T${at}.000Z","message":{"role":"user","content":"q"}}`
+        : `{"type":"assistant","timestamp":"2026-05-01T${at}.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"r"}]}}`;
+    const overlapping = [
+      line("user", "10:00:00"),
+      line("assistant", "10:00:50"),
+      line("user", "10:00:10"),
+      line("assistant", "10:01:00"),
+    ];
+    expect(
+      facets(parseClaudeSession("overlap", `${overlapping.join("\n")}\n`).session).activeSeconds,
+    ).toBe(60);
+    // The five-minute cap still applies to the gap after a step back.
+    const capped = [
+      line("user", "10:00:00"),
+      line("assistant", "10:00:30"),
+      line("user", "10:00:10"),
+      line("assistant", "10:20:30"),
+    ];
+    expect(
+      facets(parseClaudeSession("capped", `${capped.join("\n")}\n`).session).activeSeconds,
+    ).toBe(330);
+  });
+
   test("Claude facets count all markers", async () => {
     const got = facets(await claudeSession());
     expect(got.turnCount).toBe(1);

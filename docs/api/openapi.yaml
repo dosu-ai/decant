@@ -931,6 +931,13 @@ paths:
       tags: [Tools]
       operationId: listToolCalls
       summary: Browse individual tool calls newest first
+      description: |
+        Rows, `total`, and paging honor every filter, and `from`/`to` match
+        each call's own timestamp. `summary` describes the population behind
+        the Tools page cards instead: calls from visible sessions that started
+        inside `from`/`to`, the same scope as `/api/tools/usage`, narrowed by
+        `tool`, `server`, `session`, and `project` but not by `errors_only` or
+        `min_ms`.
       parameters:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/McpServer"
@@ -2460,6 +2467,7 @@ components:
       required: [today, active_sessions, last_sync_at, sync_in_progress]
       properties:
         today:
+          description: Totals for sessions started during the server's local calendar day.
           $ref: "#/components/schemas/Totals"
         active_sessions:
           type: array
@@ -2663,6 +2671,9 @@ components:
       additionalProperties: false
     ToolCallSummary:
       type: object
+      description: |
+        Calls in session-start date scope, narrowed by tool, server, session,
+        and project filters only; `errors_only` and `min_ms` never apply.
       required: [calls, errors, p50_ms, p95_ms]
       properties:
         calls:

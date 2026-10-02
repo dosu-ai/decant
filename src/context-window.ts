@@ -31,11 +31,15 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
     : DEFAULT_WINDOW_TOKENS;
 }
 
-/** Infer a Gemini window from the model id, the way we do for Claude. The
- * 2.5/3.x line publishes 1M; flash-lite and image variants get 128k. */
-export function inferGeminiContextWindowTokens(model: string | null): number {
+/** Infer a Gemini window from the model id and observed usage, the way we do
+ * for Claude. The 2.5/3.x line publishes 1M; flash-lite and image variants get
+ * 128k unless a request already proved the window is larger. */
+export function inferGeminiContextWindowTokens(model: string | null, maxSeen = 0): number {
   const normalized = (model ?? "").toLowerCase();
-  if (normalized.includes("flash-lite") || normalized.includes("image")) {
+  if (
+    maxSeen <= GEMINI_SMALL_CONTEXT_TOKENS &&
+    (normalized.includes("flash-lite") || normalized.includes("image"))
+  ) {
     return GEMINI_SMALL_CONTEXT_TOKENS;
   }
   return GEMINI_LONG_CONTEXT_TOKENS;
@@ -286,7 +290,7 @@ export function contextWindowForSession(
       : session.tool === "claude_code"
         ? inferClaudeContextWindowTokens(session.model, maxSeen)
         : session.tool === "gemini"
-          ? inferGeminiContextWindowTokens(session.model)
+          ? inferGeminiContextWindowTokens(session.model, maxSeen)
           : null;
   const window = explicitWindow ?? inferredWindow;
   const displayTurnCount = Math.max(turn, points.length > 0 ? 1 : 0);

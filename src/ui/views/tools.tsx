@@ -57,16 +57,26 @@ import type {
   ToolRow,
 } from "../types.ts";
 
-export function toolAggregate(tools: ToolRow[], summary: ToolCallPage["summary"]) {
+export function toolAggregate(
+  tools: ToolRow[],
+  summary: ToolCallPage["summary"],
+  scope: Pick<ToolFilters, "tool" | "server"> = { tool: "", server: "" },
+) {
   const resolvedSummary = summary ?? { calls: 0, errors: 0, p50_ms: null, p95_ms: null };
   const totalCalls = resolvedSummary.calls;
   const totalErrors = resolvedSummary.errors;
+  const scopedTools = tools.filter(
+    (row) =>
+      (scope.tool === "" || row.tool_name === scope.tool) &&
+      (scope.server === "" || row.mcp_server === scope.server),
+  );
   return {
     totalCalls,
     errorRate: totalCalls === 0 ? 0 : (totalErrors / totalCalls) * 100,
     p50: resolvedSummary.p50_ms,
     p95: resolvedSummary.p95_ms,
-    topTool: tools.slice().sort((left, right) => right.calls - left.calls)[0]?.tool_name ?? null,
+    topTool:
+      scopedTools.slice().sort((left, right) => right.calls - left.calls)[0]?.tool_name ?? null,
   };
 }
 
@@ -379,8 +389,12 @@ export function ToolsView({
     locationFilters.tool,
   ]);
   const aggregate = useMemo(
-    () => toolAggregate(data.tools, callPage.summary),
-    [data.tools, callPage],
+    () =>
+      toolAggregate(data.tools, callPage.summary, {
+        tool: locationFilters.tool,
+        server: locationFilters.server,
+      }),
+    [data.tools, callPage.summary, locationFilters.tool, locationFilters.server],
   );
   const durationAvailable =
     data.tools.some((row) => row.p50_ms != null) ||

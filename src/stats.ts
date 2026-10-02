@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { DAY_END, type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
+import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
@@ -418,7 +418,7 @@ export function modelSparklines(db: Database, filter?: DateFilter | null): Model
     .query(
       `SELECT COALESCE(s.model, '(unknown)') AS model,
               substr(s.started_at, 1, 10) AS day,
-              COUNT(*) AS count
+              SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END) AS count
        FROM session s
        ${whereClause({
          sql: ["s.started_at IS NOT NULL", visible.sql].filter(Boolean).join(" AND "),
@@ -464,21 +464,21 @@ export function dateBounds(db: Database): DateBounds {
     .get() as DateBounds;
 }
 
-export function todayTotals(db: Database): Totals {
+// started_at is UTC, so "today" is the local calendar day as a UTC range.
+export function todayTotals(db: Database, now: Date = new Date()): Totals {
   const visible = statsScope(db, "s");
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const scope = {
+    sql: [visible.sql, "s.started_at >= ? AND s.started_at < ?"].join(" AND "),
+    params: [...visible.params, utcSecond(start), utcSecond(end)],
+  };
   return db
     .query(
       `WITH filtered_session AS (
          SELECT ${TOTALS_COLUMNS}
          FROM session s
-         ${whereClause({
-           sql: [
-             visible.sql,
-             `s.started_at >= date('now', 'localtime')
-              AND s.started_at < date('now', 'localtime') || char(${DAY_END.codePointAt(0)})`,
-           ].join(" AND "),
-           params: visible.params,
-         })}
+         ${whereClause(scope)}
        )
        SELECT
          COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
@@ -495,7 +495,7 @@ export function todayTotals(db: Database): Totals {
          COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
        FROM filtered_session`,
     )
-    .get() as Totals;
+    .get(...scope.params) as Totals;
 }
 
 function dimensionSql(dimension: Dimension): { groupExpr: string; join: string } {
@@ -536,7 +536,7 @@ function bucket(db: Database, expr: string, size: number, filter?: DateFilter | 
   const visible = statsScope(db, "s", filter);
   const rows = db
     .query(
-      `SELECT ${expr} AS key, COUNT(*) AS count
+      `SELECT ${expr} AS key, SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END) AS count
        FROM session s
        ${whereClause({
          sql: ["s.started_at IS NOT NULL", visible.sql].filter(Boolean).join(" AND "),
@@ -564,6 +564,12 @@ function peak(counts: number[]): number | null {
     }
   }
   return bestIndex;
+}
+
+// Second precision compares correctly against stored timestamps with or
+// without fractional seconds.
+function utcSecond(date: Date): string {
+  return date.toISOString().slice(0, 19);
 }
 
 function localTimezone(): string {

@@ -315,11 +315,11 @@ describe("stats rollups", () => {
       )
       VALUES
         (1, 'claude_code', 'today-archived-root', 'hidden-model',
-         datetime('now', 'localtime'), 0, NULL, 10, 20, 1.0),
+         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 0, NULL, 10, 20, 1.0),
         (2, 'claude_code', 'today-archived-child', 'hidden-model',
-         datetime('now', 'localtime'), 1, 1, 30, 40, 2.0),
+         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1, 1, 30, 40, 2.0),
         (3, 'codex', 'today-visible-root', 'visible-model',
-         datetime('now', 'localtime'), 0, NULL, 50, 60, 3.0);
+         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 0, NULL, 50, 60, 3.0);
       INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
       VALUES ('claude_code', 'today-archived-root', 'archived', datetime('now'));
       INSERT INTO message(id, session_id, seq, role, raw)
@@ -345,6 +345,58 @@ describe("stats rollups", () => {
       estimated_cost_usd: 3,
     });
     db.close();
+  });
+
+  test("activity histograms and model sparklines count top-level sessions only", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent, parent_session_id)
+      VALUES
+        (1, 'claude_code', 'root', 'shared-model', '2026-05-03T10:00:00.000Z', 0, NULL),
+        (2, 'claude_code', 'child', 'shared-model', '2026-05-03T10:05:00.000Z', 1, 1),
+        (3, 'claude_code', 'child-only', 'subagent-model', '2026-05-03T10:06:00.000Z', 1, 1);
+    `);
+    const sessions = totals(db).sessions;
+    const got = activity(db);
+    expect(sessions).toBe(1);
+    expect(got.by_hour.reduce((sum, count) => sum + count, 0)).toBe(sessions);
+    expect(got.by_weekday.reduce((sum, count) => sum + count, 0)).toBe(sessions);
+    const sparks = modelSparklines(db);
+    expect(sparks.models["shared-model"]).toEqual([1]);
+    expect(sparks.models["subagent-model"]).toEqual([0]);
+    const byModel = byDimension(db, "model");
+    for (const row of byModel) {
+      expect((sparks.models[row.key] ?? []).reduce((sum, count) => sum + count, 0)).toBe(
+        row.sessions,
+      );
+    }
+    db.close();
+  });
+
+  test("today totals use the local calendar day, not the UTC date", () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "Pacific/Kiritimati";
+    try {
+      const db = freshDb();
+      // 01:00 on Jan 16 in UTC+14 is still Jan 15 in UTC.
+      const now = new Date("2030-01-15T11:00:00.000Z");
+      db.exec(`
+        INSERT INTO session(id, tool, source_session_id, started_at, is_subagent)
+        VALUES
+          (1, 'codex', 'yesterday-local', '2030-01-15T09:59:59.900Z', 0),
+          (2, 'codex', 'today-local-start', '2030-01-15T10:00:00Z', 0),
+          (3, 'codex', 'today-local-late', '2030-01-16T09:59:59.999Z', 0),
+          (4, 'codex', 'tomorrow-local', '2030-01-16T10:00:00.000Z', 0);
+      `);
+      expect(todayTotals(db, now).sessions).toBe(2);
+      db.close();
+    } finally {
+      if (previousTz == null) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
   });
 
   test("date filters scope analytics rollups", () => {

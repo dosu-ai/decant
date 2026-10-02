@@ -1498,6 +1498,55 @@ describe("sync", () => {
     db.close();
   });
 
+  test("re-derives overlapping parallel-call time once after the revision advances", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.codexDir, "sessions", "rollout-parallel.jsonl");
+    const mcpEnd = (callId: string, at: string, secs: number) =>
+      `{"type":"event_msg","timestamp":"2026-05-06T${at}.000Z","payload":{"type":"mcp_tool_call_end","call_id":"${callId}","invocation":{"server":"dosu","tool":"read_knowledge","arguments":{"query":"synthetic"}},"duration":{"secs":${secs},"nanos":0},"result":{"Ok":{"content":[{"type":"text","text":"synthetic result"}],"isError":false}}}}`;
+    // Both calls start at 10:00:10. Codex logs each when it ends, backdating
+    // the call by its duration, so the second call steps back in time.
+    write(
+      sourcePath,
+      `${[
+        '{"type":"session_meta","timestamp":"2026-05-06T10:00:00.000Z","payload":{"id":"sess-codex-parallel","cwd":"/synthetic/proj","originator":"codex_cli_rs","cli_version":"0.116.0","source":"cli","model_provider":"openai"}}',
+        '{"type":"response_item","timestamp":"2026-05-06T10:00:00.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Look up two things"}]}}',
+        mcpEnd("call-a", "10:00:50", 40),
+        mcpEnd("call-b", "10:01:00", 50),
+      ].join("\n")}\n`,
+    );
+    const db = openFreshDb(dir);
+    const read = () =>
+      db
+        .query(
+          "SELECT id, active_seconds FROM session WHERE source_session_id = 'sess-codex-parallel'",
+        )
+        .get() as { id: number; active_seconds: number };
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+    const derived = read();
+    expect(derived.active_seconds).toBe(60);
+    const economics = tokenEconomicsForSession(db, derived.id);
+    expect(economics?.totals.attributed_ms).toBe(60_000);
+
+    // Simulate the previous pipeline, which counted the overlap twice.
+    db.query("UPDATE session SET active_seconds = 100 WHERE id = ?1").run(derived.id);
+    db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
+      INGEST_PIPELINE_REVISION - 1,
+      sourcePath,
+    );
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
+    expect(read()).toEqual(derived);
+    expect(tokenEconomicsForSession(db, derived.id)).toEqual(economics);
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 0 });
+    expect(read()).toEqual(derived);
+    db.close();
+  });
+
   test("reports sync progress from discovery through each inspected source", () => {
     const dir = freshCase();
     const config: IngestConfig = {

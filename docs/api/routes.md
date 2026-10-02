@@ -125,6 +125,13 @@ page size, one empty request is required to confirm the end.
 `GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
 aggregate rows. Their `limit` has an effective maximum of 1000.
 
+`GET /api/tools/calls` filters its rows by each call's own timestamp, so a call
+lands on the day it ran. Its first-page `summary` follows the aggregate rule
+instead: calls from sessions whose `started_at` falls in the window, matching
+`GET /api/tools/usage` and `GET /api/tools/mcp-usage`. The summary honors
+`tool`, `server`, `session`, and `project`, and ignores `errors_only` and
+`min_ms`, so `summary.calls` can differ from `total`.
+
 Request bodies larger than 1 MiB get a `413` with an empty body before they
 reach a route handler.
 No documented request comes close to that size.

@@ -225,6 +225,41 @@ describe("server routes", () => {
     expect((await route(config, "/api/sessions?limit=10000&offset=100")).body).toBeArrayOfSize(10);
   });
 
+  test("tool-call summary matches the usage tables and ignores row-only filters", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES (1, 'claude_code', 'late-night', 'Late night', '2026-05-01T23:50:00Z'),
+             (2, 'claude_code', 'next-day', 'Next day', '2026-05-02T09:00:00Z');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, is_error, duration_ms, timestamp, ordinal
+      ) VALUES
+        (1, 'builtin', 'Bash', 1, 40, '2026-05-02T00:10:00Z', 0),
+        (2, 'builtin', 'Bash', 1, 300, '2026-05-02T09:01:00Z', 0),
+        (2, 'builtin', 'Read', 0, 20, '2026-05-02T09:02:00Z', 1);
+    `);
+    db.close();
+
+    const window = "from=2026-05-02&to=2026-05-02";
+    const usage = await route(config, `/api/tools/usage?${window}`);
+    expect(usage.body).toMatchObject([
+      { tool_name: "Bash", calls: 1, errors: 1 },
+      { tool_name: "Read", calls: 1, errors: 0 },
+    ]);
+    const summary = { calls: 2, errors: 1, p50_ms: 20, p95_ms: 300 };
+    expect(await route(config, `/api/tools/calls?${window}`)).toMatchObject({
+      status: 200,
+      body: { total: 3, summary },
+    });
+    expect(
+      await route(config, `/api/tools/calls?${window}&errors_only=true&min_ms=100`),
+    ).toMatchObject({
+      status: 200,
+      body: { calls: [{ tool_name: "Bash", duration_ms: 300 }], total: 1, summary },
+    });
+  });
+
   test("caps aggregate usage limits at the server boundary", async () => {
     const config = freshConfig();
     const db = openDb(config.dbPath);

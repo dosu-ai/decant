@@ -1,3 +1,4 @@
+import { apportion } from "../apportion.ts";
 import type { SessionSummary } from "./types.ts";
 
 export function versionLabel(version: string | null | undefined): string {
@@ -54,6 +55,20 @@ export function compact(value: number): string {
     return `${(value / 1_000).toFixed(1)}K`;
   }
   return formatInt(value);
+}
+
+// Rounding each share on its own lets a column total 99% or 101%. Largest
+// remainder keeps the visible labels summing to exactly 100.
+export function roundedPercents(values: number[]): number[] {
+  const weights = values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  if (total <= 0) {
+    return weights.map(() => 0);
+  }
+  return apportion(
+    weights.map((value) => (value / total) * 100),
+    100,
+  );
 }
 
 export function money(value: number): string {

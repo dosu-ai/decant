@@ -15,7 +15,7 @@ import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "../date-range.ts"
 import { DateRangeControl } from "../date-range-control.tsx";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "../dosu-cta.ts";
 import { dosuLink } from "../dosu-links.ts";
-import { basename, compact, duration, formatInt, money } from "../format.ts";
+import { basename, compact, duration, formatInt, money, roundedPercents } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
 import { projectSessionsHref } from "../navigation.ts";
@@ -432,6 +432,8 @@ export function TokenEconomicsPanel({
   const buckets = economics?.buckets ?? [];
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
   const totalActiveMs = economics?.totals.active_ms ?? 0;
+  const costPercents = roundedPercents(buckets.map((bucket) => bucket.cost_share));
+  const timePercents = roundedPercents(buckets.map((bucket) => bucket.active_ms));
   const showAgentRuns = !isCompact;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
@@ -515,7 +517,7 @@ export function TokenEconomicsPanel({
               </tr>
             </thead>
             <tbody>
-              {buckets.map((bucket) => {
+              {buckets.map((bucket, index) => {
                 const tone = activityTone(bucket.bucket);
                 const share = Math.max(0, Math.min(1, bucket.cost_share));
                 const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
@@ -542,7 +544,7 @@ export function TokenEconomicsPanel({
                                 style={{ width: `${share * 100}%` }}
                               />
                             </span>
-                            <small>{Math.round(share * 100)}%</small>
+                            <small>{costPercents[index]}%</small>
                           </span>
                         </td>
                         <td className="numeric activity-number">
@@ -556,7 +558,7 @@ export function TokenEconomicsPanel({
                                 style={{ width: `${timeShare * 100}%` }}
                               />
                             </span>
-                            <small>{Math.round(timeShare * 100)}%</small>
+                            <small>{timePercents[index]}%</small>
                           </span>
                         </td>
                         <td className="numeric muted activity-number">

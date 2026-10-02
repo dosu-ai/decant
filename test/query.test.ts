@@ -21,6 +21,7 @@ import {
 import { SEARCH_MATCH_END, SEARCH_MATCH_START } from "../src/search-query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
+import { mcpUsage, toolUsage } from "../src/stats.ts";
 import { preview } from "../src/tools.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-query-test-"));
@@ -1017,6 +1018,71 @@ describe("query reads", () => {
     });
     expect(page.summary).not.toBeNull();
     expect(page.total).toBe(page.summary?.calls ?? 0);
+    db.close();
+  });
+
+  test("tool-call summary shares the usage tables' session-start date scope", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES (1, 'claude_code', 'late-night', 'Late night', '2026-05-01T23:50:00Z'),
+             (2, 'claude_code', 'next-day', 'Next day', '2026-05-02T09:00:00Z');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, timestamp, ordinal
+      ) VALUES
+        (1, 'mcp', 'search', 'docs', 0, 100, '2026-05-02T00:10:00Z', 0),
+        (2, 'builtin', 'Read', NULL, 0, 200, '2026-05-02T09:01:00Z', 0);
+    `);
+
+    const window = { from: "2026-05-02", to: "2026-05-02" };
+    const page = listToolCalls(db, window);
+    expect(page.calls.map((call) => call.tool_name)).toEqual(["Read", "search"]);
+    expect(page.total).toBe(2);
+    expect(page.summary).toEqual({ calls: 1, errors: 0, p50_ms: 200, p95_ms: 200 });
+    expect(toolUsage(db, false, 50, window).map((row) => row.tool_name)).toEqual(["Read"]);
+    expect(mcpUsage(db, 50, window)).toEqual([]);
+
+    const earlier = { from: "2026-05-01", to: "2026-05-01" };
+    expect(listToolCalls(db, earlier)).toMatchObject({
+      calls: [],
+      total: 0,
+      summary: { calls: 1, errors: 0, p50_ms: 100, p95_ms: 100 },
+    });
+    expect(toolUsage(db, false, 50, earlier)).toMatchObject([{ tool_name: "search", calls: 1 }]);
+    expect(listToolCalls(db, { ...earlier, server: "docs" }).summary?.calls).toBe(1);
+    expect(listToolCalls(db, { ...earlier, tool: "Read" }).summary?.calls).toBe(0);
+    db.close();
+  });
+
+  test("errors-only and minimum-elapsed narrow tool-call rows but not the summary", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at)
+      VALUES (1, 'claude_code', 'mixed', 'Mixed results', '2026-05-01T10:00:00Z');
+      INSERT INTO tool_call(
+        session_id, tool_kind, tool_name, is_error, duration_ms, timestamp, ordinal
+      ) VALUES
+        (1, 'builtin', 'Bash', 1, 50, '2026-05-01T10:01:00Z', 0),
+        (1, 'builtin', 'Bash', 0, 2000, '2026-05-01T10:02:00Z', 1),
+        (1, 'builtin', 'Bash', 0, 100, '2026-05-01T10:03:00Z', 2),
+        (1, 'builtin', 'Read', 0, 10, '2026-05-01T10:04:00Z', 3);
+    `);
+    const whole = { calls: 4, errors: 1, p50_ms: 50, p95_ms: 2000 };
+
+    expect(listToolCalls(db).summary).toEqual(whole);
+    const errors = listToolCalls(db, { errorsOnly: true });
+    expect(errors.total).toBe(1);
+    expect(errors.calls).toHaveLength(1);
+    expect(errors.summary).toEqual(whole);
+    const slow = listToolCalls(db, { minMs: 1000 });
+    expect(slow.total).toBe(1);
+    expect(slow.calls.map((call) => call.duration_ms)).toEqual([2000]);
+    expect(slow.summary).toEqual(whole);
+    expect(listToolCalls(db, { tool: "Bash", errorsOnly: true, minMs: 60 })).toMatchObject({
+      calls: [],
+      total: 0,
+      summary: { calls: 3, errors: 1, p50_ms: 100, p95_ms: 2000 },
+    });
     db.close();
   });
 

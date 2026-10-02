@@ -415,29 +415,31 @@ interface ToolCallDbRow extends Omit<ToolCallRow, "input_preview" | "is_error" |
 export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCallPage {
   const limit = normalizeLimit(filter.limit, 50, 100);
   const offset = normalizeOffset(filter.offset);
-  const clauses: string[] = [
+  const scopeClauses: string[] = [
     visibleSessionPredicate("s"),
     sessionUserStatePredicateForDatabase(db, "s"),
   ];
-  const params: (string | number)[] = [];
+  const scopeParams: (string | number)[] = [];
   if (filter.tool != null) {
-    clauses.push("t.tool_name = ?");
-    params.push(filter.tool);
+    scopeClauses.push("t.tool_name = ?");
+    scopeParams.push(filter.tool);
   }
   if (filter.server != null) {
-    clauses.push("t.mcp_server = ?");
-    params.push(filter.server);
-  }
-  if (filter.errorsOnly === true) {
-    clauses.push("t.is_error = 1");
+    scopeClauses.push("t.mcp_server = ?");
+    scopeParams.push(filter.server);
   }
   if (filter.sessionId != null) {
-    clauses.push("t.session_id = ?");
-    params.push(filter.sessionId);
+    scopeClauses.push("t.session_id = ?");
+    scopeParams.push(filter.sessionId);
   }
   if (filter.project != null) {
-    clauses.push("p.path = ?");
-    params.push(filter.project);
+    scopeClauses.push("p.path = ?");
+    scopeParams.push(filter.project);
+  }
+  const clauses = [...scopeClauses];
+  const params = [...scopeParams];
+  if (filter.errorsOnly === true) {
+    clauses.push("t.is_error = 1");
   }
   const date = dayRangePredicate("t.timestamp", filter.from, filter.to);
   if (date.sql !== "") {
@@ -448,12 +450,17 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     clauses.push("t.duration_ms >= ?");
     params.push(Math.max(0, filter.minMs));
   }
+  // The summary feeds the Tools page cards beside the usage tables, so it shares
+  // their session-start scope and skips row-only filters.
+  const summaryDate = sessionDatePredicate("s", filter);
+  const summaryClauses = [...scopeClauses, summaryDate.sql].filter((clause) => clause !== "");
+  const summaryParams = [...scopeParams, ...summaryDate.params];
   const joins = `
     FROM tool_call t
     JOIN session s ON s.id = t.session_id
     LEFT JOIN project p ON p.id = s.project_id
     LEFT JOIN message m ON m.id = t.message_id`;
-  const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
+  const where = `WHERE ${clauses.join(" AND ")}`;
   const summary =
     offset === 0
       ? (db
@@ -461,7 +468,7 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
             `WITH filtered AS MATERIALIZED (
          SELECT t.is_error, t.duration_ms
          ${joins}
-         ${where}
+         WHERE ${summaryClauses.join(" AND ")}
        ),
        ranked AS (
          SELECT duration_ms,
@@ -476,15 +483,11 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
          ${NEAREST_RANK_PERCENTILES_SQL}
        FROM ranked`,
           )
-          .get(...params) as ToolCallSummary)
+          .get(...summaryParams) as ToolCallSummary)
       : null;
-  const total =
-    summary?.calls ??
-    (
-      db.query(`SELECT COUNT(*) AS calls ${joins} ${where}`).get(...params) as {
-        calls: number;
-      }
-    ).calls;
+  const { total } = db.query(`SELECT COUNT(*) AS total ${joins} ${where}`).get(...params) as {
+    total: number;
+  };
   const rows = db
     .query(
       `SELECT t.id, t.session_id, s.title AS session_title, p.path AS project,

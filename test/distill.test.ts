@@ -8,6 +8,7 @@ import {
   classifyPhase,
   commentSafe,
   decodeCommand,
+  defaultScriptOpts,
   hotContext,
   isDestructive,
   normalize,
@@ -214,6 +215,45 @@ describe("distill timeline and renderers", () => {
     const secret = d.ops.find((op) => op.redacted);
     expect(secret?.raw).toContain("<REDACTED>");
     expect(secret?.raw).not.toContain("ghp_");
+    db.close();
+  });
+
+  test("success rates count only calls with a recorded result", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent)
+      VALUES (1, 'claude_code', 'rate-a', '2026-05-01T00:00:00Z', 0),
+             (2, 'codex', 'rate-b', '2026-05-02T00:00:00Z', 0);
+    `);
+    const insert = db.prepare(
+      `INSERT INTO tool_call(session_id, tool_kind, tool_name, input, is_error, ordinal)
+       VALUES (?1, 'builtin', 'Bash', ?2, ?3, ?4)`,
+    );
+    let ordinal = 0;
+    const call = (sessionId: number, command: string, isError: number | null) => {
+      insert.run(sessionId, JSON.stringify({ command }), isError, ordinal);
+      ordinal += 1;
+    };
+    for (let index = 0; index < 249; index += 1) {
+      call(1, "make test", 0);
+    }
+    call(1, "make test", 1);
+    call(2, "make test", null);
+    call(1, "make lint", null);
+    call(2, "make lint", null);
+    call(1, "make broken", 1);
+    call(2, "make broken", 1);
+
+    const d = timeline(db);
+    const rate = (command: string) => d.ops.find((op) => op.normalized === command)?.success_rate;
+    expect(rate("make test")).toBeCloseTo(249 / 250, 10);
+    expect(rate("make lint")).toBeNull();
+    expect(rate("make broken")).toBe(0);
+
+    const script = renderScript(d, { ...defaultScriptOpts(), minFrequency: 0 });
+    expect(script).toContain("# seen 2/2, 99% ok\nmake test");
+    expect(script).toContain("# seen 2/2\nmake lint");
+    expect(script).not.toContain("make broken");
     db.close();
   });
 

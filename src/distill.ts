@@ -21,7 +21,8 @@ export interface Op {
   is_error: boolean;
   redacted: boolean;
   sessions_seen: number;
-  success_rate: number;
+  /** Share of calls with a recorded result that succeeded; null when none recorded one. */
+  success_rate: number | null;
 }
 
 export interface Scope {
@@ -298,17 +299,22 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
         redacted,
         phase: classifyPhase(normalized),
         is_error: row.is_error === 1,
+        outcome: row.is_error,
       },
     ];
   });
 
-  const agg = new Map<string, { sessions: Set<number>; total: number; ok: number }>();
+  // Codex records no per-call result, so an unknown outcome stays out of the
+  // rate instead of counting as a success.
+  const agg = new Map<string, { sessions: Set<number>; known: number; ok: number }>();
   for (const row of raws) {
-    const entry = agg.get(row.normalized) ?? { sessions: new Set<number>(), total: 0, ok: 0 };
+    const entry = agg.get(row.normalized) ?? { sessions: new Set<number>(), known: 0, ok: 0 };
     entry.sessions.add(row.session_id);
-    entry.total += 1;
-    if (!row.is_error) {
-      entry.ok += 1;
+    if (row.outcome != null) {
+      entry.known += 1;
+      if (row.outcome === 0) {
+        entry.ok += 1;
+      }
     }
     agg.set(row.normalized, entry);
   }
@@ -326,7 +332,7 @@ export function timeline(db: Database, scope: Scope = {}): Distillation {
       is_error: row.is_error,
       redacted: row.redacted,
       sessions_seen: entry?.sessions.size ?? 0,
-      success_rate: entry == null || entry.total === 0 ? 0 : entry.ok / entry.total,
+      success_rate: entry == null || entry.known === 0 ? null : entry.ok / entry.known,
     };
   });
 
@@ -389,11 +395,11 @@ export function replayOps(db: Database, sessionId: number): Op[] {
         is_error: isError,
         redacted,
         sessions_seen: 1,
-        success_rate: isError ? 0 : 1,
+        success_rate: outcomeRate(row.is_error),
       });
       continue;
     }
-    const file = fileOp(row.tool_name, row.input, cwd, sessionId, row.ordinal, isError);
+    const file = fileOp(row.tool_name, row.input, cwd, sessionId, row.ordinal, row.is_error);
     if (file != null) {
       ops.push(file);
     }
@@ -545,11 +551,15 @@ interface ReplayToolCallRow {
   is_error: number | null;
 }
 
+function outcomeRate(outcome: number | null): number | null {
+  return outcome == null ? null : outcome === 1 ? 0 : 1;
+}
+
 interface SelectedLine {
   phase: Phase;
   cmd: string;
   sessionsSeen: number;
-  successRate: number;
+  successRate: number | null;
   destructive: string | null;
   orderKey: [number, number];
 }
@@ -615,7 +625,7 @@ function selectLines(distillation: Distillation, options: ScriptOpts): SelectedL
     }
     seen.add(op.normalized);
     const freq = op.sessions_seen / Math.max(distillation.session_count, 1);
-    if (op.success_rate <= 0 || op.sessions_seen < 2 || freq < options.minFrequency) {
+    if (op.success_rate === 0 || op.sessions_seen < 2 || freq < options.minFrequency) {
       continue;
     }
     lines.push({
@@ -631,7 +641,7 @@ function selectLines(distillation: Distillation, options: ScriptOpts): SelectedL
     (left, right) =>
       phaseSortOrder(left.phase) - phaseSortOrder(right.phase) ||
       right.sessionsSeen - left.sessionsSeen ||
-      right.successRate - left.successRate ||
+      (right.successRate ?? -1) - (left.successRate ?? -1) ||
       compareCodePoints(left.cmd, right.cmd),
   );
   return lines;
@@ -687,10 +697,9 @@ function shLine(line: SelectedLine, sessionCount: number): string {
   if (line.destructive != null) {
     return `# REVIEW: destructive (${line.destructive}), seen in ${line.sessionsSeen} session(s) — left commented\n# ${line.cmd}\n`;
   }
-  const prefix =
-    sessionCount > 1
-      ? `# seen ${line.sessionsSeen}/${sessionCount}, ${Math.round(line.successRate * 100)}% ok\n`
-      : "";
+  // Floor so a command that ever failed never prints as 100% ok.
+  const ok = line.successRate == null ? "" : `, ${Math.floor(line.successRate * 100)}% ok`;
+  const prefix = sessionCount > 1 ? `# seen ${line.sessionsSeen}/${sessionCount}${ok}\n` : "";
   return `${prefix}${line.cmd}\n`;
 }
 
@@ -741,8 +750,9 @@ function fileOp(
   cwd: string | null,
   sessionId: number,
   ordinal: number,
-  isError: boolean,
+  outcome: number | null,
 ): Op | null {
+  const isError = outcome === 1;
   if (input == null) {
     return null;
   }
@@ -757,7 +767,7 @@ function fileOp(
     is_error: isError,
     redacted,
     sessions_seen: 1,
-    success_rate: isError ? 0 : 1,
+    success_rate: outcomeRate(outcome),
   });
   if (toolName === "apply_patch") {
     let value: unknown;

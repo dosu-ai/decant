@@ -1,4 +1,4 @@
-// Tool-name classification and text previews (port of tools.rs).
+// Tool-name classification and text previews.
 import type { ToolKind } from "./model.ts";
 
 export interface ClassifiedTool {
@@ -21,14 +21,30 @@ export function classifyTool(name: string): ClassifiedTool {
   return { kind: "builtin", mcpServer: null, baseName: name };
 }
 
+/** First `max` Unicode scalars of a string, never splitting surrogate pairs.
+ * Stops after `max` scalars instead of spreading the whole string. */
+export function headScalars(s: string, max: number): string {
+  // UTF-16 length bounds the scalar count from above.
+  if (s.length <= max) {
+    return s;
+  }
+  let head = "";
+  let taken = 0;
+  for (const ch of s) {
+    if (taken === max) {
+      break;
+    }
+    head += ch;
+    taken += 1;
+  }
+  return head;
+}
+
 /** First `max` characters of a string, with an ellipsis if truncated.
  * Counts Unicode scalars, never splitting surrogate pairs. */
 export function preview(s: string, max: number): string {
-  const chars = [...s];
-  if (chars.length <= max) {
-    return s;
-  }
-  return `${chars.slice(0, max).join("")}…`;
+  const head = headScalars(s, max);
+  return head.length === s.length ? s : `${head}…`;
 }
 
 /** Head and tail of a string with an elision marker between them, for text
@@ -70,7 +86,7 @@ export function previewHeadTail(s: string, max: number): string {
 }
 
 /** Must track the marker `previewHeadTail` writes; a drift fails silently. */
-export const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
+const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
 
 /** Scalars omitted from the middle of a preview, or null if it is complete. */
 export function previewOmittedCount(value: string | null | undefined): number | null {

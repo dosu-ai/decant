@@ -1,21 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
-
-function sourceBetween(start: string, end: string): string {
-  const startIndex = main.indexOf(start);
-  const endIndex = main.indexOf(end, startIndex + start.length);
-  expect(startIndex).toBeGreaterThanOrEqual(0);
-  expect(endIndex).toBeGreaterThan(startIndex);
-  return main.slice(startIndex, endIndex);
-}
 
 describe("UI interaction contracts", () => {
   test("aborts and ignores stale load-more search responses", () => {
-    const search = sourceBetween("function SearchView(", "function groupSearchHits(");
+    const search = sourceBetween(main, "function SearchView(", "function groupSearchHits(");
 
     expect(search).toContain("loadMoreControllerRef.current?.abort()");
     expect(search).toContain("signal: controller.signal");
@@ -24,7 +17,7 @@ describe("UI interaction contracts", () => {
   });
 
   test("does not activate stale search results and exposes arrow selection to assistive tech", () => {
-    const search = sourceBetween("function SearchView(", "function groupSearchHits(");
+    const search = sourceBetween(main, "function SearchView(", "function groupSearchHits(");
 
     expect(search).toContain("resultsQueryRef.current = null");
     expect(search).toContain("setHits([])");
@@ -37,7 +30,7 @@ describe("UI interaction contracts", () => {
   });
 
   test("keeps fast transcript search scoped and settles totals without replacing results", () => {
-    const search = sourceBetween("function SearchView(", "function groupSearchHits(");
+    const search = sourceBetween(main, "function SearchView(", "function groupSearchHits(");
     const fastRequest = search.slice(
       search.indexOf("include_total: false"),
       search.indexOf("include_total: true"),
@@ -57,8 +50,9 @@ describe("UI interaction contracts", () => {
   });
 
   test("opens one focus-managed palette from desktop, mobile, and global shortcuts", () => {
-    const app = sourceBetween("function App()", "function renderView(");
+    const app = sourceBetween(main, "function App()", "function renderView(");
     const palette = sourceBetween(
+      main,
       "function CommandPalette(",
       "function commandPaletteTextMatches(",
     );
@@ -73,7 +67,8 @@ describe("UI interaction contracts", () => {
     expect(app).toContain('className="topbar-search"');
     expect(app).toContain('className="icon-button topbar-search-mobile"');
     expect(palette).toContain("createPortal(");
-    expect(palette).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");
+    expect(palette).toContain("useDialogFocusTrap(true, dialogRef, requestClose)");
+    expect(palette).toContain("return open ? (\n    <CommandPaletteDialog");
     expect(palette).toContain('aria-modal="true"');
     expect(palette).toContain('role="dialog"');
     expect(palette).toContain('role="combobox"');
@@ -107,8 +102,8 @@ describe("UI interaction contracts", () => {
   });
 
   test("exposes tool-call details as a focus-managed modal with a keyboard entry point", () => {
-    const detail = sourceBetween("function ToolCallDetail(", "function ToolsView(");
-    const tools = sourceBetween("function ToolsView(", "function FilesView(");
+    const detail = sourceBetween(main, "function ToolCallDetail(", "function ToolsView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
 
     expect(detail).toContain("useDialogFocusTrap(true, dialogRef, onClose)");
     expect(detail).toContain('aria-modal="true"');
@@ -120,10 +115,12 @@ describe("UI interaction contracts", () => {
 
   test("closes report and share reviews only from direct backdrop presses", () => {
     const reportReview = sourceBetween(
+      main,
       "function ExportReviewSheet(",
       "function ReportExportButton(",
     );
     const shareReview = sourceBetween(
+      main,
       "function ShareChartButton(",
       "async function renderShareCardPng(",
     );
@@ -139,7 +136,11 @@ describe("UI interaction contracts", () => {
   });
 
   test("keeps compaction anchors exposed in the accessibility tree", () => {
-    const chart = sourceBetween("function ContextWindowStrip(", "function compactionTokenRange(");
+    const chart = sourceBetween(
+      main,
+      "function ContextWindowStrip(",
+      "function compactionTokenRange(",
+    );
 
     expect(chart).not.toContain('role="img"');
     expect(chart).toContain("Compactions ");
@@ -148,10 +149,14 @@ describe("UI interaction contracts", () => {
   });
 
   test("keeps archive visibility in session pagination and navigation state", () => {
-    const app = sourceBetween("function App()", "function renderView(");
-    const render = sourceBetween("function renderView(", "function NotFoundView(");
-    const sessions = sourceBetween("function SessionsView(", "function SessionTableSkeletonRows(");
-    const row = sourceBetween("function SessionTableRow(", "function DosuProvenanceBadge(");
+    const app = sourceBetween(main, "function App()", "function renderView(");
+    const render = sourceBetween(main, "function renderView(", "function NotFoundView(");
+    const sessions = sourceBetween(
+      main,
+      "function SessionsView(",
+      "function SessionTableSkeletonRows(",
+    );
+    const row = sourceBetween(main, "function SessionTableRow(", "function DosuProvenanceBadge(");
 
     expect(app).toContain("useSessionPage({");
     expect(app).toContain("includeArchivedSessions");
@@ -168,7 +173,7 @@ describe("UI interaction contracts", () => {
   });
 
   test("keeps the shell summary archive-wide while scoped session cards reload independently", () => {
-    const loaders = sourceBetween("const SLICE_LOADERS:", "const SHELL_SLICES:");
+    const loaders = sourceBetween(main, "const SLICE_LOADERS:", "const SHELL_SLICES:");
     const summaryStart = loaders.indexOf("  summary: {");
     const summaryEnd = loaders.indexOf("  byModel: {", summaryStart);
     expect(summaryStart).toBeGreaterThanOrEqual(0);
@@ -182,8 +187,12 @@ describe("UI interaction contracts", () => {
   });
 
   test("exposes session state actions through the shared accessible overflow menu", () => {
-    const overflow = sourceBetween("function OverflowMenu(", "function PromotionPanel(");
-    const session = sourceBetween("function SessionDetailView(", "function SessionDetailSkeleton(");
+    const overflow = sourceFrom(readUiFile("common.tsx"), "function OverflowMenu(");
+    const session = sourceBetween(
+      main,
+      "function SessionDetailView(",
+      "function SessionDetailSkeleton(",
+    );
 
     expect(overflow).toContain("event.currentTarget.open = false");
     expect(overflow).toContain('event.key !== "Escape"');
@@ -199,7 +208,11 @@ describe("UI interaction contracts", () => {
   });
 
   test("requires a focus-managed explicit confirmation before archive deletion", () => {
-    const dialog = sourceBetween("function DeleteSessionDialog(", "function SessionDetailView(");
+    const dialog = sourceBetween(
+      main,
+      "function DeleteSessionDialog(",
+      "function SessionDetailView(",
+    );
 
     expect(dialog).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");
     expect(dialog).toContain('aria-modal="true"');

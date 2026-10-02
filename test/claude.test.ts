@@ -276,6 +276,37 @@ describe("parseClaudeSession", () => {
     expect(parsed.issues).toEqual([]);
   });
 
+  test("a user rename wins over the first prompt and the generated title", () => {
+    const content = [
+      '{"type":"user","message":{"role":"user","content":"First prompt"}}',
+      '{"type":"ai-title","title":"Generated Title"}',
+      '{"type":"custom-title","customTitle":"Old name","sessionId":"s"}',
+      '{"type":"custom-title","customTitle":"Renamed by me","sessionId":"s"}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.session.title).toBe("Renamed by me");
+    expect(parsed.session.messages).toHaveLength(1);
+    expect(parsed.issues).toEqual([]);
+  });
+
+  test("harness bookkeeping records are not stored as messages", () => {
+    const content = [
+      '{"type":"user","message":{"role":"user","content":"hi"}}',
+      '{"type":"atis-latch","atis":"x","sessionId":"s"}',
+      '{"type":"cost-state","sessionId":"s","totalCostUSD":1}',
+      '{"type":"bridge-session","sessionId":"s","bridgeSessionId":"b"}',
+      '{"type":"worktree-state","sessionId":"s","worktreeSession":{}}',
+      '{"type":"relocated","sessionId":"s","relocatedCwd":"/tmp"}',
+      '{"type":"fork-context-ref","agentId":"a","parentSessionId":"p"}',
+      '{"type":"agent-setting","sessionId":"s"}',
+      '{"type":"artifact-autoreact-ledger","v":1,"sessionId":"s","artifacts":{}}',
+      '{"type":"artifact-comment-monitor","v":1,"sessionId":"s","artifacts":{}}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.session.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(parsed.issues).toEqual([]);
+  });
+
   test("ignored journal metadata cannot supply titles or alter conversation sequencing", () => {
     const ignoredRecordTypes = [
       "agent-name",

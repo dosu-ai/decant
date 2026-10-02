@@ -1,40 +1,36 @@
 import type { Database } from "bun:sqlite";
+import { apportion } from "./apportion.ts";
 import {
   ACTIVITY_BUCKETS,
   type ActivityBucket,
   blockBucket,
   isCodeEditTool,
+  isUserQuestionTool,
   toolBucket,
 } from "./buckets.ts";
 import { defaultPricing, estimateCostParts } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { byteLength } from "./json.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
+import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
-const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-// Version 2 includes corrected wall-clock attribution plus the billed-input
-// and waiting-on-user fields required by the current activity model.
-// Version 3 buckets and phase-splits the inner calls of Codex `exec` programs.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 3;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 8;
 
-// Cap every inter-message gap so long model, tool, or human pauses do not
-// dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for
-// session active_seconds in enrich.ts.
+// Caps each inter-message gap so long pauses do not dominate the timing
+// breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
 const ACTIVE_GAP_CAP_MS = 300_000;
 
-/** A run splits into two phases at the first file edit: "orientation" (reading
- * and planning HOW to change the code) and "implementation" (writing it). The
- * phase breakdown is orthogonal to the activity buckets -- every bucket carries
- * how much of it happened before vs after the first edit. */
+/** A run splits at the first file edit into "orientation" (reading, planning)
+ * and "implementation" (writing); every bucket carries both halves. */
 export type Phase = "orientation" | "implementation";
 
 export interface PhaseAmounts {
   generation_tokens: number;
   context_window_tokens: number;
   estimated_cost_usd: number;
-  // Wall-clock time attributed to this phase, from capped inter-message gaps.
   active_ms: number;
 }
 
@@ -46,14 +42,9 @@ export interface TokenEconomicsBucket {
   tool_calls: number;
   sessions: number;
   cost_share: number;
-  // Wall-clock time spent on this activity, in milliseconds. Measured as the
-  // sum of capped gaps between consecutive messages, charged to the activity
-  // mix of the message that closed each gap (see allocateLatency). Answers
-  // "how much *time* went to orientation/planning/etc.", not just tokens.
-  // User-authored response gaps are reported separately in totals.
+  // Capped gaps charged to the activity mix of the message that closed each
+  // one (see allocateLatency); user-response gaps are totalled separately.
   active_ms: number;
-  // Ordered block allocation places each contribution before/after the first
-  // edit for both archive-wide and per-session results.
   phases?: Record<Phase, PhaseAmounts>;
 }
 
@@ -65,11 +56,10 @@ export interface TokenEconomics {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
-    // Time attributed to the four agent activity buckets.
     active_ms: number;
-    // Capped gaps closed by user-authored text, kept separate from agent time.
+    // Gaps closed by user-authored text, kept apart from agent time.
     waiting_on_user_ms: number;
-    // All timing captured from block-bearing messages: agent time plus waiting.
+    // Agent time plus waiting.
     attributed_ms: number;
     phases?: Record<Phase, PhaseAmounts>;
   };
@@ -100,6 +90,8 @@ interface BlockRow {
   tool_input: string | null;
   text_bytes: number;
   timestamp: string | null;
+  // The record type behind an `other` block, e.g. Codex `agent_message`.
+  other_kind: string | null;
 }
 
 interface ResultRow {
@@ -116,15 +108,11 @@ interface MutableBucket {
   cost: number;
   toolCalls: number;
   sessions: Set<number>;
-  // Orientation-phase portions (pre-first-edit). Implementation = total - these.
-  // genOrientation feeds windowOrientation the same way generation feeds
-  // contextWindow, so the phase cost split mirrors the whole-bucket formula.
+  // Pre-first-edit portions; implementation is the total minus these.
   // costOrientation is derived at aggregation only (the builder leaves it 0).
   genOrientation: number;
   windowOrientation: number;
   costOrientation: number;
-  // Wall-clock ms attributed to this bucket, and the orientation-phase portion
-  // (pre-first-edit). Implementation = activeMs - activeMsOrientation.
   activeMs: number;
   activeMsOrientation: number;
 }
@@ -135,39 +123,11 @@ interface MutableLatency {
 
 type QueryParam = string | number;
 
-function economicsRows<T>(db: Database, sql: string, params: QueryParam[] = []): T[] {
-  const statement = db.prepare<T, QueryParam[]>(sql);
-  try {
-    return statement.all(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function economicsRow<T>(db: Database, sql: string, params: QueryParam[] = []): T | null {
-  const statement = db.prepare<T, QueryParam[]>(sql);
-  try {
-    return statement.get(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function runEconomicsStatement(db: Database, sql: string, params: QueryParam[] = []): void {
-  const statement = db.prepare<unknown, QueryParam[]>(sql);
-  try {
-    statement.run(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
 export interface SessionEconomicsVector {
   id: number;
   started_at: string | null;
   input_cost: number;
   output_cost: number;
-  // Total billed input volume, including cache reads and cache creation.
   billed_input_tokens: number;
   waiting_on_user_ms: number;
   buckets: Record<
@@ -177,12 +137,10 @@ export interface SessionEconomicsVector {
       context_window: number;
       tool_calls: number;
       touched: boolean;
-      // Pre-first-edit portions. context_window_orientation holds the
-      // tool-result orientation window only (before generation is folded in),
-      // matching how context_window excludes folded-in generation.
+      // Pre-first-edit portions; context_window_orientation excludes folded-in
+      // generation, like context_window.
       generation_orientation: number;
       context_window_orientation: number;
-      // Wall-clock ms on this activity, and its orientation-phase portion.
       active_ms: number;
       active_ms_orientation: number;
     }
@@ -256,44 +214,73 @@ export function aggregateEconomicsVectors(
     inputCost += vector.input_cost;
     outputCost += vector.output_cost;
     waitingOnUserMs += vector.waiting_on_user_ms;
+    // Each session's cost is split by its own activity before summing. Pooling
+    // first would let one expensive session's dollars follow another session's
+    // mix, so an archive total would not equal the sum of its sessions.
+    let generation = 0;
+    let window = 0;
+    let windowOrientation = 0;
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const part = vector.buckets[bucket];
+      generation += part.generation;
+      window += part.context_window + part.generation;
+      windowOrientation += part.context_window_orientation + part.generation_orientation;
+    }
     for (const bucket of ACTIVITY_BUCKETS) {
       const entry = buckets.get(bucket);
       const part = vector.buckets[bucket];
       if (entry == null || part == null) {
         continue;
       }
+      // Generation is part of the window; mirror it into the orientation
+      // portion so the phase cost split uses the same window basis.
+      const partWindow = part.context_window + part.generation;
+      const partWindowOrientation = part.context_window_orientation + part.generation_orientation;
       entry.generation += part.generation;
-      entry.contextWindow += part.context_window;
+      entry.contextWindow += partWindow;
       entry.genOrientation += part.generation_orientation;
-      entry.windowOrientation += part.context_window_orientation;
+      entry.windowOrientation += partWindowOrientation;
       entry.activeMs += part.active_ms;
       entry.activeMsOrientation += part.active_ms_orientation;
       entry.toolCalls += part.tool_calls;
+      entry.cost +=
+        vector.output_cost * share(part.generation, generation) +
+        vector.input_cost * share(partWindow, window);
+      entry.costOrientation +=
+        vector.output_cost * share(part.generation_orientation, generation) +
+        vector.input_cost * share(partWindowOrientation, window);
       if (part.touched) {
         entry.sessions.add(vector.id);
       }
     }
-  }
-
-  const totalGeneration = sumBuckets(buckets, "generation");
-  const totalWindow = sumBuckets(buckets, "contextWindow");
-  for (const entry of buckets.values()) {
-    // Generation is part of the window; mirror it into the orientation portion
-    // so the phase cost split uses the same window basis as the whole bucket.
-    entry.contextWindow += entry.generation;
-    entry.windowOrientation += entry.genOrientation;
-  }
-  const totalWindowWithGeneration = sumBuckets(buckets, "contextWindow");
-  const windowBasis = totalWindowWithGeneration || totalWindow;
-  for (const entry of buckets.values()) {
-    entry.cost =
-      outputCost * share(entry.generation, totalGeneration) +
-      inputCost * share(entry.contextWindow, windowBasis);
-    entry.costOrientation =
-      outputCost * share(entry.genOrientation, totalGeneration) +
-      inputCost * share(entry.windowOrientation, windowBasis);
+    // Dollars with no activity weight to follow still belong to the session,
+    // so bucket costs reconcile to its estimate. A session with no recorded
+    // activity never edited a file, so it is orientation.
+    const orientationShare = window > 0 ? windowOrientation / window : 1;
+    if (generation <= 0) {
+      chargeUnattributed(buckets, "communicating", vector.id, vector.output_cost, orientationShare);
+    }
+    if (window <= 0) {
+      chargeUnattributed(buckets, "context", vector.id, vector.input_cost, orientationShare);
+    }
   }
   return finish(buckets, inputCost, outputCost, waitingOnUserMs);
+}
+
+function chargeUnattributed(
+  buckets: Map<ActivityBucket, MutableBucket>,
+  bucket: ActivityBucket,
+  sessionId: number,
+  cost: number,
+  orientationShare: number,
+): void {
+  const entry = buckets.get(bucket);
+  if (entry == null || cost <= 0) {
+    return;
+  }
+  entry.cost += cost;
+  entry.costOrientation += cost * orientationShare;
+  entry.sessions.add(sessionId);
 }
 
 export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
@@ -364,69 +351,93 @@ export function materializeSessionEconomics(db: Database, sessionId: number): bo
   return true;
 }
 
-/** Reprice stored usage without rereading transcripts or replacing user state.
- * Check the components too: a rate change can leave the total unchanged. */
-export function refreshSessionCosts(db: Database): number {
-  return withImmediateTransaction(db, () => {
-    const pricing = defaultPricing();
-    const rows = economicsRows<
-      SessionRow & {
-        estimated_cost_usd: number;
-        format_version: number | null;
-        vector_json: string | null;
-      }
-    >(
-      db,
-      `SELECT s.id, s.model, s.estimated_cost_usd,
-               s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
-               s.total_cache_creation_tokens, s.total_cache_creation_1h_tokens,
-               s.total_reasoning_tokens, e.format_version, e.vector_json
-             FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
+interface CostRefresh {
+  id: number;
+  total: number;
+  totalChanged: boolean;
+  staleVector: SessionEconomicsVector | null;
+}
+
+/** Sessions whose stored cost or cached activity cost differs from current
+ * rates. Check the components too: a rate change can leave the total unchanged. */
+function pendingCostRefreshes(db: Database): CostRefresh[] {
+  const pricing = defaultPricing();
+  const rows = queryRows<
+    SessionRow & {
+      estimated_cost_usd: number;
+      format_version: number | null;
+      vector_json: string | null;
+    }
+  >(
+    db,
+    `SELECT s.id, s.model, s.estimated_cost_usd,
+             s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
+             s.total_cache_creation_tokens, s.total_cache_creation_1h_tokens,
+             s.total_reasoning_tokens, e.format_version, e.vector_json
+           FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
+  );
+  const pending: CostRefresh[] = [];
+  for (const row of rows) {
+    const parts = estimateCostParts(
+      row.model,
+      {
+        input: row.total_input_tokens,
+        output: row.total_output_tokens,
+        cacheRead: row.total_cache_read_tokens,
+        cacheCreation: row.total_cache_creation_tokens,
+        cacheCreation1h: row.total_cache_creation_1h_tokens,
+        reasoning: row.total_reasoning_tokens,
+      },
+      pricing,
     );
-    let refreshed = 0;
-    for (const row of rows) {
-      const parts = estimateCostParts(
-        row.model,
-        {
-          input: row.total_input_tokens,
-          output: row.total_output_tokens,
-          cacheRead: row.total_cache_read_tokens,
-          cacheCreation: row.total_cache_creation_tokens,
-          cacheCreation1h: row.total_cache_creation_1h_tokens,
-          reasoning: row.total_reasoning_tokens,
-        },
-        pricing,
-      );
-      const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
-      const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
-      const vector =
-        row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
-          ? parseEconomicsVector(row.vector_json)
-          : null;
-      const staleVector =
-        vector != null &&
-        vector.id === row.id &&
-        (vector.input_cost !== inputCost || vector.output_cost !== parts.output);
-      if (row.estimated_cost_usd === total && !staleVector) continue;
-      if (row.estimated_cost_usd !== total) {
-        runEconomicsStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
-          total,
-          row.id,
+    const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
+    const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+    const vector =
+      row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
+        ? parseEconomicsVector(row.vector_json)
+        : null;
+    const staleVector =
+      vector != null &&
+      vector.id === row.id &&
+      (vector.input_cost !== inputCost || vector.output_cost !== parts.output)
+        ? { ...vector, input_cost: inputCost, output_cost: parts.output }
+        : null;
+    const totalChanged = row.estimated_cost_usd !== total;
+    if (totalChanged || staleVector != null) {
+      pending.push({ id: row.id, total, totalChanged, staleVector });
+    }
+  }
+  return pending;
+}
+
+/** Reprice stored usage without rereading transcripts or replacing user state.
+ * The write lock is taken only when something changed, and the check reruns
+ * under it so a concurrent writer cannot make it stale. */
+export function refreshSessionCosts(db: Database): number {
+  if (pendingCostRefreshes(db).length === 0) {
+    return 0;
+  }
+  return withImmediateTransaction(db, () => {
+    const pending = pendingCostRefreshes(db);
+    for (const refresh of pending) {
+      if (refresh.totalChanged) {
+        runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
+          refresh.total,
+          refresh.id,
         ]);
       }
-      if (staleVector) {
-        storeEconomicsVector(db, { ...vector, input_cost: inputCost, output_cost: parts.output });
+      if (refresh.staleVector != null) {
+        storeEconomicsVector(db, refresh.staleVector);
       }
-      refreshed += 1;
     }
-    return refreshed;
+    return pending.length;
   });
 }
 
 /** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
  * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
 export function materializeMissingSessionEconomics(db: Database): number {
-  const rows = economicsRows<{
+  const rows = queryRows<{
     id: number;
     format_version: number | null;
     vector_json: string | null;
@@ -482,7 +493,7 @@ function vectorsForScopeWithCache(
 
 function scopeCount(db: Database, scopeCte: string, params: QueryParam[]): number {
   return (
-    economicsRow<{ count: number }>(
+    queryRow<{ count: number }>(
       db,
       `${scopeCte} SELECT COUNT(*) AS count FROM scoped_session`,
       params,
@@ -498,7 +509,7 @@ function cachedVectorsForScope(
 ): SessionEconomicsVector[] {
   throwIfEconomicsCancelled(cancelled);
   const versionParam = `?${params.length + 1}`;
-  const rows = economicsRows<{
+  const rows = queryRows<{
     session_id: number;
     vector_json: string;
     started_at: string | null;
@@ -569,7 +580,7 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
 }
 
 function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
-  runEconomicsStatement(
+  runStatement(
     db,
     `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)
      VALUES (?1, ?2, ?3, datetime('now'))
@@ -586,7 +597,7 @@ function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): voi
  * the ingest-time tool_call linkage. The scope-first join is intentional: it
  * prevents SQLite from scanning the whole block table for a single session. */
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
-  return economicsRows<BlockRow>(
+  return queryRows<BlockRow>(
     db,
     `${scopeCte}
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
@@ -596,8 +607,16 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
                    THEN COALESCE(b.tool_input, tc.input) END AS tool_input,
               CASE WHEN b.type = 'tool_result'
                    THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
+                   -- An agent message's routing metadata outweighs its text,
+                   -- and only the text reaches the model.
+                   WHEN b.type = 'other' AND json_valid(b.text)
+                        AND json_extract(b.text, '$.type') = 'agent_message'
+                   THEN (SELECT COALESCE(SUM(length(CAST(json_extract(c.value, '$.text') AS BLOB))), 0)
+                         FROM json_each(b.text, '$.content') c)
                    ELSE COALESCE(length(CAST(b.text AS BLOB)), 0)
-              END AS text_bytes
+              END AS text_bytes,
+              CASE WHEN b.type = 'other' AND json_valid(b.text)
+                   THEN json_extract(b.text, '$.type') END AS other_kind
        FROM scoped_session fs
        CROSS JOIN block b INDEXED BY idx_block_session
        JOIN message m ON m.id = b.message_id
@@ -613,7 +632,7 @@ function vectorsForScope(
   scopeCte: string,
   params: QueryParam[],
 ): SessionEconomicsVector[] {
-  const sessions = economicsRows<SessionRow>(
+  const sessions = queryRows<SessionRow>(
     db,
     `${scopeCte}
        SELECT s.id, s.tool, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
@@ -644,7 +663,9 @@ function vectorsForScope(
   // input for the block types whose bucket depends on the command being run.
   // Ordering (session, seq, ordinal) lets us place each block before/after the
   // session's first file edit.
-  const blocks = blockRowsForScope(db, scopeCte, params);
+  const blocks = blockRowsForScope(db, scopeCte, params).filter(
+    (block) => blockActivity(block) !== "skip",
+  );
   const boundaries = firstEditSeqBySession(blocks);
   const blocksBySession = groupBy(blocks, (block) => block.session_id);
   for (const [sessionId, sessionBlocks] of blocksBySession) {
@@ -652,6 +673,7 @@ function vectorsForScope(
     if (vector != null) {
       allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
       allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries, vector.latency);
+      allocateAgentMessages(sessionId, sessionBlocks, vector.buckets, boundaries);
     }
   }
   for (const vector of vectorBySession.values()) {
@@ -660,7 +682,7 @@ function vectorsForScope(
     }
   }
 
-  const results = economicsRows<ResultRow>(
+  const results = queryRows<ResultRow>(
     db,
     `${scopeCte}
        SELECT t.session_id, t.tool_name, t.input,
@@ -862,7 +884,9 @@ function allocateLatency(
         latency,
       );
     }
-    previous = at;
+    // Codex backdates parallel MCP calls, so measure from the latest time seen
+    // or overlapping spans count twice.
+    previous = previous == null ? at : Math.max(previous, at);
   }
 }
 
@@ -903,16 +927,82 @@ function distributeLatency(
   const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   for (const item of weighted) {
     const shareMs = ms * (item.weight / totalWeight);
-    if (item.block.role === "user" && item.block.type === "text") {
+    const activity = blockActivity(item.block);
+    if (activity === "waiting") {
       latency.waitingOnUserMs += shareMs;
+    } else if (activity !== "skip") {
+      addLatency(buckets, activity, shareMs, phase);
+    }
+  }
+}
+
+// Kept records that are neither model output nor a tool call. Messages from
+// other agents and compacted history are input the model reads, like an Agent or
+// SendMessage result. Anything else kept with role "other" (CLI notices, record
+// types the parser does not recognize) and model-fallback notices are harness
+// bookkeeping that never reached the model.
+const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
+
+/** Where a block's time goes: an activity bucket, the user's turn, or nowhere.
+ * Skipped blocks are dropped before allocation, so they carry no generation,
+ * window volume, or time, and the gap around them closes on the next message. */
+function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
+  if (
+    block.type === "tool_result" &&
+    isUserQuestionTool(block.tool_name, block.tool_input ?? undefined)
+  ) {
+    // A question's answer arrives when the user replies, so the gap before it
+    // is the user deciding, like the gap before a typed prompt. The question
+    // itself stays communicating.
+    return "waiting";
+  }
+  if (block.role === "user" && block.type !== "tool_result") {
+    // Text, and any image or document the user attached to the prompt.
+    return "waiting";
+  }
+  if (block.role === "other") {
+    return MODEL_INPUT_KINDS.has(block.other_kind ?? "") ? "context" : "skip";
+  }
+  if (block.role === "system") {
+    // Instructions the harness injects (Codex developer messages, AGENTS.md,
+    // the environment block). The gap before one belongs to whatever the next
+    // message is: the user's prompt it precedes, or the model's next step.
+    return "skip";
+  }
+  if (block.type === "other") {
+    if (block.other_kind === "fallback") {
+      return "skip";
+    }
+    if (block.role === "tool") {
+      // An image returned alongside a tool result.
+      return "context";
+    }
+  }
+  return blockBucket(block.type, block.tool_name, block.tool_input);
+}
+
+/** A message from another agent enters the window as input, like the result of
+ * an Agent or SendMessage call, so its text counts toward context volume. */
+function allocateAgentMessages(
+  sessionId: number,
+  blocks: BlockRow[],
+  buckets: Map<ActivityBucket, MutableBucket>,
+  boundaries: Map<number, number>,
+): void {
+  const entry = buckets.get("context");
+  if (entry == null) {
+    return;
+  }
+  for (const block of blocks) {
+    if (block.role !== "other" || block.other_kind !== "agent_message") {
       continue;
     }
-    addLatency(
-      buckets,
-      blockBucket(item.block.type, item.block.tool_name, item.block.tool_input),
-      shareMs,
-      phase,
-    );
+    const tokens = block.text_bytes / CHARS_PER_TOKEN;
+    entry.contextWindow += tokens;
+    entry.sessions.add(sessionId);
+    if (phaseOf(boundaries, sessionId, block.seq) === "orientation") {
+      entry.windowOrientation += tokens;
+    }
   }
 }
 
@@ -1019,7 +1109,19 @@ function distribute(
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
 ): void {
-  if (tokens <= 0 || blocks.length === 0) {
+  if (tokens <= 0) {
+    return;
+  }
+  if (blocks.length === 0) {
+    // Blockless output is still model output, so it counts as communicating
+    // instead of vanishing from generation.
+    addBucket(
+      buckets,
+      "communicating",
+      tokens,
+      sessionId,
+      boundaries.has(sessionId) ? "implementation" : "orientation",
+    );
     return;
   }
   const weighted = blocks.map((block) => ({
@@ -1087,30 +1189,21 @@ function emptyLatency(): MutableLatency {
   return { waitingOnUserMs: 0 };
 }
 
-function phasesFor(entry: MutableBucket | undefined): Record<Phase, PhaseAmounts> {
-  const gen = entry?.generation ?? 0;
-  const win = entry?.contextWindow ?? 0;
-  const cost = entry?.cost ?? 0;
-  const genO = entry?.genOrientation ?? 0;
-  const winO = entry?.windowOrientation ?? 0;
-  const costO = entry?.costOrientation ?? 0;
-  const active = entry?.activeMs ?? 0;
-  const activeO = entry?.activeMsOrientation ?? 0;
-  return {
-    orientation: {
-      generation_tokens: Math.round(genO),
-      context_window_tokens: Math.round(winO),
-      estimated_cost_usd: costO,
-      active_ms: Math.round(activeO),
-    },
-    implementation: {
-      generation_tokens: Math.round(gen - genO),
-      context_window_tokens: Math.round(win - winO),
-      estimated_cost_usd: cost - costO,
-      active_ms: Math.round(active - activeO),
-    },
-  };
-}
+type CountKey = "generation_tokens" | "context_window_tokens" | "active_ms";
+
+type MutableAmount =
+  | "generation"
+  | "contextWindow"
+  | "activeMs"
+  | "genOrientation"
+  | "windowOrientation"
+  | "activeMsOrientation";
+
+const COUNTS: { key: CountKey; total: MutableAmount; orientation: MutableAmount }[] = [
+  { key: "generation_tokens", total: "generation", orientation: "genOrientation" },
+  { key: "context_window_tokens", total: "contextWindow", orientation: "windowOrientation" },
+  { key: "active_ms", total: "activeMs", orientation: "activeMsOrientation" },
+];
 
 function finish(
   buckets: Map<ActivityBucket, MutableBucket>,
@@ -1119,26 +1212,57 @@ function finish(
   waitingOnUserMs = 0,
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
-  const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket) => {
-    const entry = buckets.get(bucket);
-    const row: TokenEconomicsBucket = {
+  const entries = ACTIVITY_BUCKETS.map((bucket) => buckets.get(bucket));
+  // Rounding each figure on its own lets rows and phases drift from the totals.
+  // Round each total once, then apportion it to rows and each row to phases.
+  const counts = {} as Record<CountKey, { total: number; rows: number[]; phases: number[][] }>;
+  for (const { key, total, orientation } of COUNTS) {
+    const raw = entries.map((entry) => Math.max(0, entry?.[total] ?? 0));
+    const sum = Math.round(raw.reduce((acc, value) => acc + value, 0));
+    const rows = apportion(raw, sum);
+    const phases = entries.map((entry, index) => {
+      const whole = raw[index] ?? 0;
+      const early = Math.min(whole, Math.max(0, entry?.[orientation] ?? 0));
+      return apportion([early, whole - early], rows[index] ?? 0);
+    });
+    counts[key] = { total: sum, rows, phases };
+  }
+  const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket, index) => {
+    const entry = entries[index];
+    const count = (key: CountKey) => counts[key].rows[index] ?? 0;
+    const phase = (key: CountKey, side: 0 | 1) => counts[key].phases[index]?.[side] ?? 0;
+    const cost = entry?.cost ?? 0;
+    const costOrientation = entry?.costOrientation ?? 0;
+    return {
       bucket,
-      generation_tokens: Math.round(entry?.generation ?? 0),
-      context_window_tokens: Math.round(entry?.contextWindow ?? 0),
-      estimated_cost_usd: entry?.cost ?? 0,
+      generation_tokens: count("generation_tokens"),
+      context_window_tokens: count("context_window_tokens"),
+      estimated_cost_usd: cost,
       tool_calls: entry?.toolCalls ?? 0,
       sessions: entry?.sessions.size ?? 0,
-      cost_share: share(entry?.cost ?? 0, totalCost),
-      active_ms: Math.round(entry?.activeMs ?? 0),
+      cost_share: share(cost, totalCost),
+      active_ms: count("active_ms"),
+      phases: {
+        orientation: {
+          generation_tokens: phase("generation_tokens", 0),
+          context_window_tokens: phase("context_window_tokens", 0),
+          estimated_cost_usd: costOrientation,
+          active_ms: phase("active_ms", 0),
+        },
+        implementation: {
+          generation_tokens: phase("generation_tokens", 1),
+          context_window_tokens: phase("context_window_tokens", 1),
+          estimated_cost_usd: cost - costOrientation,
+          active_ms: phase("active_ms", 1),
+        },
+      },
     };
-    row.phases = phasesFor(entry);
-    return row;
   });
-  const activeMs = rows.reduce((sum, row) => sum + row.active_ms, 0);
+  const activeMs = counts.active_ms.total;
   const waitingMs = Math.round(waitingOnUserMs);
   const totals: TokenEconomics["totals"] = {
-    generation_tokens: rows.reduce((sum, row) => sum + row.generation_tokens, 0),
-    context_window_tokens: rows.reduce((sum, row) => sum + row.context_window_tokens, 0),
+    generation_tokens: counts.generation_tokens.total,
+    context_window_tokens: counts.context_window_tokens.total,
     estimated_cost_usd: totalCost,
     input_cost_usd: inputCost,
     output_cost_usd: outputCost,
@@ -1200,8 +1324,4 @@ function groupBy<T, K>(items: T[], keyFor: (item: T) => K): Map<K, T[]> {
     }
   }
   return groups;
-}
-
-function byteLength(value: string): number {
-  return encoder.encode(value).length;
 }

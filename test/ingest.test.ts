@@ -3,16 +3,21 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { resetSync } from "@logtape/logtape";
 import { closeDb, openDb } from "../src/db.ts";
 import {
   discover,
   discoverSourcePaths,
   INGEST_PIPELINE_REVISION,
   type IngestConfig,
+  lineCount,
+  materializeMissingReasoningEfforts,
   resolveSubagentParents,
+  seedModelPricing,
   sync,
   upsertSession,
 } from "../src/ingest.ts";
+import { configureLogging } from "../src/logging.ts";
 import { getSession, listSessions } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
@@ -90,6 +95,105 @@ function canonicalizeRows(value: unknown, dir: string): unknown {
 }
 
 describe("upsertSession", () => {
+  test("stray results cannot answer a later reuse of the same call id", () => {
+    const db = openFreshDb(freshCase());
+    try {
+      const parsed = parseClaudeSession(
+        "stray-results",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id-with-strays.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/strays.jsonl", 1, 2);
+      expect(
+        db
+          .query(
+            "SELECT tool_name, output_preview, is_error, has_result, duration_ms FROM tool_call WHERE session_id = ?1 ORDER BY id",
+          )
+          .all(id),
+      ).toEqual([
+        {
+          tool_name: "Read",
+          output_preview: "read",
+          is_error: 0,
+          has_result: 1,
+          duration_ms: 1000,
+        },
+        {
+          tool_name: "Edit",
+          output_preview: "bad edit",
+          is_error: 1,
+          has_result: 1,
+          duration_ms: 1000,
+        },
+        {
+          tool_name: "Write",
+          output_preview: null,
+          is_error: null,
+          has_result: 0,
+          duration_ms: null,
+        },
+      ]);
+      const results = getSession(db, id)
+        ?.messages.flatMap((m) => m.blocks)
+        .filter((b) => b.block_type === "tool_result");
+      expect(results?.map((b) => b.tool_name)).toEqual([null, "Read", null, "Edit"]);
+      expect(results).toHaveLength(4);
+    } finally {
+      db.close();
+    }
+  });
+  test("pairs reused call ids one-to-one, preserving outcome, volume, time, and buckets", () => {
+    const db = openFreshDb(freshCase());
+    try {
+      const parsed = parseClaudeSession(
+        "reused-ids",
+        readFileSync(join(import.meta.dir, "fixtures", "reused-tool-id.jsonl"), "utf8"),
+      );
+      const id = upsertSession(db, parsed, "/synthetic/reused.jsonl", 1, 2);
+      expect(
+        db
+          .query(
+            "SELECT tool_name, output_bytes, is_error, has_result, duration_ms FROM tool_call WHERE session_id = ?1 ORDER BY id",
+          )
+          .all(id),
+      ).toEqual([
+        { tool_name: "Read", output_bytes: 4, is_error: 0, has_result: 1, duration_ms: 2000 },
+        { tool_name: "Edit", output_bytes: 8, is_error: 1, has_result: 1, duration_ms: 5000 },
+        {
+          tool_name: "Write",
+          output_bytes: null,
+          is_error: null,
+          has_result: 0,
+          duration_ms: null,
+        },
+      ]);
+      const detail = getSession(db, id);
+      expect(
+        detail?.messages
+          .flatMap((m) => m.blocks)
+          .filter((b) => b.block_type === "tool_result")
+          .map((b) => b.tool_name),
+      ).toEqual(["Read", "Edit"]);
+      const economics = tokenEconomicsForSession(db, id);
+      expect(economics?.totals.generation_tokens).toBe(60);
+      const context = economics?.buckets.find((b) => b.bucket === "context");
+      const code = economics?.buckets.find((b) => b.bucket === "code");
+      expect(context?.generation_tokens).toBe(10);
+      // Session Window includes the 600 billed input tokens, allocated over
+      // the 11 context and 52 code tokens of generation + result volume.
+      expect(context?.context_window_tokens).toBe(116);
+      expect(context?.tool_calls).toBe(1);
+      expect(code?.generation_tokens).toBe(50);
+      expect(code?.context_window_tokens).toBe(547);
+      expect(code?.tool_calls).toBe(2);
+      expect(economics?.totals.context_window_tokens).toBe(663);
+      // Replacing the session retains the same ID and derived totals.
+      expect(upsertSession(db, parsed, "/synthetic/reused.jsonl", 2, 3)).toBe(id);
+      expect(tokenEconomicsForSession(db, id)).toEqual(economics);
+    } finally {
+      db.close();
+    }
+  });
+
   test("classifies namespaced Codex MCP tool calls", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);
@@ -1394,6 +1498,55 @@ describe("sync", () => {
     db.close();
   });
 
+  test("re-derives overlapping parallel-call time once after the revision advances", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.codexDir, "sessions", "rollout-parallel.jsonl");
+    const mcpEnd = (callId: string, at: string, secs: number) =>
+      `{"type":"event_msg","timestamp":"2026-05-06T${at}.000Z","payload":{"type":"mcp_tool_call_end","call_id":"${callId}","invocation":{"server":"dosu","tool":"read_knowledge","arguments":{"query":"synthetic"}},"duration":{"secs":${secs},"nanos":0},"result":{"Ok":{"content":[{"type":"text","text":"synthetic result"}],"isError":false}}}}`;
+    // Both calls start at 10:00:10. Codex logs each when it ends, backdating
+    // the call by its duration, so the second call steps back in time.
+    write(
+      sourcePath,
+      `${[
+        '{"type":"session_meta","timestamp":"2026-05-06T10:00:00.000Z","payload":{"id":"sess-codex-parallel","cwd":"/synthetic/proj","originator":"codex_cli_rs","cli_version":"0.116.0","source":"cli","model_provider":"openai"}}',
+        '{"type":"response_item","timestamp":"2026-05-06T10:00:00.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Look up two things"}]}}',
+        mcpEnd("call-a", "10:00:50", 40),
+        mcpEnd("call-b", "10:01:00", 50),
+      ].join("\n")}\n`,
+    );
+    const db = openFreshDb(dir);
+    const read = () =>
+      db
+        .query(
+          "SELECT id, active_seconds FROM session WHERE source_session_id = 'sess-codex-parallel'",
+        )
+        .get() as { id: number; active_seconds: number };
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+    const derived = read();
+    expect(derived.active_seconds).toBe(60);
+    const economics = tokenEconomicsForSession(db, derived.id);
+    expect(economics?.totals.attributed_ms).toBe(60_000);
+
+    // Simulate the previous pipeline, which counted the overlap twice.
+    db.query("UPDATE session SET active_seconds = 100 WHERE id = ?1").run(derived.id);
+    db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
+      INGEST_PIPELINE_REVISION - 1,
+      sourcePath,
+    );
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
+    expect(read()).toEqual(derived);
+    expect(tokenEconomicsForSession(db, derived.id)).toEqual(economics);
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 0 });
+    expect(read()).toEqual(derived);
+    db.close();
+  });
+
   test("reports sync progress from discovery through each inspected source", () => {
     const dir = freshCase();
     const config: IngestConfig = {
@@ -2127,6 +2280,282 @@ describe("sync", () => {
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });
+    db.close();
+  });
+});
+
+const LEGACY_LINEAGE_ROWS = `
+  INSERT INTO project(path, name) VALUES ('/Users/dev/proj', 'proj');
+  INSERT INTO session(tool, source_session_id, project_id, title, started_at, ended_at, message_count, source_path)
+  VALUES ('claude_code', 'root', 1, 'root', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:01.000Z', 1, '/Users/dev/.claude/projects/proj/root.jsonl');
+  INSERT INTO session(tool, source_session_id, project_id, title, started_at, ended_at, message_count, source_path)
+  VALUES ('claude_code', 'agent-alpha', 1, 'alpha', '2026-05-01T10:00:02.000Z', '2026-05-01T10:00:03.000Z', 1, '/Users/dev/.claude/projects/proj/subagents/agent-alpha.jsonl');
+  INSERT INTO message(session_id, seq, role, timestamp, raw)
+  VALUES (1, 0, 'user', '2026-05-01T10:00:00.000Z', '{"sessionId":"root-session"}');
+  INSERT INTO message(session_id, seq, role, timestamp, raw)
+  VALUES (2, 0, 'user', '2026-05-01T10:00:02.000Z', '{"sessionId":"root-session","isSidechain":true,"agentId":"alpha"}');
+`;
+
+function alphaLineage(db: Database): unknown {
+  return db
+    .query(
+      `SELECT c.is_subagent, c.agent_id, p.source_session_id AS parent_key
+       FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+       WHERE c.source_session_id = 'agent-alpha'`,
+    )
+    .get();
+}
+
+describe("sync lineage gating", () => {
+  test("resolves lineage only once a sync has written or tombstoned something", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    const db = openFreshDb(dir);
+    db.exec(LEGACY_LINEAGE_ROWS);
+
+    // An unchanged archive keeps the links its last ingest resolved.
+    expect(sync(db, config)).toMatchObject({ scanned: 0, ingested: 0 });
+    expect(alphaLineage(db)).toEqual({ is_subagent: 0, agent_id: null, parent_key: null });
+
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1 });
+    expect(alphaLineage(db)).toEqual({ is_subagent: 1, agent_id: "alpha", parent_key: "root" });
+    db.close();
+  });
+
+  test("re-resolves lineage when the only change was a tombstoned source", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+    db.exec(LEGACY_LINEAGE_ROWS);
+    expect(sync(db, config)).toMatchObject({ ingested: 1 });
+    const sampleId = (
+      db.query("SELECT id FROM session WHERE source_path LIKE '%sample.jsonl'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(setSessionUserState(db, sampleId, "deleted")).toBe(true);
+    db.exec(`
+      UPDATE session SET is_subagent = 0, parent_session_id = NULL WHERE source_session_id = 'agent-alpha';
+      UPDATE ingest_source SET size = size + 1 WHERE path LIKE '%sample.jsonl';
+    `);
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(alphaLineage(db)).toEqual({ is_subagent: 1, agent_id: "alpha", parent_key: "root" });
+    db.close();
+  });
+
+  test("reads sidechain flags and ids from the first message by JSON type", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    db.exec(`
+      INSERT INTO session(tool, source_session_id, title, message_count, source_path) VALUES
+        ('claude_code', 'root', 'root', 1, '/p/root.jsonl'),
+        ('claude_code', 'numeric-flag', 'n', 1, '/p/numeric-flag.jsonl'),
+        ('claude_code', 'string-flag', 's', 1, '/p/string-flag.jsonl'),
+        ('claude_code', 'not-json', 'j', 1, '/p/not-json.jsonl'),
+        ('claude_code', 'numeric-root', 'r', 1, '/p/numeric-root.jsonl'),
+        ('claude_code', 'typed', 't', 1, '/p/typed.jsonl');
+      INSERT INTO message(session_id, seq, role, raw) VALUES
+        (1, 0, 'user', '{"sessionId":"root-session"}'),
+        (2, 0, 'user', '{"sessionId":"numeric-session","isSidechain":1,"agentId":"numeric"}'),
+        (3, 0, 'user', '{"sessionId":"string-session","isSidechain":"true","agentId":"string"}'),
+        (4, 0, 'user', 'not json {'),
+        (5, 0, 'user', '{"sessionId":42,"isSidechain":true,"agentId":7}'),
+        (6, 0, 'user', '{"sessionId":"root-session","isSidechain":true,"agentId":"typed-agent"}');
+      INSERT INTO message(session_id, seq, role, raw) VALUES
+        (2, 1, 'assistant', '{"isSidechain":true}');
+    `);
+
+    resolveSubagentParents(db);
+
+    expect(
+      db
+        .query(
+          `SELECT c.source_session_id AS id, c.is_subagent, c.agent_id, p.source_session_id AS parent
+           FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+           ORDER BY c.id`,
+        )
+        .all(),
+    ).toEqual([
+      { id: "root", is_subagent: 0, agent_id: null, parent: null },
+      { id: "numeric-flag", is_subagent: 0, agent_id: null, parent: null },
+      { id: "string-flag", is_subagent: 0, agent_id: null, parent: null },
+      { id: "not-json", is_subagent: 0, agent_id: null, parent: null },
+      { id: "numeric-root", is_subagent: 1, agent_id: null, parent: null },
+      { id: "typed", is_subagent: 1, agent_id: "typed-agent", parent: "root" },
+    ]);
+    db.close();
+  });
+
+  test("leaves resolved rows untouched on a repeat pass", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    db.exec(LEGACY_LINEAGE_ROWS);
+    resolveSubagentParents(db);
+    const before = db.query("SELECT total_changes() AS n").get() as { n: number };
+
+    resolveSubagentParents(db);
+
+    expect(db.query("SELECT total_changes() AS n").get()).toEqual(before);
+    expect(alphaLineage(db)).toEqual({ is_subagent: 1, agent_id: "alpha", parent_key: "root" });
+    db.close();
+  });
+});
+
+describe("sync bookkeeping", () => {
+  test("counts lines like a split on CRLF or LF after one trailing newline", () => {
+    const reference = (content: string): number =>
+      content === ""
+        ? 0
+        : (content.endsWith("\n") ? content.slice(0, -1) : content).split(/\r?\n/).length;
+    for (const content of [
+      "",
+      "\n",
+      "\n\n",
+      "a",
+      "a\n",
+      "a\nb",
+      "a\nb\n",
+      "a\r\nb",
+      "a\r\nb\r\n",
+      "a\r\n",
+      "\r\n\r\n",
+      "a\rb",
+      "a\n\nb\n\n",
+      "😀\n😀",
+    ]) {
+      expect(lineCount(content), JSON.stringify(content)).toBe(reference(content));
+    }
+  });
+
+  test("records line counts without a content digest", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    const source = fixture("claude", "sample.jsonl");
+    write(join(config.claudeDir, "proj", "sample.jsonl"), source);
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1 });
+
+    expect(db.query("SELECT line_count, hash FROM ingest_source").get()).toEqual({
+      line_count: source.replace(/\n$/, "").split(/\r?\n/).length,
+      hash: null,
+    });
+    expect(db.query("SELECT source_hash FROM session").get()).toEqual({ source_hash: null });
+    db.close();
+  });
+
+  test("clears a legacy digest when a source is re-ingested", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+    sync(db, config);
+    db.exec("UPDATE ingest_source SET hash = 'legacy-digest', size = size + 1");
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1 });
+
+    expect(db.query("SELECT hash FROM ingest_source").get()).toEqual({ hash: null });
+    db.close();
+  });
+
+  test("seeding model pricing only rewrites rows whose rates changed", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    seedModelPricing(db);
+    db.exec("UPDATE model_pricing SET updated_at = 'stamp'");
+    db.exec(
+      "UPDATE model_pricing SET input_per_mtok = input_per_mtok + 1 WHERE model = 'claude-sonnet'",
+    );
+    db.exec(
+      "UPDATE model_pricing SET source = 'operator', input_per_mtok = 999 WHERE model = 'claude-haiku'",
+    );
+
+    seedModelPricing(db);
+
+    const rewritten = (
+      db.query("SELECT model, updated_at, input_per_mtok FROM model_pricing").all() as {
+        model: string;
+        updated_at: string;
+        input_per_mtok: number;
+      }[]
+    ).filter((row) => row.updated_at !== "stamp");
+    expect(rewritten.map((row) => row.model)).toEqual(["claude-sonnet"]);
+    expect(rewritten[0]?.input_per_mtok).toBe(3);
+    expect(
+      db
+        .query("SELECT input_per_mtok, source FROM model_pricing WHERE model = 'claude-haiku'")
+        .get(),
+    ).toEqual({ input_per_mtok: 999, source: "operator" });
+    db.close();
+  });
+
+  test("keeps effort unchecked after a transient read failure but settles a missing source", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    write(
+      join(config.codexDir, "sessions", "rollout-effort.jsonl"),
+      [
+        '{"type":"session_meta","payload":{"id":"effort-session","cwd":"/repo"}}',
+        '{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+    sync(db, config);
+    const sourcePath = (
+      db.query("SELECT source_path FROM session").get() as { source_path: string }
+    ).source_path;
+    const reset = (path: string): void => {
+      db.query(
+        `UPDATE session
+         SET source_path = ?1, reasoning_effort = NULL, reasoning_effort_levels = '[]',
+             reasoning_effort_checked = 0`,
+      ).run(path);
+    };
+    const state = (): unknown =>
+      db.query("SELECT reasoning_effort, reasoning_effort_checked FROM session").get();
+
+    // Reading a directory fails with EISDIR rather than ENOENT.
+    reset(dirname(sourcePath));
+    expect(materializeMissingReasoningEfforts(db)).toBe(0);
+    expect(state()).toEqual({ reasoning_effort: null, reasoning_effort_checked: 0 });
+
+    reset(join(dir, "gone.jsonl"));
+    expect(materializeMissingReasoningEfforts(db)).toBe(1);
+    expect(state()).toEqual({ reasoning_effort: null, reasoning_effort_checked: 1 });
+
+    reset(sourcePath);
+    expect(materializeMissingReasoningEfforts(db)).toBe(1);
+    expect(state()).toEqual({ reasoning_effort: "xhigh", reasoning_effort_checked: 1 });
+    db.close();
+  });
+
+  test("logs why a source could not be read", () => {
+    const dir = freshCase();
+    const config: IngestConfig = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex") };
+    const sourcePath = join(config.claudeDir, "proj", "sample.jsonl");
+    write(sourcePath, fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+    db.exec("ALTER TABLE ingest_source RENAME TO ingest_source_gone");
+
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    let report: ReturnType<typeof sync>;
+    try {
+      report = sync(db, config);
+    } finally {
+      resetSync();
+    }
+
+    expect(report).toMatchObject({ scanned: 1, ingested: 0, failed: 1 });
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      level: "WARN",
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": sourcePath,
+    });
     db.close();
   });
 });

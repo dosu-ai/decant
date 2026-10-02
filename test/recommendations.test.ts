@@ -15,6 +15,7 @@ import {
   signals,
 } from "../src/recommendations.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
+import { toolUsage } from "../src/stats.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-recommendations-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -1009,6 +1010,29 @@ describe("recommendations", () => {
     expect(parseStatusFilter("implemented")).toBe("implemented");
     expect(parseStatusFilter("all")).toBe("all");
     expect(parseStatusFilter("bogus")).toBeNull();
+    db.close();
+  });
+});
+
+describe("signals with a shared tool ranking", () => {
+  test("slicing the uncapped ranking matches the capped query, ties included", () => {
+    const db = base();
+    const insert = db.prepare(
+      "INSERT INTO tool_call(session_id, tool_kind, tool_name, is_error) VALUES (1, 'builtin', ?1, 0)",
+    );
+    for (let index = 0; index < 520; index += 1) {
+      for (let call = 0; call <= index % 3; call += 1) {
+        insert.run(`tool-${String(index).padStart(3, "0")}`);
+      }
+    }
+    seedTool(db, "Bash", "builtin", null, 250, 0);
+    const from = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+
+    const uncapped = toolUsage(db, false, Number.MAX_SAFE_INTEGER, { from });
+
+    expect(uncapped.length).toBeGreaterThan(500);
+    expect(uncapped.slice(0, 500)).toEqual(toolUsage(db, false, 500, { from }));
+    expect(signals(db, uncapped)).toEqual(signals(db));
     db.close();
   });
 });

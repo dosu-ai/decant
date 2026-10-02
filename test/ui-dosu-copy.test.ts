@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
-const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const badge = readFileSync(join(root, "src", "ui", "dosu-badge.ts"), "utf8");
 const readme = readFileSync(join(root, "README.md"), "utf8");
 const npmReadme = readFileSync(join(root, "npm", "decant", "README.md"), "utf8");
@@ -21,8 +22,8 @@ describe("Dosu product copy", () => {
     );
     expect(main).toContain("Version {versionLabel(config?.version)}");
     expect(main).not.toContain('label="Dosu suggestions"');
-    expect(main).toContain("localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY)");
-    expect(main).toContain('localStorage.setItem(DOSU_ANALYTICS_DISMISSAL_KEY, "1")');
+    expect(main).toContain("readStorage(DOSU_ANALYTICS_DISMISSAL_KEY)");
+    expect(main).toContain('writeStorage(DOSU_ANALYTICS_DISMISSAL_KEY, "1")');
     expect(badge).toContain('"Optimized"');
     expect(main).toContain('["summary", "dateBounds", "config"]');
     expect(main).toContain("Decant {versionLabel(data.config?.version)}");

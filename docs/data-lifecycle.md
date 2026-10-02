@@ -26,7 +26,7 @@ By default Decant discovers:
   a re-recorded message is stored once.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
-Unchanged files are skipped by metadata and content checks unless an updated
+Unchanged files are skipped by size and modification-time checks unless an updated
 ingest pipeline requires reprocessing them. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
@@ -38,6 +38,27 @@ The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
 session state. Deleting or rebuilding the archive does not delete the source
 JSONL files.
+
+## Trajectory exports
+
+`decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
+format from the normalized archive. It does not change session discovery or
+send data to Letta. Source labels are `claude-code`, `codex`, and `gemini-cli`.
+
+Exports preserve recorded tool success/failure in the optional `ok` field;
+when the source omits an authoritative outcome, the field stays absent.
+Decant assigns unique IDs to repeated calls and pairs their results in
+occurrence order, pairing only with calls already recorded. Orphan and surplus
+results cannot consume a later call's result slot. The export report counts
+renamed IDs, orphan and surplus results, omitted blocks, truncated output, and
+filled timestamps. The archive
+retains the original records and full tool output.
+
+The exported format is intended for model consumption: it omits harness
+instructions and unsupported blocks, caps tool arguments and results, and
+requires at least one user and assistant record. Use JSON export when you need
+Decant's session totals and retained normalized transcript rather than this
+filtered format.
 
 ## What the archive stores
 
@@ -80,6 +101,12 @@ ls -l ~/.decant/decant.db
 These are filesystem permissions, not encryption. The archive is a plain SQLite
 file, so anything that can read it can read every transcript in it, including a
 backup, a synced folder, or another process running as you.
+
+Terminal, agent, and IDE preferences saved from the UI live apart from the
+archive in `~/.config/decant/settings.json`, or under `DECANT_CONFIG_DIR` when
+set. The file is written at mode `0600`. When it exists but cannot be parsed,
+Decant uses the detected defaults and leaves it alone until the next save, which
+moves it aside as `settings.json.corrupt-<timestamp>` before writing a new one.
 
 ### Inspecting and removing it
 
@@ -231,6 +258,17 @@ Source logs are sufficient to rebuild transcript-derived state. Supported
 archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
+
+Session facets such as `active_seconds` are derived from the source file at
+ingest, so a correction to them reaches existing sessions through the
+pipeline-revision re-ingest and needs the source to still exist. Persisted
+economics vectors are versioned separately and recompute from the archive's
+own rows, so they refresh even when the source is gone.
+
+Subagent parent links are resolved at the end of any sync that wrote or
+tombstoned a session. A sync that finds every source unchanged leaves the
+existing links alone, so a change to the inference rules ships with an ingest
+pipeline revision bump that re-derives them.
 
 Costs are materialized at ingest and reconciled with current pricing on every
 sync. This includes unchanged and archived sessions, even when their source

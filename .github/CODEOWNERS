@@ -15,3 +15,5 @@
 
 # The only network listener in the project.
 /src/server.ts @teedole
+/src/server/ @teedole
+/src/route-paths.ts @teedole

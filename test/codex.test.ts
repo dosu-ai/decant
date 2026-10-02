@@ -318,6 +318,35 @@ describe("parseCodexSession", () => {
     expect(unknown[0]?.error).toContain('"wormhole"');
   });
 
+  test("tool outputs sent as content arrays keep the text the model read", () => {
+    const output = [
+      { type: "input_text", text: "Script completed" },
+      { type: "input_text", text: "exit 0" },
+      { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+    ];
+    const content = JSON.stringify({
+      type: "response_item",
+      payload: { type: "custom_tool_call_output", call_id: "c1", output },
+    });
+    const block = parseCodexSession("arr", `${content}\n`, new Map()).session.messages[0]
+      ?.blocks[0];
+    expect(block?.toolResult).toBe(
+      `Script completed\nexit 0\n${JSON.stringify({ image_url: "data:image/png;base64,AAAA", type: "input_image" })}`,
+    );
+  });
+
+  test("reads the git branch from session_meta and skips bookkeeping records quietly", () => {
+    const content = [
+      '{"type":"session_meta","payload":{"id":"s1","cwd":"/w","git":{"branch":"feature/x","commit_hash":"abc"}}}',
+      '{"type":"world_state","payload":{}}',
+      '{"type":"token_usage_record","payload":{}}',
+      '{"type":"inter_agent_communication_metadata","payload":{}}',
+    ].join("\n");
+    const parsed = parseCodexSession("fallback", `${content}\n`, new Map());
+    expect(parsed.session.gitBranch).toBe("feature/x");
+    expect(parsed.issues).toEqual([]);
+  });
+
   test("response item variants cover every block kind", () => {
     const content = [
       '{"type":"response_item","timestamp":"2026-05-01T10:00:00Z","payload":{"type":"reasoning","summary":[],"content":[{"text":"deep thought"}]}}',

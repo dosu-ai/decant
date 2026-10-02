@@ -30,18 +30,18 @@ index plus local user state such as recommendations and session tombstones.
 
 | Area | Primary modules | Responsibility |
 | --- | --- | --- |
-| Composition | `src/cli.ts`, `src/config.ts` | Commands, global flags, output policy, configuration, and process lifecycle. |
+| Composition | `src/cli.ts`, `src/cli/`, `src/config.ts` | Commands, global flags, output policy, configuration, and process lifecycle. |
 | Sources | `src/sources/`, `src/model.ts` | Pure, print-free parsers and the normalized wire model. |
 | Ingest | `src/ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, normalization writes, derived facets, and ingest issues. |
 | Economics | `src/cost.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
 | Reads | `src/query.ts`, `src/stats.ts`, `src/recommendations.ts`, `src/distill.ts` | Session retrieval, aggregates, recommendations, and deterministic artifacts. |
-| Serve | `src/server.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
+| Serve | `src/server.ts`, `src/server/`, `src/route-paths.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
 | Presentation | `src/ui/`, `src/report/` | The local React application and self-contained HTML reports. |
 
 Core modules return data or structured failures. Human-readable output and exit
-codes belong in `src/cli.ts`; HTTP status and error-envelope policy belong in
-`src/server.ts`.
+codes belong in `src/cli.ts` and `src/cli/`; HTTP status and error-envelope
+policy belong in `src/server/`.
 
 ## Parsing and ingest
 
@@ -50,10 +50,11 @@ records while mapping provider-specific roles, blocks, usage, tool calls, and
 lineage into shared tables. Malformed lines and unknown record types become
 diagnostics rather than aborting the file.
 
-Ingest uses file metadata and hashes to avoid unnecessary work. A changed
+Ingest uses file size and modification time to avoid unnecessary work. A changed
 session is replaced transactionally, then Decant materializes context-window
 rollups and versioned per-session economics vectors. Costs are also stored at
-ingest, so later pricing edits do not mutate history.
+ingest and reconciled with current rates on every sync while transcripts and
+user state remain intact.
 
 The supported extension point is a new parser under `src/sources/`. Follow
 [Add a source](adding-a-source.md); it defines the privacy, capability,

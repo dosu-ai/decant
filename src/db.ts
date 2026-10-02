@@ -17,11 +17,12 @@ import {
   type SchemaManifest,
 } from "./schema-manifest.ts";
 
-/// Highest schema version this build understands. src/schema.sql is the
-/// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
-/// and is now the frozen baseline, so a fresh archive is created in one step
-/// and stamped with the full migration history.
-export const LATEST_SCHEMA_VERSION = 23;
+/**
+ * Highest schema version this build understands. src/schema.sql is the
+ * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
+ * fresh archive is created in one step and stamped with the full history.
+ */
+export const LATEST_SCHEMA_VERSION = 24;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -43,14 +44,48 @@ export class SchemaDriftError extends Error {
   }
 }
 
-/// Owner-only mode for the archive and its SQLite sidecars. The transcripts
-/// decant ingests sit in 0600 files under 0700 directories; the aggregate of
-/// all of them must not be readable by anyone the sources were not.
+export class SchemaTooNewError extends Error {
+  readonly code = "schema_too_new";
+
+  constructor(readonly version: number) {
+    super(
+      `archive schema version ${version} is newer than this build supports ` +
+        `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
+    );
+    this.name = "SchemaTooNewError";
+  }
+}
+
+export class SchemaTooOldError extends Error {
+  readonly code = "schema_too_old";
+
+  constructor(readonly version: number) {
+    super(
+      `archive schema version ${version} predates this build's baseline ` +
+        "(8); back up or move the archive aside before rebuilding it because " +
+        "manual recommendation state and source-pruned sessions may exist only in the database; " +
+        "then re-ingest from the source directories",
+    );
+    this.name = "SchemaTooOldError";
+  }
+}
+
+function assertSupportedSchemaVersion(version: number): void {
+  if (version > LATEST_SCHEMA_VERSION) {
+    throw new SchemaTooNewError(version);
+  }
+  if (version < 8) {
+    throw new SchemaTooOldError(version);
+  }
+}
+
+/**
+ * Owner-only mode for the archive and its SQLite sidecars: the aggregate of the
+ * transcripts must not be readable by anyone the 0600 sources were not.
+ */
 const ARCHIVE_FILE_MODE = 0o600;
 
-/// Owner-only mode for the directory holding the archive. Applied when
-/// decant creates the directory; an existing directory is left as the owner
-/// configured it.
+/** Applied when decant creates the archive directory; an existing one is left alone. */
 export const ARCHIVE_DIR_MODE = 0o700;
 
 /**
@@ -79,16 +114,11 @@ export function withImmediateTransaction<T>(db: Database, operation: () => T): T
 /**
  * Drop Bun's cached `db.query()` statements, then close the connection.
  *
- * `Database.query()` caches its Statement on the Database. In a short-lived
- * worker, `db.close()` can therefore defer the native close until GC; calling
- * `self.close()` immediately afterward tears down the worker while SQLite still
- * owns callbacks, producing SQLITE_MISUSE and invalid-connection-pointer
- * errors. Worker paths therefore use fresh `db.prepare()` statements and
- * finalize them at the operation boundary. Bun 1.3 also exposes
- * clearQueryCache() at runtime (its bundled declaration currently omits it), so
- * clear any route-style cached statements before asking SQLite to close.
- * `close(false)` is intentional: Bun reports SQLITE_BUSY for a clean WAL
- * connection after a large sync when forced close is requested.
+ * Cached statements defer the native close until GC, so a worker that calls
+ * `self.close()` right after `db.close()` tears down while SQLite still owns
+ * callbacks (SQLITE_MISUSE). clearQueryCache() exists at runtime but is missing
+ * from Bun's declarations. `close(false)` is intentional: a forced close reports
+ * SQLITE_BUSY for a clean WAL connection after a large sync.
  */
 export function closeDb(db: Database): void {
   (
@@ -100,16 +130,11 @@ export function closeDb(db: Database): void {
 }
 
 /**
- * Create a missing archive file owner-only, before SQLite gets the chance to
- * create it at its default 0644.
- *
- * `O_CREAT | O_EXCL` never writes through an existing name — a symlink planted
- * at the archive path fails it with EEXIST rather than being followed — and the
- * descriptor refers to an inode this call has just made, so closing it cannot
- * drop POSIX locks another SQLite connection in this process holds.
- *
- * Silent by design: the file usually exists already, and a directory decant
- * cannot write to is SQLite's error to report, not this helper's.
+ * Create a missing archive file owner-only before SQLite creates it at 0644.
+ * `O_EXCL` fails on a symlink planted at the path instead of following it, and
+ * the descriptor is for an inode this call just made, so closing it cannot drop
+ * POSIX locks another connection in this process holds. Silent by design: the
+ * file usually exists, and an unwritable directory is SQLite's error to report.
  */
 function createArchiveFile(path: string): void {
   try {
@@ -124,23 +149,15 @@ function createArchiveFile(path: string): void {
 /**
  * Best-effort permission tightening for an archive and its `-wal`/`-shm` sidecars.
  *
- * The `lstat` gate is not a security check; the two guarantees below are. It is
- * there because closing a descriptor releases *every* POSIX lock this process
- * holds on that file, which would silently strip the locks a live SQLite
- * connection in this process depends on, so a file that is already owner-only
- * is never opened at all.
- *
- * A mode change is only ever applied to a descriptor opened with `O_NOFOLLOW`,
- * so a symlink planted at a name decant is about to touch (the sidecars do not
- * exist yet on a fresh archive) fails the open with ELOOP instead of
- * redirecting the change onto its target; and the file type and ownership are
- * re-read from that same descriptor with `fstat`, so anything swapped in after
- * the `lstat` is rejected rather than chmod-ed. `O_NONBLOCK` keeps a planted
- * FIFO from parking the open.
- *
- * Silent by design: on a fresh archive the sidecars genuinely are absent, a
- * filesystem may not carry POSIX mode bits at all, and a path that turns out to
- * belong to someone else is not decant's to touch.
+ * The `lstat` gate is not a security check. It exists because closing a
+ * descriptor releases every POSIX lock this process holds on the file, which
+ * would strip the locks a live SQLite connection depends on, so an already
+ * owner-only file is never opened. The security guarantees are that the mode
+ * change only reaches a descriptor opened with `O_NOFOLLOW` (a planted symlink
+ * fails with ELOOP instead of redirecting the chmod), that type and ownership
+ * are re-read with `fstat` on that descriptor, and that `O_NONBLOCK` keeps a
+ * planted FIFO from parking the open. Silent by design: sidecars are absent on
+ * a fresh archive, and a path owned by someone else is not decant's to touch.
  */
 export function restrictArchiveFile(path: string): void {
   // Windows has neither POSIX mode bits nor O_NOFOLLOW; there is nothing safe
@@ -179,10 +196,9 @@ export function restrictArchiveFile(path: string): void {
   }
 }
 
-/// A directory, device, FIFO, or symlink at an archive name is a plant rather
-/// than an archive; extra hard links mean the same inode answers to a name
-/// decant knows nothing about; and another user's file is not decant's to
-/// change. None of those are things chmod should be pointed at.
+// A directory, device, FIFO, or symlink at an archive name is a plant, extra
+// hard links mean the inode answers to a name decant knows nothing about, and
+// another user's file is not decant's to change; chmod must reach none of them.
 function isOwnedRegularFile(stats: Stats, uid: number): boolean {
   return stats.isFile() && stats.uid === uid && stats.nlink === 1;
 }
@@ -272,20 +288,7 @@ function ensureSchema(db: Database): void {
       if (hasTable(db, "schema_migrations")) {
         const versions = readMigrationHistory(db);
         const current = versions.at(-1) ?? 0;
-        if (current > LATEST_SCHEMA_VERSION) {
-          throw new Error(
-            `archive schema version ${current} is newer than this build supports ` +
-              `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-          );
-        }
-        if (current < 8) {
-          throw new Error(
-            `archive schema version ${current} predates this build's baseline ` +
-              "(8); back up or move the archive aside before rebuilding it because " +
-              "manual recommendation state and source-pruned sessions may exist only in the database; " +
-              "then re-ingest from the source directories",
-          );
-        }
+        assertSupportedSchemaVersion(current);
         assertVersionSequence(db, versions, current);
         if (current === LATEST_SCHEMA_VERSION) {
           assertSchemaMatchesBaseline(db);
@@ -332,20 +335,7 @@ function ensureSchema(db: Database): void {
 
   const versions = readMigrationHistory(db);
   const current = versions.at(-1) ?? 0;
-  if (current > LATEST_SCHEMA_VERSION) {
-    throw new Error(
-      `archive schema version ${current} is newer than this build supports ` +
-        `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-    );
-  }
-  if (current < 8) {
-    throw new Error(
-      `archive schema version ${current} predates this build's baseline ` +
-        "(8); back up or move the archive aside before rebuilding it because " +
-        "manual recommendation state and source-pruned sessions may exist only in the database; " +
-        "then re-ingest from the source directories",
-    );
-  }
+  assertSupportedSchemaVersion(current);
   assertVersionSequence(db, versions, current);
   if (current < LATEST_SCHEMA_VERSION) {
     migrate(db, current);
@@ -362,20 +352,7 @@ function migrate(db: Database, current: number): void {
     // applied and stamped at most once.
     const lockedVersions = readMigrationHistory(db);
     const lockedCurrent = lockedVersions.at(-1) ?? 0;
-    if (lockedCurrent > LATEST_SCHEMA_VERSION) {
-      throw new Error(
-        `archive schema version ${lockedCurrent} is newer than this build supports ` +
-          `(${LATEST_SCHEMA_VERSION}); upgrade Decant`,
-      );
-    }
-    if (lockedCurrent < 8) {
-      throw new Error(
-        `archive schema version ${lockedCurrent} predates this build's baseline ` +
-          "(8); back up or move the archive aside before rebuilding it because " +
-          "manual recommendation state and source-pruned sessions may exist only in the database; " +
-          "then re-ingest from the source directories",
-      );
-    }
+    assertSupportedSchemaVersion(lockedCurrent);
     assertVersionSequence(db, lockedVersions, lockedCurrent);
     current = lockedCurrent;
     if (current < 9) {
@@ -731,6 +708,24 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (23, datetime('now'))",
+      ).run();
+    }
+    if (current < 24) {
+      // Serves resolveSubagentParents's spawner lookup by tool_use_id alone;
+      // idx_block_tool_use leads with session_id, so without this the planner
+      // scanned idx_block_type. The other two duplicate the leading columns of
+      // UNIQUE(tool, source_session_id). idx_message_parent stays even though
+      // parent_id is never written: it is the foreign-key child index, and
+      // without it every deleted message scans the whole message table.
+      if (hasTable(db, "block")) {
+        db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use'",
+        );
+      }
+      db.exec("DROP INDEX IF EXISTS idx_session_source");
+      db.exec("DROP INDEX IF EXISTS idx_session_tool");
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (24, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

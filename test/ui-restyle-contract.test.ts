@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readUiFile, readUiSource, sourceFrom } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
-const main = readFileSync(join(root, "src", "ui", "main.tsx"), "utf8");
+const main = readUiSource();
 const styles = readFileSync(join(root, "src", "ui", "styles.css"), "utf8");
 
 /** The classes the Venice restyle hangs its layout on. Each is written in JSX and
@@ -39,9 +40,7 @@ describe("restyle contract", () => {
     // reporting a card count of zero. Note the slice assumes the grid stays
     // inline in this component at six-space indent; extracting it would shift
     // the closing tag and inflate the count rather than fail cleanly.
-    const marker = main.indexOf('"stat-grid analytics-stat-grid"');
-    expect(marker).toBeGreaterThanOrEqual(0);
-    const markup = main.slice(marker);
+    const markup = sourceFrom(readUiFile("views/analytics.tsx"), '"stat-grid analytics-stat-grid"');
     const grid = markup.slice(0, markup.indexOf("\n      </div>"));
     const cards = grid.match(/<StatCard/g)?.length ?? 0;
     expect(cards).toBe(6);

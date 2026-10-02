@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { nearestUsableIndex } from "../src/ui/focus-rescue.ts";
+import { readUiFile, readUiSource, sourceFrom } from "./ui-source.ts";
 
 describe("nearestUsableIndex", () => {
   test("prefers the control before the one that just disabled itself", () => {
@@ -34,11 +33,8 @@ describe("nearestUsableIndex", () => {
 });
 
 describe("disabled focus rescue wiring", () => {
-  const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
-  const hook = main.slice(
-    main.indexOf("function useDisabledFocusRescue("),
-    main.indexOf("function PrivacyReviewLists("),
-  );
+  const main = readUiSource();
+  const hook = sourceFrom(readUiFile("focus.ts"), "function useDisabledFocusRescue(");
 
   test("App installs the rescue once, not per button", () => {
     expect(main).toContain("useDisabledFocusRescue();");

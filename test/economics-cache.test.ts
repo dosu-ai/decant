@@ -3,9 +3,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resetSync } from "@logtape/logtape";
 import { openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { configureLogging } from "../src/logging.ts";
 import { handleRequest } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
@@ -213,6 +215,44 @@ describe("economics cache", () => {
     expect(settled).toBe(false);
     releaseCleanup.resolve();
     await settling;
+    db.close();
+  });
+
+  test("logs a failed rebuild but not the abort dispose() causes", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    try {
+      const failing = new EconomicsCache({
+        dbPath,
+        db,
+        computeVectors: () => Promise.reject(new Error("worker exploded")),
+      });
+      failing.prewarm();
+      await failing.settled();
+
+      const aborted = new EconomicsCache({
+        dbPath,
+        db,
+        computeVectors: (_path, { signal }) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      });
+      aborted.prewarm();
+      aborted.dispose();
+      await aborted.settled();
+    } finally {
+      resetSync();
+    }
+
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      level: "WARN",
+      "event.name": "decant.economics.rebuild_failed",
+      "exception.message": "worker exploded",
+    });
     db.close();
   });
 

@@ -26,9 +26,13 @@ x-access-control:
     - DECANT_TRUST_DEFAULT_GATEWAY=1
   precedence_mode: replace
   host_header: The request URL hostname must be loopback, even on a non-loopback bind.
+  write_origin: |
+    A write that sends Origin must use a loopback origin whose host and port
+    equal the request's Host header, with default ports normalised; a
+    mismatch returns 403 cross_origin_write.
   non_loopback_writes: |
-    A trusted non-loopback peer must also send a loopback Origin or acceptable
-    Sec-Fetch-Site value; writes with neither header are rejected.
+    A trusted non-loopback peer must also send a matching loopback Origin or an
+    acceptable Sec-Fetch-Site value; writes with neither header are rejected.
   cidr_support: IPv4 CIDRs and exact IPv4 or IPv6 peer addresses.
   warning: Any admitted client can read or mutate the entire local archive.
 tags:
@@ -206,7 +210,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/LaunchResult"
         "400":
-          description: Invalid request, unsupported platform, or launch failure
+          description: Invalid request or key, unsupported platform, or launch failure
           content:
             application/json:
               schema:
@@ -225,7 +229,9 @@ paths:
       tags: [Launch]
       operationId: launchIde
       summary: Open a local project directory in the configured IDE
-      description: Launching is supported only on macOS.
+      description: >-
+        Launching is supported only on macOS. `dir` must be an absolute path that
+        matches a project path or root path already in the archive.
       requestBody:
         required: true
         content:
@@ -240,7 +246,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/LaunchResult"
         "400":
-          description: Invalid request, unsupported platform, missing directory, or launch failure
+          description: Invalid request, relative or unknown directory, unsupported platform, missing directory, or launch failure
           content:
             application/json:
               schema:
@@ -925,6 +931,13 @@ paths:
       tags: [Tools]
       operationId: listToolCalls
       summary: Browse individual tool calls newest first
+      description: |
+        Rows, `total`, and paging honor every filter, and `from`/`to` match
+        each call's own timestamp. `summary` describes the population behind
+        the Tools page cards instead: calls from visible sessions that started
+        inside `from`/`to`, the same scope as `/api/tools/usage`, narrowed by
+        `tool`, `server`, `session`, and `project` but not by `errors_only` or
+        `min_ms`.
       parameters:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/McpServer"
@@ -1199,6 +1212,7 @@ components:
     FileLimit:
       name: limit
       in: query
+      description: Maximum aggregate rows, capped by the server at 1000
       schema:
         type: integer
         minimum: 1
@@ -1240,7 +1254,7 @@ components:
     UsageLimit:
       name: limit
       in: query
-      description: Maximum aggregate rows; defaults to 50
+      description: Maximum aggregate rows; defaults to 50 and is capped by the server at 1000
       schema:
         type: integer
         minimum: 1
@@ -1516,6 +1530,8 @@ components:
           minLength: 1
         key:
           type: string
+          description: Recommendation key appended to the prompt as a mark instruction.
+          pattern: "^[A-Za-z0-9._:/-]{1,256}$"
       additionalProperties: false
     IdeLaunchRequest:
       type: object
@@ -1524,6 +1540,7 @@ components:
         dir:
           type: string
           minLength: 1
+          description: Absolute path of a project known to the archive.
       additionalProperties: false
     LaunchResult:
       type: object
@@ -2450,6 +2467,7 @@ components:
       required: [today, active_sessions, last_sync_at, sync_in_progress]
       properties:
         today:
+          description: Totals for sessions started during the server's local calendar day.
           $ref: "#/components/schemas/Totals"
         active_sessions:
           type: array
@@ -2653,6 +2671,9 @@ components:
       additionalProperties: false
     ToolCallSummary:
       type: object
+      description: |
+        Calls in session-start date scope, narrowed by tool, server, session,
+        and project filters only; `errors_only` and `min_ms` never apply.
       required: [calls, errors, p50_ms, p95_ms]
       properties:
         calls:

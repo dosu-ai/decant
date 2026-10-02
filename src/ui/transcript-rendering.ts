@@ -4,10 +4,10 @@ import { classifyTool } from "../tools.ts";
 export const TRANSCRIPT_COLLAPSE_LINES = 15;
 export const TRANSCRIPT_COLLAPSE_BYTES = 2 * 1024;
 export const TRANSCRIPT_PLAINTEXT_BYTES = 50 * 1024;
-export const TRANSCRIPT_DIFF_BYTES = 50 * 1024;
+const TRANSCRIPT_DIFF_BYTES = 50 * 1024;
 const UTF8_ENCODER = new TextEncoder();
 
-export const transcriptLanguages = [
+const transcriptLanguages = [
   "bash",
   "diff",
   "go",

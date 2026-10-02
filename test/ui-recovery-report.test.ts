@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { UI_ROUTE_PATHS } from "../src/route-paths.ts";
+import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
-const server = readFileSync(join(import.meta.dir, "..", "src", "server.ts"), "utf8");
+const main = readUiSource();
+const server = readFileSync(join(import.meta.dir, "..", "src", "server", "sync.ts"), "utf8");
 
 describe("coded UI recovery", () => {
   test("maps server codes to actions without rendering raw exception messages", () => {
@@ -27,9 +29,10 @@ describe("coded UI recovery", () => {
     expect(main).toContain('actionLabel: "Back to sessions"');
     expect(main).toMatch(/case "session_not_found":[\s\S]*?useSync: true/);
     expect(main).toContain('actionLabel: "View rebuild guide"');
-    const schemaTooOld = main.slice(
-      main.indexOf('case "schema_too_old":'),
-      main.indexOf('case "launch_unsupported_platform":'),
+    const schemaTooOld = sourceBetween(
+      main,
+      'case "schema_too_old":',
+      'case "launch_unsupported_platform":',
     );
     expect(schemaTooOld).not.toContain('actionHref: "/settings"');
     expect(main).toContain('typeof error.extras.command === "string"');
@@ -59,7 +62,7 @@ describe("coded UI recovery", () => {
       "const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice))",
     );
     expect(main).toContain("failed: { error: unknown; requestKey: string } | null");
-    expect(main).toContain('active === "Sessions" && sessionPageState.error != null');
+    expect(main).toContain('activeView === "sessions" && sessionPageState.error != null');
   });
 
   test("refreshes failed slices on reconnect without replacing healthy data", () => {
@@ -81,14 +84,14 @@ describe("coded UI recovery", () => {
   });
 
   test("adds recovery actions to empty Projects and Analytics states", () => {
-    expect(main).toMatch(/function ProjectsView[\s\S]*?Sync now/);
-    expect(main).toMatch(/function DailyPanel[\s\S]*?All time[\s\S]*?title="No data in range"/);
+    expect(readUiFile("views/projects.tsx")).toMatch(/function ProjectsView[\s\S]*?Sync now/);
+    expect(readUiFile("views/analytics.tsx")).toMatch(
+      /function DailyPanel[\s\S]*?All time[\s\S]*?title="No data in range"/,
+    );
   });
 
   test("file filters catch rejected requests and offer a retry", () => {
-    const start = main.indexOf("function FilesView(");
-    const end = main.indexOf("function SettingsView(", start);
-    const filesView = main.slice(start, end);
+    const filesView = sourceFrom(readUiFile("views/files.tsx"), "function FilesView(");
     expect(filesView).toContain(".catch((reason: unknown)");
     expect(filesView).toContain("<ApiFailureState");
     expect(filesView).toContain("setFilesRetryKey");
@@ -127,8 +130,8 @@ describe("report preview routes", () => {
     );
     expect(main).toContain("first user-prompt preview (up to 180 characters)");
     expect(main).toContain("Transcript messages beyond the disclosed prompt preview");
-    expect(server).toContain('"/reports/analytics": uiBundle');
-    expect(server).toContain('"/reports/session/:id": uiBundle');
+    expect(UI_ROUTE_PATHS).toContain("/reports/analytics");
+    expect(UI_ROUTE_PATHS).toContain("/reports/session/{id}");
   });
 });
 

@@ -1,6 +1,15 @@
 import { isPriceable } from "../cost.ts";
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import {
+  asBoolean,
+  asInteger,
+  asString,
+  byteLength,
+  canonicalJson,
+  get,
+  hasKey,
+  isObject,
+} from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -16,6 +25,14 @@ import {
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
+import {
+  block,
+  contentText,
+  countUnknown,
+  parseJsonLine,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
 const TITLE_META = new Set(["summary", "ai-title"]);
 
@@ -23,6 +40,11 @@ const TITLE_META = new Set(["summary", "ai-title"]);
 // sources. Keep their payloads opaque until Claude documents stable semantics.
 const IGNORED_JOURNAL_META = new Set([
   "agent-name",
+  "agent-setting",
+  "atis-latch",
+  "bridge-session",
+  "cost-state",
+  "fork-context-ref",
   "last-prompt",
   "permission-mode",
   "attachment",
@@ -33,19 +55,21 @@ const IGNORED_JOURNAL_META = new Set([
   "mode",
   "pr-link",
   "queue-operation",
+  "relocated",
   "world_state",
+  "worktree-state",
 ]);
+// Claude Code versions artifact ledgers by name (artifact-autoreact-ledger,
+// artifact-comment-monitor, ...); all of them are harness state.
+const IGNORED_JOURNAL_PREFIXES = ["artifact-"];
 
 const CHARS_PER_TOKEN = 4;
-const encoder = new TextEncoder();
 
 interface TurnAcc {
   output: number;
   visible: number;
   hasThinking: boolean;
 }
-
-type JsonObject = { [key: string]: Json };
 
 export interface ClaudeParseOptions {
   sourcePath?: string;
@@ -77,24 +101,13 @@ export function parseClaudeSession(
   let endedAt: string | null = null;
   let promptTitle: string | null = null;
   let metadataTitle: string | null = null;
+  let customTitle: string | null = null;
   let seq = 0;
-  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
+  const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo: index + 1,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
+    const value = parseJsonLine(line, index + 1, issues);
+    if (value === undefined) {
       continue;
     }
 
@@ -150,6 +163,12 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "result") {
       resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
+    } else if (typ === "custom-title") {
+      // The user renamed the session; the latest rename wins over everything.
+      const renamed = stringAt(value, "customTitle", "title");
+      if (renamed != null && renamed.trim() !== "") {
+        customTitle = truncate(renamed, 120);
+      }
     } else if (TITLE_META.has(typ)) {
       if (metadataTitle == null) {
         const metaTitle = stringAt(value, "summary", "title");
@@ -157,23 +176,17 @@ export function parseClaudeSession(
           metadataTitle = truncate(metaTitle, 120);
         }
       }
-    } else if (!IGNORED_JOURNAL_META.has(typ)) {
-      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
-      seen.count += 1;
-      unknownTypes.set(typ, seen);
+    } else if (
+      !IGNORED_JOURNAL_META.has(typ) &&
+      !IGNORED_JOURNAL_PREFIXES.some((prefix) => typ.startsWith(prefix))
+    ) {
+      countUnknown(unknownTypes, typ, index + 1);
       messages.push(simpleMessage(value, "other", seq));
       seq += 1;
     }
   }
 
-  for (const [typ, seen] of unknownTypes) {
-    issues.push({
-      code: "unknown_record_type",
-      lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); kept as role "other"`,
-      rawLine: null,
-    });
-  }
+  issues.push(...unknownTypeIssues(unknownTypes, 'kept as role "other"'));
 
   const messageTotals = emptyUsage();
   for (const message of messages) {
@@ -226,7 +239,7 @@ export function parseClaudeSession(
     // Claude emits ai-title after the first user record in normal sessions.
     // Keep the human prompt as the display title and use its metadata only
     // when the session has no usable prompt.
-    title: promptTitle ?? metadataTitle,
+    title: customTitle ?? promptTitle ?? metadataTitle,
     cwd,
     gitBranch,
     model,
@@ -343,16 +356,13 @@ function parseUser(value: Json, seq: number): NormalizedMessage {
         blocks.push(textBlock(ordinal, asString(get(item, "text")) ?? ""));
       } else if (blockType === "tool_result") {
         hasToolResult = true;
-        blocks.push({
-          ordinal,
-          blockType: "tool_result",
-          text: null,
-          toolName: null,
-          toolUseId: asString(get(item, "tool_use_id")),
-          toolInput: undefined,
-          toolResult: stringifyContent(get(item, "content")),
-          isError: asBoolean(get(item, "is_error")),
-        });
+        blocks.push(
+          block(ordinal, "tool_result", {
+            toolUseId: asString(get(item, "tool_use_id")),
+            toolResult: contentText(get(item, "content")),
+            isError: asBoolean(get(item, "is_error")),
+          }),
+        );
       } else {
         blocks.push(otherBlock(ordinal, item));
       }
@@ -383,27 +393,15 @@ function parseAssistant(value: Json, seq: number): NormalizedMessage {
       if (blockType === "text") {
         blocks.push(textBlock(ordinal, asString(get(item, "text")) ?? ""));
       } else if (blockType === "thinking") {
-        blocks.push({
-          ordinal,
-          blockType: "thinking",
-          text: asString(get(item, "thinking")),
-          toolName: null,
-          toolUseId: null,
-          toolInput: undefined,
-          toolResult: null,
-          isError: null,
-        });
+        blocks.push(block(ordinal, "thinking", { text: asString(get(item, "thinking")) }));
       } else if (blockType === "tool_use") {
-        blocks.push({
-          ordinal,
-          blockType: "tool_use",
-          text: null,
-          toolName: asString(get(item, "name")),
-          toolUseId: asString(get(item, "id")),
-          toolInput: hasKey(item, "input") ? get(item, "input") : undefined,
-          toolResult: null,
-          isError: null,
-        });
+        blocks.push(
+          block(ordinal, "tool_use", {
+            toolName: asString(get(item, "name")),
+            toolUseId: asString(get(item, "id")),
+            toolInput: hasKey(item, "input") ? get(item, "input") : undefined,
+          }),
+        );
       } else {
         blocks.push(otherBlock(ordinal, item));
       }
@@ -480,54 +478,11 @@ function previousOutput(messages: NormalizedMessage[], index: number): number {
 }
 
 function textBlock(ordinal: number, text: string): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "text",
-    text,
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
+  return block(ordinal, "text", { text });
 }
 
 function otherBlock(ordinal: number, item: Json): NormalizedBlock {
-  return {
-    ordinal,
-    blockType: "other",
-    text: canonicalJson(item),
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  };
-}
-
-function stringifyContent(content: Json | undefined): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => {
-        const text = asString(get(item, "text"));
-        return text ?? canonicalJson(item);
-      })
-      .join("\n");
-  }
-  if (content !== undefined) {
-    return canonicalJson(content);
-  }
-  return "";
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
+  return block(ordinal, "other", { text: canonicalJson(item) });
 }
 
 function stringAt(value: Json | undefined, ...keys: string[]): string | null {
@@ -538,30 +493,6 @@ function stringAt(value: Json | undefined, ...keys: string[]): string | null {
     }
   }
   return null;
-}
-
-function hasKey(value: Json, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asBoolean(value: Json | undefined): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
-}
-
-function byteLength(value: string): number {
-  return encoder.encode(value).length;
 }
 
 function isSubagentPath(path: string | undefined): boolean {

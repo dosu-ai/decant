@@ -46,11 +46,11 @@ export function toMarkdown(detail: SessionDetail): string {
 const TRAJECTORY_SOURCES: Record<string, string> = {
   claude_code: "claude-code",
   codex: "codex",
+  gemini: "gemini-cli",
 };
 
-/** Their core.ts NOISE_PREFIXES, applied to user text so downstream consumers
- * see the cleaning trajectory-native pipelines expect. The last entry has no
- * closing ">" by design — it matches attribute forms. */
+/** Stripped from user text so downstream trajectory pipelines see it cleaned.
+ * The last entry has no closing ">" by design — it matches attribute forms. */
 const TRAJECTORY_NOISE_PREFIXES = [
   "<local-command-caveat>",
   "<command-name>",
@@ -58,6 +58,15 @@ const TRAJECTORY_NOISE_PREFIXES = [
   "<local-command-stdout>",
   "<local-command-stderr>",
   "<task-notification",
+];
+
+/** Codex writes its harness context (developer instructions, environment
+ * snapshots) as `user` messages. Their adapter drops these, and so do we. */
+const CODEX_INJECTED_PREFIXES = [
+  "<environment_context>",
+  "<user_instructions>",
+  "<permissions instructions>",
+  "<turn_context>",
 ];
 
 const TRAJECTORY_ARGS_MAX = 20_000;
@@ -167,13 +176,9 @@ function trajectoryCollectLeaves(value: unknown, leaves: TrajectoryLeaf[]): void
  * string leaves (many small fields, or bulk in the keys) and only a `_raw` wrap
  * can help. `parsed` is mutated either way.
  *
- * Their core.ts has two of these; this follows the strictly decreasing one
- * (`shrinkObjectArgsSafely`), not the legacy loop whose hard 2 000-character
- * per-leaf floor can spin forever or return an over-cap object — the bug their
- * PARITY.md records as a 21,560-character object escaping a 20,000 cap. Two
- * things make termination unconditional here: a leaf no longer than the marker
- * cannot shrink usefully, so shrinking stops rather than retrying it, and an
- * iteration that shortens nothing gives up instead of looping. */
+ * Termination is unconditional: a leaf no longer than the marker cannot shrink
+ * usefully, so shrinking stops rather than retrying it, and an iteration that
+ * shortens nothing gives up instead of looping. */
 function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
   const leaves: TrajectoryLeaf[] = [];
   trajectoryCollectLeaves(parsed, leaves);
@@ -226,12 +231,33 @@ function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
  * over-cap object keeps its field structure by shrinking its string leaves, and
  * degrades to a truncated {"_raw": ...} wrap only if that cannot reach the
  * cap. */
-function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): string {
+function trajectoryArgs(
+  toolInput: string | null,
+  report: TrajectoryReport,
+  codex: boolean,
+): string {
   let parsed: unknown;
   try {
     parsed = toolInput == null ? {} : JSON.parse(toolInput);
   } catch {
     parsed = undefined;
+  }
+  // tool_input is stored as canonical JSON, so a string input arrives as a JSON
+  // string literal. Codex function_call arguments are themselves serialized
+  // JSON; custom tools (exec, apply_patch) carry free text, which their adapter
+  // files under `input`. Unwrap once so neither is emitted double-encoded.
+  let text: string | null = null;
+  if (typeof parsed === "string") {
+    text = parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    const isObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+    if (!isObject && codex) {
+      parsed = { input: text };
+    }
   }
   const isPlainObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
   const serialized = isPlainObject ? JSON.stringify(parsed) : null;
@@ -247,7 +273,7 @@ function trajectoryArgs(toolInput: string | null, report: TrajectoryReport): str
   }
   report.tool_args_wrapped += 1;
   // `serialized` predates any leaf shrinking, so the wrap carries the original.
-  const raw = serialized ?? toolInput ?? "";
+  const raw = serialized ?? text ?? toolInput ?? "";
   // Budget for {"_raw":""} scaffolding + escaping: truncate the payload, then
   // shrink until the serialized wrapper fits (escaping can expand length).
   let budget = TRAJECTORY_ARGS_MAX - 12;
@@ -268,6 +294,7 @@ interface TrajectorySessionRow {
 export interface TrajectoryReport {
   dropped_blocks: Record<string, number>;
   noise_user_records_dropped: number;
+  injected_context_dropped: number;
   orphan_tool_results_dropped: number;
   duplicate_tool_results_dropped: number;
   tool_call_ids_synthesized: number;
@@ -290,9 +317,35 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     .query("SELECT cwd, git_branch FROM session WHERE id = ?1")
     .get(sessionId) as TrajectorySessionRow | null;
 
+  const codex = detail.summary.tool === "codex";
+  const resultStatuses = new Map(
+    (
+      db
+        .query(`SELECT m.seq, b.ordinal, t.is_error FROM tool_call t
+      JOIN block b ON b.id = t.result_block_id JOIN message m ON m.id = b.message_id
+      WHERE t.session_id = ?1 AND t.is_error IS NOT NULL`)
+        .all(sessionId) as { seq: number; ordinal: number; is_error: number }[]
+    ).map((row) => [`${row.seq}:${row.ordinal}`, row.is_error === 0]),
+  );
+  // Codex developer messages are stored under role `user`; only the raw payload
+  // role tells them apart from what a person typed.
+  const developerSeqs = new Set(
+    codex
+      ? (
+          db
+            .query(
+              `SELECT seq FROM message
+               WHERE session_id = ?1 AND json_extract(raw, '$.payload.role') = 'developer'`,
+            )
+            .all(sessionId) as { seq: number }[]
+        ).map((m) => m.seq)
+      : [],
+  );
+
   const report: TrajectoryReport = {
     dropped_blocks: {},
     noise_user_records_dropped: 0,
+    injected_context_dropped: 0,
     orphan_tool_results_dropped: 0,
     duplicate_tool_results_dropped: 0,
     tool_call_ids_synthesized: 0,
@@ -306,9 +359,9 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   };
 
   // Pass 1: assign globally unique call ids in appearance order. A name already
-  // taken is renamed by probing `__dup<n>` upward until the candidate is unused
-  // (their core.ts move): a fixed `__dup2` would collide when the source itself
-  // contains an id that already looks like one of our renames. Each original id
+  // taken is renamed by probing `__dup<n>` upward until the candidate is unused:
+  // a fixed `__dup2` would collide when the source itself contains an id that
+  // already looks like one of our renames. Each original id
   // keeps a queue of the names it was assigned, so pass 2 reads the strings back
   // instead of recomputing a suffix it can no longer predict.
   const assignedByOriginal = new Map<string, string[]>();
@@ -347,7 +400,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   const records: unknown[] = [];
   const callTaken = new Map<string, number>(); // original id -> calls emitted
   const resultTaken = new Map<string, number>(); // original id -> results consumed
-  const answered = new Set<string>(); // assigned ids with a result already
   let lastTimestamp: string | null = null;
   let synthIndex = 0;
   // Their library always emits Date#toISOString() output; normalize source
@@ -407,6 +459,13 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
             report.noise_user_records_dropped += 1;
             continue;
           }
+          if (
+            developerSeqs.has(message.seq) ||
+            (codex && CODEX_INJECTED_PREFIXES.some((prefix) => trimmed.startsWith(prefix)))
+          ) {
+            report.injected_context_dropped += 1;
+            continue;
+          }
           records.push({ role: "user", content: text, timestamp: timestamp() });
           userCount += 1;
         } else if (message.role === "assistant") {
@@ -430,27 +489,29 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         records.push({
           role: "assistant",
           content: null,
-          tool_calls: [{ id: assigned, name, args: trajectoryArgs(block.tool_input, report) }],
+          tool_calls: [
+            { id: assigned, name, args: trajectoryArgs(block.tool_input, report, codex) },
+          ],
           timestamp: timestamp(),
         });
         assistantCount += 1;
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
         const queue = original == null ? undefined : assignedByOriginal.get(original);
-        if (original == null || queue == null) {
+        const emitted = original == null ? 0 : (callTaken.get(original) ?? 0);
+        if (original == null || queue == null || emitted === 0) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
         const taken = resultTaken.get(original) ?? 0;
-        // Pair with the call this result answers by position, reading back the
-        // name pass 1 assigned it. Queues are never empty, so the index holds.
-        const assigned = queue[Math.min(taken, queue.length - 1)] ?? original;
-        if (answered.has(assigned) && taken >= queue.length) {
+        // Only calls already emitted can receive a result. A surplus result
+        // must not consume the ID assigned to a future reuse of this call ID.
+        if (taken >= emitted) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }
+        const assigned = queue[taken] ?? original;
         resultTaken.set(original, taken + 1);
-        answered.add(assigned);
         const { text: content, truncated } = trajectoryTruncate(
           block.tool_result ?? "",
           TRAJECTORY_RESULT_MAX,
@@ -458,7 +519,14 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
         if (truncated) {
           report.tool_results_truncated += 1;
         }
-        records.push({ role: "tool", tool_call_id: assigned, content, timestamp: timestamp() });
+        const ok = resultStatuses.get(`${message.seq}:${block.ordinal}`);
+        records.push({
+          role: "tool",
+          tool_call_id: assigned,
+          content,
+          ...(ok == null ? {} : { ok }),
+          timestamp: timestamp(),
+        });
       } else {
         // Empty text/thinking land here too: no wire content, so they are
         // dropped and counted under their own block type.

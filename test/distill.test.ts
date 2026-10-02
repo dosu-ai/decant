@@ -7,11 +7,12 @@ import { openDb } from "../src/db.ts";
 import {
   classifyPhase,
   commentSafe,
-  DECANT_VERSION,
   decodeCommand,
+  defaultScriptOpts,
   hotContext,
   isDestructive,
   normalize,
+  parseFileOperation,
   patchBlock,
   redact,
   renderReplay,
@@ -26,6 +27,7 @@ import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-distill-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -127,6 +129,14 @@ describe("distill pure helpers", () => {
     expect(decodeCommand("Bash", "not json")).toBeNull();
   });
 
+  test("parses file operations and rejects unknown ones", () => {
+    for (const op of ["read", "edit", "write", "delete"] as const) {
+      expect(parseFileOperation(op)).toBe(op);
+    }
+    expect(parseFileOperation("rename")).toBeNull();
+    expect(parseFileOperation("")).toBeNull();
+  });
+
   test("normalizes paths, whitespace, and sibling boundaries", () => {
     expect(normalize("cd /Users/dev/proj/web && ls /Users/dev/proj", "/Users/dev/proj")).toBe(
       "cd $PROJECT_ROOT/web && ls $PROJECT_ROOT",
@@ -205,6 +215,45 @@ describe("distill timeline and renderers", () => {
     const secret = d.ops.find((op) => op.redacted);
     expect(secret?.raw).toContain("<REDACTED>");
     expect(secret?.raw).not.toContain("ghp_");
+    db.close();
+  });
+
+  test("success rates count only calls with a recorded result", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent)
+      VALUES (1, 'claude_code', 'rate-a', '2026-05-01T00:00:00Z', 0),
+             (2, 'codex', 'rate-b', '2026-05-02T00:00:00Z', 0);
+    `);
+    const insert = db.prepare(
+      `INSERT INTO tool_call(session_id, tool_kind, tool_name, input, is_error, ordinal)
+       VALUES (?1, 'builtin', 'Bash', ?2, ?3, ?4)`,
+    );
+    let ordinal = 0;
+    const call = (sessionId: number, command: string, isError: number | null) => {
+      insert.run(sessionId, JSON.stringify({ command }), isError, ordinal);
+      ordinal += 1;
+    };
+    for (let index = 0; index < 249; index += 1) {
+      call(1, "make test", 0);
+    }
+    call(1, "make test", 1);
+    call(2, "make test", null);
+    call(1, "make lint", null);
+    call(2, "make lint", null);
+    call(1, "make broken", 1);
+    call(2, "make broken", 1);
+
+    const d = timeline(db);
+    const rate = (command: string) => d.ops.find((op) => op.normalized === command)?.success_rate;
+    expect(rate("make test")).toBeCloseTo(249 / 250, 10);
+    expect(rate("make lint")).toBeNull();
+    expect(rate("make broken")).toBe(0);
+
+    const script = renderScript(d, { ...defaultScriptOpts(), minFrequency: 0 });
+    expect(script).toContain("# seen 2/2, 99% ok\nmake test");
+    expect(script).toContain("# seen 2/2\nmake lint");
+    expect(script).not.toContain("make broken");
     db.close();
   });
 

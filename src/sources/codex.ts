@@ -1,5 +1,5 @@
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson } from "../json.ts";
+import { asInteger, asString, canonicalJson, get, hasKey, isObject } from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -14,8 +14,23 @@ import {
   type TokenUsage,
 } from "../model.ts";
 import { preview } from "../tools.ts";
+import {
+  block,
+  contentText,
+  countUnknown,
+  parseJsonLine,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
-type JsonObject = { [key: string]: Json };
+// Top-level records Codex writes for its own bookkeeping. The model never sees
+// them and they carry no conversation, so they're skipped without a drift
+// diagnostic.
+const IGNORED_TOP_LEVEL = new Set([
+  "world_state",
+  "token_usage_record",
+  "inter_agent_communication_metadata",
+]);
 
 export function parseCodexSession(
   fallbackId: string,
@@ -27,6 +42,7 @@ export function parseCodexSession(
   let sourceSessionId = fallbackId;
   let cwd: string | null = null;
   let cliVersion: string | null = null;
+  let gitBranch: string | null = null;
   let model: string | null = null;
   const reasoningEfforts = new Set<string>();
   let startedAt: string | null = null;
@@ -42,23 +58,11 @@ export function parseCodexSession(
   let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
-  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
+  const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo: index + 1,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
+    const value = parseJsonLine(line, index + 1, issues);
+    if (value === undefined) {
       continue;
     }
 
@@ -72,6 +76,7 @@ export function parseCodexSession(
 
     if (typ === "session_meta") {
       sourceSessionId = asString(get(payload, "id")) ?? sourceSessionId;
+      gitBranch = asString(get(get(payload, "git"), "branch")) ?? gitBranch;
       cwd = asString(get(payload, "cwd")) ?? cwd;
       cliVersion = asString(get(payload, "cli_version")) ?? cliVersion;
       const source = get(payload, "source");
@@ -136,26 +141,17 @@ export function parseCodexSession(
         messages.push(message.message);
         seq += 1;
       }
-    } else if (typ !== "event_msg") {
+    } else if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
       // Remaining event_msg subtypes are stream noise whose durable copy is a
       // response_item. The exceptions are token_count and mcp_tool_call_end,
       // handled above — MCP calls have no response_item in current rollouts.
       // Anything else is a top-level record type this parser has never seen —
       // the drift sensor.
-      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
-      seen.count += 1;
-      unknownTypes.set(typ, seen);
+      countUnknown(unknownTypes, typ, index + 1);
     }
   }
 
-  for (const [typ, seen] of unknownTypes) {
-    issues.push({
-      code: "unknown_record_type",
-      lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); ignored`,
-      rawLine: null,
-    });
-  }
+  issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
   title = titles.get(sourceSessionId) ?? title;
   if (contextWindow != null) {
@@ -169,7 +165,7 @@ export function parseCodexSession(
     projectPath: cwd,
     title,
     cwd,
-    gitBranch: null,
+    gitBranch,
     model,
     reasoningEffort: summarizeReasoningEfforts(effortLevels),
     reasoningEffortLevels: effortLevels,
@@ -252,21 +248,7 @@ function compactedMessage(
     timestamp,
     usage: null,
     raw: line,
-    blocks:
-      summary === ""
-        ? []
-        : [
-            {
-              ordinal: 0,
-              blockType: "text",
-              text: summary,
-              toolName: null,
-              toolUseId: null,
-              toolInput: undefined,
-              toolResult: null,
-              isError: null,
-            },
-          ],
+    blocks: summary === "" ? [] : [block(0, "text", { text: summary })],
   };
 }
 
@@ -300,18 +282,10 @@ function parseItem(
   });
 
   if (payloadType === "message") {
-    const role = messageRole(asString(get(payload, "role")));
-    const text = collectText(get(payload, "content"));
-    const parsed = mk(role, {
-      ordinal: 0,
-      blockType: "text",
-      text,
-      toolName: null,
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    const content = get(payload, "content");
+    const role = messageRole(asString(get(payload, "role")), content);
+    const text = collectText(content);
+    const parsed = mk(role, block(0, "text", { text }));
     if (role === "user" && currentTitle == null && text !== "") {
       parsed.nextTitle = preview(text.trim(), 120);
     }
@@ -320,16 +294,12 @@ function parseItem(
 
   if (payloadType === "reasoning") {
     const summary = collectText(get(payload, "summary")).trim();
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "thinking",
-      text: summary === "" ? collectText(get(payload, "content")) : summary,
-      toolName: null,
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    return mk(
+      "assistant",
+      block(0, "thinking", {
+        text: summary === "" ? collectText(get(payload, "content")) : summary,
+      }),
+    );
   }
 
   if (
@@ -338,16 +308,14 @@ function parseItem(
     payloadType === "tool_search_call" ||
     payloadType === "mcp_tool_call"
   ) {
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "tool_use",
-      text: null,
-      toolName: qualifiedToolName(payload),
-      toolUseId: asString(get(payload, "call_id")),
-      toolInput: callInput(payload),
-      toolResult: null,
-      isError: null,
-    });
+    return mk(
+      "assistant",
+      block(0, "tool_use", {
+        toolName: qualifiedToolName(payload),
+        toolUseId: asString(get(payload, "call_id")),
+        toolInput: callInput(payload),
+      }),
+    );
   }
 
   if (
@@ -355,41 +323,20 @@ function parseItem(
     payloadType === "custom_tool_call_output" ||
     payloadType === "tool_search_output"
   ) {
-    return mk("tool", {
-      ordinal: 0,
-      blockType: "tool_result",
-      text: null,
-      toolName: null,
-      toolUseId: asString(get(payload, "call_id")),
-      toolInput: undefined,
-      toolResult: stringify(get(payload, "output")),
-      isError: null,
-    });
+    return mk(
+      "tool",
+      block(0, "tool_result", {
+        toolUseId: asString(get(payload, "call_id")),
+        toolResult: contentText(get(payload, "output")),
+      }),
+    );
   }
 
   if (payloadType === "web_search_call") {
-    return mk("assistant", {
-      ordinal: 0,
-      blockType: "web_search",
-      text: null,
-      toolName: "web_search",
-      toolUseId: null,
-      toolInput: undefined,
-      toolResult: null,
-      isError: null,
-    });
+    return mk("assistant", block(0, "web_search", { toolName: "web_search" }));
   }
 
-  return mk("other", {
-    ordinal: 0,
-    blockType: "other",
-    text: canonicalJson(payload),
-    toolName: null,
-    toolUseId: null,
-    toolInput: undefined,
-    toolResult: null,
-    isError: null,
-  });
+  return mk("other", block(0, "other", { text: canonicalJson(payload) }));
 }
 
 function qualifiedToolName(payload: Json): string | null {
@@ -432,16 +379,11 @@ function mcpEventMessages(
       usage: null,
       raw: value,
       blocks: [
-        {
-          ordinal: 0,
-          blockType: "tool_use",
-          text: null,
+        block(0, "tool_use", {
           toolName: name,
           toolUseId: callId,
           toolInput: get(invocation, "arguments"),
-          toolResult: null,
-          isError: null,
-        },
+        }),
       ],
     },
     result: {
@@ -454,18 +396,7 @@ function mcpEventMessages(
       timestamp,
       usage: null,
       raw: value,
-      blocks: [
-        {
-          ordinal: 0,
-          blockType: "tool_result",
-          text: null,
-          toolName: null,
-          toolUseId: callId,
-          toolInput: undefined,
-          toolResult: text,
-          isError,
-        },
-      ],
+      blocks: [block(0, "tool_result", { toolUseId: callId, toolResult: text, isError })],
     },
   };
 }
@@ -511,11 +442,34 @@ function backdate(timestamp: string | null, duration: Json | undefined): string 
   return new Date(parsed - ms).toISOString();
 }
 
-function messageRole(role: string | null): Role {
+// Context Codex injects as a "user" message: the workspace's AGENTS.md, the
+// environment block, and app-supplied context. The user never typed it, so it is
+// neither a turn nor time spent waiting on the user.
+const INJECTED_CONTEXT =
+  /^\s*(?:# AGENTS\.md instructions\b|<(?:environment_context|user_instructions|recommended_plugins|codex_internal_context|in-app-browser-context)>)/;
+
+/** `developer` messages and injected context are harness instructions, so they
+ * are system rows; a user message is a turn only when the user wrote part of it. */
+function messageRole(role: string | null, content: Json | undefined): Role {
   if (role === "assistant" || role === "system") {
     return role;
   }
+  if (role === "developer" || isInjectedContext(content)) {
+    return "system";
+  }
   return "user";
+}
+
+function isInjectedContext(content: Json | undefined): boolean {
+  const parts = typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
+  // An attached image, or any part that is not injected text, is the user's.
+  return (
+    parts.length > 0 &&
+    parts.every((part) => {
+      const text = typeof part === "string" ? part : asString(get(part, "text"));
+      return text != null && INJECTED_CONTEXT.test(text);
+    })
+  );
 }
 
 function collectText(content: Json | undefined): string {
@@ -533,16 +487,6 @@ function collectText(content: Json | undefined): string {
   return "";
 }
 
-function stringify(value: Json | undefined): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value !== undefined) {
-    return canonicalJson(value);
-  }
-  return "";
-}
-
 function callInput(payload: Json): Json | undefined {
   if (hasKey(payload, "arguments")) {
     return get(payload, "arguments");
@@ -551,29 +495,6 @@ function callInput(payload: Json): Json | undefined {
     return get(payload, "input");
   }
   return undefined;
-}
-
-function get(value: Json | undefined, key: string): Json | undefined {
-  if (!isObject(value)) {
-    return undefined;
-  }
-  return value[key];
-}
-
-function hasKey(value: Json, key: string): boolean {
-  return isObject(value) && Object.hasOwn(value, key);
-}
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: Json | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asInteger(value: Json | undefined): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 function getInteger(value: Json | undefined, key: string): number {

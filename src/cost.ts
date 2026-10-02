@@ -51,7 +51,15 @@ function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMt
   };
 }
 
-export function defaultPricing(): Map<string, Price> {
+let pricingTable: ReadonlyMap<string, Price> | null = null;
+
+/** Built once; sync and every ingested session read it, so callers share one table. */
+export function defaultPricing(): ReadonlyMap<string, Price> {
+  pricingTable ??= buildDefaultPricing();
+  return pricingTable;
+}
+
+function buildDefaultPricing(): Map<string, Price> {
   // Standard first-party API text-token rates per 1M tokens. Claude cache writes
   // carry both a 5-minute (1.25x input) and a 1-hour (2x input) rate; the split
   // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens. Rates and

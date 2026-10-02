@@ -4,6 +4,7 @@ import {
   activeRouteKey,
   documentTitleFor,
   isKnownRoute,
+  isSessionDetailPath,
   type NavDestination,
   pathOnly,
   projectSessionsHref,
@@ -186,5 +187,15 @@ describe("documentTitleFor", () => {
     expect(documentTitleFor("/sessions/42?title=private-repository", ITEMS)).toBe(
       "Session detail · Decant",
     );
+  });
+});
+
+describe("isSessionDetailPath", () => {
+  test("matches only numeric session ids without extra segments", () => {
+    expect(isSessionDetailPath("/sessions/42")).toBe(true);
+    expect(isSessionDetailPath("/sessions")).toBe(false);
+    expect(isSessionDetailPath("/sessions/abc")).toBe(false);
+    expect(isSessionDetailPath("/sessions/42/extra")).toBe(false);
+    expect(isSessionDetailPath("/reports/session/42")).toBe(false);
   });
 });

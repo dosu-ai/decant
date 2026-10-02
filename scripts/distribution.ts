@@ -122,7 +122,18 @@ export function buildTargetArgs(
   //
   // Do not add --sourcemap to recover those names: the compiled server dies
   // after its first few requests with it, which scripts/dist-check.ts catches.
-  const args = ["build", "--compile", "--minify", "--target", target.bunTarget];
+  //
+  // --compile does not set NODE_ENV for the embedded HTML bundle, so without the
+  // define the browser receives React's development build.
+  const args = [
+    "build",
+    "--compile",
+    "--minify",
+    "--define",
+    'process.env.NODE_ENV="production"',
+    "--target",
+    target.bunTarget,
+  ];
   if (version != null) {
     args.push("--env=DECANT_BUILD_VERSION*");
   }

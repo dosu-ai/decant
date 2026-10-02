@@ -12,6 +12,18 @@ to a window according to the date prefix of its `started_at` timestamp. Invalid
 date strings are ignored by the API, so callers that need a strict contract
 should validate dates before sending them.
 
+Tool and MCP aggregates follow the same rule, so a call made just after midnight
+counts on the day its session started. The Tools page summary cards (total
+calls, error rate, median and p95 elapsed, top tool) share that scope with the
+tool and MCP tables. The page's tool and server filters narrow the cards, while
+the "Errors only" and minimum-elapsed filters narrow only the call list. The
+call list itself is the exception to the session rule: it filters each call by
+its own timestamp, so a call appears on the day it ran.
+
+The live "today" totals are another exception. They cover the server's local
+calendar day, converted to a UTC range before it is compared with
+`started_at`.
+
 Archived and deleted sessions are excluded by default. Statistics endpoints
 that accept `include_archived=true` can include user-archived sessions; deleted
 sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
@@ -21,7 +33,9 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 A top-level session is a run that is not marked as a subagent. A subagent is a
 nested run linked to a parent session.
 
-- `sessions` in aggregate statistics counts top-level sessions only.
+- `sessions` in aggregate statistics counts top-level sessions only. So do the
+  hour and weekday histograms and the per-model daily sparklines, so each one
+  sums to the matching `sessions` count.
 - Message, tool-call, token, and estimated-cost totals include all visible
   sessions in scope, including subagents.
 - `GET /api/sessions` omits subagents as list rows by default.
@@ -39,6 +53,9 @@ top-level session can coordinate many separately metered runs.
 Work type and outcome are lightweight transcript-shape heuristics, not evidence
 that a change shipped or achieved its goal. Work type starts with keywords in
 the first user prompt and can fall back to the mix of file and web activity.
+Codex `developer` messages and the AGENTS.md or environment context Codex
+injects as a user message are system rows, so they are neither the first prompt
+nor a turn.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -81,15 +98,62 @@ estimated cost, and active time to four buckets:
 
 | Bucket | What it represents |
 | --- | --- |
-| `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. |
-| `planning` | Thinking/reasoning blocks and explicit plan-management tools. |
-| `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
-| `communicating` | Visible text and other non-tool, non-thinking output. |
+| `context` | Reading, searching, listing, web/MCP retrieval, read-only shell or Git commands, and messages from other agents. Unknown tools default here rather than overstating implementation. |
+| `planning` | Thinking/reasoning blocks and explicit plan-management tools (`TodoWrite`, Claude Code task-list tools, Codex `update_plan`). |
+| `code` | Structured edits, shell commands that clearly build, test, write, or otherwise mutate work, browser and desktop actions, REPL code, and note writes. |
+| `communicating` | Visible text and other non-tool, non-thinking model output, plus questions to the user (`AskUserQuestion`, Codex `request_user_input`). |
 
 Shell classification is deliberately conservative. Read-only commands such as
-`rg`, `cat`, and `git diff` are context; mutating or unrecognized shell commands
-are code. A bucket is an analytical attribution, not a provider billing field
-or a quality judgment.
+`rg`, `cat`, `sed -n`, and `git diff` are context; mutating or unrecognized
+shell commands are code. Decant judges a compound command by every part, not by
+its first word:
+
+- It splits on `;`, `&&`, `||`, a backgrounding `&`, newlines, and pipes,
+  ignoring separators inside quotes and `$(...)`, and the command is context
+  only when every part is read-only. Heredoc bodies are data, so the command
+  that reads them decides.
+- `cd`, `export`, variable assignments, and loop keywords such as `for` and
+  `done` change only the shell's state, so they never decide the bucket.
+  `cd repo; grep -n x src | head` is context. Waiting (`sleep`,
+  `gh pr checks --watch`) is code, because an agent waits on a build, a test
+  run, or CI, and that time belongs to the work.
+- Wrappers are classified by the command they run: `env X=1 git push`,
+  `timeout 60 bun test`, `xargs rm`, `bash -lc "<script>"`, and the body of
+  `$(...)`.
+- One mutating part makes the whole command code, and so does an output
+  redirect to a file (`>`, `>>`, `2>`, `&>`, `>&file`); `2>&1` and
+  `>/dev/null` don't count.
+- Some commands are read-only only with certain arguments. `git` reads through
+  global options (`git -C dir log`), and `branch`, `tag`, `remote`, and
+  `config` read only when they list or get. `gh pr view`, `gh run view`, and
+  `gh api` GET requests read; `gh pr merge` and `gh api -X POST` write.
+  `kubectl get`, `docker compose logs`, `find` or `fd` without `-delete` or a
+  mutating `-exec`/`-x`, `sed` without `-i` or a `w`/`e` command, and
+  `sqlite3 -readonly db '<sql>'` without `VACUUM INTO` or a file-writing
+  dot-command read. SQL piped or fed to `sqlite3` on stdin is not visible, so
+  it counts as code. A remote `curl` GET that prints its response is
+  retrieval; a download, a request body, or a probe of a local dev server is
+  code.
+
+Browser, desktop-control, and REPL tools (Playwright, Claude in Chrome, computer
+use, and JavaScript REPL MCP servers) split by what they do. Looking at a page
+or screen (snapshots, screenshots, page text, console and network logs, tab
+lists, `find`) and going somewhere (`navigate`, `wait`) is context. Sending
+input or running code is code: clicks, typing, key presses, form fills,
+selects, drags, hovers and mouse moves, scrolling, uploads, dialog handling,
+resizing, `evaluate` and other in-page JavaScript, and every REPL call. Hover
+counts as input because it fires page handlers and opens menus. Batch tools are
+code when any action they carry is. Other MCP tools keep the context default.
+
+Agent orchestration (`Agent`/`Task`, `SendMessage`, Codex `collaboration__*`,
+`SubagentHandback`) stays in context: the parent reads what the other agent
+reports. Writing a note or checkpoint (Codex `notes__write_file` and
+`notes__append_to_file`, Obsidian `obsidian_append_content`, Dosu
+`write_knowledge`) is code, but it is the agent's memory rather than the work
+product, so it does not mark the first edit.
+
+A bucket is an analytical attribution, not a provider billing field or a
+quality judgment.
 
 Recent Codex CLI versions run most actions through one `exec` tool. Its input
 is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,
@@ -97,35 +161,89 @@ is a JavaScript program that calls `tools.exec_command`, `tools.apply_patch`,
 like the tool it names:
 
 - The whole call takes the strongest inner bucket (code, then planning, then
-  context), so a program that reads a file and then patches it counts as code.
+  communicating, then context), so a program that reads a file and then patches
+  it counts as code.
+- Tool examples inside JavaScript strings, regex literals, or comments do not count as calls.
+  Calls inside template interpolations do count.
 - An `exec_command` whose command is assembled at runtime, rather than written
   as a literal, is treated like an unrecognized shell command, which is code.
-- A program that calls no tools stays in context.
+- A program that calls no tools or cannot be parsed stays in context.
+- `write_stdin`, which polls or answers a running `exec_command`, is code:
+  the commands agents leave running are nearly always builds and test runs.
+
+Acorn parses these programs for static tool-call inspection. Decant does not
+execute the JavaScript or resolve variables, branches, or tool aliases.
+Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
+same attribution rules.
 
 Generation is allocated from per-message usage when available, then by block
-size when it is not. Tool-result bytes contribute to context-window volume.
+size when it is not. Output with no visible block to carry it, such as an
+assistant record whose content is empty, still counts as generation and goes
+to `communicating`. Tool-result bytes contribute to context-window volume, and
+so does the text of a message from another agent (a Codex `agent_message`),
+which the model reads the way it reads an Agent or SendMessage result.
+
+When a source repeats a tool-call ID, calls and results pair one-to-one in
+occurrence order. An unmatched call has no result volume, outcome, or duration;
+it does not borrow the last result of another call with the same ID. Parser
+diagnostics still report repeated IDs and surplus results, and the raw blocks
+remain in the transcript.
+
+Some kept records are neither model output nor a tool call:
+
+- A message from another agent, or compacted history, is input the model
+  reads, so its time is context.
+- An image or document the user attaches is part of the user's turn.
+- Instructions the harness injects, such as Codex `developer` messages and
+  the AGENTS.md and environment block Codex sends as a user message, are
+  stored as role `system`. The gap before one closes on the next message
+  instead, so it counts toward the user's prompt or the model's next step.
+- CLI notices, record types a parser keeps as role `other` without
+  recognizing them, and model-fallback notices never reach the model. They
+  carry no generation, window volume, or time.
+
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
-provider charges.
+provider charges. Archive and date-range totals split each session's cost by
+that session's own activity and then add the sessions up, so an archive's
+bucket costs always equal the sum of its sessions' bucket costs.
+
+Some dollars have no activity to follow. Output cost from a session with no
+generation goes to `communicating`, since model output without a tool call or
+thinking block is what that bucket holds. Input cost from a session with no
+generation or window volume goes to `context`, the same default unknown work
+gets, rather than overstating implementation. These dollars take the phase
+split of the session's window volume, and a session with no recorded activity
+is orientation.
+
+Token counts and active time are rounded once per total. Each total is then
+apportioned to buckets by largest remainder, and each bucket to its phases the
+same way. Buckets add up to the total, and a bucket's phases add up to the
+bucket. Costs are not rounded.
+
+The API returns `cost_share` unrounded. The UI's whole-number cost and time
+percentages use largest-remainder rounding, so each column adds up to exactly
+100% instead of drifting to 99% or 101%.
 
 ### Search counting
 
 This defines the search count behind the "discovery is expensive"
 recommendation signal (`signal:search-heavy`). It is separate from activity
 buckets and does not change how shell commands are bucketed above. A search is
-a `Grep` or `Glob` tool call, or a shell statement whose leading command is a
-search binary such as `rg`, `grep`, or `find`. Compound commands are split on
-`;`, `&&`, `||`, and newlines. For example, `cd src && rg handler` counts.
-Pipelines are not split. A command such as `ps aux | grep node` filters output
-rather than searching a repository, so it does not count.
+a `Grep` or `Glob` tool call, or a shell statement whose command is a search
+binary such as `rg`, `grep`, or `find`, or `git grep`. Statements are split the
+same way as for activity buckets, outside quotes and heredoc bodies, so
+`cd src && rg handler` counts once and `rg 'a;b' src` is one search. The command
+is found the same way too, past variable assignments, `env`, `timeout`,
+`git -C dir`, and a `bash -lc "<script>"` wrapper.
 
-Search binaries count only when they are the leading command. Searches wrapped
-by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
-Shell commands inside a Codex `exec` program count like any other shell
-statement when the command is a literal string. Commands assembled at runtime
-are invisible to the count. The statement splitter does not parse
-shell quoting, so text such as `echo "a; grep b"` can add a false search. These
-cases can make the reported shell and Codex search volume too low or too high.
+Only the first stage of a pipeline counts. A command such as
+`ps aux | grep node` or `ls | xargs grep foo` filters or fans out another
+command's output rather than searching a repository, so it does not count, and
+neither does a search wrapped by `sudo`. Shell commands inside a Codex `exec`
+program count like any other shell statement when the command is a literal
+string. Commands assembled at runtime are invisible to the count. These cases
+can make the reported shell and Codex search volume too low.
 
 ## Orientation and implementation
 
@@ -138,15 +256,29 @@ Phases are orthogonal to activity buckets:
 Structured edit tools establish the boundary directly, including an
 `apply_patch` call inside a Codex `exec` program. Shell edits use narrow,
 high-confidence patterns such as `git apply`, `sed -i`, and explicit file-write
-APIs. The classifier prefers missing a weak signal over moving the boundary
-forward on a false positive.
+APIs (Node `fs.writeFileSync`, Python `open(..., "w")`, and pathlib
+`Path.write_text`/`write_bytes`). The classifier prefers missing a weak signal
+over moving the boundary forward on a false positive.
 
 ## Active time and user wait
 
 Active time is an attribution from message timestamps, not stopwatch time. The
 gap between two messages is charged to the later message, split across that
 message's blocks, and capped at five minutes. Gaps closed by user-authored text
-are reported separately as `waiting_on_user_ms`.
+are reported separately as `waiting_on_user_ms`, including the share of an
+image or document attached to that prompt. A question the model asks through a
+tool (`AskUserQuestion`, including MCP copies, and Codex `request_user_input`)
+is communicating, but its result arrives when the user answers, so the gap
+before that result is waiting on the user too, like the time before a typed
+prompt. A harness record between two messages does not split the gap; it closes
+on the next message the model or user produced.
+
+Each gap is measured from the latest timestamp seen so far, not the previous
+message's. Parallel work can log a message earlier than the one before it:
+Codex records an MCP call when it ends and dates the call back by its duration.
+A step back in time adds nothing, so overlapping calls are not counted twice
+and active time never exceeds the session's span. Session `active_seconds` and
+bucket active time follow the same rule.
 
 Consequences:
 
@@ -164,11 +296,23 @@ For one model call, occupancy is:
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
 an explicit model window. Claude and Gemini infer the window from the model
-when the source does not record one, and the API marks inferred values.
+when the source does not record one, and the API marks inferred values. An
+inferred window grows to the next published tier when a call already exceeded
+the smaller one, so an inferred peak never reads above 100%.
 
 Compactions come from provider boundary records. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing
 values remain unavailable rather than being invented.
+
+## Distilled command success
+
+`decant distill` reports `success_rate` per normalized command across the
+sessions in scope. It counts only calls with a recorded result. Codex does not
+record per-call results, so those calls stay out of the rate, and a command no
+call recorded a result for has a `null` rate. Script comments floor the
+percentage, so a command that ever failed never reads `100% ok`, and they omit
+the percentage when the rate is `null`. Commands whose recorded calls all failed
+are left out of scripts.
 
 ## Data quality signals
 

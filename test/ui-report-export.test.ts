@@ -1,20 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readUiFile, readUiSource, sourceBetween } from "./ui-source.ts";
 
-const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
-
-function sourceBetween(start: string, end: string): string {
-  const startIndex = main.indexOf(start);
-  const endIndex = main.indexOf(end, startIndex + start.length);
-  expect(startIndex).toBeGreaterThanOrEqual(0);
-  expect(endIndex).toBeGreaterThan(startIndex);
-  return main.slice(startIndex, endIndex);
-}
+const main = readUiSource();
 
 describe("report export privacy review", () => {
   test("discloses full project paths and exported insight details", () => {
     const fields = sourceBetween(
+      main,
       "const ANALYTICS_REPORT_INCLUDES",
       "const SESSION_REPORT_INCLUDES",
     );
@@ -24,8 +16,13 @@ describe("report export privacy review", () => {
   });
 
   test("uses one accessible review shell with trapped and restored focus", () => {
-    const focusTrap = sourceBetween("function useDialogFocusTrap(", "function PrivacyReviewLists(");
+    const focusTrap = sourceBetween(
+      readUiFile("focus.ts"),
+      "function useDialogFocusTrap(",
+      "function useDisabledFocusRescue(",
+    );
     const reviewSheet = sourceBetween(
+      main,
       "function ExportReviewSheet(",
       "function ReportExportButton(",
     );
@@ -42,10 +39,15 @@ describe("report export privacy review", () => {
 
   test("routes both toolbar exports through the same review before acting", () => {
     const routeActions = sourceBetween(
+      main,
       "function ReportRouteExportActions(",
       "function ReportRouteView(",
     );
-    const routeView = sourceBetween("function ReportRouteView(", "async function fetchReportHtml(");
+    const routeView = sourceBetween(
+      main,
+      "function ReportRouteView(",
+      "async function fetchReportHtml(",
+    );
 
     expect(routeActions.match(/onClick=\{\(\) => setReviewOpen\(true\)\}/g)).toHaveLength(2);
     expect(routeActions).toContain("<ExportReviewSheet");
@@ -59,7 +61,11 @@ describe("report export privacy review", () => {
   });
 
   test("shares privacy and focus primitives with the richer chart review", () => {
-    const share = sourceBetween("function ShareChartButton(", "async function renderShareCardPng(");
+    const share = sourceBetween(
+      main,
+      "function ShareChartButton(",
+      "async function renderShareCardPng(",
+    );
 
     expect(share).toContain("useDialogFocusTrap(open, dialogRef, closeShareReview)");
     expect(share).toContain("<PrivacyReviewLists");

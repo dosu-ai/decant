@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
@@ -23,14 +23,20 @@ export interface LaunchResult {
   command?: string;
 }
 
+type Run = (bin: string, args: string[]) => LaunchResult | Promise<LaunchResult>;
+
 export interface LaunchOptions {
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
-  run?: (bin: string, args: string[]) => LaunchResult;
+  run?: Run;
   tempName?: () => string;
   /** Test seam for Warp's observable config-consumption check. */
-  warpConsumed?: (configDir: string) => boolean;
+  warpConsumed?: (configDir: string) => boolean | Promise<boolean>;
 }
+
+// Mirrors the characters recommendation keys are generated from; the key is
+// spliced into the agent prompt, so anything else could inject instructions.
+const RECOMMENDATION_KEY_PATTERN = /^[A-Za-z0-9._:/-]{1,256}$/;
 
 const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
 const WARP_CONSUME_TIMEOUT_MS = 1_500;
@@ -39,8 +45,8 @@ export function canLaunch(platform: NodeJS.Platform = process.platform): boolean
   return platform === "darwin";
 }
 
-export function ideLabel(key: IdeKey): string {
-  return ideApps[key]?.label ?? "IDE";
+export function isSafeRecommendationKey(key: string): boolean {
+  return RECOMMENDATION_KEY_PATTERN.test(key);
 }
 
 export function command(agent: string, prompt: string): string | null {
@@ -48,16 +54,19 @@ export function command(agent: string, prompt: string): string | null {
   return got == null ? null : `${got.bin} ${shellQuote(prompt)}`;
 }
 
-export function launchAgent(
+export async function launchAgent(
   agent: string,
   prompt: string,
   key: string | null,
   settings: UserSettings,
   options: LaunchOptions = {},
-): LaunchResult {
+): Promise<LaunchResult> {
   const got = agents[agent as AgentKey];
   if (got == null) {
     return { ok: false, error: "Unknown agent." };
+  }
+  if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
+    return { ok: false, error: "Invalid recommendation key." };
   }
   const fullPrompt = withMarkInstruction(prompt, key);
   if (!canLaunch(options.platform)) {
@@ -67,7 +76,7 @@ export function launchAgent(
       command: command(agent, fullPrompt) ?? undefined,
     };
   }
-  sweepStaleLaunchDirs();
+  await sweepStaleLaunchDirs();
 
   // mkdtemp gives a fresh 0700 directory, so no other local user can
   // pre-plant a symlink at a predictable /tmp name or read the prompt; the
@@ -80,7 +89,7 @@ export function launchAgent(
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
     `rm -rf ${shellQuote(promptDir)})"`;
-  const result = launchIn(
+  const result = await launchIn(
     settings.terminal,
     launchCommand,
     options.run ?? runCommand,
@@ -96,40 +105,41 @@ export function launchAgent(
   return result;
 }
 
-export function openIde(
+export async function openIde(
   dir: string,
   settings: Pick<UserSettings, "ide">,
   options: LaunchOptions = {},
-): LaunchResult {
+): Promise<LaunchResult> {
   if (!canLaunch(options.platform)) {
     return { ok: false, error: "Opening an IDE is only supported on macOS right now." };
   }
   if (!existsSync(dir)) {
     return { ok: false, error: "That project folder no longer exists." };
   }
-  return (options.run ?? runCommand)("open", ["-a", ideApps[settings.ide].app, dir]);
+  return await (options.run ?? runCommand)("open", ["-a", ideApps[settings.ide].app, dir]);
 }
 
-function launchIn(
+async function launchIn(
   terminal: TerminalKey,
   cmd: string,
-  run: (bin: string, args: string[]) => LaunchResult,
+  run: Run,
   env: Record<string, string | undefined> | undefined,
-  warpConsumed: ((configDir: string) => boolean) | undefined,
-): LaunchResult {
+  warpConsumed: LaunchOptions["warpConsumed"],
+): Promise<LaunchResult> {
   switch (terminal) {
     case "iterm":
-      return run("osascript", ["-e", itermScript(cmd)]);
+      return await run("osascript", ["-e", itermScript(cmd)]);
     case "ghostty":
-      return openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
+      return await openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
     case "warp": {
       const launch = createWarpLaunch(cmd, env);
-      const result = run("open", [launch.uri]);
+      const result = await run("open", [launch.uri]);
       const consumed =
-        result.ok && (warpConsumed?.(launch.configDir) ?? waitForPathRemoval(launch.configDir));
+        result.ok &&
+        (await (warpConsumed?.(launch.configDir) ?? waitForPathRemoval(launch.configDir)));
       if (!result.ok || !consumed) {
         rmSync(launch.configDir, { recursive: true, force: true });
-        const fallback = run("open", [
+        const fallback = await run("open", [
           `warp://action/new_tab?path=${encodeURIComponent(launch.cwd)}`,
         ]);
         if (fallback.ok) {
@@ -154,13 +164,13 @@ function launchIn(
       return result;
     }
     case "alacritty":
-      return openArgs("Alacritty", ["-e", shell(env), "-lc", cmd], run);
+      return await openArgs("Alacritty", ["-e", shell(env), "-lc", cmd], run);
     case "kitty":
-      return openArgs("kitty", [shell(env), "-lc", cmd], run);
+      return await openArgs("kitty", [shell(env), "-lc", cmd], run);
     case "wezterm":
-      return openArgs("WezTerm", ["start", "--", shell(env), "-lc", cmd], run);
+      return await openArgs("WezTerm", ["start", "--", shell(env), "-lc", cmd], run);
     default:
-      return run("osascript", ["-e", terminalAppScript(cmd)]);
+      return await run("osascript", ["-e", terminalAppScript(cmd)]);
   }
 }
 
@@ -197,20 +207,19 @@ windows:
   return { configDir, cwd, uri: `warp://launch/${encodeURIComponent(configPath)}` };
 }
 
-function waitForPathRemoval(path: string): boolean {
+async function waitForPathRemoval(path: string): Promise<boolean> {
   const deadline = Date.now() + WARP_CONSUME_TIMEOUT_MS;
-  const sleeper = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   while (existsSync(path) && Date.now() < deadline) {
-    Atomics.wait(sleeper, 0, 0, 25);
+    await Bun.sleep(25);
   }
   return !existsSync(path);
 }
 
-function sweepStaleLaunchDirs(now = Date.now()): void {
+async function sweepStaleLaunchDirs(now = Date.now()): Promise<void> {
   const root = tmpdir();
   let entries: string[];
   try {
-    entries = readdirSync(root);
+    entries = await readdir(root);
   } catch {
     return;
   }
@@ -220,8 +229,8 @@ function sweepStaleLaunchDirs(now = Date.now()): void {
     }
     const path = join(root, entry);
     try {
-      if (now - statSync(path).mtimeMs >= STALE_LAUNCH_AGE_MS) {
-        rmSync(path, { recursive: true, force: true });
+      if (now - (await stat(path)).mtimeMs >= STALE_LAUNCH_AGE_MS) {
+        await rm(path, { recursive: true, force: true });
       }
     } catch {
       // Cleanup is best-effort; launch must not fail on a raced or inaccessible
@@ -230,21 +239,22 @@ function sweepStaleLaunchDirs(now = Date.now()): void {
   }
 }
 
-function openArgs(
-  app: string,
-  args: string[],
-  run: (bin: string, args: string[]) => LaunchResult,
-): LaunchResult {
+function openArgs(app: string, args: string[], run: Run): LaunchResult | Promise<LaunchResult> {
   return run("open", ["-na", app, "--args", ...args]);
 }
 
-function runCommand(bin: string, args: string[]): LaunchResult {
+async function runCommand(bin: string, args: string[]): Promise<LaunchResult> {
   try {
-    const result = spawnSync(bin, args, { encoding: "utf8" });
-    if (result.status === 0) {
+    const proc = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, status] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (status === 0) {
       return { ok: true };
     }
-    return { ok: false, error: (result.stderr || result.stdout || "launch failed").trim() };
+    return { ok: false, error: (stderr || stdout || "launch failed").trim() };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

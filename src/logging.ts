@@ -6,9 +6,10 @@ import {
   type LogLevel,
   type Sink,
 } from "@logtape/logtape";
+import { routeTemplate } from "./route-paths.ts";
 import type { WatchEvent } from "./watch.ts";
 
-export const DEFAULT_LOG_LEVEL: LogLevel = "info";
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
 export type StructuredLogger = Logger;
 
 export interface StructuredLogRecord extends Record<string, unknown> {
@@ -113,7 +114,7 @@ export function logHttpRequest(
     "event.duration_ms": Math.round(durationMs * 100) / 100,
     "http.request.method": request.method,
     "http.response.status_code": response.status,
-    "http.route": httpRoute(url.pathname),
+    "http.route": routeTemplate(url.pathname),
     "server.address": url.hostname,
     "server.port": url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
   };
@@ -141,31 +142,6 @@ export function exceptionAttributes(error: unknown): Record<string, string> {
     "exception.type": typeof error,
     "exception.message": String(error),
   };
-}
-
-function httpRoute(pathname: string): string {
-  const sessionDetail = pathname.match(
-    /^\/api\/sessions\/[^/]+\/(token-economics|context-window|outline|issues|state)$/,
-  );
-  if (sessionDetail != null) {
-    return `/api/sessions/{id}/${sessionDetail[1]}`;
-  }
-  if (pathname !== "/api/sessions/search-index" && /^\/api\/sessions\/[^/]+$/.test(pathname)) {
-    return "/api/sessions/{id}";
-  }
-  if (/^\/api\/reports\/session\/[^/]+\.html$/.test(pathname)) {
-    return "/api/reports/session/{id}.html";
-  }
-  if (/^\/sessions\/[^/]+$/.test(pathname)) {
-    return "/sessions/{id}";
-  }
-  if (/^\/reports\/session\/[^/]+$/.test(pathname)) {
-    return "/reports/session/{id}";
-  }
-  if (pathname.startsWith("/src/ui/")) {
-    return "/src/ui/*";
-  }
-  return pathname;
 }
 
 function normalizeLogLevel(value: string | undefined): {

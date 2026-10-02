@@ -131,17 +131,20 @@ function safeDate(value: string): string {
   return value.replaceAll(/[^0-9a-z]+/gi, "-").replaceAll(/^-|-$/g, "") || "all";
 }
 
+const integerFormatter = new Intl.NumberFormat("en-US");
+const moneyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 function formatInteger(value: number): string {
-  return Math.round(value).toLocaleString("en-US");
+  return integerFormatter.format(Math.round(value));
 }
 
 function formatMoney(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+  return moneyFormatter.format(value);
 }
 
 function maxIndex(values: number[]): number | null {

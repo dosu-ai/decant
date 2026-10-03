@@ -29,13 +29,13 @@ function seed(config: Config): void {
     INSERT INTO project(id, path) VALUES (1, '/session-state');
     INSERT INTO session(
       id, tool, source_session_id, project_id, title, started_at,
-      is_subagent, parent_session_id, source_path, raw_meta
+      is_subagent, parent_session_id, source_path, raw_meta, model
     ) VALUES
       (1, 'codex', 'state-root', 1, 'State root', '2026-07-29T12:00:00Z', 0, NULL,
-       '/synthetic/state-root.jsonl', NULL),
+       '/synthetic/state-root.jsonl', NULL, 'gpt-5'),
       (2, 'codex', 'state-child', 1, 'State child', '2026-07-29T12:01:00Z', 1, 1,
        '/synthetic/state-child.jsonl',
-       '{"parent_thread_id":"state-root","isSubagent":true}');
+       '{"parent_thread_id":"state-root","isSubagent":true}', 'gpt-5');
     INSERT INTO ingest_source(path, tool, session_id, status)
     VALUES
       ('/synthetic/state-root.jsonl', 'codex', 1, 'ok'),

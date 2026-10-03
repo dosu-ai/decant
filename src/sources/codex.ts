@@ -58,6 +58,8 @@ export function parseCodexSession(
   let contextWindow: number | null = null;
   let rawMeta: Json = null;
   let seq = 0;
+  let ownSessionId: string | null = null;
+  let historyStartOrdinal: number | null = null;
   const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
@@ -67,15 +69,32 @@ export function parseCodexSession(
     }
 
     const typ = asString(get(value, "type")) ?? "";
+    const payload = get(value, "payload") ?? null;
+    // A forked subagent's rollout opens with its own session_meta, then
+    // replays the thread it forked from, sometimes with that thread's
+    // session_meta. Those records belong to the parent's own rollout, and
+    // adopting the replayed id would file this child over it.
+    const metaId = typ === "session_meta" ? asString(get(payload, "id")) : null;
+    const ordinal = asInteger(get(value, "ordinal"));
+    if (
+      (ownSessionId != null && metaId != null && metaId !== ownSessionId) ||
+      (historyStartOrdinal != null && ordinal != null && ordinal < historyStartOrdinal)
+    ) {
+      continue;
+    }
+
     const timestamp = asString(get(value, "timestamp"));
     if (timestamp != null) {
       startedAt ??= timestamp;
       endedAt = timestamp;
     }
-    const payload = get(value, "payload") ?? null;
 
     if (typ === "session_meta") {
-      sourceSessionId = asString(get(payload, "id")) ?? sourceSessionId;
+      if (ownSessionId == null) {
+        historyStartOrdinal = forkHistoryStart(payload);
+      }
+      ownSessionId ??= metaId;
+      sourceSessionId = metaId ?? sourceSessionId;
       gitBranch = asString(get(get(payload, "git"), "branch")) ?? gitBranch;
       cwd = asString(get(payload, "cwd")) ?? cwd;
       cliVersion = asString(get(payload, "cli_version")) ?? cliVersion;
@@ -188,6 +207,16 @@ export function parseCodexSession(
   issues.push(...linkageIssues(normalized));
 
   return { session: normalized, issues };
+}
+
+/** First ordinal a forked subagent's rollout owns, read from its first
+ * session_meta payload; null when the rollout is not a fork. Guardian rollouts
+ * carry subagent_history_start_ordinal over turns of their own, so the ordinal
+ * marks replayed history only alongside forked_from_id. */
+export function forkHistoryStart(sessionMeta: Json | undefined): number | null {
+  return asString(get(sessionMeta, "forked_from_id")) == null
+    ? null
+    : asInteger(get(sessionMeta, "subagent_history_start_ordinal"));
 }
 
 function usageFrom(source: Json | undefined): TokenUsage {

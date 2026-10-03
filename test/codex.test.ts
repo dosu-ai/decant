@@ -274,6 +274,85 @@ describe("parseCodexSession", () => {
     expect(session.spawnDepth).toBe(1);
   });
 
+  test("a forked subagent keeps its own identity and skips the replayed parent history", () => {
+    const record = (ordinal: number, type: string, payload: unknown): string =>
+      JSON.stringify({
+        timestamp: `2026-05-01T10:00:0${ordinal}Z`,
+        ordinal,
+        type,
+        payload,
+      });
+    const message = (role: string, text: string) => ({
+      type: "message",
+      role,
+      content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+    });
+    const content = [
+      record(0, "session_meta", {
+        id: "child-thread",
+        forked_from_id: "parent-thread",
+        parent_thread_id: "parent-thread",
+        subagent_history_start_ordinal: 5,
+        cwd: "/tmp/child",
+        source: {
+          subagent: {
+            thread_spawn: { parent_thread_id: "parent-thread", depth: 1, agent_nickname: "Ada" },
+          },
+        },
+      }),
+      record(1, "session_meta", { id: "parent-thread", cwd: "/tmp/parent", source: "vscode" }),
+      record(2, "turn_context", { model: "gpt-parent", effort: "low" }),
+      record(3, "response_item", message("user", "Parent prompt")),
+      record(4, "compacted", { message: "Parent summary" }),
+      record(5, "turn_context", { model: "gpt-child", effort: "high" }),
+      record(6, "response_item", message("user", "Child prompt")),
+      record(7, "response_item", message("assistant", "Child answer")),
+    ].join("\n");
+
+    const parsed = parseCodexSession("fallback", content, new Map());
+    const session = parsed.session;
+    expect(parsed.issues).toHaveLength(0);
+    expect(session.sourceSessionId).toBe("child-thread");
+    expect(session.isSubagent).toBe(true);
+    expect(session.rootSourceSessionId).toBe("parent-thread");
+    expect(session.agentId).toBe("Ada");
+    expect(session.cwd).toBe("/tmp/child");
+    expect(session.model).toBe("gpt-child");
+    expect(session.reasoningEffortLevels).toEqual(["high"]);
+    expect(session.title).toBe("Child prompt");
+    expect(session.startedAt).toBe("2026-05-01T10:00:00Z");
+    expect(session.messages.map((m) => [m.role, m.blocks[0]?.text])).toEqual([
+      ["user", "Child prompt"],
+      ["assistant", "Child answer"],
+    ]);
+  });
+
+  test("a guardian's records before its history start ordinal are its own", () => {
+    const content = [
+      '{"type":"session_meta","ordinal":0,"payload":{"id":"guardian-thread","subagent_history_start_ordinal":3,"source":{"subagent":{"other":"guardian"}}}}',
+      '{"type":"response_item","ordinal":1,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"First review"}]}}',
+      '{"type":"event_msg","ordinal":2,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"output_tokens":5}}}}',
+      '{"type":"response_item","ordinal":3,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Second review"}]}}',
+    ].join("\n");
+    const session = parseCodexSession("fallback", content, new Map()).session;
+    expect(session.isSubagent).toBe(true);
+    expect(session.title).toBe("First review");
+    expect(session.messages).toHaveLength(2);
+    expect(session.totals.input).toBe(40);
+  });
+
+  test("a later session_meta for another thread never replaces the rollout's identity", () => {
+    const content = [
+      '{"type":"session_meta","payload":{"id":"own-thread","cwd":"/tmp/own"}}',
+      '{"type":"session_meta","payload":{"id":"other-thread","cwd":"/tmp/other"}}',
+      '{"type":"session_meta","payload":{"id":"own-thread","git":{"branch":"main"}}}',
+    ].join("\n");
+    const session = parseCodexSession("fallback", content, new Map()).session;
+    expect(session.sourceSessionId).toBe("own-thread");
+    expect(session.cwd).toBe("/tmp/own");
+    expect(session.gitBranch).toBe("main");
+  });
+
   test("malformed and blank lines and unknown top types", () => {
     const content = [
       "",

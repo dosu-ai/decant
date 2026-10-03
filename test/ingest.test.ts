@@ -1498,6 +1498,71 @@ describe("sync", () => {
     db.close();
   });
 
+  test.each([
+    ["still on disk", false],
+    ["gone", true],
+  ])("re-ingest separates a forked subagent misfiled over its parent (parent source %s)", (_label, parentGone) => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const parentPath = join(config.codexDir, "sessions", "rollout-parent.jsonl");
+    const childPath = join(config.codexDir, "sessions", "rollout-child.jsonl");
+    write(
+      parentPath,
+      [
+        '{"type":"session_meta","ordinal":0,"payload":{"id":"parent-thread","cwd":"/repo"}}',
+        '{"type":"response_item","ordinal":1,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Parent prompt"}]}}',
+      ].join("\n"),
+    );
+    write(
+      childPath,
+      [
+        '{"type":"session_meta","ordinal":0,"payload":{"id":"child-thread","cwd":"/repo","forked_from_id":"parent-thread","parent_thread_id":"parent-thread","subagent_history_start_ordinal":3,"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}}}',
+        '{"type":"session_meta","ordinal":1,"payload":{"id":"parent-thread","cwd":"/repo"}}',
+        '{"type":"response_item","ordinal":2,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Parent prompt"}]}}',
+        '{"type":"response_item","ordinal":3,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Child prompt"}]}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+
+    // Recreate what the previous parser left: the child file's row filed under
+    // the parent's identity, replacing the parent's own row.
+    db.exec("UPDATE session SET parent_session_id = NULL");
+    db.exec("DELETE FROM session WHERE source_session_id = 'parent-thread'");
+    db.exec(
+      "UPDATE session SET source_session_id = 'parent-thread' WHERE source_session_id = 'child-thread'",
+    );
+    db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+    if (parentGone) {
+      rmSync(parentPath);
+    }
+
+    expect(sync(db, config)).toMatchObject({ ingested: 1 + (parentGone ? 0 : 1), failed: 0 });
+    const rows = db
+      .query(
+        `SELECT s.source_session_id AS id, s.source_path AS path, s.is_subagent AS sub,
+                p.source_session_id AS parent,
+                (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) AS messages
+         FROM session s LEFT JOIN session p ON p.id = s.parent_session_id
+         ORDER BY s.source_session_id`,
+      )
+      .all();
+    const child = { id: "child-thread", path: childPath, sub: 1, messages: 1 };
+    expect(rows).toEqual(
+      parentGone
+        ? [{ ...child, parent: null }]
+        : [
+            { ...child, parent: "parent-thread" },
+            { id: "parent-thread", path: parentPath, sub: 0, parent: null, messages: 1 },
+          ],
+    );
+    expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 0 });
+    db.close();
+  });
+
   test("re-derives overlapping parallel-call time once after the revision advances", () => {
     const dir = freshCase();
     const config: IngestConfig = {
@@ -1839,6 +1904,37 @@ describe("sync", () => {
       reasoning_effort_levels: '["16384"]',
       reasoning_effort_checked: 1,
     });
+    db.close();
+  });
+
+  test("backfills a forked subagent's effort without the replayed parent turns", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.codexDir, "sessions", "rollout-fork.jsonl"),
+      [
+        '{"type":"session_meta","ordinal":0,"payload":{"id":"fork-effort","forked_from_id":"parent-thread","subagent_history_start_ordinal":2}}',
+        '{"type":"turn_context","ordinal":1,"payload":{"model":"gpt-5.4","effort":"low"}}',
+        '{"type":"turn_context","ordinal":2,"payload":{"model":"gpt-5.4","effort":"high"}}',
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    const ingested = db
+      .query("SELECT reasoning_effort, reasoning_effort_levels FROM session")
+      .get();
+    expect(ingested).toEqual({ reasoning_effort: "high", reasoning_effort_levels: '["high"]' });
+    db.exec(
+      "UPDATE session SET reasoning_effort = NULL, reasoning_effort_levels = '[]', reasoning_effort_checked = 0",
+    );
+
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(db.query("SELECT reasoning_effort, reasoning_effort_levels FROM session").get()).toEqual(
+      ingested,
+    );
     db.close();
   });
 

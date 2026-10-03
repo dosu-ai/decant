@@ -33,7 +33,7 @@ import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
-import { parseCodexSession } from "./sources/codex.ts";
+import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
@@ -58,7 +58,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 9;
+export const INGEST_PIPELINE_REVISION = 10;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -628,6 +628,7 @@ interface ReasoningEffortSummary {
  * leaves the database write transaction for the small update batch only. */
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
   const efforts = new Set<string>();
+  const scan: EffortScan = { tool, efforts, sawMeta: false, historyStart: null };
   const buffer = Buffer.allocUnsafe(64 * 1024);
   const decoder = new StringDecoder("utf8");
   let pending = "";
@@ -641,12 +642,12 @@ function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSum
       pending += decoder.write(buffer.subarray(0, bytesRead));
       let newline = pending.indexOf("\n");
       while (newline >= 0) {
-        collectReasoningEffort(tool, pending.slice(0, newline), efforts);
+        collectReasoningEffort(scan, pending.slice(0, newline));
         pending = pending.slice(newline + 1);
         newline = pending.indexOf("\n");
       }
     }
-    collectReasoningEffort(tool, pending + decoder.end(), efforts);
+    collectReasoningEffort(scan, pending + decoder.end());
   } finally {
     try {
       closeSync(fd);
@@ -658,21 +659,34 @@ function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSum
   return { summary: summarizeReasoningEfforts(levels), levels };
 }
 
-function collectReasoningEffort(tool: Tool, line: string, efforts: Set<string>): void {
+interface EffortScan {
+  tool: Tool;
+  efforts: Set<string>;
+  sawMeta: boolean;
+  historyStart: number | null;
+}
+
+function collectReasoningEffort(scan: EffortScan, line: string): void {
   if (line.trim() === "") {
     return;
   }
   try {
     const value = JSON.parse(line) as Json;
+    const typ = asString(get(value, "type"));
+    if (scan.tool === "codex" && typ === "session_meta" && !scan.sawMeta) {
+      scan.sawMeta = true;
+      scan.historyStart = forkHistoryStart(get(value, "payload"));
+    }
+    const ordinal = asInteger(get(value, "ordinal"));
+    if (scan.historyStart != null && ordinal != null && ordinal < scan.historyStart) {
+      return;
+    }
     const effort =
-      tool === "claude_code"
+      scan.tool === "claude_code"
         ? recordedReasoningEffort(get(value, "effort"))
         : recordedReasoningEffort(get(get(value, "payload"), "effort"));
-    if (
-      effort != null &&
-      (tool === "claude_code" || asString(get(value, "type")) === "turn_context")
-    ) {
-      efforts.add(effort);
+    if (effort != null && (scan.tool === "claude_code" || typ === "turn_context")) {
+      scan.efforts.add(effort);
     }
   } catch {
     // Parser parity: malformed source rows do not hide valid effort labels.
@@ -755,6 +769,7 @@ function writeIngestedFile(
   parsed: ParsedSession,
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
+    releaseMisfiledFork(db, prepared.file.path, parsed);
     runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
@@ -780,6 +795,31 @@ function writeIngestedFile(
     writeIngestSource(db, prepared, sessionId, status);
     return "ingested";
   });
+}
+
+/** Earlier parsers filed a forked Codex subagent under the thread it forked
+ * from. Re-reading the fork removes that row, because the parent's own rollout
+ * may be gone and nothing else would ever replace it. */
+function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession): void {
+  const parent = parsed.session.rootSourceSessionId;
+  if (parsed.session.tool !== "codex" || parent == null) {
+    return;
+  }
+  const misfiled = queryRow<{ id: number }>(
+    db,
+    "SELECT id FROM session WHERE tool = 'codex' AND source_session_id = ?1 AND source_path = ?2",
+    [parent, path],
+  );
+  if (misfiled != null) {
+    deleteSessionRow(db, misfiled.id);
+  }
+}
+
+function deleteSessionRow(db: Database, id: number): void {
+  runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
+    id,
+  ]);
+  runStatement(db, "DELETE FROM session WHERE id = ?1", [id]);
 }
 
 function writeIngestSource(
@@ -856,14 +896,8 @@ function writeSession(
     [s.tool, s.sourceSessionId],
   );
   if (existing != null) {
-    runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
-      existing.id,
-    ]);
+    deleteSessionRow(db, existing.id);
   }
-  runStatement(db, "DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2", [
-    s.tool,
-    s.sourceSessionId,
-  ]);
 
   const refs = fileRefs(s);
   const gotFacets = facets(s);

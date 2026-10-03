@@ -16,7 +16,10 @@ By default Decant discovers:
 
 - Claude Code sessions under `~/.claude/projects`;
 - Codex sessions under `~/.codex/sessions` and source-archived sessions under
-  `~/.codex/archived_sessions`;
+  `~/.codex/archived_sessions`. A forked Codex subagent's rollout replays the
+  thread it forked from before its own history. Decant stores the subagent
+  under its own session ID and skips the replayed records, which the parent's
+  rollout already holds;
 - Gemini CLI sessions under `~/.gemini/tmp/<project>/chats`, including
   subagent transcripts nested under `chats/<parent-session-id>/`, which link
   to their parent session. Decant reads the adjacent `.project_root` sidecar
@@ -264,6 +267,11 @@ ingest, so a correction to them reaches existing sessions through the
 pipeline-revision re-ingest and needs the source to still exist. Persisted
 economics vectors are versioned separately and recompute from the archive's
 own rows, so they refresh even when the source is gone.
+
+Earlier releases filed a forked Codex subagent under the thread it forked
+from, replacing that thread's session. When a sync re-reads such a fork,
+Decant removes the misfiled row and stores the subagent under its own ID. The
+parent comes back from its own rollout while that file still exists.
 
 Subagent parent links are resolved at the end of any sync that wrote or
 tombstoned a session. A sync that finds every source unchanged leaves the

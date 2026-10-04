@@ -30,7 +30,7 @@ Built by
 Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
 and more effective.
 
-![Decant analytics dashboard](docs/assets/decant-serve.png)
+https://github.com/user-attachments/assets/188f7cca-5b0a-4504-8eb2-a317a606d91e
 
 ## Quick start
 

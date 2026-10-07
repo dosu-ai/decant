@@ -177,7 +177,13 @@ Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
 same attribution rules.
 
 Generation is allocated from per-message usage when available, then by block
-size when it is not. Output with no visible block to carry it, such as an
+size when it is not. Claude Code journals one API response as a record per
+content block (thinking, text, each tool call) that share the API message id,
+so the response's output is split across all of those records' blocks: the
+visible blocks keep their size, and the remainder is planning when the response
+has a thinking block. Time is not regrouped, because each record is written when
+its block finishes, so the gap before a record is the time that block took.
+Output with no visible block to carry it, such as an
 assistant record whose content is empty, still counts as generation and goes
 to `communicating`. Tool-result bytes contribute to context-window volume, and
 so does the text of a message from another agent (a Codex `agent_message`),

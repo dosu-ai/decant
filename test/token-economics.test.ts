@@ -275,6 +275,36 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("splits a response journaled as one record per block across all of its blocks", () => {
+    const db = freshDb();
+    // Claude Code writes thinking, text, and the tool call as separate records that
+    // share the API message id; the 1000 output tokens cover all three.
+    const usage = '"usage":{"input_tokens":10,"output_tokens":1000}';
+    const content = [
+      '{"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"fix it"}}',
+      `{"type":"assistant","uuid":"a1","parentUuid":"u1","requestId":"req1","timestamp":"2026-05-01T10:00:05.000Z","message":{"id":"m1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"thinking","thinking":"","signature":"sig"}],${usage}}}`,
+      `{"type":"assistant","uuid":"a2","parentUuid":"a1","requestId":"req1","timestamp":"2026-05-01T10:00:06.000Z","message":{"id":"m1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"${"x".repeat(400)}"}],${usage}}}`,
+      `{"type":"assistant","uuid":"a3","parentUuid":"a2","requestId":"req1","timestamp":"2026-05-01T10:00:07.000Z","message":{"id":"m1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a.ts","old_string":"${"a".repeat(200)}","new_string":"b"}}],${usage}}}`,
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-split-response", `${content}\n`),
+      "/x/split.jsonl",
+      1,
+      2,
+    );
+    const economics = tokenEconomicsForSession(db, sessionId);
+    const gen = (bucket: string) =>
+      economics?.buckets.find((row) => row.bucket === bucket)?.generation_tokens ?? 0;
+    expect(economics?.totals.generation_tokens).toBe(1000);
+    // The text and the edit keep their visible size; only the rest is planning.
+    expect(gen("communicating")).toBeCloseTo(100, 6);
+    expect(gen("code")).toBeGreaterThan(50);
+    expect(gen("planning")).toBeCloseTo(1000 - gen("communicating") - gen("code"), 6);
+    expect(gen("planning")).toBeLessThan(900);
+    db.close();
+  });
+
   test("persists versioned vectors and serves economics without scanning transcript rows", () => {
     const db = freshDb();
     const sessionId = upsertSession(

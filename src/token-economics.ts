@@ -17,7 +17,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 8;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 9;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
@@ -85,6 +85,9 @@ interface BlockRow {
   seq: number;
   role: string | null;
   output_tokens: number | null;
+  // The API message id behind an assistant record. Claude Code journals one
+  // response as a record per content block, all sharing this id.
+  response_id: string | null;
   type: string | null;
   tool_name: string | null;
   tool_input: string | null;
@@ -600,7 +603,10 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
   return queryRows<BlockRow>(
     db,
     `${scopeCte}
-       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
+       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens,
+              CASE WHEN m.role = 'assistant' AND json_valid(m.raw)
+                   THEN json_extract(m.raw, '$.message.id') END AS response_id,
+              b.type,
               COALESCE(b.tool_name, tc.tool_name) AS tool_name,
               m.timestamp AS timestamp,
               CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
@@ -789,6 +795,10 @@ function phaseOf(
   return seq < boundary ? "orientation" : "implementation";
 }
 
+function responseKey(block: BlockRow): string {
+  return block.response_id == null ? `#${block.message_id}` : `id:${block.response_id}`;
+}
+
 function allocateGeneration(
   sessions: SessionRow[],
   blocks: BlockRow[],
@@ -798,11 +808,16 @@ function allocateGeneration(
   const blocksBySession = groupBy(blocks, (block) => block.session_id);
   for (const session of sessions) {
     const sessionBlocks = blocksBySession.get(session.id) ?? [];
-    const messageBlocks = groupBy(sessionBlocks, (block) => block.message_id);
-    const messageOutput = new Map<number, number>();
+    // Claude Code writes one response as a record per content block and bills
+    // its output to just one of them, so a response's output is split across
+    // all of its records' blocks. Otherwise a thinking record would take the
+    // whole turn as planning, or a text record would take its tool calls.
+    const messageBlocks = groupBy(sessionBlocks, responseKey);
+    const messageOutput = new Map<string, number>();
     for (const block of sessionBlocks) {
       if (block.output_tokens != null && block.output_tokens > 0) {
-        messageOutput.set(block.message_id, block.output_tokens);
+        const key = responseKey(block);
+        messageOutput.set(key, Math.max(messageOutput.get(key) ?? 0, block.output_tokens));
       }
     }
     // Codex per-message output is persisted for context-window tooltips, but

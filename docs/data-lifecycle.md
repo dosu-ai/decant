@@ -297,6 +297,12 @@ files, and economics exclude user-hidden sessions. Statistics operations that
 accept `include_archived=true` add archived sessions back; deleted sessions and
 their content remain absent.
 
+The same surfaces also skip sessions that hold no conversation: Claude Code
+transcripts containing only local slash-command output, and Codex threads that
+were created but never sent a prompt. Their rows stay in the archive and remain
+readable by id. Each becomes visible once its source gains a real prompt or
+reply.
+
 See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.

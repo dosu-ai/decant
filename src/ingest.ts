@@ -14,7 +14,7 @@ import { dirname, extname, join, basename as pathBasename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
-import { defaultPricing, estimateCost } from "./cost.ts";
+import { defaultPricing } from "./cost.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
@@ -29,6 +29,12 @@ import {
   summarizeReasoningEfforts,
   type Tool,
 } from "./model.ts";
+import {
+  materializeMissingModelUsage,
+  materializeModelUsage,
+  sessionCostParts,
+  totalCost,
+} from "./model-usage.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
@@ -136,6 +142,7 @@ export function sync(
   onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
+  materializeMissingModelUsage(db);
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
@@ -903,7 +910,6 @@ function writeSession(
   const gotFacets = facets(s);
   const gotOutcome = outcome(s);
   const gotWorkType = workType(s, refs);
-  const cost = estimateCost(s.model, s.totals, defaultPricing());
 
   const sessionId = runStatement(
     db,
@@ -944,7 +950,8 @@ function writeSession(
       s.totals.cacheRead,
       s.totals.cacheCreation,
       s.totals.reasoning,
-      cost,
+      // Priced below from per-request usage once the messages are stored.
+      0,
       Number(s.isArchived),
       Number(s.isSubagent),
       null,
@@ -1134,6 +1141,11 @@ function writeSession(
     insertFileRef.finalize();
   }
 
+  const usage = materializeModelUsage(db, sessionId);
+  runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
+    totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),
+    sessionId,
+  ]);
   materializeSessionEconomics(db, sessionId);
   materializeContextWindow(db, sessionId);
 

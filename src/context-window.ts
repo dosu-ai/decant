@@ -26,7 +26,12 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
   if (model == null) {
     return DEFAULT_WINDOW_TOKENS;
   }
-  const normalized = model.toLowerCase().replace(/[._/:]/g, "-");
+  // Drop the "[1m]" context suffix and a Vertex "@date" snapshot so every
+  // spelling of one model reaches the same family pattern.
+  const normalized = model
+    .toLowerCase()
+    .replace(/[[@].*$/, "")
+    .replace(/[._/:]/g, "-");
   return ONE_MILLION_CLAUDE_FAMILIES.some((pattern) => pattern.test(normalized))
     ? EXTENDED_WINDOW_TOKENS
     : DEFAULT_WINDOW_TOKENS;

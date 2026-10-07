@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 24;
+export const LATEST_SCHEMA_VERSION = 25;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -726,6 +726,26 @@ function migrate(db: Database, current: number): void {
       db.exec("DROP INDEX IF EXISTS idx_session_tool");
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (24, datetime('now'))",
+      ).run();
+    }
+    if (current < 25) {
+      // Rows are derived from stored messages; sync's backfill fills them, so
+      // the migration only creates the table.
+      db.exec(`CREATE TABLE IF NOT EXISTS session_model_usage (
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  requests INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL,
+  cache_creation_1h_tokens INTEGER NOT NULL,
+  format_version INTEGER NOT NULL,
+  PRIMARY KEY (session_id, model, tier)
+) WITHOUT ROWID`);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (25, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
+import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
+import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 
@@ -81,8 +83,11 @@ export function byDimension(
   dimension: Dimension,
   filter?: StatsFilter | null,
 ): DimRow[] {
-  const { groupExpr, join } = dimensionSql(dimension);
   const visible = statsScope(db, "s", filter);
+  if (dimension === "model") {
+    return byModel(db, visible);
+  }
+  const { groupExpr, join } = dimensionSql(dimension);
   const statement = db.prepare(
     `WITH filtered_session AS (
          SELECT s.id, s.tool, s.model, s.project_id, s.started_at, s.is_subagent,
@@ -108,6 +113,86 @@ export function byDimension(
     statement.finalize();
   }
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
+}
+
+/** Sessions count under the model that served most of their requests, but
+ * tokens and cost follow the model behind each request, so a session that
+ * switched models adds to every model it used. Each session's stored cost is
+ * split in proportion to what its models cost at current rates, so the rows
+ * still sum to the archive total. */
+function byModel(db: Database, visible: { sql: string; params: string[] }): DimRow[] {
+  const sessions = db
+    .query(
+      `SELECT s.id, s.model, s.is_subagent, s.total_input_tokens, s.total_output_tokens,
+              s.total_reasoning_tokens, s.est_reasoning_tokens, s.estimated_cost_usd
+         FROM session s ${whereClause(visible)}`,
+    )
+    .all(...visible.params) as {
+    id: number;
+    model: string | null;
+    is_subagent: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    total_reasoning_tokens: number;
+    est_reasoning_tokens: number;
+    estimated_cost_usd: number;
+  }[];
+  const usage = modelUsageForScope(
+    db,
+    `WITH scoped_session AS (SELECT s.id FROM session s ${whereClause(visible)})`,
+    visible.params,
+  );
+  const pricing = defaultPricing();
+  const rows = new Map<string, DimRow>();
+  const row = (model: string | null): DimRow => {
+    const key = model == null || model === "" ? "(unknown)" : model;
+    const existing = rows.get(key);
+    if (existing != null) {
+      return existing;
+    }
+    const created: DimRow = {
+      key,
+      sessions: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      est_reasoning_tokens: 0,
+      estimated_cost_usd: 0,
+    };
+    rows.set(key, created);
+    return created;
+  };
+  for (const session of sessions) {
+    const label = row(session.model);
+    label.sessions += session.is_subagent === 0 ? 1 : 0;
+    // Reasoning is recorded per session, not per request.
+    label.reasoning_tokens += session.total_reasoning_tokens;
+    label.est_reasoning_tokens += session.est_reasoning_tokens;
+    const served = usage.get(session.id) ?? [];
+    const costs = served.map((part) =>
+      totalCost(sessionCostParts([part], { model: part.model, usage: part.usage }, pricing)),
+    );
+    const priced = costs.reduce((sum, cost) => sum + cost, 0);
+    for (const [index, part] of served.entries()) {
+      const target = row(part.model);
+      target.input_tokens += part.usage.input;
+      target.output_tokens += part.usage.output;
+      if (priced > 0) {
+        target.estimated_cost_usd += session.estimated_cost_usd * ((costs[index] ?? 0) / priced);
+      }
+    }
+    if (served.length === 0) {
+      label.input_tokens += session.total_input_tokens;
+      label.output_tokens += session.total_output_tokens;
+    }
+    if (priced <= 0) {
+      label.estimated_cost_usd += session.estimated_cost_usd;
+    }
+  }
+  return [...rows.values()].sort(
+    (left, right) =>
+      right.sessions - left.sessions || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
+  );
 }
 
 function statsScope(
@@ -498,12 +583,10 @@ export function todayTotals(db: Database, now: Date = new Date()): Totals {
     .get(...scope.params) as Totals;
 }
 
-function dimensionSql(dimension: Dimension): { groupExpr: string; join: string } {
+function dimensionSql(dimension: Exclude<Dimension, "model">): { groupExpr: string; join: string } {
   switch (dimension) {
     case "tool":
       return { groupExpr: "s.tool", join: "" };
-    case "model":
-      return { groupExpr: "COALESCE(s.model, '(unknown)')", join: "" };
     case "project":
       return {
         groupExpr: "COALESCE(p.path, '(none)')",

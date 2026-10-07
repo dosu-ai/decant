@@ -8,10 +8,12 @@ import {
   isUserQuestionTool,
   toolBucket,
 } from "./buckets.ts";
-import { defaultPricing, estimateCostParts } from "./cost.ts";
+import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { byteLength } from "./json.ts";
+import type { TokenUsage } from "./model.ts";
+import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
@@ -379,22 +381,12 @@ function pendingCostRefreshes(db: Database): CostRefresh[] {
              s.total_reasoning_tokens, e.format_version, e.vector_json
            FROM session s LEFT JOIN session_economics e ON e.session_id = s.id`,
   );
+  const usage = modelUsageForScope(db, "WITH scoped_session AS (SELECT id FROM session)", []);
   const pending: CostRefresh[] = [];
   for (const row of rows) {
-    const parts = estimateCostParts(
-      row.model,
-      {
-        input: row.total_input_tokens,
-        output: row.total_output_tokens,
-        cacheRead: row.total_cache_read_tokens,
-        cacheCreation: row.total_cache_creation_tokens,
-        cacheCreation1h: row.total_cache_creation_1h_tokens,
-        reasoning: row.total_reasoning_tokens,
-      },
-      pricing,
-    );
+    const parts = sessionCostParts(usage.get(row.id), sessionFallback(row), pricing);
     const inputCost = parts.input + parts.cacheRead + parts.cacheCreation;
-    const total = parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+    const total = totalCost(parts);
     const vector =
       row.format_version === SESSION_ECONOMICS_FORMAT_VERSION && row.vector_json != null
         ? parseEconomicsVector(row.vector_json)
@@ -720,20 +712,10 @@ function vectorsForScope(
     }
   }
 
+  const usage = modelUsageForScope(db, scopeCte, params);
   return sessions.map((session) => {
     const mutable = vectorBySession.get(session.id);
-    const parts = estimateCostParts(
-      session.model,
-      {
-        input: session.total_input_tokens,
-        output: session.total_output_tokens,
-        cacheRead: session.total_cache_read_tokens,
-        cacheCreation: session.total_cache_creation_tokens,
-        cacheCreation1h: session.total_cache_creation_1h_tokens,
-        reasoning: session.total_reasoning_tokens,
-      },
-      defaultPricing(),
-    );
+    const parts = sessionCostParts(usage.get(session.id), sessionFallback(session));
     const buckets = {} as SessionEconomicsVector["buckets"];
     for (const bucket of ACTIVITY_BUCKETS) {
       const entry = mutable?.buckets.get(bucket);
@@ -761,6 +743,21 @@ function vectorsForScope(
       buckets,
     };
   });
+}
+
+/** Totals and label used to price a session that has no per-model rows yet. */
+function sessionFallback(session: SessionRow): { model: string | null; usage: TokenUsage } {
+  return {
+    model: session.model,
+    usage: {
+      input: session.total_input_tokens,
+      output: session.total_output_tokens,
+      cacheRead: session.total_cache_read_tokens,
+      cacheCreation: session.total_cache_creation_tokens,
+      cacheCreation1h: session.total_cache_creation_1h_tokens,
+      reasoning: session.total_reasoning_tokens,
+    },
+  };
 }
 
 type PerSessionBuckets = Map<ActivityBucket, MutableBucket>;

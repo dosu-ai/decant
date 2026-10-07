@@ -1,9 +1,10 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-Claude Haiku 5.5 rates were verified on October 7, 2026, and all other
-Anthropic rates on September 28, 2026, against the Anthropic pricing and model
-deprecation pages below. GPT-6.1
+Claude Haiku 5.5 rates, the Claude Sonnet 5.5 cache-read rate, and fast-mode
+rates were verified on October 7, 2026, and all other Anthropic rates on
+September 28, 2026, against the Anthropic pricing and model deprecation pages
+below. GPT-6.1
 Sol rates were verified on September 29, 2026, GPT-6 Sol and Luna rates on
 September 22, 2026, and other current OpenAI coding-agent rates retain their
 September 9, 2026 verification. Legacy OpenAI
@@ -13,7 +14,8 @@ rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 - [Claude Sonnet 5.5 model details](https://www.anthropic.com/claude-sonnet-5-5)
 - [Claude Haiku 5.5 model details](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
-- [Introducing Claude Haiku 5.5](https://www.anthropic.com/claude-haiku-5-5)
+- [Introducing Claude Haiku 5.5](https://www.anthropic.com/claude-haiku-5-5) (Haiku 5.5 rates and the Sonnet 5.5 cache-read reduction)
+- [Anthropic fast mode pricing](https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing)
 - [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
@@ -40,7 +42,8 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Opus 5.5 | $4.00 | $0.20 | $5.00 / $8.00 | $20.00 |
 | Claude Opus 5, 4.8, 4.7, 4.6, 4.5 | $5.00 | $0.50 | $6.25 / $10.00 | $25.00 |
 | Claude Opus 4.1, 4 | $15.00 | $1.50 | $18.75 / $30.00 | $75.00 |
-| Claude Sonnet 5.5, Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
+| Claude Sonnet 5.5 | $2.00 | $0.10 | $2.50 / $4.00 | $10.00 |
+| Claude Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
 | Claude Sonnet 4.6, 4.5, 4 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
 | Claude Haiku 5.5 | $0.10 | $0.01 | $0.125 / $0.20 | $0.50 |
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
@@ -82,10 +85,12 @@ charge to approximately the input rate for typical session-length holds.
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
 effect. Claude Sonnet 5.5 launched on September 28, 2026 at the same rates as
-Sonnet 5. Claude Opus 5.5 has a lower input, output, and cache-read rate than
-Opus 5. Claude Haiku 5.5 launched on October 7, 2026 with prompt-length
-pricing: the rates above apply to prompts up to 100,000 tokens, and every rate
-is five times higher for longer prompts. Claude Fable 5.1 and Mythos 5.1 keep
+Sonnet 5. Anthropic halved its cache-read rate to $0.10 starting October 7,
+2026, per the Claude Haiku 5.5 announcement; the pricing page's model table
+still listed $0.20 when checked that day. Claude Opus 5.5 has a lower input,
+output, and cache-read rate than Opus 5. Claude Haiku 5.5 launched on October
+7, 2026 with prompt-length pricing: the rates above apply to prompts up to
+100,000 tokens, and every rate is five times higher for longer prompts. Claude Fable 5.1 and Mythos 5.1 keep
 Fable 5's input, cache-write, and output rates but reduce cache reads from
 $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
@@ -113,21 +118,35 @@ of $1.50 input and $2.00 output. OpenAI's current deprecations table displays
 $15.00 and $20.00, but those figures conflict with the contemporaneous launch
 and June 2023 pricing announcements linked above.
 
+## Request tiers
+
+Decant prices each API request at the model that served it, and applies two
+request-level modifiers where the source records what they need:
+
+- **Fast mode.** A Claude request whose usage reports `speed: "fast"` is billed
+  at twice the standard rate for every token category, cache reads and writes
+  included, on Claude Opus 5.5 ($8.00 input / $40.00 output), Opus 5, and Opus
+  4.8 ($10.00 / $50.00). Opus 4.6 bills fast requests at standard rates.
+- **Claude Haiku 5.5 long prompts.** A request whose prompt (uncached input
+  plus cache reads and cache writes) exceeds 100,000 tokens is billed at five
+  times every rate above.
+
+Sources without per-request usage, such as Codex rollouts, are priced from
+session totals at the session's model and standard rates.
+
 ## Scope and historical behavior
 
 The estimates use standard global API token rates. They do not attempt to
 convert ChatGPT subscription usage or Codex credits to dollars, and they do not
-apply Batch, Flex, Priority, fast-mode, regional-processing, data-residency, or
+apply Batch, Flex, Priority, regional-processing, data-residency, or
 partner-cloud modifiers.
 
 OpenAI applies long-context rates above 272,000 prompt tokens for eligible API
-models. Decant estimates costs from session-level token totals, which do not
-show whether an individual request crossed that threshold, so these estimates
-use short-context rates and may be low for qualifying requests. The same
-applies to Claude Haiku 5.5's long-prompt rate above 100,000 tokens, so Haiku
-5.5 sessions with long contexts may be estimated at up to one fifth of their
-actual cost. Other Claude 4.6 and later models include their full context
-window at the standard rate.
+models. Codex reports cumulative session usage rather than per-request usage,
+so Decant cannot tell whether an individual request crossed that threshold.
+These estimates use short-context rates and may be low for qualifying
+requests. Claude 4.6 and later models other than Haiku 5.5 include their full
+context window at the standard rate.
 
 Costs are stored when transcripts are ingested and checked against current
 pricing on every sync, including unchanged and archived sessions. Sync updates

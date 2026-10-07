@@ -665,6 +665,12 @@ paths:
       tags: [Statistics]
       operationId: getStatsByDimension
       summary: Group archive totals by one dimension
+      description: >-
+        For the `model` dimension, `sessions` and reasoning counts follow each
+        session's label (the model that served most of its requests), while
+        tokens and estimated cost follow the model behind each request. A
+        session that switched models adds to every model it used, and the rows
+        still sum to the archive totals.
       parameters:
         - $ref: "#/components/parameters/Dimension"
         - $ref: "#/components/parameters/FromDate"

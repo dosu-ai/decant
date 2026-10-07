@@ -123,7 +123,10 @@ describe("serve banner and auto-open", () => {
     try {
       await waitFor(() => existsSync(spy.log), "spy browser invocation");
       expect(readFileSync(spy.log, "utf8").trim()).toBe(`http://127.0.0.1:${port}`);
-      expect(cli.stderr()).toContain("Opening your browser");
+      // serve writes the banner before it spawns the opener, but the banner
+      // reaches this process through a pipe while the spy writes a file, so
+      // the file can appear first.
+      await waitFor(() => cli.stderr().includes("Opening your browser"), "opening banner");
     } finally {
       expect(await stop(cli.child)).toBe(0);
       rmSync(scratch, { recursive: true, force: true });

@@ -1,8 +1,9 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-All Anthropic rates, including Claude Sonnet 5.5, were verified on September 28,
-2026 against the Anthropic pricing and model deprecation pages below. GPT-6.1
+Claude Haiku 5.5 rates were verified on October 7, 2026, and all other
+Anthropic rates on September 28, 2026, against the Anthropic pricing and model
+deprecation pages below. GPT-6.1
 Sol rates were verified on September 29, 2026, GPT-6 Sol and Luna rates on
 September 22, 2026, and other current OpenAI coding-agent rates retain their
 September 9, 2026 verification. Legacy OpenAI
@@ -11,6 +12,8 @@ rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 - [Claude Sonnet 5.5 model details](https://www.anthropic.com/claude-sonnet-5-5)
+- [Claude Haiku 5.5 model details](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+- [Introducing Claude Haiku 5.5](https://www.anthropic.com/claude-haiku-5-5)
 - [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
@@ -39,6 +42,7 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Opus 4.1, 4 | $15.00 | $1.50 | $18.75 / $30.00 | $75.00 |
 | Claude Sonnet 5.5, Sonnet 5 | $2.00 | $0.20 | $2.50 / $4.00 | $10.00 |
 | Claude Sonnet 4.6, 4.5, 4 | $3.00 | $0.30 | $3.75 / $6.00 | $15.00 |
+| Claude Haiku 5.5 | $0.10 | $0.01 | $0.125 / $0.20 | $0.50 |
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
 | Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
@@ -79,8 +83,11 @@ Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
 effect. Claude Sonnet 5.5 launched on September 28, 2026 at the same rates as
 Sonnet 5. Claude Opus 5.5 has a lower input, output, and cache-read rate than
-Opus 5. Claude Fable 5.1 and Mythos 5.1 keep Fable 5's input, cache-write, and
-output rates but reduce cache reads from $1.00 to $0.25. OpenAI describes the
+Opus 5. Claude Haiku 5.5 launched on October 7, 2026 with prompt-length
+pricing: the rates above apply to prompts up to 100,000 tokens, and every rate
+is five times higher for longer prompts. Claude Fable 5.1 and Mythos 5.1 keep
+Fable 5's input, cache-write, and output rates but reduce cache reads from
+$1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
 Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
@@ -116,8 +123,11 @@ partner-cloud modifiers.
 OpenAI applies long-context rates above 272,000 prompt tokens for eligible API
 models. Decant estimates costs from session-level token totals, which do not
 show whether an individual request crossed that threshold, so these estimates
-use short-context rates and may be low for qualifying requests. Claude 4.6 and
-later include their full context window at the standard rate.
+use short-context rates and may be low for qualifying requests. The same
+applies to Claude Haiku 5.5's long-prompt rate above 100,000 tokens, so Haiku
+5.5 sessions with long contexts may be estimated at up to one fifth of their
+actual cost. Other Claude 4.6 and later models include their full context
+window at the standard rate.
 
 Costs are stored when transcripts are ingested and checked against current
 pricing on every sync, including unchanged and archived sessions. Sync updates

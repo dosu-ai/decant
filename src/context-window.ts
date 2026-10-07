@@ -9,6 +9,7 @@ const EXTENDED_WINDOW_TOKENS = 1_000_000;
 const ONE_MILLION_CLAUDE_FAMILIES = [
   /(?:^|-)opus-(?:5|4-(?:6|7|8))(?:-|$)/,
   /(?:^|-)sonnet-(?:5|4-6)(?:-|$)/,
+  /(?:^|-)haiku-5-5(?:-|$)/,
   /(?:^|-)fable-5(?:-|$)/,
   /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
 ];

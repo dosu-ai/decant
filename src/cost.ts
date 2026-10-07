@@ -74,6 +74,7 @@ function buildDefaultPricing(): Map<string, Price> {
     ["claude-sonnet-5-5", claudePrice(2.0, 10.0)],
     ["claude-sonnet-5", claudePrice(2.0, 10.0)],
     ["claude-sonnet", claudePrice(3.0, 15.0)],
+    ["claude-haiku-5-5", claudePrice(0.1, 0.5)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
     ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
@@ -204,6 +205,12 @@ function canonicalModel(raw: string): string | null {
       return "claude-sonnet";
     }
     if (model.includes("haiku")) {
+      // Haiku 5.5 charges 5x for requests whose prompt exceeds 100k tokens.
+      // Session totals cannot show which requests crossed that line, so this
+      // uses the short-prompt rate, as with OpenAI's long-context surcharge.
+      if (/haiku-5(?:-|\.)5(?:$|-|\[|@)/.test(model)) {
+        return "claude-haiku-5-5";
+      }
       if (
         model.includes("haiku-3-5") ||
         model.includes("haiku-3.5") ||

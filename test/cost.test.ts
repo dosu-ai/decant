@@ -233,6 +233,41 @@ describe("estimateCost", () => {
     }
   });
 
+  test("Haiku 5.5 uses its published short-prompt rates", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    const price = pricing.get("claude-haiku-5-5");
+    expect(price?.inputPerMtok).toBeCloseTo(0.1, 9);
+    expect(price?.outputPerMtok).toBeCloseTo(0.5, 9);
+    expect(price?.cacheReadPerMtok).toBeCloseTo(0.01, 9);
+    expect(price?.cacheWritePerMtok).toBeCloseTo(0.125, 9);
+    expect(price?.cacheWrite1hPerMtok).toBeCloseTo(0.2, 9);
+    for (const model of [
+      "claude-haiku-5-5",
+      "claude-haiku-5.5",
+      "claude-haiku-5-5[1m]",
+      "claude-haiku-5-5@20261007",
+      "claude-haiku-5-5-20261007",
+      "anthropic.claude-haiku-5-5-v1:0",
+      "us.anthropic.claude-haiku-5-5-v1:0",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      const parts = estimateCostParts(model, usage, pricing);
+      expect(parts.input).toBeCloseTo(0.1, 9);
+      expect(parts.output).toBeCloseTo(0.5, 9);
+      expect(parts.cacheRead).toBeCloseTo(0.02, 9);
+      expect(parts.cacheCreation).toBeCloseTo(0.45, 9);
+    }
+    // Neighboring Haiku versions keep their own tiers.
+    expect(estimateCost("claude-haiku-4-5", usage1m(), pricing)).toBeCloseTo(6.0, 6);
+    expect(estimateCost("claude-haiku-5-50", usage1m(), pricing)).toBeCloseTo(6.0, 6);
+  });
+
   test("Claude 3 IDs price Haiku 3.5 and leave retired models unpriced", () => {
     const pricing = defaultPricing();
     const u = usage1m();

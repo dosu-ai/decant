@@ -84,6 +84,24 @@ content, so input is stored net of cache reads, and thought tokens are
 reported outside the candidate count, so they are folded into output and also
 recorded as reported reasoning.
 
+Costs are priced per API request, not per session. Each billed request is
+charged at the model that served it and at its price tier: standard, fast mode,
+or a long-prompt surcharge (see [pricing](pricing.md)). A session that switched
+models, such as an Opus session that ran some requests on another Opus version,
+is the sum of each model's share. Locally generated Claude records labeled
+`<synthetic>`, and requests with no recorded model, are charged to the
+session's model. When a session's per-request usage does not add up to its
+totals, for example when a stream `result` record disagrees with the journal,
+the whole session is priced at its model.
+
+A session's `model` is the model that served most of its requests. The model
+breakdown counts each session once, under that label, but splits tokens and
+estimated cost by the model behind each request. A model can therefore show
+tokens and cost with zero sessions. Each session's stored cost is divided among
+its models in proportion to what their requests cost at current rates, so the
+breakdown sums to the archive total. Reasoning tokens are recorded per session
+and stay with the session's label.
+
 Costs use the current [pricing table](pricing.md). Every sync reconciles
 stored session and activity costs, so historical estimates can change when
 rates or pricing logic change. These are estimates of standard API token rates,

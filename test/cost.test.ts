@@ -5,6 +5,7 @@ import {
   estimateCostParts,
   isPriceable,
   type Price,
+  requestPriceTier,
 } from "../src/cost.ts";
 import { emptyUsage, type TokenUsage } from "../src/model.ts";
 
@@ -201,7 +202,7 @@ describe("estimateCost", () => {
     expect(estimateCost("claude-opus-5", usage, pricing)).toBeCloseTo(53.5, 6);
   });
 
-  test("Sonnet 5.5 uses its published input, cache, and output rates", () => {
+  test("Sonnet 5.5 uses its published input, reduced cache-read, and output rates", () => {
     const pricing = defaultPricing();
     const usage = {
       ...usage1m(),
@@ -212,7 +213,7 @@ describe("estimateCost", () => {
     expect(pricing.get("claude-sonnet-5-5")).toEqual({
       inputPerMtok: 2,
       outputPerMtok: 10,
-      cacheReadPerMtok: 0.2,
+      cacheReadPerMtok: 0.1,
       cacheWritePerMtok: 2.5,
       cacheWrite1hPerMtok: 4,
     });
@@ -227,10 +228,12 @@ describe("estimateCost", () => {
       expect(estimateCostParts(model, usage, pricing)).toEqual({
         input: 2,
         output: 10,
-        cacheRead: 0.4,
+        cacheRead: 0.2,
         cacheCreation: 9,
       });
     }
+    // Sonnet 5 keeps the 0.1x cache-read multiplier.
+    expect(estimateCostParts("claude-sonnet-5", usage, pricing).cacheRead).toBeCloseTo(0.4, 9);
   });
 
   test("Haiku 5.5 uses its published short-prompt rates", () => {
@@ -266,6 +269,59 @@ describe("estimateCost", () => {
     // Neighboring Haiku versions keep their own tiers.
     expect(estimateCost("claude-haiku-4-5", usage1m(), pricing)).toBeCloseTo(6.0, 6);
     expect(estimateCost("claude-haiku-5-50", usage1m(), pricing)).toBeCloseTo(6.0, 6);
+  });
+
+  test("tiers multiply every token category", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    // Fast mode: Opus 5.5 at $8/$40, cache multipliers on top.
+    expect(estimateCostParts("claude-opus-5-5", usage, pricing, "fast")).toEqual({
+      input: 8,
+      output: 40,
+      cacheRead: 0.8,
+      cacheCreation: 36,
+    });
+    expect(estimateCost("claude-opus-5", usage1m(), pricing, "fast")).toBeCloseTo(60, 6);
+    // Haiku 5.5 long prompts: every rate is 5x.
+    const long = estimateCostParts("claude-haiku-5-5", usage, pricing, "long_prompt");
+    expect(long.input).toBeCloseTo(0.5, 9);
+    expect(long.output).toBeCloseTo(2.5, 9);
+    expect(long.cacheRead).toBeCloseTo(0.1, 9);
+    expect(long.cacheCreation).toBeCloseTo(2.25, 9);
+    expect(estimateCost(null, usage, pricing, "fast")).toBe(0);
+  });
+
+  test("requestPriceTier recognizes fast mode and Haiku 5.5 long prompts", () => {
+    const small = { ...usage1m(), input: 40_000, cacheRead: 40_000, cacheCreation: 20_000 };
+    const large = { ...small, cacheCreation: 20_001 };
+    for (const model of [
+      "claude-opus-5-5",
+      "claude-opus-5-5[1m]",
+      "claude-opus-5",
+      "claude-opus-5-20260601",
+      "claude-opus-4-8",
+      "claude-opus-4.8",
+    ]) {
+      expect(requestPriceTier(model, small, "fast")).toBe("fast");
+      expect(requestPriceTier(model, small, "standard")).toBe("standard");
+      expect(requestPriceTier(model, small, null)).toBe("standard");
+    }
+    // Opus 4.6 accepts the flag at standard rates; 4.7 and other tiers have no fast mode.
+    for (const model of ["claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-5-5", "gpt-6-sol"]) {
+      expect(requestPriceTier(model, small, "fast")).toBe("standard");
+    }
+    // The threshold counts uncached input plus cache reads and writes.
+    expect(requestPriceTier("claude-haiku-5-5", small, null)).toBe("standard");
+    expect(requestPriceTier("claude-haiku-5-5", large, null)).toBe("long_prompt");
+    expect(requestPriceTier("claude-haiku-5-5-20261007", large, "standard")).toBe("long_prompt");
+    expect(requestPriceTier("claude-haiku-4-5", large, null)).toBe("standard");
+    expect(requestPriceTier("claude-sonnet-5-5", large, null)).toBe("standard");
+    expect(requestPriceTier(null, large, "fast")).toBe("standard");
   });
 
   test("Claude 3 IDs price Haiku 3.5 and leave retired models unpriced", () => {

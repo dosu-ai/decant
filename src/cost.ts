@@ -71,7 +71,7 @@ function buildDefaultPricing(): Map<string, Price> {
     ["claude-opus", claudePrice(5.0, 25.0)],
     ["claude-opus-4.1", claudePrice(15.0, 75.0)],
     ["claude-opus-4", claudePrice(15.0, 75.0)],
-    ["claude-sonnet-5-5", claudePrice(2.0, 10.0)],
+    ["claude-sonnet-5-5", claudePrice(2.0, 10.0, 0.05)],
     ["claude-sonnet-5", claudePrice(2.0, 10.0)],
     ["claude-sonnet", claudePrice(3.0, 15.0)],
     ["claude-haiku-5-5", claudePrice(0.1, 0.5)],
@@ -205,9 +205,8 @@ function canonicalModel(raw: string): string | null {
       return "claude-sonnet";
     }
     if (model.includes("haiku")) {
-      // Haiku 5.5 charges 5x for requests whose prompt exceeds 100k tokens.
-      // Session totals cannot show which requests crossed that line, so this
-      // uses the short-prompt rate, as with OpenAI's long-context surcharge.
+      // Requests above Haiku 5.5's long-prompt threshold carry the
+      // long_prompt tier; see requestPriceTier.
       if (/haiku-5(?:-|\.)5(?:$|-|\[|@)/.test(model)) {
         return "claude-haiku-5-5";
       }
@@ -377,12 +376,63 @@ export function isPriceable(model: string): boolean {
   return canonicalModel(model) !== null;
 }
 
+/** Request-level rate modifiers. `fast` is Anthropic's fast mode; `long_prompt`
+ * is a model's surcharge for prompts above a published length. */
+export const PRICE_TIERS = ["standard", "fast", "long_prompt"] as const;
+export type PriceTier = (typeof PRICE_TIERS)[number];
+
+// Haiku 5.5 bills every token category at 5x once the prompt (uncached input
+// plus cache reads and writes) exceeds 100,000 tokens.
+const HAIKU_5_5_LONG_PROMPT_TOKENS = 100_000;
+const HAIKU_5_5_LONG_PROMPT_MULTIPLIER = 5;
+// Fast mode doubles every token category, cache included, on the Opus models
+// that offer it. Opus 4.6 accepts the flag but bills standard rates, so it is
+// left out rather than matched by the shared claude-opus tier.
+const FAST_MODE_MULTIPLIER = 2;
+const FAST_MODE_MODEL = /opus-(?:5(?:[-.]5)?|4[-.]8)(?:$|-|\[|@)/;
+
+export function isPriceTier(value: string): value is PriceTier {
+  return (PRICE_TIERS as readonly string[]).includes(value);
+}
+
+/** The tier one API request bills at, from its model, usage, and the `speed`
+ * the provider reported for it. */
+export function requestPriceTier(
+  model: string | null | undefined,
+  usage: TokenUsage,
+  speed: string | null | undefined,
+): PriceTier {
+  if (model == null) {
+    return "standard";
+  }
+  if (speed === "fast" && FAST_MODE_MODEL.test(model.toLowerCase())) {
+    return "fast";
+  }
+  const prompt = usage.input + usage.cacheRead + usage.cacheCreation;
+  if (canonicalModel(model) === "claude-haiku-5-5" && prompt > HAIKU_5_5_LONG_PROMPT_TOKENS) {
+    return "long_prompt";
+  }
+  return "standard";
+}
+
+function tierMultiplier(tier: PriceTier): number {
+  switch (tier) {
+    case "standard":
+      return 1;
+    case "fast":
+      return FAST_MODE_MULTIPLIER;
+    case "long_prompt":
+      return HAIKU_5_5_LONG_PROMPT_MULTIPLIER;
+  }
+}
+
 export function estimateCost(
   model: string | null | undefined,
   usage: TokenUsage,
   pricing: ReadonlyMap<string, Price>,
+  tier: PriceTier = "standard",
 ): number {
-  const parts = estimateCostParts(model, usage, pricing);
+  const parts = estimateCostParts(model, usage, pricing, tier);
   return parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
 }
 
@@ -397,6 +447,7 @@ export function estimateCostParts(
   model: string | null | undefined,
   usage: TokenUsage,
   pricing: ReadonlyMap<string, Price>,
+  tier: PriceTier = "standard",
 ): CostParts {
   if (model == null) {
     return emptyCostParts();
@@ -410,7 +461,8 @@ export function estimateCostParts(
     return emptyCostParts();
   }
 
-  const per = (tokens: number, rate: number): number => (tokens * rate) / 1_000_000.0;
+  const multiplier = tierMultiplier(tier);
+  const per = (tokens: number, rate: number): number => (tokens * rate * multiplier) / 1_000_000.0;
   // Clamped: a source that reports a 1h figure larger than the total must not
   // produce a negative 5-minute remainder.
   const creationTotal = Math.max(0, usage.cacheCreation);

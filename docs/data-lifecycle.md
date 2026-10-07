@@ -278,6 +278,13 @@ tombstoned a session. A sync that finds every source unchanged leaves the
 existing links alone, so a change to the inference rules ships with an ingest
 pipeline revision bump that re-derives them.
 
+Each session's usage is also stored split by model and price tier in
+`session_model_usage`, derived from the per-request usage already kept on its
+messages. Sync builds the split for sessions stored before the table existed,
+or under an older split rule, from those archived rows, so it reaches sessions
+whose source files are gone without a re-ingest. On a large archive the first
+backfill can take several seconds; later syncs find nothing to rebuild.
+
 Costs are materialized at ingest and reconciled with current pricing on every
 sync. This includes unchanged and archived sessions, even when their source
 files are no longer available. Session costs and cached activity cost components

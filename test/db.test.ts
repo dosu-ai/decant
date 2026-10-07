@@ -119,6 +119,7 @@ const BASELINE_TABLES = [
   "schema_migrations",
   "session",
   "session_economics",
+  "session_model_usage",
   "session_user_state",
   "tool_call",
 ];
@@ -302,6 +303,30 @@ describe("openDb", () => {
     expect(names).toContain("idx_block_call_tool_use_id");
     expect(names).not.toContain("idx_session_tool");
     expect(names).not.toContain("idx_session_source");
+    closeDb(migrated);
+  });
+
+  test("adds the per-model usage table when upgrading a v24 archive", () => {
+    const path = freshPath();
+    const fresh = openDb(path);
+    const expected = buildSchemaManifest(fresh);
+    fresh.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, total_input_tokens)
+      VALUES (1, 'claude_code', 'kept', 'claude-opus-5-5', 10);
+      DROP TABLE session_model_usage;
+      DELETE FROM schema_migrations WHERE version > 24;
+    `);
+    closeDb(fresh);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    // Rows are derived on sync, so the migration leaves the table empty and
+    // the session untouched.
+    expect(migrated.query("SELECT COUNT(*) AS n FROM session_model_usage").get()).toEqual({ n: 0 });
+    expect(migrated.query("SELECT model, total_input_tokens FROM session").get()).toEqual({
+      model: "claude-opus-5-5",
+      total_input_tokens: 10,
+    });
     closeDb(migrated);
   });
 

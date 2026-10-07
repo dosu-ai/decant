@@ -33,7 +33,7 @@ index plus local user state such as recommendations and session tombstones.
 | Composition | `src/cli.ts`, `src/cli/`, `src/config.ts` | Commands, global flags, output policy, configuration, and process lifecycle. |
 | Sources | `src/sources/`, `src/model.ts` | Pure, print-free parsers and the normalized wire model. |
 | Ingest | `src/ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, normalization writes, derived facets, and ingest issues. |
-| Economics | `src/cost.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, activity attribution, persisted vectors, and occupancy timelines. |
+| Economics | `src/cost.ts`, `src/model-usage.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, per-model usage splits, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
 | Reads | `src/query.ts`, `src/stats.ts`, `src/recommendations.ts`, `src/distill.ts` | Session retrieval, aggregates, recommendations, and deterministic artifacts. |
 | Serve | `src/server.ts`, `src/server/`, `src/route-paths.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |

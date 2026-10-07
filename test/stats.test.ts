@@ -92,8 +92,8 @@ describe("stats rollups", () => {
   test("elides recursive visibility work while session user state is empty", () => {
     const db = freshDb();
     db.exec(`
-      INSERT INTO session(id, tool, source_session_id, started_at)
-      VALUES (1, 'codex', 'visible-root', '2026-05-01T10:00:00Z');
+      INSERT INTO session(id, tool, source_session_id, started_at, model)
+      VALUES (1, 'codex', 'visible-root', '2026-05-01T10:00:00Z', 'gpt-5');
     `);
 
     const emptyStatePredicate = sessionUserStatePredicateForDatabase(db, "s");
@@ -381,12 +381,12 @@ describe("stats rollups", () => {
       // 01:00 on Jan 16 in UTC+14 is still Jan 15 in UTC.
       const now = new Date("2030-01-15T11:00:00.000Z");
       db.exec(`
-        INSERT INTO session(id, tool, source_session_id, started_at, is_subagent)
+        INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, model)
         VALUES
-          (1, 'codex', 'yesterday-local', '2030-01-15T09:59:59.900Z', 0),
-          (2, 'codex', 'today-local-start', '2030-01-15T10:00:00Z', 0),
-          (3, 'codex', 'today-local-late', '2030-01-16T09:59:59.999Z', 0),
-          (4, 'codex', 'tomorrow-local', '2030-01-16T10:00:00.000Z', 0);
+          (1, 'codex', 'yesterday-local', '2030-01-15T09:59:59.900Z', 0, 'gpt-5'),
+          (2, 'codex', 'today-local-start', '2030-01-15T10:00:00Z', 0, 'gpt-5'),
+          (3, 'codex', 'today-local-late', '2030-01-16T09:59:59.999Z', 0, 'gpt-5'),
+          (4, 'codex', 'tomorrow-local', '2030-01-16T10:00:00.000Z', 0, 'gpt-5');
       `);
       expect(todayTotals(db, now).sessions).toBe(2);
       db.close();
@@ -532,7 +532,9 @@ describe("stats rollups", () => {
 
   test("by project uses placeholder when a session has no project", () => {
     const db = freshDb();
-    db.exec("INSERT INTO session(id, tool, source_session_id) VALUES (1, 'codex', 's1');");
+    db.exec(
+      "INSERT INTO session(id, tool, source_session_id, model) VALUES (1, 'codex', 's1', 'gpt-5');",
+    );
     expect(byDimension(db, "project")[0]?.key).toBe("(none)");
     db.close();
   });

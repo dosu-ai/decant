@@ -106,6 +106,14 @@ Deletion removes the live rows. SQLite may leave deleted text recoverable in
 freed pages until `decant db vacuum` rewrites the archive. See
 [What the archive stores](../data-lifecycle.md#what-the-archive-stores).
 
+Session visibility also excludes sessions that hold no conversation. Claude Code
+transcripts containing only local slash-command output, and Codex threads that
+were created but never sent a prompt, are hidden from default lists, the
+search index, and aggregate statistics in the same way as archived sessions.
+Their rows stay in the archive and remain readable by id through
+`GET /api/sessions/:id`. Each becomes visible once its source gains a real
+prompt or reply.
+
 `POST /api/launch/agent` accepts a `key` only when it uses the characters
 recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
 `POST /api/launch/ide` requires an absolute `dir` that matches a project path or
@@ -137,8 +145,11 @@ reach a route handler.
 No documented request comes close to that size.
 
 `GET /api/sessions/search-index` returns lightweight metadata for every visible,
-non-archived top-level session. It is the command palette's local fuzzy-search
-haystack and intentionally omits transcript content.
+non-archived top-level session. A session is visible when it is not user-archived,
+not deleted, and not an empty conversation (Claude Code sessions that contain only
+local slash-command output or Codex threads that were created but never received
+a prompt). The search index is the command palette's local fuzzy-search haystack
+and intentionally omits transcript content.
 
 ## Server-Sent Events
 

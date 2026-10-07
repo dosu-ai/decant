@@ -209,13 +209,14 @@ describe("server routes", () => {
         UNION ALL
         SELECT value + 1 FROM numbered WHERE value < 110
       )
-      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent)
+      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent, model)
       SELECT
         'codex',
         'limit-cap-' || value,
         'Session ' || value,
         '2026-07-29T12:00:00Z',
-        0
+        0,
+        'gpt-5'
       FROM numbered;
     `);
     expect(listSessions(db, { limit: 10_000 })).toHaveLength(110);
@@ -264,8 +265,8 @@ describe("server routes", () => {
     const config = freshConfig();
     const db = openDb(config.dbPath);
     db.exec(`
-      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent)
-      VALUES ('codex', 'usage-cap', 'Usage cap', '2026-07-29T12:00:00Z', 0);
+      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent, model)
+      VALUES ('codex', 'usage-cap', 'Usage cap', '2026-07-29T12:00:00Z', 0, 'gpt-5');
       WITH RECURSIVE numbered(value) AS (
         SELECT 1
         UNION ALL

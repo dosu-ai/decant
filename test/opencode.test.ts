@@ -15,6 +15,7 @@ import {
   parseOpenCodeSession,
 } from "../src/sources/opencode.ts";
 import { OpenCodeStore } from "../src/sources/opencode-store.ts";
+import { openCodeUsage } from "../src/sources/opencode-usage.ts";
 import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-parser-test-"));
@@ -234,6 +235,21 @@ describe("parseOpenCodeSession", () => {
     expect(session.totals).toEqual(
       session.messages[0]?.usage as NonNullable<typeof session.totals>,
     );
+  });
+
+  test("maps 2.x tokens exactly as the shared mapping does for disjoint rows", () => {
+    // One mapping serves both readers: a 2.x row is the 1.x "disjoint" case.
+    const cases: Record<string, Json>[] = [
+      { input: 10, output: 5, reasoning: 7, cache: { read: 3, write: 2 } },
+      { input: 120, output: 30, reasoning: 0, cache: { read: 40, write: 16 } },
+      { input: 4, output: 2, reasoning: 9 },
+      { input: -1, output: 2.5, reasoning: "3", cache: { read: null, write: 7 } },
+      {},
+    ];
+    for (const tokens of cases) {
+      const { session } = parseOpenCodeSession(sessionRow(), [assistant(1, { tokens })], context);
+      expect(session.messages[0]?.usage ?? null).toEqual(openCodeUsage(tokens, "disjoint"));
+    }
   });
 
   test("names MCP tools from the configured servers and classifies web search as a tool call", () => {

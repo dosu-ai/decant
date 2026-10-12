@@ -12,10 +12,10 @@ import {
   type Role,
   reasoningEffortLevels,
   summarizeReasoningEfforts,
-  type TokenUsage,
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
+import { addTokenUsage, openCodeUsage } from "./opencode-usage.ts";
 import {
   block,
   contentText,
@@ -180,9 +180,9 @@ export function parseOpenCodeSession(
       if (model.variant != null && model.variant !== "default") {
         efforts.push(model.variant);
       }
-      const usage = usageFrom(data.tokens);
+      const usage = openCodeUsage(data.tokens, "disjoint");
       if (usage != null) {
-        totals = addUsage(totals, usage);
+        totals = addTokenUsage(totals, usage);
         sawUsage = true;
       }
       const { blocks, results } = assistantContent(data.content, servers);
@@ -203,9 +203,9 @@ export function parseOpenCodeSession(
       }
     } else if (typ === "compaction") {
       const model = modelRef(data.model);
-      const usage = usageFrom(data.tokens);
+      const usage = openCodeUsage(data.tokens, "disjoint");
       if (usage != null) {
-        totals = addUsage(totals, usage);
+        totals = addTokenUsage(totals, usage);
         sawUsage = true;
       }
       const status = asString(data.status);
@@ -512,41 +512,6 @@ function modelRef(value: Json | undefined): OpenCodeModelRef {
     providerID: asString(get(value, "providerID")),
     id: asString(get(value, "id")),
     variant: asString(get(value, "variant")),
-  };
-}
-
-/** OpenCode's token fields are disjoint: `output` excludes `reasoning` and
- * `input` excludes cached tokens. Decant treats reasoning as part of output
- * and prices cache reads and writes separately, so the mapping is additive. */
-function usageFrom(tokens: Json | undefined): TokenUsage | null {
-  if (!isObject(tokens)) {
-    return null;
-  }
-  const reasoning = integerAt(tokens, "reasoning");
-  const cache = tokens.cache;
-  return {
-    input: integerAt(tokens, "input"),
-    output: integerAt(tokens, "output") + reasoning,
-    cacheRead: isObject(cache) ? integerAt(cache, "read") : 0,
-    cacheCreation: isObject(cache) ? integerAt(cache, "write") : 0,
-    cacheCreation1h: 0,
-    reasoning,
-  };
-}
-
-function integerAt(value: JsonObject, key: string): number {
-  const v = value[key];
-  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
-}
-
-function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheCreation: a.cacheCreation + b.cacheCreation,
-    cacheCreation1h: a.cacheCreation1h + b.cacheCreation1h,
-    reasoning: a.reasoning + b.reasoning,
   };
 }
 

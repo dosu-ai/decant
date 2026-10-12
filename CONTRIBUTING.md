@@ -101,8 +101,10 @@ Maintainers squash-merge pull requests.
 
 ## Security and privacy
 
-- Never commit real Claude Code or Codex transcripts, a personal Decant
-  archive, exported real sessions, tokens, keys, or `.env` files.
+- Never commit real Claude Code or Codex transcripts, Gemini CLI or OpenCode
+  sessions (including OpenCode's `opencode.db`), a personal Decant archive,
+  exported real sessions, tokens, keys, or `.env` files. Do not put content from
+  these sources in fixtures or issues without sanitising it first.
 - Write fixtures from scratch using invented prompts, paths, tool results, and
   identifiers. Editing a real transcript does not make it synthetic.
 - Keep logs and issue output redacted. Prefer record shapes, counts, and field

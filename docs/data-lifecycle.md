@@ -325,9 +325,12 @@ it can be reconstructed from transcripts.
 
 `session_model_usage.reported_cost_usd` holds the cost a source recorded for a
 model Decant cannot price (OpenCode records one per request). It is set when
-the session is ingested and is part of the cost every sync reconciles, so a
-rate added later replaces the recorded figure with Decant's estimate on the
-next sync.
+the usage rows are derived, at ingest or by a format-version backfill, and is
+part of the cost every sync reconciles, so a rate added later replaces the
+recorded figure with Decant's estimate on the next sync. The reverse needs a
+re-derive: rows derived while a model had a rate store no recorded figure, so
+removing a rate requires bumping `MODEL_USAGE_FORMAT_VERSION`, which rebuilds
+the rows from the stored messages without the source database.
 
 ## API visibility
 

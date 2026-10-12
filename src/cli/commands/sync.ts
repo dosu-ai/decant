@@ -133,7 +133,10 @@ export function registerSyncCommands(ctx: CliContext): void {
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )
-    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--no-fs-watch",
+      "disable native filesystem watching and rely on sweeps (OpenCode databases are still polled)",
+    )
     .action(
       (commandOptions: {
         claudeDir?: string;
@@ -182,7 +185,10 @@ export function registerSyncCommands(ctx: CliContext): void {
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )
-    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--no-fs-watch",
+      "disable native filesystem watching and rely on sweeps (OpenCode databases are still polled)",
+    )
     .option(
       "--trusted-peer <peer>",
       "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",

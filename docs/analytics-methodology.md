@@ -112,7 +112,8 @@ which is a placeholder, not a price. A reported cost has no input/output
 split; token-economics totals carry it as `reported_cost_usd`, and activity
 buckets receive it by context-window share.
 
-A session's `model` is the model that served most of its requests. The model
+For Claude Code, a session's `model` is the model that served most of its
+requests; other sources use the model their session metadata records. The model
 breakdown counts each session once, under that label, but splits tokens and
 estimated cost by the model behind each request. A model can therefore show
 tokens and cost with zero sessions. Each session's stored cost is divided among

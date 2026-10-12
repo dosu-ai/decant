@@ -126,6 +126,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
         geminiDir: config.geminiDir,
+        opencodeDir: config.opencodeDir,
         version: DECANT_VERSION,
       }),
   },

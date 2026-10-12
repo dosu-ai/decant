@@ -1423,7 +1423,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, version]
       properties:
         dbPath:
           type: string
@@ -1432,6 +1432,8 @@ components:
         codexDir:
           type: string
         geminiDir:
+          type: string
+        opencodeDir:
           type: string
         version:
           type: string
@@ -1764,6 +1766,8 @@ components:
         - total_input_tokens
         - total_output_tokens
         - estimated_cost_usd
+        - cost_source
+        - model_provider
         - user_state
         - is_user_archived
         - is_archived
@@ -1828,6 +1832,19 @@ components:
         estimated_cost_usd:
           type: number
           minimum: 0
+        cost_source:
+          type: string
+          enum: [decant, reported, mixed]
+          description: >-
+            Where estimated_cost_usd came from: Decant's rate table (decant),
+            the source's own recorded per-request cost for a model Decant
+            cannot price (reported; OpenCode records one), or a mix across the
+            session's model rows (mixed).
+        model_provider:
+          type: [string, "null"]
+          description: >-
+            Provider route the session's model ran through, when the source
+            records one (OpenCode's providerID). Null for other sources.
         user_state:
           type: [string, "null"]
           enum: [archived, deleted, null]
@@ -2436,6 +2453,7 @@ components:
             - estimated_cost_usd
             - input_cost_usd
             - output_cost_usd
+            - reported_cost_usd
             - active_ms
             - waiting_on_user_ms
             - attributed_ms
@@ -2455,6 +2473,13 @@ components:
             output_cost_usd:
               type: number
               minimum: 0
+            reported_cost_usd:
+              type: number
+              minimum: 0
+              description: >-
+                Cost taken from the source's own record for models Decant
+                cannot price. Included in estimated_cost_usd and never split
+                into input_cost_usd or output_cost_usd.
             active_ms:
               type: number
               minimum: 0

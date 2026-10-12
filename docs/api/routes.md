@@ -122,6 +122,19 @@ root path in the archive. Both answer `400 invalid_request` otherwise.
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.
 
+Session summaries carry `cost_source`. `decant` means `estimated_cost_usd`
+was priced from token usage at Decant's rates. `reported` means the source
+recorded a per-request cost and Decant has no rate for the model, so the
+recorded figure is shown (OpenCode records one; a recorded zero is never
+used). `mixed` means some of the session's model rows were priced each way.
+The label is decided when the session is read: a recorded figure counts only
+while Decant still has no rate for its model, so a model that gains a rate
+later reads as `decant` even if a figure was stored earlier.
+Token-economics totals expose the reported share as `reported_cost_usd`.
+`model_provider` is the provider route the model ran through when the source
+records one. `GET /api/config` includes `opencodeDir`, the OpenCode data
+directory being read.
+
 ### Session listing and command-palette index
 
 `GET /api/sessions` returns a bare newest-first array, not an envelope with a

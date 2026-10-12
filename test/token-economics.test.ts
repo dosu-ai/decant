@@ -1186,6 +1186,27 @@ describe("archive aggregation", () => {
     expect(split.totals.estimated_cost_usd).toBeCloseTo(0.4, 12);
   });
 
+  test("charges reported cost to buckets by window share without splitting it", () => {
+    const withWindow = { ...vector(1, 0, 10, 0), reported_cost: 0.5 };
+    const result = aggregateEconomicsVectors([withWindow]);
+    expect(result.totals).toMatchObject({
+      estimated_cost_usd: 0.5,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      reported_cost_usd: 0.5,
+    });
+    expect(
+      result.buckets.find((bucket) => bucket.bucket === "context")?.estimated_cost_usd,
+    ).toBeCloseTo(0.5, 12);
+
+    const idle = { ...vector(2, 0, 0, 0), reported_cost: 0.25 };
+    const idleResult = aggregateEconomicsVectors([idle]);
+    expect(
+      idleResult.buckets.find((bucket) => bucket.bucket === "context")?.estimated_cost_usd,
+    ).toBeCloseTo(0.25, 12);
+    expect(idleResult.totals.reported_cost_usd).toBe(0.25);
+  });
+
   test("rounds each total once and apportions it to rows and phases", () => {
     const even = (amount: number, orientation: number) => ({
       generation: amount,

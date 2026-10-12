@@ -342,6 +342,7 @@ describe("server routes", () => {
       claudeDir: config.claudeDir,
       codexDir: config.codexDir,
       geminiDir: config.geminiDir,
+      opencodeDir: config.opencodeDir,
     });
   });
 

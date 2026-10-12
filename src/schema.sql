@@ -1,11 +1,12 @@
--- decant:schema_version=25
--- Effective decant schema (migrations 1..25 applied), frozen as the current
+-- decant:schema_version=26
+-- Effective decant schema (migrations 1..26 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
 -- tool-use blocks by tool_use_id and drops two session indexes that duplicate
 -- UNIQUE(tool, source_session_id). v25 splits each session's token usage by the
 -- model and price tier that served it, so mixed-model sessions price correctly.
+-- v26 keeps a source-reported cost per usage row for models Decant cannot price.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -189,6 +190,7 @@ CREATE TABLE session_model_usage (
   cache_creation_tokens INTEGER NOT NULL,
   cache_creation_1h_tokens INTEGER NOT NULL,
   format_version INTEGER NOT NULL,
+  reported_cost_usd REAL,
   PRIMARY KEY (session_id, model, tier)
 ) WITHOUT ROWID;
 CREATE TABLE session_user_state (

@@ -1,6 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeTranscript } from "@letta-ai/trajectory";
@@ -429,8 +438,17 @@ describe("opencode parity: 1.x reference totals", () => {
   test("never modifies the OpenCode database", () => {
     const path = freshPath();
     buildOpenCodeFixtureDb(path, MIXED);
-    const before = readFileSync(path);
-    const mtime = statSync(path).mtimeMs;
+    // Read the bytes and mtime through one descriptor so both describe the
+    // same file state.
+    const snapshot = () => {
+      const fd = openSync(path, "r");
+      try {
+        return { bytes: readFileSync(fd), mtimeMs: fstatSync(fd).mtimeMs };
+      } finally {
+        closeSync(fd);
+      }
+    };
+    const before = snapshot();
     withDb(path, (db) => {
       readLegacyModelTotals(db);
       readLegacyCompaction(db);
@@ -438,8 +456,9 @@ describe("opencode parity: 1.x reference totals", () => {
       readOpenCodeAssistantRows(db);
       exportOf(db, "ses_v1_sample");
     });
-    expect(readFileSync(path).equals(before)).toBe(true);
-    expect(statSync(path).mtimeMs).toBe(mtime);
+    const after = snapshot();
+    expect(after.bytes.equals(before.bytes)).toBe(true);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 });
 

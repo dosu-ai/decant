@@ -1,4 +1,6 @@
-// Read-only access to an OpenCode 2.x database. OpenCode owns the file and
+// Read-only access to an OpenCode database: the 2.x tables (`session_v2`,
+// `session_message`) and the 1.x tables (`session`, `message`, `part`), which
+// one file may hold side by side. OpenCode owns the file and
 // keeps it in WAL mode; this module only reads. The connection is opened
 // read-only (never `immutable`), so the -wal and -shm files stay visible and
 // rows OpenCode committed since the last checkpoint are seen. Nothing here
@@ -11,13 +13,21 @@ import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { queryRow, queryRows } from "../sqlite-statements.ts";
 import type { OpenCodeMessageRow, OpenCodeSessionRow } from "./opencode.ts";
+import type {
+  OpenCodeLegacyMessageRow,
+  OpenCodeLegacyPartRow,
+  OpenCodeLegacySessionRow,
+} from "./opencode-legacy.ts";
 
 export interface OpenCodeSessionRef {
   dbPath: string;
   sessionId: string;
-  /** Per-session database fingerprint (see `openCodeFingerprint`). Ingest
-   * adds the session's MCP server names to it to form the change key stored
-   * in `ingest_source.hash`, so an unchanged session is skipped. */
+  /** `v2` = session_v2/session_message; `v1` = session/message/part. */
+  format: "v1" | "v2";
+  /** Per-session database fingerprint (see `openCodeFingerprint` and
+   * `openCodeLegacyFingerprint`). Ingest adds the session's MCP server names
+   * to it to form the change key stored in `ingest_source.hash`, so an
+   * unchanged session is skipped. */
   fingerprint: string;
   timeUpdated: number;
   /** The session's working directory, which decides its project MCP configs. */
@@ -27,6 +37,14 @@ export interface OpenCodeSessionRef {
 export interface OpenCodeLoadedSession {
   session: OpenCodeSessionRow;
   messages: OpenCodeMessageRow[];
+}
+
+export interface OpenCodeLegacyLoadedSession {
+  session: OpenCodeLegacySessionRow;
+  /** Ordered by `time_created, id`, as OpenCode 1.x reads them. */
+  messages: OpenCodeLegacyMessageRow[];
+  /** Ordered by `message_id, id`, as OpenCode 1.x reads them. */
+  parts: OpenCodeLegacyPartRow[];
 }
 
 interface FingerprintRow {
@@ -51,6 +69,56 @@ export function openCodeFingerprint(
   return `${timeUpdated}:${messageCount}:${maxSeq ?? -1}:${maxMessageUpdated ?? -1}`;
 }
 
+interface LegacyFingerprintRow {
+  id: string;
+  directory: string | null;
+  time_updated: number;
+  message_count: number;
+  part_count: number;
+  max_message_updated: number | null;
+  max_part_updated: number | null;
+}
+
+/** 1.x keeps parts in their own table and rewrites them while streaming, and
+ * `session.time_updated` does not move when a message is appended, so the key
+ * covers both tables. The `v1:` prefix keeps it distinct from a 2.x key for the
+ * same virtual path, so switching which format a session is read from always
+ * re-ingests it. */
+export function openCodeLegacyFingerprint(
+  timeUpdated: number,
+  messageCount: number,
+  partCount: number,
+  maxMessageUpdated: number | null,
+  maxPartUpdated: number | null,
+): string {
+  return `v1:${timeUpdated}:${messageCount}:${partCount}:${maxMessageUpdated ?? -1}:${maxPartUpdated ?? -1}`;
+}
+
+/** Every column `OpenCodeLegacySessionRow` reads. Later 1.x releases added
+ * `cost`, `tokens_*`, `agent`, and `model` one migration at a time, so each
+ * column is selected only if the table has it and reads as NULL otherwise. */
+const LEGACY_SESSION_COLUMNS = [
+  "id",
+  "project_id",
+  "parent_id",
+  "slug",
+  "directory",
+  "title",
+  "version",
+  "cost",
+  "tokens_input",
+  "tokens_output",
+  "tokens_reasoning",
+  "tokens_cache_read",
+  "tokens_cache_write",
+  "revert",
+  "agent",
+  "model",
+  "time_created",
+  "time_updated",
+  "time_archived",
+] as const satisfies readonly (keyof OpenCodeLegacySessionRow)[];
+
 export class OpenCodeStore {
   readonly path: string;
   readonly #db: Database;
@@ -67,8 +135,8 @@ export class OpenCodeStore {
     return new OpenCodeStore(path, db);
   }
 
-  /** A database written only by OpenCode 1.x has `session`/`message`/`part`
-   * and no `session_v2`; PR 3 reads those. */
+  /** The 2.x tables. A database written only by OpenCode 1.x lacks them; see
+   * `listLegacySessions` for its sessions. */
   hasSessionTables(): boolean {
     return hasTable(this.#db, "session_v2") && hasTable(this.#db, "session_message");
   }
@@ -90,6 +158,7 @@ export class OpenCodeStore {
       .map((row) => ({
         dbPath: this.path,
         sessionId: row.id,
+        format: "v2" as const,
         fingerprint: openCodeFingerprint(
           row.time_updated,
           row.message_count,
@@ -124,6 +193,99 @@ export class OpenCodeStore {
       [sessionId],
     );
     return { session, messages };
+  }
+
+  /** The 1.x tables: `session`, `message`, and `part` all present. Every 2.x
+   * database carries them too (2.x replays the 1.x migrations), usually empty. */
+  hasLegacyTables(): boolean {
+    return ["session", "message", "part"].every((table) => hasTable(this.#db, table));
+  }
+
+  /** Every session the 1.x tables hold, including ids this database's
+   * `session_v2` also holds: a 1.x binary can keep writing a session after 2.x
+   * migrated it, so which copy is current is decided by ingest from
+   * `timeUpdated`, not here. */
+  listLegacySessions(): OpenCodeSessionRef[] {
+    if (!this.hasLegacyTables()) {
+      return [];
+    }
+    // One read transaction, so the session row and its message and part counts
+    // come from the same WAL snapshot while OpenCode writes.
+    const rows = this.#db
+      .transaction(() =>
+        queryRows<LegacyFingerprintRow>(
+          this.#db,
+          `SELECT s.id, s.directory, s.time_updated,
+                  COALESCE(m.n, 0) AS message_count,
+                  COALESCE(p.n, 0) AS part_count,
+                  m.latest AS max_message_updated,
+                  p.latest AS max_part_updated
+             FROM session s
+             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest
+                          FROM message GROUP BY session_id) m ON m.session_id = s.id
+             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest
+                          FROM part GROUP BY session_id) p ON p.session_id = s.id`,
+        ),
+      )
+      .deferred();
+    return rows
+      .map((row) => ({
+        dbPath: this.path,
+        sessionId: row.id,
+        format: "v1" as const,
+        fingerprint: openCodeLegacyFingerprint(
+          row.time_updated,
+          row.message_count,
+          row.part_count,
+          row.max_message_updated,
+          row.max_part_updated,
+        ),
+        timeUpdated: row.time_updated,
+        directory: row.directory,
+      }))
+      .sort((a, b) => compareCodePoints(a.sessionId, b.sessionId));
+  }
+
+  /** One 1.x session with its message and part rows, read in one transaction
+   * so all three see the same WAL snapshot even while OpenCode writes. Row
+   * `data` is returned as stored; the parser reports what it cannot read. */
+  loadLegacySession(sessionId: string): OpenCodeLegacyLoadedSession | null {
+    if (!this.hasLegacyTables()) {
+      return null;
+    }
+    const columns = new Set(
+      queryRows<{ name: string }>(this.#db, "SELECT name FROM pragma_table_info('session')").map(
+        (row) => row.name,
+      ),
+    );
+    const projection = LEGACY_SESSION_COLUMNS.map((column) =>
+      columns.has(column) ? `"${column}"` : `NULL AS "${column}"`,
+    ).join(", ");
+    return this.#db
+      .transaction((): OpenCodeLegacyLoadedSession | null => {
+        const session = queryRow<OpenCodeLegacySessionRow>(
+          this.#db,
+          `SELECT ${projection} FROM session WHERE id = ?1`,
+          [sessionId],
+        );
+        if (session == null) {
+          return null;
+        }
+        const messages = queryRows<OpenCodeLegacyMessageRow>(
+          this.#db,
+          `SELECT id, session_id, time_created, time_updated, data
+             FROM message WHERE session_id = ?1 ORDER BY time_created, id`,
+          [sessionId],
+        );
+        const parts = queryRows<OpenCodeLegacyPartRow>(
+          this.#db,
+          `SELECT id, message_id, session_id, time_created, time_updated, data
+             FROM part WHERE session_id = ?1 ORDER BY message_id, id`,
+          [sessionId],
+        );
+        return { session, messages, parts };
+      })
+      .deferred();
   }
 
   /** `limit.context` per `<providerID>/<modelID>` from OpenCode's cached

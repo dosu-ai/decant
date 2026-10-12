@@ -18,10 +18,16 @@ import {
   OpenCodeStore,
   openCodeFingerprint,
   openCodeGlobalConfigPaths,
+  openCodeLegacyFingerprint,
   parseJsonc,
   readOpenCodeMcpServers,
 } from "../src/sources/opencode-store.ts";
-import { buildOpenCodeDb, buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
+import {
+  buildOpenCodeDb,
+  buildOpenCodeFixtureDb,
+  buildOpenCodeV1Db,
+  buildOpenCodeV1FixtureDb,
+} from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-store-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -45,6 +51,7 @@ describe("OpenCodeStore", () => {
         {
           dbPath: path,
           sessionId: "ses_mcp",
+          format: "v2",
           fingerprint: "1791789660000:4:4:1791789607000",
           timeUpdated: 1791789660000,
           directory: "/decant-fixture/example",
@@ -52,6 +59,7 @@ describe("OpenCodeStore", () => {
         {
           dbPath: path,
           sessionId: "ses_sample",
+          format: "v2",
           fingerprint: "1791786060000:4:4:1791786008000",
           timeUpdated: 1791786060000,
           directory: "/decant-fixture/example",
@@ -131,6 +139,7 @@ describe("OpenCodeStore", () => {
         {
           dbPath: path,
           sessionId: "ses_live",
+          format: "v2",
           fingerprint: "9:0:-1:-1",
           timeUpdated: 9,
           directory: "/decant-fixture/example",
@@ -174,7 +183,7 @@ describe("OpenCodeStore", () => {
 
   test("never modifies the database file", () => {
     const path = freshPath();
-    buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql"]);
+    buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql", "v1-sample.sql"]);
     const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
     const beforeDigest = digest();
     const beforeMtime = statSync(path).mtimeMs;
@@ -184,6 +193,8 @@ describe("OpenCodeStore", () => {
       store.listSessions();
       store.loadSession("ses_sample");
       store.contextWindows();
+      expect(store.listLegacySessions().map((ref) => ref.sessionId)).toEqual(["ses_v1_sample"]);
+      expect(store.loadLegacySession("ses_v1_sample")?.parts).toHaveLength(16);
     } finally {
       store.close();
     }
@@ -203,6 +214,294 @@ describe("OpenCodeStore", () => {
   test("builds the fingerprint from the four change fields", () => {
     expect(openCodeFingerprint(10, 3, 7, 20)).toBe("10:3:7:20");
     expect(openCodeFingerprint(10, 0, null, null)).toBe("10:0:-1:-1");
+  });
+});
+
+describe("OpenCodeStore 1.x tables", () => {
+  const SAMPLE_FINGERPRINT = "v1:1791790060000:4:16:1791790010000:1791790010000";
+
+  test("lists a 1.x-only database with v1 fingerprints", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.hasSessionTables()).toBe(false);
+      expect(store.hasLegacyTables()).toBe(true);
+      expect(store.listSessions()).toEqual([]);
+      expect(store.loadSession("ses_v1_sample")).toBeNull();
+      expect(store.listLegacySessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_v1_sample",
+          format: "v1",
+          fingerprint: SAMPLE_FINGERPRINT,
+          timeUpdated: 1791790060000,
+          directory: "/decant-fixture/example",
+        },
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lists both copies of a migrated session, each with its own time_updated", () => {
+    // Which copy wins is ingest's decision (newest time_updated, across
+    // formats and databases), so the store reports every 1.x session.
+    const path = freshPath();
+    buildOpenCodeFixtureDb(path, ["v1/migrated.sql"]);
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.listSessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_shared",
+          format: "v2",
+          fingerprint: "1791796000000:1:0:1791796000000",
+          timeUpdated: 1791796000000,
+          directory: "/decant-fixture/example",
+        },
+      ]);
+      expect(store.listLegacySessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_shared",
+          format: "v1",
+          fingerprint: "v1:1791799999999:1:1:1791796000000:1791796000000",
+          timeUpdated: 1791799999999,
+          directory: "/decant-fixture/example",
+        },
+        {
+          dbPath: path,
+          sessionId: "ses_v1_only",
+          format: "v1",
+          fingerprint: "v1:1791796160000:2:4:1791796103000:1791796103000",
+          timeUpdated: 1791796160000,
+          directory: "/decant-fixture/example",
+        },
+      ]);
+      expect(store.loadLegacySession("ses_shared")?.session.title).toBe("Legacy copy");
+      expect(store.loadSession("ses_shared")?.session.title).toBe("Migrated copy");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lists a session with no messages or parts", () => {
+    const path = freshPath();
+    buildOpenCodeV1Db(path, [
+      `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+       VALUES ('ses_v1_empty', 'prj', 'empty', '/decant-fixture/example', 'Empty', '1.18.35', 5, 9)`,
+    ]);
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.listLegacySessions().map((ref) => ref.fingerprint)).toEqual(["v1:9:0:0:-1:-1"]);
+      expect(store.loadLegacySession("ses_v1_empty")).toMatchObject({ messages: [], parts: [] });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("changes the fingerprint when a part or message changes", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    const store = OpenCodeStore.open(path);
+    const fingerprint = () => store.listLegacySessions()[0]?.fingerprint;
+    try {
+      expect(fingerprint()).toBe(SAMPLE_FINGERPRINT);
+      const writer = new Database(path, { strict: true });
+      try {
+        // A streamed part update moves only the part's time_updated.
+        writer.exec("UPDATE part SET time_updated = 1791790020000 WHERE id = 'prt_v1s_16'");
+        const afterPartUpdate = fingerprint();
+        expect(afterPartUpdate).toBe("v1:1791790060000:4:16:1791790010000:1791790020000");
+        writer.exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                     VALUES ('prt_v1s_17', 'msg_v1s_4', 'ses_v1_sample', 1, 2, '{"type":"step-start"}')`);
+        const afterInsert = fingerprint();
+        expect(afterInsert).toBe("v1:1791790060000:4:17:1791790010000:1791790020000");
+        writer.exec("DELETE FROM part WHERE message_id = 'msg_v1s_4'");
+        writer.exec("DELETE FROM message WHERE id = 'msg_v1s_4'");
+        expect(fingerprint()).toBe("v1:1791790060000:3:15:1791790009000:1791790009000");
+      } finally {
+        writer.close();
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  test("loads rows in OpenCode's order", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    const store = OpenCodeStore.open(path);
+    try {
+      const loaded = store.loadLegacySession("ses_v1_sample");
+      expect(loaded?.messages.map((row) => row.id)).toEqual([
+        "msg_v1s_1",
+        "msg_v1s_2",
+        "msg_v1s_3",
+        "msg_v1s_4",
+      ]);
+      expect(loaded?.parts).toHaveLength(16);
+      expect(loaded?.parts.map((row) => row.id)).toEqual(
+        Array.from({ length: 16 }, (_, i) => `prt_v1s_${String(i + 1).padStart(2, "0")}`),
+      );
+      expect(loaded?.parts.every((row) => row.session_id === "ses_v1_sample")).toBe(true);
+      expect(loaded?.session).toEqual({
+        id: "ses_v1_sample",
+        project_id: "prj_v1",
+        parent_id: null,
+        slug: "v1-sample",
+        directory: "/decant-fixture/example",
+        title: "Read the example notes",
+        version: "1.18.35",
+        cost: 0.0000894,
+        tokens_input: 370,
+        tokens_output: 47,
+        tokens_reasoning: 10,
+        tokens_cache_read: 100,
+        tokens_cache_write: 16,
+        revert: null,
+        agent: "build",
+        model: '{"id":"glm-5.3-flash","providerID":"opencode-go","variant":"max"}',
+        time_created: 1791790000000,
+        time_updated: 1791790060000,
+        time_archived: null,
+      });
+      expect(store.loadLegacySession("ses_missing")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("orders messages by time_created then id, and parts by message_id then id", () => {
+    const path = freshPath();
+    buildOpenCodeV1Db(path, [
+      `INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+       VALUES ('ses_o', 'prj', 'o', '/decant-fixture/example', 'Order', '1.18.35', 1, 9);
+       INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+         ('msg_c', 'ses_o', 3, 3, '{}'),
+         ('msg_b', 'ses_o', 2, 2, '{}'),
+         ('msg_a2', 'ses_o', 2, 2, '{}'),
+         ('msg_x', 'ses_other', 1, 1, '{}');
+       INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+         ('prt_2', 'msg_c', 'ses_o', 1, 1, '{}'),
+         ('prt_1', 'msg_c', 'ses_o', 9, 9, '{}'),
+         ('prt_9', 'msg_a2', 'ses_o', 1, 1, '{}'),
+         ('prt_0', 'msg_x', 'ses_other', 1, 1, '{}');`,
+    ]);
+    const store = OpenCodeStore.open(path);
+    try {
+      const loaded = store.loadLegacySession("ses_o");
+      expect(loaded?.messages.map((row) => row.id)).toEqual(["msg_a2", "msg_b", "msg_c"]);
+      expect(loaded?.parts.map((row) => row.id)).toEqual(["prt_9", "prt_1", "prt_2"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("reads a v1.2-shaped database", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1/old-shape.sql"], "1.2");
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.hasLegacyTables()).toBe(true);
+      expect(store.listLegacySessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_v1_12",
+          format: "v1",
+          fingerprint: "v1:1791798060000:2:2:1791798003000:1791798002500",
+          timeUpdated: 1791798060000,
+          directory: "/decant-fixture/example",
+        },
+      ]);
+      const loaded = store.loadLegacySession("ses_v1_12");
+      expect(loaded?.session).toMatchObject({
+        id: "ses_v1_12",
+        version: "1.2.0",
+        title: "Old shape",
+        cost: null,
+        tokens_input: null,
+        tokens_output: null,
+        tokens_reasoning: null,
+        tokens_cache_read: null,
+        tokens_cache_write: null,
+        model: null,
+        agent: null,
+        time_archived: null,
+      });
+      expect(loaded?.messages.map((row) => row.id)).toEqual(["msg_v1t_1", "msg_v1t_2"]);
+      expect(loaded?.parts.map((row) => row.id)).toEqual(["prt_v1t_01", "prt_v1t_02"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("returns malformed row data as stored, for the parser to diagnose", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1/malformed.sql"]);
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.listLegacySessions().map((ref) => ref.fingerprint)).toEqual([
+        "v1:1791797060000:3:3:1791797003000:1791797004000",
+      ]);
+      const loaded = store.loadLegacySession("ses_v1_bad");
+      expect(loaded?.messages.map((row) => row.data)[0]).toBe("not json");
+      // The orphan part is still the session's part; ordering puts it by message id.
+      expect(loaded?.parts.map((row) => row.id)).toEqual(["prt_v1b_1", "prt_v1b_2", "prt_v1b_3"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("has no legacy sessions without all three tables", () => {
+    const path = freshPath("opencode-partial.db");
+    const partial = new Database(path, { create: true, strict: true });
+    partial.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    partial.exec("CREATE TABLE message (id TEXT PRIMARY KEY)");
+    partial.close();
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.hasLegacyTables()).toBe(false);
+      expect(store.listLegacySessions()).toEqual([]);
+      expect(store.loadLegacySession("x")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("sees 1.x rows that exist only in the WAL of a database another process holds open", () => {
+    const path = freshPath();
+    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    const writer = new Database(path, { strict: true });
+    try {
+      writer.exec("PRAGMA journal_mode = WAL;");
+      writer.exec("PRAGMA wal_autocheckpoint = 0;");
+      writer.exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                   VALUES ('prt_v1s_17', 'msg_v1s_4', 'ses_v1_sample', 1791790011000,
+                           1791790011000, '{"type":"step-start"}')`);
+      expect(statSync(`${path}-wal`).size).toBeGreaterThan(0);
+      const store = OpenCodeStore.open(path);
+      try {
+        expect(store.listLegacySessions().map((ref) => ref.fingerprint)).toEqual([
+          "v1:1791790060000:4:17:1791790010000:1791790011000",
+        ]);
+        expect(store.loadLegacySession("ses_v1_sample")?.parts.at(-1)?.id).toBe("prt_v1s_17");
+      } finally {
+        store.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
+  test("builds the v1 fingerprint from the six change fields", () => {
+    expect(openCodeLegacyFingerprint(10, 3, 5, 20, 21)).toBe("v1:10:3:5:20:21");
+    expect(openCodeLegacyFingerprint(10, 0, 0, null, null)).toBe("v1:10:0:0:-1:-1");
+    // Never equal to a 2.x key for the same virtual path.
+    expect(openCodeLegacyFingerprint(10, 0, 0, null, null)).not.toBe(
+      openCodeFingerprint(10, 0, null, null),
+    );
   });
 });
 

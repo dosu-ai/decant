@@ -197,6 +197,11 @@ and Codex wrote them.
 Read commands normally sync first. `decant serve` performs a startup sync and
 then watches the configured source directories.
 
+The web UI shows the startup sync's progress and loads its results as soon as
+it finishes, so a first launch fills the dashboard without a manual sync. Later
+watcher and sweep syncs only light the **Update** button, so new activity never
+reshuffles a page while you are reading it.
+
 Set `DECANT_NO_SYNC` or pass `--no-sync` to suppress syncs Decant starts on its
 own. With `serve`, this also disables the source watcher. It does not disable an
 operator-requested `POST /api/sync` or the UI's **Sync now** action.

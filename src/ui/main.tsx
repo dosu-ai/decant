@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { getJson } from "./api.ts";
+import { ApiError, getJson } from "./api.ts";
 import { ApiFailureState } from "./api-failure.tsx";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
@@ -41,6 +41,7 @@ import {
 import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { useSessionPage } from "./session-page.ts";
 import { collectSliceResults } from "./slice-loading.ts";
+import { isForegroundSync, parseSyncFailure, planArchiveUpdate } from "./sync-events.ts";
 import { hasOpenModal, isInteractiveTarget } from "./transcript-navigation.ts";
 import type {
   DashboardData,
@@ -89,6 +90,9 @@ function App() {
   const syncProgressThrottleRef = useRef<LatestThrottle<SyncProgress> | null>(null);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
+  const manualSyncPendingRef = useRef(false);
+  const awaitingStatsRef = useRef(false);
+  const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
@@ -128,6 +132,12 @@ function App() {
   }, []);
 
   useDisabledFocusRescue();
+
+  useEffect(() => {
+    // The SSE handlers live in a long-lived effect, so they read this ref
+    // rather than a stale closure over localSyncing.
+    localSyncingRef.current = localSyncing;
+  }, [localSyncing]);
 
   useEffect(() => {
     document.title = documentTitleFor(path, navItems);
@@ -216,6 +226,14 @@ function App() {
         } else {
           setArchiveUpdateAvailable(true);
         }
+        // A sync seen only over this stream may have finished, failed, or died
+        // with the server while disconnected, so its terminal event is lost.
+        // A later progress event restores the indicator if it is still running.
+        if (!manualSyncPendingRef.current) {
+          progressThrottle.cancel();
+          setLocalSyncing(false);
+          setSyncProgress(null);
+        }
       }
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
@@ -230,7 +248,7 @@ function App() {
           progress?: SyncProgress;
           reason?: string;
         };
-        if (payload.reason !== "manual") {
+        if (!isForegroundSync(payload.reason)) {
           return;
         }
         if (payload.progress != null) {
@@ -250,7 +268,7 @@ function App() {
         // Treat malformed events as background updates so a broken optional
         // payload cannot cause an unexpected page refresh.
       }
-      if (payload.reason !== "manual") {
+      if (!isForegroundSync(payload.reason)) {
         return;
       }
       progressThrottle.flush();
@@ -275,15 +293,35 @@ function App() {
         // Unknown archive updates remain pending until the user asks to load
         // them, preserving the current page while they scroll or inspect it.
       }
-      if (payload.reason === "manual" || payload.reason === "session_state") {
+      const plan = planArchiveUpdate(
+        payload.reason,
+        awaitingStatsRef.current,
+        localSyncingRef.current,
+      );
+      awaitingStatsRef.current = plan.awaitingStats;
+      if (plan.refresh) {
         setArchiveUpdateAvailable(false);
         requestRefresh();
         return;
       }
-      setArchiveUpdateAvailable(true);
+      if (plan.offerUpdate) {
+        setArchiveUpdateAvailable(true);
+      }
     };
     const handleOpen = () => markConnected();
-    const handleError = () => {
+    const handleError = (event: Event) => {
+      const failure = parseSyncFailure(event);
+      if (failure != null) {
+        markConnected();
+        if (isForegroundSync(failure.reason)) {
+          progressThrottle.cancel();
+          setLocalSyncing(false);
+          setSyncProgress(null);
+          // Matches what a failed POST /api/sync shows, so Retry runs a sync.
+          setSyncError(new ApiError(500, "internal_error", failure.error));
+        }
+        return;
+      }
       liveDroppedRef.current = true;
       if (liveDisconnectTimerRef.current != null) {
         return;
@@ -370,7 +408,11 @@ function App() {
     setSyncProgress(null);
     setArchiveUpdateAvailable(false);
     setLocalSyncing(true);
+    manualSyncPendingRef.current = true;
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
+      .finally(() => {
+        manualSyncPendingRef.current = false;
+      })
       .then(() => {
         syncProgressThrottleRef.current?.flush();
         setArchiveUpdateAvailable(false);

@@ -51,11 +51,14 @@ By default Decant discovers:
   with `session_message` but no `session_v2`) is skipped with a warning until
   a 2.x release converts it, and is never read as 1.x. Sessions in the JSON
   `storage/` directory that OpenCode used before 1.2 are not read.
-- OpenCode 1.x's cached models.dev catalog,
-  `$XDG_CACHE_HOME/opencode/models.json` (default
-  `~/.cache/opencode/models.json`), read-only, for context windows. OpenCode
-  2.x keeps the catalog in its database. Without a cached catalog the context
-  window stays unknown; Decant never fetches it.
+- OpenCode 1.x's cached models.dev catalog, for context windows of sessions
+  in a database that holds no catalog of its own (OpenCode 2.x keeps it in
+  the database; 1.x does not). The file is `OPENCODE_MODELS_PATH` when that is
+  set, as in OpenCode, else `$XDG_CACHE_HOME/opencode/models.json` (default
+  `~/.cache/opencode/models.json`). Decant reads it read-only, at most once per
+  sync, and never fetches a catalog. When the file is missing (logged at info
+  level) or unreadable (a warning), the context window stays unknown, and the
+  affected sessions are re-derived once on the first sync that can read it.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks, and
@@ -66,8 +69,11 @@ newest message update. A 1.x session's key covers the session's update time,
 its message and part counts, the newest and summed update times of its
 messages and of its parts, and a digest of the session's title, archive time,
 and usage columns, because OpenCode 1.x renames or archives a session without
-moving its update time. The two layouts' keys never coincide, so a session
-whose copy moves to the other layout is always re-ingested. An OpenCode
+moving its update time. A 2.x session that also has a 1.x copy in the same
+database (one OpenCode migrated) appends that copy's key, because its usage is
+read from that copy, so a change there re-derives it. The two layouts' keys
+never coincide, so a session whose copy moves to the other layout is always
+re-ingested. An OpenCode
 session's change key also covers the MCP server names from the OpenCode
 configs that apply to its directory, so editing those names re-derives the
 affected sessions once. After a parser correction, the next

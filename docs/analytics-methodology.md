@@ -126,15 +126,23 @@ at the next prompt; OpenCode's own migration keeps them too. A 1.x message
 that holds only a subtask (a `/command` run as a subagent) is kept as a system
 message, `Subtask (<agent>): <description>`, so the turn stays visible.
 
-When OpenCode upgrades from 1.x it migrates sessions into its 2.x tables.
-Decant reads migrated rows with the 1.x rules that still apply to them: the
-session's version decides the reasoning convention (the migration does not
-copy `total`), `filePath` tool inputs produce file references, and `task`
-calls link subagents. The migration copies each message's last-step token counts only, so
-a migrated 1.x message that took several steps (a retry within one request)
-reads lower than the original. When a 1.x binary keeps writing a session after
-the migration, its 1.x copy is newer, and Decant reads that copy with exact
-per-step usage.
+When OpenCode upgrades from 1.x it migrates sessions into its 2.x tables and
+keeps the 1.x tables. The migration keeps message IDs but copies only each
+message's last-step token counts, drops `total`, and folds a compaction request
+and its summary into one compaction row with no usage. So when a 2.x session's
+ID is also in the same database's 1.x tables, Decant reads its usage from the
+1.x copy: each migrated assistant row takes the sum of its 1.x per-step
+records, under the 1.x reasoning rules above, and a migrated compaction row
+takes its summary's usage, model, and recorded cost. Rows the 1.x copy does not
+hold were written by OpenCode 2.x after the migration and are read as 2.x rows.
+If the 1.x copy is gone, Decant reads every row of the session by the
+session's version, with last-step counts only, and a 2.x row added to a
+session created before v1.3.16 can then be misread as already holding its
+reasoning. Migrated rows keep their 1.x tool names and inputs: `read`, `edit`,
+`write`, and `multiedit` calls give their `filePath` input as a file reference
+(as for 1.x sessions), and `task` calls link subagents. When a 1.x binary
+keeps writing a session after the migration, its 1.x copy is newer, and Decant
+reads that copy instead.
 
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
@@ -419,8 +427,9 @@ For one model call, occupancy is:
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
 an explicit model window, and OpenCode sessions take theirs from the models.dev
-catalog OpenCode caches (in its database for 2.x, in a `models.json` cache
-file for 1.x; the window is unknown when no cache exists). Claude and Gemini infer the window from the model
+catalog OpenCode caches (in its database for 2.x; for a database with no
+catalog, which is how 1.x leaves it, the `models.json` cache file 1.x keeps; the
+window is unknown when neither exists). Claude and Gemini infer the window from the model
 when the source does not record one, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.

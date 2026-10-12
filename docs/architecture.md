@@ -53,7 +53,9 @@ both OpenCode's 2.x tables and its 1.x tables, and hands plain rows to the
 pure parser for that layout (`src/sources/opencode.ts` or
 `src/sources/opencode-legacy.ts`). When one session has copies in both layouts
 or in several databases, ingest reads the copy updated last, preferring 2.x on
-a tie within one database. Parsers retain canonical raw records while mapping
+a tie within one database. A 2.x session that OpenCode migrated from 1.x is
+handed to the 2.x parser with its 1.x copy, whose per-step usage corrects the
+migrated rows. Parsers retain canonical raw records while mapping
 provider-specific roles, blocks, usage, tool calls, and lineage into shared
 tables. Malformed lines and unknown record types become diagnostics rather than
 aborting the file.

@@ -184,7 +184,7 @@ describe("OpenCodeStore", () => {
 
   test("never modifies the database file", () => {
     const path = freshPath();
-    buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql", "v1-sample.sql"]);
+    buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql", "v1/sample.sql"]);
     const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
     const beforeDigest = digest();
     const beforeMtime = statSync(path).mtimeMs;
@@ -224,7 +224,7 @@ describe("OpenCodeStore 1.x tables", () => {
 
   test("lists a 1.x-only database with v1 fingerprints", () => {
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const store = OpenCodeStore.open(path);
     try {
       expect(store.hasSessionTables()).toBe(false);
@@ -309,7 +309,7 @@ describe("OpenCodeStore 1.x tables", () => {
 
   test("changes the fingerprint when a part or message changes", () => {
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const store = OpenCodeStore.open(path);
     const fingerprint = () => store.listLegacySessions()[0]?.fingerprint;
     try {
@@ -345,7 +345,7 @@ describe("OpenCodeStore 1.x tables", () => {
     // OpenCode 1.4+ writes time_updated back unchanged on setTitle and
     // setArchived, and touches no message or part.
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const store = OpenCodeStore.open(path);
     const fingerprint = () => store.listLegacySessions()[0]?.fingerprint;
     try {
@@ -374,7 +374,7 @@ describe("OpenCodeStore 1.x tables", () => {
 
   test("changes the key when a row that is not the newest is edited", () => {
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const store = OpenCodeStore.open(path);
     const fingerprint = () => store.listLegacySessions()[0]?.fingerprint;
     try {
@@ -397,7 +397,7 @@ describe("OpenCodeStore 1.x tables", () => {
 
   test("loads rows in OpenCode's order", () => {
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const store = OpenCodeStore.open(path);
     try {
       const loaded = store.loadLegacySession("ses_v1_sample");
@@ -558,7 +558,7 @@ describe("OpenCodeStore 1.x tables", () => {
     const v2 = freshPath();
     buildOpenCodeFixtureDb(v2, ["sample.sql"]);
     const v1 = freshPath();
-    buildOpenCodeV1FixtureDb(v1, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(v1, ["v1/sample.sql"]);
     for (const other of [v2, v1]) {
       const otherStore = OpenCodeStore.open(other);
       expect(otherStore.isPreSplitDatabase()).toBe(false);
@@ -568,7 +568,7 @@ describe("OpenCodeStore 1.x tables", () => {
 
   test("sees 1.x rows that exist only in the WAL of a database another process holds open", () => {
     const path = freshPath();
-    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
     const writer = new Database(path, { strict: true });
     try {
       writer.exec("PRAGMA journal_mode = WAL;");

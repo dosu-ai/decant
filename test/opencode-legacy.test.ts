@@ -133,7 +133,7 @@ function assistant(overrides: Record<string, Json> = {}): Record<string, Json> {
 
 describe("parseOpenCodeLegacySession", () => {
   test("parses the sample session", () => {
-    const { session, issues } = fixture(["v1-sample.sql"], "ses_v1_sample");
+    const { session, issues } = fixture(["v1/sample.sql"], "ses_v1_sample");
     expect(issues).toEqual([]);
     expect(session.messages.map((m) => m.role)).toEqual([
       "user",
@@ -266,14 +266,14 @@ describe("parseOpenCodeLegacySession", () => {
   });
 
   test("sums every step-finish part, not info.tokens", () => {
-    const { session } = fixture(["v1-sample.sql"], "ses_v1_sample");
+    const { session } = fixture(["v1/sample.sql"], "ses_v1_sample");
     expect(session.messages[5]?.usage).toMatchObject({ input: 250, output: 17, cacheRead: 60 });
   });
 
   test("reproduces OpenCode's recorded cost from the mapped usage", () => {
     const pricing = defaultPricing();
     const sessions: ParsedSession[] = [
-      fixture(["v1-sample.sql"], "ses_v1_sample"),
+      fixture(["v1/sample.sql"], "ses_v1_sample"),
       fixture(["v1/fork.sql"], "ses_v1_fork"),
       fixture(["v1/compaction.sql"], "ses_v1_compact"),
       fixture(["v1/subagent.sql"], "ses_v1_parent"),
@@ -454,7 +454,7 @@ describe("parseOpenCodeLegacySession", () => {
   });
 
   test("keeps reverted rows", () => {
-    const loaded = load(["v1-sample.sql"], "ses_v1_sample");
+    const loaded = load(["v1/sample.sql"], "ses_v1_sample");
     const base = parse(loaded).session;
     const { session } = parseOpenCodeLegacySession(
       { ...loaded.session, revert: '{"messageID":"msg_v1s_3"}' },

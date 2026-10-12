@@ -36,7 +36,13 @@ import { parseCodexSession } from "../src/sources/codex.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
-import { buildOpenCodeDb, buildOpenCodeFixtureDb, opencodeFixtureSql } from "./opencode-fixture.ts";
+import {
+  buildOpenCodeDb,
+  buildOpenCodeFixtureDb,
+  buildOpenCodeV1Db,
+  buildOpenCodeV1FixtureDb,
+  opencodeFixtureSql,
+} from "./opencode-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
@@ -3518,6 +3524,333 @@ describe("OpenCode ingest", () => {
       }),
     ]);
     closeDb(db);
+  });
+
+  describe("1.x sessions", () => {
+    /** A one-message session in the 1.x tables. */
+    function v1Session(id: string, timeUpdated: number, title: string): string {
+      return `
+        INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+        VALUES ('${id}', 'prj', 'slug', '/decant-fixture/example', '${title}', '1.18.35', ${T0}, ${timeUpdated});
+        INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+          ('msg_${id}_1', '${id}', ${T0}, ${T0},
+           '{"role":"user","time":{"created":${T0}},"agent":"build","model":{"providerID":"opencode-go","modelID":"glm-5.3-flash"}}');
+        INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+          ('prt_${id}_1', 'msg_${id}_1', '${id}', ${T0}, ${T0}, '{"type":"text","text":"hello"}');`;
+    }
+
+    /** The same session in the 2.x tables. */
+    function v2Session(id: string, timeUpdated: number, title: string): string {
+      return `
+        INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated)
+        VALUES ('${id}', 'prj', 'slug', '/decant-fixture/example', '${title}', '2.0.27', ${T0}, ${timeUpdated});
+        INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+          ('msg_${id}_1', '${id}', 'user', 1, ${T0}, ${T0}, '{"text":"hello","files":[],"time":{"created":${T0}}}');`;
+    }
+
+    function exec(path: string, sql: string): void {
+      const writer = new Database(path, { strict: true });
+      try {
+        writer.exec(sql);
+      } finally {
+        writer.close();
+      }
+    }
+
+    function titles(db: Database): unknown {
+      return db
+        .query(
+          `SELECT s.source_session_id AS id, s.title, s.source_path AS path,
+                  substr(i.hash, 1, 3) = 'v1:' AS from_v1
+             FROM session s JOIN ingest_source i ON i.path = s.source_path
+            ORDER BY s.source_session_id`,
+        )
+        .all();
+    }
+
+    test("ingests a database only OpenCode 1.x opened", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+      expect(
+        db
+          .query(
+            `SELECT tool, source_session_id, source_path, cli_version, total_input_tokens,
+                    total_output_tokens, total_reasoning_tokens, total_cache_read_tokens,
+                    total_cache_creation_tokens
+               FROM session`,
+          )
+          .get(),
+      ).toEqual({
+        tool: "opencode",
+        source_session_id: "ses_v1_sample",
+        source_path: `${main}#ses_v1_sample`,
+        cli_version: "1.18.35",
+        total_input_tokens: 370,
+        total_output_tokens: 57,
+        total_reasoning_tokens: 10,
+        total_cache_read_tokens: 100,
+        total_cache_creation_tokens: 16,
+      });
+      expect(
+        (db.query("SELECT estimated_cost_usd AS cost FROM session").get() as { cost: number }).cost,
+      ).toBeCloseTo(0.0000894, 9);
+      const source = db.query("SELECT hash, line_count FROM ingest_source").get() as {
+        hash: string;
+        line_count: number;
+      };
+      expect(source.hash.startsWith("v1:")).toBe(true);
+      expect(source.line_count).toBe(4);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 0, skipped: 1 });
+      closeDb(db);
+    });
+
+    test("ingests a v1.2-shaped database", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      buildOpenCodeV1FixtureDb(join(opencodeDir, "opencode.db"), ["v1/old-shape.sql"], "1.2");
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+      expect(db.query("SELECT source_session_id, cli_version FROM session").all()).toEqual([
+        { source_session_id: "ses_v1_12", cli_version: "1.2.0" },
+      ]);
+      closeDb(db);
+    });
+
+    test("reads the 1.x copy of a migrated session when a 1.x binary updated it last", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeFixtureDb(main, ["v1/migrated.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+      expect(titles(db)).toEqual([
+        { id: "ses_shared", title: "Legacy copy", path: `${main}#ses_shared`, from_v1: 1 },
+        { id: "ses_v1_only", title: "Only in 1.x", path: `${main}#ses_v1_only`, from_v1: 1 },
+      ]);
+      closeDb(db);
+    });
+
+    test("reads the 2.x copy when it is newer, or on a tie in the same database", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeFixtureDb(main, ["v1/migrated.sql"]);
+      // The 2.x migrator copies time_updated verbatim, so a tie is the usual
+      // state of a session migrated and not touched since.
+      exec(main, "UPDATE session SET time_updated = 1791796000000 WHERE id = 'ses_shared'");
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+      const migrated = {
+        id: "ses_shared",
+        title: "Migrated copy",
+        path: `${main}#ses_shared`,
+        from_v1: 0,
+      };
+      expect((titles(db) as unknown[])[0]).toEqual(migrated);
+
+      // A 2.x build continues the session.
+      exec(main, "UPDATE session_v2 SET time_updated = 1791799999999 WHERE id = 'ses_shared'");
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
+      expect((titles(db) as unknown[])[0]).toEqual(migrated);
+      closeDb(db);
+    });
+
+    test("picks the newer copy across databases and formats, then the smaller path on a tie", () => {
+      const { opencodeDir } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      const beta = join(opencodeDir, "opencode-beta.db");
+      const pick = (): string[] => {
+        const paths = discoverSourcePaths([main, beta]).map((file) => file.path);
+        expect(discoverSourcePaths([beta, main]).map((file) => file.path)).toEqual(paths);
+        return paths;
+      };
+      buildOpenCodeV1Db(main, [v1Session("ses_shared", T0 + 2000, "1.x copy")]);
+      buildOpenCodeDb(beta, [v2Session("ses_shared", T0 + 1000, "2.x copy")]);
+      expect(pick()).toEqual([`${main}#ses_shared`]);
+      exec(beta, `UPDATE session_v2 SET time_updated = ${T0 + 3000}`);
+      expect(pick()).toEqual([`${beta}#ses_shared`]);
+      // Across databases a tie goes to the smaller path ('-' < '.'), whatever
+      // the formats.
+      exec(beta, `UPDATE session_v2 SET time_updated = ${T0 + 2000}`);
+      expect(pick()).toEqual([`${beta}#ses_shared`]);
+      rmSync(main);
+      rmSync(beta);
+      buildOpenCodeDb(main, [v2Session("ses_shared", T0 + 2000, "2.x copy")]);
+      buildOpenCodeV1Db(beta, [v1Session("ses_shared", T0 + 2000, "1.x copy")]);
+      expect(pick()).toEqual([`${beta}#ses_shared`]);
+      expect(discoverSourcePaths([main, beta])[0]?.opencode?.format).toBe("v1");
+    });
+
+    test("keeps the newest 1.x copy across databases", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      const beta = join(opencodeDir, "opencode-beta.db");
+      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      buildOpenCodeV1FixtureDb(beta, ["v1/sample.sql"]);
+      exec(main, "UPDATE session SET time_updated = time_updated + 1000");
+      expect(discover(config).map((file) => file.path)).toEqual([`${main}#ses_v1_sample`]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+      closeDb(db);
+    });
+
+    test("skips an unchanged 1.x session and re-ingests when a part changes", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 1 });
+      expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+      exec(
+        main,
+        `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+         VALUES ('prt_v1s_17', 'msg_v1s_3', 'ses_v1_sample', 1791790009000, 1791790009000,
+                 '{"type":"text","text":"One more line."}')`,
+      );
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+      expect(
+        db.query("SELECT COUNT(*) AS n FROM block WHERE text = 'One more line.'").get(),
+      ).toEqual({ n: 1 });
+      closeDb(db);
+    });
+
+    test("re-ingests from session_v2 once OpenCode migrates the session, and back", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 1 });
+      const current = (): unknown => ({
+        sessions: titles(db),
+        sources: db.query("SELECT path FROM ingest_source").all(),
+      });
+      const path = `${main}#ses_v1_sample`;
+
+      // A 2.x build opens the file and migrates the session, copying
+      // time_updated verbatim.
+      exec(main, opencodeFixtureSql("schema.sql"));
+      exec(
+        main,
+        `INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated)
+         VALUES ('ses_v1_sample', 'prj_v1', 'v1-sample', '/decant-fixture/example', 'Migrated title',
+                 '1.18.35', 1791790000000, 1791790060000);
+         INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+         VALUES ('msg_v1s_1', 'ses_v1_sample', 'user', 1, 1791790000000, 1791790000000,
+                 '{"text":"Read the example notes and search the docs.","files":[],"time":{"created":1791790000000}}');`,
+      );
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+      expect(current()).toEqual({
+        sessions: [{ id: "ses_v1_sample", title: "Migrated title", path, from_v1: 0 }],
+        sources: [{ path }],
+      });
+      expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+
+      // A 1.x binary sharing the file keeps writing the session.
+      exec(main, "UPDATE session SET time_updated = time_updated + 1000");
+      expect(sync(db, config)).toMatchObject({ ingested: 1 });
+      expect(current()).toEqual({
+        sessions: [{ id: "ses_v1_sample", title: "Read the example notes", path, from_v1: 1 }],
+        sources: [{ path }],
+      });
+      closeDb(db);
+    });
+
+    test("moves a session between formats across databases and releases the old source", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      const beta = join(opencodeDir, "opencode-beta.db");
+      buildOpenCodeV1Db(main, [v1Session("ses_shared", T0 + 2000, "1.x copy")]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 1 });
+      const current = (): unknown => ({
+        sessions: titles(db),
+        sources: db.query("SELECT path FROM ingest_source").all(),
+      });
+
+      buildOpenCodeDb(beta, [v2Session("ses_shared", T0 + 3000, "2.x copy")]);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1 });
+      expect(current()).toEqual({
+        sessions: [{ id: "ses_shared", title: "2.x copy", path: `${beta}#ses_shared`, from_v1: 0 }],
+        sources: [{ path: `${beta}#ses_shared` }],
+      });
+
+      rmSync(beta);
+      expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, skipped: 0 });
+      expect(current()).toEqual({
+        sessions: [{ id: "ses_shared", title: "1.x copy", path: `${main}#ses_shared`, from_v1: 1 }],
+        sources: [{ path: `${main}#ses_shared` }],
+      });
+      closeDb(db);
+    });
+
+    test("links a 1.x subagent to its parent's task call", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      buildOpenCodeV1FixtureDb(join(opencodeDir, "opencode.db"), ["v1/subagent.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+      const parent = db
+        .query("SELECT id FROM session WHERE source_session_id = 'ses_v1_parent'")
+        .get() as { id: number };
+      expect(
+        db
+          .query(
+            `SELECT is_subagent, parent_session_id, spawn_tool_use_id
+               FROM session WHERE source_session_id = 'ses_v1_child'`,
+          )
+          .get(),
+      ).toEqual({
+        is_subagent: 1,
+        parent_session_id: parent.id,
+        spawn_tool_use_id: "call_v1_task",
+      });
+      closeDb(db);
+    });
+
+    test("links a migrated 2.x subagent that still uses task and sessionId", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const parentTool = JSON.stringify({
+        agent: "build",
+        model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+        content: [
+          {
+            type: "tool",
+            id: "call_m_task",
+            name: "task",
+            state: {
+              status: "completed",
+              input: {},
+              content: [{ type: "text", text: "ok" }],
+              metadata: { sessionId: "ses_m_child" },
+            },
+            time: { created: T0 + 1000, completed: T0 + 9000 },
+          },
+        ],
+        finish: "tool-calls",
+        cost: 0.00001,
+        tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: T0 + 1000, completed: T0 + 9000 },
+      });
+      buildOpenCodeDb(join(opencodeDir, "opencode.db"), [
+        `INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES
+           ('ses_m_parent', 'prj', NULL, 'parent', '/decant-fixture/example', 'Parent', '1.18.35', ${T0}, ${T0 + 10000}),
+           ('ses_m_child', 'prj', 'ses_m_parent', 'child', '/decant-fixture/example', 'Child', '1.18.35', ${T0 + 2000}, ${T0 + 8000});
+         INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+           ('msg_mp1', 'ses_m_parent', 'user', 1, ${T0}, ${T0}, '{"text":"Delegate.","time":{"created":${T0}}}'),
+           ('msg_mp2', 'ses_m_parent', 'assistant', 2, ${T0 + 1000}, ${T0 + 9000}, '${parentTool}'),
+           ('msg_mc1', 'ses_m_child', 'user', 3, ${T0 + 2000}, ${T0 + 2000}, '{"text":"look","time":{"created":${T0 + 2000}}}');`,
+      ]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+      expect(
+        db
+          .query(
+            `SELECT is_subagent, spawn_tool_use_id, parent_session_id IS NOT NULL AS linked
+               FROM session WHERE source_session_id = 'ses_m_child'`,
+          )
+          .get(),
+      ).toEqual({ is_subagent: 1, spawn_tool_use_id: "call_m_task", linked: 1 });
+      closeDb(db);
+    });
   });
 
   test("keeps a JSONL source's hash NULL while an OpenCode source stores its fingerprint", () => {

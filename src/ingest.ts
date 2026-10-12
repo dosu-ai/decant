@@ -1515,6 +1515,33 @@ function writeSession(
         call.block.ordinal,
         call.timestamp,
       );
+      // Inner calls share the wrapper's call block and record no result block
+      // of their own: the wrapper's result is one combined output, and linking
+      // it again would count its bytes once per inner call.
+      for (const inner of call.block.innerToolCalls ?? []) {
+        const innerClassified = classifyTool(inner.toolName);
+        const innerInput = inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
+        insertToolCall.run(
+          sessionId,
+          call.messageId,
+          call.callBlockId,
+          null,
+          innerClassified.kind,
+          inner.toolName,
+          innerClassified.mcpServer,
+          innerClassified.baseName,
+          inner.toolUseId,
+          innerInput,
+          innerInput == null ? null : byteLength(innerInput),
+          inner.isError == null ? null : Number(inner.isError),
+          0,
+          null,
+          null,
+          null,
+          call.block.ordinal,
+          call.timestamp,
+        );
+      }
     }
   } finally {
     insertToolCall.finalize();

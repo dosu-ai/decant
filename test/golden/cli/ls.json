@@ -10,7 +10,7 @@
     "reasoning_source": "reported",
     "started_at": "2026-10-12T07:20:00.000Z",
     "ended_at": "2026-10-12T07:21:00.000Z",
-    "message_count": 6,
+    "message_count": 7,
     "total_input_tokens": 2200,
     "total_output_tokens": 95,
     "estimated_cost_usd": 0.0108,
@@ -32,8 +32,8 @@
     "subagent_estimated_cost_usd": 0,
     "ingest_issue_count": 0,
     "informational_ingest_issue_count": 0,
-    "dosu_mcp_direct_calls": 1,
-    "dosu_mcp_tree_calls": 1,
+    "dosu_mcp_direct_calls": 2,
+    "dosu_mcp_tree_calls": 2,
     "reasoning_effort_levels": [
       "high"
     ]

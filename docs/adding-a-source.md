@@ -68,6 +68,11 @@ unavailable rather than zero.
   full fidelity when the normalized model is lossy.
 - Normalize MCP tool names to `mcp__<server>__<base>` so `classifyTool` in
   `src/tools.ts` can recognize them.
+- When a code-execution tool records the calls its program made (OpenCode's
+  `execute`), list them in `innerToolCalls` on the wrapper's `tool_use` block,
+  named like direct calls, with a tool-use ID derived from the wrapper's.
+  Ingest writes one tool-call row per inner call without adding transcript
+  blocks.
 - Emit one session per source path. Per-session diagnostics join on the source
   path and would be misattributed if one path produced several sessions; a
   database that holds many sessions therefore gets one virtual path per

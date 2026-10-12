@@ -5,6 +5,7 @@ import {
   type Issue,
   type Json,
   type NormalizedBlock,
+  type NormalizedInnerToolCall,
   type NormalizedMessage,
   type NormalizedSession,
   type ParsedSession,
@@ -408,13 +409,18 @@ function assistantContent(
       const name = asString(get(item, "name")) ?? "unknown";
       const state = get(item, "state");
       const status = asString(get(state, "status"));
-      blocks.push(
-        block(blocks.length, "tool_use", {
-          toolName: normalizeOpenCodeToolName(name, servers),
-          toolUseId: id,
-          toolInput: get(state, "input"),
-        }),
-      );
+      const call = block(blocks.length, "tool_use", {
+        toolName: normalizeOpenCodeToolName(name, servers),
+        toolUseId: id,
+        toolInput: get(state, "input"),
+      });
+      if (name === CODE_EXECUTION_TOOL) {
+        const inner = innerToolCalls(get(get(state, "metadata"), "toolCalls"), id);
+        if (inner.length > 0) {
+          call.innerToolCalls = inner;
+        }
+      }
+      blocks.push(call);
       if (status === "completed" || status === "error") {
         const error = get(state, "error");
         results.push({
@@ -435,6 +441,56 @@ function assistantContent(
     }
   }
   return { blocks, results };
+}
+
+/** OpenCode 2.x runs MCP tools (and some built-ins) from a JavaScript program
+ * passed to this tool, recording each call it made in
+ * `state.metadata.toolCalls`. */
+const CODE_EXECUTION_TOOL = "execute";
+
+/** Namespace of OpenCode's own tools inside an `execute` program. */
+const OPENCODE_NAMESPACE = "opencode";
+
+/** One inner call per `metadata.toolCalls` entry, in recorded order. An entry
+ * names `<server>.<tool>` for an MCP tool, with the server as configured, so
+ * the namespace alone decides MCP; `opencode.<tool>` and un-namespaced names
+ * (`search`) are OpenCode built-ins and keep their recorded name. */
+export function innerToolCalls(
+  entries: Json | undefined,
+  wrapperId: string | null,
+): NormalizedInnerToolCall[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  const calls: NormalizedInnerToolCall[] = [];
+  entries.forEach((entry, index) => {
+    const tool = asString(get(entry, "tool"));
+    if (tool == null || tool === "") {
+      return;
+    }
+    const status = asString(get(entry, "status"));
+    calls.push({
+      toolName: innerToolName(tool),
+      toolUseId: wrapperId == null ? null : `${wrapperId}#${index}`,
+      toolInput: get(entry, "input"),
+      isError: status === "completed" ? false : status === "error" ? true : null,
+    });
+  });
+  return calls;
+}
+
+export function innerToolName(tool: string): string {
+  const dot = tool.indexOf(".");
+  if (dot <= 0 || dot === tool.length - 1) {
+    return tool;
+  }
+  const namespace = tool.slice(0, dot);
+  if (namespace === OPENCODE_NAMESPACE) {
+    return tool;
+  }
+  // Sanitized like OpenCode's direct registrations, so one server's direct
+  // and code-mode calls share an `mcp_server`.
+  return `mcp__${sanitizeMcpName(namespace)}__${sanitizeMcpName(tool.slice(dot + 1))}`;
 }
 
 function parseModelJson(value: string | null): Json | undefined {

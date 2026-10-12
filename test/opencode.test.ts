@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import type { Json } from "../src/model.ts";
 import {
+  innerToolCalls,
+  innerToolName,
   mcpServerPrefixes,
   normalizeOpenCodeToolName,
   type OpenCodeMessageRow,
@@ -240,13 +242,14 @@ describe("parseOpenCodeSession", () => {
     const names = parsed.session.messages.flatMap((m) =>
       m.blocks.filter((b) => b.blockType === "tool_use").map((b) => b.toolName),
     );
-    expect(names).toEqual(["mcp__dosu__search_knowledge", "websearch", "webfetch"]);
+    expect(names).toEqual(["mcp__dosu__search_knowledge", "websearch", "execute", "webfetch"]);
     const results = parsed.session.messages
       .filter((m) => m.role === "tool")
       .map((m) => m.blocks[0]);
     expect(results).toMatchObject([
       { toolUseId: "call_mcp_1", toolResult: "example result", isError: false },
       { toolUseId: "call_web_1", toolResult: "example page", isError: false },
+      { toolUseId: "call_exec_1", toolResult: "example knowledge", isError: false },
       { toolUseId: "call_fetch_1", toolResult: "fetch failed", isError: true },
     ]);
     expect(parsed.session.model).toBe("meta/muse-wonder");
@@ -255,6 +258,107 @@ describe("parseOpenCodeSession", () => {
       model_context_window: 1_048_576,
     });
     expect(parsed.session.reasoningEffort).toBe("high");
+  });
+
+  test("records each call an execute program made on the execute tool_use block", () => {
+    const parsed = fixtureSession("mcp.sql", "ses_mcp", ["dosu"]);
+    const blocks = parsed.session.messages.flatMap((m) => m.blocks);
+    const execute = blocks.find((b) => b.toolName === "execute");
+    expect(execute?.toolInput).toMatchObject({ code: expect.stringContaining("read_knowledge") });
+    expect(execute?.innerToolCalls).toEqual([
+      {
+        toolName: "mcp__dosu__read_knowledge",
+        toolUseId: "call_exec_1#0",
+        toolInput: { query: "example topic" },
+        isError: false,
+      },
+      {
+        toolName: "mcp__exa__web_search_exa",
+        toolUseId: "call_exec_1#1",
+        toolInput: { query: "example topic" },
+        isError: true,
+      },
+      {
+        toolName: "search",
+        toolUseId: "call_exec_1#2",
+        toolInput: { query: "example" },
+        isError: false,
+      },
+      {
+        toolName: "opencode.list_mcp_resources",
+        toolUseId: "call_exec_1#3",
+        toolInput: undefined,
+        isError: false,
+      },
+    ]);
+    // Inner calls add no blocks: the program and its one result are the only
+    // transcript text, so search and transcripts show nothing twice.
+    expect(blocks.filter((b) => b.blockType === "tool_use")).toHaveLength(4);
+    expect(blocks.filter((b) => b.blockType === "tool_result")).toHaveLength(4);
+    expect(blocks.filter((b) => b.innerToolCalls != null).map((b) => b.toolUseId)).toEqual([
+      "call_exec_1",
+    ]);
+  });
+
+  test("names inner calls by namespace and tolerates sparse execute metadata", () => {
+    expect(innerToolName("dosu.write_knowledge")).toBe("mcp__dosu__write_knowledge");
+    expect(innerToolName("probe-tools.echo")).toBe("mcp__probe-tools__echo");
+    expect(innerToolName("context7.resolve-library-id")).toBe("mcp__context7__resolve-library-id");
+    expect(innerToolName("my server.run it")).toBe("mcp__my_server__run_it");
+    expect(innerToolName("opencode.list_mcp_resources")).toBe("opencode.list_mcp_resources");
+    expect(innerToolName("search")).toBe("search");
+    expect(innerToolName(".hidden")).toBe(".hidden");
+    expect(innerToolName("trailing.")).toBe("trailing.");
+
+    expect(innerToolCalls(undefined, "call_1")).toEqual([]);
+    expect(innerToolCalls({ tool: "dosu.whoami" }, "call_1")).toEqual([]);
+    expect(
+      innerToolCalls(
+        [
+          { tool: "dosu.whoami", status: "running" },
+          { status: "completed" },
+          "not an object",
+          { tool: "github.get_me", status: "completed", input: { a: 1 } },
+        ],
+        null,
+      ),
+    ).toEqual([
+      { toolName: "mcp__dosu__whoami", toolUseId: null, toolInput: undefined, isError: null },
+      {
+        toolName: "mcp__github__get_me",
+        toolUseId: null,
+        toolInput: { a: 1 },
+        isError: false,
+      },
+    ]);
+
+    const toolCalls = [{ tool: "dosu.whoami", status: "completed" }];
+    const tool = (name: string, status: string) => ({
+      type: "tool",
+      id: `call_${name}`,
+      name,
+      state: { status, input: {}, content: [], metadata: { toolCalls } },
+    });
+    const { session } = parseOpenCodeSession(
+      sessionRow(),
+      [
+        assistant(1, {
+          content: [tool("execute", "completed"), tool("read", "completed")],
+        }),
+        assistant(2, { content: [tool("execute", "running")] }),
+      ],
+      context,
+    );
+    const calls = session.messages
+      .flatMap((m) => m.blocks)
+      .filter((b) => b.blockType === "tool_use")
+      .map((b) => [b.toolName, b.innerToolCalls?.map((c) => c.toolUseId) ?? null]);
+    // Only `execute` carries inner calls; a running one records those so far.
+    expect(calls).toEqual([
+      ["execute", ["call_execute#0"]],
+      ["read", null],
+      ["execute", ["call_execute#0"]],
+    ]);
   });
 
   test("normalizes MCP names by the longest sanitized server prefix", () => {

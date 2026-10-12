@@ -213,6 +213,20 @@ execute the JavaScript or resolve variables, branches, or tool aliases.
 Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
 same attribution rules.
 
+OpenCode 2.x runs MCP tools from a JavaScript program passed to its `execute`
+tool, and records each call the program made. Decant keeps `execute` as the
+model's tool call and adds one tool call per recorded inner call, so OpenCode
+tool-call totals count both the `execute` call and its inner calls. An inner
+call to `<server>.<tool>` is an MCP call named `mcp__<server>__<tool>`, exactly
+as a direct call to that server is, so MCP and Dosu statistics include it.
+Inner calls with no namespace (`search`) or in the `opencode` namespace are
+OpenCode built-ins and keep their recorded name. Each inner call takes its own
+error status and input, but OpenCode records only the program's combined
+output, so an inner call has no result, output size, or duration; the
+`execute` call carries the output's context-window volume once. Inner calls
+add no transcript blocks, so search and transcripts show the program and its
+output once.
+
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Claude Code journals one API response as a record per
 content block (thinking, text, each tool call) that share the API message id,

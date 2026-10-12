@@ -1094,6 +1094,18 @@
   {
     "tool": "opencode",
     "source_session_id": "ses_mcp",
+    "seq": 1,
+    "ordinal": 2,
+    "type": "tool_use",
+    "text": null,
+    "tool_name": "execute",
+    "tool_use_id": "call_exec_1",
+    "tool_input": "{\"code\":\"const kb = await tools.dosu.read_knowledge({ query: \\\"example topic\\\" });\\nawait tools.exa.web_search_exa({ query: \\\"example topic\\\" }).catch(() => null);\\nawait tools.search({ query: \\\"example\\\" });\\nawait tools.opencode.list_mcp_resources();\\nreturn kb;\"}",
+    "tool_result": null
+  },
+  {
+    "tool": "opencode",
+    "source_session_id": "ses_mcp",
     "seq": 2,
     "ordinal": 0,
     "type": "tool_result",
@@ -1120,6 +1132,18 @@
     "source_session_id": "ses_mcp",
     "seq": 4,
     "ordinal": 0,
+    "type": "tool_result",
+    "text": null,
+    "tool_name": null,
+    "tool_use_id": "call_exec_1",
+    "tool_input": null,
+    "tool_result": "example knowledge"
+  },
+  {
+    "tool": "opencode",
+    "source_session_id": "ses_mcp",
+    "seq": 5,
+    "ordinal": 0,
     "type": "tool_use",
     "text": null,
     "tool_name": "webfetch",
@@ -1130,7 +1154,7 @@
   {
     "tool": "opencode",
     "source_session_id": "ses_mcp",
-    "seq": 4,
+    "seq": 5,
     "ordinal": 1,
     "type": "text",
     "text": "The knowledge base covers the example topic; the page could not be fetched.",
@@ -1142,7 +1166,7 @@
   {
     "tool": "opencode",
     "source_session_id": "ses_mcp",
-    "seq": 5,
+    "seq": 6,
     "ordinal": 0,
     "type": "tool_result",
     "text": null,

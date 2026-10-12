@@ -28,6 +28,7 @@ import {
   upsertSession,
 } from "../src/ingest.ts";
 import { configureLogging } from "../src/logging.ts";
+import type { Json } from "../src/model.ts";
 import { getSession, listSessions } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
@@ -2937,13 +2938,145 @@ describe("OpenCode ingest", () => {
       },
       {
         tool_kind: "builtin",
+        tool_name: "execute",
+        mcp_server: null,
+        tool_base_name: "execute",
+        is_error: 0,
+      },
+      {
+        tool_kind: "mcp",
+        tool_name: "mcp__dosu__read_knowledge",
+        mcp_server: "dosu",
+        tool_base_name: "read_knowledge",
+        is_error: 0,
+      },
+      {
+        tool_kind: "mcp",
+        tool_name: "mcp__exa__web_search_exa",
+        mcp_server: "exa",
+        tool_base_name: "web_search_exa",
+        is_error: 1,
+      },
+      {
+        tool_kind: "builtin",
+        tool_name: "search",
+        mcp_server: null,
+        tool_base_name: "search",
+        is_error: 0,
+      },
+      {
+        tool_kind: "builtin",
+        tool_name: "opencode.list_mcp_resources",
+        mcp_server: null,
+        tool_base_name: "opencode.list_mcp_resources",
+        is_error: 0,
+      },
+      {
+        tool_kind: "builtin",
         tool_name: "webfetch",
         mcp_server: null,
         tool_base_name: "webfetch",
         is_error: 1,
       },
     ]);
+    // The error facet counts failed result blocks; an inner call has none.
     expect(db.query("SELECT error_count FROM session").get()).toEqual({ error_count: 1 });
+    closeDb(db);
+  });
+
+  test("counts calls made inside an execute program as Dosu MCP evidence", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const call = (id: string, toolCalls: Json[]): Json => ({
+      type: "tool",
+      id,
+      name: "execute",
+      state: {
+        status: "completed",
+        input: { code: "return 1;" },
+        content: [{ type: "text", text: "ok" }],
+        metadata: { toolCalls, truncated: false },
+      },
+      time: { created: T0 + 1000, completed: T0 + 2000 },
+    });
+    const data = JSON.stringify({
+      agent: "build",
+      model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+      content: [
+        call("call_exec_a", [
+          { tool: "dosu.read_knowledge", status: "completed", input: { query: "example" } },
+          { tool: "dosu.write_knowledge", status: "completed", input: { content: "hello" } },
+        ]),
+        call("call_exec_b", [{ tool: "search", status: "completed" }]),
+      ],
+      finish: "tool-calls",
+      cost: 0.00001,
+      tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: T0 + 1000, completed: T0 + 2000 },
+    });
+    buildOpenCodeDb(join(opencodeDir, "opencode.db"), [
+      `INSERT INTO session_v2 (id, project_id, slug, directory, title, version, model, time_created, time_updated) VALUES
+         ('ses_code', 'prj', 'code', '', 'Code mode', '2.0.27', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 3000});
+       INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+         ('msg_1', 'ses_code', 'user', 1, ${T0}, ${T0}, '{"text":"Look it up.","time":{"created":${T0}}}'),
+         ('msg_2', 'ses_code', 'assistant', 2, ${T0 + 1000}, ${T0 + 2000}, '${data.replaceAll("'", "''")}');`,
+    ]);
+    const db = openFreshDb(dir);
+    // No opencode.json names `dosu`: the namespace alone marks it MCP.
+    expect(sync(db, config)).toMatchObject({ ingested: 1, issues: 0, failed: 0 });
+    const [session] = listSessions(db);
+    expect(session).toMatchObject({ dosu_mcp_direct_calls: 2, dosu_mcp_tree_calls: 2 });
+    expect(
+      db
+        .query(
+          `SELECT tc.tool_name, tc.tool_use_id, tc.has_result, tc.result_block_id,
+                  cb.tool_use_id AS call_block_tool_use_id
+             FROM tool_call tc JOIN block cb ON cb.id = tc.call_block_id
+            ORDER BY tc.id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        tool_name: "execute",
+        tool_use_id: "call_exec_a",
+        has_result: 1,
+        result_block_id: expect.any(Number),
+        call_block_tool_use_id: "call_exec_a",
+      },
+      {
+        tool_name: "mcp__dosu__read_knowledge",
+        tool_use_id: "call_exec_a#0",
+        has_result: 0,
+        result_block_id: null,
+        call_block_tool_use_id: "call_exec_a",
+      },
+      {
+        tool_name: "mcp__dosu__write_knowledge",
+        tool_use_id: "call_exec_a#1",
+        has_result: 0,
+        result_block_id: null,
+        call_block_tool_use_id: "call_exec_a",
+      },
+      {
+        tool_name: "execute",
+        tool_use_id: "call_exec_b",
+        has_result: 1,
+        result_block_id: expect.any(Number),
+        call_block_tool_use_id: "call_exec_b",
+      },
+      {
+        tool_name: "search",
+        tool_use_id: "call_exec_b#0",
+        has_result: 0,
+        result_block_id: null,
+        call_block_tool_use_id: "call_exec_b",
+      },
+    ]);
+    // Totals count the execute calls and their inner calls alike, while the
+    // transcript keeps one block per execute call and its result.
+    expect(totals(db).tool_calls).toBe(5);
+    expect(db.query("SELECT COUNT(*) AS n FROM block WHERE type = 'tool_use'").get()).toEqual({
+      n: 2,
+    });
     closeDb(db);
   });
 

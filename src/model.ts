@@ -128,6 +128,21 @@ export interface NormalizedBlock {
   toolInput: Json | undefined;
   toolResult: string | null;
   isError: boolean | null;
+  /** Calls a code-execution tool made on the model's behalf, on its
+   * `tool_use` block. Ingest writes one `tool_call` row per inner call beside
+   * the wrapper's own; they add no transcript blocks, so the wrapper's code
+   * and result are the only text stored or indexed. */
+  innerToolCalls?: NormalizedInnerToolCall[];
+}
+
+export interface NormalizedInnerToolCall {
+  /** Named like a direct call: `mcp__<server>__<tool>` for an MCP tool. */
+  toolName: string;
+  /** Derived from the wrapper's id, so re-ingest reproduces it. */
+  toolUseId: string | null;
+  toolInput: Json | undefined;
+  /** From the inner call's own status; null while it has none. */
+  isError: boolean | null;
 }
 
 export interface NormalizedMessage {

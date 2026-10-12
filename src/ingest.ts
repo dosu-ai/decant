@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
   closeSync,
@@ -504,10 +505,22 @@ type OpenCodeSyncOutcome =
   | { kind: "skipped" | "tombstoned" | "failed" }
   | { kind: "ingested"; issues: Issue[] };
 
-/** Appended to a session's fingerprint in `ingest_source.hash` when it was
+/** Appended to a session's change key in `ingest_source.hash` when it was
  * derived without its database's model catalog, so a later sync that can read
  * the catalog re-derives it once instead of skipping it on an unchanged key. */
 const WITHOUT_CATALOG = "|no-catalog";
+
+/** A session's change key: its database fingerprint plus, when any MCP server
+ * applies to it, a digest of those server names. MCP names decide how its
+ * tool calls are classified, so a config edit that changes the set for its
+ * directory re-derives the session once; other sessions keep their key. */
+export function openCodeChangeKey(fingerprint: string, mcpServers: readonly string[]): string {
+  if (mcpServers.length === 0) {
+    return fingerprint;
+  }
+  const digest = createHash("sha256").update(JSON.stringify(mcpServers)).digest("hex");
+  return `${fingerprint}|mcp:${digest.slice(0, 12)}`;
+}
 
 /** A database's models.dev context windows, or an empty map when the catalog
  * read failed. */
@@ -597,7 +610,7 @@ class OpenCodeRun {
   }
 }
 
-/** Skip when the stored fingerprint and pipeline revision match; otherwise
+/** Skip when the stored change key and pipeline revision match; otherwise
  * read, parse, and write the session under its virtual path. A session last
  * derived without the model catalog stays skipped until the catalog reads. */
 function syncOpenCodeSession(
@@ -613,7 +626,9 @@ function syncOpenCodeSession(
     [file.path],
   );
   const current = prior != null && prior.ingest_revision === INGEST_PIPELINE_REVISION;
-  if (current && prior.hash === ref.fingerprint) {
+  const mcpServerNames = mcpServers.forDirectory(ref.directory);
+  const changeKey = openCodeChangeKey(ref.fingerprint, mcpServerNames);
+  if (current && prior.hash === changeKey) {
     return { kind: "skipped" };
   }
   const store = opencode.store(ref.dbPath);
@@ -622,7 +637,7 @@ function syncOpenCodeSession(
   }
   if (
     current &&
-    prior.hash === `${ref.fingerprint}${WITHOUT_CATALOG}` &&
+    prior.hash === `${changeKey}${WITHOUT_CATALOG}` &&
     !opencode.catalog(store).available
   ) {
     return { kind: "skipped" };
@@ -638,8 +653,10 @@ function syncOpenCodeSession(
     return { kind: "skipped" };
   }
   const catalog = opencode.catalog(store);
+  // The names behind the change key, so the stored key matches what the
+  // session was derived with.
   const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
-    mcpServers: mcpServers.forDirectory(loaded.session.directory),
+    mcpServers: mcpServerNames,
     contextWindows: catalog.windows,
   });
   const prepared: Prepared = {
@@ -647,7 +664,7 @@ function syncOpenCodeSession(
     lineCount: loaded.messages.length,
     mtime: Math.trunc(loaded.session.time_updated / 1000),
     size: 0,
-    hash: catalog.available ? ref.fingerprint : `${ref.fingerprint}${WITHOUT_CATALOG}`,
+    hash: catalog.available ? changeKey : `${changeKey}${WITHOUT_CATALOG}`,
   };
   const outcome = writeIngestedFile(db, prepared, parsed, opencode);
   return outcome === "tombstoned"

@@ -3056,6 +3056,87 @@ describe("OpenCode ingest", () => {
     closeDb(db);
   });
 
+  test("re-derives only the sessions whose MCP config changed", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const alpha = join(dir, "alpha");
+    const beta = join(dir, "beta");
+    mkdirSync(alpha, { recursive: true });
+    mkdirSync(beta, { recursive: true });
+    const servers = (...names: string[]) =>
+      JSON.stringify({
+        mcp: { servers: Object.fromEntries(names.map((name) => [name, { type: "remote" }])) },
+      });
+    writeFileSync(join(alpha, "opencode.json"), servers("dosu"));
+    writeFileSync(join(beta, "opencode.json"), servers("dosu"));
+    const data = JSON.stringify({
+      agent: "build",
+      model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+      content: [
+        {
+          type: "tool",
+          id: "call_exa_1",
+          name: "exa_web_search_exa",
+          state: { status: "completed", input: { query: "example" }, content: [] },
+        },
+      ],
+      finish: "tool-calls",
+      tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: T0 + 1000, completed: T0 + 2000 },
+    });
+    buildOpenCodeDb(
+      join(opencodeDir, "opencode.db"),
+      [
+        ["ses_alpha", alpha],
+        ["ses_beta", beta],
+      ].map(
+        ([id, directory]) => `
+          INSERT INTO session_v2 (id, project_id, slug, directory, version, model, time_created, time_updated) VALUES
+            ('${id}', 'prj', 'slug', '${directory}', '2.0.27', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 3000});
+          INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+            ('${id}_1', '${id}', 'assistant', 1, ${T0 + 1000}, ${T0 + 2000}, '${data.replaceAll("'", "''")}');`,
+      ),
+    );
+    const toolNames = () =>
+      db
+        .query(
+          `SELECT s.source_session_id AS id, tc.tool_name
+             FROM tool_call tc JOIN session s ON s.id = tc.session_id
+            ORDER BY s.source_session_id`,
+        )
+        .all();
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 2, skipped: 0 });
+    expect(
+      db.query("SELECT hash FROM ingest_source ORDER BY path").all() as { hash: string }[],
+    ).toEqual([
+      { hash: expect.stringMatching(/^\d+:1:1:\d+\|mcp:[0-9a-f]{12}$/) },
+      { hash: expect.stringMatching(/^\d+:1:1:\d+\|mcp:[0-9a-f]{12}$/) },
+    ]);
+
+    // Rewriting a config without changing its server names re-derives nothing.
+    writeFileSync(join(alpha, "opencode.json"), `// same servers\n${servers("dosu")}\n`);
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 2 });
+
+    // Adding a server re-derives the sessions in that directory only.
+    writeFileSync(join(alpha, "opencode.json"), servers("dosu", "exa"));
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
+    expect(toolNames()).toEqual([
+      { id: "ses_alpha", tool_name: "mcp__exa__web_search_exa" },
+      { id: "ses_beta", tool_name: "exa_web_search_exa" },
+    ]);
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 2 });
+
+    // Removing every server returns the key to the bare fingerprint.
+    rmSync(join(alpha, "opencode.json"));
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
+    expect(toolNames()).toEqual([
+      { id: "ses_alpha", tool_name: "exa_web_search_exa" },
+      { id: "ses_beta", tool_name: "exa_web_search_exa" },
+    ]);
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 2 });
+    closeDb(db);
+  });
+
   test("counts calls made inside an execute program as Dosu MCP evidence", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     const call = (id: string, toolCalls: Json[]): Json => ({

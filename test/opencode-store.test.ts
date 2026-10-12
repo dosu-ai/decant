@@ -47,12 +47,14 @@ describe("OpenCodeStore", () => {
           sessionId: "ses_mcp",
           fingerprint: "1791789660000:4:4:1791789607000",
           timeUpdated: 1791789660000,
+          directory: "/decant-fixture/example",
         },
         {
           dbPath: path,
           sessionId: "ses_sample",
           fingerprint: "1791786060000:4:4:1791786008000",
           timeUpdated: 1791786060000,
+          directory: "/decant-fixture/example",
         },
       ]);
       const loaded = store.loadSession("ses_sample");
@@ -126,7 +128,13 @@ describe("OpenCodeStore", () => {
                    VALUES ('ses_live', 'prj', 'live', '/decant-fixture/example', '2.0.27', 5, 9)`);
       writer.close();
       expect(store.listSessions()).toEqual([
-        { dbPath: path, sessionId: "ses_live", fingerprint: "9:0:-1:-1", timeUpdated: 9 },
+        {
+          dbPath: path,
+          sessionId: "ses_live",
+          fingerprint: "9:0:-1:-1",
+          timeUpdated: 9,
+          directory: "/decant-fixture/example",
+        },
       ]);
     } finally {
       store.close();

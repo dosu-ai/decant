@@ -15,10 +15,13 @@ import type { OpenCodeMessageRow, OpenCodeSessionRow } from "./opencode.ts";
 export interface OpenCodeSessionRef {
   dbPath: string;
   sessionId: string;
-  /** Per-session change key (see `openCodeFingerprint`); stored in
-   * `ingest_source.hash` so an unchanged session is skipped. */
+  /** Per-session database fingerprint (see `openCodeFingerprint`). Ingest
+   * adds the session's MCP server names to it to form the change key stored
+   * in `ingest_source.hash`, so an unchanged session is skipped. */
   fingerprint: string;
   timeUpdated: number;
+  /** The session's working directory, which decides its project MCP configs. */
+  directory: string | null;
 }
 
 export interface OpenCodeLoadedSession {
@@ -28,6 +31,7 @@ export interface OpenCodeLoadedSession {
 
 interface FingerprintRow {
   id: string;
+  directory: string | null;
   time_updated: number;
   message_count: number;
   max_seq: number | null;
@@ -75,7 +79,7 @@ export class OpenCodeStore {
     }
     const rows = queryRows<FingerprintRow>(
       this.#db,
-      `SELECT s.id, s.time_updated,
+      `SELECT s.id, s.directory, s.time_updated,
               (SELECT COUNT(*) FROM session_message m WHERE m.session_id = s.id) AS message_count,
               (SELECT MAX(m.seq) FROM session_message m WHERE m.session_id = s.id) AS max_seq,
               (SELECT MAX(m.time_updated) FROM session_message m WHERE m.session_id = s.id)
@@ -93,6 +97,7 @@ export class OpenCodeStore {
           row.max_message_updated,
         ),
         timeUpdated: row.time_updated,
+        directory: row.directory,
       }))
       .sort((a, b) => compareCodePoints(a.sessionId, b.sessionId));
   }

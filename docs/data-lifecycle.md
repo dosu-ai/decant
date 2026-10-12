@@ -42,7 +42,9 @@ By default Decant discovers:
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks, and
 unchanged OpenCode sessions by their per-session change key, unless an updated
-ingest pipeline requires reprocessing them. After a parser correction, the next
+ingest pipeline requires reprocessing them. An OpenCode session's change key
+also covers the MCP server names from the OpenCode configs that apply to its
+directory, so editing those names re-derives the affected sessions once. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode

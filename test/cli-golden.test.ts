@@ -136,7 +136,16 @@ describe("CLI golden parity", () => {
         "--opencode-dir",
         opencodeDir,
       ],
-      { env: { ...process.env, DECANT_OPENCODE_CONFIG: opencodeConfigPath } },
+      {
+        env: {
+          ...process.env,
+          DECANT_OPENCODE_CONFIG: opencodeConfigPath,
+          // OpenCode's own variables would add or relocate configs outside
+          // the fixtures.
+          OPENCODE_CONFIG: undefined,
+          OPENCODE_CONFIG_DIR: join(caseDir, "opencode-config"),
+        },
+      },
     );
     expect(sync).toMatchObject({ code: 0, stderr: "" });
 

@@ -42,6 +42,7 @@ describe("resolveConfig", () => {
       codexDir: "/env/codex",
       geminiDir: "/env/gemini",
       opencodeDir: "/env/opencode",
+      opencodeConfigDir: "/home/dev/.config/opencode",
       opencodeConfigPath: "/env/opencode.json",
     });
   });
@@ -54,7 +55,9 @@ describe("resolveConfig", () => {
     expect(config.geminiDir).toBe("/home/dev/.gemini/tmp");
     expect(config.opencodeDir).toBe("/home/dev/.local/share/opencode");
     expect(config.opencodeDb).toBeUndefined();
-    expect(config.opencodeConfigPath).toBe("/home/dev/.config/opencode/opencode.json");
+    expect(config.opencodeConfigDir).toBe("/home/dev/.config/opencode");
+    expect(config.opencodeConfigPath).toBeUndefined();
+    expect(config.opencodeExtraConfigPath).toBeUndefined();
   });
 
   test("follows OpenCode's own environment before XDG and home", () => {
@@ -69,14 +72,32 @@ describe("resolveConfig", () => {
       homeDir: "/h",
     });
     expect(xdg.opencodeDir).toBe("/xdg/opencode");
-    expect(xdg.opencodeConfigPath).toBe("/xdgc/opencode/opencode.json");
+    expect(xdg.opencodeConfigDir).toBe("/xdgc/opencode");
     const explicit = resolveConfig({
-      env: { OPENCODE_DB: "/oc/custom.db", OPENCODE_CONFIG: "/oc/cfg.json" },
+      env: {
+        OPENCODE_DB: "/oc/custom.db",
+        OPENCODE_CONFIG: "/oc/cfg.json",
+        OPENCODE_CONFIG_DIR: "/oc/config",
+        XDG_CONFIG_HOME: "/xdgc",
+      },
       homeDir: "/h",
     });
     expect(explicit.opencodeDb).toBe("/oc/custom.db");
-    expect(explicit.opencodeConfigPath).toBe("/oc/cfg.json");
+    // OPENCODE_CONFIG_DIR relocates the global directory, as it does for
+    // OpenCode; OPENCODE_CONFIG is an extra file, not a replacement for it.
+    expect(explicit.opencodeConfigDir).toBe("/oc/config");
+    expect(explicit.opencodeExtraConfigPath).toBe("/oc/cfg.json");
+    expect(explicit.opencodeConfigPath).toBeUndefined();
+    const decant = resolveConfig({
+      env: { DECANT_OPENCODE_CONFIG: "/d/cfg.json", OPENCODE_CONFIG: "/oc/cfg.json" },
+      homeDir: "/h",
+    });
+    expect(decant.opencodeConfigPath).toBe("/d/cfg.json");
+    expect(decant.opencodeExtraConfigPath).toBe("/oc/cfg.json");
     // Empty values behave like unset ones.
     expect(resolveConfig({ env: { OPENCODE_DB: "" }, homeDir: "/h" }).opencodeDb).toBeUndefined();
+    expect(
+      resolveConfig({ env: { OPENCODE_CONFIG: "", OPENCODE_CONFIG_DIR: "" }, homeDir: "/h" }),
+    ).toMatchObject({ opencodeConfigDir: "/h/.config/opencode" });
   });
 });

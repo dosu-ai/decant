@@ -255,7 +255,7 @@ describe("OpenCode config lookup", () => {
     mcp: { servers: Object.fromEntries(names.map((name) => [name, { type: "remote" }])) },
   });
 
-  test("reads opencode.jsonc and pairs the global file with its other spelling", () => {
+  test("reads opencode.jsonc", () => {
     const dir = join(workDir, "jsonc");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, "opencode.jsonc");
@@ -264,17 +264,30 @@ describe("OpenCode config lookup", () => {
       '{\n  // servers\n  "mcp": { "servers": { "exa": { "type": "remote", }, }, },\n}\n',
     );
     expect(readOpenCodeMcpServers(path)).toEqual(["exa"]);
-    expect(openCodeGlobalConfigPaths(join(dir, "opencode.json"))).toEqual([
-      join(dir, "opencode.json"),
-      path,
+  });
+
+  test("reads the global directory's two files, or Decant's override, plus OPENCODE_CONFIG", () => {
+    expect(openCodeGlobalConfigPaths({ globalDir: "/g" })).toEqual([
+      "/g/opencode.json",
+      "/g/opencode.jsonc",
     ]);
-    expect(openCodeGlobalConfigPaths(path)).toEqual([join(dir, "opencode.json"), path]);
-    expect(openCodeGlobalConfigPaths(join(dir, "custom.json"))).toEqual([join(dir, "custom.json")]);
+    // DECANT_OPENCODE_CONFIG replaces the global directory's files.
+    expect(openCodeGlobalConfigPaths({ globalDir: "/g", globalFile: "/d/custom.json" })).toEqual([
+      "/d/custom.json",
+    ]);
+    // OPENCODE_CONFIG is loaded in addition, as OpenCode does.
+    expect(openCodeGlobalConfigPaths({ globalDir: "/g", extraFile: "/x/extra.json" })).toEqual([
+      "/g/opencode.json",
+      "/g/opencode.jsonc",
+      "/x/extra.json",
+    ]);
+    expect(openCodeGlobalConfigPaths({})).toEqual([]);
   });
 
   test("merges global and project configs per directory, read once each", () => {
     const root = join(workDir, "lookup");
-    const global = join(root, "config", "opencode.json");
+    const globalDir = join(root, "config");
+    const global = join(globalDir, "opencode.json");
     const project = join(root, "project");
     const other = join(root, "other");
     mkdirSync(join(root, "config"), { recursive: true });
@@ -290,7 +303,7 @@ describe("OpenCode config lookup", () => {
     writeFileSync(join(project, ".opencode", "opencode.json"), JSON.stringify(servers("context7")));
     writeFileSync(join(project, ".opencode", "opencode.jsonc"), "{ /* unfinished");
 
-    const names = new OpenCodeMcpServerNames(global);
+    const names = new OpenCodeMcpServerNames({ globalDir });
     expect(names.forDirectory(project)).toEqual(["context7", "dosu", "exa", "github", "supabase"]);
     expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
     expect(names.forDirectory(null)).toEqual(["dosu", "exa"]);
@@ -300,12 +313,12 @@ describe("OpenCode config lookup", () => {
     // Cached for the instance: a later edit applies to the next sync's lookup.
     writeFileSync(join(other, "opencode.json"), JSON.stringify(servers("probe-tools")));
     expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
-    expect(new OpenCodeMcpServerNames(global).forDirectory(other)).toEqual([
+    expect(new OpenCodeMcpServerNames({ globalDir }).forDirectory(other)).toEqual([
       "dosu",
       "exa",
       "probe-tools",
     ]);
-    expect(new OpenCodeMcpServerNames(undefined).forDirectory(project)).toEqual([
+    expect(new OpenCodeMcpServerNames().forDirectory(project)).toEqual([
       "context7",
       "github",
       "supabase",

@@ -5,7 +5,7 @@
 // writes or checkpoints, and the OpenCode CLI is never started.
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { asInteger, asString, get, isObject } from "../json.ts";
 import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
@@ -218,19 +218,37 @@ export function readOpenCodeMcpServers(configPath: string): string[] {
   return [...names].sort(compareCodePoints);
 }
 
-/** The global config and its other spelling beside it: OpenCode reads both
- * `opencode.json` and `opencode.jsonc` from its config directory. Any other
- * file name is read alone. */
-export function openCodeGlobalConfigPaths(configPath: string): string[] {
-  const name = basename(configPath);
-  if (name === "opencode.json") {
-    return [configPath, join(dirname(configPath), "opencode.jsonc")];
-  }
-  if (name === "opencode.jsonc") {
-    return [join(dirname(configPath), "opencode.json"), configPath];
-  }
-  return [configPath];
+/** Where OpenCode's MCP server names come from, besides project configs. */
+export interface OpenCodeConfigSources {
+  /** OpenCode's global config directory (`OPENCODE_CONFIG_DIR`, else
+   * `$XDG_CONFIG_HOME/opencode`). Its `opencode.json` and `opencode.jsonc`
+   * are read unless `globalFile` replaces them. */
+  globalDir?: string;
+  /** Decant's `DECANT_OPENCODE_CONFIG`: read alone in place of the global
+   * directory's two files. */
+  globalFile?: string;
+  /** OpenCode's `OPENCODE_CONFIG`: one more file that OpenCode loads in
+   * addition to the global and project configs. */
+  extraFile?: string;
 }
+
+/** Config files read for every session, in OpenCode's file-name order. */
+export function openCodeGlobalConfigPaths({
+  globalDir,
+  globalFile,
+  extraFile,
+}: OpenCodeConfigSources): string[] {
+  const paths =
+    globalFile != null
+      ? [globalFile]
+      : globalDir != null
+        ? OPENCODE_CONFIG_NAMES.map((name) => join(globalDir, name))
+        : [];
+  return extraFile == null ? paths : [...paths, extraFile];
+}
+
+/** File names OpenCode reads from a config directory. */
+const OPENCODE_CONFIG_NAMES = ["opencode.json", "opencode.jsonc"] as const;
 
 /** Project-level configs OpenCode reads for a session's directory. */
 export function openCodeProjectConfigPaths(directory: string): string[] {
@@ -242,7 +260,7 @@ export function openCodeProjectConfigPaths(directory: string): string[] {
   ];
 }
 
-/** MCP server names that apply to a session: the global config's merged with
+/** MCP server names that apply to a session: the global configs' merged with
  * its directory's project configs. Each directory is read once per instance,
  * and ingest makes one instance per sync, so a config edit applies from the
  * next sync to sessions it re-derives. */
@@ -250,9 +268,8 @@ export class OpenCodeMcpServerNames {
   readonly #global: readonly string[];
   readonly #byDirectory = new Map<string, readonly string[]>();
 
-  constructor(globalConfigPath: string | undefined) {
-    this.#global =
-      globalConfigPath == null ? [] : readAll(openCodeGlobalConfigPaths(globalConfigPath));
+  constructor(sources: OpenCodeConfigSources = {}) {
+    this.#global = readAll(openCodeGlobalConfigPaths(sources));
   }
 
   forDirectory(directory: string | null): readonly string[] {

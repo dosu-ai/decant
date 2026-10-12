@@ -69,10 +69,13 @@ export interface IngestConfig {
   opencodeDir?: string;
   /** Explicit OpenCode database file (`OPENCODE_DB`), read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** Global `opencode.json`, whose `mcp` section names MCP servers. The
-   * `opencode.jsonc` beside it and each session directory's project configs
-   * are read too. */
+  /** OpenCode's global config directory; its `opencode.json` and
+   * `opencode.jsonc` name MCP servers, as do each session's project configs. */
+  opencodeConfigDir?: string;
+  /** Read in place of the global directory's files (`DECANT_OPENCODE_CONFIG`). */
   opencodeConfigPath?: string;
+  /** Read in addition to the global and project configs (`OPENCODE_CONFIG`). */
+  opencodeExtraConfigPath?: string;
   sourcePaths?: string[];
 }
 
@@ -272,7 +275,11 @@ export function sync(
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
-  const mcpServers = new OpenCodeMcpServerNames(config.opencodeConfigPath);
+  const mcpServers = new OpenCodeMcpServerNames({
+    globalDir: config.opencodeConfigDir,
+    globalFile: config.opencodeConfigPath,
+    extraFile: config.opencodeExtraConfigPath,
+  });
   const opencode = new OpenCodeRun(db);
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),

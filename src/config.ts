@@ -12,10 +12,17 @@ export interface Config {
   /** Explicit OpenCode database file from `OPENCODE_DB`; present only when
    * that variable is set. Read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** Global `opencode.json`, whose `mcp` section names the MCP servers
-   * OpenCode prefixes tool names with. Ingest also reads the `opencode.jsonc`
-   * beside it and each session directory's project configs. */
+  /** OpenCode's global config directory, whose `opencode.json` and
+   * `opencode.jsonc` name the MCP servers OpenCode prefixes tool names with:
+   * `OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`. Ingest also reads
+   * each session's project configs. */
+  opencodeConfigDir?: string;
+  /** `DECANT_OPENCODE_CONFIG`: one file read in place of the global
+   * directory's files. */
   opencodeConfigPath?: string;
+  /** `OPENCODE_CONFIG`: an extra file OpenCode loads in addition to the global
+   * and project configs, so Decant reads it in addition too. */
+  opencodeExtraConfigPath?: string;
 }
 
 export interface ConfigOverrides {
@@ -34,6 +41,8 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
   const xdgData = nonEmpty(env.XDG_DATA_HOME);
   const xdgConfig = nonEmpty(env.XDG_CONFIG_HOME);
   const opencodeDb = nonEmpty(env.OPENCODE_DB);
+  const opencodeConfigPath = nonEmpty(env.DECANT_OPENCODE_CONFIG);
+  const opencodeExtraConfigPath = nonEmpty(env.OPENCODE_CONFIG);
   return {
     dbPath: overrides.dbPath ?? env.DECANT_DB ?? join(home, ".decant", "decant.db"),
     claudeDir: overrides.claudeDir ?? env.DECANT_CLAUDE_DIR ?? join(home, ".claude", "projects"),
@@ -47,10 +56,11 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       nonEmpty(env.OPENCODE_DATA_DIR) ??
       (xdgData == null ? join(home, ".local", "share", "opencode") : join(xdgData, "opencode")),
     ...(opencodeDb == null ? {} : { opencodeDb }),
-    opencodeConfigPath:
-      nonEmpty(env.DECANT_OPENCODE_CONFIG) ??
-      nonEmpty(env.OPENCODE_CONFIG) ??
-      join(xdgConfig ?? join(home, ".config"), "opencode", "opencode.json"),
+    // OpenCode resolves its global config directory the same way.
+    opencodeConfigDir:
+      nonEmpty(env.OPENCODE_CONFIG_DIR) ?? join(xdgConfig ?? join(home, ".config"), "opencode"),
+    ...(opencodeConfigPath == null ? {} : { opencodeConfigPath }),
+    ...(opencodeExtraConfigPath == null ? {} : { opencodeExtraConfigPath }),
   };
 }
 

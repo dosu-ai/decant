@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeTranscript } from "@letta-ai/trajectory";
@@ -29,6 +29,8 @@ import {
   type TranscriptStructure,
   toolNamesMatch,
 } from "../scripts/opencode-parity.ts";
+import { closeDb, openDb } from "../src/db.ts";
+import { sync } from "../src/ingest.ts";
 import type {
   OpenCodeLegacyMessageRow,
   OpenCodeLegacyPartRow,
@@ -92,6 +94,16 @@ function exportOf(db: Database, sessionId: string) {
   return buildLegacyExport(session, messages, parts);
 }
 
+/** Every focused 1.x session script (old-shape needs its own table shape). */
+const V1_SESSIONS = [
+  "v1-sample.sql",
+  "v1/compaction.sql",
+  "v1/subagent.sql",
+  "v1/fork.sql",
+  "v1/tokens.sql",
+  "v1/malformed.sql",
+];
+
 const MIXED = [
   "v1-sample.sql",
   "v1/fork.sql",
@@ -151,6 +163,42 @@ describe("opencode parity comparisons", () => {
     expect(compareRecordedCost([model({ output: 52, cost: 0.0001 })], [model({})])[0]?.level).toBe(
       "mismatch",
     );
+  });
+
+  test("takes reasoning charged twice before 1.3.16 off the recorded cost", () => {
+    // 100 in + 50 out (holding 20 reasoning) at 0.15 / 0.5 per 1M is 40e-6;
+    // OpenCode 1.3.10 recorded 50e-6, charging the 20 reasoning tokens again.
+    const reference = [
+      model({
+        input: 100,
+        output: 30,
+        reasoning: 20,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.00005,
+        doubleCharged: 20,
+      }),
+    ];
+    const decant = [
+      model({
+        input: 100,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.00004,
+        costSource: "list",
+      }),
+    ];
+    expect(compareRecordedCost(decant, reference)).toEqual([
+      {
+        level: "ok",
+        text: "opencode-go/glm-5.3-flash: Decant 0.0000400 vs recorded 0.0000500, less 0.0000100 reasoning charged twice before 1.3.16 (0.00%)",
+      },
+    ]);
+    expect(
+      compareRecordedCost(decant, [{ ...(reference[0] as ModelTotals), doubleCharged: 0 }])[0]
+        ?.level,
+    ).toBe("mismatch");
   });
 
   test("compares a model Decant cannot price by its reported cost, for any provider", () => {
@@ -321,6 +369,8 @@ describe("opencode parity: 1.x reference totals", () => {
           cacheRead: 0,
           cacheWrite: 0,
           cost: 0.00005,
+          // 1.2.0 kept reasoning inside output and charged it twice.
+          doubleCharged: 20,
         },
       ]);
       expect(readLegacySessions(db)[0]?.tokens_input).toBeNull();
@@ -441,7 +491,7 @@ describe("opencode parity: 2.x counting rules", () => {
     const rows = withDb(path, readOpenCodeAssistantRows).filter(
       (r) => r.sessionId === "ses_migrated",
     );
-    expect(rows.map((r) => [r.id, r.migrated, r.stepSum?.input ?? null])).toEqual([
+    expect(rows.map((r) => [r.id, r.migrated, r.stepSum?.usage.input ?? null])).toEqual([
       ["msg_mg_2", true, 250],
       ["msg_mg_6", true, null],
     ]);
@@ -643,8 +693,65 @@ describe("opencode parity: Letta structural cross-check", () => {
     expect(toolNamesMatch("read", "write")).toBe(false);
   });
 
-  // End to end (sync the synthetic 1.x fixtures into a scratch archive, then
-  // run the script with --letta and expect zero mismatch lines) needs the 1.x
-  // ingest path, which lands separately.
-  test.todo("reports no mismatch for synced 1.x fixtures with --letta", () => {});
+  // End to end: sync synthetic fixtures into a scratch archive with every
+  // source and config path pointed at the case directory, then run the
+  // script as a developer would.
+  for (const [name, build] of [
+    // 1.x sessions in a database only 1.x opened.
+    ["a 1.x-only database", (path: string) => buildOpenCodeV1FixtureDb(path, V1_SESSIONS)],
+    // The same beside 2.x sessions and a migrated session in one database.
+    [
+      "a 2.x database holding 1.x and migrated sessions",
+      (path: string) =>
+        buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql", ...V1_SESSIONS, "v1/migrated.sql"]),
+    ],
+  ] as const) {
+    test(`reports no mismatch for ${name} synced by Decant, with --letta`, () => {
+      counter += 1;
+      const dir = join(workDir, `e2e-${counter}`);
+      const opencodeDir = join(dir, "opencode");
+      mkdirSync(opencodeDir, { recursive: true });
+      const opencodePath = join(opencodeDir, "opencode.db");
+      build(opencodePath);
+      // Names the dosu MCP server, so 1.x `dosu_search` calls become
+      // mcp__dosu__search on both sides of the structural check.
+      const configPath = join(dir, "opencode.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "http://localhost" } } } }),
+      );
+      const archivePath = join(dir, "decant.db");
+      const archive = openDb(archivePath);
+      try {
+        expect(
+          sync(archive, {
+            claudeDir: join(dir, "none"),
+            codexDir: join(dir, "none"),
+            geminiDir: join(dir, "none"),
+            opencodeDir,
+            opencodeConfigPath: configPath,
+            opencodeModelsPath: join(dir, "models.json"),
+          }),
+        ).toMatchObject({ failed: 0 });
+      } finally {
+        closeDb(archive);
+      }
+      const run = Bun.spawnSync(
+        [
+          process.execPath,
+          "run",
+          join(import.meta.dir, "..", "scripts", "opencode-parity.ts"),
+          opencodePath,
+          archivePath,
+          "--letta",
+        ],
+        { env: { ...process.env, NO_COLOR: "1" } },
+      );
+      const stdout = run.stdout.toString();
+      expect(stdout.split("\n").filter((line) => line.startsWith("mismatch"))).toEqual([]);
+      expect(stdout).toContain("== 0 mismatch line(s)");
+      expect(stdout).toContain("== 1.x sessions: Decant vs Letta Trajectory");
+      expect(run.exitCode).toBe(0);
+    });
+  }
 });

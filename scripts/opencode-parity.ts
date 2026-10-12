@@ -52,6 +52,10 @@ export interface ModelTotals {
   /** Decant side only: `reported` when Decant has no rate for the model and
    * uses the cost OpenCode recorded, `list` when it prices the model. */
   costSource?: "list" | "reported";
+  /** Reference side only: reasoning tokens counted inside output by a release
+   * before 1.3.16, which also charged them again at the output rate, so the
+   * recorded cost exceeds the list price by that much. */
+  doubleCharged?: number;
 }
 
 export interface SessionTotals {
@@ -172,10 +176,22 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
       });
       continue;
     }
-    const gap = Math.abs(actual.cost - expected.cost) / expected.cost;
+    // Releases before 1.3.16 charged reasoning held inside output a second
+    // time; Decant charges it once, so that excess is taken off the record.
+    const excess =
+      (expected.doubleCharged ?? 0) > 0
+        ? estimateCost(
+            expected.model,
+            { ...emptyUsage(), output: expected.doubleCharged ?? 0 },
+            defaultPricing(),
+          )
+        : 0;
+    const recorded = expected.cost - excess;
+    const gap = Math.abs(actual.cost - recorded) / recorded;
+    const note = excess > 0 ? `, less ${fmt(excess)} reasoning charged twice before 1.3.16` : "";
     lines.push({
       level: gap <= COST_TOLERANCE ? "ok" : "mismatch",
-      text: `${key}: Decant ${fmt(actual.cost)} vs recorded ${fmt(expected.cost)} (${(gap * 100).toFixed(2)}%)`,
+      text: `${key}: Decant ${fmt(actual.cost)} vs recorded ${fmt(expected.cost)}${note} (${(gap * 100).toFixed(2)}%)`,
     });
   }
   return lines;
@@ -343,6 +359,7 @@ function accumulate(
   key: { provider: string; model: string },
   fields: TokenFields,
   cost: number,
+  doubleCharged = 0,
 ): void {
   const row = totals.get(modelKey(key)) ?? {
     provider: key.provider,
@@ -362,7 +379,40 @@ function accumulate(
   row.cacheRead += fields.cacheRead;
   row.cacheWrite += fields.cacheWrite;
   row.cost += cost;
+  if (doubleCharged > 0) {
+    row.doubleCharged = (row.doubleCharged ?? 0) + doubleCharged;
+  }
   totals.set(modelKey(key), row);
+}
+
+/** Reasoning a tokens object holds inside output, by the 1.x release rule. */
+function reasoningInsideOutput(tokens: JsonObject, version: string | null): number {
+  return reasoningOverlap(tokens, version) === "included"
+    ? (openCodeUsage(tokens, "included")?.reasoning ?? 0)
+    : 0;
+}
+
+/** A 1.x assistant message's usage (`legacyAssistantUsage`) and the reasoning
+ * its steps held inside output, which a release before 1.3.16 also charged a
+ * second time in the message's recorded cost. */
+export function legacyUsage(
+  info: JsonObject,
+  parts: readonly Json[],
+  version: string | null,
+): { usage: TokenUsage; doubleCharged: number } | null {
+  const usage = legacyAssistantUsage(info, parts, version);
+  if (usage == null) {
+    return null;
+  }
+  const steps = parts.flatMap((part) =>
+    isObject(part) && part.type === "step-finish" && isObject(part.tokens) ? [part.tokens] : [],
+  );
+  const sources = steps.length > 0 ? steps : isObject(info.tokens) ? [info.tokens] : [];
+  const doubleCharged = sources.reduce(
+    (sum, tokens) => sum + reasoningInsideOutput(tokens, version),
+    0,
+  );
+  return { usage, doubleCharged };
 }
 
 /** Sums reference totals from several readers by provider/model. */
@@ -383,6 +433,9 @@ export function mergeModelTotals(...lists: readonly ModelTotals[][]): ModelTotal
             cacheRead: existing.cacheRead + row.cacheRead,
             cacheWrite: existing.cacheWrite + row.cacheWrite,
             cost: existing.cost + row.cost,
+            ...(existing.doubleCharged != null || row.doubleCharged != null
+              ? { doubleCharged: (existing.doubleCharged ?? 0) + (row.doubleCharged ?? 0) }
+              : {}),
           },
     );
   }
@@ -415,7 +468,7 @@ export interface OpenCodeAssistantRow {
   migrated: boolean;
   /** This row's usage summed from its 1.x step-finish parts, when the 1.x
    * copy holds the message (the migrator kept only the last step's tokens). */
-  stepSum: TokenUsage | null;
+  stepSum: { usage: TokenUsage; doubleCharged: number } | null;
 }
 
 interface OpenCodeAssistantDbRow {
@@ -453,7 +506,10 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
         WHERE m.type = 'assistant' AND json_type(m.data, '$.tokens') = 'object'`,
     )
     .all() as OpenCodeAssistantDbRow[];
-  const stepSums = new Map<string, ReadonlyMap<string, TokenUsage | null>>();
+  const stepSums = new Map<
+    string,
+    ReadonlyMap<string, { usage: TokenUsage; doubleCharged: number } | null>
+  >();
   for (const sessionId of new Set(rows.filter((r) => r.migrated === 1).map((r) => r.session_id))) {
     stepSums.set(sessionId, legacyStepSums(db, sessionId));
   }
@@ -475,7 +531,10 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
 
 /** Each 1.x assistant message's usage by id: the sum of its step-finish
  * parts under the 1.x release rule. */
-function legacyStepSums(db: Database, sessionId: string): Map<string, TokenUsage | null> {
+function legacyStepSums(
+  db: Database,
+  sessionId: string,
+): Map<string, { usage: TokenUsage; doubleCharged: number } | null> {
   const version =
     (
       db.query("SELECT version FROM session WHERE id = ?1").get(sessionId) as {
@@ -483,10 +542,10 @@ function legacyStepSums(db: Database, sessionId: string): Map<string, TokenUsage
       } | null
     )?.version ?? null;
   const { messages, parts } = loadLegacyRows(db, sessionId);
-  const sums = new Map<string, TokenUsage | null>();
+  const sums = new Map<string, { usage: TokenUsage; doubleCharged: number } | null>();
   for (const message of legacyMessages({ time_created: 0 }, messages, parts)) {
     if (message.info.role === "assistant") {
-      sums.set(message.id, legacyAssistantUsage(message.info, message.parts, version));
+      sums.set(message.id, legacyUsage(message.info, message.parts, version));
     }
   }
   return sums;
@@ -519,12 +578,15 @@ export function openCodeModelTotals(
         continue;
       }
       const usage =
-        row.stepSum ??
+        row.stepSum?.usage ??
         openCodeUsage(
           row.tokens,
           row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
         ) ??
         emptyUsage();
+      const doubleCharged =
+        row.stepSum?.doubleCharged ??
+        (row.migrated ? 0 : reasoningInsideOutput(row.tokens, row.version));
       accumulate(
         totals,
         row,
@@ -536,6 +598,7 @@ export function openCodeModelTotals(
           cacheWrite: usage.cacheCreation,
         },
         row.cost,
+        doubleCharged,
       );
       continue;
     }
@@ -742,10 +805,11 @@ export function readLegacyModelTotals(db: Database): ModelTotals[] {
       if (message.info.role !== "assistant" || message.info.summary === true) {
         continue;
       }
-      const usage = legacyAssistantUsage(message.info, message.parts, session.version);
-      if (usage == null) {
+      const counted = legacyUsage(message.info, message.parts, session.version);
+      if (counted == null) {
         continue;
       }
+      const { usage, doubleCharged } = counted;
       accumulate(
         totals,
         {
@@ -760,6 +824,7 @@ export function readLegacyModelTotals(db: Database): ModelTotals[] {
           cacheWrite: usage.cacheCreation,
         },
         numberOr0(message.info.cost),
+        doubleCharged,
       );
     }
   }

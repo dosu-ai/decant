@@ -496,7 +496,7 @@ export function innerToolName(tool: string): string {
   return `mcp__${sanitizeMcpName(namespace)}__${sanitizeMcpName(tool.slice(dot + 1))}`;
 }
 
-function parseModelJson(value: string | null): Json | undefined {
+export function parseModelJson(value: string | null): Json | undefined {
   if (value == null) {
     return undefined;
   }
@@ -550,7 +550,7 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
-function isoFromMillis(ms: number | null): string | null {
+export function isoFromMillis(ms: number | null): string | null {
   if (ms == null || !Number.isFinite(ms)) {
     return null;
   }

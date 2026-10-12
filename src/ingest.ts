@@ -272,9 +272,7 @@ export function sync(
   const titles = codexTitles(config);
   const mcpServers =
     config.opencodeConfigPath == null ? [] : readOpenCodeMcpServers(config.opencodeConfigPath);
-  // One read-only connection per OpenCode database for the whole run; closed
-  // after the loop whether or not it finished.
-  const stores = new Map<string, OpenCodeStore>();
+  const opencode = new OpenCodeRun(db);
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
@@ -311,7 +309,7 @@ export function sync(
         if (file.opencode != null) {
           // Virtual `<db>#<session>` paths never exist on disk; the file-open
           // path below would silently skip them as ENOENT.
-          const outcome = syncOpenCodeSession(db, file, file.opencode, stores, mcpServers);
+          const outcome = syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers);
           if (outcome.kind === "ingested") {
             report.ingested += 1;
             report.issues += outcome.issues.length;
@@ -423,9 +421,7 @@ export function sync(
       }
     }
   } finally {
-    for (const store of stores.values()) {
-      store.close();
-    }
+    opencode.close();
   }
 
   refreshDerivedState(db, report, repriced, lineageMayHaveChanged);
@@ -500,13 +496,107 @@ type OpenCodeSyncOutcome =
   | { kind: "skipped" | "tombstoned" | "failed" }
   | { kind: "ingested"; issues: Issue[] };
 
+/** Appended to a session's fingerprint in `ingest_source.hash` when it was
+ * derived without its database's model catalog, so a later sync that can read
+ * the catalog re-derives it once instead of skipping it on an unchanged key. */
+const WITHOUT_CATALOG = "|no-catalog";
+
+/** A database's models.dev context windows, or an empty map when the catalog
+ * read failed. */
+interface OpenCodeCatalog {
+  windows: ReadonlyMap<string, number>;
+  available: boolean;
+}
+
+/**
+ * OpenCode state for one sync: one read-only connection and one catalog read
+ * per database, and the database halves of the `<db>#<session>` paths already
+ * in `ingest_source`. Connections are closed after the loop whether or not it
+ * finished.
+ */
+class OpenCodeRun {
+  readonly #db: Database;
+  readonly #stores = new Map<string, OpenCodeStore>();
+  readonly #catalogs = new Map<string, OpenCodeCatalog>();
+  #sourceDatabases: Set<string> | null = null;
+
+  constructor(db: Database) {
+    this.#db = db;
+  }
+
+  store(dbPath: string): OpenCodeStore | null {
+    let store = this.#stores.get(dbPath);
+    if (store == null) {
+      try {
+        store = OpenCodeStore.open(dbPath);
+      } catch (error) {
+        logger.warning("OpenCode database could not be opened.", {
+          "event.name": "decant.ingest.opencode_open_failed",
+          "file.path": dbPath,
+          "error.message": error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+      this.#stores.set(dbPath, store);
+    }
+    return store;
+  }
+
+  /** Read once per database per sync. A failure warns once for the database
+   * and yields an empty catalog: sessions still ingest, without context
+   * windows, rather than each failing and warning on every sync. */
+  catalog(store: OpenCodeStore): OpenCodeCatalog {
+    let catalog = this.#catalogs.get(store.path);
+    if (catalog == null) {
+      try {
+        catalog = { windows: store.contextWindows(), available: true };
+      } catch (error) {
+        logger.warning("OpenCode model catalog could not be read.", {
+          "event.name": "decant.ingest.opencode_catalog_failed",
+          "file.path": store.path,
+          "error.message": error instanceof Error ? error.message : String(error),
+        });
+        catalog = { windows: new Map(), available: false };
+      }
+      this.#catalogs.set(store.path, catalog);
+    }
+    return catalog;
+  }
+
+  /** Every `<db>` with an OpenCode source row, read on first use and then
+   * extended by each session this sync writes. */
+  sourceDatabases(): Set<string> {
+    if (this.#sourceDatabases == null) {
+      // rtrim with every non-'#' character of the path strips back to its last
+      // '#', the separator before the session ID.
+      this.#sourceDatabases = new Set(
+        queryRows<{ prefix: string }>(
+          this.#db,
+          `SELECT DISTINCT rtrim(path, replace(path, '#', '')) AS prefix
+             FROM ingest_source
+            WHERE tool = 'opencode' AND instr(path, '#') > 0`,
+        ).map((row) => row.prefix.slice(0, -1)),
+      );
+    }
+    return this.#sourceDatabases;
+  }
+
+  close(): void {
+    for (const store of this.#stores.values()) {
+      store.close();
+    }
+    this.#stores.clear();
+  }
+}
+
 /** Skip when the stored fingerprint and pipeline revision match; otherwise
- * read, parse, and write the session under its virtual path. */
+ * read, parse, and write the session under its virtual path. A session last
+ * derived without the model catalog stays skipped until the catalog reads. */
 function syncOpenCodeSession(
   db: Database,
   file: SourceFile,
   ref: OpenCodeSessionRef,
-  stores: Map<string, OpenCodeStore>,
+  opencode: OpenCodeRun,
   mcpServers: readonly string[],
 ): OpenCodeSyncOutcome {
   const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
@@ -514,26 +604,20 @@ function syncOpenCodeSession(
     "SELECT hash, ingest_revision FROM ingest_source WHERE path = ?1",
     [file.path],
   );
-  if (
-    prior != null &&
-    prior.hash === ref.fingerprint &&
-    prior.ingest_revision === INGEST_PIPELINE_REVISION
-  ) {
+  const current = prior != null && prior.ingest_revision === INGEST_PIPELINE_REVISION;
+  if (current && prior.hash === ref.fingerprint) {
     return { kind: "skipped" };
   }
-  let store = stores.get(ref.dbPath);
+  const store = opencode.store(ref.dbPath);
   if (store == null) {
-    try {
-      store = OpenCodeStore.open(ref.dbPath);
-    } catch (error) {
-      logger.warning("OpenCode database could not be opened.", {
-        "event.name": "decant.ingest.opencode_open_failed",
-        "file.path": ref.dbPath,
-        "error.message": error instanceof Error ? error.message : String(error),
-      });
-      return { kind: "failed" };
-    }
-    stores.set(ref.dbPath, store);
+    return { kind: "failed" };
+  }
+  if (
+    current &&
+    prior.hash === `${ref.fingerprint}${WITHOUT_CATALOG}` &&
+    !opencode.catalog(store).available
+  ) {
+    return { kind: "skipped" };
   }
   const loaded = readOpenCodeSession(store, ref.sessionId, file.path);
   if (loaded === "failed") {
@@ -545,36 +629,33 @@ function syncOpenCodeSession(
     // archive keeps the copy it last ingested.
     return { kind: "skipped" };
   }
+  const catalog = opencode.catalog(store);
   const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
     mcpServers,
-    contextWindows: loaded.contextWindows,
+    contextWindows: catalog.windows,
   });
   const prepared: Prepared = {
     file,
     lineCount: loaded.messages.length,
     mtime: Math.trunc(loaded.session.time_updated / 1000),
     size: 0,
-    hash: ref.fingerprint,
+    hash: catalog.available ? ref.fingerprint : `${ref.fingerprint}${WITHOUT_CATALOG}`,
   };
-  const outcome = writeIngestedFile(db, prepared, parsed);
+  const outcome = writeIngestedFile(db, prepared, parsed, opencode);
   return outcome === "tombstoned"
     ? { kind: "tombstoned" }
     : { kind: "ingested", issues: parsed.issues };
 }
 
-/** Every read from OpenCode's database, the model catalog included, fails
- * the one session rather than the whole sync. A failed session writes no
- * `ingest_source` row, so the next sync retries it instead of storing a copy
- * parsed without its context windows under a fingerprint that would never
- * change. */
+/** A failed session read fails the one session rather than the whole sync. It
+ * writes no `ingest_source` row, so the next sync retries it. */
 function readOpenCodeSession(
   store: OpenCodeStore,
   sessionId: string,
   sourcePath: string,
-): (OpenCodeLoadedSession & { contextWindows: ReadonlyMap<string, number> }) | null | "failed" {
+): OpenCodeLoadedSession | null | "failed" {
   try {
-    const loaded = store.loadSession(sessionId);
-    return loaded == null ? null : { ...loaded, contextWindows: store.contextWindows() };
+    return store.loadSession(sessionId);
   } catch (error) {
     logger.warning("Source file could not be read.", {
       "event.name": "decant.ingest.source_read_failed",
@@ -1045,11 +1126,15 @@ function writeIngestedFile(
   db: Database,
   prepared: Prepared,
   parsed: ParsedSession,
+  opencode?: OpenCodeRun,
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
     releaseMisfiledFork(db, prepared.file.path, parsed);
-    if (prepared.file.opencode != null) {
-      releaseSupersededOpenCodeSources(db, prepared.file.path, prepared.file.opencode.sessionId);
+    const ref = prepared.file.opencode;
+    if (ref != null && opencode != null) {
+      const databases = opencode.sourceDatabases();
+      releaseSupersededOpenCodeSources(db, prepared.file.path, ref.sessionId, databases);
+      databases.add(ref.dbPath);
     }
     runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
@@ -1106,17 +1191,32 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
 /** A session read from a newer copy in another database no longer belongs to
  * the old `<db>#<session>` path. Its source and issue rows go, so diagnostics
  * stop naming a path that backs nothing, and so the old copy is re-read rather
- * than skipped on a stale fingerprint if the newer database later disappears. */
-function releaseSupersededOpenCodeSources(db: Database, path: string, sessionId: string): void {
-  const suffix = `#${sessionId}`;
-  const stale = queryRows<{ path: string }>(
-    db,
-    "SELECT path FROM ingest_source WHERE tool = 'opencode' AND path <> ?1 AND substr(path, ?2) = ?3",
-    [path, -suffix.length, suffix],
-  ).filter((row) => row.path.lastIndexOf("#") === row.path.length - suffix.length);
-  for (const row of stale) {
-    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
-    runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
+ * than skipped on a stale fingerprint if the newer database later disappears.
+ * The candidates are one primary-key lookup per known database, not a scan of
+ * every OpenCode source on each session write. */
+function releaseSupersededOpenCodeSources(
+  db: Database,
+  path: string,
+  sessionId: string,
+  databases: ReadonlySet<string>,
+): void {
+  // The session ID follows the path's last '#', so an ID containing one never
+  // names a source.
+  if (sessionId.includes("#")) {
+    return;
+  }
+  for (const database of databases) {
+    const candidate = `${database}#${sessionId}`;
+    if (
+      candidate === path ||
+      queryRow(db, "SELECT 1 FROM ingest_source WHERE path = ?1 AND tool = 'opencode'", [
+        candidate,
+      ]) == null
+    ) {
+      continue;
+    }
+    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [candidate]);
+    runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [candidate]);
   }
 }
 

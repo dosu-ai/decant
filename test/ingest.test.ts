@@ -3018,31 +3018,78 @@ describe("OpenCode ingest", () => {
     }
   }
 
-  test("fails only the session when a later store read fails", () => {
+  test("ingests without an unreadable model catalog and re-derives once it reads", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     const main = join(opencodeDir, "opencode.db");
+    // A second session in the same database shows the catalog is read, and
+    // its failure reported, once per database rather than once per session.
+    const copy = `
+      CREATE TEMP TABLE s AS SELECT * FROM session_v2;
+      UPDATE s SET id = 'ses_copy';
+      INSERT INTO session_v2 SELECT * FROM s;
+      CREATE TEMP TABLE m AS SELECT * FROM session_message;
+      UPDATE m SET id = 'copy_' || id, session_id = 'ses_copy';
+      INSERT INTO session_message SELECT * FROM m;
+    `;
     // The session tables read fine; the model catalog query then fails.
     buildOpenCodeDb(main, [
       "DROP TABLE kv; CREATE TABLE kv (key TEXT PRIMARY KEY, other TEXT);",
       opencodeFixtureSql("sample.sql"),
+      copy,
     ]);
     write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
     const db = openFreshDb(dir);
-
-    const { result, lines } = captureWarnings(() => sync(db, config));
-    expect(result).toMatchObject({ scanned: 2, ingested: 1, failed: 1 });
-    expect(db.query("SELECT tool FROM session").all()).toEqual([{ tool: "claude_code" }]);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({
+    const opencodeRows = (): unknown =>
+      db
+        .query(
+          `SELECT s.source_session_id, s.context_window_tokens, i.hash
+             FROM session s JOIN ingest_source i ON i.path = s.source_path
+            WHERE s.tool = 'opencode' ORDER BY s.source_session_id`,
+        )
+        .all();
+    const catalogWarning = {
       level: "WARN",
-      "event.name": "decant.ingest.source_read_failed",
-      "file.path": `${main}#ses_sample`,
-      "error.type": "opencode_read",
+      "event.name": "decant.ingest.opencode_catalog_failed",
+      "file.path": main,
       "error.message": expect.stringContaining("no such column"),
-    });
-    expect(JSON.stringify(lines[0])).not.toContain("hello");
-    // Nothing was recorded for the session, so the next sync retries it.
-    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 1 });
+    };
+
+    // The stored key marks the copy as derived without the catalog.
+    const withoutCatalog = "1791786060000:4:4:1791786008000|no-catalog";
+
+    const first = captureWarnings(() => sync(db, config));
+    expect(first.result).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
+    expect(first.lines).toEqual([expect.objectContaining(catalogWarning)]);
+    expect(JSON.stringify(first.lines)).not.toContain("hello");
+    expect(opencodeRows()).toEqual([
+      { source_session_id: "ses_copy", context_window_tokens: null, hash: withoutCatalog },
+      { source_session_id: "ses_sample", context_window_tokens: null, hash: withoutCatalog },
+    ]);
+
+    // Still unreadable: nothing is re-derived, and the database warns once.
+    const second = captureWarnings(() => sync(db, config));
+    expect(second.result).toMatchObject({ ingested: 0, skipped: 3, failed: 0 });
+    expect(second.lines).toEqual([expect.objectContaining(catalogWarning)]);
+
+    // Same sessions, readable catalog: each is re-derived once with its window.
+    rmSync(main);
+    buildOpenCodeDb(main, [opencodeFixtureSql("sample.sql"), copy]);
+    const third = captureWarnings(() => sync(db, config));
+    expect(third.result).toMatchObject({ ingested: 2, skipped: 1, failed: 0 });
+    expect(third.lines).toEqual([]);
+    expect(opencodeRows()).toEqual([
+      {
+        source_session_id: "ses_copy",
+        context_window_tokens: 1_000_000,
+        hash: "1791786060000:4:4:1791786008000",
+      },
+      {
+        source_session_id: "ses_sample",
+        context_window_tokens: 1_000_000,
+        hash: "1791786060000:4:4:1791786008000",
+      },
+    ]);
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 3, failed: 0 });
     closeDb(db);
   });
 

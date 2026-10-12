@@ -1,5 +1,13 @@
 import type { Database } from "bun:sqlite";
-import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, watch } from "node:fs";
+import {
+  existsSync,
+  type FSWatcher,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  watch,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
@@ -12,6 +20,9 @@ import {
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
+/** OpenCode's live appends raise no file event (see `openCodeEvents`), so its
+ * databases are also checked by file signature on this interval. */
+export const DEFAULT_OPENCODE_POLL_MS = 2_000;
 
 export type SyncReason = "startup" | "watch" | "sweep" | "manual";
 
@@ -90,6 +101,10 @@ export interface WatchOptions {
   onEvent?: (event: WatchEvent) => void;
   open?: (path: string) => Database;
   enableWatch?: boolean;
+  /** How often to check OpenCode databases by file signature; 0 disables the
+   * poll. It runs whether or not native watching is enabled, and only when an
+   * OpenCode root exists. */
+  openCodePollMs?: number;
   syncOnStart?: boolean;
   /**
    * How to execute one sync. Defaults to the in-process runSyncOnce; servers
@@ -159,6 +174,9 @@ export interface WatchRoot {
   /** `filename` is the event path relative to `dir`, or null when the
    * platform does not report one. */
   accepts(filename: string | null): boolean;
+  /** Present on roots holding OpenCode databases: re-stats them against the
+   * same baseline `accepts` keeps, and reports whether any changed. */
+  poll?: () => boolean;
 }
 
 type EventFilter = (filename: string | null) => boolean;
@@ -169,14 +187,16 @@ const anyEvent: EventFilter = () => true;
  * Events beside an OpenCode database warrant a sync only when the database or
  * its `-wal` actually changed. Every connection that opens the database,
  * Decant's own read-only sync included, rewrites the `-shm` index, so reacting
- * to the event alone would loop forever. The `-shm` event is still a useful
- * hint: with Bun's macOS watcher, a writer's `-wal` appends after its first
- * commit surface only as `-shm` changes. So any event naming a database or one of its sidecars re-stats the
- * database and `-wal` and compares against the last size and mtime seen; a
- * read never moves either. Everything else in the directory (logs, snapshots,
- * journals, subdirectories) is ignored. A null filename re-checks every
- * database in the directory the same way, so it can neither loop nor drop a
- * write.
+ * to the event alone would loop forever. Events are also incomplete: on macOS
+ * a writer that keeps its connection open, as a running OpenCode does, raises
+ * an event for its first commit and for its checkpoint or close, but later
+ * `-wal` appends raise none at all. So any event naming a database or one of
+ * its sidecars is only a hint that re-stats the database and `-wal` and
+ * compares against the last size and mtime seen; a read never moves either.
+ * The watcher's poll calls the same filter with a null filename on an
+ * interval, which re-checks every database in the directory, so a change seen
+ * by either path updates the one baseline and is synced once. Everything else
+ * in the directory (logs, snapshots, journals, subdirectories) is ignored.
  */
 function openCodeEvents(dir: string, isDatabase: (name: string) => boolean): EventFilter {
   const seen = new Map<string, string>();
@@ -240,9 +260,14 @@ function fileSignature(path: string): string {
 }
 
 export function watchRoots(config: Config): WatchRoot[] {
-  const explicitDb =
-    config.opencodeDb != null && config.opencodeDb !== "" ? config.opencodeDb : null;
-  const candidates: { dir: string; recursive: boolean; accepts: () => EventFilter }[] = [
+  const explicitDb = explicitOpenCodeDb(config);
+  const candidates: {
+    dir: string;
+    recursive: boolean;
+    /** OpenCode databases, whose filter the watcher also polls. */
+    polled?: boolean;
+    accepts: () => EventFilter;
+  }[] = [
     { dir: config.claudeDir, recursive: true, accepts: () => anyEvent },
     { dir: join(config.codexDir, "sessions"), recursive: true, accepts: () => anyEvent },
     {
@@ -256,6 +281,7 @@ export function watchRoots(config: Config): WatchRoot[] {
     {
       dir: config.opencodeDir,
       recursive: false,
+      polled: true,
       accepts: () => openCodeEvents(config.opencodeDir, isOpenCodeDatabaseName),
     },
     ...(explicitDb != null
@@ -263,6 +289,7 @@ export function watchRoots(config: Config): WatchRoot[] {
           {
             dir: dirname(explicitDb),
             recursive: false,
+            polled: true,
             accepts: () =>
               openCodeEvents(dirname(explicitDb), (name) => name === basename(explicitDb)),
           },
@@ -271,14 +298,18 @@ export function watchRoots(config: Config): WatchRoot[] {
   ];
   // One watcher per directory: a directory named twice reacts to the events
   // either source would, and recurses if either needs it.
-  const roots = new Map<string, { recursive: boolean; filters: (() => EventFilter)[] }>();
+  const roots = new Map<
+    string,
+    { recursive: boolean; filters: { polled: boolean; make: () => EventFilter }[] }
+  >();
   for (const candidate of candidates) {
+    const filter = { polled: candidate.polled === true, make: candidate.accepts };
     const root = roots.get(candidate.dir);
     if (root == null) {
-      roots.set(candidate.dir, { recursive: candidate.recursive, filters: [candidate.accepts] });
+      roots.set(candidate.dir, { recursive: candidate.recursive, filters: [filter] });
     } else {
       root.recursive ||= candidate.recursive;
-      root.filters.push(candidate.accepts);
+      root.filters.push(filter);
     }
   }
   return [...roots]
@@ -291,15 +322,34 @@ export function watchRoots(config: Config): WatchRoot[] {
     })
     .map(([dir, { recursive, filters }]) => {
       // Built only for existing directories, so the baseline stat runs once.
-      const accepts = filters.map((make) => make());
+      const built = filters.map(({ polled, make }) => ({ polled, accept: make() }));
+      // Every filter sees every event so each keeps its baseline current.
+      const anyOf = (accepts: EventFilter[], filename: string | null): boolean =>
+        accepts.reduce((any, accept) => accept(filename) || any, false);
+      const all = built.map(({ accept }) => accept);
+      const polled = built.filter((filter) => filter.polled).map(({ accept }) => accept);
       return {
         dir,
         recursive,
-        // Every filter sees every event so each keeps its baseline current.
-        accepts: (filename: string | null) =>
-          accepts.reduce((any, accept) => accept(filename) || any, false),
+        accepts: (filename: string | null) => anyOf(all, filename),
+        // A null filename re-checks every database the filter tracks.
+        ...(polled.length > 0 ? { poll: () => anyOf(polled, null) } : {}),
       };
     });
+}
+
+/** OPENCODE_DB resolved through symlinks, so the watcher sits in the directory
+ * the writer actually touches and matches the file names it reports. Falls
+ * back to the configured path when it cannot be resolved (not created yet). */
+function explicitOpenCodeDb(config: Config): string | null {
+  if (config.opencodeDb == null || config.opencodeDb === "") {
+    return null;
+  }
+  try {
+    return realpathSync(config.opencodeDb);
+  } catch {
+    return config.opencodeDb;
+  }
 }
 
 export function watchDirs(config: Config): string[] {
@@ -343,12 +393,14 @@ export function startWatch(options: WatchOptions): WatchHandle {
     (async (config, syncStatus, cancelFlag, onProgress) =>
       runSyncOnce(config, syncStatus, cancelFlag, open, onProgress));
   const enableWatch = options.enableWatch !== false;
+  const openCodePollMs = options.openCodePollMs ?? DEFAULT_OPENCODE_POLL_MS;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
   const watchers: FSWatcher[] = [];
   let stopped = false;
   let debounceTimer: Timer | null = null;
   let intervalTimer: Timer | null = null;
+  let pollTimer: Timer | null = null;
   let running = false;
   let pendingReason: SyncReason | null = null;
   let activeRun = Promise.resolve();
@@ -449,6 +501,10 @@ export function startWatch(options: WatchOptions): WatchHandle {
       clearInterval(intervalTimer);
       intervalTimer = null;
     }
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
     for (const watcher of watchers) {
       watcher.close();
     }
@@ -479,6 +535,18 @@ export function startWatch(options: WatchOptions): WatchHandle {
 
   if (intervalMs > 0) {
     intervalTimer = setInterval(() => schedule("sweep", 0), intervalMs);
+  }
+
+  // Stat-only: the poll never opens a database, so it cannot disturb -shm or
+  // trigger itself. It shares each root's baseline with the event filter, so
+  // a change either path sees first is synced once.
+  const polls = roots.flatMap((root) => (root.poll != null ? [root.poll] : []));
+  if (openCodePollMs > 0 && polls.length > 0) {
+    pollTimer = setInterval(() => {
+      if (polls.reduce((any, poll) => poll() || any, false)) {
+        schedule("watch", debounceMs);
+      }
+    }, openCodePollMs);
   }
 
   const abort = (): void => {

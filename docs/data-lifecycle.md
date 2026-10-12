@@ -47,7 +47,12 @@ sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode
 combines native filesystem events with a periodic sweep so missed notifications
-do not leave the archive stale.
+do not leave the archive stale. OpenCode database directories are watched
+non-recursively, and because a running OpenCode's later writes may raise no
+file event, the watcher also checks each database and its `-wal` file every 2
+seconds by size and modification time, even with `--no-fs-watch`. The watcher
+only reads file metadata and never opens an OpenCode database; the sync it
+schedules opens it read-only.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local

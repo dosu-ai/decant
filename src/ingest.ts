@@ -219,6 +219,15 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
       continue;
     }
     try {
+      if (store.isPreSplitDatabase()) {
+        // Its `session` rows are 2.x-shaped, so the 1.x reader would misread
+        // them; OpenCode converts the file the next time a 2.x release opens it.
+        logger.warning("OpenCode database uses a pre-release layout and was skipped.", {
+          "event.name": "decant.ingest.opencode_unsupported_layout",
+          "file.path": dbPath,
+        });
+        continue;
+      }
       for (const ref of store.listSessions()) {
         const prior = best.get(ref.sessionId);
         if (prior == null || isNewerOpenCodeCopy(ref, prior)) {

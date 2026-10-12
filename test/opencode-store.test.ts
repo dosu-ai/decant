@@ -27,6 +27,7 @@ import {
   buildOpenCodeFixtureDb,
   buildOpenCodeV1Db,
   buildOpenCodeV1FixtureDb,
+  opencodeFixtureSql,
 } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-store-test-"));
@@ -533,6 +534,35 @@ describe("OpenCodeStore 1.x tables", () => {
       expect(store.loadLegacySession("x")).toBeNull();
     } finally {
       store.close();
+    }
+  });
+
+  test("never reads a pre-split 2.x database's sessions as 1.x sessions", () => {
+    // A pre-release 2.x database keeps its 2.x sessions in `session`, beside
+    // session_message, and has no session_v2.
+    const path = freshPath("opencode-next.db");
+    const writer = new Database(path, { create: true, strict: true });
+    writer.exec(opencodeFixtureSql("next/pre-split.sql"));
+    writer.close();
+    const store = OpenCodeStore.open(path);
+    try {
+      expect(store.isPreSplitDatabase()).toBe(true);
+      expect(store.hasSessionTables()).toBe(false);
+      expect(store.hasLegacyTables()).toBe(false);
+      expect(store.listSessions()).toEqual([]);
+      expect(store.listLegacySessions()).toEqual([]);
+      expect(store.loadLegacySession("ses_next")).toBeNull();
+    } finally {
+      store.close();
+    }
+    const v2 = freshPath();
+    buildOpenCodeFixtureDb(v2, ["sample.sql"]);
+    const v1 = freshPath();
+    buildOpenCodeV1FixtureDb(v1, ["v1-sample.sql"]);
+    for (const other of [v2, v1]) {
+      const otherStore = OpenCodeStore.open(other);
+      expect(otherStore.isPreSplitDatabase()).toBe(false);
+      otherStore.close();
     }
   });
 

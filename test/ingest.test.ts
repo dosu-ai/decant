@@ -3496,6 +3496,30 @@ describe("OpenCode ingest", () => {
     closeDb(db);
   });
 
+  test("skips a pre-split 2.x database with a warning instead of reading it as 1.x", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const next = join(opencodeDir, "opencode-next.db");
+    const writer = new Database(next, { create: true, strict: true });
+    writer.exec(opencodeFixtureSql("next/pre-split.sql"));
+    writer.close();
+    buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["sample.sql"]);
+    const db = openFreshDb(dir);
+
+    const { result, lines } = captureWarnings(() => sync(db, config));
+    expect(result).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+    expect(db.query("SELECT source_session_id FROM session").all()).toEqual([
+      { source_session_id: "ses_sample" },
+    ]);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: "WARN",
+        "event.name": "decant.ingest.opencode_unsupported_layout",
+        "file.path": next,
+      }),
+    ]);
+    closeDb(db);
+  });
+
   test("keeps a JSONL source's hash NULL while an OpenCode source stores its fingerprint", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["sample.sql"]);

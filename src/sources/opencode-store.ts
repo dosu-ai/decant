@@ -240,10 +240,24 @@ export class OpenCodeStore {
     return { session, messages };
   }
 
-  /** The 1.x tables: `session`, `message`, and `part` all present. Every 2.x
-   * database carries them too (2.x replays the 1.x migrations), usually empty. */
+  /** A pre-release 2.x database from before OpenCode split its tables
+   * (`opencode-next.db`): 2.x sessions in a table still named `session`, beside
+   * `session_message`, and no `session_v2`. OpenCode tells it apart by
+   * `session_message` the same way (v1-migration.bun.ts `isNextDatabase`), and
+   * renames its `session` to `session_v2` when a 2.x release opens it. Neither
+   * reader applies to it. */
+  isPreSplitDatabase(): boolean {
+    return hasTable(this.#db, "session_message") && !hasTable(this.#db, "session_v2");
+  }
+
+  /** The 1.x tables: `session`, `message`, and `part` all present, in a
+   * database that is not pre-split 2.x. 2.x releases that replay the 1.x
+   * migrations carry them too, usually empty. */
   hasLegacyTables(): boolean {
-    return ["session", "message", "part"].every((table) => hasTable(this.#db, table));
+    return (
+      !this.isPreSplitDatabase() &&
+      ["session", "message", "part"].every((table) => hasTable(this.#db, table))
+    );
   }
 
   /** Every session the 1.x tables hold, including ids this database's

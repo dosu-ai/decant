@@ -87,7 +87,7 @@ provider does not publish a first-party API token price for that model slug.
 | GLM-4.5-AirX | $1.10 | $0.22 | no additional fee | $4.50 |
 | GLM-4.5-Air | $0.20 | $0.03 | no additional fee | $1.10 |
 | GLM-4.7-FlashX | $0.07 | $0.01 | no additional fee | $0.40 |
-| GLM-4-32B-0414-128K | $0.10 | no discount | no additional fee | $0.10 |
+| GLM-4-32B-0414-128K | $0.10 | $0.10 | no additional fee | $0.10 |
 | GLM-4.7-Flash, GLM-4.5-Flash | free | free | free | free |
 | GLM-5.3-HighSpeed, GLM-5.2-HighSpeed, GLM-5-Turbo, GLM-5V-Turbo | — | — | — | — |
 | Muse Wonder 1.0 | $4.00 | $0.20 | no additional fee | $20.00 |

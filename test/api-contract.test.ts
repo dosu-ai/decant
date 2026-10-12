@@ -11,6 +11,7 @@ import { serve, serviceStartingResponse } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { DECANT_VERSION } from "../src/version.ts";
+import { syntheticOpenCodeSession } from "./opencode-session.ts";
 
 type HttpMethod = "get" | "post";
 
@@ -134,6 +135,11 @@ describe("local API OpenAPI contract", () => {
           path: "/api/sessions",
           method: "get",
           url: "/api/sessions?limit=1&offset=0&tool=claude_code",
+        },
+        {
+          path: "/api/sessions",
+          method: "get",
+          url: "/api/sessions?limit=1&offset=0&tool=opencode",
         },
         {
           path: "/api/sessions/search-index",
@@ -322,8 +328,9 @@ describe("local API OpenAPI contract", () => {
         },
       ];
 
+      // A route may appear in several cases (one per source filter), so compare operations, not cases.
       expect(operationKeys(document)).toEqual(
-        cases.map((entry) => `${entry.method.toUpperCase()} ${entry.path}`).sort(),
+        [...new Set(cases.map((entry) => `${entry.method.toUpperCase()} ${entry.path}`))].sort(),
       );
 
       const ajv = new Ajv2020({
@@ -510,6 +517,16 @@ function seed(config: Config): void {
     1,
     2,
     "contract-codex",
+  );
+  upsertSession(
+    db,
+    syntheticOpenCodeSession("contract-opencode", [
+      { model: "example-unpriced", cost: 0.2, input: 100, output: 10 },
+    ]),
+    "/synthetic/opencode.db#contract-opencode",
+    1,
+    0,
+    "contract-opencode",
   );
   regenerate(db);
   db.close();

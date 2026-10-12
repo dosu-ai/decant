@@ -116,7 +116,13 @@ function sessionSummarySelect(subagentVisibility: string): string {
          s.total_reasoning_tokens, s.reasoning_source,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
-         'decant' AS cost_source,
+         (SELECT CASE
+                   WHEN COUNT(*) = 0 OR SUM(u.reported_cost_usd IS NOT NULL) = 0 THEN 'decant'
+                   WHEN SUM(u.reported_cost_usd IS NULL) = 0 THEN 'reported'
+                   ELSE 'mixed'
+                 END
+            FROM session_model_usage u
+           WHERE u.session_id = s.id) AS cost_source,
          json_extract(s.raw_meta, '$.model_provider') AS model_provider,
          ${directSessionUserStateExpression("s")} AS user_state,
          ${sessionIsUserArchivedExpression("s")} AS is_user_archived,

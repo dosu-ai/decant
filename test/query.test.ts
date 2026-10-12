@@ -23,6 +23,7 @@ import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { mcpUsage, toolUsage } from "../src/stats.ts";
 import { preview } from "../src/tools.ts";
+import { syntheticOpenCodeSession } from "./opencode-session.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-query-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -1196,6 +1197,41 @@ describe("query reads", () => {
     const id = listSessions(db)[0]?.id ?? 0;
     db.exec("PRAGMA foreign_keys = OFF; DROP TABLE message;");
     expect(() => getSession(db, id)).toThrow();
+    db.close();
+  });
+});
+
+describe("cost source", () => {
+  test("labels sessions by where their cost came from", () => {
+    const db = seeded();
+    const ingest = (id: string, requests: Parameters<typeof syntheticOpenCodeSession>[1]) =>
+      upsertSession(db, syntheticOpenCodeSession(id, requests), `/tmp/opencode.db#${id}`, 1, 0, id);
+    const decant = ingest("ses_decant", [
+      { model: "glm-5.3-flash", cost: 0.1, input: 100, output: 10 },
+    ]);
+    const reported = ingest("ses_reported", [
+      { model: "example-unpriced", cost: 0.2, input: 100, output: 10 },
+    ]);
+    const mixed = ingest("ses_mixed", [
+      { model: "glm-5.3-flash", cost: 0.1, input: 100, output: 10 },
+      { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
+    ]);
+    expect(getSessionSummary(db, decant)).toMatchObject({
+      cost_source: "decant",
+      model_provider: "example",
+    });
+    expect(getSessionSummary(db, reported)).toMatchObject({
+      cost_source: "reported",
+      model_provider: "example",
+    });
+    expect(getSessionSummary(db, mixed)).toMatchObject({ cost_source: "mixed" });
+    const claude = listSessions(db, { tool: "claude_code" })[0];
+    expect(claude).toMatchObject({ cost_source: "decant", model_provider: null });
+    expect(
+      Object.fromEntries(
+        listSessions(db, { tool: "opencode" }).map((s) => [s.source_session_id, s.cost_source]),
+      ),
+    ).toEqual({ ses_decant: "decant", ses_reported: "reported", ses_mixed: "mixed" });
     db.close();
   });
 });

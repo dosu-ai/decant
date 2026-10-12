@@ -98,8 +98,8 @@ export function SettingsView({
           <div>
             <h2>About Decant</h2>
             <p>
-              Local-first analytics for Claude Code, Codex, and Gemini CLI sessions. Decant is an
-              open source tool from Dosu.
+              Local-first analytics for Claude Code, Codex, Gemini CLI, and OpenCode sessions.
+              Decant is an open source tool from Dosu.
             </p>
           </div>
           <img alt="" src={dosuDecantUrl} />

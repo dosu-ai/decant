@@ -57,9 +57,9 @@ export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the JSONL logs Claude Code, Codex, and Gemini CLI already write and turns
-          them into a searchable session-log index with token, cost, and context-window analytics.
-          Nothing leaves this machine.
+          Decant reads the session logs Claude Code, Codex, Gemini CLI, and OpenCode already write
+          and turns them into a searchable session-log index with token, cost, and context-window
+          analytics. Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button

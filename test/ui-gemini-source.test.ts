@@ -25,7 +25,9 @@ describe("Gemini CLI source copy", () => {
   });
 
   test("names Gemini CLI alongside Claude Code and Codex in product copy", () => {
-    expect(main).toContain("Every Claude Code, Codex, and Gemini CLI session log on this device.");
-    expect(main).toMatch(/JSONL logs Claude Code, Codex, and Gemini CLI already write/);
+    expect(main).toContain(
+      "Every Claude Code, Codex, Gemini CLI, and OpenCode session log on this device.",
+    );
+    expect(main).toMatch(/session logs Claude Code, Codex, Gemini CLI, and OpenCode already write/);
   });
 });

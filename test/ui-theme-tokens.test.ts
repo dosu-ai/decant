@@ -85,6 +85,9 @@ describe("theme tokens", () => {
       "--info-text",
       "--claude-text",
       "--gemini-text",
+      "--opencode-text",
+      "--zai-text",
+      "--meta-text",
     ]);
     const pureAlias = /^var\(--[a-z0-9-]+\)$/;
     const lightNames = declarations(rootBlock)
@@ -101,6 +104,9 @@ describe("theme tokens", () => {
       "--claude",
       "--claude-strong",
       "--gemini",
+      "--opencode",
+      "--zai",
+      "--meta",
     ]);
     for (const name of lightNames) {
       if (brandLocked.has(name)) {

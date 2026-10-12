@@ -165,7 +165,7 @@ export function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code, Codex, and Gemini CLI session log on this device.</p>
+          <p>Every Claude Code, Codex, Gemini CLI, and OpenCode session log on this device.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>

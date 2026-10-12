@@ -358,6 +358,9 @@
   --claude: #d97757;
   --claude-strong: #c6613f;
   --gemini: #4285f4;
+  --opencode: #7c3aed;
+  --zai: #2563eb;
+  --meta: #0866ff;
   --success: #65a30d;
   --warning: #d97706;
   --danger: var(--fg-status-destructive);
@@ -373,6 +376,9 @@
   --info-text: color-mix(in oklab, var(--info) 60%, var(--fg));
   --claude-text: color-mix(in oklab, var(--claude) 65%, var(--fg));
   --gemini-text: color-mix(in oklab, var(--gemini) 60%, var(--fg));
+  --opencode-text: color-mix(in oklab, var(--opencode) 60%, var(--fg));
+  --zai-text: color-mix(in oklab, var(--zai) 60%, var(--fg));
+  --meta-text: color-mix(in oklab, var(--meta) 60%, var(--fg));
   --btn-ink: var(--bg-components-primary-primary);
   --btn-ink-hover: var(--bg-components-primary-primary-hover);
   --shade-rgb: 20, 20, 20;
@@ -2886,6 +2892,18 @@ select {
   color: var(--gemini-text);
 }
 
+.tone-opencode {
+  color: var(--opencode-text);
+}
+
+.tone-zai {
+  color: var(--zai-text);
+}
+
+.tone-meta {
+  color: var(--meta-text);
+}
+
 .badge.tone-accent,
 .signal-icon.tone-accent {
   background: var(--bg-components-badge-fuchsia);
@@ -3202,12 +3220,36 @@ select {
   background: color-mix(in oklab, var(--gemini) 12%, transparent);
 }
 
+.badge.tone-opencode {
+  background: color-mix(in oklab, var(--opencode) 12%, transparent);
+}
+
+.badge.tone-zai {
+  background: color-mix(in oklab, var(--zai) 12%, transparent);
+}
+
+.badge.tone-meta {
+  background: color-mix(in oklab, var(--meta) 12%, transparent);
+}
+
 .bar span.tone-openai {
   color: var(--muted);
 }
 
 .bar span.tone-gemini {
   color: var(--gemini-text);
+}
+
+.bar span.tone-opencode {
+  color: var(--opencode-text);
+}
+
+.bar span.tone-zai {
+  color: var(--zai-text);
+}
+
+.bar span.tone-meta {
+  color: var(--meta-text);
 }
 
 .notice {
@@ -3961,6 +4003,18 @@ mark {
 
 .sparkline.tone-gemini {
   color: var(--gemini-text);
+}
+
+.sparkline.tone-opencode {
+  color: var(--opencode-text);
+}
+
+.sparkline.tone-zai {
+  color: var(--zai-text);
+}
+
+.sparkline.tone-meta {
+  color: var(--meta-text);
 }
 
 .sparkline polyline {
@@ -5213,6 +5267,10 @@ mark {
 
 .provider-gemini {
   --turn-rail: color-mix(in oklab, var(--gemini) 62%, var(--line));
+}
+
+.provider-opencode {
+  --turn-rail: color-mix(in oklab, var(--opencode) 62%, var(--line));
 }
 
 .turn-meta {

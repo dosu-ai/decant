@@ -6,6 +6,7 @@ import { Badge, ModelBadge, ReasoningBadge, ToolBadge } from "../badges.tsx";
 import { OverflowMenu } from "../common.tsx";
 import { SESSION_DETAIL_MESSAGE_PAGE_SIZE } from "../constants.ts";
 import { ContextWindowPanel } from "../context-window-strip.tsx";
+import { costSourceLabel, costSourceTooltip } from "../cost-source.ts";
 import { useDialogFocusTrap } from "../focus.ts";
 import { basename, compact, errorMessage, formatInt, money } from "../format.ts";
 import { Icon } from "../icons.tsx";
@@ -809,6 +810,11 @@ export function SessionDetailView({
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
+            {detail.summary.model_provider != null ? (
+              <Badge mono title={`Served through the ${detail.summary.model_provider} provider`}>
+                {detail.summary.model_provider}
+              </Badge>
+            ) : null}
             <DosuProvenanceBadge session={detail.summary} />
             <ReasoningBadge
               effort={detail.summary.reasoning_effort}
@@ -852,8 +858,11 @@ export function SessionDetailView({
             <span>
               <strong>{compact(stats.tokens)}</strong> tokens
             </span>
-            <span>
+            <span title={costSourceTooltip(detail.summary.cost_source)}>
               <strong>{money(detail.summary.estimated_cost_usd)}</strong>
+              {costSourceLabel(detail.summary.cost_source) != null ? (
+                <span className="faint"> {costSourceLabel(detail.summary.cost_source)}</span>
+              ) : null}
             </span>
           </div>
         </div>

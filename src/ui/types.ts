@@ -324,9 +324,19 @@ export type BadgeTone =
   | "info"
   | "claude"
   | "openai"
-  | "gemini";
+  | "gemini"
+  | "opencode"
+  | "zai"
+  | "meta";
 
-export type BrandIconName = "anthropic" | "claude" | "openai" | "gemini";
+export type BrandIconName =
+  | "anthropic"
+  | "claude"
+  | "openai"
+  | "gemini"
+  | "opencode"
+  | "zai"
+  | "meta";
 
 export type IconName =
   | "archive"

@@ -12,10 +12,11 @@ import {
   type Role,
   reasoningEffortLevels,
   summarizeReasoningEfforts,
+  type TokenUsage,
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
-import { addTokenUsage, openCodeUsage } from "./opencode-usage.ts";
+import { addTokenUsage, openCodeUsage, reasoningOverlap } from "./opencode-usage.ts";
 import {
   block,
   contentText,
@@ -131,6 +132,12 @@ export function parseOpenCodeSession(
   let firstUserText: string | null = null;
   let forkRowsSkipped = 0;
   let seq = 0;
+  // 2.x writes disjoint tokens, but a row OpenCode migrated from 1.x keeps the
+  // semantics of the release that wrote it, and the migration drops `total`,
+  // so the session's version decides (a 2.x-created session is always
+  // disjoint).
+  const rowUsage = (tokens: Json | undefined): TokenUsage | null =>
+    openCodeUsage(tokens, isObject(tokens) ? reasoningOverlap(tokens, row.version) : "disjoint");
 
   const emit = (role: Role, raw: Json, fields: MessageFields, blocks: NormalizedBlock[]): void => {
     messages.push({
@@ -150,10 +157,12 @@ export function parseOpenCodeSession(
   };
 
   for (const message of rows) {
-    // A fork copies the parent's settled rows with their original timestamps.
-    // OpenCode's own stats exclude them with this predicate; so does Decant,
-    // or the inherited history would be billed twice.
-    if (row.fork_session_id != null && message.time_created < row.time_created) {
+    // A fork copies the parent's settled rows with their original timestamps,
+    // so a row older than its session is inherited history and would be
+    // billed twice. `opencode stats` skips it only when `fork_session_id` is
+    // set; a fork OpenCode migrated from 1.x has no such link, so Decant
+    // skips by time alone, as its 1.x reader does.
+    if (message.time_created < row.time_created) {
       forkRowsSkipped += 1;
       continue;
     }
@@ -180,7 +189,7 @@ export function parseOpenCodeSession(
       if (model.variant != null && model.variant !== "default") {
         efforts.push(model.variant);
       }
-      const usage = openCodeUsage(data.tokens, "disjoint");
+      const usage = rowUsage(data.tokens);
       if (usage != null) {
         totals = addTokenUsage(totals, usage);
         sawUsage = true;
@@ -203,7 +212,7 @@ export function parseOpenCodeSession(
       }
     } else if (typ === "compaction") {
       const model = modelRef(data.model);
-      const usage = openCodeUsage(data.tokens, "disjoint");
+      const usage = rowUsage(data.tokens);
       if (usage != null) {
         totals = addTokenUsage(totals, usage);
         sawUsage = true;

@@ -412,6 +412,33 @@ describe("parseOpenCodeSession", () => {
     expect(session.title).toBe("Inline session");
   });
 
+  test("drops inherited rows of a fork OpenCode migrated from 1.x, which has no fork link", () => {
+    const { session } = parseOpenCodeSession(
+      sessionRow({ version: "1.18.35", time_created: T0 }),
+      [
+        msg(1, "user", { text: "inherited prompt", time: { created: T0 - 5000 } }, T0 - 5000),
+        msg(2, "user", { text: "own prompt", time: { created: T0 + 1000 } }, T0 + 1000),
+        assistant(3, {
+          tokens: { input: 70, output: 9, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      ],
+      context,
+    );
+    expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(session.rawMeta).toMatchObject({ fork_session_id: null, fork_rows_skipped: 1 });
+  });
+
+  test("keeps reasoning inside output for a row migrated from a pre-1.3.16 session", () => {
+    const tokens = { input: 100, output: 50, reasoning: 20, cache: { read: 0, write: 0 } };
+    const usage = (version: string) =>
+      parseOpenCodeSession(sessionRow({ version }), [assistant(1, { tokens })], context).session
+        .messages[0]?.usage;
+    expect(usage("1.3.10")).toMatchObject({ input: 100, output: 50, reasoning: 20 });
+    expect(usage("0.0.0-dev-202603010000")).toMatchObject({ output: 50, reasoning: 20 });
+    expect(usage("1.3.16")).toMatchObject({ output: 70, reasoning: 20 });
+    expect(usage("2.0.27")).toMatchObject({ output: 70, reasoning: 20 });
+  });
+
   test("keeps sequence gaps left by a revert without issues", () => {
     const parsed = parseOpenCodeSession(
       sessionRow(),

@@ -434,4 +434,38 @@ describe("reported cost fallback", () => {
     expect(totals?.estimated_cost_usd).toBeCloseTo(0.45, 9);
     closeDb(db);
   });
+
+  test("stops using a stored reported cost once the model has a rate", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_rated_later", [
+      { model: "glm-5.3-flash", cost: 99, input: 1_000_000, output: 1_000_000 },
+    ]);
+    // Simulate a row derived before Decant had a rate for the model.
+    db.query("UPDATE session_model_usage SET reported_cost_usd = 5 WHERE session_id = ?1").run(id);
+    db.query("UPDATE session SET estimated_cost_usd = 0 WHERE id = ?1").run(id);
+    expect(refreshSessionCosts(db)).toBe(1);
+    expect(storedCost(db, id)).toBeCloseTo(0.65, 9);
+    expect(tokenEconomicsForSession(db, id)?.totals.reported_cost_usd).toBe(0);
+    expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
+
+  test("sums recorded cost only for unpriced models when usage overshoots the totals", () => {
+    const db = freshDb();
+    const parsed = syntheticOpenCodeSession("ses_residual", [
+      { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
+      { model: "glm-5.3-flash", cost: 99, input: 200, output: 20 },
+    ]);
+    // Session totals below the per-request sum make the residual negative, so
+    // the session-level split is used.
+    parsed.session.totals.input = 1;
+    parsed.session.totals.output = 1;
+    const id = upsertSession(db, parsed, "/tmp/opencode.db#ses_residual", 1, 0, "ses_residual");
+    expect(storedRows(db, id)).toMatchObject([
+      { model: "example-unpriced", reported_cost_usd: 0.3 },
+    ]);
+    expect(storedCost(db, id)).toBeCloseTo(0.3, 12);
+    expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
 });

@@ -90,7 +90,7 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const groups = new Map<string, ModelUsageRow>();
   const reportedByGroup = new Map<string, number>();
   const billed = emptyUsage();
-  let reportedTotal = 0;
+  let unpricedReportedTotal = 0;
   for (const message of messages) {
     const recorded = parseUsageJson(message.usage_json);
     const cacheCreation = message.cache_creation_tokens ?? 0;
@@ -110,7 +110,9 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
       typeof message.reported_cost === "number" && message.reported_cost > 0
         ? message.reported_cost
         : 0;
-    reportedTotal += reported;
+    if (!isPriceableModel(model)) {
+      unpricedReportedTotal += reported;
+    }
     reportedByGroup.set(key(model, tier), (reportedByGroup.get(key(model, tier)) ?? 0) + reported);
   }
 
@@ -118,7 +120,9 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const single =
     groups.size === 0 || (groups.size === 1 && groups.has(key(sessionModel, "standard")));
   // Totals that per-request usage cannot account for, such as an SDK result
-  // record that disagrees with the journal, keep the session-level split.
+  // record that disagrees with the journal, keep the session-level split. The
+  // recorded cost there counts only requests served by models Decant cannot
+  // price, because every other request is priced at list rates.
   if (single || !isNonNegative(residual)) {
     return [
       {
@@ -126,7 +130,7 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
         tier: "standard",
         requests: messages.length,
         usage: totals,
-        reportedCostUsd: reportedFallback(sessionModel, reportedTotal),
+        reportedCostUsd: reportedFallback(sessionModel, unpricedReportedTotal),
       },
     ];
   }
@@ -288,7 +292,12 @@ export function sessionCostParts(
     total.output += parts.output;
     total.cacheRead += parts.cacheRead;
     total.cacheCreation += parts.cacheCreation;
-    total.reported += row.reportedCostUsd ?? 0;
+    // The stored figure was decided when the row was derived. A model that
+    // has since gained a rate is priced by Decant, so keeping the figure
+    // would count it twice.
+    if (!isPriceableModel(row.model)) {
+      total.reported += row.reportedCostUsd ?? 0;
+    }
   }
   return total;
 }
@@ -318,10 +327,14 @@ function isRecordedModel(model: string | null): model is string {
  * recorded zero is a subscription placeholder (OpenCode writes 0 for
  * coding-plan routes), not a free model, so it stays unpriced. */
 function reportedFallback(model: string, reported: number): number | null {
-  if (model !== "" && isPriceable(model)) {
+  if (isPriceableModel(model)) {
     return null;
   }
   return reported > 0 ? reported : null;
+}
+
+function isPriceableModel(model: string): boolean {
+  return model !== "" && isPriceable(model);
 }
 
 function parseUsageJson(value: string | null): { cacheCreation1h: number; speed: string | null } {

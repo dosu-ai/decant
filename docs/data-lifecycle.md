@@ -1,9 +1,9 @@
 # Archive and data lifecycle
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
-the archive have different jobs: source JSONL is the durable record produced by
-Claude Code, Codex, or Gemini CLI; `~/.decant/decant.db` is a searchable,
-rebuildable index plus Decant-owned user state.
+the archive have different jobs: source logs are the durable record produced by
+Claude Code, Codex, Gemini CLI, or OpenCode; `~/.decant/decant.db` is a
+searchable, rebuildable index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -27,9 +27,18 @@ By default Decant discovers:
   absent or empty. Gemini session files are event logs. Decant replays
   checkpoint and rewind records the way Gemini CLI does, so a rewound turn or
   a re-recorded message is stored once.
+- OpenCode sessions in `~/.local/share/opencode/opencode.db` and any
+  `opencode-<channel>.db` beside it (`$XDG_DATA_HOME/opencode`,
+  `OPENCODE_DATA_DIR`, or `OPENCODE_DB` when set). Decant opens the database
+  read-only, never writes to it, and never checkpoints it. Each 2.x session
+  (`session_v2`) becomes its own source `<database>#<session id>`. A session
+  present in several databases is read from the copy updated last. A fork's
+  rows inherited from its parent are skipped, as OpenCode's own statistics
+  skip them. Sessions that exist only in OpenCode 1.x tables are not read.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
-Unchanged files are skipped by size and modification-time checks unless an updated
+Unchanged files are skipped by size and modification-time checks, and
+unchanged OpenCode sessions by their per-session change key, unless an updated
 ingest pipeline requires reprocessing them. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
@@ -46,7 +55,8 @@ JSONL files.
 
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
-send data to Letta. Source labels are `claude-code`, `codex`, and `gemini-cli`.
+send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
+and `opencode`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -301,6 +311,12 @@ includes recommendation status, session archive overrides, and deletion
 tombstones.
 Preserve the database before a rebuild if that state matters, and do not assume
 it can be reconstructed from transcripts.
+
+`session_model_usage.reported_cost_usd` holds the cost a source recorded for a
+model Decant cannot price (OpenCode records one per request). It is set when
+the session is ingested and is part of the cost every sync reconciles, so a
+rate added later replaces the recorded figure with Decant's estimate on the
+next sync.
 
 ## API visibility
 

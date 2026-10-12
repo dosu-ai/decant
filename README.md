@@ -6,10 +6,10 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code, Codex, and Gemini CLI session logs on your machine
-into tangible insights. See where tokens, cost, and agent time go, inspect
-context usage, find the files and tools agents touch, and search complete
-transcripts from a CLI or local web UI.
+Decant turns the Claude Code, Codex, Gemini CLI, and OpenCode session logs on
+your machine into tangible insights. See where tokens, cost, and agent time go,
+inspect context usage, find the files and tools agents touch, and search
+complete transcripts from a CLI or local web UI.
 
 Decant is local-first. It makes no outbound network calls at runtime, and your
 transcripts never leave your machine.
@@ -41,11 +41,11 @@ npx @dosu/decant@latest
 ```
 
 This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
-Codex, and Gemini CLI logs on your machine, and watches for changes.
+Codex, Gemini CLI, and OpenCode logs on your machine, and watches for changes.
 
 ## What you get
 
-- One SQLite archive for Claude Code, Codex, and Gemini CLI sessions.
+- One SQLite archive for Claude Code, Codex, Gemini CLI, and OpenCode sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -127,10 +127,17 @@ Run `decant --help` or `decant <command> --help` for all commands and flags.
 Read commands support `--json`; global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`.
 
-Decant reads `~/.claude/projects`, `~/.codex`, and `~/.gemini/tmp` by default.
-Override them with `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, and
-`DECANT_GEMINI_DIR`, or with the corresponding `--claude-dir`, `--codex-dir`,
-and `--gemini-dir` flags on `sync`, `watch`, and `serve`.
+Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, and
+`~/.local/share/opencode` by default. Override them with `DECANT_CLAUDE_DIR`,
+`DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`, and `DECANT_OPENCODE_DIR`, or with the
+corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`, and
+`--opencode-dir` flags on `sync`, `watch`, and `serve`. OpenCode's own
+`OPENCODE_DATA_DIR`, `XDG_DATA_HOME`, `OPENCODE_DB`, and `OPENCODE_CONFIG`
+variables are honored when the Decant ones are unset; `DECANT_OPENCODE_CONFIG`
+points at the `opencode.json` whose MCP server names Decant uses to recognize
+MCP tool calls. OpenCode sessions are read from `opencode.db` (and
+`opencode-<channel>.db`) read-only; Decant never writes to it. `--path` also
+accepts an OpenCode `.db` file.
 
 To index selected files or a temporary source tree:
 

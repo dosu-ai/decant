@@ -4,8 +4,8 @@
 // rows OpenCode committed since the last checkpoint are seen. Nothing here
 // writes or checkpoints, and the OpenCode CLI is never started.
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { asInteger, asString, get, isObject } from "../json.ts";
 import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
@@ -189,13 +189,47 @@ function hasTable(db: Database, table: string): boolean {
   );
 }
 
+/** File access for config lookup, so tests can substitute an in-memory tree. */
+export interface OpenCodeConfigFs {
+  /** The file's text, or null when it is missing or unreadable. */
+  readText(path: string): string | null;
+  /** The absolute path with symlinks resolved, or just made absolute when it
+   * does not exist (OpenCode's `FSUtil.resolve`). */
+  realPath(path: string): string;
+}
+
+export const nodeOpenCodeConfigFs: OpenCodeConfigFs = {
+  readText(path) {
+    try {
+      return readFileSync(path, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  realPath(path) {
+    const absolute = resolve(path);
+    try {
+      return realpathSync.native(absolute);
+    } catch {
+      return absolute;
+    }
+  },
+};
+
 /** MCP server names from one OpenCode config file (`opencode.json` or the
  * JSONC `opencode.jsonc`): `mcp.servers.<name>` plus the legacy `mcp.<name>`
  * object layout. A missing, unreadable, or malformed file names no servers. */
-export function readOpenCodeMcpServers(configPath: string): string[] {
+export function readOpenCodeMcpServers(
+  configPath: string,
+  fs: OpenCodeConfigFs = nodeOpenCodeConfigFs,
+): string[] {
+  const text = fs.readText(configPath);
+  if (text == null) {
+    return [];
+  }
   let config: Json;
   try {
-    config = parseJsonc(readFileSync(configPath, "utf8"));
+    config = parseJsonc(text);
   } catch {
     return [];
   }
@@ -250,26 +284,34 @@ export function openCodeGlobalConfigPaths({
 /** File names OpenCode reads from a config directory. */
 const OPENCODE_CONFIG_NAMES = ["opencode.json", "opencode.jsonc"] as const;
 
-/** Project-level configs OpenCode reads for a session's directory. */
-export function openCodeProjectConfigPaths(directory: string): string[] {
-  return [
-    join(directory, "opencode.json"),
-    join(directory, "opencode.jsonc"),
-    join(directory, ".opencode", "opencode.json"),
-    join(directory, ".opencode", "opencode.jsonc"),
-  ];
-}
-
-/** MCP server names that apply to a session: the global configs' merged with
- * its directory's project configs. Each directory is read once per instance,
- * and ingest makes one instance per sync, so a config edit applies from the
- * next sync to sessions it re-derives. */
+/** MCP server names that apply to a session, found the way OpenCode 2.x
+ * discovers configs (`ConfigDiscovery.discover`): the global configs, plus
+ * `opencode.json`, `opencode.jsonc`, and `.opencode/opencode.json[c]` in the
+ * session's directory and in every ancestor up to the filesystem root. A
+ * project file that resolves to a global file, and a `.opencode` that resolves
+ * to the global directory, are skipped as OpenCode skips them. Names are a
+ * union, so OpenCode's precedence order does not matter here.
+ *
+ * Each ancestor is read once per instance, and ingest makes one instance per
+ * sync, so a config edit is seen by the next sync. */
 export class OpenCodeMcpServerNames {
+  readonly #fs: OpenCodeConfigFs;
   readonly #global: readonly string[];
+  readonly #globalDir: string | null;
+  readonly #globalFiles: ReadonlySet<string>;
+  readonly #byAncestor = new Map<string, readonly string[]>();
   readonly #byDirectory = new Map<string, readonly string[]>();
 
-  constructor(sources: OpenCodeConfigSources = {}) {
-    this.#global = readAll(openCodeGlobalConfigPaths(sources));
+  constructor(sources: OpenCodeConfigSources = {}, fs: OpenCodeConfigFs = nodeOpenCodeConfigFs) {
+    this.#fs = fs;
+    this.#global = readAll(openCodeGlobalConfigPaths(sources), fs);
+    const globalDir = sources.globalDir;
+    this.#globalDir = globalDir == null ? null : fs.realPath(globalDir);
+    this.#globalFiles = new Set(
+      globalDir == null
+        ? []
+        : OPENCODE_CONFIG_NAMES.map((name) => fs.realPath(join(globalDir, name))),
+    );
   }
 
   forDirectory(directory: string | null): readonly string[] {
@@ -279,16 +321,53 @@ export class OpenCodeMcpServerNames {
     }
     let names = this.#byDirectory.get(directory);
     if (names == null) {
-      const project = readAll(openCodeProjectConfigPaths(directory));
-      names = project.length === 0 ? this.#global : mergeNames([this.#global, project]);
+      names = this.#walk(directory);
       this.#byDirectory.set(directory, names);
+    }
+    return names;
+  }
+
+  #walk(directory: string): readonly string[] {
+    // OpenCode reads no project configs for a session run from inside its
+    // global config directory.
+    if (this.#globalDir != null && this.#fs.realPath(directory) === this.#globalDir) {
+      return this.#global;
+    }
+    const lists: (readonly string[])[] = [this.#global];
+    let current = resolve(directory);
+    while (true) {
+      lists.push(this.#ancestor(current));
+      const parent = dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+    const names = mergeNames(lists);
+    return names.length === this.#global.length ? this.#global : names;
+  }
+
+  #ancestor(directory: string): readonly string[] {
+    let names = this.#byAncestor.get(directory);
+    if (names == null) {
+      const fs = this.#fs;
+      const real = fs.realPath(directory);
+      const paths = OPENCODE_CONFIG_NAMES.map((name) => join(real, name)).filter(
+        (path) => !this.#globalFiles.has(fs.realPath(path)),
+      );
+      const projectDir = fs.realPath(join(real, ".opencode"));
+      if (projectDir !== this.#globalDir) {
+        paths.push(...OPENCODE_CONFIG_NAMES.map((name) => join(projectDir, name)));
+      }
+      names = readAll(paths, fs);
+      this.#byAncestor.set(directory, names);
     }
     return names;
   }
 }
 
-function readAll(paths: readonly string[]): string[] {
-  return mergeNames(paths.map(readOpenCodeMcpServers));
+function readAll(paths: readonly string[], fs: OpenCodeConfigFs): string[] {
+  return mergeNames(paths.map((path) => readOpenCodeMcpServers(path, fs)));
 }
 
 function mergeNames(lists: readonly (readonly string[])[]): string[] {

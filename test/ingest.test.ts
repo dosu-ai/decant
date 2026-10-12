@@ -2984,7 +2984,7 @@ describe("OpenCode ingest", () => {
     closeDb(db);
   });
 
-  test("names direct MCP tools from the session directory's project config", () => {
+  test("names direct MCP tools from project configs in the session directory or above it", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     const project = join(dir, "project");
     mkdirSync(join(project, ".opencode"), { recursive: true });
@@ -3009,6 +3009,8 @@ describe("OpenCode ingest", () => {
     });
     const sessions = [
       ["ses_project", project],
+      // OpenCode reads project configs from every ancestor directory too.
+      ["ses_nested", join(project, "packages", "app")],
       ["ses_elsewhere", join(dir, "elsewhere")],
     ];
     buildOpenCodeDb(
@@ -3022,7 +3024,7 @@ describe("OpenCode ingest", () => {
       ),
     );
     const db = openFreshDb(dir);
-    expect(sync(db, config)).toMatchObject({ ingested: 2, issues: 0, failed: 0 });
+    expect(sync(db, config)).toMatchObject({ ingested: 3, issues: 0, failed: 0 });
     expect(
       db
         .query(
@@ -3037,6 +3039,12 @@ describe("OpenCode ingest", () => {
         tool_kind: "builtin",
         tool_name: "exa_web_search_exa",
         mcp_server: null,
+      },
+      {
+        source_session_id: "ses_nested",
+        tool_kind: "mcp",
+        tool_name: "mcp__exa__web_search_exa",
+        mcp_server: "exa",
       },
       {
         source_session_id: "ses_project",

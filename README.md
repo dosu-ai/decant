@@ -140,11 +140,13 @@ config. It reads the global `opencode.json` and `opencode.jsonc` in OpenCode's
 config directory (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`,
 default `~/.config/opencode`), plus `opencode.json`, `opencode.jsonc`,
 `.opencode/opencode.json`, and `.opencode/opencode.jsonc` in each session's
-directory, and merges the names. Like OpenCode, it also reads the file named
-by `OPENCODE_CONFIG` in addition to those. `DECANT_OPENCODE_CONFIG` names one
-file that Decant reads in place of the global directory's two files. A missing
-or malformed config file names no servers, and a config change applies to
-sessions ingested after it.
+directory and in every directory above it up to the filesystem root, and merges
+the names. As in OpenCode, files that resolve to the global config directory
+are not read again as project configs. Like OpenCode, it also reads the file
+named by `OPENCODE_CONFIG` in addition to those. `DECANT_OPENCODE_CONFIG` names
+one file that Decant reads in place of the global directory's two files. A
+missing or malformed config file names no servers, and a config change applies
+to sessions ingested after it.
 OpenCode sessions are read from `opencode.db` (and `opencode-<channel>.db`)
 read-only; Decant never writes to it. `--path` also accepts an OpenCode `.db`
 file.

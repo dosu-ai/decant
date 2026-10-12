@@ -11,8 +11,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
+  type OpenCodeConfigFs,
   OpenCodeMcpServerNames,
   OpenCodeStore,
   openCodeFingerprint,
@@ -284,44 +285,140 @@ describe("OpenCode config lookup", () => {
     expect(openCodeGlobalConfigPaths({})).toEqual([]);
   });
 
-  test("merges global and project configs per directory, read once each", () => {
-    const root = join(workDir, "lookup");
-    const globalDir = join(root, "config");
-    const global = join(globalDir, "opencode.json");
-    const project = join(root, "project");
-    const other = join(root, "other");
-    mkdirSync(join(root, "config"), { recursive: true });
-    mkdirSync(join(project, ".opencode"), { recursive: true });
-    mkdirSync(other, { recursive: true });
-    writeFileSync(global, JSON.stringify(servers("dosu")));
-    writeFileSync(
-      join(root, "config", "opencode.jsonc"),
-      `// global\n${JSON.stringify(servers("exa"))}`,
+  /** An in-memory tree: `files` maps absolute paths to text, and `links`
+   * maps a symlink's absolute path to its target. Every read is recorded. */
+  function memoryFs(
+    files: Record<string, unknown>,
+    links: Record<string, string> = {},
+  ): OpenCodeConfigFs & { reads: string[] } {
+    const text = new Map(
+      Object.entries(files).map(([path, value]) => [
+        path,
+        typeof value === "string" ? value : JSON.stringify(value),
+      ]),
     );
-    writeFileSync(join(project, "opencode.json"), JSON.stringify(servers("github")));
-    writeFileSync(join(project, "opencode.jsonc"), JSON.stringify(servers("supabase")));
-    writeFileSync(join(project, ".opencode", "opencode.json"), JSON.stringify(servers("context7")));
-    writeFileSync(join(project, ".opencode", "opencode.jsonc"), "{ /* unfinished");
+    const realPath = (path: string): string => {
+      let resolved = resolve(path);
+      for (const [link, target] of Object.entries(links)) {
+        if (resolved === link || resolved.startsWith(`${link}/`)) {
+          resolved = target + resolved.slice(link.length);
+        }
+      }
+      return resolved;
+    };
+    const reads: string[] = [];
+    return {
+      reads,
+      realPath,
+      readText(path) {
+        reads.push(path);
+        return text.get(realPath(path)) ?? null;
+      },
+    };
+  }
 
-    const names = new OpenCodeMcpServerNames({ globalDir });
-    expect(names.forDirectory(project)).toEqual(["context7", "dosu", "exa", "github", "supabase"]);
-    expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
-    expect(names.forDirectory(null)).toEqual(["dosu", "exa"]);
-    expect(names.forDirectory("relative/dir")).toEqual(["dosu", "exa"]);
-    expect(names.forDirectory(join(root, "missing"))).toEqual(["dosu", "exa"]);
-
-    // Cached for the instance: a later edit applies to the next sync's lookup.
-    writeFileSync(join(other, "opencode.json"), JSON.stringify(servers("probe-tools")));
-    expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
-    expect(new OpenCodeMcpServerNames({ globalDir }).forDirectory(other)).toEqual([
+  test("merges global and project configs per directory", () => {
+    const fs = memoryFs({
+      "/cfg/opencode.json": servers("dosu"),
+      "/cfg/opencode.jsonc": `// global\n${JSON.stringify(servers("exa"))}`,
+      "/work/project/opencode.json": servers("github"),
+      "/work/project/opencode.jsonc": servers("supabase"),
+      "/work/project/.opencode/opencode.json": servers("context7"),
+      "/work/project/.opencode/opencode.jsonc": "{ /* unfinished",
+    });
+    const names = new OpenCodeMcpServerNames({ globalDir: "/cfg" }, fs);
+    expect(names.forDirectory("/work/project")).toEqual([
+      "context7",
       "dosu",
       "exa",
-      "probe-tools",
+      "github",
+      "supabase",
     ]);
-    expect(new OpenCodeMcpServerNames().forDirectory(project)).toEqual([
+    expect(names.forDirectory("/work/other")).toEqual(["dosu", "exa"]);
+    expect(names.forDirectory(null)).toEqual(["dosu", "exa"]);
+    expect(names.forDirectory("relative/dir")).toEqual(["dosu", "exa"]);
+    expect(new OpenCodeMcpServerNames({}, fs).forDirectory("/work/project")).toEqual([
       "context7",
       "github",
       "supabase",
     ]);
+  });
+
+  test("walks from the session directory up to the filesystem root, each level read once", () => {
+    const fs = memoryFs({
+      "/cfg/opencode.json": servers("dosu"),
+      "/opencode.json": servers("root-server"),
+      "/work/opencode.jsonc": servers("exa"),
+      "/work/repo/.opencode/opencode.json": servers("github"),
+      "/work/repo/pkg/opencode.json": servers("context7"),
+    });
+    const names = new OpenCodeMcpServerNames({ globalDir: "/cfg" }, fs);
+    expect(names.forDirectory("/work/repo/pkg")).toEqual([
+      "context7",
+      "dosu",
+      "exa",
+      "github",
+      "root-server",
+    ]);
+    // A sibling shares every ancestor above it; those are not read again.
+    expect(names.forDirectory("/work/repo/docs")).toEqual(["dosu", "exa", "github", "root-server"]);
+    expect(names.forDirectory("/elsewhere")).toEqual(["dosu", "root-server"]);
+    expect(fs.reads.filter((path) => path === "/work/opencode.jsonc")).toHaveLength(1);
+    expect(fs.reads.filter((path) => path === "/opencode.json")).toHaveLength(1);
+    expect(new Set(fs.reads).size).toBe(fs.reads.length);
+
+    // Cached for the instance: a later edit is seen by the next sync's lookup.
+    const edited = memoryFs({
+      "/cfg/opencode.json": servers("dosu"),
+      "/work/opencode.jsonc": servers("exa", "probe-tools"),
+    });
+    expect(
+      new OpenCodeMcpServerNames({ globalDir: "/cfg" }, edited).forDirectory("/work/x"),
+    ).toEqual(["dosu", "exa", "probe-tools"]);
+  });
+
+  test("does not read the global directory again when the walk passes through it", () => {
+    const tree = {
+      "/home/dev/.config/opencode/opencode.json": servers("dosu"),
+      "/home/dev/.config/opencode/.opencode/opencode.json": servers("nested"),
+      "/home/dev/.opencode/opencode.json": servers("exa"),
+      "/home/dev/opencode.json": servers("home-server"),
+    };
+    const global = "/home/dev/.config/opencode/opencode.json";
+
+    // A session below the global directory: its own files are global, not project.
+    let fs = memoryFs(tree);
+    let names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.config/opencode" }, fs);
+    expect(names.forDirectory("/home/dev/.config/opencode/sub")).toEqual([
+      "dosu",
+      "exa",
+      "home-server",
+      "nested",
+    ]);
+    expect(fs.reads.filter((path) => path === global)).toHaveLength(1);
+
+    // OPENCODE_CONFIG_DIR at a `.opencode` directory: the walk's `.opencode`
+    // at that level is the global directory and is skipped.
+    fs = memoryFs(tree);
+    names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.opencode" }, fs);
+    expect(names.forDirectory("/home/dev/project")).toEqual(["exa", "home-server"]);
+    expect(fs.reads.filter((path) => path === "/home/dev/.opencode/opencode.json")).toHaveLength(1);
+
+    // Reached through a symlink, the global directory is still recognized.
+    fs = memoryFs(tree, { "/links/config": "/home/dev/.config/opencode" });
+    names = new OpenCodeMcpServerNames({ globalDir: "/links/config" }, fs);
+    expect(names.forDirectory("/home/dev/.config/opencode/sub")).toEqual([
+      "dosu",
+      "exa",
+      "home-server",
+      "nested",
+    ]);
+    expect(fs.reads.filter((path) => fs.realPath(path) === global)).toHaveLength(1);
+
+    // A session run from the global directory itself reads no project configs.
+    fs = memoryFs(tree);
+    names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.config/opencode" }, fs);
+    expect(names.forDirectory("/home/dev/.config/opencode")).toEqual(["dosu"]);
+    expect(fs.reads).toEqual([global, "/home/dev/.config/opencode/opencode.jsonc"]);
   });
 });

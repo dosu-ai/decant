@@ -654,6 +654,21 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
     }
   });
 
+  test("prices hosted routing variants but not local runtime tags", () => {
+    const pricing = defaultPricing();
+    expect(estimateCost("z-ai/glm-5.3:nitro", u, pricing)).toBeCloseTo(5.8, 6);
+    expect(estimateCost("z-ai/glm-5.3:floor", u, pricing)).toBeCloseTo(5.8, 6);
+    // Ollama's `:cloud` tag runs the model on Ollama's hosted service, a paid
+    // route like any other, so it bills at the publisher's list rate.
+    expect(estimateCost("glm-4.6:cloud", u, pricing)).toBeCloseTo(2.8, 6);
+    // Other Ollama and LM Studio tags name a local build or quantization, which
+    // costs the user no API spend, so those IDs stay unpriced.
+    for (const model of ["ollama/glm-4.5-air:q4_K_M", "glm-4.5-air:latest", "glm-5.3:30b"]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, u, pricing)).toBe(0);
+    }
+  });
+
   test("does not let near-miss IDs inherit a neighboring rate", () => {
     for (const model of [
       "glm-5.3-highspeed",

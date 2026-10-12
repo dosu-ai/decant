@@ -111,8 +111,11 @@ pricing page, so they stay unpriced. Muse Wonder Full is only available
 through a Muse Code subscription, and Muse Glimmer only through third-party
 routers, so neither has a first-party API rate. OpenRouter's unversioned
 `meta/muse-wonder` bills at Muse Wonder 1.0's rates, so Decant maps it there.
-Router prefixes such as `z-ai/` and `meta/`, routing suffixes such as `:free`,
-and promotional `-free` copies are priced at the model's list rate.
+Router prefixes such as `z-ai/` and `meta/`, hosted routing suffixes such as
+OpenRouter's `:free` and Ollama's `:cloud`, and promotional `-free` copies are
+priced at the model's list rate. Other tags, such as an Ollama or LM Studio
+quantization like `:q4_K_M`, name a local build with no API spend, so Decant
+leaves them unpriced.
 
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take

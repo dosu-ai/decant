@@ -51,58 +51,46 @@ function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMt
   };
 }
 
-// Z.ai and Meta charge no separate cache-write fee, so tokens written to the
-// cache bill as ordinary input. A null cached rate means the provider lists no
-// cache-read discount for the model.
-function inputWritePrice(
-  inputPerMtok: number,
-  cacheReadPerMtok: number | null,
-  outputPerMtok: number,
-): Price {
-  return {
-    inputPerMtok,
-    outputPerMtok,
-    cacheReadPerMtok: cacheReadPerMtok ?? inputPerMtok,
-    cacheWritePerMtok: inputPerMtok,
-    cacheWrite1hPerMtok: inputPerMtok,
-  };
-}
-
 // Z.ai (docs.z.ai) and Meta Model API (dev.meta.ai) text rates per 1M tokens.
-// GLM-4.7-Flash and GLM-4.5-Flash are published as free, which is a price of
-// zero, not an unknown price.
+// Like OpenAI's models before GPT-5.6, neither charges a separate cache-write
+// fee, so `openAiPrice` bills cache writes as ordinary input. GLM-4.7-Flash and
+// GLM-4.5-Flash are published as free, which is a price of zero, not an
+// unknown price.
 const GLM_MUSE_PRICES: ReadonlyArray<readonly [string, Price]> = [
-  ["glm-5.3", inputWritePrice(1.4, 0.26, 4.4)],
-  ["glm-5.2", inputWritePrice(1.4, 0.26, 4.4)],
-  ["glm-5.1", inputWritePrice(1.4, 0.26, 4.4)],
-  ["glm-5.3-flashx", inputWritePrice(0.37, 0.075, 1.25)],
-  ["glm-5.3-flash", inputWritePrice(0.15, 0.03, 0.5)],
-  ["glm-5", inputWritePrice(1.0, 0.2, 3.2)],
-  ["glm-4.7", inputWritePrice(0.6, 0.11, 2.2)],
-  ["glm-4.6", inputWritePrice(0.6, 0.11, 2.2)],
-  ["glm-4.5", inputWritePrice(0.6, 0.11, 2.2)],
-  ["glm-4.5-x", inputWritePrice(2.2, 0.45, 8.9)],
-  ["glm-4.5-airx", inputWritePrice(1.1, 0.22, 4.5)],
-  ["glm-4.5-air", inputWritePrice(0.2, 0.03, 1.1)],
-  ["glm-4.7-flashx", inputWritePrice(0.07, 0.01, 0.4)],
-  ["glm-4-32b-0414-128k", inputWritePrice(0.1, null, 0.1)],
-  ["glm-4.7-flash", inputWritePrice(0, 0, 0)],
-  ["glm-4.5-flash", inputWritePrice(0, 0, 0)],
-  ["muse-wonder-1.0", inputWritePrice(4.0, 0.2, 20.0)],
-  ["muse-spark-1.3", inputWritePrice(1.25, 0.15, 4.25)],
-  ["muse-spark-1.2", inputWritePrice(1.25, 0.15, 4.25)],
-  ["muse-spark-1.1", inputWritePrice(1.25, 0.15, 4.25)],
-  ["muse-spark-1.3-contributor", inputWritePrice(0.1, 0.002, 0.2)],
-  ["muse-spark-1.2-contributor", inputWritePrice(0.1, 0.002, 0.2)],
+  ["glm-5.3", openAiPrice(1.4, 0.26, 4.4)],
+  ["glm-5.2", openAiPrice(1.4, 0.26, 4.4)],
+  ["glm-5.1", openAiPrice(1.4, 0.26, 4.4)],
+  ["glm-5.3-flashx", openAiPrice(0.37, 0.075, 1.25)],
+  ["glm-5.3-flash", openAiPrice(0.15, 0.03, 0.5)],
+  ["glm-5", openAiPrice(1.0, 0.2, 3.2)],
+  ["glm-4.7", openAiPrice(0.6, 0.11, 2.2)],
+  ["glm-4.6", openAiPrice(0.6, 0.11, 2.2)],
+  ["glm-4.5", openAiPrice(0.6, 0.11, 2.2)],
+  ["glm-4.5-x", openAiPrice(2.2, 0.45, 8.9)],
+  ["glm-4.5-airx", openAiPrice(1.1, 0.22, 4.5)],
+  ["glm-4.5-air", openAiPrice(0.2, 0.03, 1.1)],
+  ["glm-4.7-flashx", openAiPrice(0.07, 0.01, 0.4)],
+  ["glm-4-32b-0414-128k", openAiPrice(0.1, null, 0.1)],
+  ["glm-4.7-flash", openAiPrice(0, 0, 0)],
+  ["glm-4.5-flash", openAiPrice(0, 0, 0)],
+  ["muse-wonder-1.0", openAiPrice(4.0, 0.2, 20.0)],
+  ["muse-spark-1.3", openAiPrice(1.25, 0.15, 4.25)],
+  ["muse-spark-1.2", openAiPrice(1.25, 0.15, 4.25)],
+  ["muse-spark-1.1", openAiPrice(1.25, 0.15, 4.25)],
+  ["muse-spark-1.3-contributor", openAiPrice(0.1, 0.002, 0.2)],
+  ["muse-spark-1.2-contributor", openAiPrice(0.1, 0.002, 0.2)],
 ];
 const GLM_MUSE_KEYS: ReadonlySet<string> = new Set(GLM_MUSE_PRICES.map(([model]) => model));
 
 // GLM and Muse IDs arrive through router prefixes (`z-ai/`, `zai/`, `meta/`),
-// routing suffixes (`:free`), Claude Code's `[1m]` marker, dated snapshots, and
-// promotional `-free` copies that Decant prices at list rate like any route.
+// hosted routing variants (OpenRouter's `:free` or `:nitro`, Ollama's `:cloud`),
+// Claude Code's `[1m]` marker, dated snapshots, and promotional `-free` copies
+// that Decant prices at list rate like any route. Other `:tags` name a local
+// Ollama or LM Studio build, which incurs no API spend, so they stay unpriced.
 // Matching the whole normalized ID rather than a prefix keeps `-highspeed`,
 // `-turbo`, and `muse-wonder-full` from inheriting a neighbor's rate.
 const GLM_MUSE_ID = /(?:^|\/)(?:glm|muse)-/;
+const HOSTED_ROUTE_SUFFIX = /:(?:free|nitro|floor|online|extended|beta|thinking|exacto|cloud)$/;
 // OpenRouter's unversioned `meta/muse-wonder` bills exactly at Muse Wonder
 // 1.0's rates (verified against recorded costs on 2026-10-12).
 const GLM_MUSE_ALIASES: ReadonlyMap<string, string> = new Map([["muse-wonder", "muse-wonder-1.0"]]);
@@ -111,7 +99,7 @@ function glmOrMuseModel(model: string): string | null {
   const id = model
     .slice(model.lastIndexOf("/") + 1)
     .replace(/\[[^\]]*\]$/, "")
-    .replace(/:.*$/, "")
+    .replace(HOSTED_ROUTE_SUFFIX, "")
     .replace(/-free$/, "")
     .replace(/-\d{6,8}$/, "");
   const key = GLM_MUSE_ALIASES.get(id) ?? id;

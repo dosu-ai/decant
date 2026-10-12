@@ -254,12 +254,14 @@ export function aggregateEconomicsVectors(
       entry.activeMs += part.active_ms;
       entry.activeMsOrientation += part.active_ms_orientation;
       entry.toolCalls += part.tool_calls;
+      // Reported cost has no input/output split; it follows the window share
+      // like input cost so bucket costs still reconcile to the session total.
       entry.cost +=
         vector.output_cost * share(part.generation, generation) +
-        vector.input_cost * share(partWindow, window);
+        (vector.input_cost + vector.reported_cost) * share(partWindow, window);
       entry.costOrientation +=
         vector.output_cost * share(part.generation_orientation, generation) +
-        vector.input_cost * share(partWindowOrientation, window);
+        (vector.input_cost + vector.reported_cost) * share(partWindowOrientation, window);
       if (part.touched) {
         entry.sessions.add(vector.id);
       }
@@ -272,7 +274,13 @@ export function aggregateEconomicsVectors(
       chargeUnattributed(buckets, "communicating", vector.id, vector.output_cost, orientationShare);
     }
     if (window <= 0) {
-      chargeUnattributed(buckets, "context", vector.id, vector.input_cost, orientationShare);
+      chargeUnattributed(
+        buckets,
+        "context",
+        vector.id,
+        vector.input_cost + vector.reported_cost,
+        orientationShare,
+      );
     }
   }
   return finish(buckets, inputCost, outputCost, reportedCost, waitingOnUserMs);
@@ -400,8 +408,15 @@ function pendingCostRefreshes(db: Database): CostRefresh[] {
     const staleVector =
       vector != null &&
       vector.id === row.id &&
-      (vector.input_cost !== inputCost || vector.output_cost !== parts.output)
-        ? { ...vector, input_cost: inputCost, output_cost: parts.output }
+      (vector.input_cost !== inputCost ||
+        vector.output_cost !== parts.output ||
+        vector.reported_cost !== parts.reported)
+        ? {
+            ...vector,
+            input_cost: inputCost,
+            output_cost: parts.output,
+            reported_cost: parts.reported,
+          }
         : null;
     const totalChanged = row.estimated_cost_usd !== total;
     if (totalChanged || staleVector != null) {
@@ -742,7 +757,7 @@ function vectorsForScope(
       started_at: session.started_at,
       input_cost: parts.input + parts.cacheRead + parts.cacheCreation,
       output_cost: parts.output,
-      reported_cost: 0,
+      reported_cost: parts.reported,
       billed_input_tokens:
         session.total_input_tokens +
         session.total_cache_read_tokens +

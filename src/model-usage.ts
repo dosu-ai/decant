@@ -3,6 +3,7 @@ import {
   type CostParts,
   defaultPricing,
   estimateCostParts,
+  isPriceable,
   isPriceTier,
   type Price,
   type PriceTier,
@@ -27,6 +28,9 @@ export interface ModelUsageRow {
   tier: PriceTier;
   requests: number;
   usage: TokenUsage;
+  /** Cost the source recorded for these requests, kept only when Decant has
+   * no rate for the model and the recorded sum is positive; otherwise null. */
+  reportedCostUsd: number | null;
 }
 
 interface SessionTotalsRow {
@@ -46,6 +50,7 @@ interface BilledMessageRow {
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
   usage_json: string | null;
+  reported_cost: number | null;
 }
 
 /** Split a stored session's token totals by the model and tier of each billed
@@ -66,11 +71,14 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const sessionModel = session.model ?? "";
   const totals = sessionTotals(session);
   // Only Claude Code records the 1-hour cache split and fast-mode speed on the
-  // request; other sources keep their usage in other shapes.
+  // request, and only OpenCode records a cost per request; other sources keep
+  // their usage in other shapes.
   const messages = queryRows<BilledMessageRow>(
     db,
     `SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-            CASE WHEN ?2 = 'claude_code' THEN json_extract(raw, '$.message.usage') END AS usage_json
+            CASE WHEN ?2 = 'claude_code' THEN json_extract(raw, '$.message.usage') END AS usage_json,
+            CASE WHEN ?2 = 'opencode' AND json_valid(raw) THEN json_extract(raw, '$.cost') END
+              AS reported_cost
        FROM message
       WHERE session_id = ?1
         AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL
@@ -80,7 +88,9 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   );
 
   const groups = new Map<string, ModelUsageRow>();
+  const reportedByGroup = new Map<string, number>();
   const billed = emptyUsage();
+  let reportedTotal = 0;
   for (const message of messages) {
     const recorded = parseUsageJson(message.usage_json);
     const cacheCreation = message.cache_creation_tokens ?? 0;
@@ -96,6 +106,12 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
     const tier = requestPriceTier(model, usage, recorded.speed);
     addUsage(groups, model, tier, usage, 1);
     addTokens(billed, usage);
+    const reported =
+      typeof message.reported_cost === "number" && message.reported_cost > 0
+        ? message.reported_cost
+        : 0;
+    reportedTotal += reported;
+    reportedByGroup.set(key(model, tier), (reportedByGroup.get(key(model, tier)) ?? 0) + reported);
   }
 
   const residual = subtractUsage(totals, billed);
@@ -104,12 +120,28 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   // Totals that per-request usage cannot account for, such as an SDK result
   // record that disagrees with the journal, keep the session-level split.
   if (single || !isNonNegative(residual)) {
-    return [{ model: sessionModel, tier: "standard", requests: messages.length, usage: totals }];
+    return [
+      {
+        model: sessionModel,
+        tier: "standard",
+        requests: messages.length,
+        usage: totals,
+        reportedCostUsd: reportedFallback(sessionModel, reportedTotal),
+      },
+    ];
   }
   if (!isZero(residual)) {
     addUsage(groups, sessionModel, "standard", residual, 0);
   }
-  return [...groups.values()].sort(compareRows);
+  return [...groups.values()]
+    .map((row) => ({
+      ...row,
+      reportedCostUsd: reportedFallback(
+        row.model,
+        reportedByGroup.get(key(row.model, row.tier)) ?? 0,
+      ),
+    }))
+    .sort(compareRows);
 }
 
 /** Replace a session's stored split. Runs inside the caller's transaction. */
@@ -119,9 +151,9 @@ export function materializeModelUsage(db: Database, sessionId: number): ModelUsa
   const insert = db.prepare(
     `INSERT INTO session_model_usage(
        session_id, model, tier, requests, input_tokens, output_tokens, cache_read_tokens,
-       cache_creation_tokens, cache_creation_1h_tokens, format_version
+       cache_creation_tokens, cache_creation_1h_tokens, format_version, reported_cost_usd
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
   );
   try {
     for (const row of rows) {
@@ -136,6 +168,7 @@ export function materializeModelUsage(db: Database, sessionId: number): ModelUsa
         row.usage.cacheCreation,
         row.usage.cacheCreation1h,
         MODEL_USAGE_FORMAT_VERSION,
+        row.reportedCostUsd,
       );
     }
   } finally {
@@ -187,11 +220,13 @@ export function modelUsageForScope(
     cache_read_tokens: number;
     cache_creation_tokens: number;
     cache_creation_1h_tokens: number;
+    reported_cost_usd: number | null;
   }>(
     db,
     `${scopeCte}
        SELECT u.session_id, u.model, u.tier, u.requests, u.input_tokens, u.output_tokens,
-              u.cache_read_tokens, u.cache_creation_tokens, u.cache_creation_1h_tokens
+              u.cache_read_tokens, u.cache_creation_tokens, u.cache_creation_1h_tokens,
+              u.reported_cost_usd
          FROM scoped_session fs
          JOIN session_model_usage u ON u.session_id = fs.id`,
     params,
@@ -211,10 +246,18 @@ export function modelUsageForScope(
         cacheCreation1h: row.cache_creation_1h_tokens,
         reasoning: 0,
       },
+      reportedCostUsd: row.reported_cost_usd,
     });
     bySession.set(row.session_id, list);
   }
   return bySession;
+}
+
+/** Decant's four priced parts plus the source-reported remainder. */
+export interface SessionCostParts extends CostParts {
+  /** Cost taken from the source's own record (OpenCode) for rows Decant
+   * cannot price. Never split into input and output. */
+  reported: number;
 }
 
 /** Price a session from its per-model rows. A session without rows (one
@@ -223,11 +266,17 @@ export function sessionCostParts(
   rows: ModelUsageRow[] | undefined,
   fallback: { model: string | null; usage: TokenUsage },
   pricing: ReadonlyMap<string, Price> = defaultPricing(),
-): CostParts {
+): SessionCostParts {
   if (rows == null || rows.length === 0) {
-    return estimateCostParts(fallback.model, fallback.usage, pricing);
+    return { ...estimateCostParts(fallback.model, fallback.usage, pricing), reported: 0 };
   }
-  const total: CostParts = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  const total: SessionCostParts = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    reported: 0,
+  };
   for (const row of rows) {
     const parts = estimateCostParts(
       row.model === "" ? null : row.model,
@@ -239,12 +288,13 @@ export function sessionCostParts(
     total.output += parts.output;
     total.cacheRead += parts.cacheRead;
     total.cacheCreation += parts.cacheCreation;
+    total.reported += row.reportedCostUsd ?? 0;
   }
   return total;
 }
 
-export function totalCost(parts: CostParts): number {
-  return parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+export function totalCost(parts: SessionCostParts): number {
+  return parts.input + parts.output + parts.cacheRead + parts.cacheCreation + parts.reported;
 }
 
 function sessionTotals(session: SessionTotalsRow): TokenUsage {
@@ -262,6 +312,16 @@ function sessionTotals(session: SessionTotalsRow): TokenUsage {
 // which no model served.
 function isRecordedModel(model: string | null): model is string {
   return model != null && model !== "" && !/^<.*>$/.test(model);
+}
+
+/** The source's recorded cost stands in only where Decant has no rate. A
+ * recorded zero is a subscription placeholder (OpenCode writes 0 for
+ * coding-plan routes), not a free model, so it stays unpriced. */
+function reportedFallback(model: string, reported: number): number | null {
+  if (model !== "" && isPriceable(model)) {
+    return null;
+  }
+  return reported > 0 ? reported : null;
 }
 
 function parseUsageJson(value: string | null): { cacheCreation1h: number; speed: string | null } {
@@ -296,7 +356,13 @@ function addUsage(
   requests: number,
 ): void {
   const id = key(model, tier);
-  const row = groups.get(id) ?? { model, tier, requests: 0, usage: emptyUsage() };
+  const row = groups.get(id) ?? {
+    model,
+    tier,
+    requests: 0,
+    usage: emptyUsage(),
+    reportedCostUsd: null,
+  };
   row.requests += requests;
   addTokens(row.usage, usage);
   groups.set(id, row);

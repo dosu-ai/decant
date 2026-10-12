@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 25;
+export const LATEST_SCHEMA_VERSION = 26;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -746,6 +746,18 @@ function migrate(db: Database, current: number): void {
 ) WITHOUT ROWID`);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (25, datetime('now'))",
+      ).run();
+    }
+
+    if (current < 26) {
+      // OpenCode records a cost per request. It is kept on the usage row for
+      // models Decant cannot price, so the archive shows the recorded figure
+      // instead of zero. Existing rows stay NULL: they were priced by Decant.
+      if (!hasColumn(db, "session_model_usage", "reported_cost_usd")) {
+        db.exec("ALTER TABLE session_model_usage ADD COLUMN reported_cost_usd REAL");
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (26, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

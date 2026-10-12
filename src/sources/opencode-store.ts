@@ -6,6 +6,7 @@
 // rows OpenCode committed since the last checkpoint are seen. Nothing here
 // writes or checkpoints, and the OpenCode CLI is never started.
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { asInteger, asString, get, isObject } from "../json.ts";
@@ -77,22 +78,66 @@ interface LegacyFingerprintRow {
   part_count: number;
   max_message_updated: number | null;
   max_part_updated: number | null;
+  message_updated_total: number;
+  part_updated_total: number;
+  [stateColumn: `state_${string}`]: string | number | null;
+}
+
+/** What a 1.x session's change key is built from. */
+export interface OpenCodeLegacyChangeFields {
+  timeUpdated: number;
+  messageCount: number;
+  partCount: number;
+  maxMessageUpdated: number | null;
+  maxPartUpdated: number | null;
+  /** `TOTAL(time_updated)` per table, so an edit to a row that is not the
+   * newest still changes the key. */
+  messageUpdatedTotal: number;
+  partUpdatedTotal: number;
+  /** Session columns OpenCode writes without moving `time_updated`
+   * (`LEGACY_STATE_COLUMNS`), in that order; a missing column is null. */
+  sessionState: readonly (string | number | null)[];
 }
 
 /** 1.x keeps parts in their own table and rewrites them while streaming, and
  * `session.time_updated` does not move when a message is appended, so the key
- * covers both tables. The `v1:` prefix keeps it distinct from a 2.x key for the
+ * covers both tables. Renaming or archiving a session (1.4+) writes
+ * `time_updated` back unchanged and touches no message or part, so the
+ * session's own state goes into the key as a digest, which also keeps the
+ * title out of it. The `v1:` prefix keeps it distinct from a 2.x key for the
  * same virtual path, so switching which format a session is read from always
  * re-ingests it. */
-export function openCodeLegacyFingerprint(
-  timeUpdated: number,
-  messageCount: number,
-  partCount: number,
-  maxMessageUpdated: number | null,
-  maxPartUpdated: number | null,
-): string {
-  return `v1:${timeUpdated}:${messageCount}:${partCount}:${maxMessageUpdated ?? -1}:${maxPartUpdated ?? -1}`;
+export function openCodeLegacyFingerprint(fields: OpenCodeLegacyChangeFields): string {
+  const state = createHash("sha256")
+    .update(JSON.stringify(fields.sessionState))
+    .digest("hex")
+    .slice(0, 12);
+  return [
+    "v1",
+    fields.timeUpdated,
+    fields.messageCount,
+    fields.partCount,
+    fields.maxMessageUpdated ?? -1,
+    fields.maxPartUpdated ?? -1,
+    fields.messageUpdatedTotal,
+    fields.partUpdatedTotal,
+    state,
+  ].join(":");
 }
+
+/** Session columns that change without `time_updated` moving: `setTitle` and
+ * `setArchived` write it back unchanged, and the 1.15+ projector updates the
+ * usage aggregates from parts. `cost` and `tokens_*` exist only from 1.14.49. */
+const LEGACY_STATE_COLUMNS = [
+  "title",
+  "time_archived",
+  "cost",
+  "tokens_input",
+  "tokens_output",
+  "tokens_reasoning",
+  "tokens_cache_read",
+  "tokens_cache_write",
+] as const satisfies readonly (keyof OpenCodeLegacySessionRow)[];
 
 /** Every column `OpenCodeLegacySessionRow` reads. Later 1.x releases added
  * `cost`, `tokens_*`, `agent`, and `model` one migration at a time, so each
@@ -212,34 +257,45 @@ export class OpenCodeStore {
     // One read transaction, so the session row and its message and part counts
     // come from the same WAL snapshot while OpenCode writes.
     const rows = this.#db
-      .transaction(() =>
-        queryRows<LegacyFingerprintRow>(
+      .transaction(() => {
+        const columns = legacySessionColumns(this.#db);
+        const state = LEGACY_STATE_COLUMNS.map(
+          (column) => `${columns.has(column) ? `s."${column}"` : "NULL"} AS "state_${column}"`,
+        ).join(", ");
+        return queryRows<LegacyFingerprintRow>(
           this.#db,
-          `SELECT s.id, s.directory, s.time_updated,
+          `SELECT s.id, s.directory, s.time_updated, ${state},
                   COALESCE(m.n, 0) AS message_count,
                   COALESCE(p.n, 0) AS part_count,
                   m.latest AS max_message_updated,
-                  p.latest AS max_part_updated
+                  p.latest AS max_part_updated,
+                  COALESCE(m.total, 0) AS message_updated_total,
+                  COALESCE(p.total, 0) AS part_updated_total
              FROM session s
-             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest
+             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest,
+                               TOTAL(time_updated) AS total
                           FROM message GROUP BY session_id) m ON m.session_id = s.id
-             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest
+             LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest,
+                               TOTAL(time_updated) AS total
                           FROM part GROUP BY session_id) p ON p.session_id = s.id`,
-        ),
-      )
+        );
+      })
       .deferred();
     return rows
       .map((row) => ({
         dbPath: this.path,
         sessionId: row.id,
         format: "v1" as const,
-        fingerprint: openCodeLegacyFingerprint(
-          row.time_updated,
-          row.message_count,
-          row.part_count,
-          row.max_message_updated,
-          row.max_part_updated,
-        ),
+        fingerprint: openCodeLegacyFingerprint({
+          timeUpdated: row.time_updated,
+          messageCount: row.message_count,
+          partCount: row.part_count,
+          maxMessageUpdated: row.max_message_updated,
+          maxPartUpdated: row.max_part_updated,
+          messageUpdatedTotal: row.message_updated_total,
+          partUpdatedTotal: row.part_updated_total,
+          sessionState: LEGACY_STATE_COLUMNS.map((column) => row[`state_${column}`] ?? null),
+        }),
         timeUpdated: row.time_updated,
         directory: row.directory,
       }))
@@ -253,16 +309,14 @@ export class OpenCodeStore {
     if (!this.hasLegacyTables()) {
       return null;
     }
-    const columns = new Set(
-      queryRows<{ name: string }>(this.#db, "SELECT name FROM pragma_table_info('session')").map(
-        (row) => row.name,
-      ),
-    );
-    const projection = LEGACY_SESSION_COLUMNS.map((column) =>
-      columns.has(column) ? `"${column}"` : `NULL AS "${column}"`,
-    ).join(", ");
     return this.#db
       .transaction((): OpenCodeLegacyLoadedSession | null => {
+        // Inside the transaction, so the projection matches the table the
+        // reads below see.
+        const columns = legacySessionColumns(this.#db);
+        const projection = LEGACY_SESSION_COLUMNS.map((column) =>
+          columns.has(column) ? `"${column}"` : `NULL AS "${column}"`,
+        ).join(", ");
         const session = queryRow<OpenCodeLegacySessionRow>(
           this.#db,
           `SELECT ${projection} FROM session WHERE id = ?1`,
@@ -344,6 +398,14 @@ function parseJson(value: Json | undefined): Json | undefined {
   } catch {
     return undefined;
   }
+}
+
+function legacySessionColumns(db: Database): Set<string> {
+  return new Set(
+    queryRows<{ name: string }>(db, "SELECT name FROM pragma_table_info('session')").map(
+      (row) => row.name,
+    ),
+  );
 }
 
 function hasTable(db: Database, table: string): boolean {

@@ -47,6 +47,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   claude_code: "claude-code",
   codex: "codex",
   gemini: "gemini-cli",
+  opencode: "opencode",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.

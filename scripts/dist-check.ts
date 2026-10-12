@@ -103,10 +103,12 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   const claudeDir = join(serveDir, "claude");
   const codexDir = join(serveDir, "codex");
   const geminiDir = join(serveDir, "gemini");
+  const opencodeDir = join(serveDir, "opencode");
   const codexSessionsDir = join(codexDir, "sessions");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexSessionsDir, { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
+  mkdirSync(opencodeDir, { recursive: true });
   copyFileSync(
     join(import.meta.dir, "..", "fixtures", "codex", "sample.jsonl"),
     join(codexSessionsDir, "rollout-sample.jsonl"),
@@ -128,6 +130,8 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
       codexDir,
       "--gemini-dir",
       geminiDir,
+      "--opencode-dir",
+      opencodeDir,
     ],
     {
       env: {

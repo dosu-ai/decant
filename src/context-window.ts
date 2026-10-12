@@ -146,7 +146,13 @@ export function parseMessageRawMeta(value: string | null): MessageRawMeta {
 /** True for both compaction shapes: Claude's system/compact_boundary records
  * and Codex's top-level `compacted` records. */
 export function isCompactBoundary(meta: MessageRawMeta): boolean {
-  return meta.subtype === "compact_boundary" || meta.rawType === "compacted";
+  // Claude writes subtype compact_boundary, Codex a `compacted` record, and
+  // OpenCode a `compaction` row.
+  return (
+    meta.subtype === "compact_boundary" ||
+    meta.rawType === "compacted" ||
+    meta.rawType === "compaction"
+  );
 }
 
 interface UsageColumns {

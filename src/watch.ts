@@ -1,9 +1,14 @@
 import type { Database } from "bun:sqlite";
-import { existsSync, type FSWatcher, mkdirSync, statSync, watch } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, watch } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
-import { sync as ingestSync, type SyncProgress, type SyncReport } from "./ingest.ts";
+import {
+  sync as ingestSync,
+  isOpenCodeDatabaseName,
+  type SyncProgress,
+  type SyncReport,
+} from "./ingest.ts";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
@@ -145,19 +150,160 @@ export class SyncStatusStore {
   }
 }
 
-export function watchDirs(config: Config): string[] {
-  return [
-    config.claudeDir,
-    join(config.codexDir, "sessions"),
-    join(config.codexDir, "archived_sessions"),
-    ...(config.geminiDir != null ? [config.geminiDir] : []),
-  ].filter((dir) => {
+/** A watched directory and the change events in it that warrant a sync. */
+export interface WatchRoot {
+  dir: string;
+  /** Watch subdirectories too. Off for OpenCode-only roots, whose log/,
+   * snapshot/, and storage/ trees never hold a database Decant reads. */
+  recursive: boolean;
+  /** `filename` is the event path relative to `dir`, or null when the
+   * platform does not report one. */
+  accepts(filename: string | null): boolean;
+}
+
+type EventFilter = (filename: string | null) => boolean;
+
+const anyEvent: EventFilter = () => true;
+
+/**
+ * Events beside an OpenCode database warrant a sync only when the database or
+ * its `-wal` actually changed. Every connection that opens the database,
+ * Decant's own read-only sync included, rewrites the `-shm` index, so reacting
+ * to the event alone would loop forever. The `-shm` event is still a useful
+ * hint: with Bun's macOS watcher, a writer's `-wal` appends after its first
+ * commit surface only as `-shm` changes. So any event naming a database or one of its sidecars re-stats the
+ * database and `-wal` and compares against the last size and mtime seen; a
+ * read never moves either. Everything else in the directory (logs, snapshots,
+ * journals, subdirectories) is ignored. A null filename re-checks every
+ * database in the directory the same way, so it can neither loop nor drop a
+ * write.
+ */
+function openCodeEvents(dir: string, isDatabase: (name: string) => boolean): EventFilter {
+  const seen = new Map<string, string>();
+  const databases = (): string[] => {
     try {
-      return existsSync(dir) && statSync(dir).isDirectory();
+      return readdirSync(dir).filter(isDatabase);
     } catch {
+      return [];
+    }
+  };
+  const changed = (name: string): boolean => {
+    const signature = databaseSignature(join(dir, name));
+    if (seen.get(name) === signature) {
       return false;
     }
-  });
+    seen.set(name, signature);
+    return true;
+  };
+  for (const name of databases()) {
+    seen.set(name, databaseSignature(join(dir, name)));
+  }
+  return (filename) => {
+    if (filename == null) {
+      let any = false;
+      for (const name of databases()) {
+        any = changed(name) || any;
+      }
+      return any;
+    }
+    if (filename.includes("/") || filename.includes("\\")) {
+      return false;
+    }
+    const name = databaseFor(filename, isDatabase);
+    return name != null && changed(name);
+  };
+}
+
+function databaseFor(filename: string, isDatabase: (name: string) => boolean): string | null {
+  if (isDatabase(filename)) {
+    return filename;
+  }
+  for (const suffix of ["-wal", "-shm"]) {
+    if (filename.endsWith(suffix) && isDatabase(filename.slice(0, -suffix.length))) {
+      return filename.slice(0, -suffix.length);
+    }
+  }
+  return null;
+}
+
+function databaseSignature(path: string): string {
+  return `${fileSignature(path)}|${fileSignature(`${path}-wal`)}`;
+}
+
+function fileSignature(path: string): string {
+  try {
+    const stats = statSync(path);
+    return `${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return "-";
+  }
+}
+
+export function watchRoots(config: Config): WatchRoot[] {
+  const explicitDb =
+    config.opencodeDb != null && config.opencodeDb !== "" ? config.opencodeDb : null;
+  const candidates: { dir: string; recursive: boolean; accepts: () => EventFilter }[] = [
+    { dir: config.claudeDir, recursive: true, accepts: () => anyEvent },
+    { dir: join(config.codexDir, "sessions"), recursive: true, accepts: () => anyEvent },
+    {
+      dir: join(config.codexDir, "archived_sessions"),
+      recursive: true,
+      accepts: () => anyEvent,
+    },
+    ...(config.geminiDir != null
+      ? [{ dir: config.geminiDir, recursive: true, accepts: () => anyEvent }]
+      : []),
+    {
+      dir: config.opencodeDir,
+      recursive: false,
+      accepts: () => openCodeEvents(config.opencodeDir, isOpenCodeDatabaseName),
+    },
+    ...(explicitDb != null
+      ? [
+          {
+            dir: dirname(explicitDb),
+            recursive: false,
+            accepts: () =>
+              openCodeEvents(dirname(explicitDb), (name) => name === basename(explicitDb)),
+          },
+        ]
+      : []),
+  ];
+  // One watcher per directory: a directory named twice reacts to the events
+  // either source would, and recurses if either needs it.
+  const roots = new Map<string, { recursive: boolean; filters: (() => EventFilter)[] }>();
+  for (const candidate of candidates) {
+    const root = roots.get(candidate.dir);
+    if (root == null) {
+      roots.set(candidate.dir, { recursive: candidate.recursive, filters: [candidate.accepts] });
+    } else {
+      root.recursive ||= candidate.recursive;
+      root.filters.push(candidate.accepts);
+    }
+  }
+  return [...roots]
+    .filter(([dir]) => {
+      try {
+        return existsSync(dir) && statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .map(([dir, { recursive, filters }]) => {
+      // Built only for existing directories, so the baseline stat runs once.
+      const accepts = filters.map((make) => make());
+      return {
+        dir,
+        recursive,
+        // Every filter sees every event so each keeps its baseline current.
+        accepts: (filename: string | null) =>
+          accepts.reduce((any, accept) => accept(filename) || any, false),
+      };
+    });
+}
+
+export function watchDirs(config: Config): string[] {
+  return watchRoots(config).map((root) => root.dir);
 }
 
 export function runSyncOnce(
@@ -187,7 +333,8 @@ export function runSyncOnce(
 
 export function startWatch(options: WatchOptions): WatchHandle {
   const status = new SyncStatusStore();
-  const dirs = watchDirs(options.config);
+  const roots = watchRoots(options.config);
+  const dirs = roots.map((root) => root.dir);
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const open = options.open ?? openDb;
@@ -311,10 +458,10 @@ export function startWatch(options: WatchOptions): WatchHandle {
   };
 
   if (enableWatch) {
-    for (const dir of dirs) {
+    for (const root of roots) {
       try {
-        const watcher = watch(dir, { recursive: true }, (eventType) => {
-          if (eventType === "rename" || eventType === "change") {
+        const watcher = watch(root.dir, { recursive: root.recursive }, (eventType, filename) => {
+          if ((eventType === "rename" || eventType === "change") && root.accepts(filename)) {
             schedule("watch", debounceMs);
           }
         });

@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename } from "node:path";
@@ -21,6 +22,7 @@ import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "
 import { getDecantLogger } from "./logging.ts";
 import {
   type IngestIssueCode,
+  type Issue,
   type Json,
   type NormalizedBlock,
   type ParsedSession,
@@ -41,7 +43,13 @@ import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
-import type { OpenCodeSessionRef } from "./sources/opencode-store.ts";
+import { parseOpenCodeSession } from "./sources/opencode.ts";
+import {
+  type OpenCodeLoadedSession,
+  type OpenCodeSessionRef,
+  OpenCodeStore,
+  readOpenCodeMcpServers,
+} from "./sources/opencode-store.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
   materializeMissingSessionEconomics,
@@ -112,6 +120,8 @@ interface Prepared {
   lineCount: number;
   mtime: number;
   size: number;
+  /** Per-session change key for database-backed sources; JSONL sources keep NULL. */
+  hash?: string | null;
 }
 
 interface ToolUseBlock {
@@ -133,15 +143,120 @@ export function discover(config: IngestConfig): SourceFile[] {
   if (config.geminiDir != null) {
     collectGemini(config.geminiDir, out);
   }
+  out.push(...discoverOpenCode(openCodeDatabasePaths(config)));
   return out;
 }
 
 export function discoverSourcePaths(paths: string[]): SourceFile[] {
   const out: SourceFile[] = [];
+  const databases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out);
+    collectSourcePath(path, out, databases);
   }
-  return dedupeSourceFiles(out);
+  return [...dedupeSourceFiles(out), ...discoverOpenCode(databases)];
+}
+
+/** `opencode.db` and channel variants under the data directory, plus the
+ * explicit `OPENCODE_DB` file. The `-wal`/`-shm` sidecars never match. */
+function openCodeDatabasePaths(config: IngestConfig): string[] {
+  const paths: string[] = [];
+  if (config.opencodeDir != null && existsSync(config.opencodeDir)) {
+    let entries: string[];
+    try {
+      entries = readdirSync(config.opencodeDir);
+    } catch {
+      entries = [];
+    }
+    for (const name of entries.sort(compareCodePoints)) {
+      if (isOpenCodeDatabaseName(name)) {
+        paths.push(join(config.opencodeDir, name));
+      }
+    }
+  }
+  if (config.opencodeDb != null && config.opencodeDb !== "" && !paths.includes(config.opencodeDb)) {
+    paths.push(config.opencodeDb);
+  }
+  return paths;
+}
+
+const OPENCODE_DATABASE_NAME = /^opencode(?:-[A-Za-z0-9._-]+)?\.db$/;
+
+export function isOpenCodeDatabaseName(name: string): boolean {
+  return OPENCODE_DATABASE_NAME.test(name);
+}
+
+export function openCodeSourcePath(ref: OpenCodeSessionRef): string {
+  return `${ref.dbPath}#${ref.sessionId}`;
+}
+
+/** One virtual source per session. A session present in several databases
+ * (a channel build beside the stable one) is read from the copy OpenCode
+ * updated last. Databases that cannot be opened or lack the 2.x tables are
+ * skipped; the 1.x-only layout is PR 3's job. */
+function discoverOpenCode(dbPaths: string[]): SourceFile[] {
+  const best = new Map<string, OpenCodeSessionRef>();
+  // One database reached through a symlink, a relative path, or both the data
+  // directory and OPENCODE_DB is opened once and names one virtual path.
+  for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
+    if (!existsSync(dbPath)) {
+      continue;
+    }
+    let store: OpenCodeStore;
+    try {
+      store = OpenCodeStore.open(dbPath);
+    } catch (error) {
+      logger.warning("OpenCode database could not be opened.", {
+        "event.name": "decant.ingest.opencode_open_failed",
+        "file.path": dbPath,
+        "error.message": error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    try {
+      for (const ref of store.listSessions()) {
+        const prior = best.get(ref.sessionId);
+        if (prior == null || isNewerOpenCodeCopy(ref, prior)) {
+          best.set(ref.sessionId, ref);
+        }
+      }
+    } catch (error) {
+      logger.warning("OpenCode database could not be listed.", {
+        "event.name": "decant.ingest.opencode_list_failed",
+        "file.path": dbPath,
+        "error.message": error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      store.close();
+    }
+  }
+  return [...best.values()]
+    .sort(
+      (a, b) =>
+        compareCodePoints(a.dbPath, b.dbPath) || compareCodePoints(a.sessionId, b.sessionId),
+    )
+    .map((ref) => ({
+      tool: "opencode" as const,
+      path: openCodeSourcePath(ref),
+      archived: false,
+      opencode: ref,
+    }));
+}
+
+/** Newest `time_updated` wins; a tie goes to the code-point-smaller database
+ * path so the winner never depends on discovery order. */
+function isNewerOpenCodeCopy(ref: OpenCodeSessionRef, prior: OpenCodeSessionRef): boolean {
+  if (ref.timeUpdated !== prior.timeUpdated) {
+    return ref.timeUpdated > prior.timeUpdated;
+  }
+  return compareCodePoints(ref.dbPath, prior.dbPath) < 0;
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 export function sync(
@@ -155,6 +270,11 @@ export function sync(
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
+  const mcpServers =
+    config.opencodeConfigPath == null ? [] : readOpenCodeMcpServers(config.opencodeConfigPath);
+  // One read-only connection per OpenCode database for the whole run; closed
+  // after the loop whether or not it finished.
+  const stores = new Map<string, OpenCodeStore>();
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
@@ -180,107 +300,131 @@ export function sync(
 
   emitProgress();
 
-  for (const file of files) {
-    if (cancel?.aborted === true) {
-      report.cancelled = true;
-      break;
-    }
-
-    try {
-      // One descriptor for everything: the skip decision, the recorded stat,
-      // and the content read all describe the same inode, so a path swapped
-      // mid-loop can neither skip wrongly nor record metadata for content that
-      // was never read. A file that vanished before open is a silent skip,
-      // matching the old stat-failure path; any other open error counts as
-      // failed, matching the old read-failure path.
-      let fd: number;
-      try {
-        fd = openSync(file.path, "r");
-      } catch (error) {
-        if ((error as { code?: string }).code !== "ENOENT") {
-          report.failed += 1;
-        }
-        continue;
+  try {
+    for (const file of files) {
+      if (cancel?.aborted === true) {
+        report.cancelled = true;
+        break;
       }
-      let stats: Stats;
-      let content: string;
+
       try {
-        stats = fstatSync(fd);
-        const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
-          db,
-          "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
-          [file.path],
-        );
-        if (
-          prior != null &&
-          prior.size === stats.size &&
-          prior.mtime === mtimeSecs(stats) &&
-          prior.ingest_revision === INGEST_PIPELINE_REVISION
-        ) {
-          report.skipped += 1;
+        if (file.opencode != null) {
+          // Virtual `<db>#<session>` paths never exist on disk; the file-open
+          // path below would silently skip them as ENOENT.
+          const outcome = syncOpenCodeSession(db, file, file.opencode, stores, mcpServers);
+          if (outcome.kind === "ingested") {
+            report.ingested += 1;
+            report.issues += outcome.issues.length;
+            for (const issue of outcome.issues) {
+              report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+            }
+          } else if (outcome.kind === "failed") {
+            report.failed += 1;
+          } else {
+            report.skipped += 1;
+            lineageMayHaveChanged ||= outcome.kind === "tombstoned";
+          }
           continue;
         }
-        // fstat before read: a write landing mid-window records a smaller size
-        // than the content read, so the next sync re-ingests instead of
-        // silently skipping the tail.
-        content = readFileSync(fd, "utf8");
-      } catch (error) {
-        report.failed += 1;
-        logger.warning("Source file could not be read.", {
-          "event.name": "decant.ingest.source_read_failed",
-          "file.path": file.path,
-          "error.type": (error as { code?: string }).code ?? "unknown",
-          "error.message": error instanceof Error ? error.message : String(error),
-        });
-        continue;
-      } finally {
+        // One descriptor for everything: the skip decision, the recorded stat,
+        // and the content read all describe the same inode, so a path swapped
+        // mid-loop can neither skip wrongly nor record metadata for content that
+        // was never read. A file that vanished before open is a silent skip,
+        // matching the old stat-failure path; any other open error counts as
+        // failed, matching the old read-failure path.
+        let fd: number;
         try {
-          closeSync(fd);
-        } catch {
-          // A close failure (EIO on network/FUSE mounts) cannot invalidate a
-          // read that already succeeded, and a throw here would mask the real
-          // error on the failure path.
+          fd = openSync(file.path, "r");
+        } catch (error) {
+          if ((error as { code?: string }).code !== "ENOENT") {
+            report.failed += 1;
+          }
+          continue;
         }
-      }
-
-      const stem = fileStem(file.path);
-      let parsed: ParsedSession;
-      if (file.tool === "claude_code") {
-        parsed = parseClaudeSession(stem, content, {
-          sourcePath: file.path,
-          sidecarMeta: readClaudeSidecarMeta(file.path),
-        });
-      } else if (file.tool === "gemini") {
-        const layout = geminiSessionLayout(file.path);
-        parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
-          parentSessionId: layout?.parentSessionId ?? null,
-        });
-      } else {
-        parsed = parseCodexSession(stem, content, titles);
-      }
-      parsed.session.isArchived = file.archived;
-
-      const prepared: Prepared = {
-        file,
-        lineCount: lineCount(content),
-        mtime: mtimeSecs(stats),
-        size: stats.size,
-      };
-
-      const outcome = writeIngestedFile(db, prepared, parsed);
-      if (outcome === "tombstoned") {
-        report.skipped += 1;
-        lineageMayHaveChanged = true;
-      } else {
-        report.ingested += 1;
-        report.issues += parsed.issues.length;
-        for (const issue of parsed.issues) {
-          report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+        let stats: Stats;
+        let content: string;
+        try {
+          stats = fstatSync(fd);
+          const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
+            db,
+            "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
+            [file.path],
+          );
+          if (
+            prior != null &&
+            prior.size === stats.size &&
+            prior.mtime === mtimeSecs(stats) &&
+            prior.ingest_revision === INGEST_PIPELINE_REVISION
+          ) {
+            report.skipped += 1;
+            continue;
+          }
+          // fstat before read: a write landing mid-window records a smaller size
+          // than the content read, so the next sync re-ingests instead of
+          // silently skipping the tail.
+          content = readFileSync(fd, "utf8");
+        } catch (error) {
+          report.failed += 1;
+          logger.warning("Source file could not be read.", {
+            "event.name": "decant.ingest.source_read_failed",
+            "file.path": file.path,
+            "error.type": (error as { code?: string }).code ?? "unknown",
+            "error.message": error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        } finally {
+          try {
+            closeSync(fd);
+          } catch {
+            // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+            // read that already succeeded, and a throw here would mask the real
+            // error on the failure path.
+          }
         }
+
+        const stem = fileStem(file.path);
+        let parsed: ParsedSession;
+        if (file.tool === "claude_code") {
+          parsed = parseClaudeSession(stem, content, {
+            sourcePath: file.path,
+            sidecarMeta: readClaudeSidecarMeta(file.path),
+          });
+        } else if (file.tool === "gemini") {
+          const layout = geminiSessionLayout(file.path);
+          parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
+            parentSessionId: layout?.parentSessionId ?? null,
+          });
+        } else {
+          parsed = parseCodexSession(stem, content, titles);
+        }
+        parsed.session.isArchived = file.archived;
+
+        const prepared: Prepared = {
+          file,
+          lineCount: lineCount(content),
+          mtime: mtimeSecs(stats),
+          size: stats.size,
+        };
+
+        const outcome = writeIngestedFile(db, prepared, parsed);
+        if (outcome === "tombstoned") {
+          report.skipped += 1;
+          lineageMayHaveChanged = true;
+        } else {
+          report.ingested += 1;
+          report.issues += parsed.issues.length;
+          for (const issue of parsed.issues) {
+            report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+          }
+        }
+      } finally {
+        inspected += 1;
+        emitProgress();
       }
-    } finally {
-      inspected += 1;
-      emitProgress();
+    }
+  } finally {
+    for (const store of stores.values()) {
+      store.close();
     }
   }
 
@@ -301,6 +445,7 @@ function refreshDerivedState(
   // skipping here saves an O(archive) pass on every watcher sweep. A change to
   // the inference rules must bump INGEST_PIPELINE_REVISION to re-ingest.
   if (report.ingested > 0 || lineageMayHaveChanged) {
+    resolveOpenCodeSpawnLinks(db);
     resolveSubagentParents(db);
   }
   const materializedEconomics = materializeMissingSessionEconomics(db);
@@ -348,6 +493,123 @@ export function upsertSession(
 ): number {
   return (
     withImmediateTransaction(db, () => writeSession(db, parsed, sourcePath, mtime, size, hash)) ?? 0
+  );
+}
+
+type OpenCodeSyncOutcome =
+  | { kind: "skipped" | "tombstoned" | "failed" }
+  | { kind: "ingested"; issues: Issue[] };
+
+/** Skip when the stored fingerprint and pipeline revision match; otherwise
+ * read, parse, and write the session under its virtual path. */
+function syncOpenCodeSession(
+  db: Database,
+  file: SourceFile,
+  ref: OpenCodeSessionRef,
+  stores: Map<string, OpenCodeStore>,
+  mcpServers: readonly string[],
+): OpenCodeSyncOutcome {
+  const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
+    db,
+    "SELECT hash, ingest_revision FROM ingest_source WHERE path = ?1",
+    [file.path],
+  );
+  if (
+    prior != null &&
+    prior.hash === ref.fingerprint &&
+    prior.ingest_revision === INGEST_PIPELINE_REVISION
+  ) {
+    return { kind: "skipped" };
+  }
+  let store = stores.get(ref.dbPath);
+  if (store == null) {
+    try {
+      store = OpenCodeStore.open(ref.dbPath);
+    } catch (error) {
+      logger.warning("OpenCode database could not be opened.", {
+        "event.name": "decant.ingest.opencode_open_failed",
+        "file.path": ref.dbPath,
+        "error.message": error instanceof Error ? error.message : String(error),
+      });
+      return { kind: "failed" };
+    }
+    stores.set(ref.dbPath, store);
+  }
+  const loaded = readOpenCodeSession(store, ref.sessionId, file.path);
+  if (loaded === "failed") {
+    return { kind: "failed" };
+  }
+  if (loaded == null) {
+    // Deleted between discovery and read. Nothing is written or removed: a
+    // session deleted from opencode.db simply stops being discovered, and the
+    // archive keeps the copy it last ingested.
+    return { kind: "skipped" };
+  }
+  const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
+    mcpServers,
+    contextWindows: loaded.contextWindows,
+  });
+  const prepared: Prepared = {
+    file,
+    lineCount: loaded.messages.length,
+    mtime: Math.trunc(loaded.session.time_updated / 1000),
+    size: 0,
+    hash: ref.fingerprint,
+  };
+  const outcome = writeIngestedFile(db, prepared, parsed);
+  return outcome === "tombstoned"
+    ? { kind: "tombstoned" }
+    : { kind: "ingested", issues: parsed.issues };
+}
+
+/** Every read from OpenCode's database, the model catalog included, fails
+ * the one session rather than the whole sync. A failed session writes no
+ * `ingest_source` row, so the next sync retries it instead of storing a copy
+ * parsed without its context windows under a fingerprint that would never
+ * change. */
+function readOpenCodeSession(
+  store: OpenCodeStore,
+  sessionId: string,
+  sourcePath: string,
+): (OpenCodeLoadedSession & { contextWindows: ReadonlyMap<string, number> }) | null | "failed" {
+  try {
+    const loaded = store.loadSession(sessionId);
+    return loaded == null ? null : { ...loaded, contextWindows: store.contextWindows() };
+  } catch (error) {
+    logger.warning("Source file could not be read.", {
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": sourcePath,
+      "error.type": "opencode_read",
+      "error.message": error instanceof Error ? error.message : String(error),
+    });
+    return "failed";
+  }
+}
+
+/** OpenCode names a child session only inside the parent's `subagent` tool
+ * result (`state.metadata.sessionID`), so the child's spawn link is resolved
+ * once both sides are stored, before lineage resolution reads it. */
+function resolveOpenCodeSpawnLinks(db: Database): void {
+  runStatement(
+    db,
+    `UPDATE session
+        SET spawn_tool_use_id = (
+          SELECT json_extract(m.raw, '$.id')
+            FROM message m
+            JOIN session parent ON parent.id = m.session_id
+           WHERE parent.tool = 'opencode'
+             AND parent.source_session_id = json_extract(session.raw_meta, '$.parentSessionId')
+             AND m.role = 'tool'
+             AND json_valid(m.raw)
+             AND json_extract(m.raw, '$.name') = 'subagent'
+             AND json_extract(m.raw, '$.state.metadata.sessionID') = session.source_session_id
+           ORDER BY m.id
+           LIMIT 1)
+      WHERE tool = 'opencode'
+        AND is_subagent = 1
+        AND spawn_tool_use_id IS NULL
+        AND raw_meta IS NOT NULL
+        AND json_valid(raw_meta)`,
   );
 }
 
@@ -450,7 +712,7 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_fields
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex', 'gemini')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode')`,
   );
 
   const sessionBySource = new Map<string, number>();
@@ -786,10 +1048,20 @@ function writeIngestedFile(
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
     releaseMisfiledFork(db, prepared.file.path, parsed);
+    if (prepared.file.opencode != null) {
+      releaseSupersededOpenCodeSources(db, prepared.file.path, prepared.file.opencode.sessionId);
+    }
     runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
-    const sessionId = writeSession(db, parsed, prepared.file.path, prepared.mtime, prepared.size);
+    const sessionId = writeSession(
+      db,
+      parsed,
+      prepared.file.path,
+      prepared.mtime,
+      prepared.size,
+      prepared.hash ?? null,
+    );
     if (sessionId == null) {
       runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
       writeIngestSource(db, prepared, null, "skipped_deleted");
@@ -831,6 +1103,23 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
   }
 }
 
+/** A session read from a newer copy in another database no longer belongs to
+ * the old `<db>#<session>` path. Its source and issue rows go, so diagnostics
+ * stop naming a path that backs nothing, and so the old copy is re-read rather
+ * than skipped on a stale fingerprint if the newer database later disappears. */
+function releaseSupersededOpenCodeSources(db: Database, path: string, sessionId: string): void {
+  const suffix = `#${sessionId}`;
+  const stale = queryRows<{ path: string }>(
+    db,
+    "SELECT path FROM ingest_source WHERE tool = 'opencode' AND path <> ?1 AND substr(path, ?2) = ?3",
+    [path, -suffix.length, suffix],
+  ).filter((row) => row.path.lastIndexOf("#") === row.path.length - suffix.length);
+  for (const row of stale) {
+    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
+    runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
+  }
+}
+
 function deleteSessionRow(db: Database, id: number): void {
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
@@ -848,11 +1137,11 @@ function writeIngestSource(
     db,
     `INSERT INTO ingest_source(
        path, tool, size, mtime, ingest_revision, session_id, line_count, status,
-       last_ingested_at
+       last_ingested_at, hash
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), ?9)
      ON CONFLICT(path) DO UPDATE SET
-       tool = ?2, size = ?3, mtime = ?4, hash = NULL, ingest_revision = ?5,
+       tool = ?2, size = ?3, mtime = ?4, hash = ?9, ingest_revision = ?5,
        session_id = ?6, line_count = ?7, status = ?8, error = NULL,
        last_ingested_at = datetime('now')`,
     [
@@ -864,6 +1153,7 @@ function writeIngestSource(
       sessionId,
       prepared.lineCount,
       status,
+      prepared.hash ?? null,
     ],
   );
 }
@@ -1198,7 +1488,7 @@ function collect(
   }
 }
 
-function collectSourcePath(path: string, out: SourceFile[]): void {
+function collectSourcePath(path: string, out: SourceFile[], databases: string[]): void {
   let stats: Stats;
   try {
     stats = statSync(path);
@@ -1207,6 +1497,10 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
   }
 
   if (stats.isFile()) {
+    if (path.endsWith(".db")) {
+      databases.push(path);
+      return;
+    }
     const source = sourceFileForPath(path);
     if (source != null) {
       out.push(source);
@@ -1219,6 +1513,10 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
   }
 
   for (const child of walk(path)) {
+    if (isOpenCodeDatabaseName(pathBasename(child))) {
+      databases.push(child);
+      continue;
+    }
     const source = sourceFileForPath(child);
     if (source != null) {
       out.push(source);

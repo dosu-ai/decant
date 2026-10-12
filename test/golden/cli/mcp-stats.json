@@ -1,12 +1,12 @@
 [
   {
     "mcp_server": "dosu",
-    "tools": 1,
-    "calls": 2,
+    "tools": 2,
+    "calls": 3,
     "errors": 0,
     "p50_ms": 2000,
     "p95_ms": 3000,
-    "last_used_at": "2026-05-06T09:00:08.000Z"
+    "last_used_at": "2026-10-12T07:20:01.000Z"
   },
   {
     "mcp_server": "github",

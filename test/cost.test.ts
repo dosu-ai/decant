@@ -591,3 +591,124 @@ describe("isPriceable", () => {
     expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
 });
+
+describe("Z.ai GLM and Meta Muse pricing", () => {
+  const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+
+  test("prices every published model at its first-party rate", () => {
+    const pricing = defaultPricing();
+    // 1M input + 1M output, from docs.z.ai and dev.meta.ai checked 2026-10-12.
+    const cases: Array<[string, number]> = [
+      ["glm-5.3", 5.8],
+      ["glm-5.2", 5.8],
+      ["glm-5.1", 5.8],
+      ["glm-5.3-flashx", 1.62],
+      ["glm-5.3-flash", 0.65],
+      ["glm-5", 4.2],
+      ["glm-4.7", 2.8],
+      ["glm-4.6", 2.8],
+      ["glm-4.5", 2.8],
+      ["glm-4.5-x", 11.1],
+      ["glm-4.5-airx", 5.6],
+      ["glm-4.5-air", 1.3],
+      ["glm-4.7-flashx", 0.47],
+      ["glm-4-32b-0414-128k", 0.2],
+      ["muse-wonder-1.0", 24.0],
+      ["muse-spark-1.3", 5.5],
+      ["muse-spark-1.2", 5.5],
+      ["muse-spark-1.1", 5.5],
+      ["muse-spark-1.3-contributor", 0.3],
+      ["muse-spark-1.2-contributor", 0.3],
+    ];
+    for (const [model, expected] of cases) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(expected, 6);
+    }
+  });
+
+  test("prices published-free models at zero while keeping them priceable", () => {
+    for (const model of ["glm-4.7-flash", "glm-4.5-flash"]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCost(model, u, defaultPricing())).toBe(0);
+    }
+  });
+
+  test("reaches list rates through router prefixes, suffixes, and promotional copies", () => {
+    const pricing = defaultPricing();
+    const cases: Array<[string, number]> = [
+      ["zai/glm-5.3", 5.8],
+      ["z-ai/glm-5.3", 5.8],
+      ["zhipuai/glm-5.3", 5.8],
+      ["GLM-5.3", 5.8],
+      ["glm-5.3[1m]", 5.8],
+      ["glm-5.3-flash-250826", 0.65],
+      ["z-ai/glm-5.3-flash:free", 0.65],
+      ["opencode/glm-5-free", 4.2],
+      ["meta/muse-wonder", 24.0],
+      ["openrouter/meta/muse-wonder", 24.0],
+      ["muse-spark-1.3-contributor-free", 0.3],
+      ["opencode-go/muse-spark-1.3-contributor", 0.3],
+    ];
+    for (const [model, expected] of cases) {
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(expected, 6);
+    }
+  });
+
+  test("does not let near-miss IDs inherit a neighboring rate", () => {
+    for (const model of [
+      "glm-5.3-highspeed",
+      "glm-5.2-highspeed",
+      "glm-5-turbo",
+      "glm-5v-turbo",
+      "glm-5.3-air",
+      "glm-6",
+      "muse-wonder-full",
+      "muse-spark",
+      "muse-spark-1.1-contributor",
+      "muse-image-1.0",
+      "muse-voice-transcribe-1.0",
+      "muse-glimmer-30b",
+      "openrouter/meta/muse-glimmer-30b",
+    ]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, u, defaultPricing())).toBe(0);
+    }
+  });
+
+  test("bills cache reads at the cached rate and cache writes at the input rate", () => {
+    const pricing = defaultPricing();
+    const read = { ...emptyUsage(), cacheRead: 1_000_000 };
+    const write5m = { ...emptyUsage(), cacheCreation: 1_000_000 };
+    const write1h = { ...emptyUsage(), cacheCreation: 1_000_000, cacheCreation1h: 1_000_000 };
+    expect(estimateCost("glm-5.3", read, pricing)).toBeCloseTo(0.26, 6);
+    expect(estimateCost("glm-5.3", write5m, pricing)).toBeCloseTo(1.4, 6);
+    expect(estimateCost("glm-5.3", write1h, pricing)).toBeCloseTo(1.4, 6);
+    expect(estimateCost("muse-spark-1.3-contributor", read, pricing)).toBeCloseTo(0.002, 6);
+    expect(estimateCost("muse-wonder-1.0", write5m, pricing)).toBeCloseTo(4.0, 6);
+    // No published cached-input discount: cache reads bill at the input rate.
+    expect(estimateCost("glm-4-32b-0414-128k", read, pricing)).toBeCloseTo(0.1, 6);
+  });
+
+  test("reproduces the cost OpenCode recorded for real requests", () => {
+    // Aggregate token totals from OpenCode's own `stats --json` on 2026-10-12,
+    // with reasoning folded into output as Decant stores it. No transcript
+    // content. OpenCode recorded $0.3449921 and $0.3569672 for these requests.
+    const pricing = defaultPricing();
+    const glm = {
+      ...emptyUsage(),
+      input: 1_133_028,
+      output: 16_485 + 61_930,
+      reasoning: 61_930,
+      cacheRead: 4_527_680,
+    };
+    const muse = {
+      ...emptyUsage(),
+      input: 75_993,
+      output: 1_273 + 151,
+      reasoning: 151,
+      cacheRead: 122_576,
+    };
+    expect(estimateCost("opencode-go/glm-5.3-flash", glm, pricing)).toBeCloseTo(0.3449921, 7);
+    expect(estimateCost("meta/muse-wonder", muse, pricing)).toBeCloseTo(0.3569672, 7);
+  });
+});

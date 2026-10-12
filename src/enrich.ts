@@ -29,6 +29,17 @@ export interface Facets {
 const ACTIVE_GAP_CAP_SECONDS = 300;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
+/** OpenCode 2.x starts a child session with `subagent`; older builds named
+ * the tool `task`. Scoped to OpenCode so another source's lowercase tool of
+ * the same name is not counted. */
+const OPENCODE_SPAWN_TOOLS = new Set(["subagent", "task"]);
+
+function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null): boolean {
+  if (toolName === "Agent" || toolName === "Task") {
+    return true;
+  }
+  return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
+}
 
 export function fileRefs(session: NormalizedSession): FileRef[] {
   const refs: FileRef[] = [];
@@ -203,7 +214,7 @@ export function facets(session: NormalizedSession): Facets {
         got.thinkingBlockCount += 1;
         got.thinkingChars += byteLength(block.text ?? "");
       } else if (block.blockType === "tool_use") {
-        if (block.toolName === "Agent" || block.toolName === "Task") {
+        if (isAgentSpawn(session.tool, block.toolName)) {
           got.agentSpawnCount += 1;
         } else if (block.toolName === "Skill") {
           got.skillCount += 1;

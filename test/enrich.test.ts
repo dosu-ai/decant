@@ -229,6 +229,17 @@ describe("facets", () => {
     expect(got.activeSeconds).toBe(490);
   });
 
+  test("OpenCode subagent and task calls count as agent spawns", () => {
+    const spawns = (tool: Tool, name: string) =>
+      facets(oneBlockSession(tool, toolUse(name, { prompt: "look around" }))).agentSpawnCount;
+    expect(spawns("opencode", "subagent")).toBe(1);
+    expect(spawns("opencode", "task")).toBe(1);
+    expect(spawns("opencode", "read")).toBe(0);
+    expect(spawns("codex", "subagent")).toBe(0);
+    expect(spawns("claude_code", "task")).toBe(0);
+    expect(spawns("claude_code", "Task")).toBe(1);
+  });
+
   test("standalone subagents count their sidechain prompts as turns", () => {
     const content = [
       '{"type":"user","uuid":"u1","isSidechain":true,"timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"inspect it"}}',

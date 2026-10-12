@@ -439,6 +439,78 @@ describe("parseOpenCodeSession", () => {
     expect(usage("2.0.27")).toMatchObject({ output: 70, reasoning: 20 });
   });
 
+  test("corrects migrated rows from the 1.x copy and leaves later rows disjoint", () => {
+    const tokens = { input: 150, output: 30, reasoning: 0, cache: { read: 100, write: 0 } };
+    const later = { input: 60, output: 8, reasoning: 4, cache: { read: 0, write: 0 } };
+    const rows = [
+      assistant(1, { tokens, cost: 0.0000655 }),
+      msg(2, "compaction", { status: "completed", summary: "Summary.", time: { created: T0 } }),
+      assistant(3, { tokens: later }),
+    ];
+    const step = (messageId: string, stepTokens: object) => ({
+      id: `prt_${messageId}_${JSON.stringify(stepTokens).length}`,
+      message_id: messageId,
+      session_id: "ses_inline",
+      time_created: T0,
+      time_updated: T0,
+      data: JSON.stringify({ type: "step-finish", tokens: stepTokens }),
+    });
+    const legacyMessage = (id: string, info: object) => ({
+      id,
+      session_id: "ses_inline",
+      time_created: T0,
+      time_updated: T0,
+      data: JSON.stringify(info),
+    });
+    const legacy = {
+      version: "1.3.10",
+      messages: [
+        legacyMessage("msg_1", { role: "assistant", modelID: "glm-5.3-flash", cost: 0.0000655 }),
+        legacyMessage("msg_2", { role: "user" }),
+        legacyMessage("msg_9", {
+          role: "assistant",
+          summary: true,
+          parentID: "msg_2",
+          modelID: "glm-5.3-flash",
+          cost: 0.000065,
+        }),
+      ],
+      parts: [
+        step("msg_1", { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }),
+        step("msg_1", tokens),
+        step("msg_9", { input: 300, output: 40, reasoning: 0, cache: { read: 0, write: 0 } }),
+      ],
+    };
+    const corrected = parseOpenCodeSession(
+      sessionRow({ version: "1.3.10" }),
+      rows,
+      context,
+      legacy,
+    ).session;
+    expect(corrected.messages.map((m) => [m.sourceUuid, m.role, m.model, m.usage?.input])).toEqual([
+      ["msg_1", "assistant", "glm-5.3-flash", 250],
+      ["msg_2", "system", "glm-5.3-flash", 300],
+      ["msg_3", "assistant", "glm-5.3-flash", 60],
+    ]);
+    expect(corrected.messages[2]?.usage).toMatchObject({ output: 12, reasoning: 4 });
+    expect((corrected.messages[1]?.raw as { cost: number }).cost).toBe(0.000065);
+    expect(corrected.rawMeta).toMatchObject({ migrated_rows_from_v1: 2 });
+
+    // A 1.x copy with no messages corrects nothing: every row is read by the
+    // session's version, as when the 1.x tables are gone.
+    for (const copy of [null, { ...legacy, messages: [], parts: [] }]) {
+      const plain = parseOpenCodeSession(
+        sessionRow({ version: "1.3.10" }),
+        rows,
+        context,
+        copy,
+      ).session;
+      expect(plain.messages.map((m) => m.usage?.input ?? null)).toEqual([150, null, 60]);
+      expect(plain.messages[2]?.usage).toMatchObject({ output: 8, reasoning: 4 });
+      expect(plain.rawMeta).not.toHaveProperty("migrated_rows_from_v1");
+    }
+  });
+
   test("keeps sequence gaps left by a revert without issues", () => {
     const parsed = parseOpenCodeSession(
       sessionRow(),

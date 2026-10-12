@@ -3627,8 +3627,14 @@ describe("OpenCode ingest", () => {
       const main = join(opencodeDir, "opencode.db");
       buildOpenCodeFixtureDb(main, ["v1/migrated.sql"]);
       const db = openFreshDb(dir);
-      expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+      expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
       expect(titles(db)).toEqual([
+        {
+          id: "ses_migrated",
+          title: "Migrated with steps",
+          path: `${main}#ses_migrated`,
+          from_v1: 0,
+        },
         { id: "ses_shared", title: "Legacy copy", path: `${main}#ses_shared`, from_v1: 1 },
         { id: "ses_v1_only", title: "Only in 1.x", path: `${main}#ses_v1_only`, from_v1: 1 },
       ]);
@@ -3643,19 +3649,111 @@ describe("OpenCode ingest", () => {
       // state of a session migrated and not touched since.
       exec(main, "UPDATE session SET time_updated = 1791796000000 WHERE id = 'ses_shared'");
       const db = openFreshDb(dir);
-      expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+      expect(sync(db, config)).toMatchObject({ ingested: 3, failed: 0 });
       const migrated = {
         id: "ses_shared",
         title: "Migrated copy",
         path: `${main}#ses_shared`,
         from_v1: 0,
       };
-      expect((titles(db) as unknown[])[0]).toEqual(migrated);
+      expect((titles(db) as unknown[])[1]).toEqual(migrated);
 
       // A 2.x build continues the session.
       exec(main, "UPDATE session_v2 SET time_updated = 1791799999999 WHERE id = 'ses_shared'");
-      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
-      expect((titles(db) as unknown[])[0]).toEqual(migrated);
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+      expect((titles(db) as unknown[])[1]).toEqual(migrated);
+      closeDb(db);
+    });
+
+    test("takes a migrated session's usage from its 1.x step-finish parts", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeFixtureDb(main, ["v1/migrated.sql"]);
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 3, failed: 0 });
+      const usage = (): unknown =>
+        db
+          .query(
+            `SELECT m.source_uuid AS id, m.role, m.model, m.input_tokens AS input,
+                    m.output_tokens AS output, m.cache_read_tokens AS cacheRead
+               FROM message m JOIN session s ON s.id = m.session_id
+              WHERE s.source_session_id = 'ses_migrated' AND m.input_tokens IS NOT NULL
+              ORDER BY m.seq`,
+          )
+          .all();
+      // msg_mg_2's 2.x row holds only its last step (150 in / 30 out); the
+      // compaction row holds none; msg_mg_6 was written by 2.x and keeps its
+      // own disjoint tokens even though the session predates 1.3.16.
+      expect(usage()).toEqual([
+        {
+          id: "msg_mg_2",
+          role: "assistant",
+          model: "glm-5.3-flash",
+          input: 250,
+          output: 50,
+          cacheRead: 100,
+        },
+        {
+          id: "msg_mg_3",
+          role: "system",
+          model: "glm-5.3-flash",
+          input: 300,
+          output: 40,
+          cacheRead: 0,
+        },
+        {
+          id: "msg_mg_6",
+          role: "assistant",
+          model: "glm-5.3-flash",
+          input: 60,
+          output: 12,
+          cacheRead: 0,
+        },
+      ]);
+      const session = db
+        .query(
+          `SELECT total_input_tokens AS input, total_output_tokens AS output,
+                  total_reasoning_tokens AS reasoning, estimated_cost_usd AS cost,
+                  json_extract(raw_meta, '$.migrated_rows_from_v1') AS corrected
+             FROM session WHERE source_session_id = 'ses_migrated'`,
+        )
+        .get() as { input: number; output: number; reasoning: number; cost: number };
+      expect(session).toMatchObject({ input: 610, output: 102, reasoning: 4, corrected: 2 });
+      // 65.5e-6 + 65e-6 + 15e-6, each the list price of the corrected usage.
+      expect(session.cost).toBeCloseTo(0.0001455, 10);
+
+      // An edit to the 1.x copy (OpenCode moves the row's time_updated with
+      // it) re-derives the 2.x session, though no 2.x row changed.
+      expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 3 });
+      exec(
+        main,
+        `UPDATE part SET data = json_set(data, '$.tokens.input', 110),
+                         time_updated = time_updated + 1
+          WHERE id = 'prt_mg_04'`,
+      );
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+      expect((usage() as { input: number }[])[0]?.input).toBe(260);
+      closeDb(db);
+    });
+
+    test("reads a migrated session by its version alone once the 1.x copy is gone", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeFixtureDb(main, ["v1/migrated.sql"]);
+      exec(main, "DELETE FROM part; DELETE FROM message; DELETE FROM session;");
+      const db = openFreshDb(dir);
+      expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+      // Last-step tokens only, and msg_mg_6's reasoning is read as included
+      // because nothing tells it apart from a migrated 1.3.10 row.
+      expect(
+        db
+          .query(
+            `SELECT total_input_tokens AS input, total_output_tokens AS output,
+                    json_extract(raw_meta, '$.migrated_rows_from_v1') AS corrected
+               FROM session WHERE source_session_id = 'ses_migrated'`,
+          )
+          .get(),
+      ).toEqual({ input: 210, output: 38, corrected: null });
       closeDb(db);
     });
 

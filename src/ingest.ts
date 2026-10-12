@@ -237,10 +237,20 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
           best.set(ref.sessionId, ref);
         }
       };
-      // The 2.x refs are kept before the 1.x listing runs, so a failure there
-      // still leaves this database's 2.x sessions discovered.
-      store.listSessions().forEach(keepNewest);
-      store.listLegacySessions().forEach(keepNewest);
+      // A failed 1.x listing still leaves this database's 2.x sessions
+      // discovered, keyed without their 1.x copies.
+      let legacy: OpenCodeSessionRef[] = [];
+      let legacyError: unknown = null;
+      try {
+        legacy = store.listLegacySessions();
+      } catch (error) {
+        legacyError = error;
+      }
+      store.listSessions(legacy).forEach(keepNewest);
+      legacy.forEach(keepNewest);
+      if (legacyError != null) {
+        throw legacyError;
+      }
     } catch (error) {
       logger.warning("OpenCode database could not be listed.", {
         "event.name": "decant.ingest.opencode_list_failed",
@@ -682,7 +692,7 @@ function syncOpenCodeSession(
   const parsed =
     loaded.format === "v1"
       ? parseOpenCodeLegacySession(loaded.session, loaded.messages, loaded.parts, context)
-      : parseOpenCodeSession(loaded.session, loaded.messages, context);
+      : parseOpenCodeSession(loaded.session, loaded.messages, context, loaded.legacy);
   const prepared: Prepared = {
     file,
     lineCount: loaded.messages.length,

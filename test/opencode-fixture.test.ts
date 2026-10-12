@@ -144,10 +144,10 @@ describe("OpenCode fixture builders", () => {
     buildOpenCodeFixtureDb(migrated, ["v1/migrated.sql"]);
     expect(
       rows<{ id: string }>(migrated, "SELECT id FROM session ORDER BY id").map((r) => r.id),
-    ).toEqual(["ses_shared", "ses_v1_only"]);
-    expect(rows<{ id: string }>(migrated, "SELECT id FROM session_v2").map((r) => r.id)).toEqual([
-      "ses_shared",
-    ]);
+    ).toEqual(["ses_migrated", "ses_shared", "ses_v1_only"]);
+    expect(
+      rows<{ id: string }>(migrated, "SELECT id FROM session_v2 ORDER BY id").map((r) => r.id),
+    ).toEqual(["ses_migrated", "ses_shared"]);
   });
 });
 

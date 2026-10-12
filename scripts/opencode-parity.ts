@@ -26,7 +26,7 @@ import {
 } from "@letta-ai/trajectory";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { isObject, type JsonObject } from "../src/json.ts";
-import { emptyUsage, type Json } from "../src/model.ts";
+import { emptyUsage, type Json, type TokenUsage } from "../src/model.ts";
 import { reportedCostApplies } from "../src/model-usage.ts";
 import type {
   OpenCodeLegacyMessageRow,
@@ -56,6 +56,9 @@ export interface ModelTotals {
 
 export interface SessionTotals {
   sessionId: string;
+  /** OpenCode migrated the session from 1.x and its 1.x copy still holds
+   * messages, so session_v2's aggregates sum last-step tokens only. */
+  migrated?: boolean;
   input: number;
   output: number;
   reasoning: number;
@@ -179,7 +182,9 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
 }
 
 /** Per session, Decant's assistant-only totals must not exceed session_v2's.
- * A lower figure is expected: title generation is counted only there. */
+ * A lower figure is expected: title generation is counted only there. A
+ * session migrated from 1.x is informational: its aggregates hold each
+ * migrated message's last step only, and Decant reads every step. */
 export function compareSessionTotals(
   decant: SessionTotals[],
   reference: SessionTotals[],
@@ -206,7 +211,12 @@ export function compareSessionTotals(
     lines.push(
       over.length === 0
         ? { level: "ok", text: `${expected.sessionId}: Decant totals at or below session_v2` }
-        : { level: "mismatch", text: `${expected.sessionId}: ${over.join(", ")}` },
+        : expected.migrated === true
+          ? {
+              level: "info",
+              text: `${expected.sessionId}: ${over.join(", ")} (migrated from 1.x; session_v2 sums last steps only)`,
+            }
+          : { level: "mismatch", text: `${expected.sessionId}: ${over.join(", ")}` },
     );
   }
   return lines;
@@ -288,6 +298,15 @@ function hasLegacyTables(db: Database): boolean {
 function legacyNewerSql(db: Database, alias: string): string {
   return hasLegacyTables(db)
     ? `EXISTS (SELECT 1 FROM session l WHERE l.id = ${alias}.id AND l.time_updated > ${alias}.time_updated)`
+    : "0";
+}
+
+/** SQL that is true when `<alias>.id` has a 1.x copy holding messages: a
+ * session OpenCode migrated whose 1.x tables are intact, so Decant corrects
+ * its migrated rows from them. */
+function migratedSql(db: Database, alias: string): string {
+  return hasLegacyTables(db)
+    ? `EXISTS (SELECT 1 FROM message l WHERE l.session_id = ${alias}.id)`
     : "0";
 }
 
@@ -378,6 +397,8 @@ function withReasoningInOutput(rows: readonly ModelTotals[]): ModelTotals[] {
 
 /** One 2.x assistant row, with what each counting rule needs. */
 export interface OpenCodeAssistantRow {
+  id: string;
+  sessionId: string;
   provider: string;
   model: string;
   tokens: JsonObject;
@@ -390,9 +411,16 @@ export interface OpenCodeAssistantRow {
   forkLinked: boolean;
   /** A newer 1.x copy of the session exists, and Decant reads that one. */
   legacyPreferred: boolean;
+  /** The session's 1.x copy holds messages: OpenCode migrated it. */
+  migrated: boolean;
+  /** This row's usage summed from its 1.x step-finish parts, when the 1.x
+   * copy holds the message (the migrator kept only the last step's tokens). */
+  stepSum: TokenUsage | null;
 }
 
 interface OpenCodeAssistantDbRow {
+  id: string;
+  session_id: string;
   provider: string | null;
   model: string | null;
   tokens: string;
@@ -401,6 +429,7 @@ interface OpenCodeAssistantDbRow {
   inherited: number;
   fork_linked: number;
   legacy_preferred: number;
+  migrated: number;
 }
 
 export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] {
@@ -409,20 +438,28 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
   }
   const rows = db
     .query(
-      `SELECT json_extract(m.data, '$.model.providerID') AS provider,
+      `SELECT m.id, m.session_id,
+              json_extract(m.data, '$.model.providerID') AS provider,
               json_extract(m.data, '$.model.id') AS model,
               json_extract(m.data, '$.tokens') AS tokens,
               json_extract(m.data, '$.cost') AS cost,
               s.version AS version,
               m.time_created < s.time_created AS inherited,
               s.fork_session_id IS NOT NULL AS fork_linked,
-              ${legacyNewerSql(db, "s")} AS legacy_preferred
+              ${legacyNewerSql(db, "s")} AS legacy_preferred,
+              ${migratedSql(db, "s")} AS migrated
          FROM session_message m
          JOIN session_v2 s ON s.id = m.session_id
         WHERE m.type = 'assistant' AND json_type(m.data, '$.tokens') = 'object'`,
     )
     .all() as OpenCodeAssistantDbRow[];
+  const stepSums = new Map<string, ReadonlyMap<string, TokenUsage | null>>();
+  for (const sessionId of new Set(rows.filter((r) => r.migrated === 1).map((r) => r.session_id))) {
+    stepSums.set(sessionId, legacyStepSums(db, sessionId));
+  }
   return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
     provider: row.provider ?? "",
     model: row.model ?? "",
     tokens: parseObject(row.tokens) ?? {},
@@ -431,7 +468,28 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
     inherited: row.inherited === 1,
     forkLinked: row.fork_linked === 1,
     legacyPreferred: row.legacy_preferred === 1,
+    migrated: row.migrated === 1,
+    stepSum: stepSums.get(row.session_id)?.get(row.id) ?? null,
   }));
+}
+
+/** Each 1.x assistant message's usage by id: the sum of its step-finish
+ * parts under the 1.x release rule. */
+function legacyStepSums(db: Database, sessionId: string): Map<string, TokenUsage | null> {
+  const version =
+    (
+      db.query("SELECT version FROM session WHERE id = ?1").get(sessionId) as {
+        version: string | null;
+      } | null
+    )?.version ?? null;
+  const { messages, parts } = loadLegacyRows(db, sessionId);
+  const sums = new Map<string, TokenUsage | null>();
+  for (const message of legacyMessages({ time_created: 0 }, messages, parts)) {
+    if (message.info.role === "assistant") {
+      sums.set(message.id, legacyAssistantUsage(message.info, message.parts, version));
+    }
+  }
+  return sums;
 }
 
 /** Per-model totals of 2.x assistant rows under one counting rule. Both keep
@@ -442,7 +500,10 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
  * session OpenCode migrated from 1.x records no fork link. It classifies
  * reasoning with the 1.x rule, because a migrated row created before OpenCode
  * 1.3.16 already counts reasoning inside output. It skips sessions read from a
- * newer 1.x copy.
+ * newer 1.x copy. In a session whose 1.x copy is intact, a migrated row's
+ * usage is the sum of its 1.x step-finish parts (the migrator copied only the
+ * last step's tokens), and a row without a 1.x message was written by 2.x
+ * after the migration, so it is disjoint.
  *
  * `stats` is what `opencode stats` sums: it skips inherited rows only when the
  * session records `fork_session_id`, and adds reasoning to output as stored.
@@ -458,7 +519,12 @@ export function openCodeModelTotals(
         continue;
       }
       const usage =
-        openCodeUsage(row.tokens, reasoningOverlap(row.tokens, row.version)) ?? emptyUsage();
+        row.stepSum ??
+        openCodeUsage(
+          row.tokens,
+          row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
+        ) ??
+        emptyUsage();
       accumulate(
         totals,
         row,
@@ -498,10 +564,12 @@ export function openCodeRuleDifferences(rows: readonly OpenCodeAssistantRow[]): 
   inheritedWithoutForkLink: number;
   legacyPreferred: number;
   reasoningIncluded: number;
+  stepSums: number;
 } {
   let inheritedWithoutForkLink = 0;
   let legacyPreferred = 0;
   let reasoningIncluded = 0;
+  let stepSums = 0;
   for (const row of rows) {
     if (row.inherited && row.forkLinked) {
       continue;
@@ -510,11 +578,13 @@ export function openCodeRuleDifferences(rows: readonly OpenCodeAssistantRow[]): 
       legacyPreferred += 1;
     } else if (row.inherited) {
       inheritedWithoutForkLink += 1;
-    } else if (reasoningOverlap(row.tokens, row.version) === "included") {
+    } else if (row.stepSum != null) {
+      stepSums += 1;
+    } else if (!row.migrated && reasoningOverlap(row.tokens, row.version) === "included") {
       reasoningIncluded += 1;
     }
   }
-  return { inheritedWithoutForkLink, legacyPreferred, reasoningIncluded };
+  return { inheritedWithoutForkLink, legacyPreferred, reasoningIncluded, stepSums };
 }
 
 function readOpenCodeCompaction(db: Database): { rows: number; input: number; output: number } {
@@ -538,15 +608,17 @@ function readOpenCodeSessionTotals(db: Database): SessionTotals[] {
   if (!hasTable(db, "session_v2")) {
     return [];
   }
-  return db
+  const rows = db
     .query(
-      `SELECT s.id AS sessionId, s.tokens_input AS input, s.tokens_output AS output,
+      `SELECT s.id AS sessionId, ${migratedSql(db, "s")} AS migrated,
+              s.tokens_input AS input, s.tokens_output AS output,
               s.tokens_reasoning AS reasoning, s.tokens_cache_read AS cacheRead,
               s.tokens_cache_write AS cacheWrite, s.cost
          FROM session_v2 s
         WHERE NOT ${legacyNewerSql(db, "s")}`,
     )
-    .all() as SessionTotals[];
+    .all() as Array<Omit<SessionTotals, "migrated"> & { migrated: number }>;
+  return rows.map((row) => ({ ...row, migrated: row.migrated === 1 }));
 }
 
 /** One 1.x session Decant reads from the 1.x tables. The aggregate columns
@@ -1207,7 +1279,7 @@ function main(): void {
     const differences = openCodeRuleDifferences(v2Rows);
     const legacySteps = legacyModels.reduce((sum, row) => sum + row.steps, 0);
     console.log(
-      `info     Decant differs from opencode stats by design: ${differences.inheritedWithoutForkLink} inherited 2.x row(s) of forks without a fork link (skipped), ${differences.reasoningIncluded} 2.x row(s) whose output already includes reasoning (not added again), ${differences.legacyPreferred} 2.x row(s) of sessions read from a newer 1.x copy, ${legacySteps} 1.x step(s)`,
+      `info     Decant differs from opencode stats by design: ${differences.inheritedWithoutForkLink} inherited 2.x row(s) of forks without a fork link (skipped), ${differences.reasoningIncluded} 2.x row(s) whose output already includes reasoning (not added again), ${differences.stepSums} migrated 2.x row(s) read from their 1.x step-finish parts, ${differences.legacyPreferred} 2.x row(s) of sessions read from a newer 1.x copy, ${legacySteps} 1.x step(s)`,
     );
     const decantSessions = readDecantSessionTotals(decant);
     console.log("== per session: Decant assistant-only vs session_v2");

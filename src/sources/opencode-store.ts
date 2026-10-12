@@ -13,7 +13,11 @@ import { asInteger, asString, get, isObject } from "../json.ts";
 import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { queryRow, queryRows } from "../sqlite-statements.ts";
-import type { OpenCodeMessageRow, OpenCodeSessionRow } from "./opencode.ts";
+import type {
+  OpenCodeLegacyCounterpart,
+  OpenCodeMessageRow,
+  OpenCodeSessionRow,
+} from "./opencode.ts";
 import type {
   OpenCodeLegacyMessageRow,
   OpenCodeLegacyPartRow,
@@ -38,6 +42,8 @@ export interface OpenCodeSessionRef {
 export interface OpenCodeLoadedSession {
   session: OpenCodeSessionRow;
   messages: OpenCodeMessageRow[];
+  /** The session's 1.x copy in the same database, when OpenCode migrated it. */
+  legacy: OpenCodeLegacyCounterpart | null;
 }
 
 export interface OpenCodeLegacyLoadedSession {
@@ -97,6 +103,11 @@ export interface OpenCodeLegacyChangeFields {
   /** Session columns OpenCode writes without moving `time_updated`
    * (`LEGACY_STATE_COLUMNS`), in that order; a missing column is null. */
   sessionState: readonly (string | number | null)[];
+}
+
+/** A migrated session's 2.x key plus its 1.x copy's key. */
+function withCounterpart(fingerprint: string, legacy: string | undefined): string {
+  return legacy == null ? fingerprint : `${fingerprint}|${legacy}`;
 }
 
 /** 1.x keeps parts in their own table and rewrites them while streaming, and
@@ -186,10 +197,18 @@ export class OpenCodeStore {
     return hasTable(this.#db, "session_v2") && hasTable(this.#db, "session_message");
   }
 
-  listSessions(): OpenCodeSessionRef[] {
+  /** Every 2.x session. A session whose 1.x copy is in this database (one
+   * OpenCode migrated) has that copy's fingerprint appended, because the parser
+   * corrects migrated rows from it, so an edit there re-derives the session.
+   * `legacy` is this database's `listLegacySessions()`, when the caller already
+   * has it. */
+  listSessions(legacy?: readonly OpenCodeSessionRef[]): OpenCodeSessionRef[] {
     if (!this.hasSessionTables()) {
       return [];
     }
+    const counterparts = new Map(
+      (legacy ?? this.listLegacySessions()).map((ref) => [ref.sessionId, ref.fingerprint]),
+    );
     const rows = queryRows<FingerprintRow>(
       this.#db,
       `SELECT s.id, s.directory, s.time_updated,
@@ -204,11 +223,14 @@ export class OpenCodeStore {
         dbPath: this.path,
         sessionId: row.id,
         format: "v2" as const,
-        fingerprint: openCodeFingerprint(
-          row.time_updated,
-          row.message_count,
-          row.max_seq,
-          row.max_message_updated,
+        fingerprint: withCounterpart(
+          openCodeFingerprint(
+            row.time_updated,
+            row.message_count,
+            row.max_seq,
+            row.max_message_updated,
+          ),
+          counterparts.get(row.id),
         ),
         timeUpdated: row.time_updated,
         directory: row.directory,
@@ -216,28 +238,66 @@ export class OpenCodeStore {
       .sort((a, b) => compareCodePoints(a.sessionId, b.sessionId));
   }
 
+  /** One 2.x session, its messages, and its 1.x copy if this database has
+   * one, read in one transaction so they share a WAL snapshot. */
   loadSession(sessionId: string): OpenCodeLoadedSession | null {
     if (!this.hasSessionTables()) {
       return null;
     }
-    const session = queryRow<OpenCodeSessionRow>(
+    return this.#db
+      .transaction((): OpenCodeLoadedSession | null => {
+        const session = queryRow<OpenCodeSessionRow>(
+          this.#db,
+          `SELECT id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory,
+                  title, version, cost, tokens_input, tokens_output, tokens_reasoning,
+                  tokens_cache_read, tokens_cache_write, agent, model, time_created,
+                  time_updated, time_archived
+             FROM session_v2 WHERE id = ?1`,
+          [sessionId],
+        );
+        if (session == null) {
+          return null;
+        }
+        const messages = queryRows<OpenCodeMessageRow>(
+          this.#db,
+          `SELECT id, session_id, type, seq, time_created, time_updated, data
+             FROM session_message WHERE session_id = ?1 ORDER BY seq`,
+          [sessionId],
+        );
+        return { session, messages, legacy: this.#legacyCounterpart(sessionId) };
+      })
+      .deferred();
+  }
+
+  /** What the parser needs of a migrated session's 1.x copy: the version, the
+   * messages, and the parts that may be step-finish parts (text and tool
+   * output are left in the database). */
+  #legacyCounterpart(sessionId: string): OpenCodeLegacyCounterpart | null {
+    if (!this.hasLegacyTables()) {
+      return null;
+    }
+    const session = queryRow<{ version: string | null }>(
       this.#db,
-      `SELECT id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, title,
-              version, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read,
-              tokens_cache_write, agent, model, time_created, time_updated, time_archived
-         FROM session_v2 WHERE id = ?1`,
+      "SELECT version FROM session WHERE id = ?1",
       [sessionId],
     );
     if (session == null) {
       return null;
     }
-    const messages = queryRows<OpenCodeMessageRow>(
+    const messages = queryRows<OpenCodeLegacyMessageRow>(
       this.#db,
-      `SELECT id, session_id, type, seq, time_created, time_updated, data
-         FROM session_message WHERE session_id = ?1 ORDER BY seq`,
+      `SELECT id, session_id, time_created, time_updated, data
+         FROM message WHERE session_id = ?1 ORDER BY time_created, id`,
       [sessionId],
     );
-    return { session, messages };
+    const parts = queryRows<OpenCodeLegacyPartRow>(
+      this.#db,
+      `SELECT id, message_id, session_id, time_created, time_updated, data
+         FROM part WHERE session_id = ?1 AND instr(data, '"step-finish"') > 0
+        ORDER BY message_id, id`,
+      [sessionId],
+    );
+    return { version: session.version, messages, parts };
   }
 
   /** A pre-release 2.x database from before OpenCode split its tables

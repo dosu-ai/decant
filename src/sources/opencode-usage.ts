@@ -6,8 +6,9 @@
 // it does not. The recorded `total` decides when present (anomalyco/opencode
 // getUsage, in packages/opencode/src/session/index.ts and, from 1.18,
 // packages/opencode/src/session/session.ts).
-import { isObject, type JsonObject } from "../json.ts";
+import { asString, isObject, type JsonObject } from "../json.ts";
 import { emptyUsage, type Json, type TokenUsage } from "../model.ts";
+import type { OpenCodeLegacyMessageRow, OpenCodeLegacyPartRow } from "./opencode-legacy.ts";
 
 export type ReasoningOverlap = "disjoint" | "included";
 
@@ -129,4 +130,72 @@ export function legacyAssistantUsage(
   const recorded = usage.input + usage.output + usage.cacheRead + usage.cacheCreation;
   const cost = typeof info.cost === "number" ? info.cost : 0;
   return recorded > 0 || cost > 0 ? usage : null;
+}
+
+/** What the 1.x tables record for one row the 2.x migrator copied. */
+export interface LegacyRowUsage {
+  usage: TokenUsage | null;
+  modelId: string | null;
+  /** The message's recorded `info.cost`, which sums its steps. */
+  cost: number | null;
+}
+
+/** Per-row usage of a session OpenCode 2.x migrated, read from its 1.x copy
+ * (anomalyco/opencode v2.0.27 packages/core/src/database/v1-migration.bun.ts).
+ * The migrator keeps message ids, copies only `info.tokens` (the last step),
+ * and folds a compaction request plus its `summary` assistant into one
+ * compaction row that has the request's id and no usage. */
+export interface MigratedUsage {
+  /** By assistant message id, which is also the 2.x row id. */
+  assistants: ReadonlyMap<string, LegacyRowUsage>;
+  /** By compaction request id: the summary assistant that answered it. */
+  compactions: ReadonlyMap<string, LegacyRowUsage>;
+}
+
+/** Builds `MigratedUsage` from the 1.x message rows (in OpenCode's order) and
+ * their parts; only step-finish parts matter. Rows that do not parse are
+ * left out, so their 2.x copies keep their own tokens. */
+export function migratedUsage(
+  version: string | null,
+  messages: readonly Pick<OpenCodeLegacyMessageRow, "id" | "data">[],
+  parts: readonly Pick<OpenCodeLegacyPartRow, "message_id" | "data">[],
+): MigratedUsage {
+  const partsByMessage = new Map<string, Json[]>();
+  for (const part of parts) {
+    const data = parseObject(part.data);
+    if (data != null) {
+      const list = partsByMessage.get(part.message_id) ?? [];
+      list.push(data);
+      partsByMessage.set(part.message_id, list);
+    }
+  }
+  const assistants = new Map<string, LegacyRowUsage>();
+  const compactions = new Map<string, LegacyRowUsage>();
+  for (const message of messages) {
+    const info = parseObject(message.data);
+    if (info == null || info.role !== "assistant") {
+      continue;
+    }
+    const entry: LegacyRowUsage = {
+      usage: legacyAssistantUsage(info, partsByMessage.get(message.id) ?? [], version),
+      modelId: asString(info.modelID),
+      cost: typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : null,
+    };
+    assistants.set(message.id, entry);
+    const parentId = asString(info.parentID);
+    // The migrator pairs a request with the first summary that answers it.
+    if (info.summary === true && parentId != null && !compactions.has(parentId)) {
+      compactions.set(parentId, entry);
+    }
+  }
+  return { assistants, compactions };
+}
+
+function parseObject(text: string): JsonObject | null {
+  try {
+    const value = JSON.parse(text) as Json;
+    return isObject(value) ? value : null;
+  } catch {
+    return null;
+  }
 }

@@ -226,11 +226,21 @@ describe("opencode parity comparisons", () => {
       cacheWrite: 16,
       cost: 0.0000794,
     };
-    const reference: SessionTotals[] = [base, { ...base, sessionId: "ses_b", input: 400 }];
-    const decant: SessionTotals[] = [base, { ...base, sessionId: "ses_b", input: 410 }];
+    const reference: SessionTotals[] = [
+      base,
+      { ...base, sessionId: "ses_b", input: 400 },
+      // Migrated from 1.x: session_v2 sums each message's last step only.
+      { ...base, sessionId: "ses_c", input: 400, migrated: true },
+    ];
+    const decant: SessionTotals[] = [
+      base,
+      { ...base, sessionId: "ses_b", input: 410 },
+      { ...base, sessionId: "ses_c", input: 410 },
+    ];
     const lines = compareSessionTotals(decant, reference);
-    expect(lines.map((line) => line.level)).toEqual(["ok", "mismatch"]);
+    expect(lines.map((line) => line.level)).toEqual(["ok", "mismatch", "info"]);
     expect(lines[1]?.text).toContain("input 410 > 400");
+    expect(lines[2]?.text).toContain("migrated from 1.x");
     expect(compareSessionTotals([{ ...base, input: 300 }], [base])[0]?.level).toBe("ok");
   });
 
@@ -334,9 +344,11 @@ describe("opencode parity: 1.x reference totals", () => {
        VALUES ('msg_v1m_2', 'ses_shared', 'assistant', 1, 1791796001000, 1791796001000,
          '{"model":{"providerID":"opencode-go","id":"glm-5.3-flash"},"content":[],"cost":0.00001,"tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1791796001000}}');`,
     ]);
+    const shared = (db: Database) =>
+      readOpenCodeAssistantRows(db).filter((row) => row.sessionId === "ses_shared");
     withDb(path, (db) => {
       expect(readLegacySessions(db).map((row) => row.id)).toEqual(["ses_shared", "ses_v1_only"]);
-      const rows = readOpenCodeAssistantRows(db);
+      const rows = shared(db);
       expect(rows.map((row) => row.legacyPreferred)).toEqual([true]);
       expect(openCodeModelTotals(rows, "decant")).toEqual([]);
       expect(openCodeModelTotals(rows, "stats")[0]?.steps).toBe(1);
@@ -347,7 +359,7 @@ describe("opencode parity: 1.x reference totals", () => {
     writable.close();
     withDb(path, (db) => {
       expect(readLegacySessions(db).map((row) => row.id)).toEqual(["ses_v1_only"]);
-      expect(readOpenCodeAssistantRows(db).map((row) => row.legacyPreferred)).toEqual([false]);
+      expect(shared(db).map((row) => row.legacyPreferred)).toEqual([false]);
     });
   });
 
@@ -383,6 +395,8 @@ describe("opencode parity: 1.x reference totals", () => {
 
 describe("opencode parity: 2.x counting rules", () => {
   const row = (overrides: Partial<OpenCodeAssistantRow>): OpenCodeAssistantRow => ({
+    id: "msg_a",
+    sessionId: "ses_a",
     provider: "opencode-go",
     model: "glm-5.3-flash",
     tokens: { input: 100, output: 50, reasoning: 20, cache: { read: 0, write: 0 } },
@@ -391,6 +405,8 @@ describe("opencode parity: 2.x counting rules", () => {
     inherited: false,
     forkLinked: false,
     legacyPreferred: false,
+    migrated: false,
+    stepSum: null,
     ...overrides,
   });
 
@@ -415,7 +431,36 @@ describe("opencode parity: 2.x counting rules", () => {
       inheritedWithoutForkLink: 1,
       legacyPreferred: 0,
       reasoningIncluded: 1,
+      stepSums: 0,
     });
+  });
+
+  test("Decant reads a migrated row from its 1.x step-finish parts", () => {
+    const path = freshPath();
+    buildOpenCodeFixtureDb(path, ["v1/migrated.sql"]);
+    const rows = withDb(path, readOpenCodeAssistantRows).filter(
+      (r) => r.sessionId === "ses_migrated",
+    );
+    expect(rows.map((r) => [r.id, r.migrated, r.stepSum?.input ?? null])).toEqual([
+      ["msg_mg_2", true, 250],
+      ["msg_mg_6", true, null],
+    ]);
+    // msg_mg_2: both steps (250 in), not the migrated last step (150 in).
+    // msg_mg_6 was written by 2.x after the migration: its 4 reasoning
+    // tokens are added to output although the session predates 1.3.16.
+    expect(openCodeModelTotals(rows, "decant")).toEqual([
+      model({
+        steps: 2,
+        input: 310,
+        output: 58,
+        reasoning: 4,
+        cacheRead: 100,
+        cacheWrite: 0,
+        cost: 0.0000805,
+      }),
+    ]);
+    expect(openCodeModelTotals(rows, "stats")[0]).toMatchObject({ input: 210, output: 38 });
+    expect(openCodeRuleDifferences(rows)).toMatchObject({ stepSums: 1, reasoningIncluded: 0 });
   });
 
   test("merges 2.x and 1.x reference totals by provider and model", () => {

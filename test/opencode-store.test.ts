@@ -253,23 +253,45 @@ describe("OpenCodeStore 1.x tables", () => {
     buildOpenCodeFixtureDb(path, ["v1/migrated.sql"]);
     const store = OpenCodeStore.open(path);
     try {
+      const migratedV1 =
+        "v1:1791797030000:4:11:1791797030000:1791797030000:7167188060000:19709767135000:b423cb6a1285";
+      const sharedV1 =
+        "v1:1791799999999:1:1:1791796000000:1791796000000:1791796000000:1791796000000:9812956cee22";
+      // A 2.x session with a 1.x copy carries that copy's key too, because
+      // the parser corrects its migrated rows from it.
       expect(store.listSessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_migrated",
+          format: "v2",
+          fingerprint: `1791797060000:5:4:1791797060000|${migratedV1}`,
+          timeUpdated: 1791797060000,
+          directory: "/decant-fixture/example",
+        },
         {
           dbPath: path,
           sessionId: "ses_shared",
           format: "v2",
-          fingerprint: "1791796000000:1:0:1791796000000",
+          fingerprint: `1791796000000:1:0:1791796000000|${sharedV1}`,
           timeUpdated: 1791796000000,
           directory: "/decant-fixture/example",
         },
       ]);
+      expect(store.listSessions([])[1]?.fingerprint).toBe("1791796000000:1:0:1791796000000");
       expect(store.listLegacySessions()).toEqual([
+        {
+          dbPath: path,
+          sessionId: "ses_migrated",
+          format: "v1",
+          fingerprint: migratedV1,
+          timeUpdated: 1791797030000,
+          directory: "/decant-fixture/example",
+        },
         {
           dbPath: path,
           sessionId: "ses_shared",
           format: "v1",
-          fingerprint:
-            "v1:1791799999999:1:1:1791796000000:1791796000000:1791796000000:1791796000000:9812956cee22",
+          fingerprint: sharedV1,
           timeUpdated: 1791799999999,
           directory: "/decant-fixture/example",
         },
@@ -285,6 +307,17 @@ describe("OpenCodeStore 1.x tables", () => {
       ]);
       expect(store.loadLegacySession("ses_shared")?.session.title).toBe("Legacy copy");
       expect(store.loadSession("ses_shared")?.session.title).toBe("Migrated copy");
+      // The 1.x copy a migrated session is corrected from: every message, and
+      // only the parts that can be step-finish parts.
+      const legacy = store.loadSession("ses_migrated")?.legacy;
+      expect(legacy?.version).toBe("1.3.10");
+      expect(legacy?.messages.map((m) => m.id)).toEqual([
+        "msg_mg_1",
+        "msg_mg_2",
+        "msg_mg_3",
+        "msg_mg_4",
+      ]);
+      expect(legacy?.parts.map((p) => p.id)).toEqual(["prt_mg_04", "prt_mg_07", "prt_mg_11"]);
     } finally {
       store.close();
     }

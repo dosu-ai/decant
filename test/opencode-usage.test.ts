@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Json } from "../src/model.ts";
 import {
   legacyAssistantUsage,
+  migratedUsage,
   openCodeUsage,
   parseOpenCodeVersion,
   reasoningOverlap,
@@ -140,5 +141,46 @@ describe("legacyAssistantUsage", () => {
     expect(parseOpenCodeVersion("v1.18.35-beta.2")).toEqual([1, 18, 35]);
     expect(parseOpenCodeVersion("dev")).toBeNull();
     expect(parseOpenCodeVersion(null)).toBeNull();
+  });
+});
+
+describe("migratedUsage", () => {
+  const message = (id: string, info: object) => ({ id, data: JSON.stringify(info) });
+  const step = (messageId: string, tokens: object) => ({
+    message_id: messageId,
+    data: JSON.stringify({ type: "step-finish", tokens }),
+  });
+
+  test("keys assistants by id and compaction requests by their first summary", () => {
+    const usage = migratedUsage(
+      "1.18.35",
+      [
+        message("msg_u", { role: "user" }),
+        message("msg_a", { role: "assistant", modelID: "m", cost: 0.25 }),
+        message("msg_s1", { role: "assistant", summary: true, parentID: "msg_c", modelID: "s" }),
+        message("msg_s2", { role: "assistant", summary: true, parentID: "msg_c", modelID: "x" }),
+        { id: "msg_bad", data: "{not json" },
+      ],
+      [
+        step("msg_a", t({ reasoning: 0 })),
+        step("msg_a", t({ reasoning: 0 })),
+        { message_id: "msg_a", data: "{not json" },
+        step("msg_s1", t({ input: 7, reasoning: 0 })),
+      ],
+    );
+    expect([...usage.assistants.keys()]).toEqual(["msg_a", "msg_s1", "msg_s2"]);
+    expect(usage.assistants.get("msg_a")).toMatchObject({
+      modelId: "m",
+      cost: 0.25,
+      usage: { input: 200, output: 100 },
+    });
+    expect([...usage.compactions.keys()]).toEqual(["msg_c"]);
+    expect(usage.compactions.get("msg_c")).toMatchObject({
+      modelId: "s",
+      cost: null,
+      usage: { input: 7 },
+    });
+    // No step-finish parts and nothing recorded: an unfinished request.
+    expect(usage.assistants.get("msg_s2")?.usage).toBeNull();
   });
 });

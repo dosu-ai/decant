@@ -1,8 +1,17 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { resetSync } from "@logtape/logtape";
 import { closeDb, openDb } from "../src/db.ts";
 import {
@@ -26,12 +35,14 @@ import { parseCodexSession } from "../src/sources/codex.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
-import { buildOpenCodeDb, buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
+import { buildOpenCodeDb, buildOpenCodeFixtureDb, opencodeFixtureSql } from "./opencode-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
 const goldenDir = join(import.meta.dir, "golden");
-const workDir = mkdtempSync(join(tmpdir(), "decant-ingest-test-"));
+// Canonical, because OpenCode database paths are stored resolved (macOS's
+// temp directory sits behind the /var -> /private/var symlink).
+const workDir = realpathSync(mkdtempSync(join(tmpdir(), "decant-ingest-test-")));
 
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
@@ -2979,6 +2990,162 @@ describe("OpenCode ingest", () => {
     expect(getSession(db, parent.id)?.subagents.map((s) => s.summary.source_session_id)).toEqual([
       "ses_child",
     ]);
+    closeDb(db);
+  });
+
+  function captureWarnings<T>(run: () => T): { result: T; lines: Record<string, unknown>[] } {
+    const lines: string[] = [];
+    configureLogging({ level: "info", write: (line) => lines.push(line) });
+    try {
+      const result = run();
+      return { result, lines: lines.map((line) => JSON.parse(line) as Record<string, unknown>) };
+    } finally {
+      resetSync();
+    }
+  }
+
+  test("fails only the session when a later store read fails", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    // The session tables read fine; the model catalog query then fails.
+    buildOpenCodeDb(main, [
+      "DROP TABLE kv; CREATE TABLE kv (key TEXT PRIMARY KEY, other TEXT);",
+      opencodeFixtureSql("sample.sql"),
+    ]);
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+
+    const { result, lines } = captureWarnings(() => sync(db, config));
+    expect(result).toMatchObject({ scanned: 2, ingested: 1, failed: 1 });
+    expect(db.query("SELECT tool FROM session").all()).toEqual([{ tool: "claude_code" }]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: "WARN",
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": `${main}#ses_sample`,
+      "error.type": "opencode_read",
+      "error.message": expect.stringContaining("no such column"),
+    });
+    expect(JSON.stringify(lines[0])).not.toContain("hello");
+    // Nothing was recorded for the session, so the next sync retries it.
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1, failed: 1 });
+    closeDb(db);
+  });
+
+  test("keeps the archived copy of a session deleted from opencode.db", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1 });
+
+    const writer = new Database(main, { strict: true });
+    writer.exec("DELETE FROM session_message WHERE session_id = 'ses_sample'");
+    writer.exec("DELETE FROM session_v2 WHERE id = 'ses_sample'");
+    writer.close();
+    expect(sync(db, config)).toMatchObject({ scanned: 0, ingested: 0, skipped: 0, failed: 0 });
+    expect(
+      db.query("SELECT source_session_id, source_path, message_count FROM session").all(),
+    ).toEqual([
+      { source_session_id: "ses_sample", source_path: `${main}#ses_sample`, message_count: 4 },
+    ]);
+    expect(db.query("SELECT path, status FROM ingest_source").all()).toEqual([
+      { path: `${main}#ses_sample`, status: "ok" },
+    ]);
+    closeDb(db);
+  });
+
+  test("moves a session to the newer database's copy and back when that copy vanishes", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    const beta = join(opencodeDir, "opencode-beta.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 1 });
+    db.query(
+      `INSERT INTO ingest_issue(source_path, line_no, error, code, created_at)
+       VALUES (?1, 1, 'synthetic', 'unparsed_line', datetime('now'))`,
+    ).run(`${main}#ses_sample`);
+    const sources = (): unknown => ({
+      session: db.query("SELECT source_path FROM session").all(),
+      ingest_source: db.query("SELECT path FROM ingest_source ORDER BY path").all(),
+      ingest_issue: db.query("SELECT source_path FROM ingest_issue").all(),
+    });
+
+    buildOpenCodeFixtureDb(beta, ["sample.sql"]);
+    const writer = new Database(beta, { strict: true });
+    writer.exec("UPDATE session_v2 SET time_updated = time_updated + 1000 WHERE id = 'ses_sample'");
+    writer.close();
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1 });
+    expect(sources()).toEqual({
+      session: [{ source_path: `${beta}#ses_sample` }],
+      ingest_source: [{ path: `${beta}#ses_sample` }],
+      ingest_issue: [],
+    });
+
+    rmSync(beta);
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, skipped: 0 });
+    expect(sources()).toEqual({
+      session: [{ source_path: `${main}#ses_sample` }],
+      ingest_source: [{ path: `${main}#ses_sample` }],
+      ingest_issue: [],
+    });
+    closeDb(db);
+  });
+
+  test("breaks a time_updated tie between databases on the database path", () => {
+    const { opencodeDir } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    const beta = join(opencodeDir, "opencode-beta.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    buildOpenCodeFixtureDb(beta, ["sample.sql"]);
+    // "opencode-beta.db" sorts before "opencode.db" ('-' < '.').
+    const expected = [`${beta}#ses_sample`];
+    expect(discoverSourcePaths([main, beta]).map((file) => file.path)).toEqual(expected);
+    expect(discoverSourcePaths([beta, main]).map((file) => file.path)).toEqual(expected);
+  });
+
+  test("reads one database reached through a symlink or a relative path once", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    const linkedDir = join(dir, "linked-opencode");
+    symlinkSync(opencodeDir, linkedDir);
+    const linkedDb = join(dir, "linked.db");
+    symlinkSync(main, linkedDb);
+    const expected = [`${main}#ses_sample`];
+
+    expect(
+      discoverSourcePaths([main, linkedDb, relative(process.cwd(), main), linkedDir]).map(
+        (file) => file.path,
+      ),
+    ).toEqual(expected);
+    const throughLinks: IngestConfig = { ...config, opencodeDir: linkedDir, opencodeDb: linkedDb };
+    expect(discover(throughLinks).map((file) => file.path)).toEqual(expected);
+    const db = openFreshDb(dir);
+    expect(sync(db, throughLinks)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+    expect(db.query("SELECT path FROM ingest_source").all()).toEqual([
+      { path: `${main}#ses_sample` },
+    ]);
+    closeDb(db);
+  });
+
+  test("warns about an unreadable OpenCode database and still ingests other sources", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    writeFileSync(main, "this is not a SQLite database, just synthetic garbage bytes\n".repeat(64));
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+
+    const { result, lines } = captureWarnings(() => sync(db, config));
+    expect(result).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+    expect(db.query("SELECT tool FROM session").all()).toEqual([{ tool: "claude_code" }]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: "WARN",
+      "event.name": expect.stringMatching(/^decant\.ingest\.opencode_(open|list)_failed$/),
+      "file.path": main,
+    });
     closeDb(db);
   });
 

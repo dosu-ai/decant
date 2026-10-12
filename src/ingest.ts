@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename } from "node:path";
@@ -180,7 +181,7 @@ function openCodeDatabasePaths(config: IngestConfig): string[] {
 
 const OPENCODE_DATABASE_NAME = /^opencode(?:-[A-Za-z0-9._-]+)?\.db$/;
 
-function isOpenCodeDatabaseName(name: string): boolean {
+export function isOpenCodeDatabaseName(name: string): boolean {
   return OPENCODE_DATABASE_NAME.test(name);
 }
 
@@ -194,7 +195,9 @@ export function openCodeSourcePath(ref: OpenCodeSessionRef): string {
  * skipped; the 1.x-only layout is PR 3's job. */
 function discoverOpenCode(dbPaths: string[]): SourceFile[] {
   const best = new Map<string, OpenCodeSessionRef>();
-  for (const dbPath of dbPaths) {
+  // One database reached through a symlink, a relative path, or both the data
+  // directory and OPENCODE_DB is opened once and names one virtual path.
+  for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
     if (!existsSync(dbPath)) {
       continue;
     }
@@ -212,7 +215,7 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
     try {
       for (const ref of store.listSessions()) {
         const prior = best.get(ref.sessionId);
-        if (prior == null || ref.timeUpdated > prior.timeUpdated) {
+        if (prior == null || isNewerOpenCodeCopy(ref, prior)) {
           best.set(ref.sessionId, ref);
         }
       }
@@ -237,6 +240,23 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
       archived: false,
       opencode: ref,
     }));
+}
+
+/** Newest `time_updated` wins; a tie goes to the code-point-smaller database
+ * path so the winner never depends on discovery order. */
+function isNewerOpenCodeCopy(ref: OpenCodeSessionRef, prior: OpenCodeSessionRef): boolean {
+  if (ref.timeUpdated !== prior.timeUpdated) {
+    return ref.timeUpdated > prior.timeUpdated;
+  }
+  return compareCodePoints(ref.dbPath, prior.dbPath) < 0;
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 export function sync(
@@ -520,12 +540,14 @@ function syncOpenCodeSession(
     return { kind: "failed" };
   }
   if (loaded == null) {
-    // Deleted between discovery and read; the next sweep notices the absence.
+    // Deleted between discovery and read. Nothing is written or removed: a
+    // session deleted from opencode.db simply stops being discovered, and the
+    // archive keeps the copy it last ingested.
     return { kind: "skipped" };
   }
   const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
     mcpServers,
-    contextWindows: store.contextWindows(),
+    contextWindows: loaded.contextWindows,
   });
   const prepared: Prepared = {
     file,
@@ -540,13 +562,19 @@ function syncOpenCodeSession(
     : { kind: "ingested", issues: parsed.issues };
 }
 
+/** Every read from OpenCode's database, the model catalog included, fails
+ * the one session rather than the whole sync. A failed session writes no
+ * `ingest_source` row, so the next sync retries it instead of storing a copy
+ * parsed without its context windows under a fingerprint that would never
+ * change. */
 function readOpenCodeSession(
   store: OpenCodeStore,
   sessionId: string,
   sourcePath: string,
-): OpenCodeLoadedSession | null | "failed" {
+): (OpenCodeLoadedSession & { contextWindows: ReadonlyMap<string, number> }) | null | "failed" {
   try {
-    return store.loadSession(sessionId);
+    const loaded = store.loadSession(sessionId);
+    return loaded == null ? null : { ...loaded, contextWindows: store.contextWindows() };
   } catch (error) {
     logger.warning("Source file could not be read.", {
       "event.name": "decant.ingest.source_read_failed",
@@ -1020,6 +1048,9 @@ function writeIngestedFile(
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
     releaseMisfiledFork(db, prepared.file.path, parsed);
+    if (prepared.file.opencode != null) {
+      releaseSupersededOpenCodeSources(db, prepared.file.path, prepared.file.opencode.sessionId);
+    }
     runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
       prepared.file.path,
     ]);
@@ -1069,6 +1100,23 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
   );
   if (misfiled != null) {
     deleteSessionRow(db, misfiled.id);
+  }
+}
+
+/** A session read from a newer copy in another database no longer belongs to
+ * the old `<db>#<session>` path. Its source and issue rows go, so diagnostics
+ * stop naming a path that backs nothing, and so the old copy is re-read rather
+ * than skipped on a stale fingerprint if the newer database later disappears. */
+function releaseSupersededOpenCodeSources(db: Database, path: string, sessionId: string): void {
+  const suffix = `#${sessionId}`;
+  const stale = queryRows<{ path: string }>(
+    db,
+    "SELECT path FROM ingest_source WHERE tool = 'opencode' AND path <> ?1 AND substr(path, ?2) = ?3",
+    [path, -suffix.length, suffix],
+  ).filter((row) => row.path.lastIndexOf("#") === row.path.length - suffix.length);
+  for (const row of stale) {
+    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
+    runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
   }
 }
 

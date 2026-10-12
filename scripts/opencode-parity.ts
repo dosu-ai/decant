@@ -13,6 +13,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { emptyUsage } from "../src/model.ts";
+import { reportedCostApplies } from "../src/model-usage.ts";
 
 export interface ModelTotals {
   provider: string;
@@ -25,6 +26,9 @@ export interface ModelTotals {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  /** Decant side only: `reported` when Decant has no rate for the model and
+   * uses the cost OpenCode recorded, `list` when it prices the model. */
+  costSource?: "list" | "reported";
 }
 
 export interface SessionTotals {
@@ -45,6 +49,8 @@ export interface ParityLine {
 /** Providers that record list prices, so Decant's rate should reproduce them. */
 const LIST_PRICE_PROVIDERS = new Set(["zai", "meta", "opencode", "opencode-go", "openrouter"]);
 const COST_TOLERANCE = 0.005;
+/** A reported cost is OpenCode's own figure summed in another order. */
+const REPORTED_COST_TOLERANCE = 1e-9;
 
 const modelKey = (row: { provider: string; model: string }): string =>
   `${row.provider}/${row.model}`;
@@ -103,8 +109,11 @@ export function compareModelTotals(
   return lines;
 }
 
-/** Decant's list-price cost against the cost OpenCode recorded. Providers
- * outside the list-price set, and recorded zeros, are informational. */
+/** Decant's cost against the cost OpenCode recorded. A model Decant cannot
+ * price carries the recorded cost, so it must equal it whatever the provider.
+ * A priced model is compared at list price for list-price providers; other
+ * providers, and recorded zeros (free or subscription routes), are
+ * informational. */
 export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotals[]): ParityLine[] {
   const lines: ParityLine[] = [];
   const byKey = new Map(decant.map((row) => [modelKey(row), row]));
@@ -112,6 +121,21 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
     const key = modelKey(expected);
     const actual = byKey.get(key);
     if (actual == null) {
+      continue;
+    }
+    if (actual.costSource === "reported") {
+      if (expected.cost <= 0 && actual.cost <= 0) {
+        lines.push({
+          level: "info",
+          text: `${key}: no Decant rate and no recorded cost (cost unavailable)`,
+        });
+        continue;
+      }
+      const equal = Math.abs(actual.cost - expected.cost) <= REPORTED_COST_TOLERANCE;
+      lines.push({
+        level: equal ? "ok" : "mismatch",
+        text: `${key}: Decant reported ${fmt(actual.cost)} vs recorded ${fmt(expected.cost)} (no Decant rate)`,
+      });
       continue;
     }
     if (!LIST_PRICE_PROVIDERS.has(expected.provider) || expected.cost <= 0) {
@@ -277,6 +301,49 @@ function readOpenCodeSessionTotals(db: Database): SessionTotals[] {
     .all() as SessionTotals[];
 }
 
+/** One Decant provider/model group before costing. `recorded` is the
+ * positive cost OpenCode recorded on those messages, used only to share a
+ * model's reported cost among providers that served it. */
+export interface DecantModelGroup extends Omit<ModelTotals, "reasoning" | "cost" | "costSource"> {
+  recorded: number;
+}
+
+/** Costs each group as Decant does: a priced model at list price, and a
+ * model Decant cannot price at the reported cost the archive stores for it
+ * (`session_model_usage.reported_cost_usd`, keyed by model alone), shared by
+ * recorded cost when several providers served the model. */
+export function costDecantModelGroups(
+  groups: readonly DecantModelGroup[],
+  reportedByModel: ReadonlyMap<string, number>,
+): ModelTotals[] {
+  const pricing = defaultPricing();
+  const recordedByModel = new Map<string, { recorded: number; groups: number }>();
+  for (const group of groups) {
+    const entry = recordedByModel.get(group.model) ?? { recorded: 0, groups: 0 };
+    entry.recorded += group.recorded;
+    entry.groups += 1;
+    recordedByModel.set(group.model, entry);
+  }
+  return groups.map(({ recorded, ...group }) => {
+    const base = { ...group, reasoning: 0 };
+    if (!reportedCostApplies(group.model, 0)) {
+      const usage = {
+        ...emptyUsage(),
+        input: group.input,
+        output: group.output,
+        cacheRead: group.cacheRead,
+        cacheCreation: group.cacheWrite,
+      };
+      return { ...base, cost: estimateCost(group.model, usage, pricing), costSource: "list" };
+    }
+    const reported = reportedByModel.get(group.model) ?? 0;
+    const share = recordedByModel.get(group.model) ?? { recorded: 0, groups: 1 };
+    const cost =
+      share.recorded > 0 ? (reported * recorded) / share.recorded : reported / share.groups;
+    return { ...base, cost, costSource: "reported" };
+  });
+}
+
 /** Decant assistant messages of OpenCode sessions grouped by the provider in
  * the message's raw record and the model that served it. Reasoning is kept
  * only per session in the archive, so the per-model reasoning figure comes
@@ -284,8 +351,7 @@ function readOpenCodeSessionTotals(db: Database): SessionTotals[] {
  * comparison therefore checks output (which contains reasoning), not the
  * reasoning field. */
 function readDecantModelTotals(db: Database): ModelTotals[] {
-  const pricing = defaultPricing();
-  return (
+  const groups = (
     db
       .query(
         `SELECT json_extract(m.raw, '$.model.providerID') AS provider,
@@ -294,33 +360,42 @@ function readDecantModelTotals(db: Database): ModelTotals[] {
                 COALESCE(SUM(m.input_tokens), 0) AS input,
                 COALESCE(SUM(m.output_tokens), 0) AS output,
                 COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read,
-                COALESCE(SUM(m.cache_creation_tokens), 0) AS cache_write
+                COALESCE(SUM(m.cache_creation_tokens), 0) AS cache_write,
+                COALESCE(SUM(CASE WHEN json_extract(m.raw, '$.cost') > 0
+                                  THEN json_extract(m.raw, '$.cost') END), 0) AS recorded
            FROM message m
            JOIN session s ON s.id = m.session_id
           WHERE s.tool = 'opencode' AND m.role = 'assistant' AND m.input_tokens IS NOT NULL
           GROUP BY 1, 2`,
       )
-      .all() as Array<Omit<OpenCodeModelRow, "reasoning" | "cost">>
-  ).map((row) => {
-    const usage = {
-      ...emptyUsage(),
-      input: row.input,
-      output: row.output,
-      cacheRead: row.cache_read,
-      cacheCreation: row.cache_write,
-    };
-    return {
-      provider: row.provider ?? "",
-      model: row.model ?? "",
-      steps: row.steps,
-      input: row.input,
-      output: row.output,
-      reasoning: 0,
-      cacheRead: row.cache_read,
-      cacheWrite: row.cache_write,
-      cost: estimateCost(row.model ?? "", usage, pricing),
-    };
-  });
+      .all() as Array<Omit<OpenCodeModelRow, "reasoning" | "cost"> & { recorded: number }>
+  ).map((row) => ({
+    provider: row.provider ?? "",
+    model: row.model ?? "",
+    steps: row.steps,
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cache_read,
+    cacheWrite: row.cache_write,
+    recorded: row.recorded,
+  }));
+  const reported = db
+    .query(
+      `SELECT u.model AS model, SUM(u.reported_cost_usd) AS cost
+         FROM session_model_usage u
+         JOIN session s ON s.id = u.session_id
+        WHERE s.tool = 'opencode' AND u.reported_cost_usd IS NOT NULL
+        GROUP BY u.model`,
+    )
+    .all() as Array<{ model: string; cost: number }>;
+  return costDecantModelGroups(
+    groups,
+    new Map(
+      reported
+        .filter((row) => reportedCostApplies(row.model, row.cost))
+        .map((row) => [row.model, row.cost]),
+    ),
+  );
 }
 
 function readDecantSessionTotals(db: Database): SessionTotals[] {
@@ -379,7 +454,7 @@ function main(): void {
     let mismatches = 0;
     console.log(`== per provider/model: Decant vs ${opencodePath}`);
     mismatches += print(compareModelTotals(decantModels, perModelReference, "opencode.db"));
-    console.log("== list price vs recorded cost");
+    console.log("== Decant cost vs recorded cost");
     mismatches += print(compareRecordedCost(decantModels, openCodeModels));
     const compaction = readOpenCodeCompaction(opencode);
     console.log(

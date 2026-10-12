@@ -3,6 +3,7 @@ import {
   compareModelTotals,
   compareRecordedCost,
   compareSessionTotals,
+  costDecantModelGroups,
   type ModelTotals,
   parseStatsJson,
   type SessionTotals,
@@ -59,6 +60,69 @@ describe("opencode parity comparisons", () => {
     expect(compareRecordedCost([model({ output: 52, cost: 0.0001 })], [model({})])[0]?.level).toBe(
       "mismatch",
     );
+  });
+
+  test("compares a model Decant cannot price by its reported cost, for any provider", () => {
+    const unpriced = { provider: "example", model: "example-unpriced" };
+    const reference = [
+      model({ ...unpriced, cost: 0.0012345 }),
+      model({ provider: "zai-coding-plan", cost: 0 }),
+      model({ provider: "example", model: "example-free", cost: 0 }),
+    ];
+    const decant = [
+      model({ ...unpriced, cost: 0.0012345, costSource: "reported" }),
+      // A free route stays at list price: informational, never a mismatch.
+      model({ provider: "zai-coding-plan", cost: 0.0000794, costSource: "list" }),
+      model({ provider: "example", model: "example-free", cost: 0, costSource: "reported" }),
+    ];
+    expect(compareRecordedCost(decant, reference)).toEqual([
+      { level: "info", text: expect.stringContaining("example/example-free: no Decant rate") },
+      {
+        level: "ok",
+        text: "example/example-unpriced: Decant reported 0.0012345 vs recorded 0.0012345 (no Decant rate)",
+      },
+      {
+        level: "info",
+        text: "zai-coding-plan/glm-5.3-flash: recorded 0, Decant 0.0000794 (not compared)",
+      },
+    ]);
+    expect(
+      compareRecordedCost(
+        [model({ ...unpriced, cost: 0.008, costSource: "reported" })],
+        [model({ ...unpriced, cost: 0.0012345 })],
+      )[0]?.level,
+    ).toBe("mismatch");
+  });
+
+  test("costs Decant groups at list price or at the archive's reported cost", () => {
+    const group = {
+      steps: 1,
+      input: 320,
+      output: 52,
+      cacheRead: 100,
+      cacheWrite: 16,
+    };
+    const rows = costDecantModelGroups(
+      [
+        { ...group, provider: "opencode-go", model: "glm-5.3-flash", recorded: 0.0000794 },
+        { ...group, provider: "example", model: "example-unpriced", recorded: 0.006 },
+        { ...group, provider: "other", model: "example-unpriced", recorded: 0.002 },
+        { ...group, provider: "example", model: "example-zero", recorded: 0 },
+      ],
+      new Map([["example-unpriced", 0.01]]),
+    );
+    expect(rows.map((row) => [row.provider, row.costSource])).toEqual([
+      ["opencode-go", "list"],
+      ["example", "reported"],
+      ["other", "reported"],
+      ["example", "reported"],
+    ]);
+    expect(rows[0]?.cost).toBeGreaterThan(0);
+    // One model's stored figure is shared by what each provider recorded.
+    expect(rows[1]?.cost).toBeCloseTo(0.0075, 12);
+    expect(rows[2]?.cost).toBeCloseTo(0.0025, 12);
+    expect(rows[3]?.cost).toBe(0);
+    expect(rows.every((row) => row.reasoning === 0)).toBe(true);
   });
 
   test("allows Decant session totals at or below the recorded ones, never above", () => {

@@ -20,6 +20,16 @@
     "last_used_at": "2026-05-06T09:00:05.000Z"
   },
   {
+    "tool_name": "mcp__dosu__read_knowledge",
+    "tool_kind": "mcp",
+    "mcp_server": "dosu",
+    "calls": 3,
+    "errors": 0,
+    "p50_ms": 2000,
+    "p95_ms": 3000,
+    "last_used_at": "2026-10-12T07:20:01.000Z"
+  },
+  {
     "tool_name": "Edit",
     "tool_kind": "builtin",
     "mcp_server": null,
@@ -60,14 +70,14 @@
     "last_used_at": "2026-05-06T09:00:07.000Z"
   },
   {
-    "tool_name": "mcp__dosu__read_knowledge",
+    "tool_name": "mcp__exa__web_search_exa",
     "tool_kind": "mcp",
-    "mcp_server": "dosu",
+    "mcp_server": "exa",
     "calls": 2,
-    "errors": 0,
-    "p50_ms": 2000,
-    "p95_ms": 3000,
-    "last_used_at": "2026-05-06T09:00:08.000Z"
+    "errors": 2,
+    "p50_ms": 0,
+    "p95_ms": 0,
+    "last_used_at": "2026-10-12T07:20:01.000Z"
   },
   {
     "tool_name": "Agent",
@@ -88,15 +98,5 @@
     "p50_ms": null,
     "p95_ms": null,
     "last_used_at": "2026-05-03T10:02:00.000Z"
-  },
-  {
-    "tool_name": "Skill",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 1,
-    "errors": 0,
-    "p50_ms": null,
-    "p95_ms": null,
-    "last_used_at": "2026-05-03T10:01:00.000Z"
   }
 ]

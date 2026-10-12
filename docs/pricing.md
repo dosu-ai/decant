@@ -188,5 +188,20 @@ Costs are stored when transcripts are ingested and checked against current
 pricing on every sync, including unchanged and archived sessions. Sync updates
 stale session costs and persisted activity cost components together without
 rereading transcripts or replacing user metadata. Later syncs leave matching
-costs untouched. Aggregate dollar totals include only estimates for supported
-models.
+costs untouched.
+
+OpenCode sessions are priced with Decant's first-party rates whenever the model
+is supported, including the GLM and Muse rates above. For a model Decant cannot
+price, Decant falls back to the per-request cost OpenCode recorded (the reported
+cost). A recorded cost of 0 leaves the model unpriced, and a model that later
+gains a Decant rate switches back to Decant pricing. Each session carries a
+`cost_source` label:
+
+- `decant`: priced entirely with Decant's rates.
+- `reported`: priced only with costs OpenCode recorded.
+- `mixed`: some models priced by Decant and others by reported cost.
+
+Aggregate dollar totals therefore include Decant's estimates for supported
+models, plus reported costs for OpenCode sessions with models Decant cannot
+price. Reported costs are not first-party estimates, and token-economics totals
+report them separately as `reported_cost_usd`.

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateTranscript } from "@letta-ai/trajectory";
@@ -9,6 +9,9 @@ import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { parseGeminiSession } from "../src/sources/gemini.ts";
+import { parseOpenCodeSession } from "../src/sources/opencode.ts";
+import { OpenCodeStore } from "../src/sources/opencode-store.ts";
+import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-trajectory-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -114,6 +117,37 @@ describe("exportTrajectory", () => {
         model: "example-model",
       });
       expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("exports OpenCode with Trajectory's source label and preserved tool linkage", () => {
+    const dir = join(workDir, "opencode-src");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "opencode.db");
+    buildOpenCodeFixtureDb(path, ["sample.sql"]);
+    const store = OpenCodeStore.open(path);
+    const loaded = store.loadSession("ses_sample");
+    if (loaded == null) throw new Error("fixture session missing");
+    const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
+      mcpServers: [],
+      contextWindows: store.contextWindows(),
+    });
+    store.close();
+    const db = openDb(join(workDir, "opencode.db"));
+    try {
+      const id = upsertSession(db, parsed, `${path}#ses_sample`, 1, 0, "fp");
+      const out = exportTrajectory(db, id);
+      if (!out.ok) throw new Error(out.reason);
+      assertBothLayers(out.records);
+      expect(out.records[0]).toEqual({
+        role: "meta",
+        source: "opencode",
+        cwd: "/decant-fixture/example",
+        model: "glm-5.3-flash",
+      });
+      expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toHaveLength(1);
     } finally {
       db.close();
     }

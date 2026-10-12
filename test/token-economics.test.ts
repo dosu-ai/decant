@@ -1128,6 +1128,7 @@ describe("archive aggregation", () => {
     started_at: "2026-09-29T00:00:00Z",
     input_cost: cost,
     output_cost: 0,
+    reported_cost: 0,
     billed_input_tokens: 0,
     waiting_on_user_ms: 0,
     buckets: {
@@ -1183,6 +1184,27 @@ describe("archive aggregation", () => {
     expect(communicating?.estimated_cost_usd).toBeCloseTo(0.4, 12);
     expect(communicating?.phases?.orientation.estimated_cost_usd).toBeCloseTo(0.4 / 3, 12);
     expect(split.totals.estimated_cost_usd).toBeCloseTo(0.4, 12);
+  });
+
+  test("charges reported cost to buckets by window share without splitting it", () => {
+    const withWindow = { ...vector(1, 0, 10, 0), reported_cost: 0.5 };
+    const result = aggregateEconomicsVectors([withWindow]);
+    expect(result.totals).toMatchObject({
+      estimated_cost_usd: 0.5,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      reported_cost_usd: 0.5,
+    });
+    expect(
+      result.buckets.find((bucket) => bucket.bucket === "context")?.estimated_cost_usd,
+    ).toBeCloseTo(0.5, 12);
+
+    const idle = { ...vector(2, 0, 0, 0), reported_cost: 0.25 };
+    const idleResult = aggregateEconomicsVectors([idle]);
+    expect(
+      idleResult.buckets.find((bucket) => bucket.bucket === "context")?.estimated_cost_usd,
+    ).toBeCloseTo(0.25, 12);
+    expect(idleResult.totals.reported_cost_usd).toBe(0.25);
   });
 
   test("rounds each total once and apportions it to rows and phases", () => {

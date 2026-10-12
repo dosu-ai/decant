@@ -53,6 +53,14 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "opencode") {
+    return (
+      <Badge tone="opencode">
+        <BrandMark name="opencode" />
+        OpenCode
+      </Badge>
+    );
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -179,6 +187,12 @@ export function modelBrandIcon(model: string, tone: BadgeTone): BrandIconName | 
   if (tone === "gemini") {
     return "gemini";
   }
+  if (tone === "zai") {
+    return "zai";
+  }
+  if (tone === "meta") {
+    return "meta";
+  }
   return null;
 }
 
@@ -205,6 +219,12 @@ export function brandTone(model: string | null | undefined): BadgeTone {
   if (normalized.includes("gemini") || normalized.includes("gemma")) {
     return "gemini";
   }
+  if (/(?:^|\/)glm-/.test(normalized)) {
+    return "zai";
+  }
+  if (/(?:^|\/)muse-/.test(normalized)) {
+    return "meta";
+  }
   return "neutral";
 }
 
@@ -219,7 +239,7 @@ export function toneName(tone: string | null | undefined): BadgeTone {
 }
 
 export function providerIdentity(tool: string): {
-  key: "assistant" | "claude" | "openai" | "gemini";
+  key: "assistant" | "claude" | "openai" | "gemini" | "opencode";
   label: string;
   tone: BadgeTone;
   icon: BrandIconName | null;
@@ -232,6 +252,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "gemini") {
     return { key: "gemini", label: "Gemini", tone: "gemini", icon: "gemini" };
+  }
+  if (tool === "opencode") {
+    return { key: "opencode", label: "OpenCode", tone: "opencode", icon: "opencode" };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

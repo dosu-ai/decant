@@ -16,6 +16,7 @@ import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { byDimension, totals } from "../src/stats.ts";
 import { refreshSessionCosts, tokenEconomicsForSession } from "../src/token-economics.ts";
+import { syntheticOpenCodeSession } from "./opencode-session.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-model-usage-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -105,7 +106,7 @@ function storedRows(db: Database, sessionId: number) {
   return db
     .query(
       `SELECT model, tier, requests, input_tokens, output_tokens, cache_read_tokens,
-              cache_creation_tokens, cache_creation_1h_tokens
+              cache_creation_tokens, cache_creation_1h_tokens, reported_cost_usd
          FROM session_model_usage WHERE session_id = ?1 ORDER BY model, tier`,
     )
     .all(sessionId);
@@ -149,6 +150,7 @@ describe("per-model usage", () => {
         cache_read_tokens: 5_000,
         cache_creation_tokens: 0,
         cache_creation_1h_tokens: 0,
+        reported_cost_usd: null,
       },
       {
         model: "claude-opus-5-5",
@@ -159,6 +161,7 @@ describe("per-model usage", () => {
         cache_read_tokens: 22_000,
         cache_creation_tokens: 2_000,
         cache_creation_1h_tokens: 500,
+        reported_cost_usd: null,
       },
     ]);
 
@@ -336,6 +339,133 @@ describe("per-model usage", () => {
       (opus55?.estimated_cost_usd ?? 0) + estimateCost("claude-opus-5", usageOf(OPUS_5), pricing),
       12,
     );
+    closeDb(db);
+  });
+});
+
+describe("reported cost fallback", () => {
+  function ingestOpenCode(
+    db: Database,
+    id: string,
+    requests: Parameters<typeof syntheticOpenCodeSession>[1],
+  ): number {
+    return upsertSession(
+      db,
+      syntheticOpenCodeSession(id, requests),
+      `/tmp/opencode.db#${id}`,
+      1,
+      0,
+      id,
+    );
+  }
+
+  test("uses OpenCode's recorded cost only for a model Decant cannot price", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_unpriced", [
+      { model: "example-unpriced", cost: 0.25, input: 100, output: 10 },
+      { model: "example-unpriced", cost: 0.5, input: 200, output: 20 },
+    ]);
+    expect(storedRows(db, id)).toEqual([
+      {
+        model: "example-unpriced",
+        tier: "standard",
+        requests: 2,
+        input_tokens: 300,
+        output_tokens: 30,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_creation_1h_tokens: 0,
+        reported_cost_usd: 0.75,
+      },
+    ]);
+    expect(storedCost(db, id)).toBeCloseTo(0.75, 12);
+    const economics = tokenEconomicsForSession(db, id);
+    expect(economics?.totals).toMatchObject({
+      estimated_cost_usd: 0.75,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      reported_cost_usd: 0.75,
+    });
+    expect(
+      economics?.buckets.reduce((sum, bucket) => sum + bucket.estimated_cost_usd, 0),
+    ).toBeCloseTo(0.75, 12);
+    // The fallback is part of what a repricing sync recomputes, so nothing is
+    // pending and the total cannot flap between syncs.
+    expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
+
+  test("ignores a recorded cost of zero", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_zero", [
+      { model: "example-unpriced", cost: 0, input: 100, output: 10 },
+    ]);
+    expect(storedRows(db, id)).toMatchObject([{ reported_cost_usd: null }]);
+    expect(storedCost(db, id)).toBe(0);
+    expect(tokenEconomicsForSession(db, id)?.totals.reported_cost_usd).toBe(0);
+    closeDb(db);
+  });
+
+  test("keeps Decant's list price when the model is priceable", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_priced", [
+      { model: "glm-5.3-flash", cost: 99, input: 1_000_000, output: 1_000_000 },
+    ]);
+    expect(storedRows(db, id)).toMatchObject([{ model: "glm-5.3-flash", reported_cost_usd: null }]);
+    expect(storedCost(db, id)).toBeCloseTo(0.65, 9);
+    expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
+
+  test("keeps reported and priced rows apart in a mixed session", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_mixed", [
+      { model: "glm-5.3-flash", cost: 0.1, input: 1_000_000, output: 0 },
+      { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
+    ]);
+    expect(storedRows(db, id)).toMatchObject([
+      { model: "example-unpriced", requests: 1, reported_cost_usd: 0.3 },
+      { model: "glm-5.3-flash", requests: 1, reported_cost_usd: null },
+    ]);
+    expect(storedCost(db, id)).toBeCloseTo(0.15 + 0.3, 9);
+    const totals = tokenEconomicsForSession(db, id)?.totals;
+    expect(totals?.input_cost_usd).toBeCloseTo(0.15, 9);
+    expect(totals?.reported_cost_usd).toBe(0.3);
+    expect(totals?.estimated_cost_usd).toBeCloseTo(0.45, 9);
+    closeDb(db);
+  });
+
+  test("stops using a stored reported cost once the model has a rate", () => {
+    const db = freshDb();
+    const id = ingestOpenCode(db, "ses_rated_later", [
+      { model: "glm-5.3-flash", cost: 99, input: 1_000_000, output: 1_000_000 },
+    ]);
+    // Simulate a row derived before Decant had a rate for the model.
+    db.query("UPDATE session_model_usage SET reported_cost_usd = 5 WHERE session_id = ?1").run(id);
+    db.query("UPDATE session SET estimated_cost_usd = 0 WHERE id = ?1").run(id);
+    expect(refreshSessionCosts(db)).toBe(1);
+    expect(storedCost(db, id)).toBeCloseTo(0.65, 9);
+    expect(tokenEconomicsForSession(db, id)?.totals.reported_cost_usd).toBe(0);
+    expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
+
+  test("sums recorded cost only for unpriced models when usage overshoots the totals", () => {
+    const db = freshDb();
+    const parsed = syntheticOpenCodeSession("ses_residual", [
+      { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
+      { model: "glm-5.3-flash", cost: 99, input: 200, output: 20 },
+    ]);
+    // Session totals below the per-request sum make the residual negative, so
+    // the session-level split is used.
+    parsed.session.totals.input = 1;
+    parsed.session.totals.output = 1;
+    const id = upsertSession(db, parsed, "/tmp/opencode.db#ses_residual", 1, 0, "ses_residual");
+    expect(storedRows(db, id)).toMatchObject([
+      { model: "example-unpriced", reported_cost_usd: 0.3 },
+    ]);
+    expect(storedCost(db, id)).toBeCloseTo(0.3, 12);
+    expect(refreshSessionCosts(db)).toBe(0);
     closeDb(db);
   });
 });

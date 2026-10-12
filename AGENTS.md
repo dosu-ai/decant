@@ -7,10 +7,11 @@ truth.
 
 ## Project overview
 
-Decant is a local-first Bun and TypeScript application that turns Claude Code
-and Codex JSONL session logs into a normalized, full-text-searchable SQLite
-archive. The `decant` CLI owns parsing, ingest, reads, reports, distillation,
-recommendations, watch mode, and the React UI served by `decant serve`.
+Decant is a local-first Bun and TypeScript application that turns Claude Code,
+Codex, and Gemini CLI JSONL session logs and OpenCode's SQLite session store
+into a normalized, full-text-searchable SQLite archive. The `decant` CLI owns
+parsing, ingest, reads, reports, distillation, recommendations, watch mode, and
+the React UI served by `decant serve`.
 
 Start with these files and guides:
 

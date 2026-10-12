@@ -19,7 +19,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 9;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 10;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
@@ -58,6 +58,9 @@ export interface TokenEconomics {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    // Cost taken from the source's own record (OpenCode) for models Decant
+    // cannot price. Never split into input and output.
+    reported_cost_usd: number;
     active_ms: number;
     // Gaps closed by user-authored text, kept apart from agent time.
     waiting_on_user_ms: number;
@@ -133,6 +136,7 @@ export interface SessionEconomicsVector {
   started_at: string | null;
   input_cost: number;
   output_cost: number;
+  reported_cost: number;
   billed_input_tokens: number;
   waiting_on_user_ms: number;
   buckets: Record<
@@ -214,10 +218,12 @@ export function aggregateEconomicsVectors(
   const buckets = emptyBuckets();
   let inputCost = 0;
   let outputCost = 0;
+  let reportedCost = 0;
   let waitingOnUserMs = 0;
   for (const vector of vectors) {
     inputCost += vector.input_cost;
     outputCost += vector.output_cost;
+    reportedCost += vector.reported_cost;
     waitingOnUserMs += vector.waiting_on_user_ms;
     // Each session's cost is split by its own activity before summing. Pooling
     // first would let one expensive session's dollars follow another session's
@@ -248,12 +254,14 @@ export function aggregateEconomicsVectors(
       entry.activeMs += part.active_ms;
       entry.activeMsOrientation += part.active_ms_orientation;
       entry.toolCalls += part.tool_calls;
+      // Reported cost has no input/output split; it follows the window share
+      // like input cost so bucket costs still reconcile to the session total.
       entry.cost +=
         vector.output_cost * share(part.generation, generation) +
-        vector.input_cost * share(partWindow, window);
+        (vector.input_cost + vector.reported_cost) * share(partWindow, window);
       entry.costOrientation +=
         vector.output_cost * share(part.generation_orientation, generation) +
-        vector.input_cost * share(partWindowOrientation, window);
+        (vector.input_cost + vector.reported_cost) * share(partWindowOrientation, window);
       if (part.touched) {
         entry.sessions.add(vector.id);
       }
@@ -266,10 +274,16 @@ export function aggregateEconomicsVectors(
       chargeUnattributed(buckets, "communicating", vector.id, vector.output_cost, orientationShare);
     }
     if (window <= 0) {
-      chargeUnattributed(buckets, "context", vector.id, vector.input_cost, orientationShare);
+      chargeUnattributed(
+        buckets,
+        "context",
+        vector.id,
+        vector.input_cost + vector.reported_cost,
+        orientationShare,
+      );
     }
   }
-  return finish(buckets, inputCost, outputCost, waitingOnUserMs);
+  return finish(buckets, inputCost, outputCost, reportedCost, waitingOnUserMs);
 }
 
 function chargeUnattributed(
@@ -394,8 +408,15 @@ function pendingCostRefreshes(db: Database): CostRefresh[] {
     const staleVector =
       vector != null &&
       vector.id === row.id &&
-      (vector.input_cost !== inputCost || vector.output_cost !== parts.output)
-        ? { ...vector, input_cost: inputCost, output_cost: parts.output }
+      (vector.input_cost !== inputCost ||
+        vector.output_cost !== parts.output ||
+        vector.reported_cost !== parts.reported)
+        ? {
+            ...vector,
+            input_cost: inputCost,
+            output_cost: parts.output,
+            reported_cost: parts.reported,
+          }
         : null;
     const totalChanged = row.estimated_cost_usd !== total;
     if (totalChanged || staleVector != null) {
@@ -545,6 +566,7 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
       typeof vector.id !== "number" ||
       typeof vector.input_cost !== "number" ||
       typeof vector.output_cost !== "number" ||
+      typeof vector.reported_cost !== "number" ||
       typeof vector.billed_input_tokens !== "number" ||
       typeof vector.waiting_on_user_ms !== "number" ||
       vector.buckets == null ||
@@ -735,6 +757,7 @@ function vectorsForScope(
       started_at: session.started_at,
       input_cost: parts.input + parts.cacheRead + parts.cacheCreation,
       output_cost: parts.output,
+      reported_cost: parts.reported,
       billed_input_tokens:
         session.total_input_tokens +
         session.total_cache_read_tokens +
@@ -1221,6 +1244,7 @@ function finish(
   buckets: Map<ActivityBucket, MutableBucket>,
   inputCost: number,
   outputCost: number,
+  reportedCost: number,
   waitingOnUserMs = 0,
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
@@ -1278,6 +1302,7 @@ function finish(
     estimated_cost_usd: totalCost,
     input_cost_usd: inputCost,
     output_cost_usd: outputCost,
+    reported_cost_usd: reportedCost,
     active_ms: activeMs,
     waiting_on_user_ms: waitingMs,
     attributed_ms: activeMs + waitingMs,

@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
@@ -7,6 +7,7 @@ import { type IngestConfig, sync } from "../src/ingest.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
 import { ROW_QUERIES } from "../test/golden-rows.ts";
+import { buildOpenCodeFixtureDb } from "../test/opencode-fixture.ts";
 import { stripGoldenVolatility } from "./golden-normalize.ts";
 
 const reviewFlag = "--i-reviewed-the-diff";
@@ -32,9 +33,12 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
   const geminiDir = join(caseDir, "sources", "gemini");
+  const opencodeDir = join(caseDir, "sources", "opencode");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
+  mkdirSync(opencodeDir, { recursive: true });
+  const opencodeFixtures: string[] = [];
   for (const fixture of fixtures) {
     const source = join(repoRoot, fixture);
     const name = basename(source);
@@ -43,6 +47,8 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       copyFileSync(source, join(codexDir, "sessions", `rollout-${name}`));
     } else if (fixture.startsWith("fixtures/gemini/")) {
       copyFileSync(source, join(geminiDir, "synthetic-project", "chats", `session-${name}`));
+    } else if (fixture.startsWith("fixtures/opencode/")) {
+      opencodeFixtures.push(name);
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -51,11 +57,23 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     join(geminiDir, "synthetic-project", ".project_root"),
     "/synthetic/gemini-project\n",
   );
-  return { claudeDir, codexDir, geminiDir };
+  // All OpenCode sessions share one database, as they do on a real machine.
+  buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), opencodeFixtures);
+  const opencodeConfigPath = join(opencodeDir, "opencode.json");
+  writeFileSync(
+    opencodeConfigPath,
+    `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
+  );
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {
-  return JSON.parse(JSON.stringify(value).replaceAll(caseDir, "<TMP>")) as unknown;
+  // OpenCode source paths are resolved with realpath, which turns macOS's
+  // /var/folders into /private/var/folders. Both spellings are the same case dir.
+  const text = JSON.stringify(value)
+    .replaceAll(realpathSync(caseDir), "<TMP>")
+    .replaceAll(caseDir, "<TMP>");
+  return JSON.parse(text) as unknown;
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {

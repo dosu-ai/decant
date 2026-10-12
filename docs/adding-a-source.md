@@ -13,7 +13,9 @@ Use this checklist when adding support for another coding-agent CLI.
   paths, tokens, credentials, or environment values.
 - Write every fixture by hand with invented content such as `"hello"`,
   `/tmp/example`, and `example-model`. A redacted or edited real transcript is
-  not a synthetic fixture.
+  not a synthetic fixture. When ingest reads files near a session's directory,
+  as OpenCode config lookup does, use a directory no user can create, such as
+  `/decant-fixture/example`, so golden runs never read the machine's own files.
 - Parity checks against a private session store must report counts and shape
   mismatches only, never content.
 
@@ -21,7 +23,12 @@ Use this checklist when adding support for another coding-agent CLI.
 
 1. **Discovery** teaches `discover()` in `src/ingest.ts` where session files
    live and which sidecars to exclude. Add a source-directory environment
-   override and document it in `README.md`.
+   override and document it in `README.md`. A database-backed source (see
+   `src/sources/opencode-store.ts`) adds a read-only store module that lists
+   sessions with a per-session change key and loads one session's rows; each
+   session is registered as a virtual source `<database>#<session id>` with
+   the key in `ingest_source.hash`, and the sync loop handles it before the
+   file-open path.
 2. **Parser** adds `src/sources/<tool>.ts` and returns a `ParsedSession`.
    Parsers are pure and print-free, returning data and issues without throwing
    on malformed input or writing to stdout or stderr.
@@ -63,8 +70,18 @@ unavailable rather than zero.
   full fidelity when the normalized model is lossy.
 - Normalize MCP tool names to `mcp__<server>__<base>` so `classifyTool` in
   `src/tools.ts` can recognize them.
-- Emit one session per source file. Per-session diagnostics join on the source
-  path and would be misattributed if one file produced several sessions.
+- When a code-execution tool records the calls its program made (OpenCode's
+  `execute`), list them in `innerToolCalls` on the wrapper's `tool_use` block,
+  named like direct calls, with a tool-use ID derived from the wrapper's.
+  Ingest writes one tool-call row per inner call without adding transcript
+  blocks.
+- Emit one session per source path. Per-session diagnostics join on the source
+  path and would be misattributed if one path produced several sessions; a
+  database that holds many sessions therefore gets one virtual path per
+  session.
+- For a database-backed source, take rows as plain objects (the store does the
+  I/O) and keep the parser pure; use the row's sequence number as the issue
+  `lineNo`.
 
 Use `src/sources/codex.ts` as the reference parser and `src/model.ts` for the
 normalized shape.

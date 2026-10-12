@@ -29,6 +29,17 @@ export interface Facets {
 const ACTIVE_GAP_CAP_SECONDS = 300;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
+/** OpenCode 2.x starts a child session with `subagent`; older builds named
+ * the tool `task`. Scoped to OpenCode so another source's lowercase tool of
+ * the same name is not counted. */
+const OPENCODE_SPAWN_TOOLS = new Set(["subagent", "task"]);
+
+function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null): boolean {
+  if (toolName === "Agent" || toolName === "Task") {
+    return true;
+  }
+  return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
+}
 
 export function fileRefs(session: NormalizedSession): FileRef[] {
   const refs: FileRef[] = [];
@@ -41,6 +52,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (session.tool === "gemini") {
         keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "opencode") {
+        keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -62,6 +75,14 @@ const GEMINI_FILE_TOOLS: FileToolTable = {
   read_file: { key: "file_path", operation: "read" },
   replace: { key: "file_path", operation: "edit" },
   write_file: { key: "file_path", operation: "write" },
+};
+
+// OpenCode's built-in file tools take an absolute `path`. A `streaming` tool
+// item carries its partial input as a string, which keyedRef ignores.
+const OPENCODE_FILE_TOOLS: FileToolTable = {
+  read: { key: "path", operation: "read" },
+  edit: { key: "path", operation: "edit" },
+  write: { key: "path", operation: "write" },
 };
 
 function keyedRef(
@@ -172,7 +193,8 @@ export function facets(session: NormalizedSession): Facets {
     }
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
-      rawString(message.raw, "type") === "compacted"
+      rawString(message.raw, "type") === "compacted" ||
+      rawString(message.raw, "type") === "compaction"
     ) {
       got.compactionCount += 1;
     }
@@ -192,7 +214,7 @@ export function facets(session: NormalizedSession): Facets {
         got.thinkingBlockCount += 1;
         got.thinkingChars += byteLength(block.text ?? "");
       } else if (block.blockType === "tool_use") {
-        if (block.toolName === "Agent" || block.toolName === "Task") {
+        if (isAgentSpawn(session.tool, block.toolName)) {
           got.agentSpawnCount += 1;
         } else if (block.toolName === "Skill") {
           got.skillCount += 1;

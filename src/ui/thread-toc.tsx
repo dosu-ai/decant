@@ -46,10 +46,18 @@ export function threadToc(messages: SessionDetailData["messages"]): ThreadTocIte
 }
 
 export function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[] {
+  // One block can carry several Dosu calls (an OpenCode `execute` program
+  // runs them inside a single tool call), so repeats of a key get a suffix.
+  const seen = new Map<string, number>();
+  const uniqueKey = (key: string): string => {
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+    return count === 0 ? key : `${key}:${count}`;
+  };
   return outline.map((item) =>
     item.kind === "dosu"
       ? {
-          key: `dosu:${item.seq}:${item.ordinal}`,
+          key: uniqueKey(`dosu:${item.seq}:${item.ordinal}`),
           seq: item.seq,
           label: item.text || "Dosu tool",
           icon: "bolt",

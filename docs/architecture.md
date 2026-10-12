@@ -8,7 +8,7 @@ service, bearer token, or second application process.
 ## Data flow
 
 ```text
-~/.claude + ~/.codex + ~/.gemini
+~/.claude + ~/.codex + ~/.gemini + ~/.local/share/opencode/opencode.db
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -45,16 +45,24 @@ policy belong in `src/server/`.
 
 ## Parsing and ingest
 
-Each source file produces one normalized session. Parsers retain canonical raw
+Each source file produces one normalized session. OpenCode keeps every
+session in one SQLite database, so there each session is a virtual source
+`<database path>#<session id>`: `src/sources/opencode-store.ts` opens the
+database read-only (never writing or checkpointing it) and hands plain rows to
+the pure parser in `src/sources/opencode.ts`. Parsers retain canonical raw
 records while mapping provider-specific roles, blocks, usage, tool calls, and
 lineage into shared tables. Malformed lines and unknown record types become
 diagnostics rather than aborting the file.
 
-Ingest uses file size and modification time to avoid unnecessary work. A changed
-session is replaced transactionally, then Decant materializes context-window
-rollups and versioned per-session economics vectors. Costs are also stored at
-ingest and reconciled with current rates on every sync while transcripts and
-user state remain intact.
+Ingest uses file size and modification time to avoid unnecessary work on JSONL
+sources, and a per-session change key (the session's update time, message
+count, highest sequence, and newest message update, stored in
+`ingest_source.hash`) for OpenCode sessions. A changed session is replaced
+transactionally, then Decant materializes context-window rollups and versioned
+per-session economics vectors. Costs are also stored at ingest and reconciled
+with current rates on every sync while transcripts and user state remain
+intact. Reading a foreign database does not change Decant's own rule that one
+process owns the archive; the OpenCode database stays OpenCode's.
 
 The supported extension point is a new parser under `src/sources/`. Follow
 [Add a source](adding-a-source.md); it defines the privacy, capability,

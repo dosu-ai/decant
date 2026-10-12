@@ -17,6 +17,22 @@
     ]
   },
   {
+    "path": "/decant-fixture/example",
+    "name": "example",
+    "sessions": 2,
+    "estimated_cost_usd": 0.010879400000000001,
+    "last_seen_at": "2026-10-12T07:21:00.000Z",
+    "is_worktree": false,
+    "root_path": "/decant-fixture/example",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "opencode"
+    ]
+  },
+  {
     "path": "/synthetic/gemini-project",
     "name": "gemini-project",
     "sessions": 2,

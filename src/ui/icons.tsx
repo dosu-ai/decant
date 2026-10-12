@@ -57,6 +57,14 @@ export const ANTHROPIC_ICON_PATH =
 export const GEMINI_ICON_PATH =
   "M12 2a.75.75 0 0 1 .67.42l1.93 3.86 3.86 1.93a.75.75 0 0 1 0 1.34l-3.86 1.93-1.93 3.86a.75.75 0 0 1-1.34 0l-1.93-3.86-3.86-1.93a.75.75 0 0 1 0-1.34l3.86-1.93 1.93-3.86a.75.75 0 0 1 .67-.42Zm7.5 12a.75.75 0 0 1 .67.42l1.05 2.1 2.1 1.05a.75.75 0 0 1 0 1.34l-2.1 1.05-1.05 2.1a.75.75 0 0 1-1.34 0l-1.05-2.1-2.1-1.05a.75.75 0 0 1 0-1.34l2.1-1.05 1.05-2.1a.75.75 0 0 1 .67-.42Z";
 
+export const OPENCODE_ICON_PATH =
+  "M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v12h16V6Zm3.3 2.6L11.7 12l-4.4 3.4-1.2-1.6L8.4 12 6.1 10.2Zm4.7 5.4h5v2h-5Z";
+
+export const ZAI_ICON_PATH = "M4 4h16v3.2L9.6 17H20v3H4v-3.2L14.4 7H4Z";
+
+export const META_ICON_PATH =
+  "M7 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm10-2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z";
+
 export function Icon({ name }: { name: IconName }) {
   const Component = iconComponent(name);
   return <Component aria-hidden="true" focusable="false" strokeWidth={2} />;
@@ -169,5 +177,11 @@ export function brandIconPath(name: BrandIconName): string {
       return OPENAI_ICON_PATH;
     case "gemini":
       return GEMINI_ICON_PATH;
+    case "opencode":
+      return OPENCODE_ICON_PATH;
+    case "zai":
+      return ZAI_ICON_PATH;
+    case "meta":
+      return META_ICON_PATH;
   }
 }

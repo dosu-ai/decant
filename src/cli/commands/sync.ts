@@ -22,6 +22,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     claudeDir?: string;
     codexDir?: string;
     geminiDir?: string;
+    opencodeDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -76,6 +77,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           claudeDir: commandOptions.claudeDir,
           codexDir: commandOptions.codexDir,
           geminiDir: commandOptions.geminiDir,
+          opencodeDir: commandOptions.opencodeDir,
         },
       },
     );
@@ -87,6 +89,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
+    .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
@@ -98,6 +101,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         claudeDir?: string;
         codexDir?: string;
         geminiDir?: string;
+        opencodeDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -121,6 +125,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
+    .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -128,12 +133,16 @@ export function registerSyncCommands(ctx: CliContext): void {
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )
-    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--no-fs-watch",
+      "disable native filesystem watching and rely on sweeps (OpenCode databases are still polled)",
+    )
     .action(
       (commandOptions: {
         claudeDir?: string;
         codexDir?: string;
         geminiDir?: string;
+        opencodeDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -143,6 +152,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
             geminiDir: commandOptions.geminiDir,
+            opencodeDir: commandOptions.opencodeDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -167,6 +177,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
+    .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -174,7 +185,10 @@ export function registerSyncCommands(ctx: CliContext): void {
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )
-    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--no-fs-watch",
+      "disable native filesystem watching and rely on sweeps (OpenCode databases are still polled)",
+    )
     .option(
       "--trusted-peer <peer>",
       "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
@@ -189,6 +203,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         claudeDir?: string;
         codexDir?: string;
         geminiDir?: string;
+        opencodeDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -200,6 +215,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
             geminiDir: commandOptions.geminiDir,
+            opencodeDir: commandOptions.opencodeDir,
           });
           // --no-sync must stop the watcher, or serving a scratch archive would
           // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how

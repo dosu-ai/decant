@@ -84,6 +84,24 @@ content, so input is stored net of cache reads, and thought tokens are
 reported outside the candidate count, so they are folded into output and also
 recorded as reported reasoning.
 
+OpenCode records disjoint `input`, `output`, `reasoning`, `cache.read`, and
+`cache.write` counts on each assistant step. Decant stores input as reported,
+output as `output + reasoning` with reasoning also recorded as reported,
+cache reads as cache reads, and cache writes as cache creation. Compaction
+steps carry their own usage and are counted; `opencode stats` does not count
+them on a local install, so Decant can read slightly higher. OpenCode's
+session totals also include title generation, which never appears in a
+message row, so Decant's per-session totals can read slightly lower than
+OpenCode's. Rows a fork inherited from its parent are skipped.
+
+Known limitation: when OpenCode upgrades from 1.x it migrates sessions into its
+2.x tables, and Decant reads those migrated sessions as stored. Their
+per-message token counts reflect only each message's last request, sessions
+created before OpenCode v1.3.16 may count reasoning tokens twice, and their
+file references and subagent links may be missing. Decant does not read
+OpenCode's 1.x tables yet; a later reader for them will correct these sessions
+from the original 1.x records.
+
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
 or a long-prompt surcharge (see [pricing](pricing.md)). A session that switched
@@ -94,7 +112,16 @@ session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
 
-A session's `model` is the model that served most of its requests. The model
+When Decant has no rate for a model, the cost OpenCode recorded for those
+requests is used instead and the session's `cost_source` is `reported` (or
+`mixed` when only some of its model rows fell back). A recorded cost of zero
+is never used: subscription routes such as the GLM Coding Plan record zero,
+which is a placeholder, not a price. A reported cost has no input/output
+split; token-economics totals carry it as `reported_cost_usd`, and activity
+buckets receive it by context-window share.
+
+For Claude Code, a session's `model` is the model that served most of its
+requests; other sources use the model their session metadata records. The model
 breakdown counts each session once, under that label, but splits tokens and
 estimated cost by the model behind each request. A model can therefore show
 tokens and cost with zero sessions. Each session's stored cost is divided among
@@ -193,6 +220,42 @@ Acorn parses these programs for static tool-call inspection. Decant does not
 execute the JavaScript or resolve variables, branches, or tool aliases.
 Raw programs and JSON-encoded programs or `{input: ...}` objects follow the
 same attribution rules.
+
+OpenCode 2.x runs MCP tools from a JavaScript program passed to its `execute`
+tool, and records each call the program made. Decant keeps `execute` as the
+model's tool call and adds one tool call per recorded inner call. An inner
+call to `<server>.<tool>` is an MCP call named `mcp__<server>__<tool>`, exactly
+as a direct call to that server is. OpenCode writes `<server>` with the same
+`[^a-zA-Z0-9_-]` to `_` replacement it applies to direct MCP tool names, so
+both forms of a call share one `mcp_server`. Inner calls with no namespace
+(`search`) or in the `opencode` namespace are OpenCode built-ins and keep
+their recorded name. Any other namespace is treated as an MCP server, so a
+plugin that adds its own namespace to code mode would count as MCP.
+
+Inner calls are tool-call rows, so these numbers count both the `execute`
+call and each inner call:
+
+- `decant tool stats` and `decant mcp stats`, and `GET /api/tools/usage` and
+  `GET /api/tools/mcp-usage`.
+- The Dosu MCP call counters on sessions.
+- `tool_calls` in `decant stats` and in token-economics buckets.
+- The activity report's "Tool calls" figure and its tool table.
+- A session report's tool table, so it can sum to more than that session's
+  "Tool calls" total below.
+
+These follow transcript blocks instead, so an `execute` call counts once
+however many inner calls it made:
+
+- A single session's "Tool calls" total (session detail and the session
+  report), which counts `tool_use` blocks.
+- A session's `error_count`, which counts failed result blocks.
+
+Each inner call takes its own error status and input, but OpenCode records
+only the program's combined output, so an inner call has no result, output
+size, or duration; the `execute` call carries the output's context-window
+volume once. An inner call that was still `running` when the program ended
+has no error status either. Inner calls add no transcript blocks, so search
+and transcripts show the program and its output once.
 
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Claude Code journals one API response as a record per
@@ -319,7 +382,8 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window. Claude and Gemini infer the window from the model
+an explicit model window, and OpenCode sessions take theirs from the models.dev
+catalog OpenCode caches. Claude and Gemini infer the window from the model
 when the source does not record one, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.

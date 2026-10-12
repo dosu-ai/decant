@@ -1,9 +1,9 @@
 # Archive and data lifecycle
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
-the archive have different jobs: source JSONL is the durable record produced by
-Claude Code, Codex, or Gemini CLI; `~/.decant/decant.db` is a searchable,
-rebuildable index plus Decant-owned user state.
+the archive have different jobs: source logs are the durable record produced by
+Claude Code, Codex, Gemini CLI, or OpenCode; `~/.decant/decant.db` is a
+searchable, rebuildable index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -27,26 +27,49 @@ By default Decant discovers:
   absent or empty. Gemini session files are event logs. Decant replays
   checkpoint and rewind records the way Gemini CLI does, so a rewound turn or
   a re-recorded message is stored once.
+- OpenCode sessions in `~/.local/share/opencode/opencode.db` and any
+  `opencode-<channel>.db` beside it. The directory comes from
+  `--opencode-dir`, `DECANT_OPENCODE_DIR`, `OPENCODE_DATA_DIR`, or
+  `$XDG_DATA_HOME/opencode`, in that order. `OPENCODE_DB`, when set, names an
+  explicit extra database file that is read in addition to that directory.
+  Decant opens the databases read-only, never writes to them, and never
+  checkpoints them. Each 2.x session (`session_v2`) becomes its own source
+  `<database>#<session id>`. A session present in several databases is read
+  from the copy updated last. A fork's rows inherited from its parent are
+  skipped, as OpenCode's own statistics skip them. Sessions that exist only in
+  OpenCode 1.x tables are not read. Sessions OpenCode migrated from 1.x into
+  its 2.x tables are read as stored, which leaves gaps in their tokens, file
+  references, and subagent links (see
+  [analytics methodology](analytics-methodology.md#token-and-cost-totals)).
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
-Unchanged files are skipped by size and modification-time checks unless an updated
-ingest pipeline requires reprocessing them. After a parser correction, the next
+Unchanged files are skipped by size and modification-time checks, and
+unchanged OpenCode sessions by their per-session change key, unless an updated
+ingest pipeline requires reprocessing them. An OpenCode session's change key
+also covers the MCP server names from the OpenCode configs that apply to its
+directory, so editing those names re-derives the affected sessions once. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode
 combines native filesystem events with a periodic sweep so missed notifications
-do not leave the archive stale.
+do not leave the archive stale. OpenCode database directories are watched
+non-recursively, and because a running OpenCode's later writes may raise no
+file event, the watcher also checks each database and its `-wal` file every 2
+seconds by size and modification time, even with `--no-fs-watch`. The watcher
+only reads file metadata and never opens an OpenCode database; the sync it
+schedules opens it read-only.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
 session state. Deleting or rebuilding the archive does not delete the source
-JSONL files.
+logs or databases.
 
 ## Trajectory exports
 
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
-send data to Letta. Source labels are `claude-code`, `codex`, and `gemini-cli`.
+send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
+and `opencode`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -218,7 +241,7 @@ decant --db /tmp/decant-review.db --no-sync serve --no-open
 Session state is keyed by stable provider identity rather than the transient
 SQLite row id.
 
-| Action | Archive rows | Default reads and statistics | Later sync | Source JSONL |
+| Action | Archive rows | Default reads and statistics | Later sync | Source log |
 | --- | --- | --- | --- | --- |
 | Archive | Retained | Hidden, including effective descendants | Remains archived | Unchanged |
 | Restore visibility | Retained | Visible unless an ancestor or source state still hides it | Remains visible | Unchanged |
@@ -241,9 +264,12 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, or Gemini CLI log remains on disk. If the source record
-must also be removed, manage it through the owning tool or delete that source
-file only after deciding that losing the original transcript is intended.
+Claude Code, Codex, Gemini CLI, or OpenCode record remains on disk. If the
+source record must also be removed, manage it through the owning tool or delete
+that source file only after deciding that losing the original transcript is
+intended. OpenCode keeps every session in one shared database, so deleting its
+file would remove all OpenCode history; remove an individual session from within
+OpenCode instead.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
 that was sensitive enough to delete, run both commands:
@@ -301,6 +327,15 @@ includes recommendation status, session archive overrides, and deletion
 tombstones.
 Preserve the database before a rebuild if that state matters, and do not assume
 it can be reconstructed from transcripts.
+
+`session_model_usage.reported_cost_usd` holds the cost a source recorded for a
+model Decant cannot price (OpenCode records one per request). It is set when
+the usage rows are derived, at ingest or by a format-version backfill, and is
+part of the cost every sync reconciles, so a rate added later replaces the
+recorded figure with Decant's estimate on the next sync. The reverse needs a
+re-derive: rows derived while a model had a rate store no recorded figure, so
+removing a rate requires bumping `MODEL_USAGE_FORMAT_VERSION`, which rebuilds
+the rows from the stored messages without the source database.
 
 ## API visibility
 

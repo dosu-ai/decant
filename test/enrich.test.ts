@@ -126,6 +126,40 @@ describe("fileRefs", () => {
     expect(fileRefs(shell)).toEqual([]);
   });
 
+  test("OpenCode file tools become refs keyed by path", () => {
+    const read = oneBlockSession("opencode", toolUse("read", { path: "/w/src/a.ts", offset: 0 }));
+    read.cwd = "/w";
+    expect(fileRefs(read).map(brief)).toEqual([["src/a.ts", "read", "ts"]]);
+    const edit = oneBlockSession(
+      "opencode",
+      toolUse("edit", { path: "b.md", oldString: "x", newString: "y" }),
+    );
+    expect(fileRefs(edit).map(brief)).toEqual([["b.md", "edit", "md"]]);
+    const write = oneBlockSession("opencode", toolUse("write", { path: "c.json", content: "{}" }));
+    expect(fileRefs(write).map(brief)).toEqual([["c.json", "write", "json"]]);
+    const shell = oneBlockSession("opencode", toolUse("shell", { command: "cat f.txt" }));
+    expect(fileRefs(shell)).toEqual([]);
+    const streaming = oneBlockSession("opencode", toolUse("read", '{"path": "/w/par'));
+    expect(fileRefs(streaming)).toEqual([]);
+  });
+
+  test("OpenCode compaction rows count as compactions", () => {
+    const session = oneBlockSession("opencode", toolUse("read", { path: "/w/a.ts" }));
+    session.messages.push({
+      seq: 1,
+      sourceUuid: "msg_c",
+      parentSourceUuid: null,
+      role: "system",
+      model: null,
+      stopReason: null,
+      timestamp: null,
+      usage: null,
+      raw: { type: "compaction", status: "completed", seq: 2 },
+      blocks: [],
+    });
+    expect(facets(session).compactionCount).toBe(1);
+  });
+
   test("tool names inherited from Object.prototype never produce refs", () => {
     for (const tool of ["claude_code", "gemini"] as const) {
       for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
@@ -193,6 +227,17 @@ describe("facets", () => {
     expect(got.thinkingBlockCount).toBe(1);
     expect(got.thinkingChars).toBe("Plan the refactor carefully.".length);
     expect(got.activeSeconds).toBe(490);
+  });
+
+  test("OpenCode subagent and task calls count as agent spawns", () => {
+    const spawns = (tool: Tool, name: string) =>
+      facets(oneBlockSession(tool, toolUse(name, { prompt: "look around" }))).agentSpawnCount;
+    expect(spawns("opencode", "subagent")).toBe(1);
+    expect(spawns("opencode", "task")).toBe(1);
+    expect(spawns("opencode", "read")).toBe(0);
+    expect(spawns("codex", "subagent")).toBe(0);
+    expect(spawns("claude_code", "task")).toBe(0);
+    expect(spawns("claude_code", "Task")).toBe(1);
   });
 
   test("standalone subagents count their sidechain prompts as turns", () => {

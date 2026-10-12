@@ -23,6 +23,8 @@ export type SessionSummary = {
   total_input_tokens: number;
   total_output_tokens: number;
   estimated_cost_usd: number;
+  cost_source: "decant" | "reported" | "mixed";
+  model_provider: string | null;
   user_state: "archived" | null;
   is_user_archived: boolean;
   is_subagent: boolean;
@@ -114,6 +116,7 @@ export type TokenEconomics = {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    reported_cost_usd: number;
     active_ms: number;
     waiting_on_user_ms: number;
     attributed_ms: number;
@@ -321,9 +324,19 @@ export type BadgeTone =
   | "info"
   | "claude"
   | "openai"
-  | "gemini";
+  | "gemini"
+  | "opencode"
+  | "zai"
+  | "meta";
 
-export type BrandIconName = "anthropic" | "claude" | "openai" | "gemini";
+export type BrandIconName =
+  | "anthropic"
+  | "claude"
+  | "openai"
+  | "gemini"
+  | "opencode"
+  | "zai"
+  | "meta";
 
 export type IconName =
   | "archive"

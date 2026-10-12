@@ -1,7 +1,7 @@
 // Normalized domain model shared by every source parser.
 // The const tuples are the wire strings stored in SQLite — never reworded.
 
-export const TOOLS = ["claude_code", "codex", "gemini"] as const;
+export const TOOLS = ["claude_code", "codex", "gemini", "opencode"] as const;
 export type Tool = (typeof TOOLS)[number];
 
 export const ROLES = ["user", "assistant", "system", "tool", "other"] as const;
@@ -25,6 +25,12 @@ export type ToolKind = (typeof TOOL_KINDS)[number];
  * estimated by subtraction (`inferred`, Claude), or unavailable (`none`). */
 export const REASONING_SOURCES = ["reported", "inferred", "none"] as const;
 export type ReasoningSource = (typeof REASONING_SOURCES)[number];
+
+/** Where a session's `estimated_cost_usd` came from: Decant's rate table, the
+ * source's own recorded cost (OpenCode, for models Decant cannot price), or a
+ * mix of both across the session's model rows. */
+export const COST_SOURCES = ["decant", "reported", "mixed"] as const;
+export type CostSource = (typeof COST_SOURCES)[number];
 
 /** Any JSON value. `undefined` never appears inside; use `Json | undefined`
  * where absent and JSON null carry different meanings. */
@@ -121,6 +127,21 @@ export interface NormalizedBlock {
    * (including JSON null) = present. */
   toolInput: Json | undefined;
   toolResult: string | null;
+  isError: boolean | null;
+  /** Calls a code-execution tool made on the model's behalf, on its
+   * `tool_use` block. Ingest writes one `tool_call` row per inner call beside
+   * the wrapper's own; they add no transcript blocks, so the wrapper's code
+   * and result are the only text stored or indexed. */
+  innerToolCalls?: NormalizedInnerToolCall[];
+}
+
+export interface NormalizedInnerToolCall {
+  /** Named like a direct call: `mcp__<server>__<tool>` for an MCP tool. */
+  toolName: string;
+  /** Derived from the wrapper's id, so re-ingest reproduces it. */
+  toolUseId: string | null;
+  toolInput: Json | undefined;
+  /** From the inner call's own status; null while it has none. */
   isError: boolean | null;
 }
 

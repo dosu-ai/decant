@@ -21,15 +21,18 @@ function freshConfig(): Config {
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
   const geminiDir = join(root, "gemini");
+  const opencodeDir = join(root, "opencode");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(codexDir, "archived_sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
+  mkdirSync(opencodeDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
     geminiDir,
+    opencodeDir,
   };
 }
 

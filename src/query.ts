@@ -7,7 +7,8 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
-import type { Tool } from "./model.ts";
+import type { CostSource, Tool } from "./model.ts";
+import { costSourceFor } from "./model-usage.ts";
 import {
   bracketSearchMatches,
   buildFtsQuery,
@@ -41,6 +42,12 @@ export interface SessionSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   estimated_cost_usd: number;
+  /** Where `estimated_cost_usd` came from; `reported` means the source's own
+   * recorded cost was used because Decant has no rate for the model. */
+  cost_source: CostSource;
+  /** Provider route the session's model ran through (OpenCode records one);
+   * null for sources that do not record a provider. */
+  model_provider: string | null;
   /** Direct user override for this source identity. */
   user_state: SessionUserState | null;
   /** Effective archive state inherited from this row or any current ancestor. */
@@ -94,12 +101,20 @@ export interface SessionSearchIndexRow {
 interface SessionSummaryRow
   extends Omit<
     SessionSummary,
-    "is_archived" | "is_user_archived" | "is_subagent" | "reasoning_effort_levels" | "subagents"
+    | "is_archived"
+    | "is_user_archived"
+    | "is_subagent"
+    | "reasoning_effort_levels"
+    | "subagents"
+    | "cost_source"
   > {
   is_archived: number;
   is_user_archived: number;
   is_subagent: number;
   reasoning_effort_levels_json: string | null;
+  /** `{reported, other}` from the session's model-usage rows; mapped to
+   * `cost_source` in TypeScript so it follows the read-time pricing rule. */
+  cost_usage_json: string;
 }
 
 function sessionSummarySelect(subagentVisibility: string): string {
@@ -110,6 +125,13 @@ function sessionSummarySelect(subagentVisibility: string): string {
          s.total_reasoning_tokens, s.reasoning_source,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
+         (SELECT json_object(
+                   'reported', json_group_array(u.model)
+                                 FILTER (WHERE u.reported_cost_usd IS NOT NULL),
+                   'other', COUNT(*) FILTER (WHERE u.reported_cost_usd IS NULL))
+            FROM session_model_usage u
+           WHERE u.session_id = s.id) AS cost_usage_json,
+         json_extract(s.raw_meta, '$.model_provider') AS model_provider,
          ${directSessionUserStateExpression("s")} AS user_state,
          ${sessionIsUserArchivedExpression("s")} AS is_user_archived,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,
@@ -1002,9 +1024,11 @@ export function listProjects(db: Database): ProjectSummary[] {
 }
 
 function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
-  const { reasoning_effort_levels_json: levelsJson, ...summary } = row;
+  const { reasoning_effort_levels_json: levelsJson, cost_usage_json: costUsage, ...summary } = row;
+  const usage = JSON.parse(costUsage) as { reported: string[]; other: number };
   return {
     ...summary,
+    cost_source: costSourceFor(usage.reported, usage.other),
     reasoning_effort_levels: parseReasoningEffortLevels(levelsJson),
     is_user_archived: row.is_user_archived !== 0,
     is_archived: row.is_archived !== 0,

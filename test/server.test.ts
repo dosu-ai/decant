@@ -38,15 +38,18 @@ function freshConfig(): Config {
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
   const geminiDir = join(root, "gemini");
+  const opencodeDir = join(root, "opencode");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(codexDir, "archived_sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
+  mkdirSync(opencodeDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
     geminiDir,
+    opencodeDir,
   };
 }
 
@@ -129,7 +132,7 @@ describe("server routes", () => {
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
     expect(sourceHead).toContain(
-      "Local-first analytics for Claude Code, Codex, and Gemini CLI sessions.",
+      "Local-first analytics for Claude Code, Codex, Gemini CLI, and OpenCode sessions.",
     );
   });
 
@@ -339,6 +342,7 @@ describe("server routes", () => {
       claudeDir: config.claudeDir,
       codexDir: config.codexDir,
       geminiDir: config.geminiDir,
+      opencodeDir: config.opencodeDir,
     });
   });
 

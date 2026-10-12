@@ -330,6 +330,30 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
+  test("adds the reported-cost column when upgrading a v25 archive", () => {
+    const path = freshPath();
+    const fresh = openDb(path);
+    const expected = buildSchemaManifest(fresh);
+    fresh.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, total_input_tokens)
+      VALUES (1, 'claude_code', 'kept', 'claude-opus-5-5', 10);
+      INSERT INTO session_model_usage(session_id, model, tier, requests, input_tokens, output_tokens,
+        cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, format_version)
+      VALUES (1, 'claude-opus-5-5', 'standard', 1, 10, 0, 0, 0, 0, 1);
+      ALTER TABLE session_model_usage DROP COLUMN reported_cost_usd;
+      DELETE FROM schema_migrations WHERE version > 25;
+    `);
+    closeDb(fresh);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    // Existing rows were priced by Decant, which a NULL reported cost means.
+    expect(
+      migrated.query("SELECT model, reported_cost_usd FROM session_model_usage").all(),
+    ).toEqual([{ model: "claude-opus-5-5", reported_cost_usd: null }]);
+    closeDb(migrated);
+  });
+
   test("keeps the message parent index that backs the foreign key", () => {
     // parent_id is never written, but every deleted message still checks for
     // children referencing it. Without this index that check scans the whole

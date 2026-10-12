@@ -22,12 +22,12 @@
   {
     "key": "txt",
     "project": null,
-    "reads": 1,
+    "reads": 2,
     "edits": 0,
     "writes": 0,
     "deletes": 1,
-    "sessions": 2,
-    "last_touched_at": "2026-06-01T10:00:02.000Z"
+    "sessions": 3,
+    "last_touched_at": "2026-10-12T06:20:01.000Z"
   },
   {
     "key": "ipynb",

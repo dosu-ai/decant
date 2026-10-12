@@ -41,6 +41,7 @@ import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
+import type { OpenCodeSessionRef } from "./sources/opencode-store.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
   materializeMissingSessionEconomics,
@@ -56,6 +57,12 @@ export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
   geminiDir?: string;
+  /** OpenCode data directory holding `opencode.db` and `opencode-<channel>.db`. */
+  opencodeDir?: string;
+  /** Explicit OpenCode database file (`OPENCODE_DB`), read in addition to `opencodeDir`. */
+  opencodeDb?: string;
+  /** `opencode.json`, whose `mcp` section names MCP servers. */
+  opencodeConfigPath?: string;
   sourcePaths?: string[];
 }
 
@@ -96,6 +103,8 @@ export interface SourceFile {
   tool: Tool;
   path: string;
   archived: boolean;
+  /** Set for OpenCode sessions, whose `path` is the virtual `<db>#<session id>`. */
+  opencode?: OpenCodeSessionRef;
 }
 
 interface Prepared {

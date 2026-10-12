@@ -58,6 +58,7 @@ describe("route dispatch edge cases", () => {
     claudeDir: join(root, "claude"),
     codexDir: join(root, "codex"),
     geminiDir: join(root, "gemini"),
+    opencodeDir: join(root, "opencode"),
   };
 
   async function call(

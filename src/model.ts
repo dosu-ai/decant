@@ -1,7 +1,7 @@
 // Normalized domain model shared by every source parser.
 // The const tuples are the wire strings stored in SQLite — never reworded.
 
-export const TOOLS = ["claude_code", "codex", "gemini"] as const;
+export const TOOLS = ["claude_code", "codex", "gemini", "opencode"] as const;
 export type Tool = (typeof TOOLS)[number];
 
 export const ROLES = ["user", "assistant", "system", "tool", "other"] as const;
@@ -25,6 +25,12 @@ export type ToolKind = (typeof TOOL_KINDS)[number];
  * estimated by subtraction (`inferred`, Claude), or unavailable (`none`). */
 export const REASONING_SOURCES = ["reported", "inferred", "none"] as const;
 export type ReasoningSource = (typeof REASONING_SOURCES)[number];
+
+/** Where a session's `estimated_cost_usd` came from: Decant's rate table, the
+ * source's own recorded cost (OpenCode, for models Decant cannot price), or a
+ * mix of both across the session's model rows. */
+export const COST_SOURCES = ["decant", "reported", "mixed"] as const;
+export type CostSource = (typeof COST_SOURCES)[number];
 
 /** Any JSON value. `undefined` never appears inside; use `Json | undefined`
  * where absent and JSON null carry different meanings. */

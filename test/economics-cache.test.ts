@@ -341,6 +341,7 @@ describe("economics cache", () => {
       claudeDir: join(workDir, "none"),
       codexDir: join(workDir, "none"),
       geminiDir: join(workDir, "none"),
+      opencodeDir: join(workDir, "none"),
     };
     const cache = new EconomicsCache({
       dbPath,

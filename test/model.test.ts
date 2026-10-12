@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BLOCK_TYPES,
+  COST_SOURCES,
   emptyUsage,
   INGEST_ISSUE_CODES,
   normalizeReasoningEffort,
@@ -17,7 +18,7 @@ import {
 // these are the wire strings stored in SQLite — they must never drift.
 describe("model wire strings", () => {
   test("every enum string is pinned", () => {
-    expect(TOOLS).toEqual(["claude_code", "codex", "gemini"]);
+    expect(TOOLS).toEqual(["claude_code", "codex", "gemini", "opencode"]);
     expect(ROLES).toEqual(["user", "assistant", "system", "tool", "other"]);
     expect(BLOCK_TYPES).toEqual([
       "text",
@@ -30,6 +31,7 @@ describe("model wire strings", () => {
     ]);
     expect(TOOL_KINDS).toEqual(["builtin", "mcp", "custom", "web_search", "tool_search"]);
     expect(REASONING_SOURCES).toEqual(["reported", "inferred", "none"]);
+    expect(COST_SOURCES).toEqual(["decant", "reported", "mixed"]);
     expect(INGEST_ISSUE_CODES).toEqual([
       "unparsed_line",
       "unknown_record_type",

@@ -7,7 +7,7 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
-import type { Tool } from "./model.ts";
+import type { CostSource, Tool } from "./model.ts";
 import {
   bracketSearchMatches,
   buildFtsQuery,
@@ -41,6 +41,12 @@ export interface SessionSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   estimated_cost_usd: number;
+  /** Where `estimated_cost_usd` came from; `reported` means the source's own
+   * recorded cost was used because Decant has no rate for the model. */
+  cost_source: CostSource;
+  /** Provider route the session's model ran through (OpenCode records one);
+   * null for sources that do not record a provider. */
+  model_provider: string | null;
   /** Direct user override for this source identity. */
   user_state: SessionUserState | null;
   /** Effective archive state inherited from this row or any current ancestor. */
@@ -110,6 +116,8 @@ function sessionSummarySelect(subagentVisibility: string): string {
          s.total_reasoning_tokens, s.reasoning_source,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
+         'decant' AS cost_source,
+         json_extract(s.raw_meta, '$.model_provider') AS model_provider,
          ${directSessionUserStateExpression("s")} AS user_state,
          ${sessionIsUserArchivedExpression("s")} AS is_user_archived,
          s.is_archived, s.is_subagent, s.parent_session_id, s.spawn_tool_use_id,

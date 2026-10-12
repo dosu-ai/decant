@@ -17,10 +17,12 @@ function freshConfig(): Config {
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
   const geminiDir = join(root, "gemini");
+  const opencodeDir = join(root, "opencode");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
-  return { dbPath: join(root, "archive.db"), claudeDir, codexDir, geminiDir };
+  mkdirSync(opencodeDir, { recursive: true });
+  return { dbPath: join(root, "archive.db"), claudeDir, codexDir, geminiDir, opencodeDir };
 }
 
 function seed(config: Config): void {

@@ -1128,6 +1128,7 @@ describe("archive aggregation", () => {
     started_at: "2026-09-29T00:00:00Z",
     input_cost: cost,
     output_cost: 0,
+    reported_cost: 0,
     billed_input_tokens: 0,
     waiting_on_user_ms: 0,
     buckets: {

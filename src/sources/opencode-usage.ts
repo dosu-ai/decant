@@ -1,9 +1,11 @@
 // Token mapping shared by the OpenCode readers. OpenCode's tokens object is
 // {input, output, reasoning, cache:{read, write}, total?}. `input` never
 // includes cached tokens. Whether `output` includes `reasoning` depends on the
-// release that wrote the row: up to 1.3.15 it did (and OpenCode then charged
-// reasoning a second time); from 1.3.16 on, and in 2.x, it does not
-// (anomalyco/opencode packages/opencode/src/session/index.ts getUsage).
+// release that wrote the row: up to 1.3.15 it did for most providers (and
+// OpenCode then charged reasoning a second time); from 1.3.16 on, and in 2.x,
+// it does not. The recorded `total` decides when present (anomalyco/opencode
+// getUsage, in packages/opencode/src/session/index.ts and, from 1.18,
+// packages/opencode/src/session/session.ts).
 import { isObject, type JsonObject } from "../json.ts";
 import { emptyUsage, type Json, type TokenUsage } from "../model.ts";
 
@@ -12,6 +14,13 @@ export type ReasoningOverlap = "disjoint" | "included";
 type Version = readonly [number, number, number];
 
 const DISJOINT_SINCE: Version = [1, 3, 16];
+
+/** Preview builds record `0.0.0-<channel>-<YYYYMMDDHHmm>` (UTC build time)
+ * instead of a release number (packages/script/src/index.ts). */
+const PREVIEW_VERSION = /^0\.0\.0-.+-(\d{12})$/;
+
+/** When 1.3.16 was tagged (2026-04-06T03:44Z), in the preview stamp's format. */
+const DISJOINT_SINCE_BUILD = "202604060344";
 
 export function parseOpenCodeVersion(version: string | null): [number, number, number] | null {
   const match = version == null ? null : /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);
@@ -27,7 +36,8 @@ function count(value: Json | undefined): number {
 }
 
 /** The provider's `total`, when recorded, decides; otherwise the release that
- * created the session does. An unparseable version is treated as current. */
+ * created the session does, or a preview build's date. A real 0.x release
+ * predates 1.3.16; an unparseable version is treated as current. */
 export function reasoningOverlap(tokens: JsonObject, version: string | null): ReasoningOverlap {
   const reasoning = count(tokens.reasoning);
   if (reasoning === 0) {
@@ -43,6 +53,11 @@ export function reasoningOverlap(tokens: JsonObject, version: string | null): Re
     if (base === total) {
       return "included";
     }
+  }
+  const preview = version == null ? null : PREVIEW_VERSION.exec(version);
+  if (preview?.[1] != null) {
+    // Same-length digit strings compare in time order.
+    return preview[1] < DISJOINT_SINCE_BUILD ? "included" : "disjoint";
   }
   const parsed = parseOpenCodeVersion(version);
   if (parsed == null) {

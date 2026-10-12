@@ -1234,4 +1234,40 @@ describe("cost source", () => {
     ).toEqual({ ses_decant: "decant", ses_reported: "reported", ses_mixed: "mixed" });
     db.close();
   });
+
+  test("follows the read-time pricing rule when a model gains a rate", () => {
+    const db = seeded();
+    const ingest = (id: string, requests: Parameters<typeof syntheticOpenCodeSession>[1]) =>
+      upsertSession(db, syntheticOpenCodeSession(id, requests), `/tmp/opencode.db#${id}`, 1, 0, id);
+    // Simulates rows stored while a model was unpriced: the model has a rate
+    // now, but the stored reported figure remains in the table.
+    const stale = (sessionId: number, model: string) =>
+      db
+        .query(
+          "UPDATE session_model_usage SET reported_cost_usd = 5 WHERE session_id = ? AND model = ?",
+        )
+        .run(sessionId, model);
+    const allNowPriced = ingest("ses_now_priced", [
+      { model: "glm-5.3-flash", cost: 0.1, input: 100, output: 10 },
+    ]);
+    stale(allNowPriced, "glm-5.3-flash");
+    const partlyNowPriced = ingest("ses_partly_priced", [
+      { model: "glm-5.3-flash", cost: 0.1, input: 100, output: 10 },
+      { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
+    ]);
+    stale(partlyNowPriced, "glm-5.3-flash");
+    stale(partlyNowPriced, "example-unpriced");
+
+    const listPrice = getSessionSummary(
+      db,
+      ingest("ses_list_price", [{ model: "glm-5.3-flash", cost: 0.1, input: 100, output: 10 }]),
+    );
+    const priced = getSessionSummary(db, allNowPriced);
+    expect(priced?.cost_source).toBe("decant");
+    expect(priced?.estimated_cost_usd).toBe(listPrice?.estimated_cost_usd ?? Number.NaN);
+    expect(listPrice?.estimated_cost_usd).toBeGreaterThan(0);
+    // One row is priced by Decant now and one still shows the recorded figure.
+    expect(getSessionSummary(db, partlyNowPriced)?.cost_source).toBe("mixed");
+    db.close();
+  });
 });

@@ -11,7 +11,7 @@ import {
 } from "./cost.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { asInteger, asString, isObject } from "./json.ts";
-import { emptyUsage, type Json, type TokenUsage } from "./model.ts";
+import { type CostSource, emptyUsage, type Json, type TokenUsage } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
@@ -295,11 +295,34 @@ export function sessionCostParts(
     // The stored figure was decided when the row was derived. A model that
     // has since gained a rate is priced by Decant, so keeping the figure
     // would count it twice.
-    if (!isPriceableModel(row.model)) {
-      total.reported += row.reportedCostUsd ?? 0;
+    if (reportedCostApplies(row.model, row.reportedCostUsd)) {
+      total.reported += row.reportedCostUsd;
     }
   }
   return total;
+}
+
+/** Whether a stored reported cost still stands at read time. A model that
+ * gained a rate after the row was derived is priced by Decant instead, so the
+ * dollars and the `cost_source` label must both follow this one rule. */
+export function reportedCostApplies(
+  model: string,
+  reportedCostUsd: number | null,
+): reportedCostUsd is number {
+  return reportedCostUsd != null && !isPriceableModel(model);
+}
+
+/** Label a session's cost from its model-usage rows: `reportedModels` lists the
+ * model of every row with a stored reported cost, `otherRows` counts the rest.
+ * Rows without a stored figure are priced by Decant (or contribute nothing),
+ * so they count on the Decant side. */
+export function costSourceFor(reportedModels: readonly string[], otherRows: number): CostSource {
+  const reported = reportedModels.filter((model) => reportedCostApplies(model, 0)).length;
+  const decant = otherRows + (reportedModels.length - reported);
+  if (reported === 0) {
+    return "decant";
+  }
+  return decant === 0 ? "reported" : "mixed";
 }
 
 export function totalCost(parts: SessionCostParts): number {

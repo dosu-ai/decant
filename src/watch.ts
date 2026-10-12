@@ -146,12 +146,17 @@ export class SyncStatusStore {
 }
 
 export function watchDirs(config: Config): string[] {
-  return [
+  const candidates = [
     config.claudeDir,
     join(config.codexDir, "sessions"),
     join(config.codexDir, "archived_sessions"),
     ...(config.geminiDir != null ? [config.geminiDir] : []),
-  ].filter((dir) => {
+    // OpenCode writes to opencode.db-wal inside its data directory, so a
+    // recursive watch on the directory sees every session change.
+    config.opencodeDir,
+    ...(config.opencodeDb != null ? [dirname(config.opencodeDb)] : []),
+  ];
+  return [...new Set(candidates)].filter((dir) => {
     try {
       return existsSync(dir) && statSync(dir).isDirectory();
     } catch {

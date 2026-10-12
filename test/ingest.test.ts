@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import {
   lineCount,
   materializeMissingReasoningEfforts,
   resolveSubagentParents,
+  type SourceFile,
   seedModelPricing,
   sync,
   upsertSession,
@@ -25,6 +26,7 @@ import { parseCodexSession } from "../src/sources/codex.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
+import { buildOpenCodeDb, buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
@@ -2653,5 +2655,345 @@ describe("sync bookkeeping", () => {
       "file.path": sourcePath,
     });
     db.close();
+  });
+});
+
+describe("OpenCode ingest", () => {
+  const T0 = 1791786000000;
+
+  function opencodeCase(): { dir: string; opencodeDir: string; config: IngestConfig } {
+    const dir = freshCase();
+    const opencodeDir = join(dir, "opencode");
+    mkdirSync(opencodeDir, { recursive: true });
+    return {
+      dir,
+      opencodeDir,
+      config: { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex"), opencodeDir },
+    };
+  }
+
+  function brief(
+    files: SourceFile[],
+  ): { tool: string; path: string; fingerprint: string | null }[] {
+    return files.map((file) => ({
+      tool: file.tool,
+      path: file.path,
+      fingerprint: file.opencode?.fingerprint ?? null,
+    }));
+  }
+
+  test("discovers one virtual source per session in each OpenCode database", () => {
+    const { opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    const beta = join(opencodeDir, "opencode-beta.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    buildOpenCodeFixtureDb(beta, ["mcp.sql"]);
+    writeFileSync(join(opencodeDir, "opencode.db-wal"), "");
+    writeFileSync(join(opencodeDir, "notes.db"), "");
+    expect(brief(discover(config))).toEqual([
+      { tool: "opencode", path: `${beta}#ses_mcp`, fingerprint: "1791789660000:4:4:1791789607000" },
+      {
+        tool: "opencode",
+        path: `${main}#ses_sample`,
+        fingerprint: "1791786060000:4:4:1791786008000",
+      },
+    ]);
+  });
+
+  test("keeps the newest copy of a session found in several databases", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    const beta = join(opencodeDir, "opencode-beta.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    buildOpenCodeFixtureDb(beta, ["sample.sql"]);
+    const writer = new Database(beta, { strict: true });
+    writer.exec("UPDATE session_v2 SET time_updated = time_updated + 1000 WHERE id = 'ses_sample'");
+    writer.close();
+    expect(brief(discover(config))).toEqual([
+      {
+        tool: "opencode",
+        path: `${beta}#ses_sample`,
+        fingerprint: "1791786061000:4:4:1791786008000",
+      },
+    ]);
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM session WHERE tool = 'opencode'").get()).toEqual({
+      n: 1,
+    });
+    closeDb(db);
+  });
+
+  test("honors an explicit OPENCODE_DB file and skips a database without 2.x tables", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const legacy = join(opencodeDir, "opencode-legacy.db");
+    const legacyDb = new Database(legacy, { create: true, strict: true });
+    legacyDb.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    legacyDb.close();
+    const explicit = join(dir, "elsewhere", "custom.db");
+    mkdirSync(dirname(explicit), { recursive: true });
+    buildOpenCodeFixtureDb(explicit, ["sample.sql"]);
+    const withDb: IngestConfig = { ...config, opencodeDb: explicit };
+    expect(brief(discover(withDb))).toEqual([
+      {
+        tool: "opencode",
+        path: `${explicit}#ses_sample`,
+        fingerprint: "1791786060000:4:4:1791786008000",
+      },
+    ]);
+    const db = openFreshDb(dir);
+    expect(sync(db, withDb)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
+    expect(sync(db, { ...config, opencodeDb: join(dir, "absent.db") })).toMatchObject({
+      scanned: 0,
+      failed: 0,
+    });
+    closeDb(db);
+  });
+
+  test("accepts a .db file and a data directory through --path", () => {
+    const { dir, opencodeDir } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    write(join(dir, "selected", "claude", "one.jsonl"), "");
+    expect(brief(discoverSourcePaths([main, join(dir, "selected")]))).toEqual([
+      {
+        tool: "claude_code",
+        path: join(dir, "selected", "claude", "one.jsonl"),
+        fingerprint: null,
+      },
+      {
+        tool: "opencode",
+        path: `${main}#ses_sample`,
+        fingerprint: "1791786060000:4:4:1791786008000",
+      },
+    ]);
+    expect(brief(discoverSourcePaths([opencodeDir, main]))).toEqual([
+      {
+        tool: "opencode",
+        path: `${main}#ses_sample`,
+        fingerprint: "1791786060000:4:4:1791786008000",
+      },
+    ]);
+  });
+
+  test("ingests OpenCode sessions through virtual per-session source paths", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({
+      scanned: 1,
+      ingested: 1,
+      skipped: 0,
+      issues: 0,
+      failed: 0,
+    });
+    expect(
+      db
+        .query(
+          `SELECT tool, source_session_id, source_path, source_hash, source_size, source_mtime, model,
+                  cli_version, message_count, total_input_tokens, total_output_tokens,
+                  total_cache_read_tokens, total_cache_creation_tokens, total_reasoning_tokens,
+                  reasoning_source, reasoning_effort, is_archived, context_window_tokens,
+                  peak_context_tokens
+             FROM session`,
+        )
+        .get(),
+    ).toEqual({
+      tool: "opencode",
+      source_session_id: "ses_sample",
+      source_path: `${main}#ses_sample`,
+      source_hash: "1791786060000:4:4:1791786008000",
+      source_size: 0,
+      source_mtime: 1791786060,
+      model: "glm-5.3-flash",
+      cli_version: "2.0.27",
+      message_count: 4,
+      total_input_tokens: 320,
+      total_output_tokens: 52,
+      total_cache_read_tokens: 100,
+      total_cache_creation_tokens: 16,
+      total_reasoning_tokens: 10,
+      reasoning_source: "reported",
+      reasoning_effort: "max",
+      is_archived: 0,
+      context_window_tokens: 1_000_000,
+      peak_context_tokens: 260,
+    });
+    expect(
+      (db.query("SELECT estimated_cost_usd AS cost FROM session").get() as { cost: number }).cost,
+    ).toBeCloseTo(0.0000794, 10);
+    expect(
+      db.query("SELECT path, tool, size, mtime, hash, line_count, status FROM ingest_source").get(),
+    ).toEqual({
+      path: `${main}#ses_sample`,
+      tool: "opencode",
+      size: 0,
+      mtime: 1791786060,
+      hash: "1791786060000:4:4:1791786008000",
+      line_count: 4,
+      status: "ok",
+    });
+    expect(
+      db.query("SELECT tool_kind, tool_name, has_result, is_error FROM tool_call").all(),
+    ).toEqual([{ tool_kind: "builtin", tool_name: "read", has_result: 1, is_error: 0 }]);
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 0, skipped: 1 });
+    closeDb(db);
+  });
+
+  test("re-ingests a session whose fingerprint changed, in either direction", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const main = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(main, ["sample.sql"]);
+    const db = openFreshDb(dir);
+    sync(db, config);
+
+    // A streamed assistant row is rewritten in place: same row count, newer
+    // time_updated.
+    let writer = new Database(main, { strict: true });
+    writer.exec(`UPDATE session_message SET time_updated = time_updated + 1,
+                   data = json_set(data, '$.content[0].text', 'The file says hello, again.')
+                 WHERE id = 'msg_sample_3'`);
+    writer.exec("UPDATE session_v2 SET time_updated = time_updated + 1 WHERE id = 'ses_sample'");
+    writer.close();
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    expect(
+      db.query("SELECT text FROM block WHERE type = 'text' ORDER BY id DESC LIMIT 1").get(),
+    ).toEqual({ text: "The file says hello, again." });
+
+    // A revert deletes rows past the revert point: the count goes down.
+    writer = new Database(main, { strict: true });
+    writer.exec("DELETE FROM session_message WHERE id IN ('msg_sample_3', 'msg_sample_4')");
+    writer.exec("UPDATE session_v2 SET time_updated = time_updated + 1 WHERE id = 'ses_sample'");
+    writer.close();
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
+    expect(db.query("SELECT message_count FROM session").get()).toEqual({ message_count: 3 });
+    expect(db.query("SELECT line_count FROM ingest_source").get()).toEqual({ line_count: 2 });
+    expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
+    closeDb(db);
+  });
+
+  test("names MCP tools from the configured servers at ingest", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["mcp.sql"]);
+    const configPath = join(dir, "opencode.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } },
+      }),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, { ...config, opencodeConfigPath: configPath })).toMatchObject({
+      ingested: 1,
+      issues: 0,
+    });
+    expect(
+      db
+        .query(
+          "SELECT tool_kind, tool_name, mcp_server, tool_base_name, is_error FROM tool_call ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      {
+        tool_kind: "mcp",
+        tool_name: "mcp__dosu__search_knowledge",
+        mcp_server: "dosu",
+        tool_base_name: "search_knowledge",
+        is_error: 0,
+      },
+      {
+        tool_kind: "builtin",
+        tool_name: "websearch",
+        mcp_server: null,
+        tool_base_name: "websearch",
+        is_error: 0,
+      },
+      {
+        tool_kind: "builtin",
+        tool_name: "webfetch",
+        mcp_server: null,
+        tool_base_name: "webfetch",
+        is_error: 1,
+      },
+    ]);
+    expect(db.query("SELECT error_count FROM session").get()).toEqual({ error_count: 1 });
+    closeDb(db);
+  });
+
+  test("links a child session to its parent through the subagent tool call", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const parentTool = JSON.stringify({
+      agent: "build",
+      model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+      content: [
+        {
+          type: "tool",
+          id: "call_sub_1",
+          name: "subagent",
+          state: {
+            status: "completed",
+            input: { description: "explore", prompt: "look around" },
+            content: [{ type: "text", text: "done" }],
+            metadata: { sessionID: "ses_child", truncated: false },
+          },
+          time: { created: T0 + 1000, completed: T0 + 9000 },
+        },
+      ],
+      finish: "tool-calls",
+      cost: 0.00001,
+      tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: T0 + 1000, completed: T0 + 9000 },
+    });
+    const script = `
+      INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, agent, model, time_created, time_updated) VALUES
+        ('ses_parent', 'prj', NULL, 'parent', '/tmp/example', 'Parent', '2.0.27', 'build', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 10000}),
+        ('ses_child', 'prj', 'ses_parent', 'child', '/tmp/example', 'Child', '2.0.27', 'explore', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0 + 2000}, ${T0 + 8000});
+      INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+        ('msg_p1', 'ses_parent', 'user', 1, ${T0}, ${T0}, '{"text":"Delegate the synthetic task.","time":{"created":${T0}}}'),
+        ('msg_p2', 'ses_parent', 'assistant', 2, ${T0 + 1000}, ${T0 + 9000}, '${parentTool.replaceAll("'", "''")}'),
+        ('msg_c1', 'ses_child', 'user', 3, ${T0 + 2000}, ${T0 + 2000}, '{"text":"look around","time":{"created":${T0 + 2000}}}'),
+        ('msg_c2', 'ses_child', 'assistant', 4, ${T0 + 3000}, ${T0 + 4000}, '{"agent":"explore","model":{"providerID":"opencode-go","id":"glm-5.3-flash"},"content":[{"type":"text","text":"nothing here"}],"finish":"stop","cost":0.000005,"tokens":{"input":20,"output":4,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":${T0 + 3000},"completed":${T0 + 4000}}}');
+    `;
+    buildOpenCodeDb(join(opencodeDir, "opencode.db"), [script]);
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, issues: 0, failed: 0 });
+    const parent = db
+      .query("SELECT id FROM session WHERE source_session_id = 'ses_parent'")
+      .get() as { id: number };
+    expect(
+      db
+        .query(
+          `SELECT is_subagent, parent_session_id, spawn_tool_use_id, agent_id, agent_type
+             FROM session WHERE source_session_id = 'ses_child'`,
+        )
+        .get(),
+    ).toEqual({
+      is_subagent: 1,
+      parent_session_id: parent.id,
+      spawn_tool_use_id: "call_sub_1",
+      agent_id: "ses_child",
+      agent_type: "explore",
+    });
+    expect(getSession(db, parent.id)?.subagents.map((s) => s.summary.source_session_id)).toEqual([
+      "ses_child",
+    ]);
+    closeDb(db);
+  });
+
+  test("keeps a JSONL source's hash NULL while an OpenCode source stores its fingerprint", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["sample.sql"]);
+    write(join(config.claudeDir, "proj", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2 });
+    expect(
+      db.query("SELECT tool, hash IS NULL AS no_hash FROM ingest_source ORDER BY tool").all(),
+    ).toEqual([
+      { tool: "claude_code", no_hash: 1 },
+      { tool: "opencode", no_hash: 0 },
+    ]);
+    closeDb(db);
   });
 });

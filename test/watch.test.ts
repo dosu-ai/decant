@@ -71,6 +71,7 @@ describe("watch mode", () => {
       config.claudeDir,
       join(config.codexDir, "sessions"),
       config.geminiDir,
+      config.opencodeDir,
     ]);
   });
 

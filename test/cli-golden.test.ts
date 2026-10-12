@@ -22,10 +22,13 @@ function stageFixtures(caseDir: string): {
   claudeDir: string;
   codexDir: string;
   geminiDir: string;
+  opencodeDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
   const geminiDir = join(caseDir, "sources", "gemini");
+  const opencodeDir = join(caseDir, "sources", "opencode");
+  mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -48,7 +51,7 @@ function stageFixtures(caseDir: string): {
     join(geminiDir, "synthetic-project", ".project_root"),
     "/synthetic/gemini-project\n",
   );
-  return { claudeDir, codexDir, geminiDir };
+  return { claudeDir, codexDir, geminiDir, opencodeDir };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -104,7 +107,7 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir, geminiDir } = stageFixtures(caseDir);
+    const { claudeDir, codexDir, geminiDir, opencodeDir } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli([
       "--db",
@@ -117,6 +120,8 @@ describe("CLI golden parity", () => {
       codexDir,
       "--gemini-dir",
       geminiDir,
+      "--opencode-dir",
+      opencodeDir,
     ]);
     expect(sync).toMatchObject({ code: 0, stderr: "" });
 

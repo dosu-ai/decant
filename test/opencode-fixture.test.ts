@@ -11,7 +11,9 @@ import {
 } from "./opencode-fixture.ts";
 
 // The 1.x fixtures are hand-written, so these checks pin the invariants real
-// OpenCode 1.x rows hold (and the parser relies on) before any reader exists.
+// OpenCode 1.x rows hold (and the parser relies on) before any reader exists,
+// plus one fixture convention: the session usage columns are kept the way
+// releases from 1.14.49 on keep them.
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-fixture-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
@@ -188,7 +190,10 @@ describe("OpenCode 1.x fixture invariants", () => {
     }
   });
 
-  test("session aggregates equal the sum of step-finish parts", () => {
+  test("session aggregates equal the sum of step-finish parts, as 1.14.49+ keeps them", () => {
+    // A fixture convention, not a 1.x rule: the columns arrived in 1.14.49
+    // and were backfilled from each message's last-step info.tokens, so older
+    // sessions' aggregates can be lower. The parser never reads them for usage.
     const sessions = rows<{
       id: string;
       cost: number;

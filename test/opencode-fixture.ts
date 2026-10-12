@@ -9,7 +9,7 @@ export function opencodeFixtureSql(name: string): string {
 }
 
 /** Builds an OpenCode 2.x database from SQL text: the 2.x DDL, the 1.x tables
- * every 2.x database also carries, then each script in order. Used by parser,
+ * a database created by a 2.x release also carries, then each script in order. Used by parser,
  * store, ingest, and golden tests. */
 export function buildOpenCodeDb(dbPath: string, scripts: readonly string[]): void {
   buildWith(

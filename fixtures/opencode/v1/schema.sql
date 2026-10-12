@@ -1,8 +1,10 @@
 -- Synthetic OpenCode 1.x storage: `session`, `message`, and `part` in the
 -- final 1.x shape (anomalyco/opencode v1.18.35 packages/core/src/session/sql.ts),
--- minus foreign keys so malformed fixtures can hold orphan parts. Every 2.x
--- database carries these tables too (2.x replays the 1.x migrations and never
--- drops them), so buildOpenCodeDb applies this after schema.sql.
+-- minus foreign keys so malformed fixtures can hold orphan parts. A 2.x
+-- database created by a 2.x release carries these tables too, usually empty
+-- (2.x replays the 1.x migrations, and its migrator never drops them), so
+-- buildOpenCodeDb applies this after schema.sql. A pre-release 2.x database
+-- from before the table split differs (see ../next/pre-split.sql).
 CREATE TABLE `session` (
   `id` text PRIMARY KEY,
   `project_id` text NOT NULL,

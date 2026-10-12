@@ -13,8 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  OpenCodeMcpServerNames,
   OpenCodeStore,
   openCodeFingerprint,
+  openCodeGlobalConfigPaths,
+  parseJsonc,
   readOpenCodeMcpServers,
 } from "../src/sources/opencode-store.ts";
 import { buildOpenCodeDb, buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
@@ -218,5 +221,94 @@ describe("readOpenCodeMcpServers", () => {
     const empty = join(workDir, "empty.json");
     writeFileSync(empty, JSON.stringify({ model: "example/example-model" }));
     expect(readOpenCodeMcpServers(empty)).toEqual([]);
+  });
+});
+
+describe("parseJsonc", () => {
+  test("accepts comments and trailing commas outside strings", () => {
+    const text = [
+      "\uFEFF{",
+      "  // line comment",
+      '  "url": "https://example.invalid/a//b", /* block, with comma, */',
+      '  "text": "keep /* this */ and \\"// this\\",",',
+      '  "list": [1, 2, /* c */ ],',
+      '  "nested": { "a": [], },',
+      "}",
+    ].join("\n");
+    expect(parseJsonc(text)).toEqual({
+      url: "https://example.invalid/a//b",
+      text: 'keep /* this */ and "// this",',
+      list: [1, 2],
+      nested: { a: [] },
+    });
+  });
+
+  test("rejects input that is not JSON once comments and trailing commas go", () => {
+    expect(() => parseJsonc("{ /* open")).toThrow();
+    expect(() => parseJsonc("{ a: 1 }")).toThrow();
+    expect(() => parseJsonc("[1,,]")).toThrow();
+  });
+});
+
+describe("OpenCode config lookup", () => {
+  const servers = (...names: string[]) => ({
+    mcp: { servers: Object.fromEntries(names.map((name) => [name, { type: "remote" }])) },
+  });
+
+  test("reads opencode.jsonc and pairs the global file with its other spelling", () => {
+    const dir = join(workDir, "jsonc");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "opencode.jsonc");
+    writeFileSync(
+      path,
+      '{\n  // servers\n  "mcp": { "servers": { "exa": { "type": "remote", }, }, },\n}\n',
+    );
+    expect(readOpenCodeMcpServers(path)).toEqual(["exa"]);
+    expect(openCodeGlobalConfigPaths(join(dir, "opencode.json"))).toEqual([
+      join(dir, "opencode.json"),
+      path,
+    ]);
+    expect(openCodeGlobalConfigPaths(path)).toEqual([join(dir, "opencode.json"), path]);
+    expect(openCodeGlobalConfigPaths(join(dir, "custom.json"))).toEqual([join(dir, "custom.json")]);
+  });
+
+  test("merges global and project configs per directory, read once each", () => {
+    const root = join(workDir, "lookup");
+    const global = join(root, "config", "opencode.json");
+    const project = join(root, "project");
+    const other = join(root, "other");
+    mkdirSync(join(root, "config"), { recursive: true });
+    mkdirSync(join(project, ".opencode"), { recursive: true });
+    mkdirSync(other, { recursive: true });
+    writeFileSync(global, JSON.stringify(servers("dosu")));
+    writeFileSync(
+      join(root, "config", "opencode.jsonc"),
+      `// global\n${JSON.stringify(servers("exa"))}`,
+    );
+    writeFileSync(join(project, "opencode.json"), JSON.stringify(servers("github")));
+    writeFileSync(join(project, "opencode.jsonc"), JSON.stringify(servers("supabase")));
+    writeFileSync(join(project, ".opencode", "opencode.json"), JSON.stringify(servers("context7")));
+    writeFileSync(join(project, ".opencode", "opencode.jsonc"), "{ /* unfinished");
+
+    const names = new OpenCodeMcpServerNames(global);
+    expect(names.forDirectory(project)).toEqual(["context7", "dosu", "exa", "github", "supabase"]);
+    expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
+    expect(names.forDirectory(null)).toEqual(["dosu", "exa"]);
+    expect(names.forDirectory("relative/dir")).toEqual(["dosu", "exa"]);
+    expect(names.forDirectory(join(root, "missing"))).toEqual(["dosu", "exa"]);
+
+    // Cached for the instance: a later edit applies to the next sync's lookup.
+    writeFileSync(join(other, "opencode.json"), JSON.stringify(servers("probe-tools")));
+    expect(names.forDirectory(other)).toEqual(["dosu", "exa"]);
+    expect(new OpenCodeMcpServerNames(global).forDirectory(other)).toEqual([
+      "dosu",
+      "exa",
+      "probe-tools",
+    ]);
+    expect(new OpenCodeMcpServerNames(undefined).forDirectory(project)).toEqual([
+      "context7",
+      "github",
+      "supabase",
+    ]);
   });
 });

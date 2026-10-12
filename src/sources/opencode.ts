@@ -67,7 +67,8 @@ export interface OpenCodeModelRef {
 }
 
 export interface OpenCodeParseContext {
-  /** MCP server names from opencode.json, as written there (unsanitized). */
+  /** MCP server names from the global and project OpenCode configs, as
+   * written there (unsanitized). */
   mcpServers: readonly string[];
   /** models.dev context limits keyed `<providerID>/<modelID>`. */
   contextWindows: ReadonlyMap<string, number>;

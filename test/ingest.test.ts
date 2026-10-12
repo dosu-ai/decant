@@ -2984,6 +2984,70 @@ describe("OpenCode ingest", () => {
     closeDb(db);
   });
 
+  test("names direct MCP tools from the session directory's project config", () => {
+    const { dir, opencodeDir, config } = opencodeCase();
+    const project = join(dir, "project");
+    mkdirSync(join(project, ".opencode"), { recursive: true });
+    writeFileSync(
+      join(project, ".opencode", "opencode.jsonc"),
+      '{\n  // project servers\n  "mcp": { "servers": { "exa": { "type": "remote" }, }, },\n}\n',
+    );
+    const data = JSON.stringify({
+      agent: "build",
+      model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+      content: [
+        {
+          type: "tool",
+          id: "call_exa_1",
+          name: "exa_web_search_exa",
+          state: { status: "completed", input: { query: "example" }, content: [] },
+        },
+      ],
+      finish: "tool-calls",
+      tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: T0 + 1000, completed: T0 + 2000 },
+    });
+    const sessions = [
+      ["ses_project", project],
+      ["ses_elsewhere", join(dir, "elsewhere")],
+    ];
+    buildOpenCodeDb(
+      join(opencodeDir, "opencode.db"),
+      sessions.map(
+        ([id, directory]) => `
+          INSERT INTO session_v2 (id, project_id, slug, directory, version, model, time_created, time_updated) VALUES
+            ('${id}', 'prj', 'slug', '${directory}', '2.0.27', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 3000});
+          INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
+            ('${id}_1', '${id}', 'assistant', 1, ${T0 + 1000}, ${T0 + 2000}, '${data.replaceAll("'", "''")}');`,
+      ),
+    );
+    const db = openFreshDb(dir);
+    expect(sync(db, config)).toMatchObject({ ingested: 2, issues: 0, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT s.source_session_id, tc.tool_kind, tc.tool_name, tc.mcp_server
+             FROM tool_call tc JOIN session s ON s.id = tc.session_id
+            ORDER BY s.source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        source_session_id: "ses_elsewhere",
+        tool_kind: "builtin",
+        tool_name: "exa_web_search_exa",
+        mcp_server: null,
+      },
+      {
+        source_session_id: "ses_project",
+        tool_kind: "mcp",
+        tool_name: "mcp__exa__web_search_exa",
+        mcp_server: "exa",
+      },
+    ]);
+    closeDb(db);
+  });
+
   test("counts calls made inside an execute program as Dosu MCP evidence", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     const call = (id: string, toolCalls: Json[]): Json => ({

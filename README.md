@@ -135,8 +135,15 @@ corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`, and
 variable and flag are unset, the OpenCode directory falls back to OpenCode's own
 `OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`. `OPENCODE_DB` names an
 explicit extra database file that is read alongside the discovered directory.
-`DECANT_OPENCODE_CONFIG` (or OpenCode's `OPENCODE_CONFIG`) points at the
-`opencode.json` whose MCP server names Decant uses to recognize MCP tool calls.
+Decant recognizes OpenCode MCP tool calls by the server names in OpenCode's
+config. It reads the global `opencode.json` and `opencode.jsonc` in
+`$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`), plus
+`opencode.json`, `opencode.jsonc`, `.opencode/opencode.json`, and
+`.opencode/opencode.jsonc` in each session's directory, and merges the names.
+`DECANT_OPENCODE_CONFIG` (or OpenCode's `OPENCODE_CONFIG`) names a different
+global file; when it is called `opencode.json` or `opencode.jsonc`, the other
+spelling beside it is read too. A missing or malformed config file names no
+servers, and a config change applies to sessions ingested after it.
 OpenCode sessions are read from `opencode.db` (and `opencode-<channel>.db`)
 read-only; Decant never writes to it. `--path` also accepts an OpenCode `.db`
 file.

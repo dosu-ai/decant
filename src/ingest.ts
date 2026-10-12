@@ -46,9 +46,9 @@ import { parseGeminiSession } from "./sources/gemini.ts";
 import { parseOpenCodeSession } from "./sources/opencode.ts";
 import {
   type OpenCodeLoadedSession,
+  OpenCodeMcpServerNames,
   type OpenCodeSessionRef,
   OpenCodeStore,
-  readOpenCodeMcpServers,
 } from "./sources/opencode-store.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
@@ -69,7 +69,9 @@ export interface IngestConfig {
   opencodeDir?: string;
   /** Explicit OpenCode database file (`OPENCODE_DB`), read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** `opencode.json`, whose `mcp` section names MCP servers. */
+  /** Global `opencode.json`, whose `mcp` section names MCP servers. The
+   * `opencode.jsonc` beside it and each session directory's project configs
+   * are read too. */
   opencodeConfigPath?: string;
   sourcePaths?: string[];
 }
@@ -270,8 +272,7 @@ export function sync(
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
-  const mcpServers =
-    config.opencodeConfigPath == null ? [] : readOpenCodeMcpServers(config.opencodeConfigPath);
+  const mcpServers = new OpenCodeMcpServerNames(config.opencodeConfigPath);
   const opencode = new OpenCodeRun(db);
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
@@ -597,7 +598,7 @@ function syncOpenCodeSession(
   file: SourceFile,
   ref: OpenCodeSessionRef,
   opencode: OpenCodeRun,
-  mcpServers: readonly string[],
+  mcpServers: OpenCodeMcpServerNames,
 ): OpenCodeSyncOutcome {
   const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
     db,
@@ -631,7 +632,7 @@ function syncOpenCodeSession(
   }
   const catalog = opencode.catalog(store);
   const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
-    mcpServers,
+    mcpServers: mcpServers.forDirectory(loaded.session.directory),
     contextWindows: catalog.windows,
   });
   const prepared: Prepared = {

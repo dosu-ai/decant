@@ -5,6 +5,7 @@
 // writes or checkpoints, and the OpenCode CLI is never started.
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { asInteger, asString, get, isObject } from "../json.ts";
 import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
@@ -188,12 +189,13 @@ function hasTable(db: Database, table: string): boolean {
   );
 }
 
-/** MCP server names from opencode.json: `mcp.servers.<name>` plus the legacy
- * `mcp.<name>` object layout. A missing or malformed file names no servers. */
+/** MCP server names from one OpenCode config file (`opencode.json` or the
+ * JSONC `opencode.jsonc`): `mcp.servers.<name>` plus the legacy `mcp.<name>`
+ * object layout. A missing, unreadable, or malformed file names no servers. */
 export function readOpenCodeMcpServers(configPath: string): string[] {
   let config: Json;
   try {
-    config = JSON.parse(readFileSync(configPath, "utf8")) as Json;
+    config = parseJsonc(readFileSync(configPath, "utf8"));
   } catch {
     return [];
   }
@@ -214,4 +216,134 @@ export function readOpenCodeMcpServers(configPath: string): string[] {
     }
   }
   return [...names].sort(compareCodePoints);
+}
+
+/** The global config and its other spelling beside it: OpenCode reads both
+ * `opencode.json` and `opencode.jsonc` from its config directory. Any other
+ * file name is read alone. */
+export function openCodeGlobalConfigPaths(configPath: string): string[] {
+  const name = basename(configPath);
+  if (name === "opencode.json") {
+    return [configPath, join(dirname(configPath), "opencode.jsonc")];
+  }
+  if (name === "opencode.jsonc") {
+    return [join(dirname(configPath), "opencode.json"), configPath];
+  }
+  return [configPath];
+}
+
+/** Project-level configs OpenCode reads for a session's directory. */
+export function openCodeProjectConfigPaths(directory: string): string[] {
+  return [
+    join(directory, "opencode.json"),
+    join(directory, "opencode.jsonc"),
+    join(directory, ".opencode", "opencode.json"),
+    join(directory, ".opencode", "opencode.jsonc"),
+  ];
+}
+
+/** MCP server names that apply to a session: the global config's merged with
+ * its directory's project configs. Each directory is read once per instance,
+ * and ingest makes one instance per sync, so a config edit applies from the
+ * next sync to sessions it re-derives. */
+export class OpenCodeMcpServerNames {
+  readonly #global: readonly string[];
+  readonly #byDirectory = new Map<string, readonly string[]>();
+
+  constructor(globalConfigPath: string | undefined) {
+    this.#global =
+      globalConfigPath == null ? [] : readAll(openCodeGlobalConfigPaths(globalConfigPath));
+  }
+
+  forDirectory(directory: string | null): readonly string[] {
+    // A relative directory would resolve against Decant's own cwd.
+    if (directory == null || !isAbsolute(directory)) {
+      return this.#global;
+    }
+    let names = this.#byDirectory.get(directory);
+    if (names == null) {
+      const project = readAll(openCodeProjectConfigPaths(directory));
+      names = project.length === 0 ? this.#global : mergeNames([this.#global, project]);
+      this.#byDirectory.set(directory, names);
+    }
+    return names;
+  }
+}
+
+function readAll(paths: readonly string[]): string[] {
+  return mergeNames(paths.map(readOpenCodeMcpServers));
+}
+
+function mergeNames(lists: readonly (readonly string[])[]): string[] {
+  return [...new Set(lists.flat())].sort(compareCodePoints);
+}
+
+/** Parses JSONC as OpenCode accepts it: JSON plus `//` and block comments and
+ * trailing commas. Anything else that is not JSON throws. */
+export function parseJsonc(text: string): Json {
+  return JSON.parse(withoutTrailingCommas(withoutComments(text.replace(/^\uFEFF/, "")))) as Json;
+}
+
+/** Index just past the string literal that opens at `start`. */
+function stringEnd(text: string, start: number): number {
+  let i = start + 1;
+  while (i < text.length && text[i] !== '"') {
+    i += text[i] === "\\" ? 2 : 1;
+  }
+  return i + 1;
+}
+
+function withoutComments(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"') {
+      const end = stringEnd(text, i);
+      out += text.slice(i, end);
+      i = end;
+    } else if (ch === "/" && next === "/") {
+      const end = text.indexOf("\n", i);
+      i = end === -1 ? text.length : end;
+    } else if (ch === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) {
+        throw new SyntaxError("unterminated block comment");
+      }
+      out += " ";
+      i = end + 2;
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function withoutTrailingCommas(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      const end = stringEnd(text, i);
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j] ?? "")) {
+        j += 1;
+      }
+      if (text[j] === "}" || text[j] === "]") {
+        i += 1;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }

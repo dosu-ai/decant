@@ -12,8 +12,9 @@ export interface Config {
   /** Explicit OpenCode database file from `OPENCODE_DB`; present only when
    * that variable is set. Read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** `opencode.json`, whose `mcp` section names the MCP servers OpenCode
-   * prefixes tool names with. */
+  /** Global `opencode.json`, whose `mcp` section names the MCP servers
+   * OpenCode prefixes tool names with. Ingest also reads the `opencode.jsonc`
+   * beside it and each session directory's project configs. */
   opencodeConfigPath?: string;
 }
 

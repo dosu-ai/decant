@@ -52,6 +52,7 @@ import {
   OpenCodeMcpServerNames,
   type OpenCodeSessionRef,
   OpenCodeStore,
+  readOpenCodeModelsCache,
 } from "./sources/opencode-store.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
@@ -79,6 +80,9 @@ export interface IngestConfig {
   opencodeConfigPath?: string;
   /** Read in addition to the global and project configs (`OPENCODE_CONFIG`). */
   opencodeExtraConfigPath?: string;
+  /** OpenCode 1.x's models.dev cache file, read for context windows when a
+   * database holds no catalog (a database only 1.x opened). */
+  opencodeModelsPath?: string;
   sourcePaths?: string[];
 }
 
@@ -314,7 +318,7 @@ export function sync(
     globalFile: config.opencodeConfigPath,
     extraFile: config.opencodeExtraConfigPath,
   });
-  const opencode = new OpenCodeRun(db);
+  const opencode = new OpenCodeRun(db, config.opencodeModelsPath);
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
@@ -570,12 +574,15 @@ interface OpenCodeCatalog {
  */
 class OpenCodeRun {
   readonly #db: Database;
+  readonly #modelsPath: string | null;
   readonly #stores = new Map<string, OpenCodeStore>();
   readonly #catalogs = new Map<string, OpenCodeCatalog>();
+  #modelsCache: OpenCodeCatalog | null = null;
   #sourceDatabases: Set<string> | null = null;
 
-  constructor(db: Database) {
+  constructor(db: Database, modelsPath: string | undefined) {
     this.#db = db;
+    this.#modelsPath = modelsPath == null || modelsPath === "" ? null : modelsPath;
   }
 
   store(dbPath: string): OpenCodeStore | null {
@@ -604,6 +611,10 @@ class OpenCodeRun {
     if (catalog == null) {
       try {
         catalog = { windows: store.contextWindows(), available: true };
+        if (catalog.windows.size === 0 && this.#modelsPath != null) {
+          // OpenCode 1.x keeps the catalog in a cache file, not the database.
+          catalog = this.#readModelsCache(this.#modelsPath);
+        }
       } catch (error) {
         logger.warning("OpenCode model catalog could not be read.", {
           "event.name": "decant.ingest.opencode_catalog_failed",
@@ -615,6 +626,33 @@ class OpenCodeRun {
       this.#catalogs.set(store.path, catalog);
     }
     return catalog;
+  }
+
+  /** Read once per sync, whichever databases need it. Without the file the
+   * catalog counts as unavailable, so sessions derived without it are
+   * re-derived once it can be read. */
+  #readModelsCache(path: string): OpenCodeCatalog {
+    if (this.#modelsCache == null) {
+      const cache = readOpenCodeModelsCache(path);
+      if (cache.status === "ok") {
+        this.#modelsCache = { windows: cache.windows, available: true };
+      } else {
+        if (cache.status === "missing") {
+          logger.info("OpenCode model cache was not found; context windows stay unknown.", {
+            "event.name": "decant.ingest.opencode_models_cache_missing",
+            "file.path": path,
+          });
+        } else {
+          logger.warning("OpenCode model cache could not be read.", {
+            "event.name": "decant.ingest.opencode_models_cache_failed",
+            "file.path": path,
+            "error.message": cache.error,
+          });
+        }
+        this.#modelsCache = { windows: new Map(), available: false };
+      }
+    }
+    return this.#modelsCache;
   }
 
   /** Every `<db>` with an OpenCode source row, read on first use and then

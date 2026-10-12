@@ -444,7 +444,12 @@ export class OpenCodeStore {
 }
 
 function collectContextWindows(value: string, windows: Map<string, number>): void {
-  const body = parseJson(get(parseJson(value), "body"));
+  collectCatalogWindows(parseJson(get(parseJson(value), "body")), windows);
+}
+
+/** `limit.context` per `<providerID>/<modelID>` from a models.dev catalog body
+ * (`{ <provider>: { models: { <model>: { limit: { context } } } } }`). */
+function collectCatalogWindows(body: Json | undefined, windows: Map<string, number>): void {
   if (!isObject(body)) {
     return;
   }
@@ -460,6 +465,34 @@ function collectContextWindows(value: string, windows: Map<string, number>): voi
       }
     }
   }
+}
+
+export type OpenCodeModelsCache =
+  | { status: "ok"; windows: ReadonlyMap<string, number> }
+  | { status: "missing" }
+  | { status: "failed"; error: string };
+
+/** Context windows from OpenCode 1.x's models.dev cache file, which 1.x keeps
+ * on disk instead of in the database (`models.json` in its cache directory,
+ * the raw catalog body; packages/core/src/models-dev.ts). Read-only, and never
+ * fetched: a missing or unreadable file means no windows. */
+export function readOpenCodeModelsCache(path: string): OpenCodeModelsCache {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "missing" };
+    }
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+  const body = parseJson(text);
+  if (!isObject(body)) {
+    return { status: "failed", error: "not a JSON object" };
+  }
+  const windows = new Map<string, number>();
+  collectCatalogWindows(body, windows);
+  return { status: "ok", windows };
 }
 
 /** The catalog envelope is JSON whose `body` is itself a JSON string. */

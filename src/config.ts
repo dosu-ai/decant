@@ -23,6 +23,10 @@ export interface Config {
   /** `OPENCODE_CONFIG`: an extra file OpenCode loads in addition to the global
    * and project configs, so Decant reads it in addition too. */
   opencodeExtraConfigPath?: string;
+  /** OpenCode 1.x's models.dev cache, read for context windows when a
+   * database has no catalog of its own: `OPENCODE_MODELS_PATH`, else
+   * `$XDG_CACHE_HOME/opencode/models.json`. */
+  opencodeModelsPath?: string;
 }
 
 export interface ConfigOverrides {
@@ -40,6 +44,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
   const home = (overrides.homeDir ?? homedir()) || ".";
   const xdgData = nonEmpty(env.XDG_DATA_HOME);
   const xdgConfig = nonEmpty(env.XDG_CONFIG_HOME);
+  const xdgCache = nonEmpty(env.XDG_CACHE_HOME);
   const opencodeDb = nonEmpty(env.OPENCODE_DB);
   const opencodeConfigPath = nonEmpty(env.DECANT_OPENCODE_CONFIG);
   const opencodeExtraConfigPath = nonEmpty(env.OPENCODE_CONFIG);
@@ -61,6 +66,10 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       nonEmpty(env.OPENCODE_CONFIG_DIR) ?? join(xdgConfig ?? join(home, ".config"), "opencode"),
     ...(opencodeConfigPath == null ? {} : { opencodeConfigPath }),
     ...(opencodeExtraConfigPath == null ? {} : { opencodeExtraConfigPath }),
+    // Where OpenCode 1.x keeps it (packages/core/src/models-dev.ts), read-only.
+    opencodeModelsPath:
+      nonEmpty(env.OPENCODE_MODELS_PATH) ??
+      join(xdgCache ?? join(home, ".cache"), "opencode", "models.json"),
   };
 }
 

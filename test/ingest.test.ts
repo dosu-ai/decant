@@ -3665,6 +3665,85 @@ describe("OpenCode ingest", () => {
       closeDb(db);
     });
 
+    test("reads context windows from OpenCode's models.json cache when the database has no catalog", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      const main = join(opencodeDir, "opencode.db");
+      buildOpenCodeV1FixtureDb(main, ["v1-sample.sql"]);
+      const modelsPath = join(dir, "cache", "opencode", "models.json");
+      const withCache = { ...config, opencodeModelsPath: modelsPath };
+      const db = openFreshDb(dir);
+      const window = (): unknown =>
+        db
+          .query(
+            `SELECT json_extract(raw_meta, '$.model_context_window') AS window, i.hash
+               FROM session s JOIN ingest_source i ON i.path = s.source_path`,
+          )
+          .get();
+
+      // No cache file: the window stays absent, one line says why, and the
+      // key records that the session was derived without a catalog.
+      const missing = captureWarnings(() => sync(db, withCache));
+      expect(missing.result).toMatchObject({ ingested: 1, failed: 0 });
+      expect(missing.lines).toEqual([
+        expect.objectContaining({
+          level: "INFO",
+          "event.name": "decant.ingest.opencode_models_cache_missing",
+          "file.path": modelsPath,
+        }),
+      ]);
+      expect(window()).toEqual({ window: null, hash: expect.stringMatching(/\|no-catalog$/) });
+      expect(sync(db, withCache)).toMatchObject({ ingested: 0, skipped: 1 });
+
+      // A malformed file warns and still never fails the sync.
+      mkdirSync(dirname(modelsPath), { recursive: true });
+      writeFileSync(modelsPath, "{not json");
+      const malformed = captureWarnings(() => sync(db, withCache));
+      expect(malformed.result).toMatchObject({ ingested: 0, skipped: 1, failed: 0 });
+      expect(malformed.lines).toEqual([
+        expect.objectContaining({
+          level: "WARN",
+          "event.name": "decant.ingest.opencode_models_cache_failed",
+          "file.path": modelsPath,
+        }),
+      ]);
+
+      // Once the cache reads, the session is re-derived with its window.
+      writeFileSync(
+        modelsPath,
+        JSON.stringify({
+          "opencode-go": {
+            id: "opencode-go",
+            models: { "glm-5.3-flash": { limit: { context: 200000, output: 32000 } } },
+          },
+        }),
+      );
+      expect(sync(db, withCache)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(window()).toEqual({ window: 200000, hash: expect.not.stringContaining("no-catalog") });
+      expect(sync(db, withCache)).toMatchObject({ ingested: 0, skipped: 1 });
+      closeDb(db);
+    });
+
+    test("prefers the database's own catalog over models.json", () => {
+      const { dir, opencodeDir, config } = opencodeCase();
+      buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["v1-sample.sql"]);
+      const modelsPath = join(dir, "models.json");
+      writeFileSync(
+        modelsPath,
+        JSON.stringify({
+          "opencode-go": { models: { "glm-5.3-flash": { limit: { context: 7 } } } },
+        }),
+      );
+      const db = openFreshDb(dir);
+      const run = captureWarnings(() => sync(db, { ...config, opencodeModelsPath: modelsPath }));
+      expect(run.lines).toEqual([]);
+      expect(
+        db
+          .query("SELECT json_extract(raw_meta, '$.model_context_window') AS window FROM session")
+          .get(),
+      ).toEqual({ window: 1_000_000 });
+      closeDb(db);
+    });
+
     test("takes a migrated session's usage from its 1.x step-finish parts", () => {
       const { dir, opencodeDir, config } = opencodeCase();
       const main = join(opencodeDir, "opencode.db");

@@ -28,7 +28,11 @@ Use this checklist when adding support for another coding-agent CLI.
    sessions with a per-session change key and loads one session's rows; each
    session is registered as a virtual source `<database>#<session id>` with
    the key in `ingest_source.hash`, and the sync loop handles it before the
-   file-open path.
+   file-open path. When the tool has changed its storage layout, one store can
+   list sessions from each layout: tag each source ref with its format, give
+   each layout's change key a distinct prefix so a session that moves between
+   layouts is re-ingested, decide in discovery which copy of a session wins,
+   and keep one pure parser per layout.
 2. **Parser** adds `src/sources/<tool>.ts` and returns a `ParsedSession`.
    Parsers are pure and print-free, returning data and issues without throwing
    on malformed input or writing to stdout or stderr.

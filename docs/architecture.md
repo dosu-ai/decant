@@ -48,16 +48,21 @@ policy belong in `src/server/`.
 Each source file produces one normalized session. OpenCode keeps every
 session in one SQLite database, so there each session is a virtual source
 `<database path>#<session id>`: `src/sources/opencode-store.ts` opens the
-database read-only (never writing or checkpointing it) and hands plain rows to
-the pure parser in `src/sources/opencode.ts`. Parsers retain canonical raw
-records while mapping provider-specific roles, blocks, usage, tool calls, and
-lineage into shared tables. Malformed lines and unknown record types become
-diagnostics rather than aborting the file.
+database read-only (never writing or checkpointing it), lists sessions from
+both OpenCode's 2.x tables and its 1.x tables, and hands plain rows to the
+pure parser for that layout (`src/sources/opencode.ts` or
+`src/sources/opencode-legacy.ts`). When one session has copies in both layouts
+or in several databases, ingest reads the copy updated last, preferring 2.x on
+a tie within one database. Parsers retain canonical raw records while mapping
+provider-specific roles, blocks, usage, tool calls, and lineage into shared
+tables. Malformed lines and unknown record types become diagnostics rather than
+aborting the file.
 
 Ingest uses file size and modification time to avoid unnecessary work on JSONL
-sources, and a per-session change key (the session's update time, message
-count, highest sequence, and newest message update, stored in
-`ingest_source.hash`) for OpenCode sessions. A changed session is replaced
+sources, and a per-session change key for OpenCode sessions, stored in
+`ingest_source.hash` and built per layout from the session's update time and
+its message (and, for 1.x, part) counts and update times; see
+[data lifecycle](data-lifecycle.md). A changed session is replaced
 transactionally, then Decant materializes context-window rollups and versioned
 per-session economics vectors. Costs are also stored at ingest and reconciled
 with current rates on every sync while transcripts and user state remain

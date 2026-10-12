@@ -84,23 +84,57 @@ content, so input is stored net of cache reads, and thought tokens are
 reported outside the candidate count, so they are folded into output and also
 recorded as reported reasoning.
 
-OpenCode records disjoint `input`, `output`, `reasoning`, `cache.read`, and
+OpenCode records `input`, `output`, `reasoning`, `cache.read`, and
 `cache.write` counts on each assistant step. Decant stores input as reported,
-output as `output + reasoning` with reasoning also recorded as reported,
-cache reads as cache reads, and cache writes as cache creation. Compaction
-steps carry their own usage and are counted; `opencode stats` does not count
-them on a local install, so Decant can read slightly higher. OpenCode's
-session totals also include title generation, which never appears in a
-message row, so Decant's per-session totals can read slightly lower than
-OpenCode's. Rows a fork inherited from its parent are skipped.
+output with reasoning included (reasoning is also recorded as reported), cache
+reads as cache reads, and cache writes as cache creation. OpenCode 2.x, and
+1.x from v1.3.16 on, record output without reasoning, so Decant stores
+`output + reasoning`. Releases up to v1.3.15 recorded output that already
+included reasoning, so Decant does not add reasoning again; OpenCode's recorded
+cost for those steps charges reasoning twice, which matters only where Decant
+falls back to the reported cost. A step's recorded `total` decides which
+convention it follows. Without one, the OpenCode version recorded on the
+session decides. OpenCode writes that version once, when the session is
+created, so a session created before v1.3.16 and resumed on a later release
+can be misclassified for steps that carry no `total`. Preview builds record a
+version of the form `0.0.0-<channel>-<YYYYMMDDHHmm>`; Decant compares that
+build time with the v1.3.16 release (2026-04-06).
 
-Known limitation: when OpenCode upgrades from 1.x it migrates sessions into its
-2.x tables, and Decant reads those migrated sessions as stored. Their
-per-message token counts reflect only each message's last request, sessions
-created before OpenCode v1.3.16 may count reasoning tokens twice, and their
-file references and subagent links may be missing. Decant does not read
-OpenCode's 1.x tables yet; a later reader for them will correct these sessions
-from the original 1.x records.
+OpenCode 1.x keeps steps as parts of a message, and the message's own token
+counts hold only its last step. Decant sums the message's per-step
+(`step-finish`) usage instead, and counts one step per message, as 2.x does
+per row. A 1.x message with no per-step records uses its own counts, and one
+that recorded neither tokens nor cost (an unfinished request) has no usage.
+
+Compaction steps carry their own usage and are counted; `opencode stats` does
+not count them on a local install, so Decant can read slightly higher. In 1.x a
+compaction is a request message plus the summary that answers it; Decant
+stores the pair as one compaction record carrying the summary's usage, as it
+does for a 2.x compaction row. OpenCode 2.x session totals also include title
+generation, which never appears in a message row, so Decant's per-session
+totals can read slightly lower than OpenCode's.
+
+A fork copies its parent's messages with their original creation time.
+Decant skips every message older than its session, so forked history is
+counted once, in the parent. 2.x records the fork link, but 1.x records none,
+and sessions OpenCode migrated from 1.x keep none, so the timestamp is the
+only signal for them. `opencode stats` skips inherited rows only for sessions
+with a fork link, so for a fork migrated from 1.x it counts the parent's
+history again and reads higher than Decant. Decant differs from it here on
+purpose. Messages past a revert point stay counted until OpenCode deletes them
+at the next prompt; OpenCode's own migration keeps them too. A 1.x message
+that holds only a subtask (a `/command` run as a subagent) is kept as a system
+message, `Subtask (<agent>): <description>`, so the turn stays visible.
+
+When OpenCode upgrades from 1.x it migrates sessions into its 2.x tables.
+Decant reads migrated rows with the 1.x rules that still apply to them: the
+session's version decides the reasoning convention (the migration does not
+copy `total`), `filePath` tool inputs produce file references, and `task`
+calls link subagents. The migration copies each message's last-step token counts only, so
+a migrated 1.x message that took several steps (a retry within one request)
+reads lower than the original. When a 1.x binary keeps writing a session after
+the migration, its 1.x copy is newer, and Decant reads that copy with exact
+per-step usage.
 
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
@@ -230,7 +264,9 @@ as a direct call to that server is. OpenCode writes `<server>` with the same
 both forms of a call share one `mcp_server`. Inner calls with no namespace
 (`search`) or in the `opencode` namespace are OpenCode built-ins and keep
 their recorded name. Any other namespace is treated as an MCP server, so a
-plugin that adds its own namespace to code mode would count as MCP.
+plugin that adds its own namespace to code mode would count as MCP. OpenCode
+1.x has no `execute` tool and calls MCP tools directly as `<server>_<tool>`,
+which Decant names `mcp__<server>__<tool>` like a 2.x direct call.
 
 Inner calls are tool-call rows, so these numbers count both the `execute`
 call and each inner call:
@@ -383,7 +419,8 @@ For one model call, occupancy is:
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
 an explicit model window, and OpenCode sessions take theirs from the models.dev
-catalog OpenCode caches. Claude and Gemini infer the window from the model
+catalog OpenCode caches (in its database for 2.x, in a `models.json` cache
+file for 1.x; the window is unknown when no cache exists). Claude and Gemini infer the window from the model
 when the source does not record one, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.

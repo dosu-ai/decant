@@ -150,9 +150,14 @@ the server names that apply to a session, the next sync re-derives that
 session; sessions whose names did not change are skipped as usual. Run
 `sync`, `watch`, and `serve` with the same `OPENCODE_CONFIG` and
 `DECANT_OPENCODE_CONFIG` values, or each switch re-derives those sessions.
-OpenCode sessions are read from `opencode.db` (and `opencode-<channel>.db`)
-read-only; Decant never writes to it. `--path` also accepts an OpenCode `.db`
-file.
+Decant supports OpenCode 1.2 and later, reading both its 1.x and its 2.x
+session storage. OpenCode sessions are read from `opencode.db` (and
+`opencode-<channel>.db`) read-only; Decant never writes to it. When the same
+session is stored in both layouts, Decant reads the copy OpenCode updated last.
+For context windows Decant uses the models.dev catalog OpenCode caches: 2.x
+keeps it in the database, and for 1.x Decant reads
+`$XDG_CACHE_HOME/opencode/models.json` (default `~/.cache/opencode/models.json`)
+read-only. `--path` also accepts an OpenCode `.db` file.
 
 To index selected files or a temporary source tree:
 

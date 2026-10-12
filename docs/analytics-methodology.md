@@ -240,6 +240,8 @@ call and each inner call:
 - The Dosu MCP call counters on sessions.
 - `tool_calls` in `decant stats` and in token-economics buckets.
 - The activity report's "Tool calls" figure and its tool table.
+- A session report's tool table, so it can sum to more than that session's
+  "Tool calls" total below.
 
 These follow transcript blocks instead, so an `execute` call counts once
 however many inner calls it made:

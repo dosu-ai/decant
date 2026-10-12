@@ -147,7 +147,9 @@ named by `OPENCODE_CONFIG` in addition to those. `DECANT_OPENCODE_CONFIG` names
 one file that Decant reads in place of the global directory's two files. A
 missing or malformed config file names no servers. When a config edit changes
 the server names that apply to a session, the next sync re-derives that
-session; sessions whose names did not change are skipped as usual.
+session; sessions whose names did not change are skipped as usual. Run
+`sync`, `watch`, and `serve` with the same `OPENCODE_CONFIG` and
+`DECANT_OPENCODE_CONFIG` values, or each switch re-derives those sessions.
 OpenCode sessions are read from `opencode.db` (and `opencode-<channel>.db`)
 read-only; Decant never writes to it. `--path` also accepts an OpenCode `.db`
 file.

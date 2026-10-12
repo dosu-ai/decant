@@ -1,6 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -118,6 +127,61 @@ describe("OpenCodeStore", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("sees rows that exist only in the WAL of a database another process holds open", () => {
+    const path = freshPath();
+    buildOpenCodeFixtureDb(path, ["sample.sql"]);
+    const writer = new Database(path, { strict: true });
+    try {
+      writer.exec("PRAGMA journal_mode = WAL;");
+      // Auto-checkpoint is off so the insert stays in the -wal file, as it does
+      // while OpenCode is running; an immutable open would never see it.
+      writer.exec("PRAGMA wal_autocheckpoint = 0;");
+      writer.exec(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
+                   VALUES ('ses_wal', 'prj', 'wal', '/tmp/example', '2.0.27', 5, 9)`);
+      writer.exec(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+                   VALUES ('msg_wal_1', 'ses_wal', 'user', 1, 6, 7, '{"text":"hello"}')`);
+      expect(existsSync(`${path}-wal`)).toBe(true);
+      expect(statSync(`${path}-wal`).size).toBeGreaterThan(0);
+
+      const store = OpenCodeStore.open(path);
+      try {
+        expect(store.listSessions().map((ref) => [ref.sessionId, ref.fingerprint])).toEqual([
+          ["ses_sample", "1791786060000:4:4:1791786008000"],
+          ["ses_wal", "9:1:1:7"],
+        ]);
+        expect(store.loadSession("ses_wal")?.messages.map((row) => row.id)).toEqual(["msg_wal_1"]);
+      } finally {
+        store.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
+  test("never modifies the database file", () => {
+    const path = freshPath();
+    buildOpenCodeFixtureDb(path, ["sample.sql", "mcp.sql"]);
+    const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
+    const beforeDigest = digest();
+    const beforeMtime = statSync(path).mtimeMs;
+
+    const store = OpenCodeStore.open(path);
+    try {
+      store.listSessions();
+      store.loadSession("ses_sample");
+      store.contextWindows();
+    } finally {
+      store.close();
+    }
+
+    expect(digest()).toBe(beforeDigest);
+    expect(statSync(path).mtimeMs).toBe(beforeMtime);
+    // A read-only connection leaves no journal or WAL sidecar behind.
+    expect(existsSync(`${path}-wal`)).toBe(false);
+    expect(existsSync(`${path}-shm`)).toBe(false);
+    expect(existsSync(`${path}-journal`)).toBe(false);
   });
 
   test("refuses to open a missing database", () => {

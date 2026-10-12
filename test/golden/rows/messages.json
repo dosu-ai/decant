@@ -1261,7 +1261,7 @@
     "output_tokens": 40,
     "cache_read_tokens": 40,
     "cache_creation_tokens": 16,
-    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"Read the file before answering.\",\"time\":{\"completed\":1791786002000,\"created\":1791786001000},\"type\":\"reasoning\"},{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/tmp/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}],\"cost\":0.0000416,\"finish\":\"tool-calls\",\"id\":\"msg_sample_2\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"seq\":2,\"time\":{\"completed\":1791786005000,\"created\":1791786001000},\"tokens\":{\"cache\":{\"read\":40,\"write\":16},\"input\":120,\"output\":30,\"reasoning\":10},\"type\":\"assistant\"}"
+    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"Read the file before answering.\",\"time\":{\"completed\":1791786002000,\"created\":1791786001000},\"type\":\"reasoning\"},{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/decant-fixture/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}],\"cost\":0.0000416,\"finish\":\"tool-calls\",\"id\":\"msg_sample_2\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"seq\":2,\"time\":{\"completed\":1791786005000,\"created\":1791786001000},\"tokens\":{\"cache\":{\"read\":40,\"write\":16},\"input\":120,\"output\":30,\"reasoning\":10},\"type\":\"assistant\"}"
   },
   {
     "tool": "opencode",
@@ -1277,7 +1277,7 @@
     "output_tokens": null,
     "cache_read_tokens": null,
     "cache_creation_tokens": null,
-    "raw": "{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/tmp/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}"
+    "raw": "{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/decant-fixture/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}"
   },
   {
     "tool": "opencode",

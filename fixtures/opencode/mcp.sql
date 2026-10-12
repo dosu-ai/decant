@@ -4,7 +4,7 @@
 INSERT INTO `session_v2` (`id`, `project_id`, `slug`, `directory`, `title`, `version`, `cost`,
   `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`,
   `agent`, `model`, `time_created`, `time_updated`)
-VALUES ('ses_mcp', 'prj_sample', 'mcp', '/tmp/example', 'Search the knowledge base', '2.0.27',
+VALUES ('ses_mcp', 'prj_sample', 'mcp', '/decant-fixture/example', 'Search the knowledge base', '2.0.27',
   0.0108, 2200, 70, 25, 500, 0, 'build',
   '{"providerID":"openrouter","id":"meta/muse-wonder","variant":"high"}',
   1791789600000, 1791789660000);

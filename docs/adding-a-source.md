@@ -13,7 +13,9 @@ Use this checklist when adding support for another coding-agent CLI.
   paths, tokens, credentials, or environment values.
 - Write every fixture by hand with invented content such as `"hello"`,
   `/tmp/example`, and `example-model`. A redacted or edited real transcript is
-  not a synthetic fixture.
+  not a synthetic fixture. When ingest reads files near a session's directory,
+  as OpenCode config lookup does, use a directory no user can create, such as
+  `/decant-fixture/example`, so golden runs never read the machine's own files.
 - Parity checks against a private session store must report counts and shape
   mismatches only, never content.
 

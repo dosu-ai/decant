@@ -63,9 +63,9 @@ export function syntheticOpenCodeSession(id: string, requests: SyntheticRequest[
     session: {
       tool: "opencode",
       sourceSessionId: id,
-      projectPath: "/tmp/example",
+      projectPath: "/decant-fixture/example",
       title: "hello",
-      cwd: "/tmp/example",
+      cwd: "/decant-fixture/example",
       gitBranch: null,
       model: requests[0]?.model ?? null,
       reasoningEffort: null,

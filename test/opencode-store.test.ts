@@ -58,7 +58,7 @@ describe("OpenCodeStore", () => {
       const loaded = store.loadSession("ses_sample");
       expect(loaded?.session).toMatchObject({
         id: "ses_sample",
-        directory: "/tmp/example",
+        directory: "/decant-fixture/example",
         title: "Summarize the example file",
         version: "2.0.27",
         cost: 0.0000794,
@@ -123,7 +123,7 @@ describe("OpenCodeStore", () => {
       expect(() => store.loadSession("x")).not.toThrow();
       const writer = new Database(path, { strict: true });
       writer.exec(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
-                   VALUES ('ses_live', 'prj', 'live', '/tmp/example', '2.0.27', 5, 9)`);
+                   VALUES ('ses_live', 'prj', 'live', '/decant-fixture/example', '2.0.27', 5, 9)`);
       writer.close();
       expect(store.listSessions()).toEqual([
         { dbPath: path, sessionId: "ses_live", fingerprint: "9:0:-1:-1", timeUpdated: 9 },
@@ -143,7 +143,7 @@ describe("OpenCodeStore", () => {
       // while OpenCode is running; an immutable open would never see it.
       writer.exec("PRAGMA wal_autocheckpoint = 0;");
       writer.exec(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
-                   VALUES ('ses_wal', 'prj', 'wal', '/tmp/example', '2.0.27', 5, 9)`);
+                   VALUES ('ses_wal', 'prj', 'wal', '/decant-fixture/example', '2.0.27', 5, 9)`);
       writer.exec(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
                    VALUES ('msg_wal_1', 'ses_wal', 'user', 1, 6, 7, '{"text":"hello"}')`);
       expect(existsSync(`${path}-wal`)).toBe(true);

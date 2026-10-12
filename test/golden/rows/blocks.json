@@ -1208,7 +1208,7 @@
     "text": null,
     "tool_name": "read",
     "tool_use_id": "call_read_1",
-    "tool_input": "{\"path\":\"/tmp/example/notes.txt\"}",
+    "tool_input": "{\"path\":\"/decant-fixture/example/notes.txt\"}",
     "tool_result": null
   },
   {

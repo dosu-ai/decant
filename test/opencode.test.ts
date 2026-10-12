@@ -36,7 +36,7 @@ function sessionRow(overrides: Partial<OpenCodeSessionRow> = {}): OpenCodeSessio
     fork_session_id: null,
     fork_boundary: null,
     slug: "inline",
-    directory: "/tmp/example",
+    directory: "/decant-fixture/example",
     title: "Inline session",
     version: "2.0.27",
     cost: 0,
@@ -111,8 +111,8 @@ describe("parseOpenCodeSession", () => {
     expect(session).toMatchObject({
       tool: "opencode",
       sourceSessionId: "ses_sample",
-      projectPath: "/tmp/example",
-      cwd: "/tmp/example",
+      projectPath: "/decant-fixture/example",
+      cwd: "/decant-fixture/example",
       title: "Summarize the example file",
       model: "glm-5.3-flash",
       reasoningEffort: "max",
@@ -161,7 +161,7 @@ describe("parseOpenCodeSession", () => {
         blockType: "tool_use",
         toolName: "read",
         toolUseId: "call_read_1",
-        toolInput: { path: "/tmp/example/notes.txt" },
+        toolInput: { path: "/decant-fixture/example/notes.txt" },
       },
     ]);
     expect(session.messages[2]).toMatchObject({
@@ -550,7 +550,10 @@ describe("parseOpenCodeSession", () => {
           time: { created: T0 + 1000 },
         }),
         msg(2, "model-switched", { model: GLM, time: { created: T0 + 2000 } }),
-        msg(3, "location-switched", { location: "/tmp/example", time: { created: T0 + 3000 } }),
+        msg(3, "location-switched", {
+          location: "/decant-fixture/example",
+          time: { created: T0 + 3000 },
+        }),
         msg(4, "user", { text: "hello", time: { created: T0 + 4000 } }),
       ],
       context,
@@ -642,7 +645,7 @@ describe("parseOpenCodeSession", () => {
       name: "read",
       state: {
         status: "completed",
-        input: { path: "/tmp/example/a" },
+        input: { path: "/decant-fixture/example/a" },
         content: [{ type: "text", text: "a" }],
       },
       time: { created: T0 },

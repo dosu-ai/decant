@@ -144,7 +144,7 @@ describe("exportTrajectory", () => {
       expect(out.records[0]).toEqual({
         role: "meta",
         source: "opencode",
-        cwd: "/tmp/example",
+        cwd: "/decant-fixture/example",
         model: "glm-5.3-flash",
       });
       expect(out.records.filter((r) => (r as { role: string }).role === "tool")).toHaveLength(1);

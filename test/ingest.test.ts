@@ -3178,8 +3178,8 @@ describe("OpenCode ingest", () => {
     });
     const script = `
       INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, agent, model, time_created, time_updated) VALUES
-        ('ses_parent', 'prj', NULL, 'parent', '/tmp/example', 'Parent', '2.0.27', 'build', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 10000}),
-        ('ses_child', 'prj', 'ses_parent', 'child', '/tmp/example', 'Child', '2.0.27', 'explore', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0 + 2000}, ${T0 + 8000});
+        ('ses_parent', 'prj', NULL, 'parent', '/decant-fixture/example', 'Parent', '2.0.27', 'build', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0}, ${T0 + 10000}),
+        ('ses_child', 'prj', 'ses_parent', 'child', '/decant-fixture/example', 'Child', '2.0.27', 'explore', '{"providerID":"opencode-go","id":"glm-5.3-flash"}', ${T0 + 2000}, ${T0 + 8000});
       INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES
         ('msg_p1', 'ses_parent', 'user', 1, ${T0}, ${T0}, '{"text":"Delegate the synthetic task.","time":{"created":${T0}}}'),
         ('msg_p2', 'ses_parent', 'assistant', 2, ${T0 + 1000}, ${T0 + 9000}, '${parentTool.replaceAll("'", "''")}'),

@@ -24,9 +24,21 @@ test("sync stays visually icon-led while retaining a hidden live announcement", 
 
 test("background archive activity waits for an explicit update", () => {
   expect(main).toContain("const [archiveUpdateAvailable, setArchiveUpdateAvailable]");
-  expect(main).toContain('if (payload.reason !== "manual")');
-  expect(main.match(/if \(payload\.reason !== "manual"\) \{\s*return;\s*\}/g)).toHaveLength(2);
-  expect(main).toContain('payload.reason === "manual" || payload.reason === "session_state"');
+  expect(main.match(/if \(!isForegroundSync\(payload\.reason\)\) \{\s*return;\s*\}/g)).toHaveLength(
+    2,
+  );
+  expect(main).toMatch(
+    /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
+  );
+  expect(main).toContain("localSyncingRef.current = localSyncing;");
+  // Server sync failures share EventSource's "error" listener and must end a
+  // foreground sync rather than read as a dropped connection.
+  expect(main).toContain("const failure = parseSyncFailure(event);");
+  // Reconnecting drops a stream-only sync indicator whose terminal event was
+  // lost, but never one owned by this tab's own pending POST /api/sync.
+  expect(main).toMatch(
+    /if \(!manualSyncPendingRef\.current\) \{\s*progressThrottle\.cancel\(\);\s*setLocalSyncing\(false\);/,
+  );
   expect(main).toContain('events.addEventListener("archive_updated", handleArchiveUpdated');
   expect(main).not.toContain('events.addEventListener("archive_updated", requestRefresh)');
   expect(main).toContain('archiveUpdateAvailable ? "Update" : "Sync"');

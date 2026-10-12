@@ -1083,6 +1083,33 @@ describe("refreshSessionCosts", () => {
     expect(refreshSessionCosts(db)).toBe(0);
     db.close();
   });
+
+  test("reprices an archived GLM session that was stored before GLM had a rate", () => {
+    // Claude Code pointed at Z.ai's Anthropic-compatible endpoint records GLM
+    // model IDs. Archives synced before GLM was priced hold a $0 estimate.
+    const db = freshDb();
+    const glmTranscript = fixture("claude", "enriched.jsonl").replaceAll(
+      '"model":"claude-opus-4-7"',
+      '"model":"glm-5.3"',
+    );
+    upsertSession(db, parseClaudeSession("sess-glm-claude", glmTranscript), "/x/glm.jsonl", 1, 2);
+    const stored = db.query("SELECT model, estimated_cost_usd AS cost FROM session").get() as {
+      model: string;
+      cost: number;
+    };
+    expect(stored.model).toBe("glm-5.3");
+    expect(stored.cost).toBeGreaterThan(0);
+
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    expect(refreshSessionCosts(db)).toBe(1);
+
+    const repriced = db.query("SELECT estimated_cost_usd AS cost FROM session").get() as {
+      cost: number;
+    };
+    expect(repriced.cost).toBe(stored.cost);
+    expect(refreshSessionCosts(db)).toBe(0);
+    db.close();
+  });
 });
 
 describe("archive aggregation", () => {

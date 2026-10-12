@@ -428,4 +428,16 @@ describe("parseClaudeSession", () => {
     const parsed = parseClaudeSession("s", `${content}\n`);
     expect(parsed.session.model).toBe("claude-opus-4-7");
   });
+
+  test("primary model of a Z.ai-routed session is its GLM model once GLM is priced", () => {
+    // Before GLM had a rate, the priceable preference labeled this session with
+    // the Haiku title model. That label also prices unrecorded and residual
+    // tokens, which is why the change bumped INGEST_PIPELINE_REVISION.
+    const content = [
+      '{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"assistant","model":"claude-haiku-4-5","content":[]}}',
+      '{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"assistant","model":"glm-5.3","content":[]}}',
+      '{"type":"assistant","uuid":"a3","timestamp":"2026-05-01T10:00:02.000Z","message":{"role":"assistant","model":"glm-5.3","content":[]}}',
+    ].join("\n");
+    expect(parseClaudeSession("s", `${content}\n`).session.model).toBe("glm-5.3");
+  });
 });

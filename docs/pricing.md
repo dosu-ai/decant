@@ -8,7 +8,8 @@ below. GPT-6.1
 Sol rates were verified on September 29, 2026, GPT-6 Sol and Luna rates on
 September 22, 2026, and other current OpenAI coding-agent rates retain their
 September 9, 2026 verification. Legacy OpenAI
-rates were checked September 2, 2026, and Gemini rates September 28, 2026.
+rates were checked September 2, 2026, Gemini rates September 28, 2026, and
+Z.ai GLM and Meta Muse rates October 12, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
@@ -29,6 +30,8 @@ rates were checked September 2, 2026, and Gemini rates September 28, 2026.
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
 - [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked September 28, 2026)
+- [Z.ai pricing](https://docs.z.ai/guides/overview/pricing) (checked October 12, 2026)
+- [Meta Model API pricing](https://dev.meta.ai/docs/pricing-rate-limits) (checked October 12, 2026)
 
 All dollar amounts below are USD per million tokens. A dash means that the
 provider does not publish a first-party API token price for that model slug.
@@ -75,12 +78,44 @@ provider does not publish a first-party API token price for that model slug.
 | Gemini 2.5 Flash | $0.30 | $0.03 | $0.30-equiv | $2.50 |
 | Gemini 2.5 Flash-Lite | $0.10 | $0.01 | $0.10-equiv | $0.40 |
 | Gemini image, TTS, live, transcribe, native-audio, computer-use variants | — | — | — | — |
+| GLM-5.3, GLM-5.2, GLM-5.1 | $1.40 | $0.26 | no additional fee | $4.40 |
+| GLM-5.3-FlashX | $0.37 | $0.075 | no additional fee | $1.25 |
+| GLM-5.3-Flash | $0.15 | $0.03 | no additional fee | $0.50 |
+| GLM-5 | $1.00 | $0.20 | no additional fee | $3.20 |
+| GLM-4.7, GLM-4.6, GLM-4.5 | $0.60 | $0.11 | no additional fee | $2.20 |
+| GLM-4.5-X | $2.20 | $0.45 | no additional fee | $8.90 |
+| GLM-4.5-AirX | $1.10 | $0.22 | no additional fee | $4.50 |
+| GLM-4.5-Air | $0.20 | $0.03 | no additional fee | $1.10 |
+| GLM-4.7-FlashX | $0.07 | $0.01 | no additional fee | $0.40 |
+| GLM-4-32B-0414-128K | $0.10 | $0.10 | no additional fee | $0.10 |
+| GLM-4.7-Flash, GLM-4.5-Flash | free | free | free | free |
+| GLM-5.3-HighSpeed, GLM-5.2-HighSpeed, GLM-5-Turbo, GLM-5V-Turbo | — | — | — | — |
+| Muse Wonder 1.0 | $4.00 | $0.20 | no additional fee | $20.00 |
+| Muse Spark 1.3, 1.2, 1.1 | $1.25 | $0.15 | no additional fee | $4.25 |
+| Muse Spark 1.3 Contributor, 1.2 Contributor | $0.10 | $0.002 | no additional fee | $0.20 |
+| Muse Wonder Full, Muse Glimmer, Muse Image, Muse Voice | — | — | — | — |
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
 cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
 and GPT-6.1 models above bill cache writes at 1.25 times the uncached-input rate. Gemini
 bills cache storage by the token-hour, so Decant maps the equivalent write
 charge to approximately the input rate for typical session-length holds.
+
+Z.ai and Meta charge no separate cache-write fee, so Decant bills cache writes
+for GLM and Muse models at the input rate. Z.ai lists cached-input storage as
+free for a limited time, so Decant adds no holding charge. Z.ai publishes
+GLM-4.7-Flash and GLM-4.5-Flash as free, so Decant prices them at zero rather
+than leaving them unpriced. The HighSpeed GLM models are only offered through
+the GLM Coding Plan, and GLM-5-Turbo and GLM-5V-Turbo are absent from Z.ai's
+pricing page, so they stay unpriced. Muse Wonder Full is only available
+through a Muse Code subscription, and Muse Glimmer only through third-party
+routers, so neither has a first-party API rate. OpenRouter's unversioned
+`meta/muse-wonder` bills at Muse Wonder 1.0's rates, so Decant maps it there.
+Router prefixes such as `z-ai/` and `meta/`, hosted routing suffixes such as
+OpenRouter's `:free` and Ollama's `:cloud`, and promotional `-free` copies are
+priced at the model's list rate. Other tags, such as an Ollama or LM Studio
+quantization like `:q4_K_M`, name a local build with no API spend, so Decant
+leaves them unpriced.
 
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
@@ -139,7 +174,8 @@ session totals at the session's model and standard rates.
 The estimates use standard global API token rates. They do not attempt to
 convert ChatGPT subscription usage or Codex credits to dollars, and they do not
 apply Batch, Flex, Priority, regional-processing, data-residency, or
-partner-cloud modifiers.
+partner-cloud modifiers. Requests made through subscription routes such as the
+GLM Coding Plan are estimated at the model's API list rate.
 
 OpenAI applies long-context rates above 272,000 prompt tokens for eligible API
 models. Codex reports cumulative session usage rather than per-request usage,

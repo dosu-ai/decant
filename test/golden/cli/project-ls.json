@@ -19,9 +19,9 @@
   {
     "path": "/decant-fixture/example",
     "name": "example",
-    "sessions": 2,
-    "estimated_cost_usd": 0.010879400000000001,
-    "last_seen_at": "2026-10-12T07:21:00.000Z",
+    "sessions": 3,
+    "estimated_cost_usd": 0.0109688,
+    "last_seen_at": "2026-10-12T07:27:40.000Z",
     "is_worktree": false,
     "root_path": "/decant-fixture/example",
     "worktree_label": null,

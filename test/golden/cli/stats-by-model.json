@@ -28,12 +28,12 @@
   },
   {
     "key": "glm-5.3-flash",
-    "sessions": 1,
-    "input_tokens": 320,
-    "output_tokens": 52,
-    "reasoning_tokens": 10,
+    "sessions": 2,
+    "input_tokens": 690,
+    "output_tokens": 109,
+    "reasoning_tokens": 20,
     "est_reasoning_tokens": 0,
-    "estimated_cost_usd": 0.0000794
+    "estimated_cost_usd": 0.00016880000000000004
   },
   {
     "key": "meta/muse-wonder",

@@ -14,7 +14,8 @@
     "fixtures/gemini/mcp.jsonl",
     "fixtures/gemini/sample.jsonl",
     "fixtures/opencode/mcp.sql",
-    "fixtures/opencode/sample.sql"
+    "fixtures/opencode/sample.sql",
+    "fixtures/opencode/v1-sample.sql"
   ],
   "row_dumps": [
     "blocks",

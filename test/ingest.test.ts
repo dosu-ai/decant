@@ -101,7 +101,11 @@ function stageFixtures(dir: string): IngestConfig {
     "/synthetic/gemini-project\n",
   );
 
-  buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["mcp.sql", "sample.sql"]);
+  buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), [
+    "mcp.sql",
+    "sample.sql",
+    "v1-sample.sql",
+  ]);
   const opencodeConfigPath = join(opencodeDir, "opencode.json");
   writeFileSync(
     opencodeConfigPath,
@@ -2365,7 +2369,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 12, ingested: 12, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 13, ingested: 13, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
@@ -2387,7 +2391,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 12, ingested: 0, skipped: 12, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 13, ingested: 0, skipped: 13, failed: 0 });
     expect(
       db
         .query(
@@ -2406,7 +2410,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 12, ingested: 0, skipped: 12, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 13, ingested: 0, skipped: 13, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });
@@ -3571,7 +3575,7 @@ describe("OpenCode ingest", () => {
     test("ingests a database only OpenCode 1.x opened", () => {
       const { dir, opencodeDir, config } = opencodeCase();
       const main = join(opencodeDir, "opencode.db");
-      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      buildOpenCodeV1FixtureDb(main, ["v1-sample.sql"]);
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, failed: 0 });
       expect(
@@ -3685,8 +3689,8 @@ describe("OpenCode ingest", () => {
       const { dir, opencodeDir, config } = opencodeCase();
       const main = join(opencodeDir, "opencode.db");
       const beta = join(opencodeDir, "opencode-beta.db");
-      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
-      buildOpenCodeV1FixtureDb(beta, ["v1/sample.sql"]);
+      buildOpenCodeV1FixtureDb(main, ["v1-sample.sql"]);
+      buildOpenCodeV1FixtureDb(beta, ["v1-sample.sql"]);
       exec(main, "UPDATE session SET time_updated = time_updated + 1000");
       expect(discover(config).map((file) => file.path)).toEqual([`${main}#ses_v1_sample`]);
       const db = openFreshDb(dir);
@@ -3697,7 +3701,7 @@ describe("OpenCode ingest", () => {
     test("skips an unchanged 1.x session and re-ingests when a part changes", () => {
       const { dir, opencodeDir, config } = opencodeCase();
       const main = join(opencodeDir, "opencode.db");
-      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      buildOpenCodeV1FixtureDb(main, ["v1-sample.sql"]);
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ ingested: 1 });
       expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
@@ -3717,7 +3721,7 @@ describe("OpenCode ingest", () => {
     test("re-ingests from session_v2 once OpenCode migrates the session, and back", () => {
       const { dir, opencodeDir, config } = opencodeCase();
       const main = join(opencodeDir, "opencode.db");
-      buildOpenCodeV1FixtureDb(main, ["v1/sample.sql"]);
+      buildOpenCodeV1FixtureDb(main, ["v1-sample.sql"]);
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ ingested: 1 });
       const current = (): unknown => ({

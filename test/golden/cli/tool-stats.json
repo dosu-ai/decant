@@ -30,6 +30,16 @@
     "last_used_at": "2026-10-12T07:20:01.000Z"
   },
   {
+    "tool_name": "read",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 3,
+    "errors": 0,
+    "p50_ms": 1500,
+    "p95_ms": 2000,
+    "last_used_at": "2026-10-12T07:26:50.000Z"
+  },
+  {
     "tool_name": "Edit",
     "tool_kind": "builtin",
     "mcp_server": null,
@@ -88,15 +98,5 @@
     "p50_ms": null,
     "p95_ms": null,
     "last_used_at": "2026-05-03T10:01:00.000Z"
-  },
-  {
-    "tool_name": "NotebookEdit",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 1,
-    "errors": 0,
-    "p50_ms": null,
-    "p95_ms": null,
-    "last_used_at": "2026-05-03T10:02:00.000Z"
   }
 ]

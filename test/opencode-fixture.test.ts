@@ -77,7 +77,7 @@ type Tokens = {
 };
 
 const V1_SCRIPTS = [
-  "v1/sample.sql",
+  "v1-sample.sql",
   "v1/compaction.sql",
   "v1/subagent.sql",
   "v1/fork.sql",
@@ -101,7 +101,7 @@ describe("OpenCode fixture builders", () => {
 
   test("a 1.x-only database has no 2.x tables", () => {
     const path = dbPath();
-    buildOpenCodeV1FixtureDb(path, ["v1/sample.sql"]);
+    buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
     expect(tables(path)).toEqual(["message", "part", "session"]);
     expect(rows<{ n: number }>(path, "SELECT COUNT(*) AS n FROM message")[0]?.n).toBe(4);
     expect(rows<{ n: number }>(path, "SELECT COUNT(*) AS n FROM part")[0]?.n).toBe(16);

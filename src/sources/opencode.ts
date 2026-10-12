@@ -453,9 +453,11 @@ const CODE_EXECUTION_TOOL = "execute";
 const OPENCODE_NAMESPACE = "opencode";
 
 /** One inner call per `metadata.toolCalls` entry, in recorded order. An entry
- * names `<server>.<tool>` for an MCP tool, with the server as configured, so
- * the namespace alone decides MCP; `opencode.<tool>` and un-namespaced names
- * (`search`) are OpenCode built-ins and keep their recorded name. */
+ * names `<server>.<tool>` for an MCP tool, where `<server>` is already
+ * sanitized by OpenCode (`McpTool.namespace`, the same replacement as
+ * `sanitizeMcpName`), so the namespace alone decides MCP and no config lookup
+ * is needed; `opencode.<tool>` and un-namespaced names (`search`) are OpenCode
+ * built-ins and keep their recorded name. Any other namespace counts as MCP. */
 export function innerToolCalls(
   entries: Json | undefined,
   wrapperId: string | null,

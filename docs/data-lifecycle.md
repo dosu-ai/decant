@@ -37,7 +37,10 @@ By default Decant discovers:
   `<database>#<session id>`. A session present in several databases is read
   from the copy updated last. A fork's rows inherited from its parent are
   skipped, as OpenCode's own statistics skip them. Sessions that exist only in
-  OpenCode 1.x tables are not read.
+  OpenCode 1.x tables are not read. Sessions OpenCode migrated from 1.x into
+  its 2.x tables are read as stored, which leaves gaps in their tokens, file
+  references, and subagent links (see
+  [analytics methodology](analytics-methodology.md#token-and-cost-totals)).
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks, and

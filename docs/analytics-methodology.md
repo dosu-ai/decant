@@ -94,6 +94,14 @@ session totals also include title generation, which never appears in a
 message row, so Decant's per-session totals can read slightly lower than
 OpenCode's. Rows a fork inherited from its parent are skipped.
 
+Known limitation: when OpenCode upgrades from 1.x it migrates sessions into its
+2.x tables, and Decant reads those migrated sessions as stored. Their
+per-message token counts reflect only each message's last request, sessions
+created before OpenCode v1.3.16 may count reasoning tokens twice, and their
+file references and subagent links may be missing. Decant does not read
+OpenCode's 1.x tables yet; a later reader for them will correct these sessions
+from the original 1.x records.
+
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
 or a long-prompt surcharge (see [pricing](pricing.md)). A session that switched
@@ -215,17 +223,37 @@ same attribution rules.
 
 OpenCode 2.x runs MCP tools from a JavaScript program passed to its `execute`
 tool, and records each call the program made. Decant keeps `execute` as the
-model's tool call and adds one tool call per recorded inner call, so OpenCode
-tool-call totals count both the `execute` call and its inner calls. An inner
+model's tool call and adds one tool call per recorded inner call. An inner
 call to `<server>.<tool>` is an MCP call named `mcp__<server>__<tool>`, exactly
-as a direct call to that server is, so MCP and Dosu statistics include it.
-Inner calls with no namespace (`search`) or in the `opencode` namespace are
-OpenCode built-ins and keep their recorded name. Each inner call takes its own
-error status and input, but OpenCode records only the program's combined
-output, so an inner call has no result, output size, or duration; the
-`execute` call carries the output's context-window volume once. Inner calls
-add no transcript blocks, so search and transcripts show the program and its
-output once.
+as a direct call to that server is. OpenCode writes `<server>` with the same
+`[^a-zA-Z0-9_-]` to `_` replacement it applies to direct MCP tool names, so
+both forms of a call share one `mcp_server`. Inner calls with no namespace
+(`search`) or in the `opencode` namespace are OpenCode built-ins and keep
+their recorded name. Any other namespace is treated as an MCP server, so a
+plugin that adds its own namespace to code mode would count as MCP.
+
+Inner calls are tool-call rows, so these numbers count both the `execute`
+call and each inner call:
+
+- `decant tool stats` and `decant mcp stats`, and `GET /api/tools/usage` and
+  `GET /api/tools/mcp-usage`.
+- The Dosu MCP call counters on sessions.
+- `tool_calls` in `decant stats` and in token-economics buckets.
+- The activity report's "Tool calls" figure and its tool table.
+
+These follow transcript blocks instead, so an `execute` call counts once
+however many inner calls it made:
+
+- A single session's "Tool calls" total (session detail and the session
+  report), which counts `tool_use` blocks.
+- A session's `error_count`, which counts failed result blocks.
+
+Each inner call takes its own error status and input, but OpenCode records
+only the program's combined output, so an inner call has no result, output
+size, or duration; the `execute` call carries the output's context-window
+volume once. An inner call that was still `running` when the program ended
+has no error status either. Inner calls add no transcript blocks, so search
+and transcripts show the program and its output once.
 
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Claude Code journals one API response as a record per

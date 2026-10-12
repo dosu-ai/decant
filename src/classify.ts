@@ -207,7 +207,10 @@ function isWebSearch(block: NormalizedBlock): boolean {
   return (
     block.blockType === "web_search" ||
     (block.blockType === "tool_use" &&
-      (block.toolName === "WebSearch" || block.toolName === "WebFetch"))
+      (block.toolName === "WebSearch" ||
+        block.toolName === "WebFetch" ||
+        block.toolName === "websearch" ||
+        block.toolName === "webfetch"))
   );
 }
 

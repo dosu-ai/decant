@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,9 @@ import { upsertSession } from "../src/ingest.ts";
 import { getSession, listSessions } from "../src/query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { parseOpenCodeSession } from "../src/sources/opencode.ts";
+import { OpenCodeStore } from "../src/sources/opencode-store.ts";
+import { buildOpenCodeDb, opencodeFixtureSql } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-context-window-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -787,6 +790,50 @@ describe("getSession per-turn context fields", () => {
       WHERE session_id = ${sessionId} AND seq = 1
     `);
     expect(getSession(db, sessionId)?.messages[1]?.context_tokens).toBeNull();
+    db.close();
+  });
+});
+
+describe("OpenCode context windows", () => {
+  test("uses the catalog window and counts compaction rows", () => {
+    const dir = join(workDir, "opencode-ctx");
+    mkdirSync(dir, { recursive: true });
+    const T0 = 1791786000000;
+    const compaction = JSON.stringify({
+      status: "completed",
+      reason: "manual",
+      model: { providerID: "opencode-go", id: "glm-5.3-flash" },
+      summary: "Summary.",
+      recent: "",
+      cost: 0.0001,
+      tokens: { input: 900, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: T0 + 7000 },
+    });
+    const script = `${opencodeFixtureSql("sample.sql")}
+      INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+      VALUES ('msg_sample_5', 'ses_sample', 'compaction', 5, ${T0 + 7000}, ${T0 + 7000}, '${compaction}');`;
+    const path = join(dir, "opencode.db");
+    buildOpenCodeDb(path, [script]);
+    const store = OpenCodeStore.open(path);
+    const loaded = store.loadSession("ses_sample");
+    if (loaded == null) throw new Error("fixture session missing");
+    const parsed = parseOpenCodeSession(loaded.session, loaded.messages, {
+      mcpServers: [],
+      contextWindows: store.contextWindows(),
+    });
+    store.close();
+    const db = freshDb();
+    const id = upsertSession(db, parsed, `${path}#ses_sample`, 1, 0, "fp");
+    expect(
+      db
+        .query(
+          "SELECT context_window_tokens, peak_context_tokens, compaction_count FROM session WHERE id = ?1",
+        )
+        .get(id),
+    ).toEqual({ context_window_tokens: 1_000_000, peak_context_tokens: 260, compaction_count: 1 });
+    const timeline = contextWindowForSession(db, id);
+    expect(timeline?.window_inferred).toBe(false);
+    expect(timeline?.compactions).toMatchObject([{ seq: 4, pre_tokens: 260 }]);
     db.close();
   });
 });

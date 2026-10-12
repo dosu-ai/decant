@@ -203,6 +203,37 @@ describe("workType", () => {
     ).toBe("feature");
   });
 
+  test("OpenCode web search and fetch calls alone classify as research", () => {
+    const search: NormalizedBlock = {
+      ordinal: 0,
+      blockType: "tool_use",
+      text: null,
+      toolName: "websearch",
+      toolUseId: "call_web",
+      toolInput: { query: "example" },
+      toolResult: null,
+      isError: null,
+    };
+    // No user prompt, so the keyword classifier yields nothing and the tool
+    // mix decides.
+    const searched = session([msg("assistant", [search])]);
+    searched.tool = "opencode";
+    expect(workType(searched, [])).toBe("research");
+    const fetch = {
+      ...search,
+      toolName: "webfetch",
+      toolInput: { url: "https://example.invalid" },
+    };
+    const fetched = session([msg("assistant", [fetch])]);
+    fetched.tool = "opencode";
+    expect(workType(fetched, [])).toBe("research");
+    const plain = session([
+      msg("assistant", [{ ...search, toolName: "read", toolInput: { path: "/w/a" } }]),
+    ]);
+    plain.tool = "opencode";
+    expect(workType(plain, [])).toBeNull();
+  });
+
   test("none without signal", () => {
     expect(workType(session([msg("user", [text("hello there")])]), [])).toBeNull();
   });

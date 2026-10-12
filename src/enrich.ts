@@ -41,6 +41,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (session.tool === "gemini") {
         keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "opencode") {
+        keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -62,6 +64,14 @@ const GEMINI_FILE_TOOLS: FileToolTable = {
   read_file: { key: "file_path", operation: "read" },
   replace: { key: "file_path", operation: "edit" },
   write_file: { key: "file_path", operation: "write" },
+};
+
+// OpenCode's built-in file tools take an absolute `path`. A `streaming` tool
+// item carries its partial input as a string, which keyedRef ignores.
+const OPENCODE_FILE_TOOLS: FileToolTable = {
+  read: { key: "path", operation: "read" },
+  edit: { key: "path", operation: "edit" },
+  write: { key: "path", operation: "write" },
 };
 
 function keyedRef(
@@ -172,7 +182,8 @@ export function facets(session: NormalizedSession): Facets {
     }
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
-      rawString(message.raw, "type") === "compacted"
+      rawString(message.raw, "type") === "compacted" ||
+      rawString(message.raw, "type") === "compaction"
     ) {
       got.compactionCount += 1;
     }

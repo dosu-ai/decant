@@ -131,13 +131,15 @@ Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, and
 `~/.local/share/opencode` by default. Override them with `DECANT_CLAUDE_DIR`,
 `DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`, and `DECANT_OPENCODE_DIR`, or with the
 corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`, and
-`--opencode-dir` flags on `sync`, `watch`, and `serve`. OpenCode's own
-`OPENCODE_DATA_DIR`, `XDG_DATA_HOME`, `OPENCODE_DB`, and `OPENCODE_CONFIG`
-variables are honored when the Decant ones are unset; `DECANT_OPENCODE_CONFIG`
-points at the `opencode.json` whose MCP server names Decant uses to recognize
-MCP tool calls. OpenCode sessions are read from `opencode.db` (and
-`opencode-<channel>.db`) read-only; Decant never writes to it. `--path` also
-accepts an OpenCode `.db` file.
+`--opencode-dir` flags on `sync`, `watch`, and `serve`. When the Decant
+variable and flag are unset, the OpenCode directory falls back to OpenCode's own
+`OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`. `OPENCODE_DB` names an
+explicit extra database file that is read alongside the discovered directory.
+`DECANT_OPENCODE_CONFIG` (or OpenCode's `OPENCODE_CONFIG`) points at the
+`opencode.json` whose MCP server names Decant uses to recognize MCP tool calls.
+OpenCode sessions are read from `opencode.db` (and `opencode-<channel>.db`)
+read-only; Decant never writes to it. `--path` also accepts an OpenCode `.db`
+file.
 
 To index selected files or a temporary source tree:
 

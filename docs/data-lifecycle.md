@@ -28,13 +28,16 @@ By default Decant discovers:
   checkpoint and rewind records the way Gemini CLI does, so a rewound turn or
   a re-recorded message is stored once.
 - OpenCode sessions in `~/.local/share/opencode/opencode.db` and any
-  `opencode-<channel>.db` beside it (`$XDG_DATA_HOME/opencode`,
-  `OPENCODE_DATA_DIR`, or `OPENCODE_DB` when set). Decant opens the database
-  read-only, never writes to it, and never checkpoints it. Each 2.x session
-  (`session_v2`) becomes its own source `<database>#<session id>`. A session
-  present in several databases is read from the copy updated last. A fork's
-  rows inherited from its parent are skipped, as OpenCode's own statistics
-  skip them. Sessions that exist only in OpenCode 1.x tables are not read.
+  `opencode-<channel>.db` beside it. The directory comes from
+  `--opencode-dir`, `DECANT_OPENCODE_DIR`, `OPENCODE_DATA_DIR`, or
+  `$XDG_DATA_HOME/opencode`, in that order. `OPENCODE_DB`, when set, names an
+  explicit extra database file that is read in addition to that directory.
+  Decant opens the databases read-only, never writes to them, and never
+  checkpoints them. Each 2.x session (`session_v2`) becomes its own source
+  `<database>#<session id>`. A session present in several databases is read
+  from the copy updated last. A fork's rows inherited from its parent are
+  skipped, as OpenCode's own statistics skip them. Sessions that exist only in
+  OpenCode 1.x tables are not read.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks, and
@@ -49,7 +52,7 @@ do not leave the archive stale.
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
 session state. Deleting or rebuilding the archive does not delete the source
-JSONL files.
+logs or databases.
 
 ## Trajectory exports
 
@@ -228,7 +231,7 @@ decant --db /tmp/decant-review.db --no-sync serve --no-open
 Session state is keyed by stable provider identity rather than the transient
 SQLite row id.
 
-| Action | Archive rows | Default reads and statistics | Later sync | Source JSONL |
+| Action | Archive rows | Default reads and statistics | Later sync | Source log |
 | --- | --- | --- | --- | --- |
 | Archive | Retained | Hidden, including effective descendants | Remains archived | Unchanged |
 | Restore visibility | Retained | Visible unless an ancestor or source state still hides it | Remains visible | Unchanged |
@@ -251,9 +254,12 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, or Gemini CLI log remains on disk. If the source record
-must also be removed, manage it through the owning tool or delete that source
-file only after deciding that losing the original transcript is intended.
+Claude Code, Codex, Gemini CLI, or OpenCode record remains on disk. If the
+source record must also be removed, manage it through the owning tool or delete
+that source file only after deciding that losing the original transcript is
+intended. OpenCode keeps every session in one shared database, so deleting its
+file would remove all OpenCode history; remove an individual session from within
+OpenCode instead.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
 that was sensitive enough to delete, run both commands:

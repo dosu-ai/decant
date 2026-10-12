@@ -118,5 +118,15 @@
     "ext": "txt",
     "operation": "read",
     "timestamp": "2026-06-01T10:00:02.000Z"
+  },
+  {
+    "tool": "opencode",
+    "source_session_id": "ses_sample",
+    "seq": 1,
+    "path": "/tmp/example/notes.txt",
+    "rel_path": "notes.txt",
+    "ext": "txt",
+    "operation": "read",
+    "timestamp": "2026-10-12T06:20:01.000Z"
   }
 ]

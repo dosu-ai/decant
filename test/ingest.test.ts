@@ -74,6 +74,8 @@ function stageFixtures(dir: string): IngestConfig {
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
+  const opencodeDir = join(dir, "sources", "opencode");
+  mkdirSync(opencodeDir, { recursive: true });
 
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(fixtureRoot, "claude", name), join(claudeDir, name));
@@ -92,7 +94,14 @@ function stageFixtures(dir: string): IngestConfig {
     "/synthetic/gemini-project\n",
   );
 
-  return { claudeDir, codexDir, geminiDir };
+  buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), ["mcp.sql", "sample.sql"]);
+  const opencodeConfigPath = join(opencodeDir, "opencode.json");
+  writeFileSync(
+    opencodeConfigPath,
+    `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
+  );
+
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
 }
 
 async function golden<T>(relPath: string): Promise<T> {
@@ -104,7 +113,12 @@ function rows(db: Database, sql: string): unknown[] {
 }
 
 function canonicalizeRows(value: unknown, dir: string): unknown {
-  return JSON.parse(JSON.stringify(value).replaceAll(dir, "<TMP>")) as unknown;
+  // OpenCode source paths are resolved with realpath, which turns macOS's
+  // /var/folders into /private/var/folders. Both spellings are the same case dir.
+  const text = JSON.stringify(value)
+    .replaceAll(realpathSync(dir), "<TMP>")
+    .replaceAll(dir, "<TMP>");
+  return JSON.parse(text) as unknown;
 }
 
 describe("upsertSession", () => {
@@ -2344,7 +2358,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 10, ingested: 10, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 12, ingested: 12, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
@@ -2366,7 +2380,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 10, ingested: 0, skipped: 10, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 12, ingested: 0, skipped: 12, failed: 0 });
     expect(
       db
         .query(
@@ -2385,7 +2399,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 10, ingested: 0, skipped: 10, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 12, ingested: 0, skipped: 12, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

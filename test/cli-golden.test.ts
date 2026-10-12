@@ -6,15 +6,16 @@ import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
 import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
+import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
 const goldenDir = join(import.meta.dir, "golden");
 
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-function fixtureFiles(tool: string): string[] {
+function fixtureFiles(tool: string, extension = ".jsonl"): string[] {
   return readdirSync(join(import.meta.dir, "..", "fixtures", tool))
-    .filter((file) => file.endsWith(".jsonl"))
+    .filter((file) => file.endsWith(extension))
     .sort();
 }
 
@@ -23,6 +24,7 @@ function stageFixtures(caseDir: string): {
   codexDir: string;
   geminiDir: string;
   opencodeDir: string;
+  opencodeConfigPath: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
@@ -51,7 +53,16 @@ function stageFixtures(caseDir: string): {
     join(geminiDir, "synthetic-project", ".project_root"),
     "/synthetic/gemini-project\n",
   );
-  return { claudeDir, codexDir, geminiDir, opencodeDir };
+  buildOpenCodeFixtureDb(
+    join(opencodeDir, "opencode.db"),
+    fixtureFiles("opencode", ".sql").filter((file) => file !== "schema.sql"),
+  );
+  const opencodeConfigPath = join(opencodeDir, "opencode.json");
+  writeFileSync(
+    opencodeConfigPath,
+    `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
+  );
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -107,22 +118,26 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir, geminiDir, opencodeDir } = stageFixtures(caseDir);
+    const { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath } =
+      stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
-    const sync = await runCli([
-      "--db",
-      dbPath,
-      "--json",
-      "sync",
-      "--claude-dir",
-      claudeDir,
-      "--codex-dir",
-      codexDir,
-      "--gemini-dir",
-      geminiDir,
-      "--opencode-dir",
-      opencodeDir,
-    ]);
+    const sync = await runCli(
+      [
+        "--db",
+        dbPath,
+        "--json",
+        "sync",
+        "--claude-dir",
+        claudeDir,
+        "--codex-dir",
+        codexDir,
+        "--gemini-dir",
+        geminiDir,
+        "--opencode-dir",
+        opencodeDir,
+      ],
+      { env: { ...process.env, DECANT_OPENCODE_CONFIG: opencodeConfigPath } },
+    );
     expect(sync).toMatchObject({ code: 0, stderr: "" });
 
     const meta = (await Bun.file(join(goldenDir, "meta.json")).json()) as {

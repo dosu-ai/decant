@@ -84,6 +84,16 @@ content, so input is stored net of cache reads, and thought tokens are
 reported outside the candidate count, so they are folded into output and also
 recorded as reported reasoning.
 
+OpenCode records disjoint `input`, `output`, `reasoning`, `cache.read`, and
+`cache.write` counts on each assistant step. Decant stores input as reported,
+output as `output + reasoning` with reasoning also recorded as reported,
+cache reads as cache reads, and cache writes as cache creation. Compaction
+steps carry their own usage and are counted; `opencode stats` does not count
+them on a local install, so Decant can read slightly higher. OpenCode's
+session totals also include title generation, which never appears in a
+message row, so Decant's per-session totals can read slightly lower than
+OpenCode's. Rows a fork inherited from its parent are skipped.
+
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
 or a long-prompt surcharge (see [pricing](pricing.md)). A session that switched
@@ -93,6 +103,14 @@ is the sum of each model's share. Locally generated Claude records labeled
 session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
+
+When Decant has no rate for a model, the cost OpenCode recorded for those
+requests is used instead and the session's `cost_source` is `reported` (or
+`mixed` when only some of its model rows fell back). A recorded cost of zero
+is never used: subscription routes such as the GLM Coding Plan record zero,
+which is a placeholder, not a price. A reported cost has no input/output
+split; token-economics totals carry it as `reported_cost_usd`, and activity
+buckets receive it by context-window share.
 
 A session's `model` is the model that served most of its requests. The model
 breakdown counts each session once, under that label, but splits tokens and
@@ -319,7 +337,8 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window. Claude and Gemini infer the window from the model
+an explicit model window, and OpenCode sessions take theirs from the models.dev
+catalog OpenCode caches. Claude and Gemini infer the window from the model
 when the source does not record one, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.

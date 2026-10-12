@@ -22,6 +22,7 @@ import {
   type MigratedUsage,
   migratedUsage,
   openCodeUsage,
+  parseOpenCodeVersion,
   reasoningOverlap,
 } from "./opencode-usage.ts";
 import {
@@ -188,13 +189,18 @@ export function parseOpenCodeSession(
     seq += 1;
   };
 
+  // A fork copies the parent's settled rows with their original timestamps,
+  // so a row older than its session is inherited history and would be billed
+  // twice. `opencode stats` skips it only when `fork_session_id` is set; a
+  // fork OpenCode migrated from 1.x has no such link, so Decant also skips by
+  // time for sessions migrated from 1.x (a 1.x copy or a pre-2 version). A
+  // native 2.x session without the link keeps every row, so a clock step
+  // backwards can never drop its usage.
+  const majorVersion = parseOpenCodeVersion(row.version)?.[0];
+  const skipInherited =
+    row.fork_session_id != null || legacy != null || (majorVersion != null && majorVersion < 2);
   for (const message of rows) {
-    // A fork copies the parent's settled rows with their original timestamps,
-    // so a row older than its session is inherited history and would be
-    // billed twice. `opencode stats` skips it only when `fork_session_id` is
-    // set; a fork OpenCode migrated from 1.x has no such link, so Decant
-    // skips by time alone, as its 1.x reader does.
-    if (message.time_created < row.time_created) {
+    if (skipInherited && message.time_created < row.time_created) {
       forkRowsSkipped += 1;
       continue;
     }

@@ -428,6 +428,23 @@ describe("parseOpenCodeSession", () => {
     expect(session.rawMeta).toMatchObject({ fork_session_id: null, fork_rows_skipped: 1 });
   });
 
+  test("keeps a native 2.x row that predates its session when there is no fork link", () => {
+    // A clock step backwards must not drop a native session's usage.
+    const { session } = parseOpenCodeSession(
+      sessionRow({ version: "2.0.27", time_created: T0 }),
+      [
+        msg(1, "user", { text: "early prompt", time: { created: T0 - 5000 } }, T0 - 5000),
+        assistant(2, {
+          tokens: { input: 70, output: 9, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      ],
+      context,
+    );
+    expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(session.totals).toMatchObject({ input: 70, output: 9 });
+    expect(session.rawMeta).not.toHaveProperty("fork_rows_skipped");
+  });
+
   test("keeps reasoning inside output for a row migrated from a pre-1.3.16 session", () => {
     const tokens = { input: 100, output: 50, reasoning: 20, cache: { read: 0, write: 0 } };
     const usage = (version: string) =>

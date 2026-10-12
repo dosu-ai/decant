@@ -105,6 +105,10 @@ counts hold only its last step. Decant sums the message's per-step
 (`step-finish`) usage instead, and counts one step per message, as 2.x does
 per row. A 1.x message with no per-step records uses its own counts, and one
 that recorded neither tokens nor cost (an unfinished request) has no usage.
+1.x starts a new message for each step of a turn, so a message holds several
+steps only after a retry. Such a message is priced and measured as one
+request, so a long-prompt price tier and context occupancy see its summed
+input.
 
 Compaction steps carry their own usage and are counted; `opencode stats` does
 not count them on a local install, so Decant can read slightly higher. In 1.x a
@@ -115,10 +119,12 @@ generation, which never appears in a message row, so Decant's per-session
 totals can read slightly lower than OpenCode's.
 
 A fork copies its parent's messages with their original creation time.
-Decant skips every message older than its session, so forked history is
-counted once, in the parent. 2.x records the fork link, but 1.x records none,
-and sessions OpenCode migrated from 1.x keep none, so the timestamp is the
-only signal for them. `opencode stats` skips inherited rows only for sessions
+Decant skips a fork's messages that are older than its session, so forked
+history is counted once, in the parent. 2.x records the fork link, but 1.x
+records none, and sessions OpenCode migrated from 1.x keep none, so for 1.x
+sessions and sessions migrated from 1.x the timestamp is the only signal and
+Decant skips by time. A native 2.x session without a fork link keeps every
+message, so a clock change cannot drop its usage. `opencode stats` skips inherited rows only for sessions
 with a fork link, so for a fork migrated from 1.x it counts the parent's
 history again and reads higher than Decant. Decant differs from it here on
 purpose. Messages past a revert point stay counted until OpenCode deletes them

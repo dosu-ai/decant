@@ -96,7 +96,7 @@ export interface OpenCodeLegacyChangeFields {
   partCount: number;
   maxMessageUpdated: number | null;
   maxPartUpdated: number | null;
-  /** `TOTAL(time_updated)` per table, so an edit to a row that is not the
+  /** `SUM(time_updated)` per table (an exact integer sum), so an edit to a row that is not the
    * newest still changes the key. */
   messageUpdatedTotal: number;
   partUpdatedTotal: number;
@@ -347,10 +347,10 @@ export class OpenCodeStore {
                   COALESCE(p.total, 0) AS part_updated_total
              FROM session s
              LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest,
-                               TOTAL(time_updated) AS total
+                               SUM(time_updated) AS total
                           FROM message GROUP BY session_id) m ON m.session_id = s.id
              LEFT JOIN (SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS latest,
-                               TOTAL(time_updated) AS total
+                               SUM(time_updated) AS total
                           FROM part GROUP BY session_id) p ON p.session_id = s.id`,
         );
       })

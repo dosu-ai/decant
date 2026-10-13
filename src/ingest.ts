@@ -91,7 +91,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 11;
+export const INGEST_PIPELINE_REVISION = 12;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */

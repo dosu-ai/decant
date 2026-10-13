@@ -17,6 +17,7 @@ import {
 import { OpenCodeStore } from "../src/sources/opencode-store.ts";
 import { openCodeUsage } from "../src/sources/opencode-usage.ts";
 import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
+import { STEP_TIMES, timingMessageRows, timingSessionRow } from "./opencode-timing.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-parser-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -152,7 +153,8 @@ describe("parseOpenCodeSession", () => {
     expect(session.messages[1]).toMatchObject({
       model: "glm-5.3-flash",
       stopReason: "tool-calls",
-      timestamp: "2026-10-12T06:20:01.000Z",
+      // The step's `time.streamed`: generation ended, the tool still running.
+      timestamp: "2026-10-12T06:20:02.600Z",
       usage: { input: 120, output: 40, reasoning: 10, cacheRead: 40, cacheCreation: 16 },
     });
     expect(session.messages[1]?.blocks).toMatchObject([
@@ -790,6 +792,93 @@ describe("parseOpenCodeSession", () => {
     expect(parsed.issues.map((issue) => issue.code)).toEqual([
       "duplicate_tool_use_id",
       "duplicate_tool_result",
+    ]);
+  });
+});
+
+describe("OpenCode 2.x step timing", () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  test("stamps a step when its generation ended and a tool result when the tool did", () => {
+    const { session } = parseOpenCodeSession(timingSessionRow(), timingMessageRows(), context);
+    expect(session.messages.map((m) => [m.role, m.timestamp])).toEqual([
+      ["user", iso(STEP_TIMES.prompt1)],
+      ["assistant", iso(STEP_TIMES.step1Streamed)],
+      ["tool", iso(STEP_TIMES.toolCompleted)],
+      ["user", iso(STEP_TIMES.prompt2)],
+      ["assistant", iso(STEP_TIMES.step2Streamed)],
+    ]);
+    // The call is dated when it started to run, so its duration is the run.
+    expect(session.messages[1]?.blocks[1]).toMatchObject({
+      blockType: "tool_use",
+      calledAt: iso(STEP_TIMES.toolRan),
+    });
+  });
+
+  test("keeps hidden reasoning as an empty thinking block and records its tokens", () => {
+    const { session } = parseOpenCodeSession(timingSessionRow(), timingMessageRows(), context);
+    const answer = session.messages[4];
+    expect(answer?.blocks.map((b) => [b.blockType, b.text])).toEqual([
+      ["thinking", ""],
+      ["text", "The notes say hello."],
+    ]);
+    expect(answer?.usage).toMatchObject({ output: 300, reasoning: 240 });
+    expect(answer?.raw).toMatchObject({ reasoning_tokens: 240 });
+    expect(session.messages[1]?.raw).toMatchObject({ reasoning_tokens: 150 });
+    expect(session.totals).toMatchObject({ input: 2200, output: 500, reasoning: 390 });
+  });
+
+  test("falls back to the step's end, never its start, when a time is missing", () => {
+    const step = (seq: number, content: Json[], time: Record<string, number>) =>
+      msg(seq, "assistant", { agent: "build", model: GLM, content, time });
+    const reasoning = (completed: number) => ({
+      type: "reasoning",
+      text: "r",
+      time: { created: T0, completed },
+    });
+    const tool = (id: string, time: Record<string, number>) => ({
+      type: "tool",
+      id,
+      name: "read",
+      state: { status: "completed", input: { path: "/decant-fixture/example/a" }, content: [] },
+      time,
+    });
+    const { session } = parseOpenCodeSession(
+      sessionRow(),
+      [
+        // No `streamed` and no tools: `completed` is the end of generation.
+        step(1, [reasoning(T0 + 1200), { type: "text", text: "a" }], {
+          created: T0 + 1000,
+          completed: T0 + 1900,
+        }),
+        // No `streamed` with a tool: `completed` waits for the tool, so the
+        // latest part that finished streaming marks the end. A row migrated
+        // from 1.x has no `ran`; its `created` is when the tool started.
+        step(
+          2,
+          [reasoning(T0 + 2300), tool("call_mig", { created: T0 + 2400, completed: T0 + 2800 })],
+          {
+            created: T0 + 2000,
+            completed: T0 + 2900,
+          },
+        ),
+        // A tool with no completion time: the result takes the step's end.
+        step(3, [tool("call_open", { created: T0 + 3100, ran: T0 + 3200 })], {
+          created: T0 + 3000,
+          streamed: T0 + 3300,
+        }),
+        // Only a start: nothing else to go on.
+        step(4, [{ type: "text", text: "b" }], { created: T0 + 4000 }),
+      ],
+      context,
+    );
+    expect(session.messages.map((m) => [m.role, m.timestamp])).toEqual([
+      ["assistant", iso(T0 + 1900)],
+      ["assistant", iso(T0 + 2400)],
+      ["tool", iso(T0 + 2800)],
+      ["assistant", iso(T0 + 3300)],
+      ["tool", iso(T0 + 3300)],
+      ["assistant", iso(T0 + 4000)],
     ]);
   });
 });

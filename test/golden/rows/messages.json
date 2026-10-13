@@ -1144,12 +1144,12 @@
     "role": "assistant",
     "model": "meta/muse-wonder",
     "stop_reason": "tool-calls",
-    "timestamp": "2026-10-12T07:20:01.000Z",
+    "timestamp": "2026-10-12T07:20:03.200Z",
     "input_tokens": 1000,
     "output_tokens": 75,
     "cache_read_tokens": 500,
     "cache_creation_tokens": 0,
-    "raw": "{\"agent\":\"build\",\"content\":[{\"executed\":false,\"id\":\"call_mcp_1\",\"name\":\"dosu_search_knowledge\",\"state\":{\"content\":[{\"text\":\"example result\",\"type\":\"text\"}],\"input\":{\"query\":\"example topic\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789602000,\"created\":1791789601000,\"ran\":1791789601500},\"type\":\"tool\"},{\"executed\":false,\"id\":\"call_web_1\",\"name\":\"websearch\",\"state\":{\"content\":[{\"text\":\"example page\",\"type\":\"text\"}],\"input\":{\"query\":\"example topic\"},\"metadata\":{\"provider\":\"synthetic\",\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789603000,\"created\":1791789602000,\"ran\":1791789602500},\"type\":\"tool\"},{\"executed\":false,\"id\":\"call_exec_1\",\"name\":\"execute\",\"state\":{\"content\":[{\"text\":\"example knowledge\",\"type\":\"text\"}],\"input\":{\"code\":\"const kb = await tools.dosu.read_knowledge({ query: \\\"example topic\\\" });\\nawait tools.exa.web_search_exa({ query: \\\"example topic\\\" }).catch(() => null);\\nawait tools.search({ query: \\\"example\\\" });\\nawait tools.opencode.list_mcp_resources();\\nreturn kb;\"},\"metadata\":{\"toolCalls\":[{\"input\":{\"query\":\"example topic\"},\"status\":\"completed\",\"tool\":\"dosu.read_knowledge\"},{\"input\":{\"query\":\"example topic\"},\"status\":\"error\",\"tool\":\"exa.web_search_exa\"},{\"input\":{\"query\":\"example\"},\"status\":\"completed\",\"tool\":\"search\"},{\"status\":\"completed\",\"tool\":\"opencode.list_mcp_resources\"}],\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789603800,\"created\":1791789603000,\"ran\":1791789603200},\"type\":\"tool\"}],\"cost\":0.0056,\"finish\":\"tool-calls\",\"id\":\"msg_mcp_2\",\"model\":{\"id\":\"meta/muse-wonder\",\"providerID\":\"openrouter\",\"variant\":\"high\"},\"seq\":2,\"time\":{\"completed\":1791789604000,\"created\":1791789601000},\"tokens\":{\"cache\":{\"read\":500,\"write\":0},\"input\":1000,\"output\":50,\"reasoning\":25},\"type\":\"assistant\"}"
+    "raw": "{\"agent\":\"build\",\"content\":[{\"executed\":false,\"id\":\"call_mcp_1\",\"name\":\"dosu_search_knowledge\",\"state\":{\"content\":[{\"text\":\"example result\",\"type\":\"text\"}],\"input\":{\"query\":\"example topic\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789602000,\"created\":1791789601000,\"ran\":1791789601500},\"type\":\"tool\"},{\"executed\":false,\"id\":\"call_web_1\",\"name\":\"websearch\",\"state\":{\"content\":[{\"text\":\"example page\",\"type\":\"text\"}],\"input\":{\"query\":\"example topic\"},\"metadata\":{\"provider\":\"synthetic\",\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789603000,\"created\":1791789602000,\"ran\":1791789602500},\"type\":\"tool\"},{\"executed\":false,\"id\":\"call_exec_1\",\"name\":\"execute\",\"state\":{\"content\":[{\"text\":\"example knowledge\",\"type\":\"text\"}],\"input\":{\"code\":\"const kb = await tools.dosu.read_knowledge({ query: \\\"example topic\\\" });\\nawait tools.exa.web_search_exa({ query: \\\"example topic\\\" }).catch(() => null);\\nawait tools.search({ query: \\\"example\\\" });\\nawait tools.opencode.list_mcp_resources();\\nreturn kb;\"},\"metadata\":{\"toolCalls\":[{\"input\":{\"query\":\"example topic\"},\"status\":\"completed\",\"tool\":\"dosu.read_knowledge\"},{\"input\":{\"query\":\"example topic\"},\"status\":\"error\",\"tool\":\"exa.web_search_exa\"},{\"input\":{\"query\":\"example\"},\"status\":\"completed\",\"tool\":\"search\"},{\"status\":\"completed\",\"tool\":\"opencode.list_mcp_resources\"}],\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791789603800,\"created\":1791789603000,\"ran\":1791789603200},\"type\":\"tool\"}],\"cost\":0.0056,\"finish\":\"tool-calls\",\"id\":\"msg_mcp_2\",\"model\":{\"id\":\"meta/muse-wonder\",\"providerID\":\"openrouter\",\"variant\":\"high\"},\"reasoning_tokens\":25,\"seq\":2,\"time\":{\"completed\":1791789604000,\"created\":1791789601000},\"tokens\":{\"cache\":{\"read\":500,\"write\":0},\"input\":1000,\"output\":50,\"reasoning\":25},\"type\":\"assistant\"}"
   },
   {
     "tool": "opencode",
@@ -1208,12 +1208,12 @@
     "role": "assistant",
     "model": "meta/muse-wonder",
     "stop_reason": "stop",
-    "timestamp": "2026-10-12T07:20:05.000Z",
+    "timestamp": "2026-10-12T07:20:05.500Z",
     "input_tokens": 1200,
     "output_tokens": 20,
     "cache_read_tokens": 0,
     "cache_creation_tokens": 0,
-    "raw": "{\"agent\":\"build\",\"content\":[{\"executed\":false,\"id\":\"call_fetch_1\",\"name\":\"webfetch\",\"state\":{\"error\":{\"message\":\"fetch failed\",\"type\":\"tool.failed\"},\"input\":{\"format\":\"markdown\",\"url\":\"https://example.invalid/page\"},\"status\":\"error\"},\"time\":{\"completed\":1791789606000,\"created\":1791789605000,\"ran\":1791789605500},\"type\":\"tool\"},{\"text\":\"The knowledge base covers the example topic; the page could not be fetched.\",\"type\":\"text\"}],\"cost\":0.0052,\"finish\":\"stop\",\"id\":\"msg_mcp_3\",\"model\":{\"id\":\"meta/muse-wonder\",\"providerID\":\"openrouter\",\"variant\":\"high\"},\"seq\":3,\"time\":{\"completed\":1791789607000,\"created\":1791789605000},\"tokens\":{\"cache\":{\"read\":0,\"write\":0},\"input\":1200,\"output\":20,\"reasoning\":0},\"type\":\"assistant\"}"
+    "raw": "{\"agent\":\"build\",\"content\":[{\"executed\":false,\"id\":\"call_fetch_1\",\"name\":\"webfetch\",\"state\":{\"error\":{\"message\":\"fetch failed\",\"type\":\"tool.failed\"},\"input\":{\"format\":\"markdown\",\"url\":\"https://example.invalid/page\"},\"status\":\"error\"},\"time\":{\"completed\":1791789606000,\"created\":1791789605000,\"ran\":1791789605500},\"type\":\"tool\"},{\"text\":\"The knowledge base covers the example topic; the page could not be fetched.\",\"type\":\"text\"}],\"cost\":0.0052,\"finish\":\"stop\",\"id\":\"msg_mcp_3\",\"model\":{\"id\":\"meta/muse-wonder\",\"providerID\":\"openrouter\",\"variant\":\"high\"},\"reasoning_tokens\":0,\"seq\":3,\"time\":{\"completed\":1791789607000,\"created\":1791789605000},\"tokens\":{\"cache\":{\"read\":0,\"write\":0},\"input\":1200,\"output\":20,\"reasoning\":0},\"type\":\"assistant\"}"
   },
   {
     "tool": "opencode",
@@ -1256,12 +1256,12 @@
     "role": "assistant",
     "model": "glm-5.3-flash",
     "stop_reason": "tool-calls",
-    "timestamp": "2026-10-12T06:20:01.000Z",
+    "timestamp": "2026-10-12T06:20:02.600Z",
     "input_tokens": 120,
     "output_tokens": 40,
     "cache_read_tokens": 40,
     "cache_creation_tokens": 16,
-    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"Read the file before answering.\",\"time\":{\"completed\":1791786002000,\"created\":1791786001000},\"type\":\"reasoning\"},{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/decant-fixture/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}],\"cost\":0.0000416,\"finish\":\"tool-calls\",\"id\":\"msg_sample_2\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"seq\":2,\"time\":{\"completed\":1791786005000,\"created\":1791786001000},\"tokens\":{\"cache\":{\"read\":40,\"write\":16},\"input\":120,\"output\":30,\"reasoning\":10},\"type\":\"assistant\"}"
+    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"Read the file before answering.\",\"time\":{\"completed\":1791786002000,\"created\":1791786001000},\"type\":\"reasoning\"},{\"executed\":false,\"id\":\"call_read_1\",\"name\":\"read\",\"state\":{\"content\":[{\"text\":\"hello\",\"type\":\"text\"}],\"input\":{\"path\":\"/decant-fixture/example/notes.txt\"},\"metadata\":{\"truncated\":false},\"status\":\"completed\"},\"time\":{\"completed\":1791786003000,\"created\":1791786002000,\"ran\":1791786002500},\"type\":\"tool\"}],\"cost\":0.0000416,\"finish\":\"tool-calls\",\"id\":\"msg_sample_2\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"reasoning_tokens\":10,\"seq\":2,\"time\":{\"completed\":1791786005000,\"created\":1791786001000,\"streamed\":1791786002600},\"tokens\":{\"cache\":{\"read\":40,\"write\":16},\"input\":120,\"output\":30,\"reasoning\":10},\"type\":\"assistant\"}"
   },
   {
     "tool": "opencode",
@@ -1288,12 +1288,12 @@
     "role": "assistant",
     "model": "glm-5.3-flash",
     "stop_reason": "stop",
-    "timestamp": "2026-10-12T06:20:06.000Z",
+    "timestamp": "2026-10-12T06:20:07.500Z",
     "input_tokens": 200,
     "output_tokens": 12,
     "cache_read_tokens": 60,
     "cache_creation_tokens": 0,
-    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"The file says hello.\",\"type\":\"text\"}],\"cost\":0.0000378,\"finish\":\"stop\",\"id\":\"msg_sample_3\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"seq\":3,\"time\":{\"completed\":1791786008000,\"created\":1791786006000},\"tokens\":{\"cache\":{\"read\":60,\"write\":0},\"input\":200,\"output\":12,\"reasoning\":0},\"type\":\"assistant\"}"
+    "raw": "{\"agent\":\"build\",\"content\":[{\"text\":\"The file says hello.\",\"type\":\"text\"}],\"cost\":0.0000378,\"finish\":\"stop\",\"id\":\"msg_sample_3\",\"model\":{\"id\":\"glm-5.3-flash\",\"providerID\":\"opencode-go\",\"variant\":\"max\"},\"reasoning_tokens\":0,\"seq\":3,\"time\":{\"completed\":1791786008000,\"created\":1791786006000,\"streamed\":1791786007500},\"tokens\":{\"cache\":{\"read\":60,\"write\":0},\"input\":200,\"output\":12,\"reasoning\":0},\"type\":\"assistant\"}"
   },
   {
     "tool": "opencode",

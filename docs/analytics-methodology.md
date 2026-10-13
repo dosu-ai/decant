@@ -314,6 +314,10 @@ so the response's output is split across all of those records' blocks: the
 visible blocks keep their size, and the remainder is planning when the response
 has a thinking block. Time is not regrouped, because each record is written when
 its block finishes, so the gap before a record is the time that block took.
+OpenCode records reasoning tokens for each step (a 1.x message), so a step's
+planning is its reported reasoning, capped at its output, and the visible
+blocks split the rest by size. An empty reasoning part stays as a thinking
+block, because providers that hide reasoning still bill it.
 Output with no visible block to carry it, such as an
 assistant record whose content is empty, still counts as generation and goes
 to `communicating`. Tool-result bytes contribute to context-window volume, and
@@ -409,6 +413,20 @@ is communicating, but its result arrives when the user answers, so the gap
 before that result is waiting on the user too, like the time before a typed
 prompt. A harness record between two messages does not split the gap; it closes
 on the next message the model or user produced.
+
+OpenCode dates each assistant step when its generation ended: the 2.x
+`time.streamed`, when the provider response ended, or for 1.x the latest part
+that finished streaming (a text or reasoning end, or a tool's run start). The
+gap before a step is then its first-token latency plus generation, and the gap
+from the step to a tool result, dated at the tool's `completed`, is the tool's
+run. A step without those times falls back to its completion, which waits for
+its tools, and only to its start when nothing else was recorded. Tool calls
+are dated and timed from when they started to run (`ran`, or the 1.x
+`state.time.start`). A step's parts stream concurrently, so their times cannot
+separate reasoning from visible output: the planning share of a step's time is
+its reported reasoning tokens over its output tokens, and its visible blocks
+split the rest by size. Planning time for OpenCode is therefore an
+apportionment by tokens, not a measurement.
 
 Each gap is measured from the latest timestamp seen so far, not the previous
 message's. Parallel work can log a message earlier than the one before it:

@@ -642,6 +642,35 @@ describe("OpenCode 1.x step timing", () => {
     expect(session.messages[4]?.raw).toMatchObject({ reasoning_tokens: 240 });
   });
 
+  test("records reasoning summed over the message's step-finish parts", () => {
+    const finish = (reasoning: number) => ({
+      type: "step-finish",
+      reason: "stop",
+      cost: 0,
+      tokens: { input: 10, output: 4, reasoning, cache: { read: 0, write: 0 } },
+    });
+    const { session } = parse({
+      session: sessionRow(),
+      messages: [
+        // info.tokens holds only the last step's usage.
+        messageRow(
+          "msg_a",
+          1000,
+          assistant({
+            tokens: { input: 10, output: 4, reasoning: 7, cache: { read: 0, write: 0 } },
+          }),
+        ),
+      ],
+      parts: [
+        partRow("prt_1", "msg_a", finish(5)),
+        partRow("prt_2", "msg_a", { type: "reasoning", text: "", time: { start: T0, end: T0 } }),
+        partRow("prt_3", "msg_a", finish(7)),
+      ],
+    });
+    expect(session.messages[0]?.usage).toMatchObject({ output: 20, reasoning: 12 });
+    expect(session.messages[0]?.raw).toMatchObject({ reasoning_tokens: 12 });
+  });
+
   test("falls back to the message's end, never its start, when a time is missing", () => {
     const { session } = parse({
       session: sessionRow(),

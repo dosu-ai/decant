@@ -495,7 +495,7 @@ describe("parseOpenCodeSession", () => {
         }),
       ],
       parts: [
-        step("msg_1", { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }),
+        step("msg_1", { input: 100, output: 20, reasoning: 5, cache: { read: 0, write: 0 } }),
         step("msg_1", tokens),
         step("msg_9", { input: 300, output: 40, reasoning: 0, cache: { read: 0, write: 0 } }),
       ],
@@ -512,6 +512,8 @@ describe("parseOpenCodeSession", () => {
       ["msg_3", "assistant", "glm-5.3-flash", 60],
     ]);
     expect(corrected.messages[2]?.usage).toMatchObject({ output: 12, reasoning: 4 });
+    // The migrated row's own tokens say 0 reasoning; the 1.x steps say 5.
+    expect(corrected.messages[0]?.raw).toMatchObject({ reasoning_tokens: 5 });
     expect((corrected.messages[1]?.raw as { cost: number }).cost).toBe(0.000065);
     expect(corrected.rawMeta).toMatchObject({ migrated_rows_from_v1: 2 });
 

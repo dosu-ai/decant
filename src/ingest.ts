@@ -1558,7 +1558,7 @@ function writeSession(
           toolUseBlocks.push({
             messageId,
             callBlockId: blockId,
-            timestamp: message.timestamp,
+            timestamp: block.calledAt ?? message.timestamp,
             block,
           });
         } else if (block.blockType === "tool_result" && block.toolUseId != null) {

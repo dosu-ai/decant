@@ -21,7 +21,9 @@ export function toMarkdown(detail: SessionDetail): string {
           out += `${block.text}\n\n`;
         }
       } else if (block.block_type === "thinking") {
-        if (block.text != null) {
+        // Hidden reasoning is stored as a blank thinking block; there is
+        // nothing to show for it.
+        if (block.text != null && block.text.trim() !== "") {
           out += `> _thinking:_ ${block.text}\n\n`;
         }
       } else if (block.block_type === "tool_use") {

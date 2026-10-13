@@ -9,7 +9,7 @@ import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
-import { parseOpenCodeSession } from "../src/sources/opencode.ts";
+import { type OpenCodeMessageRow, parseOpenCodeSession } from "../src/sources/opencode.ts";
 import {
   aggregateEconomicsVectors,
   computeSessionEconomicsVectors,
@@ -1043,10 +1043,10 @@ describe("OpenCode step apportionment", () => {
     const economics = tokenEconomicsForSession(db, ingestTiming(db));
     const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
     const T = STEP_TIMES;
-    // Step 1 closes 1849 ms after the prompt (latency, reasoning, and the
+    // Step 1 closes 2000 ms after the prompt (latency, reasoning, and the
     // read call's arguments); 150 of its 200 output tokens are reasoning.
     const step1 = T.step1Streamed - T.prompt1;
-    // Step 2 closes 900 ms after the prompt; 240 of 300 tokens are reasoning.
+    // Step 2 closes 1050 ms after the prompt; 240 of 300 tokens are reasoning.
     const step2 = T.step2Streamed - T.prompt2;
     expect(bucket("planning")?.active_ms).toBeCloseTo(step1 * 0.75 + step2 * 0.8, 0);
     // The read call gets its share of step 1 plus its own run, nothing more.
@@ -1063,6 +1063,25 @@ describe("OpenCode step apportionment", () => {
     expect(bucket("planning")?.generation_tokens).toBeCloseTo(150 + 240, 6);
     expect(bucket("context")?.generation_tokens).toBeCloseTo(50, 6);
     expect(bucket("communicating")?.generation_tokens).toBeCloseTo(60, 6);
+    db.close();
+  });
+
+  test("estimates planning when a step streams reasoning text but reports zero", () => {
+    const db = freshDb();
+    // Some providers stream reasoning text and still report 0 reasoning
+    // tokens; that zero must not erase the step's planning.
+    const rows = timingMessageRows();
+    const step1 = rows[1] as OpenCodeMessageRow;
+    const data = JSON.parse(step1.data) as { tokens: { output: number; reasoning: number } };
+    data.tokens = { ...data.tokens, output: 200, reasoning: 0 };
+    rows[1] = { ...step1, data: JSON.stringify(data) };
+    const economics = tokenEconomicsForSession(db, ingestTiming(db, rows));
+    const planning = economics?.buckets.find((row) => row.bucket === "planning");
+    // Step 1's 200 tokens minus its read call's bytes / 4, plus step 2's 240.
+    expect(planning?.generation_tokens ?? 0).toBeGreaterThan(240 + 150);
+    expect(planning?.active_ms ?? 0).toBeGreaterThan(
+      (STEP_TIMES.step2Streamed - STEP_TIMES.prompt2) * 0.8,
+    );
     db.close();
   });
 

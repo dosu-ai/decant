@@ -857,7 +857,7 @@ function allocateGeneration(
         allocateOutput(
           session.id,
           outputTokens,
-          reportedReasoning(session, rows[0]),
+          reportedReasoning(session, rows),
           rows,
           buckets,
           phase,
@@ -925,7 +925,7 @@ function allocateLatency(
     if (previous != null) {
       const gap = Math.min(Math.max(0, at - previous), ACTIVE_GAP_CAP_MS);
       const first = message.blocks[0];
-      const reasoning = reportedReasoning(session, first);
+      const reasoning = reportedReasoning(session, message.blocks);
       const output = first?.output_tokens ?? 0;
       distributeLatency(
         gap,
@@ -1124,15 +1124,25 @@ function epochMillis(timestamp: string | null): number | null {
  * blocks cannot explain, which would overstate planning once hidden reasoning
  * keeps an empty thinking block. Its time follows the same token share: an
  * apportionment, because a step's parts stream concurrently and their times
- * cannot separate reasoning from visible output. */
-function reportedReasoning(session: SessionRow, block: BlockRow | undefined): number | null {
+ * cannot separate reasoning from visible output. Some providers stream
+ * reasoning text but report zero reasoning tokens; that zero is not a count,
+ * so such a step falls back to the estimate other sources use. */
+function reportedReasoning(session: SessionRow, blocks: BlockRow[]): number | null {
+  const block = blocks[0];
   if (session.tool !== "opencode" || block?.role !== "assistant") {
     return null;
   }
   const reasoning = block.reasoning_tokens;
-  return typeof reasoning === "number" && Number.isFinite(reasoning) && reasoning >= 0
-    ? reasoning
-    : null;
+  if (typeof reasoning !== "number" || !Number.isFinite(reasoning) || reasoning < 0) {
+    return null;
+  }
+  if (
+    reasoning === 0 &&
+    blocks.some((candidate) => candidate.type === "thinking" && candidate.text_bytes > 0)
+  ) {
+    return null;
+  }
+  return reasoning;
 }
 
 function allocateOutput(

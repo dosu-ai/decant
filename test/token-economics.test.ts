@@ -1066,6 +1066,30 @@ describe("OpenCode step apportionment", () => {
     db.close();
   });
 
+  test("ignores reasoning counts in another source's raw records", () => {
+    const economicsOf = (withCounts: boolean) => {
+      const db = freshDb();
+      const parsed = parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl"));
+      if (withCounts) {
+        for (const message of parsed.session.messages) {
+          if (message.role === "assistant" && typeof message.raw === "object") {
+            Object.assign(message.raw as object, {
+              reasoning_tokens: 1_000_000,
+              tokens: { reasoning: 1_000_000 },
+            });
+          }
+        }
+      }
+      const economics = tokenEconomicsForSession(
+        db,
+        upsertSession(db, parsed, "/x/claude.jsonl", 1, 2, "claude"),
+      );
+      db.close();
+      return economics?.buckets.map((row) => [row.bucket, row.generation_tokens, row.active_ms]);
+    };
+    expect(economicsOf(true)).toEqual(economicsOf(false));
+  });
+
   test("leaves session totals and cost unchanged", () => {
     const db = freshDb();
     const id = ingestTiming(db);

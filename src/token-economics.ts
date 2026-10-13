@@ -19,7 +19,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 10;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 11;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
@@ -93,8 +93,8 @@ interface BlockRow {
   // The API message id behind an assistant record. Claude Code journals one
   // response as a record per content block, all sharing this id.
   response_id: string | null;
-  // Reasoning tokens an OpenCode step reported, as its parser mapped them;
-  // read only for OpenCode sessions.
+  // Reasoning tokens an OpenCode step reported, as its parser mapped them
+  // (raw.reasoning_tokens); null for every other source.
   reasoning_tokens: number | null;
   type: string | null;
   tool_name: string | null;
@@ -623,7 +623,7 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens,
               CASE WHEN m.role = 'assistant' AND json_valid(m.raw)
                    THEN json_extract(m.raw, '$.message.id') END AS response_id,
-              CASE WHEN m.role = 'assistant' AND json_valid(m.raw)
+              CASE WHEN s.tool = 'opencode' AND m.role = 'assistant' AND json_valid(m.raw)
                    THEN json_extract(m.raw, '$.reasoning_tokens') END AS reasoning_tokens,
               b.type,
               COALESCE(b.tool_name, tc.tool_name) AS tool_name,
@@ -645,6 +645,7 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
        FROM scoped_session fs
        CROSS JOIN block b INDEXED BY idx_block_session
        JOIN message m ON m.id = b.message_id
+       JOIN session s ON s.id = b.session_id
        LEFT JOIN tool_call tc ON tc.result_block_id = b.id
        WHERE b.session_id = fs.id
        ORDER BY b.session_id, m.seq, b.ordinal`,

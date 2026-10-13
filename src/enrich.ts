@@ -62,7 +62,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
   return refs;
 }
 
-type FileToolTable = Record<string, { key: string; operation: Operation }>;
+/** `fallbackKey` is read when `key` does not hold a string. */
+type FileToolTable = Record<string, { key: string; fallbackKey?: string; operation: Operation }>;
 
 const CLAUDE_FILE_TOOLS: FileToolTable = {
   Read: { key: "file_path", operation: "read" },
@@ -77,12 +78,15 @@ const GEMINI_FILE_TOOLS: FileToolTable = {
   write_file: { key: "file_path", operation: "write" },
 };
 
-// OpenCode's built-in file tools take an absolute `path`. A `streaming` tool
-// item carries its partial input as a string, which keyedRef ignores.
+// OpenCode 2.x's built-in file tools take an absolute `path`. 1.x tools take
+// `filePath`, and so do 2.x rows the migrator copied from 1.x, which keep their
+// input as written; `multiedit` exists only in 1.x. A `streaming` tool item
+// carries its partial input as a string, which keyedRef ignores.
 const OPENCODE_FILE_TOOLS: FileToolTable = {
-  read: { key: "path", operation: "read" },
-  edit: { key: "path", operation: "edit" },
-  write: { key: "path", operation: "write" },
+  read: { key: "path", fallbackKey: "filePath", operation: "read" },
+  edit: { key: "path", fallbackKey: "filePath", operation: "edit" },
+  write: { key: "path", fallbackKey: "filePath", operation: "write" },
+  multiedit: { key: "filePath", operation: "edit" },
 };
 
 function keyedRef(
@@ -100,7 +104,11 @@ function keyedRef(
   if (pair == null || !isObject(block.toolInput)) {
     return;
   }
-  const path = block.toolInput[pair.key];
+  const primary = block.toolInput[pair.key];
+  const path =
+    typeof primary !== "string" && pair.fallbackKey != null
+      ? block.toolInput[pair.fallbackKey]
+      : primary;
   if (typeof path !== "string") {
     return;
   }

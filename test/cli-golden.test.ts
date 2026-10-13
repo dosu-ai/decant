@@ -144,6 +144,8 @@ describe("CLI golden parity", () => {
           // the fixtures.
           OPENCODE_CONFIG: undefined,
           OPENCODE_CONFIG_DIR: join(caseDir, "opencode-config"),
+          // Never the user's own models.dev cache.
+          OPENCODE_MODELS_PATH: join(caseDir, "opencode-cache", "models.json"),
         },
       },
     );

@@ -1,6 +1,45 @@
 [
   {
     "tool": "opencode",
+    "source_session_id": "ses_v1_sample",
+    "title": "Read the example notes and search the docs.",
+    "project_path": "/decant-fixture/example",
+    "model": "glm-5.3-flash",
+    "reasoning_effort": "max",
+    "total_reasoning_tokens": 10,
+    "reasoning_source": "reported",
+    "started_at": "2026-10-12T07:26:40.000Z",
+    "ended_at": "2026-10-12T07:27:40.000Z",
+    "message_count": 8,
+    "total_input_tokens": 370,
+    "total_output_tokens": 57,
+    "estimated_cost_usd": 0.00008940000000000002,
+    "model_provider": "opencode-go",
+    "user_state": null,
+    "is_user_archived": false,
+    "is_archived": false,
+    "is_subagent": false,
+    "parent_session_id": null,
+    "spawn_tool_use_id": null,
+    "agent_id": null,
+    "agent_type": "build",
+    "spawn_depth": null,
+    "context_window_tokens": 1000000,
+    "peak_context_tokens": 310,
+    "compaction_count": 0,
+    "subagent_count": 0,
+    "subagent_estimated_cost_usd": 0,
+    "ingest_issue_count": 0,
+    "informational_ingest_issue_count": 0,
+    "dosu_mcp_direct_calls": 1,
+    "dosu_mcp_tree_calls": 1,
+    "cost_source": "decant",
+    "reasoning_effort_levels": [
+      "max"
+    ]
+  },
+  {
+    "tool": "opencode",
     "source_session_id": "ses_mcp",
     "title": "Search the knowledge base for the example topic.",
     "project_path": "/decant-fixture/example",
@@ -14,7 +53,6 @@
     "total_input_tokens": 2200,
     "total_output_tokens": 95,
     "estimated_cost_usd": 0.0108,
-    "cost_source": "decant",
     "model_provider": "openrouter",
     "user_state": null,
     "is_user_archived": false,
@@ -34,6 +72,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 2,
     "dosu_mcp_tree_calls": 2,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "high"
     ]
@@ -53,7 +92,6 @@
     "total_input_tokens": 320,
     "total_output_tokens": 52,
     "estimated_cost_usd": 0.0000794,
-    "cost_source": "decant",
     "model_provider": "opencode-go",
     "user_state": null,
     "is_user_archived": false,
@@ -73,6 +111,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "max"
     ]
@@ -92,7 +131,6 @@
     "total_input_tokens": 3,
     "total_output_tokens": 1,
     "estimated_cost_usd": 0,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -112,6 +150,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   },
   {
@@ -129,7 +168,6 @@
     "total_input_tokens": 15,
     "total_output_tokens": 14,
     "estimated_cost_usd": 0,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -149,6 +187,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   },
   {
@@ -166,7 +205,6 @@
     "total_input_tokens": 500,
     "total_output_tokens": 120,
     "estimated_cost_usd": 0.0031249999999999997,
-    "cost_source": "decant",
     "model_provider": "openai",
     "user_state": null,
     "is_user_archived": false,
@@ -186,6 +224,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "high"
     ]
@@ -205,7 +244,6 @@
     "total_input_tokens": 0,
     "total_output_tokens": 0,
     "estimated_cost_usd": 0,
-    "cost_source": "decant",
     "model_provider": "openai",
     "user_state": null,
     "is_user_archived": false,
@@ -225,6 +263,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 2,
     "dosu_mcp_tree_calls": 2,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "medium"
     ]
@@ -244,7 +283,6 @@
     "total_input_tokens": 4900,
     "total_output_tokens": 550,
     "estimated_cost_usd": 0.03825,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -264,6 +302,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   },
   {
@@ -281,7 +320,6 @@
     "total_input_tokens": 220,
     "total_output_tokens": 60,
     "estimated_cost_usd": 0.0026,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -301,6 +339,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   },
   {
@@ -318,7 +357,6 @@
     "total_input_tokens": 500,
     "total_output_tokens": 120,
     "estimated_cost_usd": 0.0031249999999999997,
-    "cost_source": "decant",
     "model_provider": "openai",
     "user_state": null,
     "is_user_archived": false,
@@ -338,6 +376,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "high"
     ]
@@ -357,7 +396,6 @@
     "total_input_tokens": 2500,
     "total_output_tokens": 400,
     "estimated_cost_usd": 0.0225,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -377,6 +415,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   },
   {
@@ -394,7 +433,6 @@
     "total_input_tokens": 500,
     "total_output_tokens": 150,
     "estimated_cost_usd": 0.0035999999999999995,
-    "cost_source": "decant",
     "model_provider": "openai",
     "user_state": null,
     "is_user_archived": false,
@@ -414,6 +452,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": [
       "high"
     ]
@@ -433,7 +472,6 @@
     "total_input_tokens": 2700,
     "total_output_tokens": 460,
     "estimated_cost_usd": 0.0355,
-    "cost_source": "decant",
     "model_provider": null,
     "user_state": null,
     "is_user_archived": false,
@@ -453,6 +491,7 @@
     "informational_ingest_issue_count": 0,
     "dosu_mcp_direct_calls": 0,
     "dosu_mcp_tree_calls": 0,
+    "cost_source": "decant",
     "reasoning_effort_levels": []
   }
 ]

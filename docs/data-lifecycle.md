@@ -33,21 +33,50 @@ By default Decant discovers:
   `$XDG_DATA_HOME/opencode`, in that order. `OPENCODE_DB`, when set, names an
   explicit extra database file that is read in addition to that directory.
   Decant opens the databases read-only, never writes to them, and never
-  checkpoints them. Each 2.x session (`session_v2`) becomes its own source
-  `<database>#<session id>`. A session present in several databases is read
-  from the copy updated last. A fork's rows inherited from its parent are
-  skipped, as OpenCode's own statistics skip them. Sessions that exist only in
-  OpenCode 1.x tables are not read. Sessions OpenCode migrated from 1.x into
-  its 2.x tables are read as stored, which leaves gaps in their tokens, file
-  references, and subagent links (see
-  [analytics methodology](analytics-methodology.md#token-and-cost-totals)).
+  checkpoints them. Decant reads OpenCode 2.x sessions (`session_v2` and
+  `session_message`) and OpenCode 1.x sessions (`session`, `message`, and
+  `part`, from OpenCode 1.2 on), including databases only 1.x ever opened.
+  Each session becomes its own source `<database>#<session id>`. One session
+  can have several copies: in several databases, or in both layouts of one
+  database, because OpenCode 2.x migrates 1.x sessions into its own tables and
+  a 1.x binary can keep writing a session after that. Decant reads the copy
+  updated last. A tie within one database goes to the 2.x copy, which is the
+  usual state of a freshly migrated session, and a tie across databases goes
+  to the database path that sorts first. When the copy Decant reads moves to
+  the other layout, the next sync re-ingests the session from it. A fork's
+  rows inherited from its parent are skipped by their timestamps (see
+  [analytics methodology](analytics-methodology.md#token-and-cost-totals),
+  which also covers sessions OpenCode migrated from 1.x). An early 2.x
+  preview database from before OpenCode split its tables (`opencode-next.db`
+  with `session_message` but no `session_v2`) is skipped with a warning until
+  a 2.x release converts it, and is never read as 1.x. Sessions in the JSON
+  `storage/` directory that OpenCode used before 1.2 are not read.
+- OpenCode 1.x's cached models.dev catalog, for context windows of sessions
+  in a database that holds no catalog of its own (OpenCode 2.x keeps it in
+  the database; 1.x does not). The file is `OPENCODE_MODELS_PATH` when that is
+  set, as in OpenCode, else `$XDG_CACHE_HOME/opencode/models.json` (default
+  `~/.cache/opencode/models.json`). Decant reads it read-only, at most once per
+  sync, and never fetches a catalog. When the file is missing (logged at info
+  level) or unreadable (a warning), the context window stays unknown, and the
+  affected sessions are re-derived once on the first sync that can read it.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks, and
 unchanged OpenCode sessions by their per-session change key, unless an updated
-ingest pipeline requires reprocessing them. An OpenCode session's change key
-also covers the MCP server names from the OpenCode configs that apply to its
-directory, so editing those names re-derives the affected sessions once. After a parser correction, the next
+ingest pipeline requires reprocessing them. A 2.x session's change key is built
+from the session's update time and its message count, highest sequence, and
+newest message update. A 1.x session's key covers the session's update time,
+its message and part counts, the newest and summed update times of its
+messages and of its parts, and a digest of the session's title, archive time,
+and usage columns, because OpenCode 1.x renames or archives a session without
+moving its update time. A 2.x session that also has a 1.x copy in the same
+database (one OpenCode migrated) appends that copy's key, because its usage is
+read from that copy, so a change there re-derives it. The two layouts' keys
+never coincide, so a session whose copy moves to the other layout is always
+re-ingested. An OpenCode
+session's change key also covers the MCP server names from the OpenCode
+configs that apply to its directory, so editing those names re-derives the
+affected sessions once. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode

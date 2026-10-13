@@ -143,6 +143,27 @@ describe("fileRefs", () => {
     expect(fileRefs(streaming)).toEqual([]);
   });
 
+  test("OpenCode 1.x file tools, and 2.x rows migrated from 1.x, use filePath", () => {
+    const refs = (name: string, input: NormalizedBlock["toolInput"]) => {
+      const session = oneBlockSession("opencode", toolUse(name, input));
+      session.cwd = "/w";
+      return fileRefs(session).map(brief);
+    };
+    expect(refs("read", { filePath: "/w/a.ts" })).toEqual([["a.ts", "read", "ts"]]);
+    expect(refs("edit", { filePath: "/w/b.md", oldString: "x", newString: "y" })).toEqual([
+      ["b.md", "edit", "md"],
+    ]);
+    expect(refs("write", { filePath: "/w/c.json", content: "{}" })).toEqual([
+      ["c.json", "write", "json"],
+    ]);
+    expect(refs("multiedit", { filePath: "/w/d.ts", edits: [] })).toEqual([["d.ts", "edit", "ts"]]);
+    // A 2.x input names `path`; it wins when both are present.
+    expect(refs("read", { path: "/w/e.ts", filePath: "/w/f.ts" })).toEqual([
+      ["e.ts", "read", "ts"],
+    ]);
+    expect(refs("read", { filePath: 7 })).toEqual([]);
+  });
+
   test("OpenCode compaction rows count as compactions", () => {
     const session = oneBlockSession("opencode", toolUse("read", { path: "/w/a.ts" }));
     session.messages.push({

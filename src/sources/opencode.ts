@@ -16,6 +16,15 @@ import {
 } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
+import type { OpenCodeLegacyMessageRow, OpenCodeLegacyPartRow } from "./opencode-legacy.ts";
+import {
+  addTokenUsage,
+  type MigratedUsage,
+  migratedUsage,
+  openCodeUsage,
+  parseOpenCodeVersion,
+  reasoningOverlap,
+} from "./opencode-usage.ts";
 import {
   block,
   contentText,
@@ -58,6 +67,17 @@ export interface OpenCodeMessageRow {
   time_created: number;
   time_updated: number;
   data: string;
+}
+
+/** The 1.x copy of a session, from the same database, when the session is
+ * also in `session_v2`: OpenCode 2.x migrated it and keeps the 1.x tables. */
+export interface OpenCodeLegacyCounterpart {
+  /** The 1.x `session.version`. */
+  version: string | null;
+  /** In OpenCode's order (`time_created, id`). */
+  messages: readonly OpenCodeLegacyMessageRow[];
+  /** Step-finish parts are the only ones read; others may be left out. */
+  parts: readonly OpenCodeLegacyPartRow[];
 }
 
 export interface OpenCodeModelRef {
@@ -113,11 +133,16 @@ interface ToolResult {
  * their parts inline in `content[]`, so a completed or failed tool item yields
  * a `tool_use` on the assistant message and a separate `tool` message holding
  * the `tool_result` (writeSession pairs a result only with an earlier call).
+ *
+ * `legacy` is the session's 1.x copy when OpenCode migrated it. The migrator
+ * keeps only each message's last-step tokens, so a migrated row takes its
+ * usage from the 1.x step-finish parts instead (`migratedUsage`).
  */
 export function parseOpenCodeSession(
   row: OpenCodeSessionRow,
   rows: readonly OpenCodeMessageRow[],
   context: OpenCodeParseContext,
+  legacy: OpenCodeLegacyCounterpart | null = null,
 ): ParsedSession {
   const issues: Issue[] = [];
   const unknownTypes: UnknownTypes = new Map();
@@ -131,6 +156,21 @@ export function parseOpenCodeSession(
   let firstUserText: string | null = null;
   let forkRowsSkipped = 0;
   let seq = 0;
+  let migratedRows = 0;
+  const migrated: MigratedUsage | null =
+    legacy != null && legacy.messages.length > 0
+      ? migratedUsage(legacy.version, legacy.messages, legacy.parts)
+      : null;
+  // 2.x writes disjoint tokens. A row OpenCode migrated from 1.x keeps the
+  // semantics of the release that wrote it, and the migration drops `total`.
+  // With the 1.x copy at hand, migrated rows are corrected from it and any
+  // other row was written by 2.x since; without it, the session's version
+  // decides for every row (a 2.x-created session is always disjoint).
+  const rowUsage = (tokens: Json | undefined): TokenUsage | null =>
+    openCodeUsage(
+      tokens,
+      migrated != null || !isObject(tokens) ? "disjoint" : reasoningOverlap(tokens, row.version),
+    );
 
   const emit = (role: Role, raw: Json, fields: MessageFields, blocks: NormalizedBlock[]): void => {
     messages.push({
@@ -149,11 +189,18 @@ export function parseOpenCodeSession(
     seq += 1;
   };
 
+  // A fork copies the parent's settled rows with their original timestamps,
+  // so a row older than its session is inherited history and would be billed
+  // twice. `opencode stats` skips it only when `fork_session_id` is set; a
+  // fork OpenCode migrated from 1.x has no such link, so Decant also skips by
+  // time for sessions migrated from 1.x (a 1.x copy or a pre-2 version). A
+  // native 2.x session without the link keeps every row, so a clock step
+  // backwards can never drop its usage.
+  const majorVersion = parseOpenCodeVersion(row.version)?.[0];
+  const skipInherited =
+    row.fork_session_id != null || legacy != null || (majorVersion != null && majorVersion < 2);
   for (const message of rows) {
-    // A fork copies the parent's settled rows with their original timestamps.
-    // OpenCode's own stats exclude them with this predicate; so does Decant,
-    // or the inherited history would be billed twice.
-    if (row.fork_session_id != null && message.time_created < row.time_created) {
+    if (skipInherited && message.time_created < row.time_created) {
       forkRowsSkipped += 1;
       continue;
     }
@@ -180,9 +227,13 @@ export function parseOpenCodeSession(
       if (model.variant != null && model.variant !== "default") {
         efforts.push(model.variant);
       }
-      const usage = usageFrom(data.tokens);
+      const corrected = migrated?.assistants.get(message.id);
+      if (corrected != null) {
+        migratedRows += 1;
+      }
+      const usage = corrected?.usage ?? rowUsage(data.tokens);
       if (usage != null) {
-        totals = addUsage(totals, usage);
+        totals = addTokenUsage(totals, usage);
         sawUsage = true;
       }
       const { blocks, results } = assistantContent(data.content, servers);
@@ -203,9 +254,18 @@ export function parseOpenCodeSession(
       }
     } else if (typ === "compaction") {
       const model = modelRef(data.model);
-      const usage = usageFrom(data.tokens);
+      // A migrated compaction row has no usage of its own; the summary
+      // request's usage and recorded cost are in the 1.x tables.
+      const answer = migrated?.compactions.get(message.id);
+      if (answer != null) {
+        migratedRows += 1;
+        if (data.cost == null && answer.cost != null) {
+          raw.cost = answer.cost;
+        }
+      }
+      const usage = answer != null ? answer.usage : rowUsage(data.tokens);
       if (usage != null) {
-        totals = addUsage(totals, usage);
+        totals = addTokenUsage(totals, usage);
         sawUsage = true;
       }
       const status = asString(data.status);
@@ -217,7 +277,7 @@ export function parseOpenCodeSession(
         raw,
         {
           sourceUuid: message.id,
-          model: model.id,
+          model: model.id ?? answer?.modelId ?? null,
           stopReason: status === "failed" ? "error" : null,
           timestamp,
           usage,
@@ -313,6 +373,9 @@ export function parseOpenCodeSession(
   }
   if (forkRowsSkipped > 0) {
     rawMeta.fork_rows_skipped = forkRowsSkipped;
+  }
+  if (migratedRows > 0) {
+    rawMeta.migrated_rows_from_v1 = migratedRows;
   }
 
   const normalized: NormalizedSession = {
@@ -496,7 +559,7 @@ export function innerToolName(tool: string): string {
   return `mcp__${sanitizeMcpName(namespace)}__${sanitizeMcpName(tool.slice(dot + 1))}`;
 }
 
-function parseModelJson(value: string | null): Json | undefined {
+export function parseModelJson(value: string | null): Json | undefined {
   if (value == null) {
     return undefined;
   }
@@ -515,42 +578,7 @@ function modelRef(value: Json | undefined): OpenCodeModelRef {
   };
 }
 
-/** OpenCode's token fields are disjoint: `output` excludes `reasoning` and
- * `input` excludes cached tokens. Decant treats reasoning as part of output
- * and prices cache reads and writes separately, so the mapping is additive. */
-function usageFrom(tokens: Json | undefined): TokenUsage | null {
-  if (!isObject(tokens)) {
-    return null;
-  }
-  const reasoning = integerAt(tokens, "reasoning");
-  const cache = tokens.cache;
-  return {
-    input: integerAt(tokens, "input"),
-    output: integerAt(tokens, "output") + reasoning,
-    cacheRead: isObject(cache) ? integerAt(cache, "read") : 0,
-    cacheCreation: isObject(cache) ? integerAt(cache, "write") : 0,
-    cacheCreation1h: 0,
-    reasoning,
-  };
-}
-
-function integerAt(value: JsonObject, key: string): number {
-  const v = value[key];
-  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
-}
-
-function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheCreation: a.cacheCreation + b.cacheCreation,
-    cacheCreation1h: a.cacheCreation1h + b.cacheCreation1h,
-    reasoning: a.reasoning + b.reasoning,
-  };
-}
-
-function isoFromMillis(ms: number | null): string | null {
+export function isoFromMillis(ms: number | null): string | null {
   if (ms == null || !Number.isFinite(ms)) {
     return null;
   }

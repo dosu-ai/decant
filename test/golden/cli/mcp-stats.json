@@ -1,12 +1,12 @@
 [
   {
     "mcp_server": "dosu",
-    "tools": 2,
-    "calls": 4,
+    "tools": 3,
+    "calls": 5,
     "errors": 0,
     "p50_ms": 2000,
     "p95_ms": 3000,
-    "last_used_at": "2026-10-12T07:20:01.000Z"
+    "last_used_at": "2026-10-12T07:26:41.000Z"
   },
   {
     "mcp_server": "exa",

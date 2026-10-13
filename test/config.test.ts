@@ -44,6 +44,7 @@ describe("resolveConfig", () => {
       opencodeDir: "/env/opencode",
       opencodeConfigDir: "/home/dev/.config/opencode",
       opencodeConfigPath: "/env/opencode.json",
+      opencodeModelsPath: "/home/dev/.cache/opencode/models.json",
     });
   });
 
@@ -58,6 +59,7 @@ describe("resolveConfig", () => {
     expect(config.opencodeConfigDir).toBe("/home/dev/.config/opencode");
     expect(config.opencodeConfigPath).toBeUndefined();
     expect(config.opencodeExtraConfigPath).toBeUndefined();
+    expect(config.opencodeModelsPath).toBe("/home/dev/.cache/opencode/models.json");
   });
 
   test("follows OpenCode's own environment before XDG and home", () => {
@@ -94,6 +96,17 @@ describe("resolveConfig", () => {
     });
     expect(decant.opencodeConfigPath).toBe("/d/cfg.json");
     expect(decant.opencodeExtraConfigPath).toBe("/oc/cfg.json");
+    // OpenCode 1.x caches the models.dev catalog in its cache directory,
+    // and reads OPENCODE_MODELS_PATH instead when it is set.
+    expect(
+      resolveConfig({ env: { XDG_CACHE_HOME: "/xc" }, homeDir: "/h" }).opencodeModelsPath,
+    ).toBe("/xc/opencode/models.json");
+    expect(
+      resolveConfig({
+        env: { OPENCODE_MODELS_PATH: "/m.json", XDG_CACHE_HOME: "/xc" },
+        homeDir: "/h",
+      }).opencodeModelsPath,
+    ).toBe("/m.json");
     // Empty values behave like unset ones.
     expect(resolveConfig({ env: { OPENCODE_DB: "" }, homeDir: "/h" }).opencodeDb).toBeUndefined();
     expect(

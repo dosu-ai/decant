@@ -33,6 +33,7 @@ import { getSession, listSessions } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { block } from "../src/sources/shared.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { ROW_QUERIES } from "./golden-rows.ts";
@@ -43,6 +44,7 @@ import {
   buildOpenCodeV1FixtureDb,
   opencodeFixtureSql,
 } from "./opencode-fixture.ts";
+import { syntheticOpenCodeSession } from "./opencode-session.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
@@ -133,6 +135,46 @@ function canonicalizeRows(value: unknown, dir: string): unknown {
 }
 
 describe("upsertSession", () => {
+  test("dates a tool call from its own start when the source records one", () => {
+    const db = openFreshDb(freshCase());
+    try {
+      const parsed = syntheticOpenCodeSession("called-at", []);
+      const at = (ms: number) =>
+        new Date(Date.parse("2026-10-12T06:21:00.000Z") + ms).toISOString();
+      const message = (seq: number, role: "assistant" | "tool", timestamp: string) => ({
+        seq,
+        sourceUuid: null,
+        parentSourceUuid: null,
+        role,
+        model: null,
+        stopReason: null,
+        timestamp,
+        usage: null,
+        raw: {},
+      });
+      // A step stamped at the end of its generation, with the tool recording
+      // when it started to run (as OpenCode does): the call is dated and timed
+      // from that start, not from the step.
+      parsed.session.messages.push(
+        {
+          ...message(1, "assistant", at(500)),
+          blocks: [
+            block(0, "tool_use", { toolName: "read", toolUseId: "call_1", calledAt: at(400) }),
+          ],
+        },
+        {
+          ...message(2, "tool", at(650)),
+          blocks: [block(0, "tool_result", { toolUseId: "call_1", toolResult: "ok" })],
+        },
+      );
+      const id = upsertSession(db, parsed, "/synthetic/called-at", 1, 2);
+      expect(
+        db.query("SELECT duration_ms, timestamp FROM tool_call WHERE session_id = ?1").get(id),
+      ).toEqual({ duration_ms: 250, timestamp: at(400) });
+    } finally {
+      db.close();
+    }
+  });
   test("stray results cannot answer a later reuse of the same call id", () => {
     const db = openFreshDb(freshCase());
     try {

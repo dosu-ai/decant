@@ -13,6 +13,7 @@ import {
 } from "../src/sources/opencode-legacy.ts";
 import { type OpenCodeLegacyLoadedSession, OpenCodeStore } from "../src/sources/opencode-store.ts";
 import { buildOpenCodeV1FixtureDb } from "./opencode-fixture.ts";
+import { STEP_TIMES } from "./opencode-timing.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-legacy-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -543,9 +544,11 @@ describe("parseOpenCodeLegacySession", () => {
     expect(issues).toEqual([]);
     expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     const call = session.messages[1];
+    // Empty reasoning stays: a provider that hides reasoning still bills it.
     expect(call?.blocks.map((b) => [b.blockType, b.toolName, b.toolUseId])).toEqual([
       ["tool_use", "mcp__my_server__lookup", "call_run"],
       ["tool_use", "bash", "call_pend"],
+      ["thinking", null, null],
     ]);
     expect(call?.stopReason).toBe("error");
     expect(session).toMatchObject({
@@ -554,5 +557,138 @@ describe("parseOpenCodeLegacySession", () => {
       reasoningEffort: null,
       model: "glm-5.3-flash",
     });
+  });
+});
+
+describe("OpenCode 1.x step timing", () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const T = STEP_TIMES;
+  const at = (ms: number) => ms - T0;
+
+  test("dates a message when its last part streamed and a tool result when the tool ended", () => {
+    const { session } = parse({
+      session: sessionRow({ time_created: T.session }),
+      messages: [
+        messageRow("msg_u1", at(T.prompt1), { ...USER, time: { created: T.prompt1 } }),
+        messageRow(
+          "msg_a1",
+          at(T.step1Created),
+          assistant({
+            time: { created: T.step1Created, completed: T.step1Completed },
+            tokens: { input: 1000, output: 50, reasoning: 150, cache: { read: 0, write: 0 } },
+            finish: "tool-calls",
+          }),
+        ),
+        messageRow("msg_u2", at(T.prompt2), { ...USER, time: { created: T.prompt2 } }),
+        messageRow(
+          "msg_a2",
+          at(T.step2Created),
+          assistant({
+            time: { created: T.step2Created, completed: T.step2Completed },
+            tokens: { input: 1200, output: 60, reasoning: 240, cache: { read: 0, write: 0 } },
+          }),
+        ),
+      ],
+      parts: [
+        partRow("prt_01", "msg_u1", { type: "text", text: "Read the notes." }),
+        partRow("prt_02", "msg_a1", { type: "step-start" }),
+        partRow("prt_03", "msg_a1", {
+          type: "reasoning",
+          text: "Read the file first.",
+          time: { start: T.reasoning1Created, end: T.reasoning1Completed },
+        }),
+        partRow("prt_04", "msg_a1", {
+          type: "tool",
+          callID: "call_read",
+          tool: "read",
+          state: {
+            status: "completed",
+            input: { filePath: "/decant-fixture/example/notes.txt" },
+            output: "hello",
+            title: "notes.txt",
+            metadata: {},
+            time: { start: T.toolRan, end: T.toolCompleted },
+          },
+        }),
+        partRow("prt_05", "msg_u2", { type: "text", text: "And then?" }),
+        partRow("prt_06", "msg_a2", {
+          type: "reasoning",
+          text: "",
+          time: { start: T.reasoning2Created, end: T.reasoning2Completed },
+        }),
+        partRow("prt_07", "msg_a2", {
+          type: "text",
+          text: "The notes say hello.",
+          time: { start: T.reasoning2Completed, end: T.step2Streamed },
+        }),
+      ],
+    });
+    expect(session.messages.map((m) => [m.role, m.timestamp])).toEqual([
+      ["user", iso(T.prompt1)],
+      ["assistant", iso(T.toolRan)],
+      ["tool", iso(T.toolCompleted)],
+      ["user", iso(T.prompt2)],
+      ["assistant", iso(T.step2Streamed)],
+    ]);
+    expect(session.messages[1]?.blocks[1]).toMatchObject({
+      blockType: "tool_use",
+      calledAt: iso(T.toolRan),
+    });
+    expect(session.messages[1]?.raw).toMatchObject({ reasoning_tokens: 150 });
+    expect(session.messages[4]?.blocks.map((b) => [b.blockType, b.text])).toEqual([
+      ["thinking", ""],
+      ["text", "The notes say hello."],
+    ]);
+    expect(session.messages[4]?.raw).toMatchObject({ reasoning_tokens: 240 });
+  });
+
+  test("records reasoning summed over the message's step-finish parts", () => {
+    const finish = (reasoning: number) => ({
+      type: "step-finish",
+      reason: "stop",
+      cost: 0,
+      tokens: { input: 10, output: 4, reasoning, cache: { read: 0, write: 0 } },
+    });
+    const { session } = parse({
+      session: sessionRow(),
+      messages: [
+        // info.tokens holds only the last step's usage.
+        messageRow(
+          "msg_a",
+          1000,
+          assistant({
+            tokens: { input: 10, output: 4, reasoning: 7, cache: { read: 0, write: 0 } },
+          }),
+        ),
+      ],
+      parts: [
+        partRow("prt_1", "msg_a", finish(5)),
+        partRow("prt_2", "msg_a", { type: "reasoning", text: "", time: { start: T0, end: T0 } }),
+        partRow("prt_3", "msg_a", finish(7)),
+      ],
+    });
+    expect(session.messages[0]?.usage).toMatchObject({ output: 20, reasoning: 12 });
+    expect(session.messages[0]?.raw).toMatchObject({ reasoning_tokens: 12 });
+  });
+
+  test("falls back to the message's end, never its start, when a time is missing", () => {
+    const { session } = parse({
+      session: sessionRow(),
+      messages: [
+        // A text part without a time (older 1.x): completion ends the step.
+        messageRow(
+          "msg_a",
+          1000,
+          assistant({ time: { created: T0 + 1000, completed: T0 + 1900 } }),
+        ),
+        // Only a start: nothing else to go on.
+        messageRow("msg_b", 2000, assistant({ time: { created: T0 + 2000 } })),
+      ],
+      parts: [
+        partRow("prt_1", "msg_a", { type: "text", text: "a" }),
+        partRow("prt_2", "msg_b", { type: "text", text: "b" }),
+      ],
+    });
+    expect(session.messages.map((m) => m.timestamp)).toEqual([iso(T0 + 1900), iso(T0 + 2000)]);
   });
 });

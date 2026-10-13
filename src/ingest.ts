@@ -91,7 +91,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 11;
+export const INGEST_PIPELINE_REVISION = 12;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -1558,7 +1558,7 @@ function writeSession(
           toolUseBlocks.push({
             messageId,
             callBlockId: blockId,
-            timestamp: message.timestamp,
+            timestamp: block.calledAt ?? message.timestamp,
             block,
           });
         } else if (block.blockType === "tool_result" && block.toolUseId != null) {

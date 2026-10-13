@@ -79,6 +79,10 @@ unavailable rather than zero.
   named like direct calls, with a tool-use ID derived from the wrapper's.
   Ingest writes one tool-call row per inner call without adding transcript
   blocks.
+- Date each message when the work it records finished, because active time
+  charges the gap before a message to that message's blocks. If a tool call
+  started at a time other than its message's, set `calledAt` on its
+  `tool_use` block; ingest dates and times the call from it.
 - Emit one session per source path. Per-session diagnostics join on the source
   path and would be misattributed if one path produced several sessions; a
   database that holds many sessions therefore gets one virtual path per

@@ -19,7 +19,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 10;
+export const SESSION_ECONOMICS_FORMAT_VERSION = 11;
 
 // Caps each inter-message gap so long pauses do not dominate the timing
 // breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
@@ -93,6 +93,9 @@ interface BlockRow {
   // The API message id behind an assistant record. Claude Code journals one
   // response as a record per content block, all sharing this id.
   response_id: string | null;
+  // Reasoning tokens an OpenCode step reported, as its parser mapped them
+  // (raw.reasoning_tokens); null for every other source.
+  reasoning_tokens: number | null;
   type: string | null;
   tool_name: string | null;
   tool_input: string | null;
@@ -620,6 +623,8 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens,
               CASE WHEN m.role = 'assistant' AND json_valid(m.raw)
                    THEN json_extract(m.raw, '$.message.id') END AS response_id,
+              CASE WHEN s.tool = 'opencode' AND m.role = 'assistant' AND json_valid(m.raw)
+                   THEN json_extract(m.raw, '$.reasoning_tokens') END AS reasoning_tokens,
               b.type,
               COALESCE(b.tool_name, tc.tool_name) AS tool_name,
               m.timestamp AS timestamp,
@@ -640,6 +645,7 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
        FROM scoped_session fs
        CROSS JOIN block b INDEXED BY idx_block_session
        JOIN message m ON m.id = b.message_id
+       JOIN session s ON s.id = b.session_id
        LEFT JOIN tool_call tc ON tc.result_block_id = b.id
        WHERE b.session_id = fs.id
        ORDER BY b.session_id, m.seq, b.ordinal`,
@@ -692,7 +698,7 @@ function vectorsForScope(
     const vector = vectorBySession.get(sessionId);
     if (vector != null) {
       allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
-      allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries, vector.latency);
+      allocateLatency(vector.session, sessionBlocks, vector.buckets, boundaries, vector.latency);
       allocateAgentMessages(sessionId, sessionBlocks, vector.buckets, boundaries);
     }
   }
@@ -848,7 +854,14 @@ function allocateGeneration(
       for (const [messageId, outputTokens] of messageOutput) {
         const rows = messageBlocks.get(messageId) ?? [];
         const phase = phaseOf(boundaries, session.id, rows[0]?.seq);
-        allocateOutput(session.id, outputTokens, rows, buckets, phase);
+        allocateOutput(
+          session.id,
+          outputTokens,
+          reportedReasoning(session, rows),
+          rows,
+          buckets,
+          phase,
+        );
       }
       continue;
     }
@@ -897,7 +910,7 @@ function allocateGeneration(
  * message's blocks by the same byte weight generation uses. Blockless messages
  * are absent here, so attributed time only approximates active_seconds. */
 function allocateLatency(
-  sessionId: number,
+  session: SessionRow,
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
@@ -911,12 +924,16 @@ function allocateLatency(
     }
     if (previous != null) {
       const gap = Math.min(Math.max(0, at - previous), ACTIVE_GAP_CAP_MS);
+      const first = message.blocks[0];
+      const reasoning = reportedReasoning(session, message.blocks);
+      const output = first?.output_tokens ?? 0;
       distributeLatency(
         gap,
         message.blocks,
         buckets,
-        phaseOf(boundaries, sessionId, message.seq),
+        phaseOf(boundaries, session.id, message.seq),
         latency,
+        reasoning != null && output > 0 ? Math.min(1, reasoning / output) : null,
       );
     }
     // Codex backdates parallel MCP calls, so measure from the latest time seen
@@ -947,15 +964,28 @@ function orderedMessages(blocks: BlockRow[]): OrderedMessage[] {
   return order.map((id) => byId.get(id) as OrderedMessage);
 }
 
-/** Split one message's gap across its blocks by byte-weight into their buckets. */
+/** Split one message's gap across its blocks by byte-weight into their
+ * buckets. With `planningShare`, that share of the gap is planning and the
+ * visible blocks split the rest; see `reportedReasoning`. */
 function distributeLatency(
   ms: number,
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
   latency: MutableLatency,
+  planningShare: number | null = null,
 ): void {
   if (ms <= 0 || blocks.length === 0) {
+    return;
+  }
+  if (planningShare != null) {
+    addLatency(buckets, "planning", ms * planningShare, phase);
+    const visible = blocks.filter((block) => block.type !== "thinking");
+    if (visible.length === 0) {
+      addLatency(buckets, "communicating", ms * (1 - planningShare), phase);
+      return;
+    }
+    distributeLatency(ms * (1 - planningShare), visible, buckets, phase, latency);
     return;
   }
   const weighted = blocks.map((block) => ({ block, weight: Math.max(1, blockSize(block)) }));
@@ -1089,26 +1119,58 @@ function epochMillis(timestamp: string | null): number | null {
   );
 }
 
+/** Reasoning tokens an OpenCode step reported. OpenCode records them per
+ * step, so its planning is that count rather than the output its visible
+ * blocks cannot explain, which would overstate planning once hidden reasoning
+ * keeps an empty thinking block. Its time follows the same token share: an
+ * apportionment, because a step's parts stream concurrently and their times
+ * cannot separate reasoning from visible output. Some providers stream
+ * reasoning text but report zero reasoning tokens; that zero is not a count,
+ * so such a step falls back to the estimate other sources use. */
+function reportedReasoning(session: SessionRow, blocks: BlockRow[]): number | null {
+  const block = blocks[0];
+  if (session.tool !== "opencode" || block?.role !== "assistant") {
+    return null;
+  }
+  const reasoning = block.reasoning_tokens;
+  if (typeof reasoning !== "number" || !Number.isFinite(reasoning) || reasoning < 0) {
+    return null;
+  }
+  if (
+    reasoning === 0 &&
+    blocks.some((candidate) => candidate.type === "thinking" && candidate.text_bytes > 0)
+  ) {
+    return null;
+  }
+  return reasoning;
+}
+
 function allocateOutput(
   sessionId: number,
   outputTokens: number,
+  reasoning: number | null,
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
 ): void {
-  const hasThinking = blocks.some((block) => block.type === "thinking");
-  const visible = blocks
-    .filter((block) => block.type !== "thinking")
-    .reduce((sum, block) => sum + blockSize(block), 0);
-  const planning = hasThinking ? Math.max(0, outputTokens - visible / CHARS_PER_TOKEN) : 0;
+  const visibleBlocks = blocks.filter((block) => block.type !== "thinking");
+  let planning: number;
+  if (reasoning != null) {
+    planning = Math.min(outputTokens, reasoning);
+  } else {
+    const hasThinking = blocks.length > visibleBlocks.length;
+    const visible = visibleBlocks.reduce((sum, block) => sum + blockSize(block), 0);
+    planning = hasThinking ? Math.max(0, outputTokens - visible / CHARS_PER_TOKEN) : 0;
+  }
   addBucket(buckets, "planning", planning, sessionId, phase);
-  distributeVisible(
-    sessionId,
-    Math.max(0, outputTokens - planning),
-    blocks.filter((block) => block.type !== "thinking"),
-    buckets,
-    phase,
-  );
+  const rest = Math.max(0, outputTokens - planning);
+  if (reasoning != null && visibleBlocks.length === 0) {
+    // Output beyond the reported reasoning with no visible block to carry it
+    // is still model output, so it counts as communicating.
+    addBucket(buckets, "communicating", rest, sessionId, phase);
+    return;
+  }
+  distributeVisible(sessionId, rest, visibleBlocks, buckets, phase);
 }
 
 /** Distribute across blocks that all share one phase (used per-message). */

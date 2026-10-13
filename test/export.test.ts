@@ -61,3 +61,27 @@ describe("toMarkdown fallback blocks", () => {
     db.close();
   });
 });
+
+describe("toMarkdown thinking blocks", () => {
+  test("skips a blank thinking block, which holds reasoning the provider hid", () => {
+    const db = openDb(join(workDir, "blank-thinking.db"));
+    db.exec(`
+      INSERT INTO project(id, path) VALUES (1, '/p');
+      INSERT INTO session(id, tool, source_session_id, project_id, message_count)
+        VALUES (1, 'opencode', 's1', 1, 1);
+      INSERT INTO message(id, session_id, seq, role, raw)
+        VALUES (1, 1, 0, 'assistant', '{}');
+      INSERT INTO block(id, message_id, session_id, ordinal, type, text)
+        VALUES (1, 1, 1, 0, 'thinking', ''), (2, 1, 1, 1, 'thinking', 'Plan it.'),
+               (3, 1, 1, 2, 'text', 'Done.');
+    `);
+    const detail = getSession(db, 1);
+    if (detail == null) {
+      throw new Error("expected session detail");
+    }
+    const md = toMarkdown(detail);
+    expect(md.match(/_thinking:_/g)).toHaveLength(1);
+    expect(md).toContain("> _thinking:_ Plan it.");
+    db.close();
+  });
+});

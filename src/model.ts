@@ -133,6 +133,11 @@ export interface NormalizedBlock {
    * the wrapper's own; they add no transcript blocks, so the wrapper's code
    * and result are the only text stored or indexed. */
   innerToolCalls?: NormalizedInnerToolCall[];
+  /** When a `tool_use` started to run, for a source that records it apart
+   * from its message's time. OpenCode dates a step when its generation ended,
+   * which can be after a tool started, so ingest dates and times the call
+   * from this instead. */
+  calledAt?: string;
 }
 
 export interface NormalizedInnerToolCall {

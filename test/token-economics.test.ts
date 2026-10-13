@@ -9,6 +9,7 @@ import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { type OpenCodeMessageRow, parseOpenCodeSession } from "../src/sources/opencode.ts";
 import {
   aggregateEconomicsVectors,
   computeSessionEconomicsVectors,
@@ -19,6 +20,7 @@ import {
   tokenEconomics,
   tokenEconomicsForSession,
 } from "../src/token-economics.ts";
+import { STEP_TIMES, timingMessageRows, timingSessionRow } from "./opencode-timing.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-token-economics-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -1022,6 +1024,126 @@ describe("token economics", () => {
     );
     expect(bounded.map((vector) => vector.id)).toEqual([1]);
     expect(aggregateEconomicsVectors([])).toEqual(tokenEconomics(db, { from: "2030-01-01" }));
+    db.close();
+  });
+});
+
+describe("OpenCode step apportionment", () => {
+  const ingestTiming = (db: Database, rows = timingMessageRows()) =>
+    upsertSession(
+      db,
+      parseOpenCodeSession(timingSessionRow(), rows, { mcpServers: [], contextWindows: new Map() }),
+      "/synthetic/opencode-timing",
+      1,
+      2,
+    );
+
+  test("splits a step's time and output by its reported reasoning tokens", () => {
+    const db = freshDb();
+    const economics = tokenEconomicsForSession(db, ingestTiming(db));
+    const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
+    const T = STEP_TIMES;
+    // Step 1 closes 2000 ms after the prompt (latency, reasoning, and the
+    // read call's arguments); 150 of its 200 output tokens are reasoning.
+    const step1 = T.step1Streamed - T.prompt1;
+    // Step 2 closes 1050 ms after the prompt; 240 of 300 tokens are reasoning.
+    const step2 = T.step2Streamed - T.prompt2;
+    expect(bucket("planning")?.active_ms).toBeCloseTo(step1 * 0.75 + step2 * 0.8, 0);
+    // The read call gets its share of step 1 plus its own run, nothing more.
+    expect(bucket("context")?.active_ms).toBeCloseTo(
+      step1 * 0.25 + (T.toolCompleted - T.step1Streamed),
+      0,
+    );
+    // The final answer gets the visible share of its step's generation.
+    expect(bucket("communicating")?.active_ms).toBeCloseTo(step2 * 0.2, 0);
+    expect(bucket("code")?.active_ms).toBe(0);
+    expect(economics?.totals.waiting_on_user_ms).toBe(T.prompt2 - T.toolCompleted);
+
+    // Reported reasoning is planning; the rest follows the visible blocks.
+    expect(bucket("planning")?.generation_tokens).toBeCloseTo(150 + 240, 6);
+    expect(bucket("context")?.generation_tokens).toBeCloseTo(50, 6);
+    expect(bucket("communicating")?.generation_tokens).toBeCloseTo(60, 6);
+    db.close();
+  });
+
+  test("estimates planning when a step streams reasoning text but reports zero", () => {
+    const db = freshDb();
+    // Some providers stream reasoning text and still report 0 reasoning
+    // tokens; that zero must not erase the step's planning.
+    const rows = timingMessageRows();
+    const step1 = rows[1] as OpenCodeMessageRow;
+    const data = JSON.parse(step1.data) as { tokens: { output: number; reasoning: number } };
+    data.tokens = { ...data.tokens, output: 200, reasoning: 0 };
+    rows[1] = { ...step1, data: JSON.stringify(data) };
+    const economics = tokenEconomicsForSession(db, ingestTiming(db, rows));
+    const planning = economics?.buckets.find((row) => row.bucket === "planning");
+    // Step 1's 200 tokens minus its read call's bytes / 4, plus step 2's 240.
+    expect(planning?.generation_tokens ?? 0).toBeGreaterThan(240 + 150);
+    expect(planning?.active_ms ?? 0).toBeGreaterThan(
+      (STEP_TIMES.step2Streamed - STEP_TIMES.prompt2) * 0.8,
+    );
+    db.close();
+  });
+
+  test("ignores reasoning counts in another source's raw records", () => {
+    const economicsOf = (withCounts: boolean) => {
+      const db = freshDb();
+      const parsed = parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl"));
+      if (withCounts) {
+        for (const message of parsed.session.messages) {
+          if (message.role === "assistant" && typeof message.raw === "object") {
+            Object.assign(message.raw as object, {
+              reasoning_tokens: 1_000_000,
+              tokens: { reasoning: 1_000_000 },
+            });
+          }
+        }
+      }
+      const economics = tokenEconomicsForSession(
+        db,
+        upsertSession(db, parsed, "/x/claude.jsonl", 1, 2, "claude"),
+      );
+      db.close();
+      return economics?.buckets.map((row) => [row.bucket, row.generation_tokens, row.active_ms]);
+    };
+    expect(economicsOf(true)).toEqual(economicsOf(false));
+  });
+
+  test("leaves session totals and cost unchanged", () => {
+    const db = freshDb();
+    const id = ingestTiming(db);
+    const economics = tokenEconomicsForSession(db, id);
+    const session = db
+      .query("SELECT total_output_tokens, estimated_cost_usd FROM session WHERE id = ?1")
+      .get(id) as { total_output_tokens: number; estimated_cost_usd: number };
+    expect(session.total_output_tokens).toBe(500);
+    expect(economics?.totals.generation_tokens).toBeCloseTo(500, 6);
+    expect(economics?.totals.estimated_cost_usd).toBeCloseTo(session.estimated_cost_usd, 12);
+    const sum = (key: "generation_tokens" | "estimated_cost_usd" | "active_ms") =>
+      economics?.buckets.reduce((total, row) => total + row[key], 0) ?? 0;
+    expect(sum("generation_tokens")).toBeCloseTo(500, 6);
+    expect(sum("estimated_cost_usd")).toBeCloseTo(session.estimated_cost_usd, 12);
+    expect(sum("active_ms")).toBeCloseTo(economics?.totals.active_ms ?? -1, 6);
+    db.close();
+  });
+
+  test("gives output with no visible block to communicating, not to nothing", () => {
+    const db = freshDb();
+    const rows = timingMessageRows();
+    // Step 2 without its answer text: only hidden reasoning is left.
+    const step2 = rows[3];
+    if (step2 == null) throw new Error("fixture lacks step 2");
+    const data = JSON.parse(step2.data) as { content: unknown[] };
+    data.content = data.content.slice(0, 1);
+    rows[3] = { ...step2, data: JSON.stringify(data) };
+    const economics = tokenEconomicsForSession(db, ingestTiming(db, rows));
+    const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
+    expect(economics?.totals.generation_tokens).toBeCloseTo(500, 6);
+    expect(bucket("communicating")?.generation_tokens).toBeCloseTo(60, 6);
+    expect(bucket("communicating")?.active_ms).toBeCloseTo(
+      (STEP_TIMES.step2Streamed - STEP_TIMES.prompt2) * 0.2,
+      0,
+    );
     db.close();
   });
 });

@@ -235,8 +235,13 @@ export function parseOpenCodeSession(
       if (usage != null) {
         totals = addTokenUsage(totals, usage);
         sawUsage = true;
+        // Token economics splits the step's time and output by this count.
+        // Read from the mapped usage, it is right for every reasoning
+        // convention and for migrated rows, where `tokens` is the last step's.
+        raw.reasoning_tokens = usage.reasoning;
       }
       const { blocks, results } = assistantContent(data.content, servers);
+      const generated = isoFromMillis(stepGenerationEnd(data)) ?? timestamp;
       emit(
         "assistant",
         raw,
@@ -244,13 +249,13 @@ export function parseOpenCodeSession(
           sourceUuid: message.id,
           model: model.id,
           stopReason: data.error != null ? "error" : asString(data.finish),
-          timestamp,
+          timestamp: generated,
           usage,
         },
         blocks,
       );
       for (const result of results) {
-        emit("tool", result.raw, { timestamp: result.timestamp ?? timestamp }, [result.block]);
+        emit("tool", result.raw, { timestamp: result.timestamp ?? generated }, [result.block]);
       }
     } else if (typ === "compaction") {
       const model = modelRef(data.model);
@@ -465,19 +470,28 @@ function assistantContent(
         blocks.push(block(blocks.length, "text", { text }));
       }
     } else if (type === "reasoning") {
-      if (text !== "") {
-        blocks.push(block(blocks.length, "thinking", { text }));
-      }
+      // Kept when empty: providers that hide reasoning (often via OpenRouter)
+      // leave the text blank but still bill the tokens.
+      blocks.push(block(blocks.length, "thinking", { text }));
     } else if (type === "tool") {
       const id = asString(get(item, "id"));
       const name = asString(get(item, "name")) ?? "unknown";
       const state = get(item, "state");
       const status = asString(get(state, "status"));
+      const time = get(item, "time");
       const call = block(blocks.length, "tool_use", {
         toolName: normalizeOpenCodeToolName(name, servers),
         toolUseId: id,
         toolInput: get(state, "input"),
       });
+      // OpenCode's own stats time a call from `ran`, or from `created` on a
+      // row migrated from 1.x, whose `created` is when the 1.x run started.
+      const calledAt = isoFromMillis(
+        asInteger(get(time, "ran")) ?? asInteger(get(time, "created")),
+      );
+      if (calledAt != null) {
+        call.calledAt = calledAt;
+      }
       if (name === CODE_EXECUTION_TOOL) {
         const inner = innerToolCalls(get(get(state, "metadata"), "toolCalls"), id);
         if (inner.length > 0) {
@@ -489,7 +503,7 @@ function assistantContent(
         const error = get(state, "error");
         results.push({
           raw: item,
-          timestamp: isoFromMillis(asInteger(get(get(item, "time"), "completed"))),
+          timestamp: isoFromMillis(asInteger(get(time, "completed"))),
           block: block(0, "tool_result", {
             toolUseId: id,
             toolResult:
@@ -505,6 +519,80 @@ function assistantContent(
     }
   }
   return { blocks, results };
+}
+
+/** When a 2.x step finished generating, in epoch ms. OpenCode stamps a step
+ * `created` when it starts, `streamed` when the provider response ends, and
+ * `completed` after its tools settle, so `streamed` is the end of generation
+ * and a tool's `completed` the end of its run. Rows without `streamed` (older
+ * or failed steps, and rows migrated from 1.x) fall back through
+ * `stepEnd`. */
+function stepGenerationEnd(data: JsonObject): number | null {
+  const ends: number[] = [];
+  let untimedText = false;
+  let hasTools = false;
+  for (const item of Array.isArray(data.content) ? data.content : []) {
+    const type = asString(get(item, "type"));
+    const time = get(item, "time");
+    if (type === "tool") {
+      hasTools = true;
+      // A row migrated from 1.x has no `ran`; its `created` is the 1.x start
+      // of the run, as in OpenCode's own stats.
+      pushTime(ends, get(time, "ran") ?? get(time, "created"));
+    } else if (type === "reasoning" || type === "text") {
+      const end = asInteger(get(time, "completed")) ?? asInteger(get(time, "end"));
+      if (end == null) {
+        untimedText = true;
+      } else {
+        ends.push(end);
+      }
+    }
+  }
+  return stepEnd({
+    streamed: asInteger(get(data.time, "streamed")),
+    completed: asInteger(get(data.time, "completed")),
+    created: asInteger(get(data.time, "created")),
+    partEnds: ends,
+    untimedText,
+    hasTools,
+  });
+}
+
+function pushTime(into: number[], value: Json | undefined): void {
+  const ms = asInteger(value);
+  if (ms != null) {
+    into.push(ms);
+  }
+}
+
+export interface StepTimes {
+  /** End of the provider response (2.x only). */
+  streamed: number | null;
+  /** End of the step, after its tools settled. */
+  completed: number | null;
+  created: number | null;
+  /** When each reasoning or text part closed, and when each tool started to
+   * run (its arguments had streamed). */
+  partEnds: readonly number[];
+  /** A text or reasoning part without an end, so `partEnds` may miss the
+   * answer. */
+  untimedText: boolean;
+  hasTools: boolean;
+}
+
+/** End of a step's generation from what OpenCode recorded, never the step's
+ * start while an end exists. Without `streamed`, the step's completion waits
+ * for its tools, so a step with tools ends at its latest streamed part; one
+ * without tools ends at completion unless every part was timed. */
+export function stepEnd(times: StepTimes): number | null {
+  if (times.streamed != null) {
+    return times.streamed;
+  }
+  const latest = times.partEnds.length > 0 ? Math.max(...times.partEnds) : null;
+  if (latest != null && (times.hasTools || !times.untimedText)) {
+    return latest;
+  }
+  return times.completed ?? latest ?? times.created;
 }
 
 /** OpenCode 2.x runs MCP tools (and some built-ins) from a JavaScript program

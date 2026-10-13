@@ -794,8 +794,8 @@
     "has_result": 1,
     "output_preview": "hello",
     "output_bytes": 5,
-    "duration_ms": 1500,
-    "timestamp": "2026-10-12T07:26:41.000Z"
+    "duration_ms": 500,
+    "timestamp": "2026-10-12T07:26:42.000Z"
   },
   {
     "tool": "opencode",
@@ -813,8 +813,8 @@
     "has_result": 1,
     "output_preview": "no results",
     "output_bytes": 10,
-    "duration_ms": 2500,
-    "timestamp": "2026-10-12T07:26:41.000Z"
+    "duration_ms": 500,
+    "timestamp": "2026-10-12T07:26:43.000Z"
   },
   {
     "tool": "opencode",
@@ -832,8 +832,8 @@
     "has_result": 1,
     "output_preview": "No such file or directory",
     "output_bytes": 25,
-    "duration_ms": 2700,
-    "timestamp": "2026-10-12T07:26:46.000Z"
+    "duration_ms": 100,
+    "timestamp": "2026-10-12T07:26:48.600Z"
   },
   {
     "tool": "opencode",

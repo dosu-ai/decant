@@ -26,6 +26,7 @@ import {
   type OpenCodeModelRef,
   type OpenCodeParseContext,
   parseModelJson,
+  stepEnd,
 } from "./opencode.ts";
 import { addTokenUsage, legacyAssistantUsage } from "./opencode-usage.ts";
 import {
@@ -334,7 +335,12 @@ export function parseOpenCodeLegacySession(
       }
       const usage = legacyAssistantUsage(entry.info, partData(entry), row.version);
       addToTotals(usage);
+      if (usage != null) {
+        // Token economics splits the message's time and output by this count.
+        raw.reasoning_tokens = usage.reasoning;
+      }
       const { blocks, results } = assistantContent(entry, servers);
+      const generated = isoFromMillis(messageGenerationEnd(entry)) ?? entry.timestamp;
       emit(
         "assistant",
         raw,
@@ -342,15 +348,13 @@ export function parseOpenCodeLegacySession(
           sourceUuid: entry.row.id,
           model: modelId,
           stopReason: entry.info.error != null ? "error" : asString(entry.info.finish),
-          timestamp: entry.timestamp,
+          timestamp: generated,
           usage,
         },
         blocks,
       );
       for (const result of results) {
-        emit("tool", result.raw, { timestamp: result.timestamp ?? entry.timestamp }, [
-          result.block,
-        ]);
+        emit("tool", result.raw, { timestamp: result.timestamp ?? generated }, [result.block]);
       }
     } else {
       countUnknown(unknownTypes, `role:${role ?? "(missing)"}`, entry.ordinal);
@@ -569,24 +573,32 @@ function assistantContent(
   for (const part of entry.parts) {
     const data = part.data;
     const type = asString(data.type);
-    if (type === "text" || type === "reasoning") {
+    if (type === "text") {
       const text = asString(data.text) ?? "";
       if (text !== "") {
-        blocks.push(block(blocks.length, type === "text" ? "text" : "thinking", { text }));
+        blocks.push(block(blocks.length, "text", { text }));
       }
+    } else if (type === "reasoning") {
+      // Kept when empty: providers that hide reasoning still bill it.
+      blocks.push(block(blocks.length, "thinking", { text: asString(data.text) ?? "" }));
     } else if (type === "tool") {
       const id = asString(data.callID);
       const state = data.state;
       const status = asString(get(state, "status"));
       // 1.x calls MCP tools directly as `<server>_<tool>`; there is no
       // code-mode `execute` wrapper to unpack.
-      blocks.push(
-        block(blocks.length, "tool_use", {
-          toolName: normalizeOpenCodeToolName(asString(data.tool) ?? "unknown", servers),
-          toolUseId: id,
-          toolInput: get(state, "input"),
-        }),
-      );
+      const call = block(blocks.length, "tool_use", {
+        toolName: normalizeOpenCodeToolName(asString(data.tool) ?? "unknown", servers),
+        toolUseId: id,
+        toolInput: get(state, "input"),
+      });
+      // `state.time.start` is when the call started to run (its arguments
+      // had streamed); a pending call has none.
+      const calledAt = isoFromMillis(asInteger(get(get(state, "time"), "start")));
+      if (calledAt != null) {
+        call.calledAt = calledAt;
+      }
+      blocks.push(call);
       // Pending and running calls never finished, so they have no result.
       if (status === "completed" || status === "error") {
         const error = get(state, "error");
@@ -606,4 +618,39 @@ function assistantContent(
     }
   }
   return { blocks, results };
+}
+
+/** When a 1.x message finished generating, in epoch ms. 1.x has no
+ * `streamed` time and `time.completed` waits for the message's tools, so the
+ * latest part that finished streaming (a text or reasoning end, or a tool's
+ * run start) marks the end, as `stepEnd` decides. */
+function messageGenerationEnd(entry: Decoded): number | null {
+  const ends: number[] = [];
+  let untimedText = false;
+  let hasTools = false;
+  for (const part of entry.parts) {
+    const type = asString(part.data.type);
+    if (type === "tool") {
+      hasTools = true;
+      const start = asInteger(get(get(part.data.state, "time"), "start"));
+      if (start != null) {
+        ends.push(start);
+      }
+    } else if (type === "text" || type === "reasoning") {
+      const end = asInteger(get(part.data.time, "end"));
+      if (end == null) {
+        untimedText = true;
+      } else {
+        ends.push(end);
+      }
+    }
+  }
+  return stepEnd({
+    streamed: null,
+    completed: asInteger(get(entry.info.time, "completed")),
+    created: asInteger(get(entry.info.time, "created")) ?? entry.row.time_created,
+    partEnds: ends,
+    untimedText,
+    hasTools,
+  });
 }

@@ -542,7 +542,7 @@ function stepGenerationEnd(data: JsonObject): number | null {
     } else if (type === "reasoning" || type === "text") {
       const end = asInteger(get(time, "completed")) ?? asInteger(get(time, "end"));
       if (end == null) {
-        untimedText ||= type === "text";
+        untimedText = true;
       } else {
         ends.push(end);
       }
@@ -574,7 +574,8 @@ export interface StepTimes {
   /** When each reasoning or text part closed, and when each tool started to
    * run (its arguments had streamed). */
   partEnds: readonly number[];
-  /** A text part without a time, so `partEnds` may miss the answer. */
+  /** A text or reasoning part without an end, so `partEnds` may miss the
+   * answer. */
   untimedText: boolean;
   hasTools: boolean;
 }

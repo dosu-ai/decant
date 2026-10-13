@@ -4,9 +4,9 @@
     "tools": 3,
     "calls": 5,
     "errors": 0,
-    "p50_ms": 2000,
+    "p50_ms": 500,
     "p95_ms": 3000,
-    "last_used_at": "2026-10-12T07:26:41.000Z"
+    "last_used_at": "2026-10-12T07:26:43.000Z"
   },
   {
     "mcp_server": "exa",

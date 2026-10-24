@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Prepares a fresh Amp orb: the pinned Bun, `just`, and locked dependencies.
+# Must stay idempotent; a stale snapshot reruns this on a warm filesystem.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+# ~/.local/bin precedes /usr/local/bin on every orb PATH (Amp, login shells,
+# services), so binaries linked there shadow the base image's older Bun
+# without any shell profile changes.
+bin_dir="$HOME/.local/bin"
+mkdir -p "$bin_dir"
+
+just_version="1.59.0"
+bun_version="$(tr -d '[:space:]' < .bun-version)"
+
+case "$(uname -m)" in
+  x86_64) bun_arch="x64"; just_arch="x86_64" ;;
+  aarch64 | arm64) bun_arch="aarch64"; just_arch="aarch64" ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "    $name took $((SECONDS - start))s"
+}
+
+install_bun() {
+  if [[ "$("$bin_dir/bun" --version 2>/dev/null || true)" == "$bun_version" ]]; then
+    echo "    bun $bun_version already installed"
+    return
+  fi
+  local dest="$HOME/.bun/versions/$bun_version"
+  local tmp
+  tmp="$(mktemp -d)"
+  curl -fsSL --retry 3 -o "$tmp/bun.zip" \
+    "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-$bun_arch.zip"
+  unzip -q -o "$tmp/bun.zip" -d "$tmp"
+  mkdir -p "$dest"
+  install -m 0755 "$tmp/bun-linux-$bun_arch/bun" "$dest/bun"
+  rm -rf "$tmp"
+  ln -sfn "$dest/bun" "$bin_dir/bun"
+  ln -sfn "$dest/bun" "$bin_dir/bunx"
+  "$bin_dir/bun" --version
+}
+
+install_just() {
+  if [[ "$("$bin_dir/just" --version 2>/dev/null || true)" == "just $just_version" ]]; then
+    echo "    just $just_version already installed"
+    return
+  fi
+  curl -fsSL --retry 3 \
+    "https://github.com/casey/just/releases/download/$just_version/just-$just_version-$just_arch-unknown-linux-musl.tar.gz" \
+    | tar -xz -C "$bin_dir" just
+  "$bin_dir/just" --version
+}
+
+install_apt_packages() {
+  # test/install-sh.test.ts skips its lint check without shellcheck.
+  local missing=()
+  for pkg in shellcheck; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if ((${#missing[@]} == 0)); then
+    echo "    apt packages already installed"
+    return
+  fi
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
+}
+
+install_deps() {
+  # A warm `bun install --frozen-lockfile` verifies node_modules against
+  # bun.lock in well under a second, so no custom fingerprint is needed.
+  "$bin_dir/bun" install --frozen-lockfile
+}
+
+step "install apt packages" install_apt_packages
+step "install bun $bun_version" install_bun
+step "install just $just_version" install_just
+step "bun install --frozen-lockfile" install_deps

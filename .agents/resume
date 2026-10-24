@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Decant has no backing services or credentials to reconnect on wake. This only
+# confirms the pinned toolchain from setup is still the one on PATH.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+expected="$(tr -d '[:space:]' < "$repo_root/.bun-version")"
+actual="$(bun --version 2>/dev/null || true)"
+if [[ "$actual" != "$expected" ]]; then
+  echo "warning: bun on PATH is '${actual:-missing}', expected $expected; rerun .agents/setup" >&2
+fi

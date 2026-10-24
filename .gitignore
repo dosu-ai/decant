@@ -24,3 +24,6 @@ node_modules
 # `bun build --compile` leaves one of these behind in the repo root when a
 # compile fails, which is exactly when someone is most likely to `git add -A`.
 *.bun-build
+
+# Amp orb portal links are generated per orb and thread.
+.amp/portals/*

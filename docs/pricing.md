@@ -14,7 +14,7 @@ Qwen, StepFun, Tencent Hy, and Reflection Beam rates were verified on October
 26, 2026. The open-weight models in that list were chosen from the
 [Artificial Analysis open-weight leaderboard](https://artificialanalysis.ai/models/open-source),
 which Decant uses only to decide which models to price, never as the source of
-a rate.
+a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
@@ -40,6 +40,7 @@ a rate.
 - [Meta Model API pricing](https://dev.meta.ai/docs/pricing-rate-limits) (checked October 26, 2026)
 - [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/) (checked October 26, 2026)
 - [Kimi API pricing](https://platform.kimi.ai/docs/pricing/chat) and [context caching](https://platform.kimi.ai/docs/guide/context-caching.md) (checked October 26, 2026)
+- [Kimi K3.1 Pro API pricing](https://www.kimi.ai/resources/kimi-k3-1-pro-pricing) (checked October 25, 2026)
 - [MiniMax pricing](https://platform.minimax.io/docs/pricing/overview) (checked October 26, 2026)
 - [Xiaomi MiMo pay-as-you-go pricing](https://mimo.mi.com/docs/en-US/price/pay-as-you-go) (checked October 26, 2026)
 - [Alibaba Cloud Model Studio pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing) and [context cache](https://www.alibabacloud.com/help/en/model-studio/context-cache) (checked October 26, 2026)
@@ -114,6 +115,7 @@ provider does not publish a first-party API token price for that model slug.
 | DeepSeek V4 Pro | $1.32 | $0.044 | no additional fee | $3.96 |
 | Kimi K2.7 Code, Kimi K2.6 | $0.95 | $0.19 / $0.16 | no additional fee | $4.00 |
 | Kimi K2.7 Code HighSpeed | $1.90 | $0.38 | no additional fee | $8.00 |
+| Kimi K3.1 Pro | $2.00 | $0.20 | $2.00 / $4.00 | $10.00 |
 | MiniMax-M3 | $0.30 | $0.06 | no additional fee | $1.20 |
 | MiMo-V2.6-Pro | $0.435 | $0.0036 | free | $0.87 |
 | MiMo-V2.6-Flash | $0.14 | $0.0028 | free | $0.28 |
@@ -129,8 +131,9 @@ provider does not publish a first-party API token price for that model slug.
 | `deepseek-chat`, `deepseek-reasoner`, Kimi K2.5, Kimi K3 and K3.1, MiniMax M2.x, MiMo V2.5, Qwen3.8-Flash, Qwen3.8-Flash-Next, `hy3-preview` | — | — | — | — |
 | Ling 3.1 Flash, Muse Spark Open, Nemotron 3.5 Super VL, Nemotron 3 Ultra, Inkling, K2 Horizon | — | — | — | — |
 
-Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
-cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
+The two cache-write figures for Claude and Kimi K3.1 Pro are the 5-minute and
+1-hour rates. Kimi K3.1 Pro uses flat rates across its full context window.
+OpenAI cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
 and GPT-6.1 models above bill cache writes at 1.25 times the uncached-input
 rate, which OpenAI lists as the 30-minute cache write. OpenAI also lists a
 12-hour cache write for GPT-6 and GPT-6.1 at twice the input rate, but Codex
@@ -177,7 +180,8 @@ Prompts above 512,000 tokens bill at twice those rates, and the Priority
 service tier at 1.5 times. Decant applies neither modifier, so estimates for
 those requests are low. Moonshot's Kimi K2 models do not support cache writes,
 and Moonshot retires all K2 models by the end of December 2026. Kimi K3 and
-K3.1 are not open-weight and are not yet priced.
+K3.1 are not open-weight and are not yet priced. Kimi K3.1 Pro has its own
+published rates and is priced above.
 
 Xiaomi lists MiMo cache writes as free for a limited time with no end date, so
 Decant bills them at zero. Alibaba prices Qwen at the international

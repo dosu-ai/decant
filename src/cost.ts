@@ -92,6 +92,18 @@ const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
   ["kimi-k2.7-code", openAiPrice(0.95, 0.19, 4.0)],
   ["kimi-k2.7-code-highspeed", openAiPrice(1.9, 0.38, 8.0)],
   ["kimi-k2.6", openAiPrice(0.95, 0.16, 4.0)],
+  // K3.1 Pro bills cache writes by TTL like Claude, at flat rates across its
+  // full context window.
+  [
+    "kimi-k3.1-pro",
+    {
+      inputPerMtok: 2,
+      outputPerMtok: 10,
+      cacheReadPerMtok: 0.2,
+      cacheWritePerMtok: 2,
+      cacheWrite1hPerMtok: 4,
+    },
+  ],
   // MiniMax's standard tier for prompts up to 512K tokens, at the "permanent"
   // 50% discount it actually charges.
   ["minimax-m3", openAiPrice(0.3, 0.06, 1.2)],

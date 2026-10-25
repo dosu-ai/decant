@@ -41,7 +41,14 @@ import {
 import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { useSessionPage } from "./session-page.ts";
 import { collectSliceResults } from "./slice-loading.ts";
-import { isForegroundSync, parseSyncFailure, planArchiveUpdate } from "./sync-events.ts";
+import {
+  isForegroundSync,
+  LIVE_SESSIONS_REFRESH_MS,
+  liveSessionsAction,
+  parseSyncFailure,
+  planArchiveUpdate,
+  sessionsAutoRefresh,
+} from "./sync-events.ts";
 import { hasOpenModal, isInteractiveTarget } from "./transcript-navigation.ts";
 import type {
   DashboardData,
@@ -86,8 +93,11 @@ function App() {
   const [archiveUpdateAvailable, setArchiveUpdateAvailable] = useState(false);
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
+  const [sessionTextFilterActive, setSessionTextFilterActive] = useState(false);
   const syncCompleteTimerRef = useRef<number | null>(null);
   const syncProgressThrottleRef = useRef<LatestThrottle<SyncProgress> | null>(null);
+  const liveSessionsThrottleRef = useRef<LatestThrottle<null> | null>(null);
+  const liveSessionsRef = useRef(false);
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
   const manualSyncPendingRef = useRef(false);
@@ -138,6 +148,38 @@ function App() {
     // rather than a stale closure over localSyncing.
     localSyncingRef.current = localSyncing;
   }, [localSyncing]);
+
+  const liveSessions = sessionsAutoRefresh({
+    path,
+    textFilterActive: sessionTextFilterActive,
+    paletteOpen: commandPaletteOpen,
+  });
+
+  useEffect(() => {
+    const throttle = createLatestThrottle<null>(() => {
+      const action = liveSessionsAction(liveSessionsRef.current, localSyncingRef.current);
+      if (action === "refresh") {
+        setArchiveUpdateAvailable(false);
+        requestRefresh();
+      } else if (action === "offer_update") {
+        setArchiveUpdateAvailable(true);
+      }
+    }, LIVE_SESSIONS_REFRESH_MS);
+    liveSessionsThrottleRef.current = throttle;
+    return () => {
+      throttle.cancel();
+      liveSessionsThrottleRef.current = null;
+    };
+  }, [requestRefresh]);
+
+  useEffect(() => {
+    liveSessionsRef.current = liveSessions;
+    // Activity that lit Update while the list was filtered, paged, or covered
+    // loads once the unfiltered first page is back in view.
+    if (liveSessions && archiveUpdateAvailable) {
+      liveSessionsThrottleRef.current?.push(null);
+    }
+  }, [archiveUpdateAvailable, liveSessions]);
 
   useEffect(() => {
     document.title = documentTitleFor(path, navItems);
@@ -305,7 +347,12 @@ function App() {
         return;
       }
       if (plan.offerUpdate) {
-        setArchiveUpdateAvailable(true);
+        const liveRefresh = liveSessionsThrottleRef.current;
+        if (liveSessionsRef.current && liveRefresh != null) {
+          liveRefresh.push(null);
+        } else {
+          setArchiveUpdateAvailable(true);
+        }
       }
     };
     const handleOpen = () => markConnected();
@@ -697,6 +744,7 @@ function App() {
               renderView(activeView, path, data, {
                 dateRange: dateRangeSelection,
                 onDateRangeChange: handleDateRangeChange,
+                onSessionTextFilterChange: setSessionTextFilterActive,
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
@@ -740,6 +788,7 @@ function renderView(
   actions: {
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
+    onSessionTextFilterChange: (active: boolean) => void;
     refresh: () => void;
     reloadKey: number;
     runSync: () => void;
@@ -769,6 +818,7 @@ function renderView(
           data={data}
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
+          onTextFilterChange={actions.onSessionTextFilterChange}
           path={path}
           reloadKey={actions.reloadKey}
           sessionPageState={actions.sessionPageState}

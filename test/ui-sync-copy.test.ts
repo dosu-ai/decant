@@ -47,3 +47,24 @@ test("background archive activity waits for an explicit update", () => {
   // carried it must not be fetched on every route either.
   expect(main).not.toContain("/api/analytics/now");
 });
+
+test("the unfiltered Sessions list loads background activity itself, throttled", () => {
+  // Background activity goes to the live throttle only while the list
+  // qualifies. Anywhere else it still lights Update.
+  expect(main).toMatch(
+    /if \(liveSessionsRef\.current && liveRefresh != null\) \{\s*liveRefresh\.push\(null\);\s*\} else \{\s*setArchiveUpdateAvailable\(true\);\s*\}/,
+  );
+  expect(main).toContain(
+    "createLatestThrottle<null>(() => {\n      const action = liveSessionsAction(liveSessionsRef.current, localSyncingRef.current);",
+  );
+  expect(main).toContain("}, LIVE_SESSIONS_REFRESH_MS);");
+  // A refresh does what Update would, so Update goes dark with it.
+  expect(main).toMatch(
+    /if \(action === "refresh"\) \{\s*setArchiveUpdateAvailable\(false\);\s*requestRefresh\(\);/,
+  );
+  // Activity that lit Update elsewhere loads on return to the list.
+  expect(main).toMatch(
+    /if \(liveSessions && archiveUpdateAvailable\) \{\s*liveSessionsThrottleRef\.current\?\.push\(null\);/,
+  );
+  expect(main).toContain("onTextFilterChange?.(textFilterActive);");
+});

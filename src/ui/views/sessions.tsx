@@ -40,6 +40,7 @@ export function SessionsView({
   data,
   dateRange,
   onDateRangeChange,
+  onTextFilterChange,
   path,
   reloadKey,
   sessionPageState,
@@ -47,6 +48,7 @@ export function SessionsView({
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
+  onTextFilterChange?: (active: boolean) => void;
   path: string;
   reloadKey: number;
   sessionPageState: SessionPageState;
@@ -99,14 +101,19 @@ export function SessionsView({
     loadedRows: sessions.length,
     query,
   });
+  const textFilterActive = query.trim() !== "";
   const emptyMessage =
     waitingForSessions || filtered.length > 0
       ? null
-      : query.trim() !== ""
+      : textFilterActive
         ? "No sessions match that filter."
         : displayedPage > 1
           ? "No sessions on this page."
           : "No sessions ingested yet.";
+
+  useEffect(() => {
+    onTextFilterChange?.(textFilterActive);
+  }, [onTextFilterChange, textFilterActive]);
 
   useEffect(() => {
     if (scopedSummaryRequest == null) {

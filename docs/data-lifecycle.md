@@ -250,9 +250,15 @@ Read commands normally sync first. `decant serve` performs a startup sync and
 then watches the configured source directories.
 
 The web UI shows the startup sync's progress and loads its results as soon as
-it finishes, so a first launch fills the dashboard without a manual sync. Later
-watcher and sweep syncs only light the **Update** button, so new activity never
-reshuffles a page while you are reading it.
+it finishes, so a first launch fills the dashboard without a manual sync.
+
+Later watcher and sweep syncs refresh the first page of **Sessions** in place
+when it has no project, archive, or text filter. New sessions appear at the top
+within a few seconds, without a click, and the rows already on screen stay put
+while the list reloads. These refreshes run at most once every five seconds
+while an agent is busy writing its log. Everywhere else, including later pages,
+filtered lists, transcripts, and analytics, background activity only lights the
+**Update** button, so it never reshuffles a page while you are reading it.
 
 Set `DECANT_NO_SYNC` or pass `--no-sync` to suppress syncs Decant starts on its
 own. With `serve`, this also disables the source watcher. It does not disable an

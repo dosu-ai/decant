@@ -1,5 +1,12 @@
-import { expect, test } from "bun:test";
-import { isForegroundSync, parseSyncFailure, planArchiveUpdate } from "../src/ui/sync-events.ts";
+import { describe, expect, test } from "bun:test";
+import {
+  isForegroundSync,
+  LIVE_SESSIONS_REFRESH_MS,
+  liveSessionsAction,
+  parseSyncFailure,
+  planArchiveUpdate,
+  sessionsAutoRefresh,
+} from "../src/ui/sync-events.ts";
 
 test("manual and startup syncs run in the foreground", () => {
   expect(isForegroundSync("manual")).toBe(true);
@@ -76,5 +83,48 @@ test("server sync failures are told apart from EventSource connection errors", (
   ).toEqual({ reason: "startup", error: "disk full" });
   expect(parseSyncFailure(new MessageEvent("error", { data: "not json" }))).toEqual({
     error: "sync failed",
+  });
+});
+
+describe("live Sessions refresh", () => {
+  const visibleList = { textFilterActive: false, paletteOpen: false };
+
+  test("applies only to the unfiltered first page of the Sessions list", () => {
+    expect(sessionsAutoRefresh({ path: "/sessions", ...visibleList })).toBe(true);
+    expect(sessionsAutoRefresh({ path: "/sessions?page=1", ...visibleList })).toBe(true);
+    for (const path of [
+      "/sessions?page=2",
+      "/sessions?project=%2Frepo",
+      "/sessions?include_archived=true",
+      "/sessions/42",
+      "/analytics",
+      "/projects",
+    ]) {
+      expect(sessionsAutoRefresh({ path, ...visibleList })).toBe(false);
+    }
+  });
+
+  test("pauses while a text filter or the command palette is in use", () => {
+    expect(
+      sessionsAutoRefresh({ path: "/sessions", textFilterActive: true, paletteOpen: false }),
+    ).toBe(false);
+    expect(
+      sessionsAutoRefresh({ path: "/sessions", textFilterActive: false, paletteOpen: true }),
+    ).toBe(false);
+  });
+
+  test("a due refresh reloads the list, falls back to Update, or defers to a foreground sync", () => {
+    expect(liveSessionsAction(true, false)).toBe("refresh");
+    // The page stopped qualifying while the refresh waited, so the change is
+    // offered through Update instead of being dropped.
+    expect(liveSessionsAction(false, false)).toBe("offer_update");
+    // A running foreground sync refreshes the page when it finishes.
+    expect(liveSessionsAction(true, true)).toBe("none");
+    expect(liveSessionsAction(false, true)).toBe("none");
+  });
+
+  test("refreshes at most once every five to ten seconds", () => {
+    expect(LIVE_SESSIONS_REFRESH_MS).toBeGreaterThanOrEqual(5_000);
+    expect(LIVE_SESSIONS_REFRESH_MS).toBeLessThanOrEqual(10_000);
   });
 });

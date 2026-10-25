@@ -81,7 +81,9 @@ sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode
 combines native filesystem events with a periodic sweep so missed notifications
-do not leave the archive stale. OpenCode database directories are watched
+do not leave the archive stale. Events are debounced so a burst of writes becomes
+one sync, and a log an agent keeps writing still syncs about every 5 seconds
+instead of waiting for the agent to pause. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher

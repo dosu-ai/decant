@@ -368,6 +368,42 @@ describe("watch mode", () => {
     expect(event.report.ingested).toBe(1);
     await handle.stop();
   });
+  test("a log written faster than the debounce still syncs while it is being written", async () => {
+    const config = freshConfig();
+    seedClaude(config);
+    const path = join(config.claudeDir, "Users-dev-proj", "sample.jsonl");
+    const content = readFileSync(path, "utf8");
+    const events: WatchEvent[] = [];
+    const handle = startWatch({
+      config,
+      intervalMs: 0,
+      debounceMs: 300,
+      debounceMaxWaitMs: 400,
+      syncOnStart: false,
+      onEvent: (event) => events.push(event),
+    });
+    const watchSyncs = (): number =>
+      events.filter((event) => event.type === "sync" && event.reason === "watch").length;
+    try {
+      // Let the native watcher settle; FSEvents can still deliver the seed
+      // write, so count only the syncs that follow.
+      await Bun.sleep(600);
+      const baseline = watchSyncs();
+      // Each write lands well inside the debounce window, so only the max
+      // wait can start a sync before the writes stop.
+      const writesEnd = Date.now() + 1_600;
+      let syncedWhileWriting = false;
+      while (Date.now() < writesEnd && !syncedWhileWriting) {
+        writeFileSync(path, content);
+        await Bun.sleep(25);
+        syncedWhileWriting = watchSyncs() > baseline;
+      }
+      expect(syncedWhileWriting).toBe(true);
+    } finally {
+      await handle.stop();
+    }
+  });
+
   test("an OpenCode database read does not retrigger the watcher", async () => {
     const config = freshConfig();
     const main = join(config.opencodeDir, "opencode.db");

@@ -37,7 +37,8 @@ describe("responsive session detail styles", () => {
 
   test("keeps wide data surfaces inside their panels", () => {
     expect(rule(".activity-table-wrap")).toContain("overflow-x: auto");
-    expect(rule(".sessions-table")).toContain("min-width: 1280px");
+    // ui-sessions-table-layout.test.tsx derives the exact width from the columns.
+    expect(rule(".sessions-table")).toMatch(/min-width: \d+px/);
     expect(rule(".ctx-strip-frame")).toContain("overflow: hidden");
     expect(rule(".ctx-strip")).toContain("max-width: 100%");
     expect(rule(".ctx-tooltip")).toContain("max-width: calc(100% - 4px)");

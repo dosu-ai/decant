@@ -51,12 +51,13 @@ function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMt
   };
 }
 
-// Z.ai (docs.z.ai) and Meta Model API (dev.meta.ai) text rates per 1M tokens.
-// Like OpenAI's models before GPT-5.6, neither charges a separate cache-write
-// fee, so `openAiPrice` bills cache writes as ordinary input. GLM-4.7-Flash and
-// GLM-4.5-Flash are published as free, which is a price of zero, not an
-// unknown price.
-const GLM_MUSE_PRICES: ReadonlyArray<readonly [string, Price]> = [
+// First-party text rates per 1M tokens for models from labs other than
+// Anthropic, OpenAI, and Google, matched by exact normalized ID. Like OpenAI's
+// models before GPT-5.6, most of these labs charge no separate cache-write fee,
+// so `openAiPrice` bills cache writes as ordinary input. Published-free models
+// are a price of zero, not an unknown price.
+const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
+  // Z.ai (docs.z.ai) and Meta Model API (dev.meta.ai).
   ["glm-5.3", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.2", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.1", openAiPrice(1.4, 0.26, 4.4)],
@@ -79,31 +80,71 @@ const GLM_MUSE_PRICES: ReadonlyArray<readonly [string, Price]> = [
   ["muse-spark-1.1", openAiPrice(1.25, 0.15, 4.25)],
   ["muse-spark-1.3-contributor", openAiPrice(0.1, 0.002, 0.2)],
   ["muse-spark-1.2-contributor", openAiPrice(0.1, 0.002, 0.2)],
+  // DeepSeek bills these peak-hour rates on weekday mornings and afternoons
+  // (Beijing time) and half of them otherwise. Decant prices every request at
+  // the peak rate. `deepseek-v4-flash` and its vision alias now serve and bill
+  // as `deepseek-flash`.
+  ["deepseek-flash", openAiPrice(0.3, 0.006, 1.2)],
+  ["deepseek-v4-flash", openAiPrice(0.3, 0.006, 1.2)],
+  ["deepseek-v4-flash-vision-exp", openAiPrice(0.3, 0.006, 1.2)],
+  ["deepseek-v4-pro", openAiPrice(1.32, 0.044, 3.96)],
+  // Moonshot's K2 models cannot write a cache, and HighSpeed has its own rate.
+  ["kimi-k2.7-code", openAiPrice(0.95, 0.19, 4.0)],
+  ["kimi-k2.7-code-highspeed", openAiPrice(1.9, 0.38, 8.0)],
+  ["kimi-k2.6", openAiPrice(0.95, 0.16, 4.0)],
+  // MiniMax's standard tier for prompts up to 512K tokens, at the "permanent"
+  // 50% discount it actually charges.
+  ["minimax-m3", openAiPrice(0.3, 0.06, 1.2)],
+  // Xiaomi lists MiMo cache writes as free for a limited time.
+  ["mimo-v2.6-pro", openAiPrice(0.435, 0.0036, 0.87, 0)],
+  ["mimo-v2.6-flash", openAiPrice(0.14, 0.0028, 0.28, 0)],
+  ["mimo-v2.6-pro-ultraspeed", openAiPrice(4.35, 0.036, 8.7, 0)],
+  // Alibaba Cloud Model Studio, international (Singapore) rates. Implicit cache
+  // hits bill at the cached rate below; only explicit caching creates a cache
+  // entry, at 125% of input. The Qwen3.5 and Qwen3.6 open models have no cache.
+  ["qwen3.8-2.4t-a95b", openAiPrice(2.0, 0.25, 6.0, 1.25)],
+  ["qwen3.8-27b", openAiPrice(0.5, 0.1, 3.0, 1.25)],
+  ["qwen3.5-397b-a17b", openAiPrice(0.6, null, 3.6)],
+  ["qwen3.5-122b-a10b", openAiPrice(0.4, null, 3.2)],
+  ["qwen3.6-35b-a3b", openAiPrice(0.375, null, 2.25)],
+  ["step-5-preview", openAiPrice(1.0, 0.1, 2.7)],
+  ["hy3", openAiPrice(0.132, 0.033, 0.528)],
+  // Reflection's API is free during its beta, subject to daily limits.
+  ["beam-1.0-501b-a23b", openAiPrice(0, 0, 0)],
 ];
-const GLM_MUSE_KEYS: ReadonlySet<string> = new Set(GLM_MUSE_PRICES.map(([model]) => model));
+const EXACT_ID_KEYS: ReadonlySet<string> = new Set(EXACT_ID_PRICES.map(([model]) => model));
 
-// GLM and Muse IDs arrive through router prefixes (`z-ai/`, `zai/`, `meta/`),
-// hosted routing variants (OpenRouter's `:free` or `:nitro`, Ollama's `:cloud`),
-// Claude Code's `[1m]` marker, dated snapshots, and promotional `-free` copies
-// that Decant prices at list rate like any route. Other `:tags` name a local
-// Ollama or LM Studio build, which incurs no API spend, so they stay unpriced.
-// Matching the whole normalized ID rather than a prefix keeps `-highspeed`,
-// `-turbo`, and `muse-wonder-full` from inheriting a neighbor's rate.
-const GLM_MUSE_ID = /(?:^|\/)(?:glm|muse)-/;
+// These IDs arrive through router prefixes (`z-ai/`, `meta/`, `deepseek/`,
+// `moonshotai/`), hosted routing variants (OpenRouter's `:free` or `:nitro`,
+// Ollama's `:cloud`), Claude Code's `[1m]` marker, dated snapshots, and
+// promotional `-free` copies that Decant prices at list rate like any route.
+// Other `:tags` name a local Ollama or LM Studio build, which incurs no API
+// spend, so they stay unpriced. Matching the whole normalized ID rather than a
+// prefix keeps `-highspeed`, `-turbo`, and `muse-wonder-full` from inheriting a
+// neighbor's rate. Only the last path segment names the model, so a proxy
+// prefix such as `kimi-proxy/claude-opus-5-5` still reaches the Claude rates.
+const EXACT_ID_FAMILY = /^(?:glm-|muse-|deepseek-|kimi-|minimax-|mimo-|qwen\d|step-\d|hy\d|beam-)/;
 const HOSTED_ROUTE_SUFFIX = /:(?:free|nitro|floor|online|extended|beta|thinking|exacto|cloud)$/;
 // OpenRouter's unversioned `meta/muse-wonder` bills exactly at Muse Wonder
 // 1.0's rates (verified against recorded costs on 2026-10-12).
-const GLM_MUSE_ALIASES: ReadonlyMap<string, string> = new Map([["muse-wonder", "muse-wonder-1.0"]]);
+// OpenRouter names DeepSeek models by the version DeepSeek serves behind its
+// API IDs, so the V4.1 Flash and V4 Pro 0813 slugs bill at those IDs' rates.
+const EXACT_ID_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["muse-wonder", "muse-wonder-1.0"],
+  ["deepseek-v4.1-flash", "deepseek-flash"],
+  ["deepseek-v4.1-flash-1017", "deepseek-flash"],
+  ["deepseek-v4-pro-0813", "deepseek-v4-pro"],
+]);
 
-function glmOrMuseModel(model: string): string | null {
+function exactIdModel(model: string): string | null {
   const id = model
     .slice(model.lastIndexOf("/") + 1)
     .replace(/\[[^\]]*\]$/, "")
     .replace(HOSTED_ROUTE_SUFFIX, "")
     .replace(/-free$/, "")
     .replace(/-\d{6,8}$/, "");
-  const key = GLM_MUSE_ALIASES.get(id) ?? id;
-  return GLM_MUSE_KEYS.has(key) ? key : null;
+  const key = EXACT_ID_ALIASES.get(id) ?? id;
+  return EXACT_ID_KEYS.has(key) ? key : null;
 }
 
 let pricingTable: ReadonlyMap<string, Price> | null = null;
@@ -135,6 +176,7 @@ function buildDefaultPricing(): Map<string, Price> {
     ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
     ["gpt-6-sol", openAiPrice(2.0, 0.2, 10.0, 1.25)],
     ["gpt-6.1-sol", openAiPrice(2.0, 0.1, 10.0, 1.25)],
+    ["gpt-6.1-terra", openAiPrice(1.0, 0.05, 5.0, 1.25)],
     ["gpt-6-luna", openAiPrice(0.1, 0.01, 0.5, 1.25)],
     ["gpt-5.6-sol", openAiPrice(4.0, 0.4, 20.0, 1.25)],
     ["gpt-5.6-terra", openAiPrice(2.0, 0.2, 12.0, 1.25)],
@@ -202,14 +244,14 @@ function buildDefaultPricing(): Map<string, Price> {
     ["gemini-2.5-pro", geminiPrice(1.25, 0.125, 10.0)],
     ["gemini-2.5-flash-lite", geminiPrice(0.1, 0.01, 0.4)],
     ["gemini-2.5-flash", geminiPrice(0.3, 0.03, 2.5)],
-    ...GLM_MUSE_PRICES,
+    ...EXACT_ID_PRICES,
   ]);
 }
 
 function canonicalModel(raw: string): string | null {
   const model = raw.toLowerCase().replace(/^openai[/:]/, "");
-  if (GLM_MUSE_ID.test(model)) {
-    return glmOrMuseModel(model);
+  if (EXACT_ID_FAMILY.test(model.slice(model.lastIndexOf("/") + 1))) {
+    return exactIdModel(model);
   }
 
   if (
@@ -305,6 +347,7 @@ function canonicalModel(raw: string): string | null {
     model === "gpt-6-astra" ||
     model === "gpt-6-sol" ||
     model === "gpt-6.1-sol" ||
+    model === "gpt-6.1-terra" ||
     model === "gpt-6-luna"
   ) {
     return model;

@@ -345,7 +345,7 @@ describe("estimateCost", () => {
     }
   });
 
-  test("GPT-6 Sol, GPT-6.1 Sol, and Luna use their published input, cache, and output rates", () => {
+  test("GPT-6 Sol, GPT-6.1 Sol and Terra, and Luna use their published input, cache, and output rates", () => {
     const pricing = defaultPricing();
     const usage = {
       ...usage1m(),
@@ -356,6 +356,7 @@ describe("estimateCost", () => {
     for (const [model, expected] of [
       ["gpt-6-sol", { input: 2, output: 10, cacheRead: 0.4, cacheCreation: 7.5 }],
       ["gpt-6.1-sol", { input: 2, output: 10, cacheRead: 0.2, cacheCreation: 7.5 }],
+      ["gpt-6.1-terra", { input: 1, output: 5, cacheRead: 0.1, cacheCreation: 3.75 }],
       ["gpt-6-luna", { input: 0.1, output: 0.5, cacheRead: 0.02, cacheCreation: 0.375 }],
     ] as const) {
       for (const alias of [model, `openai/${model}`, `OpenAI:${model.toUpperCase()}`]) {
@@ -370,6 +371,8 @@ describe("estimateCost", () => {
       "gpt-6.1-sol-ultrafast",
       "gpt-6-solar",
       "gpt-6-luna-pro",
+      "gpt-6.1-terra-pro",
+      "gpt-6-terra",
     ]) {
       expect(isPriceable(model)).toBe(false);
       expect(estimateCost(model, usage, pricing)).toBe(0);
@@ -725,5 +728,130 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
     };
     expect(estimateCost("opencode-go/glm-5.3-flash", glm, pricing)).toBeCloseTo(0.3449921, 7);
     expect(estimateCost("meta/muse-wonder", muse, pricing)).toBeCloseTo(0.3569672, 7);
+  });
+});
+
+describe("open-weight lab pricing", () => {
+  const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+
+  test("prices every published model at its first-party rate", () => {
+    const pricing = defaultPricing();
+    const read = { ...emptyUsage(), cacheRead: 1_000_000 };
+    const write = { ...emptyUsage(), cacheCreation: 1_000_000 };
+    // [model, 1M input + 1M output, 1M cache reads, 1M cache writes], from each
+    // lab's own pricing page checked 2026-10-26.
+    const cases: Array<[string, number, number, number]> = [
+      ["deepseek-flash", 1.5, 0.006, 0.3],
+      ["deepseek-v4-flash", 1.5, 0.006, 0.3],
+      ["deepseek-v4-flash-vision-exp", 1.5, 0.006, 0.3],
+      ["deepseek-v4-pro", 5.28, 0.044, 1.32],
+      ["kimi-k2.7-code", 4.95, 0.19, 0.95],
+      ["kimi-k2.7-code-highspeed", 9.9, 0.38, 1.9],
+      ["kimi-k2.6", 4.95, 0.16, 0.95],
+      ["minimax-m3", 1.5, 0.06, 0.3],
+      // Xiaomi lists MiMo cache writes as free for a limited time.
+      ["mimo-v2.6-pro", 1.305, 0.0036, 0],
+      ["mimo-v2.6-flash", 0.42, 0.0028, 0],
+      ["mimo-v2.6-pro-ultraspeed", 13.05, 0.036, 0],
+      // Explicit Model Studio cache creation bills at 125% of input.
+      ["qwen3.8-2.4t-a95b", 8.0, 0.25, 2.5],
+      ["qwen3.8-27b", 3.5, 0.1, 0.625],
+      // Qwen3.5 and Qwen3.6 have no cache, so reported reads bill as input.
+      ["qwen3.5-397b-a17b", 4.2, 0.6, 0.6],
+      ["qwen3.5-122b-a10b", 3.6, 0.4, 0.4],
+      ["qwen3.6-35b-a3b", 2.625, 0.375, 0.375],
+      ["step-5-preview", 3.7, 0.1, 1.0],
+      ["hy3", 0.66, 0.033, 0.132],
+    ];
+    for (const [model, inputOutput, cacheRead, cacheWrite] of cases) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(inputOutput, 6);
+      expect(estimateCost(model, read, pricing)).toBeCloseTo(cacheRead, 6);
+      expect(estimateCost(model, write, pricing)).toBeCloseTo(cacheWrite, 6);
+    }
+  });
+
+  test("prices Reflection's free beta at zero while keeping it priceable", () => {
+    expect(isPriceable("beam-1.0-501b-a23b")).toBe(true);
+    expect(estimateCost("Beam-1.0-501B-A23B", u, defaultPricing())).toBe(0);
+  });
+
+  test("reaches list rates through router prefixes, casing, and hosted routes", () => {
+    const pricing = defaultPricing();
+    const cases: Array<[string, number]> = [
+      ["deepseek/deepseek-v4-pro", 5.28],
+      // OpenRouter names DeepSeek models by the version behind the API ID.
+      ["deepseek/deepseek-v4-pro-0813", 5.28],
+      ["deepseek/deepseek-v4.1-flash-1017", 1.5],
+      ["deepseek/deepseek-v4.1-flash", 1.5],
+      ["deepseek-v4-pro[1m]", 5.28],
+      ["deepseek-v4-pro:cloud", 5.28],
+      ["moonshotai/kimi-k2.6", 4.95],
+      ["openrouter/moonshotai/kimi-k2.7-code:nitro", 4.95],
+      ["MiniMax-M3", 1.5],
+      ["minimax/minimax-m3", 1.5],
+      ["xiaomi/mimo-v2.6-pro", 1.305],
+      ["qwen/qwen3.8-27b", 3.5],
+      ["stepfun/step-5-preview", 3.7],
+      ["tencent/hy3", 0.66],
+      ["deepseek-v4-pro-20260813", 5.28],
+      ["tencent/hy3-20261001", 0.66],
+    ];
+    for (const [model, expected] of cases) {
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(expected, 6);
+    }
+  });
+
+  test("leaves local builds, retired IDs, and models without a first-party rate unpriced", () => {
+    for (const model of [
+      // Local Ollama and LM Studio builds incur no API spend.
+      "qwen3.8:27b",
+      "qwen3.6:35b-a3b",
+      "ollama/deepseek-v4-flash:q4_K_M",
+      // Retired or undocumented IDs with no current published rate.
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "deepseek-v4-flash-0731",
+      "kimi-k2.7",
+      "kimi-k2.5",
+      "minimax-m2.7",
+      "minimax-m2.7-highspeed",
+      "mimo-v2.5-pro",
+      "hy3-preview",
+      "hunyuan-hy3",
+      "step-5",
+      "beam-501b-a23b",
+      // Proprietary siblings that are not open-weight and not yet verified.
+      "kimi-k3.1-pro",
+      "qwen3.8-flash",
+      "qwen3.8-flash-next",
+      "qwen3-coder-flash",
+      // Open-weight models whose labs publish no USD per-token API rate.
+      "ling-3.1-flash",
+      "muse-spark-open",
+      "nvidia/nemotron-3.5-super-vl-120b-a12b",
+      "thinkingmachines/inkling",
+      "ifm/k2-horizon-375b-a23b",
+    ]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, u, defaultPricing())).toBe(0);
+    }
+  });
+});
+
+describe("exact-ID family matching", () => {
+  test("reads the family from the last path segment so proxy prefixes keep Claude rates", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    const claude = estimateCost("claude-opus-5-5", u, pricing);
+    expect(claude).toBeGreaterThan(0);
+    for (const model of [
+      "kimi-proxy/claude-opus-5-5",
+      "qwen3/claude-opus-5-5",
+      "glm-gateway/claude-opus-5-5",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCost(model, u, pricing)).toBeCloseTo(claude, 6);
+    }
   });
 });

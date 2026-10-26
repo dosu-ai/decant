@@ -1,0 +1,7 @@
+# Decant's /api/* guard rejects any non-loopback Host by design (DNS-rebinding
+# defense), so the service has no portal: agents use it at http://127.0.0.1:3000.
+services:
+  decant:
+    command: bun run src/cli.ts serve --no-open --port "$PORT"
+    port: 3000
+    health: /api/health

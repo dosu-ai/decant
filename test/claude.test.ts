@@ -440,4 +440,16 @@ describe("parseClaudeSession", () => {
     ].join("\n");
     expect(parseClaudeSession("s", `${content}\n`).session.model).toBe("glm-5.3");
   });
+
+  test("primary model of a Kimi-routed session is its Kimi model once Kimi is priced", () => {
+    // Moonshot and MiniMax serve Anthropic-compatible endpoints that record
+    // their own model IDs, so pricing them changes the priceable preference the
+    // same way GLM did, which is why the change bumped INGEST_PIPELINE_REVISION.
+    const content = [
+      '{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"assistant","model":"claude-haiku-4-5","content":[]}}',
+      '{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:00:01.000Z","message":{"role":"assistant","model":"kimi-k2.7-code","content":[]}}',
+      '{"type":"assistant","uuid":"a3","timestamp":"2026-05-01T10:00:02.000Z","message":{"role":"assistant","model":"kimi-k2.7-code","content":[]}}',
+    ].join("\n");
+    expect(parseClaudeSession("s", `${content}\n`).session.model).toBe("kimi-k2.7-code");
+  });
 });

@@ -178,7 +178,7 @@ describe("parseOpenCodeLegacySession", () => {
       cost: 0.0000416,
       providerID: "opencode-go",
     });
-    expect((first?.raw as { parts: { id: string }[] }).parts.map((p) => p.id)).toEqual([
+    expect((first!.raw as { parts: { id: string }[] }).parts.map((p) => p.id)).toEqual([
       "prt_v1s_04",
       "prt_v1s_05",
       "prt_v1s_06",

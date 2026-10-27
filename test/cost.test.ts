@@ -595,6 +595,58 @@ describe("isPriceable", () => {
   });
 });
 
+describe("Kimi K3.1 Pro pricing", () => {
+  test("prices input, output, cache reads, and both cache-write TTLs separately", () => {
+    const usage = {
+      ...usage1m(),
+      cacheRead: 1_000_000,
+      cacheCreation: 2_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    const pricing = defaultPricing();
+    expect(estimateCostParts("kimi-k3.1-pro", usage, pricing)).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheCreation: 6,
+    });
+    expect(estimateCost("kimi-k3.1-pro", usage, pricing)).toBeCloseTo(18.2, 6);
+  });
+
+  test("recognizes provider prefixes and hosted routing variants", () => {
+    for (const model of [
+      "kimi-k3.1-pro",
+      "KIMI-K3.1-PRO",
+      "moonshot/kimi-k3.1-pro",
+      "moonshotai/kimi-k3.1-pro",
+      "openrouter/moonshotai/kimi-k3.1-pro",
+      "kimi-k3.1-pro[1m]",
+      "moonshotai/kimi-k3.1-pro:nitro",
+      "moonshotai/kimi-k3.1-pro:free",
+      "opencode/kimi-k3.1-pro-free",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCost(model, usage1m(), defaultPricing())).toBeCloseTo(12, 6);
+    }
+  });
+
+  test("leaves other Kimi models and local builds unpriced", () => {
+    for (const model of [
+      "kimi-k3",
+      "kimi-k3.1",
+      "kimi-k3.1-pro-highspeed",
+      "moonshotai/kimi-k3.1-pro-highspeed",
+      "kimi-k3.1-pro-preview",
+      "kimi-k3.10-pro",
+      "kimi-k3.1-pro:q4_K_M",
+      "ollama/kimi-k3.1-pro:latest",
+    ]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, usage1m(), defaultPricing())).toBe(0);
+    }
+  });
+});
+
 describe("Z.ai GLM and Meta Muse pricing", () => {
   const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
 
@@ -822,7 +874,7 @@ describe("open-weight lab pricing", () => {
       "step-5",
       "beam-501b-a23b",
       // Proprietary siblings that are not open-weight and not yet verified.
-      "kimi-k3.1-pro",
+      "kimi-k3.1",
       "qwen3.8-flash",
       "qwen3.8-flash-next",
       "qwen3-coder-flash",

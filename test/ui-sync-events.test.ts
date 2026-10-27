@@ -114,13 +114,21 @@ describe("live Sessions refresh", () => {
   });
 
   test("a due refresh reloads the list, falls back to Update, or defers to a foreground sync", () => {
-    expect(liveSessionsAction(true, false)).toBe("refresh");
+    const reading = { nearTop: true, visible: true };
+    expect(liveSessionsAction(true, false, reading)).toBe("refresh");
     // The page stopped qualifying while the refresh waited, so the change is
     // offered through Update instead of being dropped.
-    expect(liveSessionsAction(false, false)).toBe("offer_update");
+    expect(liveSessionsAction(false, false, reading)).toBe("offer_update");
     // A running foreground sync refreshes the page when it finishes.
-    expect(liveSessionsAction(true, true)).toBe("none");
-    expect(liveSessionsAction(false, true)).toBe("none");
+    expect(liveSessionsAction(true, true, reading)).toBe("none");
+    expect(liveSessionsAction(false, true, reading)).toBe("none");
+  });
+
+  test("holds a refresh for a reader scrolled down the list or a hidden tab", () => {
+    // Rows inserted at the top would push a scrolled reader's place down the
+    // page, and a hidden tab has no one to keep current.
+    expect(liveSessionsAction(true, false, { nearTop: false, visible: true })).toBe("offer_update");
+    expect(liveSessionsAction(true, false, { nearTop: true, visible: false })).toBe("offer_update");
   });
 
   test("refreshes at most once every five to ten seconds", () => {

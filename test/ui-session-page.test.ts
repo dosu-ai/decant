@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sessionPageView } from "../src/ui/session-page.ts";
+import { sessionPageFailure, sessionPageView } from "../src/ui/session-page.ts";
 import type { LoadedSessionPage } from "../src/ui/types.ts";
 
 const scopeKey = JSON.stringify(["", null, false]);
@@ -27,7 +27,7 @@ describe("sessionPageView", () => {
         scopeKey,
         settled: null,
       }),
-    ).toEqual({ loading: false, visible: cached });
+    ).toEqual({ loading: false, refreshing: false, visible: cached });
   });
 
   test("keeps the same page's rows on screen while a reload fetches it again", () => {
@@ -43,7 +43,7 @@ describe("sessionPageView", () => {
         scopeKey,
         settled,
       }),
-    ).toEqual({ loading: false, visible: settled });
+    ).toEqual({ loading: false, refreshing: true, visible: settled });
   });
 
   test("keeps another page's rows visible but busy until the requested page arrives", () => {
@@ -57,7 +57,7 @@ describe("sessionPageView", () => {
         scopeKey,
         settled,
       }),
-    ).toEqual({ loading: true, visible: settled });
+    ).toEqual({ loading: true, refreshing: false, visible: settled });
   });
 
   test("never shows rows from a different scope", () => {
@@ -71,7 +71,7 @@ describe("sessionPageView", () => {
         scopeKey,
         settled,
       }),
-    ).toEqual({ loading: true, visible: null });
+    ).toEqual({ loading: true, refreshing: false, visible: null });
   });
 
   test("stops loading once the request has failed or the view is hidden", () => {
@@ -95,5 +95,32 @@ describe("sessionPageView", () => {
         settled: null,
       }).loading,
     ).toBe(false);
+  });
+});
+
+describe("sessionPageFailure", () => {
+  const rows = loadedPage(1, {
+    sessions: [{ id: "s1" } as unknown as LoadedSessionPage["sessions"][number]],
+  }).sessions;
+
+  test("keeps the rows on screen when a reload of the same page fails", () => {
+    expect(
+      sessionPageFailure({ error: new Error("offline"), loadedPage: 1, sessions: rows }, 1),
+    ).toBe("notice");
+  });
+
+  test("shows the error screen when the failed page has no rows of its own", () => {
+    // Page 2 failed while page 1's rows were still up, so those rows are not
+    // what was asked for.
+    expect(
+      sessionPageFailure({ error: new Error("offline"), loadedPage: 1, sessions: rows }, 2),
+    ).toBe("replace");
+    expect(
+      sessionPageFailure({ error: new Error("offline"), loadedPage: null, sessions: [] }, 1),
+    ).toBe("replace");
+  });
+
+  test("reports nothing without an error", () => {
+    expect(sessionPageFailure({ error: null, loadedPage: 1, sessions: rows }, 1)).toBeNull();
   });
 });

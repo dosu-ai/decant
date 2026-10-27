@@ -62,7 +62,7 @@ export function SessionsView({
     ids: Set<number>;
     key: string;
   }>(() => ({ ids: new Set(), key: "" }));
-  const { exhausted, loadedPage, loading, sessions } = sessionPageState;
+  const { exhausted, loadedPage, loading, refreshing, sessions } = sessionPageState;
   const filtered = filterSessions(sessions, query);
   const project = sessionProjectFilter(path);
   const includeArchived = sessionIncludesArchived(path);
@@ -191,7 +191,7 @@ export function SessionsView({
         <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
       </div>
 
-      <section aria-busy={pageLoading} className="panel sessions-panel">
+      <section aria-busy={pageLoading || refreshing} className="panel sessions-panel">
         <div className="panel-heading">
           <div>
             <h2>Sessions</h2>

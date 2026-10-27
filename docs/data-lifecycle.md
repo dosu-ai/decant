@@ -255,12 +255,18 @@ The web UI shows the startup sync's progress and loads its results as soon as
 it finishes, so a first launch fills the dashboard without a manual sync.
 
 Later watcher and sweep syncs refresh the first page of **Sessions** in place
-when it has no project, archive, or text filter. New sessions appear at the top
-within a few seconds, without a click, and the rows already on screen stay put
-while the list reloads. These refreshes run at most once every five seconds
-while an agent is busy writing its log. Everywhere else, including later pages,
-filtered lists, transcripts, and analytics, background activity only lights the
-**Update** button, so it never reshuffles a page while you are reading it.
+when it has no project, archive, or text filter. The date range doesn't matter,
+so a past range refreshes too, though its rows rarely change. New sessions
+appear at the top within a few seconds, without a click, and the table keeps
+its rows on screen instead of dropping back to a loading skeleton while it
+reloads. These refreshes run at most once every five seconds while an agent is
+busy writing its log. They also wait while you are scrolled down the list or
+the tab is hidden, because new rows at the top would push your place down the
+page. **Update** lights instead, and the list catches up once you scroll back
+to the top. If a refresh fails, the rows stay up under a notice with a
+**Retry** button. Everywhere else, including later pages, filtered lists,
+transcripts, and analytics, background activity only lights the **Update**
+button, so it never reshuffles a page while you are reading it.
 
 Set `DECANT_NO_SYNC` or pass `--no-sync` to suppress syncs Decant starts on its
 own. With `serve`, this also disables the source watcher. It does not disable an

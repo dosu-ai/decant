@@ -39,11 +39,13 @@ import {
   SESSION_REPORT_NEVER_INCLUDES,
 } from "./report-export.tsx";
 import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
-import { useSessionPage } from "./session-page.ts";
+import { sessionPageFailure, useSessionPage } from "./session-page.ts";
 import { collectSliceResults } from "./slice-loading.ts";
 import {
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
+  LIVE_SESSIONS_TOP_PX,
+  type LiveSessionsViewer,
   liveSessionsAction,
   parseSyncFailure,
   planArchiveUpdate,
@@ -74,6 +76,13 @@ const LIVE_DISCONNECT_GRACE_MS = 15_000;
 // Every other view renders its own <h1>; the topbar title is then a plain label.
 const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
+
+function liveSessionsViewer(): LiveSessionsViewer {
+  return {
+    nearTop: window.scrollY <= LIVE_SESSIONS_TOP_PX,
+    visible: document.visibilityState !== "hidden",
+  };
+}
 
 function App() {
   const [path, setPath] = useState(locationPath);
@@ -149,6 +158,7 @@ function App() {
     localSyncingRef.current = localSyncing;
   }, [localSyncing]);
 
+  const sessionFailure = sessionPageFailure(sessionPageState, sessionPage);
   const liveSessions = sessionsAutoRefresh({
     path,
     textFilterActive: sessionTextFilterActive,
@@ -157,7 +167,11 @@ function App() {
 
   useEffect(() => {
     const throttle = createLatestThrottle<null>(() => {
-      const action = liveSessionsAction(liveSessionsRef.current, localSyncingRef.current);
+      const action = liveSessionsAction(
+        liveSessionsRef.current,
+        localSyncingRef.current,
+        liveSessionsViewer(),
+      );
       if (action === "refresh") {
         setArchiveUpdateAvailable(false);
         requestRefresh();
@@ -179,6 +193,26 @@ function App() {
     if (liveSessions && archiveUpdateAvailable) {
       liveSessionsThrottleRef.current?.push(null);
     }
+  }, [archiveUpdateAvailable, liveSessions]);
+
+  useEffect(() => {
+    if (!liveSessions || !archiveUpdateAvailable) {
+      return;
+    }
+    // Activity held back while the reader was scrolled down or the tab was
+    // hidden loads once they are back at the top of a visible list.
+    const resume = () => {
+      const viewer = liveSessionsViewer();
+      if (viewer.nearTop && viewer.visible) {
+        liveSessionsThrottleRef.current?.push(null);
+      }
+    };
+    window.addEventListener("scroll", resume, { passive: true });
+    document.addEventListener("visibilitychange", resume);
+    return () => {
+      window.removeEventListener("scroll", resume);
+      document.removeEventListener("visibilitychange", resume);
+    };
   }, [archiveUpdateAvailable, liveSessions]);
 
   useEffect(() => {
@@ -734,7 +768,17 @@ function App() {
                 </button>
               </div>
             ) : null}
-            {activeView === "sessions" && sessionPageState.error != null ? (
+            {activeView === "sessions" && sessionFailure === "notice" ? (
+              <div className="notice danger slice-load-notice" role="alert">
+                <span>
+                  The session list could not be refreshed. The sessions shown may be out of date.
+                </span>
+                <button className="secondary-button" onClick={requestRefresh} type="button">
+                  Retry
+                </button>
+              </div>
+            ) : null}
+            {activeView === "sessions" && sessionFailure === "replace" ? (
               <ApiFailureState
                 error={sessionPageState.error}
                 onRetry={requestRefresh}

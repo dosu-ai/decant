@@ -90,19 +90,36 @@ export function sessionsAutoRefresh({
 export type LiveSessionsAction = "refresh" | "offer_update" | "none";
 
 /**
+ * How far down the window can be scrolled and still take a live refresh. The
+ * Sessions panel turns off scroll anchoring, so rows inserted at the top push
+ * everything below them down, which only goes unnoticed near the top.
+ */
+export const LIVE_SESSIONS_TOP_PX = 64;
+
+export interface LiveSessionsViewer {
+  /** Whether the window is scrolled within LIVE_SESSIONS_TOP_PX of the top. */
+  nearTop: boolean;
+  /** Whether the tab is visible. A hidden tab has no reader to keep current. */
+  visible: boolean;
+}
+
+/**
  * What a throttled Sessions refresh does when it comes due. The page may have
  * changed since the change was queued, so a view that no longer qualifies
- * gets Update instead and the change is not lost. A running foreground sync
- * refreshes the page itself when it finishes.
+ * gets Update instead and the change is not lost. The same goes for a reader
+ * scrolled down the list and for a hidden tab, which load it once they are
+ * back at the top. A running foreground sync refreshes the page itself when it
+ * finishes.
  */
 export function liveSessionsAction(
   autoRefresh: boolean,
   foregroundSyncRunning: boolean,
+  viewer: LiveSessionsViewer,
 ): LiveSessionsAction {
   if (foregroundSyncRunning) {
     return "none";
   }
-  return autoRefresh ? "refresh" : "offer_update";
+  return autoRefresh && viewer.nearTop && viewer.visible ? "refresh" : "offer_update";
 }
 
 export interface SyncFailure {

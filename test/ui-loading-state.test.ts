@@ -102,7 +102,8 @@ describe("session table skeleton", () => {
 
   test("reserves all fifty row slots before the first page settles", () => {
     expect(main).toContain("{ length: SESSION_PAGE_SIZE }");
-    expect(main).toContain("const loading = enabled && cached == null && currentError == null");
+    expect(main).toContain("const fetching = enabled && cached == null && currentError == null");
+    expect(main).toContain("loading: fetching && !revalidating");
     expect(main).not.toContain("setSessionsLoading");
     expect(main).not.toContain("loadedSessionKey");
   });

@@ -43,11 +43,27 @@ export function sessionPageView({
   page: number;
   scopeKey: string;
   settled: LoadedSessionPage | null;
-}): { loading: boolean; visible: LoadedSessionPage | null } {
+}): { loading: boolean; refreshing: boolean; visible: LoadedSessionPage | null } {
   const visible = cached ?? (settled?.scopeKey === scopeKey ? settled : null);
   const revalidating = cached == null && visible?.page === page;
-  const loading = enabled && cached == null && currentError == null && !revalidating;
-  return { loading, visible };
+  const fetching = enabled && cached == null && currentError == null;
+  return { loading: fetching && !revalidating, refreshing: fetching && revalidating, visible };
+}
+
+/**
+ * How a failed page load shows. A failed reload of the page already on screen,
+ * such as a live refresh that hit a transient error, keeps those rows under a
+ * notice instead of replacing what someone is reading with an error screen.
+ * Any other failure has no rows of its own to show.
+ */
+export function sessionPageFailure(
+  state: Pick<SessionPageState, "error" | "loadedPage" | "sessions">,
+  page: number,
+): "notice" | "replace" | null {
+  if (state.error == null) {
+    return null;
+  }
+  return state.loadedPage === page && state.sessions.length > 0 ? "notice" : "replace";
 }
 
 export function useSessionPage({
@@ -74,7 +90,7 @@ export function useSessionPage({
   const requestKey = `${scopeKey}:${page}:${reloadKey}`;
   const cached = cacheRef.current.get(requestKey) ?? null;
   const currentError = settled.failed?.requestKey === requestKey ? settled.failed.error : null;
-  const { loading, visible } = sessionPageView({
+  const { loading, refreshing, visible } = sessionPageView({
     cached,
     currentError,
     enabled,
@@ -127,6 +143,7 @@ export function useSessionPage({
     exhausted: visible?.exhausted ?? false,
     loadedPage: visible?.page ?? null,
     loading,
+    refreshing,
     sessions: visible?.sessions ?? [],
   };
 }

@@ -54,9 +54,12 @@ test("the unfiltered Sessions list loads background activity itself, throttled",
   expect(main).toMatch(
     /if \(liveSessionsRef\.current && liveRefresh != null\) \{\s*liveRefresh\.push\(null\);\s*\} else \{\s*setArchiveUpdateAvailable\(true\);\s*\}/,
   );
-  expect(main).toContain(
-    "createLatestThrottle<null>(() => {\n      const action = liveSessionsAction(liveSessionsRef.current, localSyncingRef.current);",
+  expect(main).toMatch(
+    /createLatestThrottle<null>\(\(\) => \{\s*const action = liveSessionsAction\(\s*liveSessionsRef\.current,\s*localSyncingRef\.current,\s*liveSessionsViewer\(\),\s*\);/,
   );
+  // Held-back activity loads once the reader is back at the top of a visible tab.
+  expect(main).toContain('window.addEventListener("scroll", resume, { passive: true });');
+  expect(main).toContain('document.addEventListener("visibilitychange", resume);');
   expect(main).toContain("}, LIVE_SESSIONS_REFRESH_MS);");
   // A refresh does what Update would, so Update goes dark with it.
   expect(main).toMatch(

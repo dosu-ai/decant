@@ -312,6 +312,8 @@ export type SessionPageState = {
   exhausted: boolean;
   loadedPage: number | null;
   loading: boolean;
+  /** Whether the page on screen is being fetched again behind its rows. */
+  refreshing: boolean;
   sessions: SessionSummary[];
 };
 

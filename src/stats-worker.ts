@@ -2,12 +2,15 @@ import { Database } from "bun:sqlite";
 import { closeDb } from "./db.ts";
 import { computeSessionEconomicsVectors } from "./token-economics.ts";
 
-self.addEventListener("message", (event) => {
+self.addEventListener("message", function onMessage(event) {
   // Dedicated worker: the only sender is the spawning parent thread, whose
   // messages carry an empty origin. Drop anything else.
   if (event.origin !== "") {
     return;
   }
+  // Removing the one-shot listener lets Bun drain the worker event loop once
+  // this callback has released SQLite and delivered its result.
+  self.removeEventListener("message", onMessage);
   const { dbPath, cancelBuffer } = event.data as {
     dbPath: string;
     cancelBuffer: SharedArrayBuffer | null;
@@ -36,9 +39,7 @@ self.addEventListener("message", (event) => {
       closeDb(db);
     }
   }
-  // Completion is emitted only after the native connection is closed so the
-  // worker can close its own event loop without a parent-thread teardown
-  // racing SQLite finalization.
+  // Completion is emitted only after the native connection is closed. Natural
+  // event-loop exit avoids a parent-thread teardown racing SQLite finalization.
   self.postMessage(result);
-  self.close();
 });

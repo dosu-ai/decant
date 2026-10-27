@@ -6,7 +6,7 @@ import { closeDb, openDb } from "../src/db.ts";
 import { type IngestConfig, sync } from "../src/ingest.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
-import { ROW_QUERIES } from "../test/golden-rows.ts";
+import { decodeGoldenRows, ROW_QUERIES } from "../test/golden-rows.ts";
 import { buildOpenCodeFixtureDb } from "../test/opencode-fixture.ts";
 import { stripGoldenVolatility } from "./golden-normalize.ts";
 
@@ -122,7 +122,7 @@ async function regenerate(): Promise<void> {
         if (sql == null) throw new Error(`Unknown row dump in meta.json: ${name}`);
         writeJson(
           join(goldenDir, "rows", `${name}.json`),
-          canonicalizeRows(db.query(sql).all(), caseDir),
+          canonicalizeRows(decodeGoldenRows(db.query(sql).all()), caseDir),
         );
       }
     } finally {

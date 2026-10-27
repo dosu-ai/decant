@@ -49,7 +49,8 @@ describe("coded UI recovery", () => {
   });
 
   test("keeps successful dashboard slices visible when a sibling request fails", () => {
-    expect(main).toContain("Promise.allSettled");
+    expect(main).toContain("loadSlicesIndependently");
+    expect(readUiFile("slice-loading.ts")).toContain("Promise.allSettled");
     expect(main).not.toContain("Promise.all(missing.map");
     expect(main).toContain("collectSliceResults");
     expect(main).toContain("const [failedSlices, setFailedSlices]");

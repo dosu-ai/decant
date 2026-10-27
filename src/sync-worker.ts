@@ -7,12 +7,15 @@ type SyncWorkerMessage =
   | { type: "complete"; ok: true; report: ReturnType<typeof sync> }
   | { type: "complete"; ok: false; error: string };
 
-self.addEventListener("message", (event) => {
+self.addEventListener("message", function onMessage(event) {
   // Dedicated worker: the only sender is the spawning parent thread, whose
   // messages carry an empty origin. Drop anything else.
   if (event.origin !== "") {
     return;
   }
+  // Bun keeps a worker alive while its global message listener is attached.
+  // This worker handles one request, then exits naturally after closing SQLite.
+  self.removeEventListener("message", onMessage);
   const { config, cancelBuffer } = event.data as {
     config: Config;
     cancelBuffer: SharedArrayBuffer | null;
@@ -45,9 +48,7 @@ self.addEventListener("message", (event) => {
       closeDb(db);
     }
   }
-  // Completion means every native SQLite resource has been released. The
-  // worker can now close its own event loop without a parent-thread teardown
-  // racing the SQLite callback that produced the result.
+  // Completion means every native SQLite resource has been released. Return
+  // to the drained event loop rather than racing a parent-thread termination.
   self.postMessage(result);
-  self.close();
 });

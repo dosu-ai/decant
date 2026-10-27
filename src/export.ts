@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import { getSession, type SessionDetail } from "./query.ts";
 
 export function toMarkdown(detail: SessionDetail): string {
@@ -337,8 +338,8 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       ? (
           db
             .query(
-              `SELECT seq FROM message
-               WHERE session_id = ?1 AND json_extract(raw, '$.payload.role') = 'developer'`,
+              `SELECT seq FROM message m
+               WHERE session_id = ?1 AND json_extract(${MESSAGE_METADATA_SQL}, '$.payload.role') = 'developer'`,
             )
             .all(sessionId) as { seq: number }[]
         ).map((m) => m.seq)

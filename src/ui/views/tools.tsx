@@ -48,6 +48,14 @@ import {
   toolFiltersHref,
   withToolDateRange,
 } from "../tool-filters.ts";
+import {
+  type ScopedToolSummary,
+  toolSummaryForScope,
+  toolSummaryKey,
+  toolSummaryNeedsRefresh,
+  toolSummaryQuery,
+  topToolLabel,
+} from "../tool-summary.ts";
 import { toolTableColumns } from "../tool-table-layout.ts";
 import type {
   DashboardData,
@@ -311,11 +319,17 @@ export function ToolCallDetail({
 export function ToolsView({
   data,
   dateRange,
+  mcpStatus,
   onDateRangeChange,
+  reloadKey,
+  toolsStatus,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
+  mcpStatus: "loading" | "ready" | "failed";
   onDateRangeChange: (range: DateRangeSelection) => void;
+  reloadKey: number;
+  toolsStatus: "loading" | "ready" | "failed";
 }) {
   const locationFilters = toolFiltersFromSearch(window.location.search);
   const [mcpSort, setMcpSort] = useState<SortState<McpSortKey>>({
@@ -331,18 +345,25 @@ export function ToolsView({
     total: 0,
     limit: 50,
     offset: locationFilters.offset,
-    summary: { calls: 0, errors: 0, p50_ms: null, p95_ms: null },
+    summary: null,
   });
-  const [callError, setCallError] = useState<string | null>(null);
-  const [callsLoading, setCallsLoading] = useState(true);
+  const [callError, setCallError] = useState<{ query: string; message: string } | null>(null);
+  const [callsRequestKey, setCallsRequestKey] = useState<string | null>(null);
+  const [savedSummary, setSavedSummary] = useState<ScopedToolSummary | null>(null);
+  const [summaryErrorScope, setSummaryErrorScope] = useState<string | null>(null);
   const [selectedCall, setSelectedCall] = useState<ToolCallRow | null>(null);
   const [detailTab, setDetailTab] = useState<"preview" | "raw">("preview");
   const closeToolDetail = useCallback(() => setSelectedCall(null), []);
-  const mcpRows = useMemo(() => sortRows(data.mcp, mcpSort, mcpSortValue), [data.mcp, mcpSort]);
-  const toolRows = useMemo(
-    () => sortRows(data.tools, toolSort, toolSortValue),
-    [data.tools, toolSort],
+  const mcpRows = useMemo(
+    () => (mcpStatus === "ready" ? sortRows(data.mcp, mcpSort, mcpSortValue) : []),
+    [data.mcp, mcpSort, mcpStatus],
   );
+  const toolRows = useMemo(
+    () => (toolsStatus === "ready" ? sortRows(data.tools, toolSort, toolSortValue) : []),
+    [data.tools, toolSort, toolsStatus],
+  );
+  const toolFilterRows = toolsStatus === "ready" ? data.tools : [];
+  const serverFilterRows = mcpStatus === "ready" ? data.mcp : [];
   // Built from every server in view, so two registrations of the same server
   // (`dosu` and `claude_ai_Dosu`) never render as two identical rows. Both
   // tables and the filter share one map so a server reads the same everywhere.
@@ -388,13 +409,18 @@ export function ToolsView({
     locationFilters.to,
     locationFilters.tool,
   ]);
+  const summaryScopeKey = toolSummaryKey(locationFilters);
+  const summaryQuery = toolSummaryQuery(locationFilters);
+  const callSummary = toolSummaryForScope(savedSummary, summaryScopeKey);
+  const summaryNeedsRefresh = toolSummaryNeedsRefresh(savedSummary, summaryScopeKey, reloadKey);
+  const laterCallPage = locationFilters.offset > 0;
   const aggregate = useMemo(
     () =>
-      toolAggregate(data.tools, callPage.summary, {
+      toolAggregate(data.tools, callSummary, {
         tool: locationFilters.tool,
         server: locationFilters.server,
       }),
-    [data.tools, callPage.summary, locationFilters.tool, locationFilters.server],
+    [data.tools, callSummary, locationFilters.tool, locationFilters.server],
   );
   const durationAvailable =
     data.tools.some((row) => row.p50_ms != null) ||
@@ -416,29 +442,62 @@ export function ToolsView({
 
   useEffect(() => {
     const controller = new AbortController();
-    setCallsLoading(true);
     setCallError(null);
+    if (locationFilters.offset === 0) {
+      setSummaryErrorScope(null);
+    }
     void getJson<ToolCallPage>(`/api/tools/calls?${callQuery}`, {
       signal: controller.signal,
     })
-      .then((page) =>
-        setCallPage((current) => ({
-          ...page,
-          summary: page.summary ?? current.summary,
-        })),
-      )
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          setCallError(errorMessage(error));
+      .then((page) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setCallPage(page);
+        setCallsRequestKey(callQuery);
+        if (page.summary != null) {
+          setSavedSummary({ scopeKey: summaryScopeKey, reloadKey, summary: page.summary });
+        } else if (locationFilters.offset === 0) {
+          setSummaryErrorScope(summaryScopeKey);
         }
       })
-      .finally(() => {
+      .catch((error: unknown) => {
         if (!controller.signal.aborted) {
-          setCallsLoading(false);
+          setCallError({ query: callQuery, message: errorMessage(error) });
+          if (locationFilters.offset === 0) {
+            setSummaryErrorScope(summaryScopeKey);
+          }
         }
       });
     return () => controller.abort();
-  }, [callQuery]);
+  }, [callQuery, locationFilters.offset, reloadKey, summaryScopeKey]);
+
+  useEffect(() => {
+    if (!laterCallPage || !summaryNeedsRefresh) {
+      return;
+    }
+    const controller = new AbortController();
+    setSummaryErrorScope(null);
+    void getJson<ToolCallPage>(`/api/tools/calls?${summaryQuery}`, {
+      signal: controller.signal,
+    })
+      .then((page) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (page.summary == null) {
+          setSummaryErrorScope(summaryScopeKey);
+        } else {
+          setSavedSummary({ scopeKey: summaryScopeKey, reloadKey, summary: page.summary });
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setSummaryErrorScope(summaryScopeKey);
+        }
+      });
+    return () => controller.abort();
+  }, [laterCallPage, reloadKey, summaryNeedsRefresh, summaryQuery, summaryScopeKey]);
 
   const updateFilters = (patch: Partial<ToolFilters>) => {
     const next = { ...locationFilters, ...patch };
@@ -459,6 +518,13 @@ export function ToolsView({
   const clearedCallFilters = clearToolCallFilters(locationFilters);
   const clearedFiltersHref = toolFiltersHref(clearedCallFilters);
   const errorRate = errorRateDisplay(aggregate.totalCalls, aggregate.errorRate);
+  const summaryLoading = callSummary == null && summaryErrorScope !== summaryScopeKey;
+  const summaryAvailable = callSummary != null;
+  const callsCurrent = callsRequestKey === callQuery;
+  const currentCallError = callError?.query === callQuery ? callError.message : null;
+  const usageDateMatches =
+    dateRange.from === locationFilters.from && dateRange.to === locationFilters.to;
+  const topToolLoading = toolsStatus === "loading" || !usageDateMatches;
 
   return (
     <div className="view-stack">
@@ -479,19 +545,49 @@ export function ToolsView({
         />
       </header>
 
-      <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
-        <StatCard icon="tools" label="Total calls" value={formatInt(aggregate.totalCalls)} />
-        <StatCard alert={errorRate.alert} icon="info" label="Error rate" value={errorRate.label} />
+      <section
+        aria-busy={summaryLoading || topToolLoading}
+        aria-label="Tool call summary"
+        className="stat-grid tool-stat-grid"
+      >
+        <StatCard
+          icon="tools"
+          label="Total calls"
+          value={
+            summaryLoading ? "Loading…" : summaryAvailable ? formatInt(aggregate.totalCalls) : "—"
+          }
+        />
+        <StatCard
+          alert={summaryAvailable && errorRate.alert}
+          icon="info"
+          label="Error rate"
+          value={summaryLoading ? "Loading…" : summaryAvailable ? errorRate.label : "—"}
+        />
         <StatCard
           icon="clock"
           label="Median / p95 elapsed"
           value={
-            aggregate.p50 == null || aggregate.p95 == null
-              ? "—"
-              : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
+            summaryLoading
+              ? "Loading…"
+              : aggregate.p50 == null || aggregate.p95 == null
+                ? "—"
+                : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
           }
         />
-        <StatCard icon="bolt" label="Top tool" value={aggregate.topTool ?? "—"} />
+        <StatCard
+          icon="bolt"
+          label="Top tool"
+          value={
+            topToolLoading
+              ? "Loading…"
+              : toolsStatus !== "ready" || aggregate.topTool == null
+                ? "—"
+                : topToolLabel(aggregate.topTool)
+          }
+          valueTitle={
+            topToolLoading || toolsStatus !== "ready" ? undefined : (aggregate.topTool ?? undefined)
+          }
+        />
       </section>
 
       <section className="panel">
@@ -501,7 +597,13 @@ export function ToolsView({
             <p>Model Context Protocol servers and their call volume</p>
           </div>
         </div>
-        {mcpRows.length === 0 ? (
+        {mcpStatus === "loading" ? (
+          <div className="panel-body muted" role="status">
+            Loading MCP servers…
+          </div>
+        ) : mcpStatus === "failed" ? (
+          <div className="panel-body muted">MCP servers could not be loaded.</div>
+        ) : mcpRows.length === 0 ? (
           <EmptyState
             icon="cpu"
             message="No MCP tool calls in this range."
@@ -616,7 +718,7 @@ export function ToolsView({
           </div>
         </div>
         <div className="table-scroll">
-          <table className="data-table tools-table">
+          <table aria-busy={toolsStatus === "loading"} className="data-table tools-table">
             <colgroup>
               {toolColumns.map((column) => (
                 <col
@@ -681,7 +783,13 @@ export function ToolsView({
             <tbody>
               {toolRows.length === 0 ? (
                 <tr>
-                  <td colSpan={durationAvailable ? 7 : 6}>No tool calls.</td>
+                  <td colSpan={durationAvailable ? 7 : 6}>
+                    {toolsStatus === "loading"
+                      ? "Loading tools…"
+                      : toolsStatus === "failed"
+                        ? "Tool usage could not be loaded."
+                        : "No tool calls."}
+                  </td>
                 </tr>
               ) : null}
               {toolRows.map((row) => {
@@ -739,7 +847,13 @@ export function ToolsView({
             <h2>Calls</h2>
             <p>Inspect individual tool activity, inputs, results, and elapsed time</p>
           </div>
-          <span className="muted">{formatInt(callPage.total)} matching</span>
+          <span className="muted">
+            {callsCurrent
+              ? `${formatInt(callPage.total)} matching`
+              : currentCallError == null
+                ? "Loading…"
+                : "—"}
+          </span>
         </div>
         <div className="tool-filter-bar">
           <label>
@@ -749,7 +863,13 @@ export function ToolsView({
               value={locationFilters.tool}
             >
               <option value="">All tools</option>
-              {data.tools.map((row) => (
+              {locationFilters.tool !== "" &&
+              !toolFilterRows.some((row) => row.tool_name === locationFilters.tool) ? (
+                <option title={locationFilters.tool} value={locationFilters.tool}>
+                  {locationFilters.tool}
+                </option>
+              ) : null}
+              {toolFilterRows.map((row) => (
                 <option key={`${row.tool_name}-${row.mcp_server ?? ""}`} value={row.tool_name}>
                   {row.tool_name} ({formatInt(row.calls)})
                 </option>
@@ -763,7 +883,13 @@ export function ToolsView({
               value={locationFilters.server}
             >
               <option value="">All servers</option>
-              {data.mcp.map((row) => (
+              {locationFilters.server !== "" &&
+              !serverFilterRows.some((row) => row.mcp_server === locationFilters.server) ? (
+                <option title={locationFilters.server} value={locationFilters.server}>
+                  {mcpServerLabel(serverLabels, locationFilters.server)}
+                </option>
+              ) : null}
+              {serverFilterRows.map((row) => (
                 <option key={row.mcp_server} title={row.mcp_server} value={row.mcp_server}>
                   {mcpServerLabel(serverLabels, row.mcp_server)} ({formatInt(row.calls)})
                 </option>
@@ -800,17 +926,17 @@ export function ToolsView({
             </Link>
           ) : null}
         </div>
-        {callError != null ? (
+        {currentCallError != null ? (
           <ErrorState
             action={
               <button className="secondary-button" onClick={() => updateFilters({})} type="button">
                 Retry
               </button>
             }
-            detail={callError}
+            detail={currentCallError}
             title="Tool calls could not be loaded"
           />
-        ) : callsLoading && callPage.calls.length === 0 ? (
+        ) : !callsCurrent ? (
           <div className="panel-body muted">Loading calls…</div>
         ) : callPage.calls.length === 0 ? (
           <EmptyState

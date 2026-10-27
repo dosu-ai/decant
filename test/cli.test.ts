@@ -945,6 +945,33 @@ describe("db info discloses what the archive stores", () => {
     // block.text / tool_input / tool_result.
     expect(info.text_bytes).toBe(52);
   });
+
+  test("db compact preserves logical bytes and reports smaller source storage", async () => {
+    const dbPath = join(workDir, "compact.db");
+    const raw = JSON.stringify({ unknown: "retained 🙂 content\n".repeat(3000) });
+    const db = openDb(dbPath);
+    db.exec("INSERT INTO session(id, tool, source_session_id) VALUES (1, 'codex', 'compact')");
+    db.query("INSERT INTO message(session_id, seq, role, raw) VALUES (1, 0, 'user', ?1)").run(raw);
+    closeDb(db);
+
+    const result = await runCli(["--db", dbPath, "--json", "db", "compact"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ compressed: 1 });
+    expect(result.stderr).toContain("vacuuming archive");
+    const info = await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"]);
+    expect(info.code).toBe(0);
+    const row = JSON.parse(info.stdout) as {
+      sessions: number;
+      text_bytes: number;
+      compressed_messages: number;
+      raw_stored_bytes: number;
+    };
+    // db compact always skips source sync, even without the global --no-sync.
+    expect(row.sessions).toBe(1);
+    expect(row.text_bytes).toBe(Buffer.byteLength(raw));
+    expect(row.compressed_messages).toBe(1);
+    expect(row.raw_stored_bytes).toBeLessThan(row.text_bytes / 4);
+  });
 });
 
 describe("session rm", () => {

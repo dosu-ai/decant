@@ -26,6 +26,7 @@ import {
 } from "@letta-ai/trajectory";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { isObject, type JsonObject } from "../src/json.ts";
+import { MESSAGE_METADATA_SQL } from "../src/message-storage.ts";
 import { emptyUsage, type Json, type TokenUsage } from "../src/model.ts";
 import { reportedCostApplies } from "../src/model-usage.ts";
 import type {
@@ -1224,16 +1225,16 @@ function readDecantModelTotals(db: Database): ModelTotals[] {
   const groups = (
     db
       .query(
-        `SELECT COALESCE(json_extract(m.raw, '$.model.providerID'),
-                         json_extract(m.raw, '$.providerID')) AS provider,
+        `SELECT COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.model.providerID'),
+                         json_extract(${MESSAGE_METADATA_SQL}, '$.providerID')) AS provider,
                 m.model AS model,
                 COUNT(*) AS steps,
                 COALESCE(SUM(m.input_tokens), 0) AS input,
                 COALESCE(SUM(m.output_tokens), 0) AS output,
                 COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read,
                 COALESCE(SUM(m.cache_creation_tokens), 0) AS cache_write,
-                COALESCE(SUM(CASE WHEN json_extract(m.raw, '$.cost') > 0
-                                  THEN json_extract(m.raw, '$.cost') END), 0) AS recorded
+                COALESCE(SUM(CASE WHEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost') > 0
+                                  THEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost') END), 0) AS recorded
            FROM message m
            JOIN session s ON s.id = m.session_id
           WHERE s.tool = 'opencode' AND m.role = 'assistant' AND m.input_tokens IS NOT NULL

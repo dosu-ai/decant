@@ -11,6 +11,7 @@ import {
 } from "./cost.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { asInteger, asString, isObject } from "./json.ts";
+import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import { type CostSource, emptyUsage, type Json, type TokenUsage } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
@@ -76,10 +77,10 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const messages = queryRows<BilledMessageRow>(
     db,
     `SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-            CASE WHEN ?2 = 'claude_code' THEN json_extract(raw, '$.message.usage') END AS usage_json,
-            CASE WHEN ?2 = 'opencode' AND json_valid(raw) THEN json_extract(raw, '$.cost') END
+            CASE WHEN ?2 = 'claude_code' THEN json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage') END AS usage_json,
+            CASE WHEN ?2 = 'opencode' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost') END
               AS reported_cost
-       FROM message
+       FROM message m
       WHERE session_id = ?1
         AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL
              OR cache_read_tokens IS NOT NULL OR cache_creation_tokens IS NOT NULL)

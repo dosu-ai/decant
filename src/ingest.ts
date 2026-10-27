@@ -21,6 +21,7 @@ import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
+import { encodeMessageRaw, MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import {
   type IngestIssueCode,
   type Issue,
@@ -786,17 +787,17 @@ function resolveOpenCodeSpawnLinks(db: Database): void {
     db,
     `UPDATE session
         SET spawn_tool_use_id = (
-          SELECT COALESCE(json_extract(m.raw, '$.callID'), json_extract(m.raw, '$.id'))
+          SELECT COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.callID'), json_extract(${MESSAGE_METADATA_SQL}, '$.id'))
             FROM message m
             JOIN session parent ON parent.id = m.session_id
            WHERE parent.tool = 'opencode'
              AND parent.source_session_id = json_extract(session.raw_meta, '$.parentSessionId')
              AND m.role = 'tool'
-             AND json_valid(m.raw)
-             AND ((json_extract(m.raw, '$.name') = 'subagent'
-                   AND json_extract(m.raw, '$.state.metadata.sessionID') = session.source_session_id)
-               OR (COALESCE(json_extract(m.raw, '$.tool'), json_extract(m.raw, '$.name')) = 'task'
-                   AND json_extract(m.raw, '$.state.metadata.sessionId') = session.source_session_id))
+             AND json_valid(${MESSAGE_METADATA_SQL})
+             AND ((json_extract(${MESSAGE_METADATA_SQL}, '$.name') = 'subagent'
+                   AND json_extract(${MESSAGE_METADATA_SQL}, '$.state.metadata.sessionID') = session.source_session_id)
+               OR (COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.tool'), json_extract(${MESSAGE_METADATA_SQL}, '$.name')) = 'task'
+                   AND json_extract(${MESSAGE_METADATA_SQL}, '$.state.metadata.sessionId') = session.source_session_id))
            ORDER BY m.id
            LIMIT 1)
       WHERE tool = 'opencode'
@@ -898,8 +899,8 @@ export function resolveSubagentParents(db: Database): void {
     `SELECT s.id, s.source_session_id, s.raw_meta, s.source_path, s.spawn_tool_use_id,
               s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent, s.parent_session_id,
               s.tool,
-              (SELECT CASE WHEN json_valid(m.raw)
-                           THEN json_extract(m.raw, '$.isSidechain', '$.sessionId', '$.agentId')
+              (SELECT CASE WHEN json_valid(${MESSAGE_METADATA_SQL})
+                           THEN json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.sessionId', '$.agentId')
                       END
                FROM message m
                WHERE m.session_id = s.id
@@ -1508,9 +1509,9 @@ function writeSession(
   const insertMessage = db.prepare(
     `INSERT INTO message(
        session_id, seq, source_uuid, parent_source_uuid, role, model, stop_reason,
-       timestamp, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, raw
+       timestamp, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, raw, raw_meta, raw_bytes
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
   );
   const insertBlock = db.prepare(
     `INSERT INTO block(
@@ -1521,6 +1522,7 @@ function writeSession(
 
   try {
     for (const message of s.messages) {
+      const storedRaw = encodeMessageRaw(canonicalJson(message.raw), message.raw);
       const messageId = Number(
         insertMessage.run(
           sessionId,
@@ -1535,7 +1537,9 @@ function writeSession(
           message.usage?.output ?? null,
           message.usage?.cacheRead ?? null,
           message.usage?.cacheCreation ?? null,
-          canonicalJson(message.raw),
+          storedRaw.raw,
+          storedRaw.rawMeta,
+          storedRaw.rawBytes,
         ).lastInsertRowid,
       );
       messageIds.push(messageId);

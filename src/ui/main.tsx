@@ -40,7 +40,11 @@ import {
 } from "./report-export.tsx";
 import { readStorage, removeStorage, writeStorage } from "./safe-storage.ts";
 import { sessionPageFailure, useSessionPage } from "./session-page.ts";
-import { collectSliceResults } from "./slice-loading.ts";
+import {
+  collectSliceResults,
+  dateScopedSliceStatus,
+  loadSlicesIndependently,
+} from "./slice-loading.ts";
 import {
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
@@ -260,25 +264,29 @@ function App() {
       return;
     }
     let cancelled = false;
-    void Promise.allSettled(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
-      .then((results) => {
+    void loadSlicesIndependently<DataSlice, DashboardData>(
+      missing,
+      (slice) => SLICE_LOADERS[slice].load(dateQuery),
+      (slice, result) => {
         if (cancelled) {
           return;
         }
-        const settled = collectSliceResults<DataSlice, DashboardData>(missing, results);
+        const settled = collectSliceResults<DataSlice, DashboardData>([slice], [result]);
         setData((current) => ({ ...current, ...settled.data }));
-        for (const slice of settled.loaded) {
-          loadedSlicesRef.current.set(slice, sliceKey(slice));
+        for (const loaded of settled.loaded) {
+          loadedSlicesRef.current.set(loaded, sliceKey(loaded));
         }
-        const failures = settled.failures.map((failure) => failure.slice);
+        const failures = [
+          ...failedSlicesRef.current.filter((failed) => failed !== slice),
+          ...settled.failures.map((failure) => failure.slice),
+        ];
         failedSlicesRef.current = failures;
         setFailedSlices(failures);
-      })
-      .finally(() => {
-        if (!cancelled && missing.includes("recommendations")) {
+        if (slice === "recommendations") {
           setRecommendationsLoading(false);
         }
-      });
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -793,6 +801,7 @@ function App() {
                 reloadKey,
                 runSync,
                 failedSlices,
+                loadedSlices: loadedSlicesRef.current,
                 recommendationsLoading,
                 sessionPageState,
                 syncing: syncInProgress,
@@ -837,12 +846,19 @@ function renderView(
     reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
+    loadedSlices: ReadonlyMap<DataSlice, string>;
     recommendationsLoading: boolean;
     sessionPageState: SessionPageState;
     syncing: boolean;
   },
 ) {
   const pathname = pathOnly(path);
+  const sliceStatus = (slice: DataSlice) =>
+    dateScopedSliceStatus(
+      actions.loadedSlices.get(slice),
+      actions.failedSlices.includes(slice),
+      dateRangeQuery(actions.dateRange),
+    );
   if (isSessionDetailPath(pathname)) {
     return (
       <SessionDetailView
@@ -899,7 +915,10 @@ function renderView(
         <ToolsView
           data={data}
           dateRange={actions.dateRange}
+          mcpStatus={sliceStatus("mcp")}
           onDateRangeChange={actions.onDateRangeChange}
+          reloadKey={actions.reloadKey}
+          toolsStatus={sliceStatus("tools")}
         />
       );
     case "files":

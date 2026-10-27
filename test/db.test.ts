@@ -124,7 +124,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 26;
+const BASELINE_INDEX_COUNT = 27;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -351,6 +351,29 @@ describe("openDb", () => {
     expect(
       migrated.query("SELECT model, reported_cost_usd FROM session_model_usage").all(),
     ).toEqual([{ model: "claude-opus-5-5", reported_cost_usd: null }]);
+    closeDb(migrated);
+  });
+
+  test("upgrades a v26 archive without rewriting retained records", () => {
+    const path = freshPath();
+    const legacy = openDb(path);
+    const expected = buildSchemaManifest(legacy);
+    const raw = JSON.stringify({ unknown: "retained source content".repeat(1000) });
+    legacy.exec("INSERT INTO session(id, tool, source_session_id) VALUES (1, 'codex', 'kept')");
+    legacy.query("INSERT INTO message(id, session_id, seq, raw) VALUES (1, 1, 0, ?1)").run(raw);
+    legacy.exec(`ALTER TABLE message DROP COLUMN raw_meta;
+      ALTER TABLE message DROP COLUMN raw_bytes;
+      DROP INDEX idx_toolcall_usage;
+      DELETE FROM schema_migrations WHERE version > 26;`);
+    closeDb(legacy);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    expect(migrated.query("SELECT raw, raw_meta, raw_bytes FROM message").get()).toEqual({
+      raw,
+      raw_meta: null,
+      raw_bytes: null,
+    });
     closeDb(migrated);
   });
 

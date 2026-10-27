@@ -654,6 +654,93 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("duration percentiles count repeated values and ignore unknown durations", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model)
+      VALUES (1, 'codex', 'tied-duration', 'gpt-5');
+      INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, duration_ms)
+      VALUES (1, 'mcp', 'read', 'docs', 10),
+             (1, 'mcp', 'read', 'docs', 10),
+             (1, 'mcp', 'read', 'docs', 10),
+             (1, 'mcp', 'read', 'docs', 100),
+             (1, 'mcp', 'read', 'docs', NULL),
+             (1, 'mcp', 'write', 'docs', 100),
+             (1, 'mcp', 'write', 'docs', 100);
+    `);
+    expect(toolUsage(db, false)).toEqual([
+      expect.objectContaining({ tool_name: "read", calls: 5, p50_ms: 10, p95_ms: 100 }),
+      expect.objectContaining({ tool_name: "write", calls: 2, p50_ms: 100, p95_ms: 100 }),
+    ]);
+    expect(mcpUsage(db)).toEqual([
+      expect.objectContaining({ calls: 7, tools: 2, p50_ms: 10, p95_ms: 100 }),
+    ]);
+    db.close();
+  });
+
+  test("tool duration histograms match expanded nearest ranks without losing untimed calls", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model)
+      VALUES (1, 'codex', 'histogram-durations', 'gpt-5');
+    `);
+    const insert = db.prepare(`
+      INSERT INTO tool_call(session_id, tool_name, tool_kind, duration_ms, is_error, timestamp)
+      VALUES (1, ?, 'builtin', ?, ?, ?)
+    `);
+    const durations: number[] = [];
+    let errors = 0;
+    for (let index = 0; index < 103; index += 1) {
+      const duration = index % 5 === 0 ? null : index % 7;
+      const isError = index % 11 === 0 ? 1 : 0;
+      errors += isError;
+      insert.run(
+        index % 2 === 0 ? null : "",
+        duration,
+        isError,
+        `2026-05-${index < 102 ? "01" : "02"}`,
+      );
+      if (duration != null) {
+        durations.push(duration);
+      }
+    }
+    for (const duration of [0, 10, ...Array<number>(30).fill(20), 100]) {
+      insert.run("Skewed", duration, 0, null);
+    }
+    insert.run("Untimed", null, 1, "2026-05-03");
+    insert.finalize();
+    durations.sort((left, right) => left - right);
+
+    expect(toolUsage(db, false)).toEqual([
+      {
+        tool_name: "",
+        tool_kind: "builtin",
+        mcp_server: null,
+        calls: 103,
+        errors,
+        p50_ms: durations[Math.ceil(durations.length / 2) - 1],
+        p95_ms: durations[Math.ceil((durations.length * 95) / 100) - 1],
+        last_used_at: "2026-05-02",
+      },
+      expect.objectContaining({
+        tool_name: "Skewed",
+        calls: 33,
+        errors: 0,
+        p50_ms: 20,
+        p95_ms: 20,
+      }),
+      expect.objectContaining({
+        tool_name: "Untimed",
+        calls: 1,
+        errors: 1,
+        p50_ms: null,
+        p95_ms: null,
+      }),
+    ]);
+    expect(toolUsage(db, true)).toHaveLength(2);
+    db.close();
+  });
+
   test("session facets return a known row or null", () => {
     const db = seededEnriched();
     const id = (

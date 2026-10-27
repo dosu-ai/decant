@@ -1,3 +1,15 @@
+import { decodeMessageRaw } from "../src/message-storage.ts";
+
+/** Compare source records after decoding, independent of their storage codec. */
+export function decodeGoldenRows(rows: unknown[]): unknown[] {
+  return rows.map((row) => {
+    if (row != null && typeof row === "object" && "raw" in row && row.raw instanceof Uint8Array) {
+      return { ...row, raw: decodeMessageRaw(row.raw) };
+    }
+    return row;
+  });
+}
+
 /** Natural-key row snapshots shared by the parity test and golden regenerator. */
 export const ROW_QUERIES = {
   sessions: `

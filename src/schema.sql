@@ -1,5 +1,5 @@
--- decant:schema_version=26
--- Effective decant schema (migrations 1..26 applied), frozen as the current
+-- decant:schema_version=27
+-- Effective decant schema (migrations 1..27 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
@@ -7,6 +7,7 @@
 -- UNIQUE(tool, source_session_id). v25 splits each session's token usage by the
 -- model and price tier that served it, so mixed-model sessions price correctly.
 -- v26 keeps a source-reported cost per usage row for models Decant cannot price.
+-- v27 keeps query metadata beside compressed source records and indexes tool usage.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -96,7 +97,9 @@ CREATE TABLE message (
   output_tokens INTEGER,
   cache_read_tokens INTEGER,
   cache_creation_tokens INTEGER,
-  raw TEXT NOT NULL
+  raw TEXT NOT NULL,
+  raw_meta TEXT,
+  raw_bytes INTEGER
 );
 CREATE TABLE block (
   id INTEGER PRIMARY KEY,
@@ -247,6 +250,7 @@ CREATE INDEX idx_fileref_message ON file_ref(message_id);
 CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
 CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
+CREATE INDEX idx_toolcall_usage ON tool_call(session_id, tool_name, tool_kind, mcp_server, is_error, duration_ms, timestamp);
 CREATE INDEX idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use';
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,

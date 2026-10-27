@@ -36,7 +36,7 @@ import { parseCodexSession } from "../src/sources/codex.ts";
 import { block } from "../src/sources/shared.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
-import { ROW_QUERIES } from "./golden-rows.ts";
+import { decodeGoldenRows, ROW_QUERIES } from "./golden-rows.ts";
 import {
   buildOpenCodeDb,
   buildOpenCodeFixtureDb,
@@ -2417,7 +2417,9 @@ describe("sync", () => {
     expect(report).toMatchObject({ scanned: 13, ingested: 13, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
-      expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
+      expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
+        await golden(`rows/${name}.json`),
+      );
     }
 
     db.exec(`

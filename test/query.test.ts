@@ -1044,6 +1044,36 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("tool-call pages retain timestamp and id ordering with large input payloads", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model)
+      VALUES (1, 'codex', 'paged-large-input', 'gpt-5');
+    `);
+    const input = `${"payload ".repeat(20_000)}end-of-input`;
+    const insert = db.prepare(`
+      INSERT INTO tool_call(session_id, tool_kind, tool_name, input, duration_ms, timestamp)
+      VALUES (1, 'builtin', 'Read', ?, ?, ?)
+    `);
+    for (let id = 1; id <= 6; id += 1) {
+      insert.run(input, id, id < 3 ? null : "2026-05-01T10:00:00Z");
+    }
+    insert.finalize();
+
+    const first = listToolCalls(db, { limit: 2 });
+    const second = listToolCalls(db, { limit: 2, offset: 2 });
+    const last = listToolCalls(db, { limit: 2, offset: 4 });
+    expect(first.calls.map((call) => call.id)).toEqual([6, 5]);
+    expect(second.calls.map((call) => call.id)).toEqual([4, 3]);
+    expect(last.calls.map((call) => call.id)).toEqual([2, 1]);
+    expect(first.calls[0]?.input_preview).toEndWith("end-of-input");
+    expect(first.calls[0]?.input_preview?.length).toBeLessThan(600);
+    expect(first.summary).toEqual({ calls: 6, errors: 0, p50_ms: 3, p95_ms: 6 });
+    expect(last.total).toBe(6);
+    expect(last.summary).toBeNull();
+    db.close();
+  });
+
   test("tool-call summary shares the usage tables' session-start date scope", () => {
     const db = freshDb();
     db.exec(`

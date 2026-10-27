@@ -1,4 +1,4 @@
-// Every JSON TEXT column in the archive (`message.raw`, `session.raw_meta`,
+// Every JSON value in the archive (`message.raw` before lossless compression, `session.raw_meta`,
 // `block.tool_input`, stringified unknown blocks) is stored with recursively
 // sorted keys and compact separators, so the same record always serializes to
 // the same bytes and goldens can compare it directly. JSON.stringify supplies

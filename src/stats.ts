@@ -235,7 +235,8 @@ function statsScope(
 export function durationRankSql(partitionBy?: string): string {
   const partition = partitionBy == null ? "" : `PARTITION BY ${partitionBy}`;
   return `ROW_NUMBER() OVER (${partition} ORDER BY duration_ms) AS duration_rank,
-                COUNT(*) OVER (${partition}) AS duration_count`;
+                COUNT(*) OVER (${partition} ORDER BY duration_ms
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS duration_count`;
 }
 
 /** Aggregate columns picking p50 and p95 out of a durationRankSql relation. */
@@ -245,6 +246,26 @@ export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
                 END) AS p50_ms,
                 MAX(CASE
                   WHEN duration_rank = CAST((duration_count * 95 + 99) / 100 AS INTEGER)
+                  THEN duration_ms
+                END) AS p95_ms`;
+
+/** Rank a histogram by the number of calls represented by each duration, so
+ * repeated elapsed times do not need a window row for every individual call. */
+function durationHistogramRankSql(partitionBy: string): string {
+  return `SUM(frequency) OVER (PARTITION BY ${partitionBy} ORDER BY duration_ms
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_count,
+                SUM(frequency) OVER (PARTITION BY ${partitionBy} ORDER BY duration_ms
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS duration_count`;
+}
+
+// The first histogram bucket reaching each nearest rank contains the same
+// duration as that position in the fully expanded, sorted call population.
+const HISTOGRAM_PERCENTILES_SQL = `MIN(CASE
+                  WHEN cumulative_count >= CAST((duration_count + 1) / 2 AS INTEGER)
+                  THEN duration_ms
+                END) AS p50_ms,
+                MIN(CASE
+                  WHEN cumulative_count >= CAST((duration_count * 95 + 99) / 100 AS INTEGER)
                   THEN duration_ms
                 END) AS p95_ms`;
 
@@ -276,32 +297,40 @@ export function toolUsage(
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
   const statement = db.prepare(
-    `WITH scoped AS MATERIALIZED (
+    `WITH scoped AS (
          SELECT COALESCE(t.tool_name, '') AS tool_name,
                 COALESCE(t.tool_kind, '') AS tool_kind,
                 t.mcp_server, t.is_error,
                 t.duration_ms, t.timestamp
-         FROM tool_call t
+         FROM tool_call t INDEXED BY idx_toolcall_usage
          ${scope}
+       ),
+       histogram AS MATERIALIZED (
+         SELECT tool_name, tool_kind, mcp_server, duration_ms,
+                COUNT(*) AS frequency,
+                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
+                MAX(timestamp) AS last_used_at
+         FROM scoped
+         GROUP BY tool_name, tool_kind, mcp_server, duration_ms
        ),
        ranked AS (
          SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                ${durationRankSql("tool_name, tool_kind, mcp_server")}
-         FROM scoped
+                ${durationHistogramRankSql("tool_name, tool_kind, mcp_server")}
+         FROM histogram
          WHERE duration_ms IS NOT NULL
        ),
        latency AS (
          SELECT tool_name, tool_kind, mcp_server,
-                ${NEAREST_RANK_PERCENTILES_SQL}
+                ${HISTOGRAM_PERCENTILES_SQL}
          FROM ranked
          GROUP BY tool_name, tool_kind, mcp_server
        ),
        aggregate AS (
          SELECT tool_name, tool_kind, mcp_server,
-                COUNT(*) AS calls,
-                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
-                MAX(timestamp) AS last_used_at
-         FROM scoped
+                SUM(frequency) AS calls,
+                SUM(errors) AS errors,
+                MAX(last_used_at) AS last_used_at
+         FROM histogram
          GROUP BY tool_name, tool_kind, mcp_server
        )
        SELECT a.tool_name, a.tool_kind, a.mcp_server, a.calls, a.errors,
@@ -352,7 +381,7 @@ export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | nu
        ),
        scoped AS (
          SELECT t.mcp_server, t.tool_name, t.is_error, t.duration_ms, t.timestamp
-         FROM tool_call t
+         FROM tool_call t INDEXED BY idx_toolcall_usage
          JOIN filtered_session s ON s.id = t.session_id
          WHERE t.tool_kind = 'mcp' AND t.mcp_server IS NOT NULL
        ),

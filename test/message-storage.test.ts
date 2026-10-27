@@ -179,3 +179,21 @@ describe("message source storage", () => {
     }
   });
 });
+
+describe("SQL readers of message source records", () => {
+  test("read metadata through MESSAGE_METADATA_SQL instead of the raw column", async () => {
+    // Compacted rows hold a zstd BLOB in raw, where json_extract raises
+    // "malformed JSON" and json_valid returns 0. Only raw_meta is queryable.
+    const root = join(import.meta.dir, "..");
+    const offenders: string[] = [];
+    for (const pattern of ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"]) {
+      for await (const file of new Bun.Glob(pattern).scan(root)) {
+        const source = readFileSync(join(root, file), "utf8");
+        for (const match of source.matchAll(/json_\w+\(\s*(?:\w+\.)?raw\s*[,)]/g)) {
+          offenders.push(`${file}: ${match[0]}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

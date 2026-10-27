@@ -81,7 +81,9 @@ sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Watch mode
 combines native filesystem events with a periodic sweep so missed notifications
-do not leave the archive stale. OpenCode database directories are watched
+do not leave the archive stale. Events are debounced so a burst of writes becomes
+one sync, and a log an agent keeps writing still syncs about every 5 seconds
+instead of waiting for the agent to pause. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
@@ -250,9 +252,21 @@ Read commands normally sync first. `decant serve` performs a startup sync and
 then watches the configured source directories.
 
 The web UI shows the startup sync's progress and loads its results as soon as
-it finishes, so a first launch fills the dashboard without a manual sync. Later
-watcher and sweep syncs only light the **Update** button, so new activity never
-reshuffles a page while you are reading it.
+it finishes, so a first launch fills the dashboard without a manual sync.
+
+Later watcher and sweep syncs refresh the first page of **Sessions** in place
+when it has no project, archive, or text filter. The date range doesn't matter,
+so a past range refreshes too, though its rows rarely change. New sessions
+appear at the top within a few seconds, without a click, and the table keeps
+its rows on screen instead of dropping back to a loading skeleton while it
+reloads. These refreshes run at most once every five seconds while an agent is
+busy writing its log. They also wait while you are scrolled down the list or
+the tab is hidden, because new rows at the top would push your place down the
+page. **Update** lights instead, and the list catches up once you scroll back
+to the top. If a refresh fails, the rows stay up under a notice with a
+**Retry** button. Everywhere else, including later pages, filtered lists,
+transcripts, and analytics, background activity only lights the **Update**
+button, so it never reshuffles a page while you are reading it.
 
 Set `DECANT_NO_SYNC` or pass `--no-sync` to suppress syncs Decant starts on its
 own. With `serve`, this also disables the source watcher. It does not disable an

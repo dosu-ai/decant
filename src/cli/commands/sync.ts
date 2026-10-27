@@ -129,7 +129,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
-      "filesystem event debounce window",
+      "quiet period before file events sync (a busy log still syncs every 5s)",
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )
@@ -181,7 +181,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
-      "filesystem event debounce window",
+      "quiet period before file events sync (a busy log still syncs every 5s)",
       parseInteger,
       DEFAULT_DEBOUNCE_MS,
     )

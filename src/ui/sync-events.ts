@@ -1,9 +1,17 @@
+import {
+  pathOnly,
+  sessionIncludesArchived,
+  sessionPageFromPath,
+  sessionProjectFilter,
+} from "./navigation.ts";
+
 /**
  * Whether the UI should show a sync's progress and load its results without
  * waiting for the user. Manual syncs were asked for, and the startup sync runs
  * while the page is first opening, so nobody is mid-read; on a fresh install it
  * is the sync that fills an empty archive. Watcher and sweep syncs stay
  * deferred so background activity never reshuffles a page someone is reading.
+ * The unfiltered Sessions list is the one exception (see sessionsAutoRefresh).
  */
 export function isForegroundSync(reason: string | undefined): boolean {
   return reason === "manual" || reason === "startup";
@@ -43,6 +51,75 @@ export function planArchiveUpdate(
   // sync button "Load new activity" mid-sync, as the boot-time stats rebuild
   // does during a first launch's startup sync.
   return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
+}
+
+/**
+ * Minimum gap between automatic Sessions refreshes. An agent mid-run appends to
+ * its log every few seconds, and each watcher sync is followed by a stats
+ * rebuild, so without a floor the list would reload on nearly every event.
+ */
+export const LIVE_SESSIONS_REFRESH_MS = 5_000;
+
+/**
+ * Whether a background archive change reloads the Sessions list in place
+ * instead of lighting Update. Only the unfiltered first page qualifies. It is
+ * newest first, so new sessions land at the top of what is already on screen.
+ * Later pages would shift rows between pages, and a project, archive, or text
+ * filter is a narrowed view someone is working through. The command palette
+ * covers the list and would reload its own index on every refresh.
+ */
+export function sessionsAutoRefresh({
+  path,
+  textFilterActive,
+  paletteOpen,
+}: {
+  path: string;
+  textFilterActive: boolean;
+  paletteOpen: boolean;
+}): boolean {
+  return (
+    pathOnly(path) === "/sessions" &&
+    sessionPageFromPath(path) === 1 &&
+    sessionProjectFilter(path) == null &&
+    !sessionIncludesArchived(path) &&
+    !textFilterActive &&
+    !paletteOpen
+  );
+}
+
+export type LiveSessionsAction = "refresh" | "offer_update" | "none";
+
+/**
+ * How far down the window can be scrolled and still take a live refresh. The
+ * Sessions panel turns off scroll anchoring, so rows inserted at the top push
+ * everything below them down, which only goes unnoticed near the top.
+ */
+export const LIVE_SESSIONS_TOP_PX = 64;
+
+export interface LiveSessionsViewer {
+  /** Whether the window is scrolled within LIVE_SESSIONS_TOP_PX of the top. */
+  nearTop: boolean;
+  /** Whether the tab is visible. A hidden tab has no reader to keep current. */
+  visible: boolean;
+}
+
+/**
+ * What a throttled Sessions refresh does when it comes due. The page may have
+ * changed since the change was queued, so a view that no longer qualifies
+ * gets Update instead and the change is not lost. The same goes for a reader
+ * scrolled down the list and for a hidden tab, which load it once they are
+ * back at the top. A running foreground sync refreshes the page itself when it
+ * finishes.
+ */
+export function liveSessionsAction(
+  autoRefresh: boolean,
+  foregroundSyncRunning: boolean,
+  viewer: LiveSessionsViewer,
+): LiveSessionsAction {
+  if (foregroundSyncRunning) {
+    return "none";
+  }
+  return autoRefresh && viewer.nearTop && viewer.visible ? "refresh" : "offer_update";
 }
 
 export interface SyncFailure {

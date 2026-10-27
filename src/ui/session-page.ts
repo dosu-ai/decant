@@ -20,6 +20,52 @@ export function rememberSessionPage(
   }
 }
 
+/**
+ * Chooses the rows to show for a page request. A reload of the same scope
+ * (Update, a finished sync, or a live Sessions refresh) keeps the rows already
+ * on screen until the new page arrives, so the table never drops back to a
+ * skeleton while someone is reading it. Re-showing the requested page's own
+ * rows is not loading, but another page's rows still are, so pagination stays
+ * busy until the page asked for arrives. Rows from a different scope (date
+ * range, project, archive toggle) are never shown.
+ */
+export function sessionPageView({
+  cached,
+  currentError,
+  enabled,
+  page,
+  scopeKey,
+  settled,
+}: {
+  cached: LoadedSessionPage | null;
+  currentError: unknown;
+  enabled: boolean;
+  page: number;
+  scopeKey: string;
+  settled: LoadedSessionPage | null;
+}): { loading: boolean; refreshing: boolean; visible: LoadedSessionPage | null } {
+  const visible = cached ?? (settled?.scopeKey === scopeKey ? settled : null);
+  const revalidating = cached == null && visible?.page === page;
+  const fetching = enabled && cached == null && currentError == null;
+  return { loading: fetching && !revalidating, refreshing: fetching && revalidating, visible };
+}
+
+/**
+ * How a failed page load shows. A failed reload of the page already on screen,
+ * such as a live refresh that hit a transient error, keeps those rows under a
+ * notice instead of replacing what someone is reading with an error screen.
+ * Any other failure has no rows of its own to show.
+ */
+export function sessionPageFailure(
+  state: Pick<SessionPageState, "error" | "loadedPage" | "sessions">,
+  page: number,
+): "notice" | "replace" | null {
+  if (state.error == null) {
+    return null;
+  }
+  return state.loadedPage === page && state.sessions.length > 0 ? "notice" : "replace";
+}
+
 export function useSessionPage({
   dateQuery,
   enabled,
@@ -40,12 +86,18 @@ export function useSessionPage({
     failed: { error: unknown; requestKey: string } | null;
     loaded: LoadedSessionPage | null;
   }>({ failed: null, loaded: null });
-  const scopeKey = JSON.stringify([dateQuery, project, includeArchived, reloadKey]);
-  const requestKey = `${scopeKey}:${page}`;
+  const scopeKey = JSON.stringify([dateQuery, project, includeArchived]);
+  const requestKey = `${scopeKey}:${page}:${reloadKey}`;
   const cached = cacheRef.current.get(requestKey) ?? null;
-  const visible = cached ?? (settled.loaded?.scopeKey === scopeKey ? settled.loaded : null);
   const currentError = settled.failed?.requestKey === requestKey ? settled.failed.error : null;
-  const loading = enabled && cached == null && currentError == null;
+  const { loading, refreshing, visible } = sessionPageView({
+    cached,
+    currentError,
+    enabled,
+    page,
+    scopeKey,
+    settled: settled.loaded,
+  });
 
   useEffect(() => {
     if (!enabled || cacheRef.current.has(requestKey)) {
@@ -91,6 +143,7 @@ export function useSessionPage({
     exhausted: visible?.exhausted ?? false,
     loadedPage: visible?.page ?? null,
     loading,
+    refreshing,
     sessions: visible?.sessions ?? [],
   };
 }

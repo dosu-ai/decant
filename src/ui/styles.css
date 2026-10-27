@@ -1993,8 +1993,10 @@ table {
   min-width: 1080px;
 }
 
+/* The fixed columns at the narrowest tier (784px) plus the 280px title floor.
+ * Below this the table scrolls instead of squeezing the title. */
 .sessions-table {
-  min-width: 1280px;
+  min-width: 1064px;
 }
 
 .sessions-panel {
@@ -2002,14 +2004,20 @@ table {
   overflow-anchor: none;
 }
 
+.sessions-panel .table-scroll {
+  container: sessions-table / inline-size;
+}
+
 /* The data-table layout is fixed, so column widths come from measured content
- * instead of fixed percentages. Text columns take the slack, badges and
- * numbers keep their natural width, and percent widths stop squeezing badges
- * into clipped mid-character states like "la-hig" and "claude-opus-4-…".
- * Widths come from rendered scrollWidth audits plus cell padding; widen with
- * the audit, not by eye. */
+ * instead of fixed percentages. Title is the only auto column and takes the
+ * slack, badges and numbers keep their natural width, and percent widths stop
+ * squeezing badges into clipped mid-character states like "la-hig" and
+ * "claude-opus-4-…". Widths come from rendered audits of the widest archived
+ * value plus 20px of cell padding ("OpenCode" with the disclosure,
+ * claude-sonnet-5-5, "thinking on", "226 +$927.50", "47,662", "$1,124.88",
+ * "Oct 18, 12:04 PM"); widen with the audit, not by eye. */
 .sessions-table .col-session-tool {
-  width: 152px;
+  width: 144px;
 }
 
 .sessions-table .col-session-title {
@@ -2021,33 +2029,61 @@ table {
 }
 
 .sessions-table .col-session-model {
-  width: 184px;
+  width: 180px;
   min-width: 0;
 }
 
 .sessions-table .col-session-effort {
-  width: 128px;
+  width: 120px;
 }
 
-.sessions-table .col-session-context,
+.sessions-table .col-session-context {
+  width: 72px;
+}
+
 .sessions-table .col-session-compactions {
-  width: 84px;
+  width: 60px;
 }
 
 .sessions-table .col-session-subagents {
-  width: 124px;
+  width: 112px;
 }
 
 .sessions-table .col-session-count {
-  width: 64px;
+  width: 72px;
 }
 
 .sessions-table .col-session-cost {
-  width: 84px;
+  width: 92px;
 }
 
 .sessions-table .col-session-started {
-  width: 104px;
+  width: 136px;
+}
+
+/* Every column fits only on wide screens, so narrower panels drop the
+ * per-session detail columns before the title falls below 280px. Each
+ * breakpoint is the visible fixed width plus that floor. The session detail
+ * page still shows effort, context, compactions, and subagents. The class sits
+ * on the col, th, and td so one rule removes the whole column. */
+@container sessions-table (width < 1428px) {
+  .sessions-table .col-session-effort,
+  .sessions-table .col-session-context,
+  .sessions-table .col-session-compactions {
+    display: none;
+  }
+}
+
+@container sessions-table (width < 1176px) {
+  .sessions-table .col-session-subagents {
+    display: none;
+  }
+}
+
+.sessions-empty {
+  margin: 0;
+  padding: 14px 10px;
+  font-size: 14px;
 }
 
 .active-filter-row {

@@ -40,6 +40,7 @@ export function SessionsView({
   data,
   dateRange,
   onDateRangeChange,
+  onTextFilterChange,
   path,
   reloadKey,
   sessionPageState,
@@ -47,6 +48,7 @@ export function SessionsView({
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
+  onTextFilterChange?: (active: boolean) => void;
   path: string;
   reloadKey: number;
   sessionPageState: SessionPageState;
@@ -60,7 +62,7 @@ export function SessionsView({
     ids: Set<number>;
     key: string;
   }>(() => ({ ids: new Set(), key: "" }));
-  const { exhausted, loadedPage, loading, sessions } = sessionPageState;
+  const { exhausted, loadedPage, loading, refreshing, sessions } = sessionPageState;
   const filtered = filterSessions(sessions, query);
   const project = sessionProjectFilter(path);
   const includeArchived = sessionIncludesArchived(path);
@@ -99,6 +101,19 @@ export function SessionsView({
     loadedRows: sessions.length,
     query,
   });
+  const textFilterActive = query.trim() !== "";
+  const emptyMessage =
+    waitingForSessions || filtered.length > 0
+      ? null
+      : textFilterActive
+        ? "No sessions match that filter."
+        : displayedPage > 1
+          ? "No sessions on this page."
+          : "No sessions ingested yet.";
+
+  useEffect(() => {
+    onTextFilterChange?.(textFilterActive);
+  }, [onTextFilterChange, textFilterActive]);
 
   useEffect(() => {
     if (scopedSummaryRequest == null) {
@@ -176,7 +191,7 @@ export function SessionsView({
         <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
       </div>
 
-      <section aria-busy={pageLoading} className="panel sessions-panel">
+      <section aria-busy={pageLoading || refreshing} className="panel sessions-panel">
         <div className="panel-heading">
           <div>
             <h2>Sessions</h2>
@@ -235,10 +250,10 @@ export function SessionsView({
                 <th>Title</th>
                 <th>Project</th>
                 <th>Model</th>
-                <th>Effort</th>
-                <th className="numeric">Peak ctx</th>
-                <th className="numeric">Comp.</th>
-                <th className="numeric">Subagents</th>
+                <th className="col-session-effort">Effort</th>
+                <th className="numeric col-session-context">Peak ctx</th>
+                <th className="numeric col-session-compactions">Comp.</th>
+                <th className="numeric col-session-subagents">Subagents</th>
                 <th className="numeric">Msgs</th>
                 <th className="numeric">Cost</th>
                 <th className="numeric">Started</th>
@@ -246,21 +261,14 @@ export function SessionsView({
             </thead>
             <tbody>
               {waitingForSessions ? <SessionTableSkeletonRows /> : null}
-              {!waitingForSessions && filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={11}>
-                    {query.trim() !== ""
-                      ? "No sessions match that filter."
-                      : displayedPage > 1
-                        ? "No sessions on this page."
-                        : "No sessions ingested yet."}
-                  </td>
-                </tr>
-              ) : null}
               {!waitingForSessions ? filtered.flatMap((session) => renderRows(session)) : null}
             </tbody>
           </table>
         </div>
+        {/* Outside the table because a full-width row would have to span the
+         * columns that narrow panels hide, and those phantom columns would
+         * squeeze the visible header. */}
+        {emptyMessage == null ? null : <p className="sessions-empty">{emptyMessage}</p>}
         <div className="panel-footer">
           <span>
             {sessionsCaption(
@@ -325,16 +333,16 @@ export function SessionTableSkeletonRows() {
       <td>
         <span className="skeleton-line table-skeleton-line model" />
       </td>
-      <td>
+      <td className="col-session-effort">
         <span className="skeleton-line table-skeleton-line effort" />
       </td>
-      <td className="numeric">
+      <td className="numeric col-session-context">
         <span className="skeleton-line table-skeleton-line number" />
       </td>
-      <td className="numeric">
+      <td className="numeric col-session-compactions">
         <span className="skeleton-line table-skeleton-line number" />
       </td>
-      <td className="numeric">
+      <td className="numeric col-session-subagents">
         <span className="skeleton-line table-skeleton-line number" />
       </td>
       <td className="numeric">
@@ -471,7 +479,7 @@ export const SessionTableRow = memo(function SessionTableRow({
       <td>
         <ModelBadge model={session.model} />
       </td>
-      <td>
+      <td className="col-session-effort">
         <ReasoningBadge
           effort={session.reasoning_effort}
           levels={session.reasoning_effort_levels}
@@ -479,11 +487,13 @@ export const SessionTableRow = memo(function SessionTableRow({
           reasoningSource={session.reasoning_source}
         />
       </td>
-      <td className="numeric">
+      <td className="numeric col-session-context">
         <SessionContextPeak session={session} />
       </td>
-      <td className="numeric muted">{formatInt(session.compaction_count)}</td>
-      <td className="numeric">
+      <td className="numeric muted col-session-compactions">
+        {formatInt(session.compaction_count)}
+      </td>
+      <td className="numeric col-session-subagents">
         <SubagentRollup session={session} />
       </td>
       <td className="numeric muted">{formatInt(session.message_count)}</td>

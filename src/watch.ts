@@ -20,6 +20,10 @@ import {
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
+/** An agent mid-run can append to its log faster than the debounce window, and
+ * each event restarts the window, so without a cap its session stays out of
+ * the archive until it pauses or the sweep runs. */
+export const DEFAULT_DEBOUNCE_MAX_WAIT_MS = 5_000;
 /** OpenCode's live appends raise no file event (see `openCodeEvents`), so its
  * databases are also checked by file signature on this interval. */
 export const DEFAULT_OPENCODE_POLL_MS = 2_000;
@@ -97,6 +101,9 @@ export interface WatchOptions {
   config: Config;
   intervalMs?: number;
   debounceMs?: number;
+  /** Longest a burst of events can hold off a sync. It is never shorter than
+   * debounceMs. */
+  debounceMaxWaitMs?: number;
   signal?: AbortSignal;
   onEvent?: (event: WatchEvent) => void;
   open?: (path: string) => Database;
@@ -387,6 +394,10 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const dirs = roots.map((root) => root.dir);
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const debounceMaxWaitMs = Math.max(
+    options.debounceMaxWaitMs ?? DEFAULT_DEBOUNCE_MAX_WAIT_MS,
+    debounceMs,
+  );
   const open = options.open ?? openDb;
   const runner: SyncRunner =
     options.runner ??
@@ -399,6 +410,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const watchers: FSWatcher[] = [];
   let stopped = false;
   let debounceTimer: Timer | null = null;
+  let debounceDeadline: number | null = null;
   let intervalTimer: Timer | null = null;
   let pollTimer: Timer | null = null;
   let running = false;
@@ -427,10 +439,16 @@ export function startWatch(options: WatchOptions): WatchHandle {
       if (debounceTimer != null) {
         clearTimeout(debounceTimer);
       }
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
-        requestRun(reason);
-      }, delay);
+      const now = Date.now();
+      debounceDeadline ??= now + debounceMaxWaitMs;
+      debounceTimer = setTimeout(
+        () => {
+          debounceTimer = null;
+          debounceDeadline = null;
+          requestRun(reason);
+        },
+        Math.max(0, Math.min(delay, debounceDeadline - now)),
+      );
       return;
     }
     requestRun(reason);
@@ -496,6 +514,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
     if (debounceTimer != null) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
+      debounceDeadline = null;
     }
     if (intervalTimer != null) {
       clearInterval(intervalTimer);

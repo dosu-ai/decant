@@ -117,6 +117,12 @@ The default loopback listener is unauthenticated. A broad bind must pass the
 trusted-peer source-address guard; `Host` and browser-origin checks are defense
 in depth, not credentials. The app never adds an outbound runtime dependency.
 
+Dashboard requests publish their results independently, so available data can
+render while another slice is still loading. Tools aggregates scan a covering
+index of call metadata rather than reading tool inputs and output previews.
+The call browser selects its page of IDs before fetching transcript payloads,
+keeping page reads bounded even when individual inputs are large.
+
 ## Change map
 
 - New source format: parser, synthetic fixtures, ingest tests, and goldens.

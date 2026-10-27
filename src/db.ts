@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 26;
+export const LATEST_SCHEMA_VERSION = 27;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -758,6 +758,21 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (26, datetime('now'))",
+      ).run();
+    }
+    if (current < 27) {
+      // Large source records can be stored as zstd BLOBs. Metadata remains
+      // ordinary JSON so analytics never need to decompress the transcript.
+      if (!hasColumn(db, "message", "raw_meta")) {
+        db.exec("ALTER TABLE message ADD COLUMN raw_meta TEXT");
+      }
+      if (!hasColumn(db, "message", "raw_bytes")) {
+        db.exec("ALTER TABLE message ADD COLUMN raw_bytes INTEGER");
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_toolcall_usage
+        ON tool_call(session_id, tool_name, tool_kind, mcp_server, is_error, duration_ms, timestamp)`);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (27, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

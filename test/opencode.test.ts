@@ -514,7 +514,7 @@ describe("parseOpenCodeSession", () => {
     expect(corrected.messages[2]?.usage).toMatchObject({ output: 12, reasoning: 4 });
     // The migrated row's own tokens say 0 reasoning; the 1.x steps say 5.
     expect(corrected.messages[0]?.raw).toMatchObject({ reasoning_tokens: 5 });
-    expect((corrected.messages[1]?.raw as { cost: number }).cost).toBe(0.000065);
+    expect((corrected.messages[1]!.raw as { cost: number }).cost).toBe(0.000065);
     expect(corrected.rawMeta).toMatchObject({ migrated_rows_from_v1: 2 });
 
     // A 1.x copy with no messages corrects nothing: every row is read by the

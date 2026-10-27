@@ -7,6 +7,15 @@ const main = readUiSource();
 const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
 describe("Tools and MCP presentation", () => {
+  test("archive refreshes reload call rows and both summary request paths", () => {
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
+    expect(readUiFile("main.tsx")).toContain("reloadKey={actions.reloadKey}");
+    expect(tools).toContain("[callQuery, locationFilters.offset, reloadKey, summaryScopeKey]");
+    expect(tools).toContain(
+      "[laterCallPage, reloadKey, summaryNeedsRefresh, summaryQuery, summaryScopeKey]",
+    );
+    expect(tools).toContain("toolSummaryNeedsRefresh(savedSummary, summaryScopeKey, reloadKey)");
+  });
   test("the detail header can shrink so a long MCP tool name cannot push the close button out", () => {
     const header = sourceBetween(styles, ".tool-detail-heading {", ".tool-detail-elision {");
     expect(header).toContain("min-width: 0");
@@ -75,7 +84,7 @@ describe("Tools and MCP presentation", () => {
     expect(tools.match(/<colgroup>/g)).toHaveLength(3);
     expect(tools.match(/style=\{\{ width: `\$\{column\.width\}%` \}\}/g)).toHaveLength(3);
     expect(tools).toContain('<table className="data-table mcp-table">');
-    expect(tools).toContain('<table className="data-table tools-table">');
+    expect(tools).toContain('className="data-table tools-table"');
     expect(tools).toContain('<table className="data-table tool-calls-table">');
     expect(tools).not.toContain("has-duration");
     expect(tools).toMatch(

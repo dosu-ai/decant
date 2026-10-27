@@ -259,24 +259,24 @@ describe("server sync coordination", () => {
     await expect(coordinator.run(config)).rejects.toThrow("sync coordinator is closed");
   });
 
-  test.each([
-    "SQLITE_BUSY_SNAPSHOT",
-    "SQLITE_LOCKED_SHAREDCACHE",
-  ])("maps extended SQLite contention code %s to a retryable service response", async (code) => {
-    const response = await handleRequest(
-      new Request("http://127.0.0.1:3000/api/analytics/token-economics"),
-      freshConfig(),
-      {
-        economics: {
-          get: () => Promise.reject(Object.assign(new Error("temporary contention"), { code })),
-        } as never,
-      },
-    );
+  test.each(["SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED_SHAREDCACHE"])(
+    "maps extended SQLite contention code %s to a retryable service response",
+    async (code) => {
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/analytics/token-economics"),
+        freshConfig(),
+        {
+          economics: {
+            get: () => Promise.reject(Object.assign(new Error("temporary contention"), { code })),
+          } as never,
+        },
+      );
 
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      code: "archive_locked",
-      retryable: true,
-    });
-  });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        code: "archive_locked",
+        retryable: true,
+      });
+    },
+  );
 });

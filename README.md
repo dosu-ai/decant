@@ -121,6 +121,7 @@ decant export 1 > session.md   # export a session
 decant db info                 # what the archive holds and where
 decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
+decant db compact              # losslessly compress stored source records
 ```
 
 Run `decant --help` or `decant <command> --help` for all commands and flags.

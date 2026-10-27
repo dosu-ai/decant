@@ -126,7 +126,7 @@ that duplicate retained messages or contain only stream metadata.
 
 | What it holds | Columns |
 | --- | --- |
-| The full source record for every retained transcript message, canonicalized as JSON | `message.raw` |
+| The full source record for every retained transcript message, canonicalized as JSON and optionally compressed losslessly | `message.raw` |
 | Prompt, response, and reasoning text | `block.text` |
 | A display title, normally the first 120 characters of the opening prompt or a provider title | `session.title` |
 | Tool arguments, including shell commands, file paths, and patch bodies | `block.tool_input`, `tool_call.input` |
@@ -138,6 +138,18 @@ that duplicate retained messages or contain only stream metadata.
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
 indexed. `block.tool_result` and `message.raw` are stored but not searchable,
 which makes them harder to find, not absent.
+
+Large source records use standard Zstandard BLOBs in `message.raw` when the
+compressed record and its metadata take less space than the original JSON.
+Small records stay as JSON text. Compression preserves the complete canonical
+JSON, including fields Decant does not recognize. It does not truncate or redact
+content. Normalized transcript blocks and the full-text index stay unchanged.
+
+For compressed records, `message.raw_meta` holds the small JSON projection that
+transcript and accounting queries need, and `message.raw_bytes` records the
+original UTF-8 byte count. These queries read the projection without inflating
+the full source record. Code reading complete source records should use
+`decodeMessageRaw` from `src/message-storage.ts` for both TEXT and BLOB rows.
 
 There is no redaction step. Decant does not detect, mask, or strip secrets,
 tokens, keys, or personal data. Whatever your agents read, and whatever was
@@ -174,6 +186,34 @@ holds. It prints no transcript content.
 decant db info
 decant db info --full   # adds fts_rows and text_bytes: a full scan, slow on a large archive
 ```
+
+`--full` also reports `compressed_messages` and `raw_stored_bytes`. The latter
+counts stored source-record bytes plus their metadata. `text_bytes` still
+counts the original uncompressed source records and normalized transcript text.
+
+### Compressing an existing archive
+
+New and changed sessions use lossless source-record compression when they are
+ingested. Opening an existing archive adds the storage columns without
+rewriting its retained records. Compress those records explicitly with
+
+```sh
+decant --no-sync db compact
+```
+
+Stop any running Decant server before upgrading and compacting the archive,
+then restart it with the new build. A process running an older build cannot
+read compressed source records. Keep a consistent backup before maintaining a
+large archive. SQLite's final `VACUUM` can need up to twice the archive's size
+in additional free disk space for its temporary copy and journal.
+
+`db compact` never syncs source directories. It verifies that every compressed
+record decodes to exactly the stored text before saving it, commits bounded
+batches, and then runs `VACUUM` to return freed pages to the filesystem. It
+prints progress while compressing and before vacuuming. If interrupted, run it
+again. Completed batches stay committed, already compressed records are
+skipped, and a failed vacuum can be retried with `decant --no-sync db vacuum`.
+Session IDs, user state, normalized content, and search results are preserved.
 
 Delete one session tree from the CLI, or use **Delete session** in the web UI:
 

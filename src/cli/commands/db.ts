@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { compactMessageStorage } from "../../message-storage.ts";
 import type { Archive, CliContext } from "../context.ts";
 
 interface DbInfo {
@@ -19,6 +20,8 @@ interface DbInfo {
   /** Full-scan totals, present only under `--full`. */
   fts_rows?: number;
   text_bytes?: number;
+  compressed_messages?: number;
+  raw_stored_bytes?: number;
 }
 
 export function registerDbCommands(ctx: CliContext): void {
@@ -50,6 +53,12 @@ export function registerDbCommands(ctx: CliContext): void {
           if (row.text_bytes != null) {
             fields.push(["text_bytes", row.text_bytes]);
           }
+          if (row.compressed_messages != null) {
+            fields.push(["compressed_messages", row.compressed_messages]);
+          }
+          if (row.raw_stored_bytes != null) {
+            fields.push(["raw_stored_bytes", row.raw_stored_bytes]);
+          }
           ctx.output(row, () =>
             fields.map(([label, value]) => `${`${label}:`.padEnd(16)}${value}\n`).join(""),
           );
@@ -64,6 +73,34 @@ export function registerDbCommands(ctx: CliContext): void {
         ctx.withArchive((archive) => {
           io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
         }),
+      ),
+    );
+  dbCommand
+    .command("compact")
+    .description("losslessly compress retained source records and reclaim free space")
+    .action(() =>
+      ctx.run(() =>
+        ctx.withArchive(
+          (archive) => {
+            io.writeErr("compressing retained source records\n");
+            let lastProgress = Date.now();
+            const result = compactMessageStorage(archive.db, (progress) => {
+              if (Date.now() - lastProgress < 1_000) return;
+              io.writeErr(
+                `compressed ${progress.compressed} messages, saved ${progress.saved_bytes} bytes\n`,
+              );
+              lastProgress = Date.now();
+            });
+            io.writeErr("vacuuming archive to reclaim free pages\n");
+            archive.db.exec("VACUUM;");
+            ctx.output(
+              result,
+              () =>
+                `compressed ${result.compressed} messages, saved ${result.saved_bytes} source-record bytes\n`,
+            );
+          },
+          { sync: false },
+        ),
       ),
     );
   dbCommand
@@ -120,13 +157,21 @@ function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
             // block.tool_result and message.raw are stored but not indexed, so
             // this total is deliberately wider than what search can reach.
             `SELECT (SELECT COUNT(*) FROM block_fts) AS fts_rows,
-                    (SELECT COALESCE(SUM(OCTET_LENGTH(raw)), 0) FROM message)
+                    (SELECT COALESCE(SUM(COALESCE(raw_bytes, OCTET_LENGTH(raw))), 0) FROM message)
                     + (SELECT COALESCE(SUM(OCTET_LENGTH(COALESCE(text, ''))
                                           + OCTET_LENGTH(COALESCE(tool_input, ''))
                                           + OCTET_LENGTH(COALESCE(tool_result, ''))), 0)
-                       FROM block) AS text_bytes`,
+                       FROM block) AS text_bytes,
+                    (SELECT COUNT(*) FROM message WHERE typeof(raw) = 'blob') AS compressed_messages,
+                    (SELECT COALESCE(SUM(OCTET_LENGTH(raw) + COALESCE(OCTET_LENGTH(raw_meta), 0)), 0)
+                       FROM message) AS raw_stored_bytes`,
           )
-          .get() as { fts_rows: number; text_bytes: number })
+          .get() as {
+          fts_rows: number;
+          text_bytes: number;
+          compressed_messages: number;
+          raw_stored_bytes: number;
+        })
       : null;
   return {
     path: archive.config.dbPath,

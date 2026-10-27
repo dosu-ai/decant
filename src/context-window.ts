@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { withImmediateTransaction } from "./db.ts";
+import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 /** Baseline for Claude models whose published limit is still 200k. */
@@ -104,7 +105,7 @@ export interface MessageRawMeta {
 /** Single-parse extraction of every raw field the read path needs; expects the
  * message table aliased as `m`. Multi-path json_extract returns one JSON array
  * per row, so large raw payloads are parsed once, not once per field. */
-export const MESSAGE_RAW_META_SQL = `json_extract(m.raw, '$.isSidechain', '$.subtype',
+export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens')`;
 
 /** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults. */

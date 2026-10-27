@@ -12,6 +12,7 @@ import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { byteLength } from "./json.ts";
+import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { TokenUsage } from "./model.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
@@ -621,10 +622,10 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
     db,
     `${scopeCte}
        SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens,
-              CASE WHEN m.role = 'assistant' AND json_valid(m.raw)
-                   THEN json_extract(m.raw, '$.message.id') END AS response_id,
-              CASE WHEN s.tool = 'opencode' AND m.role = 'assistant' AND json_valid(m.raw)
-                   THEN json_extract(m.raw, '$.reasoning_tokens') END AS reasoning_tokens,
+              CASE WHEN m.role = 'assistant' AND json_valid(${MESSAGE_METADATA_SQL})
+                   THEN json_extract(${MESSAGE_METADATA_SQL}, '$.message.id') END AS response_id,
+              CASE WHEN s.tool = 'opencode' AND m.role = 'assistant' AND json_valid(${MESSAGE_METADATA_SQL})
+                   THEN json_extract(${MESSAGE_METADATA_SQL}, '$.reasoning_tokens') END AS reasoning_tokens,
               b.type,
               COALESCE(b.tool_name, tc.tool_name) AS tool_name,
               m.timestamp AS timestamp,

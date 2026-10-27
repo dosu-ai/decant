@@ -7,6 +7,7 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
+import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { CostSource, Tool } from "./model.ts";
 import { costSourceFor } from "./model-usage.ts";
 import {
@@ -477,11 +478,14 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
   const summaryDate = sessionDatePredicate("s", filter);
   const summaryClauses = [...scopeClauses, summaryDate.sql].filter((clause) => clause !== "");
   const summaryParams = [...scopeParams, ...summaryDate.params];
-  const joins = `
+  const scanJoins = `
+    FROM tool_call t INDEXED BY idx_toolcall_usage
+    JOIN session s ON s.id = t.session_id
+    ${filter.project == null ? "" : "LEFT JOIN project p ON p.id = s.project_id"}`;
+  const pageJoins = `
     FROM tool_call t
     JOIN session s ON s.id = t.session_id
-    LEFT JOIN project p ON p.id = s.project_id
-    LEFT JOIN message m ON m.id = t.message_id`;
+    ${filter.project == null ? "" : "LEFT JOIN project p ON p.id = s.project_id"}`;
   const where = `WHERE ${clauses.join(" AND ")}`;
   const summary =
     offset === 0
@@ -489,7 +493,7 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
           .query(
             `WITH filtered AS MATERIALIZED (
          SELECT t.is_error, t.duration_ms
-         ${joins}
+         ${scanJoins}
          WHERE ${summaryClauses.join(" AND ")}
        ),
        ranked AS (
@@ -507,19 +511,26 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
           )
           .get(...summaryParams) as ToolCallSummary)
       : null;
-  const { total } = db.query(`SELECT COUNT(*) AS total ${joins} ${where}`).get(...params) as {
+  const { total } = db.query(`SELECT COUNT(*) AS total ${scanJoins} ${where}`).get(...params) as {
     total: number;
   };
   const rows = db
     .query(
-      `SELECT t.id, t.session_id, s.title AS session_title, p.path AS project,
+      `WITH page AS MATERIALIZED (
+         SELECT t.id ${pageJoins} ${where}
+         ORDER BY t.timestamp DESC, t.id DESC
+         LIMIT ? OFFSET ?
+       )
+       SELECT t.id, t.session_id, s.title AS session_title, p.path AS project,
               t.tool_name, t.tool_kind,
               t.mcp_server, t.input, t.input_bytes, t.output_preview, t.output_bytes,
               t.is_error, t.has_result, t.duration_ms, t.timestamp, m.seq
-       ${joins}
-       ${where}
-       ORDER BY t.timestamp DESC, t.id DESC
-       LIMIT ? OFFSET ?`,
+       FROM page
+       JOIN tool_call t ON t.id = page.id
+       JOIN session s ON s.id = t.session_id
+       LEFT JOIN project p ON p.id = s.project_id
+       LEFT JOIN message m ON m.id = t.message_id
+       ORDER BY t.timestamp DESC, t.id DESC`,
     )
     .all(...params, limit, offset) as ToolCallDbRow[];
   return {
@@ -1258,11 +1269,11 @@ function subagentTaskTitle(text: string): string | null {
 // Claude parent files can hold copied sidechain rows that belong to child
 // agents, and compact summaries are machine continuations, not prompts.
 const HUMAN_TITLE_MESSAGE_SQL = `
-  COALESCE(json_extract(m.raw, '$.payload.role'), 'user') = 'user'
-  AND COALESCE(json_extract(m.raw, '$.isCompactSummary'), 0) != 1
+  COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.payload.role'), 'user') = 'user'
+  AND COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.isCompactSummary'), 0) != 1
   AND (
     s.is_subagent = 1
-    OR COALESCE(json_extract(m.raw, '$.isSidechain'), 0) != 1
+    OR COALESCE(json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain'), 0) != 1
   )
 `;
 

@@ -235,18 +235,20 @@ export function StatCard({
   icon,
   label,
   value,
+  valueTitle,
 }: {
   /** Danger colour is redundant emphasis on a number that already states the problem; stat icons are otherwise muted by design. */
   alert?: boolean;
   icon: IconName;
   label: string;
   value: string;
+  valueTitle?: string;
 }) {
   return (
     <div className="stat-card" data-alert={alert ? "true" : undefined}>
       <div>
         <span>{label}</span>
-        <strong>{value}</strong>
+        <strong title={valueTitle}>{value}</strong>
       </div>
       <span className="stat-icon">
         <Icon name={icon} />

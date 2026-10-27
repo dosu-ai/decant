@@ -496,6 +496,10 @@ jobs:
       - name: Tap dosu-ai/dosu
         run: brew tap dosu-ai/dosu
 
+      # Homebrew 6+ refuses to load formulas from a third-party tap until it is trusted.
+      - name: Trust dosu-ai/dosu
+        run: brew trust dosu-ai/dosu
+
       - name: Put the rendered formula in the tap
         run: cp Formula/decant.rb "$(brew --repository dosu-ai/dosu)/Formula/decant.rb"
 

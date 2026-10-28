@@ -177,6 +177,12 @@ set. The file is written at mode `0600`. When it exists but cannot be parsed,
 Decant uses the detected defaults and leaves it alone until the next save, which
 moves it aside as `settings.json.corrupt-<timestamp>` before writing a new one.
 
+When update checks are on, the result of the last check is cached next to it in
+`update-check.json`: the time of the check and the newest version it found.
+Decant asks the npm registry again only after a day has passed, including after
+a failed check. `decant update` and `decant update --check` always ask and
+refresh the cache. Deleting the file only causes one more check.
+
 ### Inspecting and removing it
 
 `decant db info` reports where the archive is, how large it is, and how much it

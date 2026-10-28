@@ -94,6 +94,46 @@ Build a native binary for the current platform with:
 bun run scripts/build-binaries.ts --target native
 ```
 
+## Update
+
+```sh
+decant update           # install the newest release in place
+decant update --check   # only report whether one exists; add --json for scripts
+```
+
+`decant update` asks the npm registry for the newest `@dosu/decant` version
+and updates with the tool that owns the running binary:
+
+| Install | What `decant update` does |
+| --- | --- |
+| `npm install --global` | Runs `npm install --global @dosu/decant@<version>` |
+| Homebrew | Runs `brew upgrade dosu-ai/dosu/decant` |
+| Shell installer, or any other standalone binary | Downloads the release tarball and `SHA256SUMS`, verifies the checksum, checks that the new binary reports the expected version, then renames it over the old one |
+| `npx` | Prints `npx @dosu/decant@latest` |
+| A project's `node_modules` | Prints the `npm install` command for that project |
+| Docker | Prints `docker pull ghcr.io/dosu-ai/decant:latest` |
+| Source checkout | Prints `git pull && bun install` |
+
+The standalone download honors `DECANT_BASE_URL`, like the installer. The
+binary's directory must be writable. `decant update` exits with status 1 when
+the registry check fails, when a package manager fails (such as a global npm
+prefix that needs `sudo`), or when the package manager succeeds but the
+`decant` on `PATH` still reports the old version. The release workflow publishes
+to npm a few minutes before GitHub Releases and the Homebrew tap, so an update
+started in that window fails with a message to try again shortly.
+
+The Docker image sets `DECANT_INSTALL_CHANNEL=docker`, so containers are
+recognized even where the runtime creates no `/.dockerenv`.
+
+Update checks are off by default. Turn them on with **Check for updates** in
+Settings or `DECANT_UPDATE_CHECK=1`, and force them off with
+`DECANT_UPDATE_CHECK=0`. With checks on, Decant asks the npm registry once a day
+and shows a notice in the sidebar, under the `decant serve` banner, and after
+CLI commands. The CLI notice goes to stderr. It stays off with `--json` or
+`--quiet`, when `CI` is set, when stderr is not a terminal, and for the
+`update`, `completion`, and `watch` commands. Source checkouts skip the daily
+check. [Permissions](data-lifecycle.md#permissions) describes the cache file.
+
 ## Cut a release
 
 Releases are cut by pushing a signed `vMAJOR.MINOR.PATCH` tag from `main`

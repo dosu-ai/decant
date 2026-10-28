@@ -8,7 +8,9 @@ breakdowns, context-window usage, full-text search, files touched, tool usage,
 and complete transcript browsing.
 
 Decant is local-first. It makes no outbound network calls at runtime,
-and your transcripts never leave your machine.
+and your transcripts never leave your machine. The one exception is an update
+check that stays off until you turn it on in Settings or with
+`DECANT_UPDATE_CHECK=1`. Run `decant update` to install a newer release.
 
 It does keep a copy of them. To make sessions searchable, Decant writes prompts,
 tool inputs, tool output, and canonicalized raw records for retained transcript

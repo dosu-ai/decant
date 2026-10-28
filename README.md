@@ -12,7 +12,8 @@ inspect context usage, find the files and tools agents touch, and search
 complete transcripts from a CLI or local web UI.
 
 Decant is local-first. It makes no outbound network calls at runtime, and your
-transcripts never leave your machine.
+transcripts never leave your machine. The one exception is an update check that
+stays off until you turn it on. See [Updating](#updating).
 
 It does keep a copy of them. To make sessions searchable, Decant writes prompts,
 tool inputs, tool output, and canonicalized raw records for retained transcript
@@ -83,6 +84,22 @@ decant
 See [Distribution](docs/distribution.md) for installer options, Docker, source
 builds, and release verification.
 
+## Updating
+
+```sh
+decant update           # install the newest release in place
+decant update --check   # only report whether one exists
+```
+
+`decant update` uses the tool that installed Decant: `npm install --global` for
+npm, `brew upgrade` for Homebrew, and a checksum-verified download for the shell
+installer. Docker, `npx`, and source checkouts print the command to run instead.
+
+To hear about new releases, turn on **Check for updates** in Settings or set
+`DECANT_UPDATE_CHECK=1`. Decant then asks the npm registry for the newest
+version once a day and shows a notice in the sidebar and after CLI commands.
+The request carries no session data.
+
 ## Docker
 
 ```sh
@@ -122,6 +139,7 @@ decant db info                 # what the archive holds and where
 decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
 decant db compact              # losslessly compress stored source records
+decant update                  # update Decant with the tool that installed it
 ```
 
 Run `decant --help` or `decant <command> --help` for all commands and flags.

@@ -4824,6 +4824,11 @@ mark {
   font-size: 12px;
 }
 
+/* Settings panels have no padding of their own; line notes up with the rows. */
+.settings-page .panel > .settings-note {
+  padding-inline: 20px;
+}
+
 .about-decant .panel-heading > img {
   width: 44px;
   height: 44px;
@@ -6689,4 +6694,75 @@ a:focus-visible .ctx-strip-compaction-marker rect {
 
 .session-context-peak.is-hot {
   color: var(--danger-text);
+}
+
+/* ===========================================================================
+   Updates
+   =========================================================================== */
+
+.update-nudge {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 4px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent);
+  padding: 9px 10px 10px;
+}
+
+.update-nudge-title {
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: var(--font-weight-strong);
+}
+
+.update-nudge-title:hover {
+  color: var(--fg);
+}
+
+.update-nudge-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.update-nudge-command code {
+  overflow: hidden;
+  font: var(--text-mono-xs-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-nudge-command svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.update-nudge-command:hover svg,
+.update-nudge-command:focus-visible svg {
+  color: var(--fg);
+}
+
+.update-nudge-error {
+  color: var(--muted);
+  font-size: var(--text-micro-size);
+}
+
+.setting-toggle input {
+  width: 18px;
+  height: 18px;
+  min-height: auto;
+  accent-color: var(--accent-text);
+  cursor: pointer;
 }

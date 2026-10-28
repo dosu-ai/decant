@@ -4,16 +4,18 @@ import dosuDecantUrl from "../assets/dosu-decant.png";
 import { dosuLink } from "../dosu-links.ts";
 import { errorMessage, versionLabel } from "../format.ts";
 import { Icon } from "../icons.tsx";
-import type { ConfigView, SettingsInfo, UserSettings } from "../types.ts";
+import type { ConfigView, SettingsInfo, UpdateStatus, UserSettings } from "../types.ts";
 
 export function SettingsView({
   config,
   onSaved,
   settingsInfo,
+  update,
 }: {
   config: ConfigView | null;
   onSaved: () => void;
   settingsInfo: SettingsInfo | null;
+  update: UpdateStatus | null;
 }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -93,6 +95,31 @@ export function SettingsView({
         </p>
       </section>
 
+      <section className="panel">
+        <div className="settings-form">
+          <label className="setting-select setting-toggle">
+            <span>
+              <strong>Check for updates</strong>
+              <small>
+                Once a day, ask the npm registry for the newest Decant version. The request carries
+                no session data.
+              </small>
+            </span>
+            {/* With DECANT_UPDATE_CHECK set, the box shows what is in effect
+                and saving the setting would change nothing. */}
+            <input
+              checked={
+                update?.envOverride === true ? update.enabled : (settings?.updateCheck ?? false)
+              }
+              disabled={update?.envOverride === true}
+              onChange={(event) => save({ updateCheck: event.target.checked })}
+              type="checkbox"
+            />
+          </label>
+        </div>
+        <p className="settings-note">{updateNote(update, settings?.updateCheck ?? false)}</p>
+      </section>
+
       <section className="panel about-decant">
         <div className="panel-heading">
           <div>
@@ -122,12 +149,48 @@ export function SettingsView({
           </div>
           <p className="about-version">Version {versionLabel(config?.version)}</p>
           <p className="about-privacy">
-            Decant makes no outbound network calls. Your session logs stay on this machine.
+            {update?.enabled === true
+              ? "Decant contacts the npm registry once a day to check for a newer version. Your session logs stay on this machine."
+              : "Decant makes no outbound network calls. Your session logs stay on this machine."}
           </p>
         </div>
       </section>
     </div>
   );
+}
+
+function updateNote(update: UpdateStatus | null, saved: boolean): string {
+  if (update == null) {
+    return "Loading update status...";
+  }
+  // A failed save rolls the toggle back, so a mismatch without an override
+  // means the status reload after a save has not finished yet.
+  if (!update.envOverride && update.enabled !== saved) {
+    return saved ? "Checking for updates..." : "Saving...";
+  }
+  const override = update.envOverride
+    ? " DECANT_UPDATE_CHECK in the environment overrides this setting."
+    : "";
+  if (!update.enabled) {
+    return `Checks are off. Run decant update to check and install by hand.${override}`;
+  }
+  if (update.updateAvailable && update.latest != null) {
+    return `Decant ${versionLabel(update.latest)} is available. Run ${update.command} to install it.${override}`;
+  }
+  if (update.channel === "source") {
+    return `This is a source checkout, so Decant does not check for releases. Update it with git pull.${override}`;
+  }
+  if (update.latest != null) {
+    const checked =
+      update.checkedAt == null
+        ? ""
+        : ` Last checked ${new Date(update.checkedAt).toLocaleString()}.`;
+    return `You have the newest release.${checked}${override}`;
+  }
+  if (update.error != null) {
+    return `The last check failed: ${update.error}. Decant tries again tomorrow.${override}`;
+  }
+  return `No check has finished yet.${override}`;
 }
 
 export function SettingSelect({

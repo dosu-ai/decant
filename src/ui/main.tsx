@@ -9,6 +9,7 @@ import { CommandPalette } from "./command-palette-view.tsx";
 import { EmptyState, ErrorState } from "./common.tsx";
 import { emptyData, SLICE_LOADERS, slicesForView } from "./data-slices.ts";
 import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "./date-range.ts";
+import { useTodayRollover } from "./date-range-control.tsx";
 import { dosuLink } from "./dosu-links.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { useDisabledFocusRescue } from "./focus.ts";
@@ -117,6 +118,7 @@ function App() {
   const awaitingStatsRef = useRef(false);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
+  useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);

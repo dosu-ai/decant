@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ALL_DATE_RANGE } from "../src/ui/date-range.ts";
+import { DateRangeControl, focusLeftMenu } from "../src/ui/date-range-control.tsx";
 import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
 
 const main = readUiSource();
@@ -214,10 +218,57 @@ describe("UI interaction contracts", () => {
     // relatedTarget. Closing on that dropped every preset click in WebKit.
     const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
     const onBlur = control.slice(control.indexOf("onBlur="), control.indexOf("onKeyDown="));
-    expect(onBlur).toContain("event.relatedTarget instanceof Node &&");
-    expect(onBlur).not.toContain("!(event.relatedTarget instanceof Node)");
+    expect(onBlur).toContain("focusLeftMenu(event.currentTarget, event.relatedTarget)");
     expect(control).toContain('document.addEventListener("pointerdown", closeOnOutsidePress)');
     expect(control).toContain('document.removeEventListener("pointerdown", closeOnOutsidePress)');
+  });
+
+  test("clicking the From or To label focuses its date input inside the open menu", () => {
+    // A label click blurs the summary with a null relatedTarget before the label
+    // focuses its input. Closing the menu then removed the label mid-click and
+    // crashed Chromium, so each input must sit inside its label in the popover.
+    const markup = renderToStaticMarkup(
+      createElement(DateRangeControl, {
+        bounds: null,
+        onChange: () => {},
+        range: { preset: "custom", from: "2026-10-01", to: "2026-10-23" },
+      }),
+    );
+    const popover = markup.slice(markup.indexOf('class="date-range-popover"'));
+    for (const [label, input] of [
+      ["From", "From date"],
+      ["To", "To date"],
+    ]) {
+      expect(popover).toMatch(
+        new RegExp(`<label><span>${label}</span><input [^>]*aria-label="${input}"[^>]*/></label>`),
+      );
+    }
+    expect(focusLeftMenu({ contains: () => false }, null)).toBe(false);
+  });
+
+  test("announces a reversed custom range without applying it", () => {
+    const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
+    const markup = renderToStaticMarkup(
+      createElement(DateRangeControl, { bounds: null, onChange: () => {}, range: ALL_DATE_RANGE }),
+    );
+    expect(markup).toContain('<div aria-live="polite" class="custom-date-range-status"></div>');
+    expect(control).toContain('if (result.status === "valid")');
+    expect(control).toContain("onChange(result.range)");
+    expect(control).not.toContain("onChange({ ...range");
+    expect(control).toContain("{REVERSED_RANGE_MESSAGE}");
+    expect(control.match(/aria-invalid=\{\s*reversed \|\|/g)).toHaveLength(2);
+  });
+
+  test("keeps a Today selection on the current UTC date while the app stays open", () => {
+    const app = sourceBetween(main, "function App()", "function renderView(");
+    expect(app).toContain(
+      'useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection)',
+    );
+    const hook = sourceFrom(readUiFile("date-range-control.tsx"), "function useTodayRollover(");
+    expect(hook).toContain("scheduleUtcDayRollover(refresh)");
+    expect(hook).toContain('document.addEventListener("visibilitychange", refreshWhenVisible)');
+    expect(hook).toContain('document.removeEventListener("visibilitychange", refreshWhenVisible)');
+    expect(hook).toContain("stop();");
   });
 
   test("exposes session state actions through the shared accessible overflow menu", () => {

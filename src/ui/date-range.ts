@@ -18,14 +18,54 @@ export const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
   timeZone: "UTC",
 });
 
+export const REVERSED_RANGE_MESSAGE = "From must be on or before To";
+
+// Chrome reports a year typed one digit at a time as `0002`, `0020`, `0202`, so
+// a date before this year is treated as still being typed, not as a bound.
+const EARLIEST_PLAUSIBLE_YEAR = 1970;
+
+export type CustomRangeCheck =
+  | { status: "valid"; range: DateRangeSelection }
+  | { status: "incomplete"; field: "from" | "to" }
+  | { status: "reversed" };
+
+/**
+ * Decides whether the custom From and To inputs form a range worth applying.
+ * `""` is a cleared, open-ended bound; `null` is a partly typed date the
+ * browser reports as bad input.
+ */
+export function checkCustomRange(from: string | null, to: string | null): CustomRangeCheck {
+  const start = plausibleBound(from);
+  if (start === undefined) {
+    return { status: "incomplete", field: "from" };
+  }
+  const end = plausibleBound(to);
+  if (end === undefined) {
+    return { status: "incomplete", field: "to" };
+  }
+  if (start != null && end != null && start > end) {
+    return { status: "reversed" };
+  }
+  return { status: "valid", range: { preset: "custom", from: start, to: end } };
+}
+
+function plausibleBound(value: string | null): string | null | undefined {
+  if (value === "") {
+    return null;
+  }
+  const date = value == null ? null : parseIsoDate(value);
+  return date != null && date.getUTCFullYear() >= EARLIEST_PLAUSIBLE_YEAR ? value : undefined;
+}
+
 export function applyDatePreset(
   key: (typeof RANGE_PRESETS)[number]["key"],
   bounds: DateBounds | null,
+  now = Date.now(),
 ): DateRangeSelection {
   const preset = RANGE_PRESETS.find((item) => item.key === key);
   // Lookbacks end at the newest archived session so a stale archive still shows
   // data. Today means the current date even when nothing has synced yet.
-  const to = key === "today" ? todayIsoDate() : (validIsoDate(bounds?.max) ?? todayIsoDate());
+  const to = key === "today" ? todayIsoDate(now) : (validIsoDate(bounds?.max) ?? todayIsoDate(now));
   if (preset == null) {
     return ALL_DATE_RANGE;
   }
@@ -91,8 +131,56 @@ export function addDays(isoDate: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+export function todayIsoDate(now = Date.now()): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+/** Moves a Today selection onto the current UTC date, keeping any other range as is. */
+export function refreshTodayRange(range: DateRangeSelection, now = Date.now()): DateRangeSelection {
+  if (range.preset !== "today") {
+    return range;
+  }
+  const today = todayIsoDate(now);
+  // Returning the same object lets React skip the update when the day is unchanged.
+  return range.from === today && range.to === today ? range : applyDatePreset("today", null, now);
+}
+
+export function msUntilNextUtcDay(now: number): number {
+  const next = new Date(now);
+  next.setUTCHours(24, 0, 0, 0);
+  return next.getTime() - now;
+}
+
+export interface WallClock {
+  now(): number;
+  setTimer(callback: () => void, delayMs: number): unknown;
+  clearTimer(handle: unknown): void;
+}
+
+const browserWallClock: WallClock = {
+  now: () => Date.now(),
+  setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * Calls `onRollover` at each UTC midnight until the returned function stops it.
+ * One timer is pending at a time; each run re-arms from the clock, so a timer
+ * that fires early lands on a no-op refresh and re-arms for the real boundary.
+ */
+export function scheduleUtcDayRollover(
+  onRollover: () => void,
+  clock: WallClock = browserWallClock,
+): () => void {
+  let timer: unknown = null;
+  const arm = () => {
+    timer = clock.setTimer(() => {
+      onRollover();
+      arm();
+    }, msUntilNextUtcDay(clock.now()));
+  };
+  arm();
+  return () => clock.clearTimer(timer);
 }
 
 export function validIsoDate(value: string | null | undefined): string | null {

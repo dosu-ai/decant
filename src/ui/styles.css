@@ -1462,6 +1462,19 @@ nav a[aria-current="page"] svg {
   font-size: 12px;
 }
 
+/* Scoped under the popover to outrank `.page-heading p`, which the control sits inside. */
+.custom-date-range .custom-date-range-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--text-micro-size);
+}
+
+/* The live region stays mounted so screen readers announce the message when it
+ * appears; while empty it gives back the grid gap above it. */
+.custom-date-range-status:empty {
+  margin-top: -9px;
+}
+
 .date-range-buttons button:hover {
   background: var(--bg-components-ghost-ghost-hover);
   color: var(--fg);

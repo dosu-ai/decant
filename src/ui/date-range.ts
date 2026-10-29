@@ -79,6 +79,12 @@ export function dateRangePresetLabel(range: DateRangeSelection): string {
   return RANGE_PRESETS.find((preset) => preset.key === range.preset)?.label ?? "All time";
 }
 
+// The page heading wraps the range trigger to the left edge on narrower layouts,
+// where a right-anchored popover would open off-screen.
+export function datePopoverAlign(triggerRight: number, popoverWidth: number): "start" | "end" {
+  return triggerRight - popoverWidth >= 0 ? "end" : "start";
+}
+
 export function addDays(isoDate: string, days: number): string {
   const date = parseIsoDate(isoDate) ?? new Date();
   date.setUTCDate(date.getUTCDate() + days);

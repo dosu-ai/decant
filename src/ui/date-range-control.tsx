@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   ALL_DATE_RANGE,
   applyDatePreset,
+  datePopoverAlign,
   dateRangeLabel,
   dateRangePresetLabel,
   RANGE_PRESETS,
@@ -19,6 +20,7 @@ export function DateRangeControl({
   onChange: (range: DateRangeSelection) => void;
 }) {
   const menuRef = useRef<HTMLDetailsElement | null>(null);
+  const [align, setAlign] = useState<"start" | "end">("end");
   const bounded = range.from != null && range.to != null;
   const closeMenu = () => {
     if (menuRef.current == null) {
@@ -43,6 +45,7 @@ export function DateRangeControl({
       <div className="date-range-buttons">
         <details
           className="date-range-menu"
+          data-align={align}
           onBlur={(event) => {
             if (
               !(event.relatedTarget instanceof Node) ||
@@ -56,6 +59,13 @@ export function DateRangeControl({
               event.preventDefault();
               event.currentTarget.open = false;
               event.currentTarget.querySelector("summary")?.focus();
+            }
+          }}
+          onToggle={(event) => {
+            const menu = event.currentTarget;
+            const popover = menu.querySelector<HTMLElement>(".date-range-popover");
+            if (menu.open && popover != null) {
+              setAlign(datePopoverAlign(menu.getBoundingClientRect().right, popover.offsetWidth));
             }
           }}
           ref={menuRef}

@@ -1351,7 +1351,9 @@ nav a[aria-current="page"] svg {
   animation: menu-in var(--duration-menu) var(--ease-out);
   position: absolute;
   top: calc(100% + 7px);
-  right: -30px;
+  /* The trigger sits against the 16px page gutter, so any negative offset runs
+   * the popover past the viewport edge. */
+  right: 0;
   z-index: 20;
   width: 19rem;
   border: 1px solid var(--border-default);
@@ -1361,6 +1363,11 @@ nav a[aria-current="page"] svg {
   -webkit-backdrop-filter: blur(var(--blur-dropdown));
   box-shadow: var(--shadow-components-dropdown-default);
   padding: 5px;
+}
+
+.date-range-menu[data-align="start"] > .date-range-popover {
+  right: auto;
+  left: 0;
 }
 
 .date-range-presets {
@@ -6317,8 +6324,6 @@ pre {
   }
 
   .date-range-popover {
-    right: auto;
-    left: -30px;
     width: min(19rem, calc(100vw - 48px));
   }
 

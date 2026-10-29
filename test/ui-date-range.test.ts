@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyDatePreset,
+  datePopoverAlign,
   dateRangePresetLabel,
   dateRangeQuery,
   formatDateLabel,
@@ -51,6 +52,14 @@ describe("dashboard date ranges", () => {
     expect(dateRangePresetLabel(applyDatePreset("30d", { min: null, max: "2026-08-26" }))).toBe(
       "Last 30 days",
     );
+  });
+
+  test("opens the popover toward whichever side has room for it", () => {
+    // Trigger against the right gutter of a 1200px page: open leftward.
+    expect(datePopoverAlign(1181, 304)).toBe("end");
+    // Heading wrapped the trigger to the left edge (Files at 1024px): open rightward.
+    expect(datePopoverAlign(179, 304)).toBe("start");
+    expect(datePopoverAlign(304, 304)).toBe("end");
   });
 
   test("formats ISO calendar dates without shifting them to the local timezone", () => {

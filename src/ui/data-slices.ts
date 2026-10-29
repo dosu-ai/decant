@@ -1,3 +1,4 @@
+import type { AvailableSessionSource } from "../source-filter.ts";
 import { getJson } from "./api.ts";
 import { TABLE_ROW_LIMIT } from "./constants.ts";
 import { withDateQuery } from "./date-range.ts";
@@ -35,6 +36,7 @@ export const emptyData: DashboardData = {
   modelSparklines: null,
   tokenEconomics: null,
   dateBounds: null,
+  sessionSources: [],
 };
 
 // Each page fetches only the slices it renders; fetching everything for every
@@ -141,6 +143,12 @@ export const SLICE_LOADERS: Record<
     dateScoped: false,
     load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
   },
+  sessionSources: {
+    dateScoped: false,
+    load: async () => ({
+      sessionSources: await getJson<AvailableSessionSource[]>("/api/metadata/session-sources"),
+    }),
+  },
 };
 
 // Slices the app shell itself renders (sidebar stats, sync button, pickers).
@@ -151,6 +159,7 @@ export const ROUTE_SLICES: Record<string, DataSlice[]> = {
   projects: ["projects"],
   search: [],
   analytics: [
+    "sessionSources",
     "byDay",
     "byModel",
     "byProject",

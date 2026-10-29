@@ -33,6 +33,7 @@ export const API_ROUTE_PATHS = [
   "/api/reports/session/{id}.html",
   "/api/date-bounds",
   "/api/metadata/date-bounds",
+  "/api/metadata/session-sources",
   "/api/files",
   "/api/tools/calls",
   "/api/tools/usage",

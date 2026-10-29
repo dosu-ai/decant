@@ -46,6 +46,12 @@ import {
   terminalOptions,
 } from "../settings.ts";
 import {
+  availableSessionSources,
+  parseSessionSource,
+  SESSION_SOURCES,
+  type SessionSource,
+} from "../source-filter.ts";
+import {
   activity as activityStats,
   byDimension,
   DIMENSIONS,
@@ -114,6 +120,19 @@ const sessionScoped =
       const result = compute(db, Number(ctx.params.id), ctx);
       return result == null ? sessionNotFound(db) : json(result);
     });
+
+// Analytics routes share this guard so an unknown source value is rejected
+// before any archive read.
+const sourceScoped =
+  (handle: (ctx: RouteContext, source: SessionSource | null) => RouteResult): RouteHandler =>
+  (ctx) => {
+    const value = ctx.url.searchParams.get("source");
+    const source = parseSessionSource(value);
+    if (value != null && source == null) {
+      return errorResponse("invalid_request", "unknown source", { allowed: SESSION_SOURCES }, 400);
+    }
+    return handle(ctx, source);
+  };
 
 export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/health": { GET: () => json({ ok: true }) },
@@ -214,20 +233,22 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   },
   "/api/search": { POST: { body: "object", handle: searchRoute } },
   "/api/stats/summary": {
-    GET: ({ config, context, url, dateFilter }) =>
+    GET: sourceScoped(({ config, context, url, dateFilter }, source) =>
       withDb(config, context, (db) =>
         json(
           totals(db, {
             ...dateFilter,
             includeArchived: url.searchParams.get("include_archived") === "true",
             project: url.searchParams.get("project"),
+            source,
             tool: url.searchParams.get("tool"),
           }),
         ),
       ),
+    ),
   },
   "/api/stats/by-dimension": {
-    GET: ({ config, context, url, dateFilter }) => {
+    GET: sourceScoped(({ config, context, url, dateFilter }, source) => {
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
         return errorResponse(
@@ -243,27 +264,32 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
             ...dateFilter,
             includeArchived: url.searchParams.get("include_archived") === "true",
             project: url.searchParams.get("project"),
+            source,
             tool: url.searchParams.get("tool"),
           }),
         ),
       );
-    },
+    }),
   },
   "/api/analytics/activity": {
-    GET: ({ config, context, dateFilter }) =>
-      withDb(config, context, (db) => json(activityStats(db, dateFilter))),
+    GET: sourceScoped(({ config, context, dateFilter }, source) =>
+      withDb(config, context, (db) => json(activityStats(db, { ...dateFilter, source }))),
+    ),
   },
   "/api/analytics/model-sparklines": {
-    GET: ({ config, context, dateFilter }) =>
-      withDb(config, context, (db) => json(modelSparklines(db, dateFilter))),
+    GET: sourceScoped(({ config, context, dateFilter }, source) =>
+      withDb(config, context, (db) => json(modelSparklines(db, { ...dateFilter, source }))),
+    ),
   },
   "/api/analytics/token-economics": {
-    GET: async ({ config, context, dateFilter }) => {
-      if (context.economics != null) {
+    GET: sourceScoped(async ({ config, context, dateFilter }, source) => {
+      // The in-memory cache holds archive-wide vectors only; a source-scoped
+      // request reads persisted vectors so one source never answers for another.
+      if (context.economics != null && source == null) {
         return json(await context.economics.get(dateFilter));
       }
-      return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
-    },
+      return withDb(config, context, (db) => json(tokenEconomics(db, { ...dateFilter, source })));
+    }),
   },
   "/api/analytics/now": {
     GET: ({ config, context }) =>
@@ -277,15 +303,15 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
       ),
   },
   "/api/reports/analytics.html": {
-    GET: async ({ config, context, dateFilter }) => {
+    GET: sourceScoped(async ({ config, context, dateFilter }, source) => {
       const { assembleAnalyticsReport, renderAnalyticsReport } = await import("../report/index.ts");
       return withDb(config, context, (db) =>
         reportHtmlResponse(
-          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter })),
+          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: { ...dateFilter, source } })),
           "decant-analytics-report.html",
         ),
       );
-    },
+    }),
   },
   "/api/reports/session/{id}.html": {
     validateId: ["GET"],
@@ -308,6 +334,10 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   },
   "/api/metadata/date-bounds": {
     GET: ({ config, context }) => withDb(config, context, (db) => json(dateBounds(db))),
+  },
+  "/api/metadata/session-sources": {
+    GET: ({ config, context }) =>
+      withDb(config, context, (db) => json(availableSessionSources(db))),
   },
   "/api/files": { GET: filesRoute },
   "/api/tools/calls": { GET: toolCallsRoute },

@@ -40,7 +40,8 @@ ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
 ENV DECANT_GEMINI_DIR=/sources/gemini
 # Tells `decant update` to print `docker pull` instead of rewriting a binary the
-# decant user cannot write. Kubernetes and containerd create no /.dockerenv.
+# decant user cannot write. Marker files like /.dockerenv are not used because
+# devcontainers have them too, and Kubernetes and containerd create none.
 ENV DECANT_INSTALL_CHANNEL=docker
 # The archive is served without credentials and the `Host` header is forgeable
 # by any non-browser client, so the peer's source address is the only real

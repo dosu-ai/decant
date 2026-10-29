@@ -4,7 +4,6 @@ import {
   accessSync,
   chmodSync,
   constants,
-  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -45,6 +44,19 @@ export function parseVersion(value: string): Semver | null {
     core: [Number(match[1]), Number(match[2]), Number(match[3])],
     prerelease: match[4] == null ? [] : match[4].split("."),
   };
+}
+
+/**
+ * The version string as the registry or cache should hold it. parseVersion
+ * trims, so without this "1.2.3\n" would pass the check and still reach the
+ * cache file and the release URL with the newline attached.
+ */
+function cleanVersion(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return parseVersion(trimmed) == null ? null : trimmed;
 }
 
 /** Semver precedence: negative when `a` is older than `b`. */
@@ -109,7 +121,6 @@ export interface DetectInstallOptions {
   compiled?: boolean;
   env?: Record<string, string | undefined>;
   execPath?: string;
-  exists?: (path: string) => boolean;
   realpath?: (path: string) => string;
 }
 
@@ -124,14 +135,10 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
   if (!(options.compiled ?? isCompiledBinary())) {
     return { channel: "source", binaryPath: null };
   }
-  const exists = options.exists ?? existsSync;
-  // The official image sets the variable because Kubernetes and containerd
-  // create neither marker file.
-  if (
-    (options.env ?? process.env).DECANT_INSTALL_CHANNEL === "docker" ||
-    exists("/.dockerenv") ||
-    exists("/run/.containerenv")
-  ) {
+  // Only the official image sets this. Marker files like /.dockerenv also
+  // exist in devcontainers and CI jobs, where decant came from npm, Homebrew,
+  // or install.sh and updates the usual way.
+  if ((options.env ?? process.env).DECANT_INSTALL_CHANNEL === "docker") {
     return { channel: "docker", binaryPath: null };
   }
   const execPath = options.execPath ?? process.execPath;
@@ -149,7 +156,8 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
       return { channel: "npx", binaryPath: null };
     }
     // `npm install --global` lays packages out under <prefix>/lib/node_modules
-    // on macOS and Linux; any other node_modules belongs to a project.
+    // on macOS and Linux. Anything else is a project, or a global install by
+    // another package manager such as bun or pnpm.
     return { channel: path.includes("/lib/node_modules/") ? "npm" : "npm-local", binaryPath: null };
   }
   return { channel: "installer", binaryPath: path };
@@ -195,7 +203,7 @@ export function planUpdate(install: InstallInfo, version: string): UpdatePlan {
     case "npm-local":
       return {
         kind: "manual",
-        instructions: `This copy belongs to a project's node_modules. Update it there with \`npm install ${NPM_PACKAGE}@${version}\`.`,
+        instructions: `This copy lives in a node_modules folder that \`npm install --global\` does not manage. Update it with the package manager that installed it, for example \`npm install ${NPM_PACKAGE}@${version}\` in that project.`,
       };
     case "docker":
       return {
@@ -227,10 +235,11 @@ export async function fetchLatestVersion(
     throw new Error(`the npm registry returned HTTP ${response.status}`);
   }
   const body = (await response.json()) as { version?: unknown };
-  if (typeof body.version !== "string" || parseVersion(body.version) == null) {
+  const version = cleanVersion(body.version);
+  if (version == null) {
     throw new Error("the npm registry did not return a valid version");
   }
-  return body.version;
+  return version;
 }
 
 export interface UpdateCheckRecord {
@@ -251,11 +260,7 @@ export function readUpdateCheck(options: SettingsOptions = {}): UpdateCheckRecor
     if (typeof parsed.checkedAt !== "string" || Number.isNaN(Date.parse(parsed.checkedAt))) {
       return null;
     }
-    const latest =
-      typeof parsed.latest === "string" && parseVersion(parsed.latest) != null
-        ? parsed.latest
-        : null;
-    return { checkedAt: parsed.checkedAt, latest };
+    return { checkedAt: parsed.checkedAt, latest: cleanVersion(parsed.latest) };
   } catch {
     return null;
   }
@@ -307,6 +312,16 @@ async function attemptCheck(
   }
   writeUpdateCheck(attempt.record, options);
   return attempt;
+}
+
+function newerRecord(
+  a: UpdateCheckRecord | null,
+  b: UpdateCheckRecord | null,
+): UpdateCheckRecord | null {
+  if (a == null || b == null) {
+    return a ?? b;
+  }
+  return Date.parse(b.checkedAt) > Date.parse(a.checkedAt) ? b : a;
 }
 
 /** `DECANT_UPDATE_CHECK` as a boolean, or null when it is unset or unrecognized. */
@@ -362,13 +377,18 @@ export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promi
   const force = options.force === true;
   const now = (options.now ?? (() => new Date()))();
   const cachePath = updateCheckPath(options);
-  let record = readUpdateCheck(options) ?? lastChecks.get(cachePath) ?? null;
+  // The file can be older than this process's last check when the config dir
+  // is read-only, so the newer of the two holds the daily limit.
+  let record = newerRecord(readUpdateCheck(options), lastChecks.get(cachePath) ?? null);
   let error: string | null = null;
 
   const age =
     record == null ? Number.POSITIVE_INFINITY : now.getTime() - Date.parse(record.checkedAt);
   // A checkout is never nudged, so a passive check there would be a wasted request.
-  const due = enabled && install.channel !== "source" && age >= UPDATE_CHECK_INTERVAL_MS;
+  // A negative age means the clock was wrong when the cache was written, and
+  // trusting it would stop checks until that date.
+  const due =
+    enabled && install.channel !== "source" && (age < 0 || age >= UPDATE_CHECK_INTERVAL_MS);
   if (force || due) {
     let attempt = force ? undefined : inflightChecks.get(cachePath);
     if (attempt == null) {
@@ -444,7 +464,10 @@ export interface ReplaceBinaryOptions {
  * paths trust the same artifacts.
  */
 export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void> {
-  const version = options.version.replace(/^v/, "");
+  const version = cleanVersion(options.version)?.replace(/^v/, "");
+  if (version == null) {
+    throw new Error(`not a release version: ${JSON.stringify(options.version)}`);
+  }
   const target = releaseTarget(options.platform, options.arch);
   const tarballName = `${target}.tar.gz`;
   const releaseBase = `${(options.baseUrl ?? RELEASES_URL).replace(/\/+$/, "")}/download/v${version}`;

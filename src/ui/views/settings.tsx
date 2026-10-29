@@ -131,7 +131,7 @@ export function SettingsView({
           </div>
           <p className="about-version">Version {versionLabel(config?.version)}</p>
           <p className="about-privacy">
-            {update?.enabled === true
+            {update?.enabled === true && update.channel !== "source"
               ? "Decant contacts the npm registry once a day to check for a newer version. Your session logs stay on this machine."
               : "Decant makes no outbound network calls. Your session logs stay on this machine."}
           </p>

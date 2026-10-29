@@ -83,21 +83,14 @@ describe("version comparison", () => {
 });
 
 describe("install detection", () => {
-  const compiled = (execPath: string, files: string[] = [], env: Record<string, string> = {}) =>
-    detectInstall({
-      compiled: true,
-      env,
-      execPath,
-      exists: (path) => files.includes(path),
-      realpath: (path) => path,
-    });
+  const compiled = (execPath: string, env: Record<string, string> = {}) =>
+    detectInstall({ compiled: true, env, execPath, realpath: (path) => path });
 
   test("maps the real binary path to the tool that owns it", () => {
     expect(detectInstall({ compiled: false }).channel).toBe("source");
-    expect(compiled("/usr/local/bin/decant", ["/.dockerenv"]).channel).toBe("docker");
-    expect(
-      compiled("/usr/local/bin/decant", [], { DECANT_INSTALL_CHANNEL: "docker" }).channel,
-    ).toBe("docker");
+    expect(compiled("/usr/local/bin/decant", { DECANT_INSTALL_CHANNEL: "docker" }).channel).toBe(
+      "docker",
+    );
     expect(compiled("/opt/homebrew/Cellar/decant/0.11.0/bin/decant").channel).toBe("homebrew");
     expect(
       compiled(
@@ -251,6 +244,10 @@ describe("checkForUpdate", () => {
     const env = configEnv({ DECANT_UPDATE_CHECK: "1" });
     const dir = env.DECANT_CONFIG_DIR ?? "";
     mkdirSync(dir, { recursive: true });
+    // A day-old answer the process can read but never replace, as under a
+    // read-only bind mount.
+    const stale = new Date(now.getTime() - 2 * UPDATE_CHECK_INTERVAL_MS).toISOString();
+    writeFileSync(updateCheckPath({ env }), JSON.stringify({ checkedAt: stale, latest: "0.11.5" }));
     chmodSync(dir, 0o500);
     try {
       const calls: string[] = [];
@@ -262,6 +259,46 @@ describe("checkForUpdate", () => {
     } finally {
       chmodSync(dir, 0o700);
     }
+  });
+
+  test("checks again when the cache is dated in the future", async () => {
+    const env = configEnv({ DECANT_UPDATE_CHECK: "1" });
+    const future = new Date(now.getTime() + 30 * UPDATE_CHECK_INTERVAL_MS).toISOString();
+    mkdirSync(env.DECANT_CONFIG_DIR ?? "", { recursive: true });
+    writeFileSync(
+      updateCheckPath({ env }),
+      JSON.stringify({ checkedAt: future, latest: "0.11.5" }),
+    );
+    const calls: string[] = [];
+    const status = await checkForUpdate({
+      env,
+      install,
+      current: "0.11.0",
+      fetch: registry("0.12.0", calls),
+      now: () => now,
+    });
+    expect(calls).toHaveLength(1);
+    expect(status).toMatchObject({ latest: "0.12.0", checkedAt: now.toISOString() });
+  });
+
+  test("stores the registry version trimmed and rejects anything else", async () => {
+    const env = configEnv({ DECANT_UPDATE_CHECK: "1" });
+    const base = { env, install, current: "0.11.0", now: () => now, force: true };
+    expect(await checkForUpdate({ ...base, fetch: registry(" 0.12.0\n") })).toMatchObject({
+      latest: "0.12.0",
+      error: null,
+    });
+    expect(readUpdateCheck({ env })?.latest).toBe("0.12.0");
+
+    const bad = await checkForUpdate({ ...base, fetch: registry("0.13.0/../../x") });
+    expect(bad).toMatchObject({ latest: "0.12.0" });
+    expect(bad.error).toContain("did not return a valid version");
+
+    writeFileSync(
+      updateCheckPath({ env }),
+      JSON.stringify({ checkedAt: now.toISOString(), latest: "0.13.0?x=1" }),
+    );
+    expect(readUpdateCheck({ env })?.latest).toBeNull();
   });
 
   test("concurrent checks share one registry request", async () => {
@@ -387,6 +424,15 @@ describe("replaceBinary", () => {
       replaceBinary({ binaryPath, version: "0.12.0", fetch: releaseServer({}, []) }),
     ).rejects.toThrow("v0.12.0 is not on the release page yet");
     expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
+  });
+
+  test("refuses a version that is not a release before downloading", async () => {
+    const binaryPath = installed();
+    const calls: string[] = [];
+    await expect(
+      replaceBinary({ binaryPath, version: "0.12.0/../x", fetch: releaseServer({}, calls) }),
+    ).rejects.toThrow("not a release version");
+    expect(calls).toEqual([]);
   });
 
   test("rejects a release whose decant entry is a symlink", async () => {

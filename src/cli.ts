@@ -114,7 +114,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       current: deps.current,
       fetch: deps.fetch,
       now: deps.now,
-      timeoutMs: UPDATE_NOTICE_WAIT_MS,
+      // A short command exits only after this request settles, so it gets the
+      // notice's wait. serve stays up and shares this check with /api/update,
+      // so a slow registry there should not count as a failed day.
+      timeoutMs: command === "serve" ? undefined : UPDATE_NOTICE_WAIT_MS,
     });
   });
 

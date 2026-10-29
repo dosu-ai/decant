@@ -122,8 +122,9 @@ prefix that needs `sudo`), or when the package manager succeeds but the
 to npm a few minutes before GitHub Releases and the Homebrew tap, so an update
 started in that window fails with a message to try again shortly.
 
-The Docker image sets `DECANT_INSTALL_CHANNEL=docker`, so containers are
-recognized even where the runtime creates no `/.dockerenv`.
+The Docker image sets `DECANT_INSTALL_CHANNEL=docker`, and that variable is how
+`decant update` recognizes it. Other containers, such as a devcontainer with
+decant from npm or the installer, update the same way they would on the host.
 
 Update checks are off by default. Turn them on with **Check for updates** in
 Settings or `DECANT_UPDATE_CHECK=1`, and force them off with

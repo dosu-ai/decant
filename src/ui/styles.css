@@ -4824,11 +4824,6 @@ mark {
   font-size: 12px;
 }
 
-/* Settings panels have no padding of their own; line notes up with the rows. */
-.settings-page .panel > .settings-note {
-  padding-inline: 20px;
-}
-
 .about-decant .panel-heading > img {
   width: 44px;
   height: 44px;
@@ -6759,10 +6754,91 @@ a:focus-visible .ctx-strip-compaction-marker rect {
   font-size: var(--text-micro-size);
 }
 
-.setting-toggle input {
-  width: 18px;
-  height: 18px;
-  min-height: auto;
-  accent-color: var(--accent-text);
+/* Declared after the narrow-screen .setting-select rule so the switch stays
+   beside its label instead of dropping under it. */
+.setting-switch {
+  grid-template-columns: minmax(0, 1fr) auto;
   cursor: pointer;
+}
+
+.setting-select .setting-switch-status {
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.setting-switch:has(.switch:disabled) {
+  cursor: not-allowed;
+}
+
+.switch {
+  display: inline-flex;
+  width: 36px;
+  height: 20px;
+  min-height: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-components-switch-switch);
+  cursor: inherit;
+  padding: 2px;
+  transition: background-color var(--duration-hover) var(--ease-out);
+}
+
+.switch-handle {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-components-switch-switch-handle);
+  box-shadow: var(--shadow-switch-handle);
+  transition: transform var(--duration-press) var(--ease-out);
+}
+
+.switch[aria-checked="true"] {
+  background: var(--bg-components-switch-switch-active);
+}
+
+.switch[aria-checked="true"] .switch-handle {
+  transform: translateX(16px);
+}
+
+.setting-switch:hover .switch:not(:disabled) {
+  background: var(--bg-components-switch-switch-hover);
+}
+
+.setting-switch:hover .switch[aria-checked="true"]:not(:disabled) {
+  background: var(--bg-components-switch-switch-active-hover);
+}
+
+.switch:disabled {
+  background: var(--bg-components-switch-switch-disabled);
+}
+
+.switch:disabled[aria-checked="true"] {
+  background: var(--bg-components-switch-switch-active-disabled);
+}
+
+.switch:disabled .switch-handle {
+  background: var(--bg-components-switch-switch-handle-disabled);
+  box-shadow: none;
+}
+
+/* The track and handle are background colours, which forced-colours mode drops. */
+@media (forced-colors: active) {
+  .switch {
+    border: 1px solid ButtonText;
+  }
+
+  .switch-handle {
+    background: ButtonText;
+  }
+
+  .switch[aria-checked="true"] {
+    background: Highlight;
+  }
+
+  .switch[aria-checked="true"] .switch-handle {
+    background: HighlightText;
+  }
 }

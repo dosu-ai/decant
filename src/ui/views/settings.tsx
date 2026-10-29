@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { getJson } from "../api.ts";
 import dosuDecantUrl from "../assets/dosu-decant.png";
 import { dosuLink } from "../dosu-links.ts";
@@ -19,7 +19,6 @@ export function SettingsView({
 }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setSettings(settingsInfo?.settings ?? null);
@@ -35,7 +34,6 @@ export function SettingsView({
     const next = { ...base, ...patch };
     setSettings(next);
     setSaveError(null);
-    setSaving(true);
     void getJson<SettingsInfo>("/api/settings", {
       method: "POST",
       body: JSON.stringify(next),
@@ -47,8 +45,7 @@ export function SettingsView({
       .catch((err: unknown) => {
         setSettings(previous ?? base);
         setSaveError(errorMessage(err));
-      })
-      .finally(() => setSaving(false));
+      });
   };
 
   return (
@@ -86,38 +83,23 @@ export function SettingsView({
           />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
-        <p className="settings-note">
-          {saving
-            ? "Saving preferences..."
-            : settingsInfo?.can_launch === true
-              ? "Native launcher is available on this Mac."
-              : "Native launcher is unavailable on this platform."}
-        </p>
       </section>
 
       <section className="panel">
         <div className="settings-form">
-          <label className="setting-select setting-toggle">
-            <span>
-              <strong>Check for updates</strong>
-              <small>
-                Once a day, ask the npm registry for the newest Decant version. The request carries
-                no session data.
-              </small>
-            </span>
-            {/* With DECANT_UPDATE_CHECK set, the box shows what is in effect
-                and saving the setting would change nothing. */}
-            <input
-              checked={
-                update?.envOverride === true ? update.enabled : (settings?.updateCheck ?? false)
-              }
-              disabled={update?.envOverride === true}
-              onChange={(event) => save({ updateCheck: event.target.checked })}
-              type="checkbox"
-            />
-          </label>
+          {/* With DECANT_UPDATE_CHECK set, the switch shows what is in effect
+              and saving the setting would change nothing. */}
+          <SettingSwitch
+            checked={
+              update?.envOverride === true ? update.enabled : (settings?.updateCheck ?? false)
+            }
+            disabled={update?.envOverride === true}
+            help="Once a day, ask the npm registry for the newest Decant version. The request carries no session data."
+            label="Check for updates"
+            onChange={(updateCheck) => save({ updateCheck })}
+            status={updateNote(update, settings?.updateCheck ?? false)}
+          />
         </div>
-        <p className="settings-note">{updateNote(update, settings?.updateCheck ?? false)}</p>
       </section>
 
       <section className="panel about-decant">
@@ -222,6 +204,51 @@ export function SettingSelect({
         </select>
         <Icon name="chevronDown" />
       </span>
+    </label>
+  );
+}
+
+export function SettingSwitch({
+  checked,
+  disabled = false,
+  help,
+  label,
+  onChange,
+  status,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  help: string;
+  label: string;
+  onChange: (checked: boolean) => void;
+  status?: string;
+}) {
+  const id = useId();
+  return (
+    // A label activates its button, so clicking the title or help text flips the switch too.
+    <label className="setting-select setting-switch" htmlFor={id}>
+      <span>
+        <strong id={`${id}-label`}>{label}</strong>
+        <small id={`${id}-help`}>{help}</small>
+        {status != null ? (
+          <small aria-live="polite" className="setting-switch-status">
+            {status}
+          </small>
+        ) : null}
+      </span>
+      <button
+        aria-checked={checked}
+        aria-describedby={`${id}-help`}
+        aria-labelledby={`${id}-label`}
+        className="switch"
+        disabled={disabled}
+        id={id}
+        onClick={() => onChange(!checked)}
+        role="switch"
+        type="button"
+      >
+        <span className="switch-handle" />
+      </button>
     </label>
   );
 }

@@ -1,12 +1,13 @@
+import { useRef } from "react";
 import {
   ALL_DATE_RANGE,
   applyDatePreset,
   dateRangeLabel,
+  dateRangePresetLabel,
   RANGE_PRESETS,
-  shiftDateRange,
 } from "./date-range.ts";
 import { Icon } from "./icons.tsx";
-import type { DateBounds, DateRangeSelection } from "./types.ts";
+import type { DateBounds, DateRangeSelection, RangePreset } from "./types.ts";
 
 export function DateRangeControl({
   bounds,
@@ -17,51 +18,113 @@ export function DateRangeControl({
   range: DateRangeSelection;
   onChange: (range: DateRangeSelection) => void;
 }) {
+  const menuRef = useRef<HTMLDetailsElement | null>(null);
+  const bounded = range.from != null && range.to != null;
+  const closeMenu = () => {
+    if (menuRef.current == null) {
+      return;
+    }
+    menuRef.current.open = false;
+    menuRef.current.querySelector("summary")?.focus();
+  };
+
+  const choosePreset = (value: Exclude<RangePreset, "custom">) => {
+    if (value === "all") {
+      onChange(ALL_DATE_RANGE);
+      closeMenu();
+      return;
+    }
+    onChange(applyDatePreset(value, bounds));
+    closeMenu();
+  };
+
   return (
     <div className="date-range-control">
       <div className="date-range-buttons">
-        {range.from != null && range.to != null ? (
-          <button
-            aria-label="Previous period"
-            className="icon-period-button"
-            onClick={() => onChange(shiftDateRange(range, -1))}
-            type="button"
-          >
-            <Icon name="chevronLeft" />
-          </button>
-        ) : null}
-        <button
-          aria-pressed={range.preset === "all"}
-          onClick={() => onChange(ALL_DATE_RANGE)}
-          type="button"
+        <details
+          className="date-range-menu"
+          onBlur={(event) => {
+            if (
+              !(event.relatedTarget instanceof Node) ||
+              !event.currentTarget.contains(event.relatedTarget)
+            ) {
+              event.currentTarget.open = false;
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector("summary")?.focus();
+            }
+          }}
+          ref={menuRef}
         >
-          All time
-        </button>
-        {RANGE_PRESETS.map((preset) => (
-          <button
-            aria-pressed={range.preset === preset.key}
-            key={preset.key}
-            onClick={() => onChange(applyDatePreset(preset.key, bounds))}
-            type="button"
-          >
-            {preset.label}
-          </button>
-        ))}
-        {range.from != null && range.to != null ? (
-          <button
-            aria-label="Next period"
-            className="icon-period-button"
-            onClick={() => onChange(shiftDateRange(range, 1))}
-            type="button"
-          >
-            <Icon name="chevronRight" />
-          </button>
-        ) : null}
+          <summary aria-label={`Time range: ${dateRangePresetLabel(range)}`}>
+            <Icon name="clock" />
+            <span>{dateRangePresetLabel(range)}</span>
+            <Icon name="chevronDown" />
+          </summary>
+          <div className="date-range-popover">
+            <fieldset className="date-range-presets">
+              <legend className="sr-only">Time range presets</legend>
+              <button
+                aria-pressed={range.preset === "all"}
+                onClick={() => choosePreset("all")}
+                type="button"
+              >
+                <span>All time</span>
+                {range.preset === "all" ? <Icon name="check" /> : null}
+              </button>
+              {RANGE_PRESETS.map((preset) => (
+                <button
+                  aria-pressed={range.preset === preset.key}
+                  key={preset.key}
+                  onClick={() => choosePreset(preset.key)}
+                  type="button"
+                >
+                  <span>{preset.label}</span>
+                  {range.preset === preset.key ? <Icon name="check" /> : null}
+                </button>
+              ))}
+            </fieldset>
+            <div className="custom-date-range">
+              <div className="custom-date-range-heading">
+                <span>Custom range</span>
+                {range.preset === "custom" && bounded ? (
+                  <small>{dateRangeLabel(range)}</small>
+                ) : null}
+              </div>
+              <div className="custom-date-fields">
+                <label>
+                  <span>From</span>
+                  <input
+                    aria-label="From date"
+                    max={range.to ?? undefined}
+                    onChange={(event) =>
+                      onChange({ ...range, from: event.target.value || null, preset: "custom" })
+                    }
+                    type="date"
+                    value={range.from ?? ""}
+                  />
+                </label>
+                <label>
+                  <span>To</span>
+                  <input
+                    aria-label="To date"
+                    min={range.from ?? undefined}
+                    onChange={(event) =>
+                      onChange({ ...range, preset: "custom", to: event.target.value || null })
+                    }
+                    type="date"
+                    value={range.to ?? ""}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
-      {/* The label spells out a custom range ("Jun 3 to Jun 17"). For "all" it
-       * returns "All time", which is now exactly what the selected button reads,
-       * so showing it twice just looks like a bug. */}
-      {range.preset === "all" ? null : <span>{dateRangeLabel(range)}</span>}
     </div>
   );
 }

@@ -186,6 +186,29 @@ describe("UI interaction contracts", () => {
     expect(summaryLoader).not.toContain("sessionSummaryPath");
   });
 
+  test("uses one compact date-range control across every date-scoped view", () => {
+    const app = sourceBetween(main, "function App()", "function renderView(");
+    const sessions = sourceFrom(readUiFile("views/sessions.tsx"), "function SessionsView(");
+    const analytics = sourceFrom(readUiFile("views/analytics.tsx"), "function AnalyticsView(");
+    const tools = sourceFrom(readUiFile("views/tools.tsx"), "function ToolsView(");
+    const files = sourceFrom(readUiFile("views/files.tsx"), "function FilesView(");
+    const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
+
+    expect(app).toContain("SLICE_LOADERS[slice].load(dateQuery)");
+    for (const view of [sessions, analytics, tools, files]) {
+      expect(view).toContain("<DateRangeControl");
+    }
+    expect(analytics).toContain(
+      'withDateQuery("/api/reports/analytics.html", dateRangeQuery(dateRange))',
+    );
+    expect(control).toContain('<Icon name="clock" />');
+    expect(control).toContain('<Icon name="chevronDown" />');
+    expect(control.match(/<span>Custom range<\/span>/g)).toHaveLength(1);
+    expect(control).not.toContain('choosePreset("custom")');
+    expect(control).not.toContain('name="chevronLeft"');
+    expect(control).not.toContain('name="chevronRight"');
+  });
+
   test("exposes session state actions through the shared accessible overflow menu", () => {
     const overflow = sourceFrom(readUiFile("common.tsx"), "function OverflowMenu(");
     const session = sourceBetween(

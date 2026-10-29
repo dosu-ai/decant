@@ -119,6 +119,7 @@ describe("restyle contract", () => {
       ".command-palette",
       ".share-review-backdrop",
       ".overflow-menu-popover",
+      ".date-range-popover",
       ".sidebar-backdrop.is-open",
     ]);
     const blurred = [...styles.matchAll(/([^{}]+)\{([^{}]*backdrop-filter[^{}]*)\}/g)].map(

@@ -1,17 +1,21 @@
 import type { DateBounds, DateRangeSelection } from "./types.ts";
 
 export const RANGE_PRESETS = [
-  { key: "7d", label: "7d", days: 7 },
-  { key: "30d", label: "30d", days: 30 },
-  { key: "90d", label: "90d", days: 90 },
+  { key: "today", label: "Today", days: 1 },
+  { key: "7d", label: "Last 7 days", days: 7 },
+  { key: "30d", label: "Last 30 days", days: 30 },
+  { key: "90d", label: "Last 90 days", days: 90 },
 ] as const;
 
 export const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
 
+// `from` and `to` are UTC calendar dates, so labels format them in UTC too.
+// A local-time formatter would show the previous day west of UTC.
 export const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "2-digit",
   year: "numeric",
+  timeZone: "UTC",
 });
 
 export function applyDatePreset(
@@ -19,7 +23,9 @@ export function applyDatePreset(
   bounds: DateBounds | null,
 ): DateRangeSelection {
   const preset = RANGE_PRESETS.find((item) => item.key === key);
-  const to = validIsoDate(bounds?.max) ?? todayIsoDate();
+  // Lookbacks end at the newest archived session so a stale archive still shows
+  // data. Today means the current date even when nothing has synced yet.
+  const to = key === "today" ? todayIsoDate() : (validIsoDate(bounds?.max) ?? todayIsoDate());
   if (preset == null) {
     return ALL_DATE_RANGE;
   }
@@ -27,18 +33,6 @@ export function applyDatePreset(
     preset: key,
     from: addDays(to, -(preset.days - 1)),
     to,
-  };
-}
-
-export function shiftDateRange(range: DateRangeSelection, direction: -1 | 1): DateRangeSelection {
-  if (range.from == null || range.to == null) {
-    return range;
-  }
-  const span = Math.max(1, daysBetween(range.from, range.to) + 1);
-  return {
-    preset: "custom",
-    from: addDays(range.from, span * direction),
-    to: addDays(range.to, span * direction),
   };
 }
 
@@ -75,16 +69,20 @@ export function dateRangeLabel(range: DateRangeSelection): string {
     : `${formatDateLabel(range.from)} to ${formatDateLabel(range.to)}`;
 }
 
+export function dateRangePresetLabel(range: DateRangeSelection): string {
+  if (range.preset === "all") {
+    return "All time";
+  }
+  if (range.preset === "custom") {
+    return "Custom range";
+  }
+  return RANGE_PRESETS.find((preset) => preset.key === range.preset)?.label ?? "All time";
+}
+
 export function addDays(isoDate: string, days: number): string {
   const date = parseIsoDate(isoDate) ?? new Date();
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
-}
-
-export function daysBetween(from: string, to: string): number {
-  const start = parseIsoDate(from)?.getTime() ?? 0;
-  const end = parseIsoDate(to)?.getTime() ?? start;
-  return Math.round((end - start) / 86_400_000);
 }
 
 export function todayIsoDate(): string {

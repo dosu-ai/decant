@@ -291,7 +291,7 @@ export type NavItem = {
 
 export type ThemeChoice = "system" | "light" | "dark";
 
-export type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
+export type RangePreset = "today" | "7d" | "30d" | "90d" | "all" | "custom";
 
 export type DateRangeSelection = {
   preset: RangePreset;

@@ -64,6 +64,7 @@ docker run --rm \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
   -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
+  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 

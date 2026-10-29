@@ -160,6 +160,13 @@ session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
 
+Cursor CLI records no token usage, so its sessions store zero tokens and zero
+cost. Session summaries mark them `usage_available: false` and stats totals
+count only sessions with usage in `usage_sessions`, so the UI, reports, and
+Markdown exports show tokens and cost for a Cursor-only scope as unavailable
+rather than free. In a mixed scope the totals cover the sessions that recorded
+usage.
+
 When Decant has no rate for a model, the cost OpenCode recorded for those
 requests is used instead and the session's `cost_source` is `reported` (or
 `mixed` when only some of its model rows fell back). A recorded cost of zero

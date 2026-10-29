@@ -37,16 +37,19 @@ function freshConfig(): Config {
   const codexDir = join(root, "codex");
   const geminiDir = join(root, "gemini");
   const opencodeDir = join(root, "opencode");
+  const cursorDir = join(root, "cursor", "chats");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
     geminiDir,
     opencodeDir,
+    cursorDir,
   };
 }
 
@@ -83,6 +86,7 @@ describe("watch mode", () => {
       join(config.codexDir, "sessions"),
       config.geminiDir,
       config.opencodeDir,
+      config.cursorDir,
     ]);
   });
 
@@ -101,10 +105,18 @@ describe("watch mode", () => {
       [config.geminiDir, true],
       [config.opencodeDir, false],
       [realpathSync(dirname(explicit)), false],
+      [config.cursorDir, true],
     ]);
     const [claude, , , data, other] = roots;
     // Only OpenCode roots are polled.
-    expect(roots.map((root) => root.poll != null)).toEqual([false, false, false, true, true]);
+    expect(roots.map((root) => root.poll != null)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+    ]);
     expect(claude?.accepts(null)).toBe(true);
     expect(claude?.accepts("Users-dev-proj/sample.jsonl")).toBe(true);
 
@@ -143,6 +155,17 @@ describe("watch mode", () => {
     write(explicit);
     expect(other?.accepts("custom.db-shm")).toBe(true);
     expect(other?.poll?.()).toBe(false);
+  });
+
+  test("Cursor roots ignore the -shm index a read rewrites", () => {
+    const config = freshConfig();
+    const root = watchRoots(config).find((candidate) => candidate.dir === config.cursorDir);
+    expect(root?.poll).toBeUndefined();
+    expect(root?.accepts("workspace/chat/store.db-shm")).toBe(false);
+    expect(root?.accepts("workspace/chat/store.db-wal")).toBe(true);
+    expect(root?.accepts("workspace/chat/store.db")).toBe(true);
+    expect(root?.accepts("workspace/chat/meta.json")).toBe(true);
+    expect(root?.accepts(null)).toBe(true);
   });
 
   test("a symlinked OPENCODE_DB is watched in its real directory", () => {

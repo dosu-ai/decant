@@ -1,11 +1,13 @@
 export interface SessionCardSummary {
   sessions: number;
+  usage_sessions: number;
   messages: number;
   estimated_cost_usd: number;
 }
 
 export interface SessionCardRow {
   message_count: number;
+  usage_available: boolean;
   estimated_cost_usd: number;
   subagent_estimated_cost_usd?: number;
   subagents?: readonly SessionCardRow[];
@@ -26,12 +28,13 @@ export function sessionCardMetrics(
   return visibleRows.reduce<SessionCardSummary>(
     (metrics, row) => ({
       sessions: metrics.sessions + 1,
+      usage_sessions: metrics.usage_sessions + Number(sessionThreadUsageAvailable(row)),
       // The table's "Msgs" column is the matching root row's own messages,
       // while its cost cell is a recursive thread total.
       messages: metrics.messages + row.message_count,
       estimated_cost_usd: metrics.estimated_cost_usd + sessionThreadCost(row),
     }),
-    { sessions: 0, messages: 0, estimated_cost_usd: 0 },
+    { sessions: 0, usage_sessions: 0, messages: 0, estimated_cost_usd: 0 },
   );
 }
 
@@ -43,6 +46,13 @@ export function sessionThreadCost(session: SessionCardRow): number {
     );
   }
   return session.estimated_cost_usd + (session.subagent_estimated_cost_usd ?? 0);
+}
+
+export function sessionThreadUsageAvailable(session: SessionCardRow): boolean {
+  return (
+    session.usage_available ||
+    (session.subagents ?? []).some((subagent) => sessionThreadUsageAvailable(subagent))
+  );
 }
 
 export function sessionSummaryPath(

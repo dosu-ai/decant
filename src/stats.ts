@@ -8,6 +8,7 @@ import { visibleSessionPredicate } from "./session-visibility.ts";
 
 export interface Totals {
   sessions: number;
+  usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
@@ -25,10 +26,26 @@ export interface StatsFilter extends DateFilter {
   tool?: string | null;
 }
 
+/** 1 unless the session comes from a source that records no token usage.
+ * Cursor CLI stores none, so a Cursor session's zero cost means "unknown",
+ * not "free", unless one of its messages does carry usage. Other sources
+ * always count: Codex can report usage only as session totals, and a zero
+ * total there is a real zero. */
+export function sessionUsageAvailableSql(alias: string): string {
+  return `(${alias}.tool != 'cursor' OR EXISTS (
+           SELECT 1 FROM message usage_message
+           WHERE usage_message.session_id = ${alias}.id
+             AND (usage_message.input_tokens IS NOT NULL
+               OR usage_message.output_tokens IS NOT NULL
+               OR usage_message.cache_read_tokens IS NOT NULL
+               OR usage_message.cache_creation_tokens IS NOT NULL)
+         ))`;
+}
+
 const TOTALS_COLUMNS = `s.id, s.is_subagent,
          s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
          s.total_cache_creation_tokens, s.total_reasoning_tokens, s.est_reasoning_tokens,
-         s.estimated_cost_usd`;
+         s.estimated_cost_usd, ${sessionUsageAvailableSql("s")} AS usage_available`;
 
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
@@ -39,6 +56,8 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
+         (SELECT COUNT(*) FROM filtered_session
+          WHERE is_subagent = 0 AND usage_available = 1) AS usage_sessions,
          (SELECT COUNT(*) FROM message m JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
          (SELECT COALESCE(SUM(total_input_tokens), 0) FROM filtered_session) AS input_tokens,
@@ -596,6 +615,8 @@ export function todayTotals(db: Database, now: Date = new Date()): Totals {
        )
        SELECT
          COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+         COALESCE(SUM(CASE WHEN is_subagent = 0 AND usage_available = 1 THEN 1 ELSE 0 END), 0)
+           AS usage_sessions,
          (SELECT COUNT(*) FROM message m
           JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t

@@ -25,9 +25,13 @@ describe("Gemini CLI source copy", () => {
   });
 
   test("names Gemini CLI alongside Claude Code and Codex in product copy", () => {
-    expect(main).toContain(
-      "Every Claude Code, Codex, Gemini CLI, and OpenCode session log on this device.",
+    // JSX text wraps wherever the formatter puts it, so compare it as rendered.
+    const copy = main.replace(/\s+/g, " ");
+    expect(copy).toContain(
+      "Every Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI session log on this device.",
     );
-    expect(main).toMatch(/session logs Claude Code, Codex, Gemini CLI, and OpenCode already write/);
+    expect(copy).toContain(
+      "session logs Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI already write",
+    );
   });
 });

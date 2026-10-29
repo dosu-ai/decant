@@ -24,9 +24,10 @@ we investigate and prepare a fix.
 ## Scope and threat model
 
 Decant is a local-first, offline tool. It reads CLI session logs that already
-exist on disk (`~/.claude`, `~/.codex`), writes a local SQLite archive, and makes
-no outbound runtime network requests. `decant serve` is intended for local use
-and binds to `127.0.0.1` by default.
+exist on disk (by default `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
+OpenCode's `~/.local/share/opencode`, and `~/.cursor/chats`), writes a local
+SQLite archive, and makes no outbound runtime network requests. `decant serve`
+is intended for local use and binds to `127.0.0.1` by default.
 
 In scope:
 

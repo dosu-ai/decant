@@ -44,6 +44,7 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
+import { type CursorSource, parseCursorSession, readCursorSource } from "./sources/cursor.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
 import { parseOpenCodeSession } from "./sources/opencode.ts";
 import { parseOpenCodeLegacySession } from "./sources/opencode-legacy.ts";
@@ -84,6 +85,8 @@ export interface IngestConfig {
   /** OpenCode 1.x's models.dev cache file, read for context windows when a
    * database holds no catalog (a database only 1.x opened). */
   opencodeModelsPath?: string;
+  /** Cursor CLI chats directory: `<workspace>/<chat>/store.db` plus `meta.json`. */
+  cursorDir?: string;
   sourcePaths?: string[];
 }
 
@@ -157,7 +160,10 @@ export function discover(config: IngestConfig): SourceFile[] {
     collectGemini(config.geminiDir, out);
   }
   out.push(...discoverOpenCode(openCodeDatabasePaths(config)));
-  return out;
+  if (config.cursorDir != null) {
+    collect(config.cursorDir, "cursor", false, (name) => name === CURSOR_STORE_NAME, out);
+  }
+  return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
 }
 
 export function discoverSourcePaths(paths: string[]): SourceFile[] {
@@ -353,10 +359,14 @@ export function sync(
       }
 
       try {
-        if (file.opencode != null) {
-          // Virtual `<db>#<session>` paths never exist on disk; the file-open
-          // path below would silently skip them as ENOENT.
-          const outcome = syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers);
+        if (file.opencode != null || file.tool === "cursor") {
+          // Virtual `<db>#<session>` paths never exist on disk, and a Cursor
+          // store is a SQLite database with sidecars; the text read below fits
+          // neither.
+          const outcome =
+            file.opencode != null
+              ? syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers)
+              : syncCursorStore(db, file);
           if (outcome.kind === "ingested") {
             report.ingested += 1;
             report.issues += outcome.issues.length;
@@ -539,7 +549,7 @@ export function upsertSession(
   );
 }
 
-type OpenCodeSyncOutcome =
+type SessionSyncOutcome =
   | { kind: "skipped" | "tombstoned" | "failed" }
   | { kind: "ingested"; issues: Issue[] };
 
@@ -691,7 +701,7 @@ function syncOpenCodeSession(
   ref: OpenCodeSessionRef,
   opencode: OpenCodeRun,
   mcpServers: OpenCodeMcpServerNames,
-): OpenCodeSyncOutcome {
+): SessionSyncOutcome {
   const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
     db,
     "SELECT hash, ingest_revision FROM ingest_source WHERE path = ?1",
@@ -743,6 +753,96 @@ function syncOpenCodeSession(
   return outcome === "tombstoned"
     ? { kind: "tombstoned" }
     : { kind: "ingested", issues: parsed.issues };
+}
+
+/** A Cursor CLI chat is a SQLite store with `meta.json` beside it. Its
+ * recorded size and mtime cover `meta.json` and the `-wal` too, because a
+ * running chat appends to the WAL without touching `store.db`. A store that
+ * cannot be read fails alone and is retried on the next sync. */
+function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
+  let signature: { size: number; mtime: number };
+  try {
+    signature = cursorStoreSignature(file.path);
+  } catch (error) {
+    // Vanished since discovery: a silent skip, as for a JSONL file.
+    return (error as { code?: string }).code === "ENOENT"
+      ? { kind: "skipped" }
+      : { kind: "failed" };
+  }
+  const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
+    db,
+    "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
+    [file.path],
+  );
+  if (
+    prior != null &&
+    prior.size === signature.size &&
+    prior.mtime === signature.mtime &&
+    prior.ingest_revision === INGEST_PIPELINE_REVISION
+  ) {
+    return { kind: "skipped" };
+  }
+  // Stat before read: a write landing in between records an older signature
+  // than the content read, so the next sync re-ingests instead of skipping.
+  let source: CursorSource;
+  try {
+    source = readCursorSource(file.path);
+  } catch (error) {
+    logger.warning("Source file could not be read.", {
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": file.path,
+      "error.type": "cursor_read",
+      "error.message": error instanceof Error ? error.message : String(error),
+    });
+    return { kind: "failed" };
+  }
+  const parsed = parseCursorSession(pathBasename(dirname(file.path)), source);
+  parsed.session.isArchived = file.archived;
+  const prepared: Prepared = {
+    file,
+    lineCount: parsed.session.messages.length,
+    mtime: signature.mtime,
+    size: signature.size,
+  };
+  const outcome = writeIngestedFile(db, prepared, parsed);
+  return outcome === "tombstoned"
+    ? { kind: "tombstoned" }
+    : { kind: "ingested", issues: parsed.issues };
+}
+
+const CURSOR_STORE_NAME = "store.db";
+
+/** Combined size and latest mtime of a Cursor store and its sidecars. Throws
+ * only when `store.db` itself cannot be stat'ed. */
+function cursorStoreSignature(path: string): { size: number; mtime: number } {
+  const store = statSync(path);
+  let size = store.size;
+  let mtime = mtimeSecs(store);
+  for (const sidecar of [cursorMetaPath(path), `${path}-wal`]) {
+    try {
+      const stats = statSync(sidecar);
+      size += stats.size;
+      mtime = Math.max(mtime, mtimeSecs(stats));
+    } catch {
+      // The WAL is optional; a missing meta.json fails the read instead.
+    }
+  }
+  return { size, mtime };
+}
+
+function cursorMetaPath(path: string): string {
+  return join(dirname(path), "meta.json");
+}
+
+/** Cursor creates a store for every chat it opens; only those whose
+ * `meta.json` says a conversation happened hold a transcript. */
+function isCursorConversationStore(path: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(cursorMetaPath(path), "utf8")) as Json;
+    return get(meta, "hasConversation") === true;
+  } catch {
+    return false;
+  }
 }
 
 type OpenCodeLoaded =
@@ -907,7 +1007,7 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_fields
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode', 'cursor')`,
   );
 
   const sessionBySource = new Map<string, number>();
@@ -1100,6 +1200,9 @@ interface ReasoningEffortSummary {
  * every message/block/tool object from a potentially multi-GB archive and
  * leaves the database write transaction for the small update batch only. */
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
+  if (tool === "cursor") {
+    return { summary: null, levels: [] };
+  }
   const efforts = new Set<string>();
   const scan: EffortScan = { tool, efforts, sawMeta: false, historyStart: null };
   const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -1194,6 +1297,8 @@ function inferSubagent(row: {
   const meta = parseObject(row.raw_meta);
   const first = firstMessageFields(row.first_fields);
   const source = get(meta, "source");
+  const cursorStore = get(meta, "store");
+  const cursorSubagent = get(cursorStore, "subagentInfo");
   const subagentSource = get(source, "subagent");
   const threadSpawn = get(subagentSource, "thread_spawn");
   const parentThreadId =
@@ -1211,16 +1316,22 @@ function inferSubagent(row: {
   return {
     isSubagent,
     rootKey:
-      parentThreadId ?? asString(get(meta, "sessionId")) ?? asString(get(first, "sessionId")),
+      parentThreadId ??
+      asString(get(cursorSubagent, "rootParentAgentId")) ??
+      asString(get(cursorSubagent, "parentAgentId")) ??
+      asString(get(meta, "sessionId")) ??
+      asString(get(first, "sessionId")),
     spawnToolUseId:
       row.spawn_tool_use_id ??
       asString(get(meta, "spawnToolUseId")) ??
-      asString(get(meta, "toolUseId")),
+      asString(get(meta, "toolUseId")) ??
+      asString(get(cursorSubagent, "toolCallId")),
     agentId:
       row.agent_id ??
       asString(get(meta, "agent_nickname")) ??
       asString(get(threadSpawn, "agent_nickname")) ??
       asString(get(meta, "agentId")) ??
+      asString(get(cursorStore, "agentId")) ??
       asString(get(first, "agentId")) ??
       (isSubagent && row.tool === "codex" ? row.source_session_id : null),
     agentType:
@@ -1230,7 +1341,8 @@ function inferSubagent(row: {
       asString(subagentSource) ??
       asString(get(meta, "agentType")) ??
       asString(get(meta, "subagentType")) ??
-      asString(get(meta, "subagent_type")),
+      asString(get(meta, "subagent_type")) ??
+      asString(get(cursorSubagent, "typeName")),
     spawnDepth:
       row.spawn_depth ?? asInteger(get(threadSpawn, "depth")) ?? asInteger(get(meta, "spawnDepth")),
   };
@@ -1741,6 +1853,12 @@ function collectSourcePath(path: string, out: SourceFile[], databases: string[])
   }
 
   if (stats.isFile()) {
+    if (pathBasename(path) === CURSOR_STORE_NAME) {
+      if (isCursorConversationStore(path)) {
+        out.push({ tool: "cursor", path, archived: false });
+      }
+      return;
+    }
     if (path.endsWith(".db")) {
       databases.push(path);
       return;
@@ -1770,6 +1888,9 @@ function collectSourcePath(path: string, out: SourceFile[], databases: string[])
 
 function sourceFileForPath(path: string): SourceFile | null {
   const name = pathBasename(path);
+  if (name === CURSOR_STORE_NAME) {
+    return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
+  }
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }

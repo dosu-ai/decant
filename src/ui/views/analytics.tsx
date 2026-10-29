@@ -15,7 +15,15 @@ import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "../date-range.ts"
 import { DateRangeControl } from "../date-range-control.tsx";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "../dosu-cta.ts";
 import { dosuLink } from "../dosu-links.ts";
-import { basename, compact, duration, formatInt, money, roundedPercents } from "../format.ts";
+import {
+  basename,
+  compact,
+  duration,
+  formatInt,
+  money,
+  roundedPercents,
+  usageMetric,
+} from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
 import { projectSessionsHref } from "../navigation.ts";
@@ -57,9 +65,9 @@ export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the session logs Claude Code, Codex, Gemini CLI, and OpenCode already write
-          and turns them into a searchable session-log index with token, cost, and context-window
-          analytics. Nothing leaves this machine.
+          Decant reads the session logs Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI
+          already write and turns them into a searchable session-log index with token, cost, and
+          context-window analytics wherever the source records usage. Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button
@@ -158,21 +166,38 @@ export function AnalyticsView({
         <StatCard
           icon="download"
           label="Input tokens"
-          value={compact(data.summary?.input_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.input_tokens ?? 0),
+          )}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
-          value={compact(data.summary?.output_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.output_tokens ?? 0),
+          )}
         />
         <StatCard
           icon="money"
           label="Est. cost"
-          value={money(data.summary?.estimated_cost_usd ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            money(data.summary?.estimated_cost_usd ?? 0),
+          )}
         />
       </div>
 
-      <TokenEconomicsPanel economics={data.tokenEconomics} />
+      <TokenEconomicsPanel
+        costAvailable={
+          (data.summary?.sessions ?? 0) === 0 || (data.summary?.usage_sessions ?? 0) > 0
+        }
+        economics={data.tokenEconomics}
+      />
 
       <div className="split">
         <DailyPanel
@@ -418,12 +443,15 @@ export function ActivityPanel({
 
 export function TokenEconomicsPanel({
   compact: isCompact = false,
+  costAvailable = true,
   description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
   subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
+  /** False when none of the sessions in scope recorded token usage. */
+  costAvailable?: boolean;
   description?: string;
   economics: TokenEconomics | null;
   subagentRuns?: number;
@@ -445,7 +473,7 @@ export function TokenEconomicsPanel({
         {economics != null ? (
           <div className="activity-summary">
             <span>
-              <strong>{money(totalCost)}</strong>
+              <strong>{costAvailable ? money(totalCost) : "Unavailable"}</strong>
               total
             </span>
             <span>
@@ -537,18 +565,22 @@ export function TokenEconomicsPanel({
                           </span>
                         </td>
                         <td className="activity-share">
-                          <span className="activity-share-inner">
-                            <span className="activity-bar">
-                              <span
-                                className={`tone-${tone}`}
-                                style={{ width: `${share * 100}%` }}
-                              />
+                          {costAvailable ? (
+                            <span className="activity-share-inner">
+                              <span className="activity-bar">
+                                <span
+                                  className={`tone-${tone}`}
+                                  style={{ width: `${share * 100}%` }}
+                                />
+                              </span>
+                              <small>{costPercents[index]}%</small>
                             </span>
-                            <small>{costPercents[index]}%</small>
-                          </span>
+                          ) : (
+                            <span className="faint">-</span>
+                          )}
                         </td>
                         <td className="numeric activity-number">
-                          {money(bucket.estimated_cost_usd)}
+                          {costAvailable ? money(bucket.estimated_cost_usd) : "-"}
                         </td>
                         <td className="activity-share">
                           <span className="activity-share-inner">

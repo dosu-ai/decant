@@ -61,6 +61,9 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "cursor") {
+    return <Badge tone="accent">Cursor</Badge>;
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -255,6 +258,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "opencode") {
     return { key: "opencode", label: "OpenCode", tone: "opencode", icon: "opencode" };
+  }
+  if (tool === "cursor") {
+    return { key: "assistant", label: "Cursor", tone: "accent", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

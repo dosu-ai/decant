@@ -75,6 +75,12 @@ export function money(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+/** Token and cost totals over sessions that all lack recorded usage are
+ * unknown, not zero. */
+export function usageMetric(sessions: number, usageSessions: number, value: string): string {
+  return sessions > 0 && usageSessions === 0 ? "Unavailable" : value;
+}
+
 export function duration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {

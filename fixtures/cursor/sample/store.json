@@ -1,0 +1,45 @@
+{
+  "store": {
+    "agentId": "cursor-synthetic-session",
+    "name": "Inspect the demo project",
+    "mode": "agent",
+    "createdAt": 1752489000000,
+    "lastUsedModel": "cursor-test-model"
+  },
+  "records": [
+    { "id": "user-1", "role": "user", "content": [{ "type": "text", "text": "Inspect the demo project." }] },
+    {
+      "id": "assistant-1",
+      "role": "assistant",
+      "content": [
+        { "type": "reasoning", "text": "I will inspect the requested file." },
+        {
+          "type": "tool-call",
+          "toolCallId": "call-1",
+          "toolName": "read_file",
+          "args": { "path": "/Users/dev/cursor-demo/src/index.ts" }
+        }
+      ]
+    },
+    {
+      "id": "tool-1",
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool-result",
+          "toolCallId": "call-1",
+          "toolName": "read_file",
+          "result": "export const greeting = 'hello';"
+        }
+      ]
+    },
+    {
+      "id": "assistant-2",
+      "role": "assistant",
+      "content": [
+        { "type": "redacted-reasoning", "data": "synthetic-redacted" },
+        { "type": "text", "text": "The demo exports a greeting." }
+      ]
+    }
+  ]
+}

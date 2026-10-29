@@ -9,9 +9,11 @@ import { sync } from "../src/ingest.ts";
 import { listProjects } from "../src/query.ts";
 import { byDimension } from "../src/stats.ts";
 import { CostValue } from "../src/ui/common.tsx";
+import { emptyData } from "../src/ui/data-slices.ts";
+import { ALL_DATE_RANGE } from "../src/ui/date-range.ts";
 import { costDisplay, NO_USAGE_TITLE } from "../src/ui/format.ts";
 import type { DimensionRow, ProjectSummary } from "../src/ui/types.ts";
-import { DailyPanel } from "../src/ui/views/analytics.tsx";
+import { AnalyticsView, DailyPanel } from "../src/ui/views/analytics.tsx";
 import { ProjectsView } from "../src/ui/views/projects.tsx";
 import { buildCursorChat } from "./cursor-fixture.ts";
 
@@ -126,6 +128,34 @@ describe("cost for sessions without recorded usage", () => {
     expect(html).toContain(`<span class="faint" title="${NO_USAGE_TITLE}">-</span>`);
     expect(html).toContain("$0.25*");
     expect(html).toContain("2 sessions lack usage data and are not in this cost.");
+  });
+
+  test("By model and By project rows show unavailable usage as a dash", () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsView
+        data={{
+          ...emptyData,
+          dateBounds: { min: "2026-10-01", max: "2026-10-01" },
+          byModel: [dimRow({ key: "cursor-only-model", usage_sessions: 0, input_tokens: 0 })],
+          byProject: [
+            dimRow({
+              key: "/synthetic/mixed",
+              sessions: 2,
+              usage_sessions: 1,
+              estimated_cost_usd: 0.5,
+            }),
+          ],
+        }}
+        dateRange={ALL_DATE_RANGE}
+        onDateRangeChange={() => {}}
+        onSync={() => {}}
+        syncing={false}
+      />,
+    );
+    const modelRow = html.slice(html.indexOf("cursor-only-model"));
+    expect(modelRow.slice(0, modelRow.indexOf("</tr>"))).not.toMatch(/Unavailable|\$0\.00|>0</);
+    expect(html.match(new RegExp(`title="${NO_USAGE_TITLE}">-<`, "g"))).toHaveLength(3);
+    expect(html).toContain("$0.50*");
   });
 
   test("the cost-per-day chart leaves out days without usage data", () => {

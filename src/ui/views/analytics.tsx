@@ -322,10 +322,10 @@ export function AnalyticsView({
                   </td>
                   <td className="numeric">{formatInt(row.sessions)}</td>
                   <td className="numeric muted">
-                    {usageMetric(row.sessions, row.usage_sessions, compact(row.input_tokens))}
+                    <UsageTokens row={row} value={row.input_tokens} />
                   </td>
                   <td className="numeric muted">
-                    {usageMetric(row.sessions, row.usage_sessions, compact(row.output_tokens))}
+                    <UsageTokens row={row} value={row.output_tokens} />
                   </td>
                   <td className="numeric muted">
                     {row.reasoning_tokens > 0
@@ -411,6 +411,17 @@ export function AnalyticsView({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/** A dense token cell: "-" when none of the row's sessions recorded usage. */
+function UsageTokens({ row, value }: { row: DimensionRow; value: number }) {
+  return row.sessions > 0 && row.usage_sessions === 0 ? (
+    <span className="faint" title={NO_USAGE_TITLE}>
+      -
+    </span>
+  ) : (
+    compact(value)
   );
 }
 

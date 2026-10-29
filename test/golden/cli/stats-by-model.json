@@ -2,6 +2,7 @@
   {
     "key": "claude-opus-4-7",
     "sessions": 4,
+    "usage_sessions": 4,
     "input_tokens": 10320,
     "output_tokens": 1470,
     "reasoning_tokens": 0,
@@ -11,6 +12,7 @@
   {
     "key": "gpt-5.4",
     "sessions": 4,
+    "usage_sessions": 4,
     "input_tokens": 1500,
     "output_tokens": 390,
     "reasoning_tokens": 140,
@@ -20,6 +22,7 @@
   {
     "key": "example-model",
     "sessions": 2,
+    "usage_sessions": 2,
     "input_tokens": 18,
     "output_tokens": 15,
     "reasoning_tokens": 2,
@@ -29,6 +32,7 @@
   {
     "key": "glm-5.3-flash",
     "sessions": 2,
+    "usage_sessions": 2,
     "input_tokens": 690,
     "output_tokens": 109,
     "reasoning_tokens": 20,
@@ -38,6 +42,7 @@
   {
     "key": "cursor-test-model",
     "sessions": 1,
+    "usage_sessions": 0,
     "input_tokens": 0,
     "output_tokens": 0,
     "reasoning_tokens": 0,
@@ -47,6 +52,7 @@
   {
     "key": "meta/muse-wonder",
     "sessions": 1,
+    "usage_sessions": 1,
     "input_tokens": 2200,
     "output_tokens": 95,
     "reasoning_tokens": 25,

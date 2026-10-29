@@ -86,6 +86,9 @@ export function parseDimension(value: string): Dimension | null {
 export interface DimRow {
   key: string;
   sessions: number;
+  /** Top-level sessions in the row whose source records token usage. When
+   * this is below `sessions`, the row's tokens and cost cover only these. */
+  usage_sessions: number;
   input_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;
@@ -111,11 +114,14 @@ export function byDimension(
     `WITH filtered_session AS (
          SELECT s.id, s.tool, s.model, s.project_id, s.started_at, s.is_subagent,
                 s.total_input_tokens, s.total_output_tokens, s.total_reasoning_tokens,
-                s.est_reasoning_tokens, s.estimated_cost_usd
+                s.est_reasoning_tokens, s.estimated_cost_usd,
+                ${sessionUsageAvailableSql("s")} AS usage_available
          FROM session s ${whereClause(visible)}
        )
        SELECT ${groupExpr} AS key,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+              COALESCE(SUM(CASE WHEN s.is_subagent = 0 AND s.usage_available = 1 THEN 1 ELSE 0 END), 0)
+                AS usage_sessions,
               COALESCE(SUM(s.total_input_tokens), 0) AS input_tokens,
               COALESCE(SUM(s.total_output_tokens), 0) AS output_tokens,
               COALESCE(SUM(s.total_reasoning_tokens), 0) AS reasoning_tokens,
@@ -143,13 +149,15 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   const sessions = db
     .query(
       `SELECT s.id, s.model, s.is_subagent, s.total_input_tokens, s.total_output_tokens,
-              s.total_reasoning_tokens, s.est_reasoning_tokens, s.estimated_cost_usd
+              s.total_reasoning_tokens, s.est_reasoning_tokens, s.estimated_cost_usd,
+              ${sessionUsageAvailableSql("s")} AS usage_available
          FROM session s ${whereClause(visible)}`,
     )
     .all(...visible.params) as {
     id: number;
     model: string | null;
     is_subagent: number;
+    usage_available: number;
     total_input_tokens: number;
     total_output_tokens: number;
     total_reasoning_tokens: number;
@@ -172,6 +180,7 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
     const created: DimRow = {
       key,
       sessions: 0,
+      usage_sessions: 0,
       input_tokens: 0,
       output_tokens: 0,
       reasoning_tokens: 0,
@@ -184,6 +193,7 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   for (const session of sessions) {
     const label = row(session.model);
     label.sessions += session.is_subagent === 0 ? 1 : 0;
+    label.usage_sessions += session.is_subagent === 0 && session.usage_available === 1 ? 1 : 0;
     // Reasoning is recorded per session, not per request.
     label.reasoning_tokens += session.total_reasoning_tokens;
     label.est_reasoning_tokens += session.est_reasoning_tokens;

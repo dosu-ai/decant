@@ -992,6 +992,8 @@ export interface ProjectSummary {
   path: string;
   name: string | null;
   sessions: number;
+  /** Top-level sessions whose source records token usage. */
+  usage_sessions: number;
   estimated_cost_usd: number;
   last_seen_at: string | null;
   is_worktree: boolean;
@@ -1014,6 +1016,8 @@ export function listProjects(db: Database): ProjectSummary[] {
     .query(
       `SELECT p.id, p.path, p.name,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+              COALESCE(SUM(CASE WHEN s.is_subagent = 0 AND ${sessionUsageAvailableSql("s")}
+                                THEN 1 ELSE 0 END), 0) AS usage_sessions,
               COALESCE(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd,
               MAX(s.ended_at) AS last_seen_at,
               p.is_worktree, p.root_path, p.worktree_label, p.worktree_tool, p.root_source,

@@ -256,7 +256,10 @@ export function renderSessionsByDayChart(rows: readonly DimRow[], size?: ReportC
 }
 
 export function renderCostByDayChart(rows: readonly DimRow[], size?: ReportChartSize): string {
-  const ordered = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+  // A day whose sessions all lack recorded usage has no cost, not a zero one.
+  const ordered = rows
+    .filter((row) => row.sessions === 0 || row.usage_sessions > 0)
+    .sort((left, right) => left.key.localeCompare(right.key));
   return renderChartSvg(
     {
       grid: { top: 18, right: 16, bottom: 44, left: 58 },

@@ -81,6 +81,31 @@ export function usageMetric(sessions: number, usageSessions: number, value: stri
   return sessions > 0 && usageSessions === 0 ? "Unavailable" : value;
 }
 
+export const NO_USAGE_TITLE =
+  "Cursor CLI records no token usage, so Decant cannot estimate cost for its sessions.";
+
+/** A cost over `sessions`, of which only `usageSessions` recorded usage. With
+ * none it is unavailable ("-" when `dense`); with some missing it is the
+ * known part, marked with an asterisk and a title counting the rest. */
+export function costDisplay(
+  cost: number,
+  sessions: number,
+  usageSessions: number,
+  dense = false,
+): { text: string; title: string | undefined } {
+  if (sessions > 0 && usageSessions === 0) {
+    return { text: dense ? "-" : "Unavailable", title: NO_USAGE_TITLE };
+  }
+  const missing = sessions - usageSessions;
+  if (missing > 0) {
+    return {
+      text: `${money(cost)}*`,
+      title: `${formatInt(missing)} ${missing === 1 ? "session lacks" : "sessions lack"} usage data and ${missing === 1 ? "is" : "are"} not in this cost. ${NO_USAGE_TITLE}`,
+    };
+  }
+  return { text: money(cost), title: undefined };
+}
+
 export function duration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {

@@ -66,6 +66,31 @@ describe("Cursor source", () => {
     }
   });
 
+  test("a store locked by a writer fails and is retried, not read unlocked", () => {
+    const root = mkdtempSync(join(tmpdir(), "decant-cursor-test-"));
+    const cursorDir = join(root, "cursor");
+    const chatDir = join(cursorDir, "workspace", "chat");
+    buildCursorChat(chatDir);
+    const store = join(chatDir, "store.db");
+    const config = { claudeDir: join(root, "claude"), codexDir: join(root, "codex"), cursorDir };
+    const writer = new Database(store);
+    const db = openDb(join(root, "archive.db"));
+    try {
+      // A rollback-journal writer mid-transaction may already have written
+      // pages to store.db; the immutable fallback would read them unlocked.
+      writer.exec("PRAGMA journal_mode = DELETE; PRAGMA cache_size = 1; BEGIN EXCLUSIVE");
+      writer.prepare("INSERT INTO blobs(id, data) VALUES ('pending', zeroblob(200000))").run();
+      expect(() => readCursorSource(store)).toThrow("database is locked");
+      expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
+      writer.exec("ROLLBACK");
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+    } finally {
+      writer.close();
+      closeDb(db);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("turns malformed and unknown message content into diagnostics", () => {
     const parsed = parseCursorSession("diagnostics", {
       fileMeta: { schemaVersion: 1 },

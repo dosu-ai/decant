@@ -47,11 +47,22 @@ export function readCursorSource(storePath: string): CursorSource {
       return readCursorDatabase(fileMeta, db);
     } catch (error) {
       lastError = error;
+      // Immutable mode skips locking, so falling back while another
+      // connection holds a lock could read a half-written store. Fail
+      // instead; the next sync retries.
+      if (isLockError(error)) break;
     } finally {
       db?.close(false);
     }
   }
   throw lastError;
+}
+
+function isLockError(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  return (
+    typeof code === "string" && (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED"))
+  );
 }
 
 function readCursorDatabase(fileMeta: CursorFileMeta, db: Database): CursorSource {

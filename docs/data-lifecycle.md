@@ -65,6 +65,8 @@ By default Decant discovers:
   `meta.json` sets `hasConversation` and skips the rest. Stores are opened
   read-only, falling back to SQLite's immutable mode for a store whose
   directory cannot hold a `-shm` file (a read-only mount, for example).
+  A store another process has locked is not read in immutable mode, which
+  ignores locks; it counts as failed and the next sync retries it.
   Cursor records no token usage, so these sessions keep token and cost
   totals unavailable.
 

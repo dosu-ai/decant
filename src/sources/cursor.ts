@@ -1,5 +1,5 @@
 import { constants, Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { linkageIssues } from "../diagnostics.ts";
 import { canonicalJson, isObject, type JsonObject } from "../json.ts";
 import {
@@ -19,8 +19,24 @@ type CursorFileMeta = JsonObject;
 export interface CursorSource {
   fileMeta: CursorFileMeta;
   storeMeta: CursorStoreMeta;
-  records: Json[];
+  records: CursorRecord[];
 }
+
+/** A message blob that could not be read as stored. Kept in place so the
+ * parser reports it as a diagnostic without losing the rest of the chat. */
+export class CursorBlobProblem {
+  constructor(
+    readonly kind: "missing" | "text" | "invalid_json",
+    /** The blob's text, for the parser to read and for the local raw_line. */
+    readonly text: string | null = null,
+  ) {}
+}
+
+export type CursorRecord = Json | CursorBlobProblem;
+
+/** A failure reading a Cursor store. Its message is fixed text that never
+ * quotes the store, so it is safe to log. */
+export class CursorSourceError extends Error {}
 
 /** Read one Cursor CLI chat store without ever opening the source database for
  * writes. Active WAL stores need a normal read-only connection; older stores
@@ -28,34 +44,51 @@ export interface CursorSource {
  * mode. */
 export function readCursorSource(storePath: string): CursorSource {
   const fileMeta = readCursorFileMeta(storePath);
-  let lastError: unknown;
-  const opens = [
-    () => new Database(storePath, { readonly: true }),
+  try {
+    return readWith(fileMeta, () => new Database(storePath, { readonly: true }));
+  } catch (error) {
     // A WAL store on a read-only mount cannot get the -shm file a normal
-    // read-only open creates. Immutable mode needs a URI filename, and the
-    // SQLite in Bun's Linux builds parses one only when SQLITE_OPEN_URI is set.
-    () =>
-      new Database(
-        `file:${storePath.replace(/[?#%]/g, encodeURIComponent)}?immutable=1`,
-        constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
-      ),
-  ];
-  for (const open of opens) {
-    let db: Database | null = null;
-    try {
-      db = open();
-      return readCursorDatabase(fileMeta, db);
-    } catch (error) {
-      lastError = error;
-      // Immutable mode skips locking, so falling back while another
-      // connection holds a lock could read a half-written store. Fail
-      // instead; the next sync retries.
-      if (isLockError(error)) break;
-    } finally {
-      db?.close(false);
+    // read-only open creates. Immutable mode reads store.db alone, ignoring
+    // locks and the -wal, so it is a fallback only for a store with no writer
+    // holding it and nothing pending in its WAL. Anything else fails, and the
+    // next sync retries it.
+    if (error instanceof CursorSourceError || isLockError(error)) throw error;
+    if (hasWalContent(storePath)) {
+      throw new CursorSourceError(
+        "Cursor store has unread WAL data that a read-only open cannot see; " +
+          "mount the chats directory read-write or close the chat in Cursor",
+      );
     }
+    // Immutable mode needs a URI filename, and the SQLite in Bun's Linux
+    // builds parses one only when SQLITE_OPEN_URI is set.
+    return readWith(
+      fileMeta,
+      () =>
+        new Database(
+          `file:${storePath.replace(/[?#%]/g, encodeURIComponent)}?immutable=1`,
+          constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+        ),
+    );
   }
-  throw lastError;
+}
+
+function readWith(fileMeta: CursorFileMeta, open: () => Database): CursorSource {
+  const db = open();
+  try {
+    return readCursorDatabase(fileMeta, db);
+  } finally {
+    db.close(false);
+  }
+}
+
+function hasWalContent(storePath: string): boolean {
+  try {
+    return statSync(`${storePath}-wal`).size > 0;
+  } catch (error) {
+    // No WAL file means every commit is already in store.db.
+    if ((error as { code?: unknown }).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function isLockError(error: unknown): boolean {
@@ -68,41 +101,45 @@ function isLockError(error: unknown): boolean {
 function readCursorDatabase(fileMeta: CursorFileMeta, db: Database): CursorSource {
   const metaRow = db.query("SELECT value FROM meta LIMIT 1").get() as { value?: unknown } | null;
   if (typeof metaRow?.value !== "string") {
-    throw new Error("Cursor store metadata is missing");
+    throw new CursorSourceError("Cursor store metadata is missing");
   }
   const storeMeta = parseHexJson(metaRow.value, "Cursor store metadata");
   if (!isObject(storeMeta)) {
-    throw new Error("Cursor store metadata is not an object");
+    throw new CursorSourceError("Cursor store metadata is not an object");
   }
   const rootId = asString(storeMeta.latestRootBlobId);
   if (rootId == null) {
-    throw new Error("Cursor store metadata has no latestRootBlobId");
+    throw new CursorSourceError("Cursor store metadata has no latestRootBlobId");
   }
   const rootRow = db.query("SELECT data FROM blobs WHERE id = ?1").get(rootId) as {
     data?: unknown;
   } | null;
   const root = bytes(rootRow?.data);
   if (root == null) {
-    throw new Error("Cursor root blob is missing");
+    throw new CursorSourceError("Cursor root blob is missing");
   }
 
   const messageIds = protobufFieldOneHashes(root);
   const statement = db.query("SELECT data FROM blobs WHERE id = ?1");
-  const records: Json[] = [];
+  const records: CursorRecord[] = [];
   for (const id of messageIds) {
     const row = statement.get(id) as { data?: unknown } | null;
+    if (typeof row?.data === "string") {
+      records.push(new CursorBlobProblem("text", row.data));
+      continue;
+    }
     const data = bytes(row?.data);
     if (data == null) {
-      records.push("Cursor message blob is missing");
+      records.push(new CursorBlobProblem("missing"));
       continue;
     }
     const text = new TextDecoder().decode(data);
     try {
       records.push(JSON.parse(text) as Json);
     } catch {
-      // Keep the malformed blob as a string so the pure parser reports an
+      // Keep the malformed blob in place so the pure parser reports an
       // unparsed_line diagnostic while preserving the rest of the chat.
-      records.push(text);
+      records.push(new CursorBlobProblem("invalid_json", text));
     }
   }
   return { fileMeta, storeMeta, records };
@@ -112,44 +149,66 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   const issues: ParsedSession["issues"] = [];
   const messages: NormalizedMessage[] = [];
   const unknownTypes: UnknownTypes = new Map();
-  if (source.fileMeta.schemaVersion !== 1) {
+  const unknownRoles: UnknownTypes = new Map();
+  const schemaVersion = source.fileMeta.schemaVersion;
+  if (schemaVersion !== 1) {
     issues.push({
       code: "unknown_record_type",
       lineNo: null,
-      error: `unknown Cursor schema version ${String(source.fileMeta.schemaVersion)}; parsed with version 1 rules`,
+      error: `unknown Cursor schema version ${typeof schemaVersion === "number" ? schemaVersion : "(not a number)"}; parsed with version 1 rules`,
       rawLine: null,
     });
   }
 
-  for (const [seq, record] of source.records.entries()) {
+  for (const [seq, stored] of source.records.entries()) {
+    const lineNo = seq + 1;
+    const record = readRecord(stored, lineNo, issues);
+    if (record === undefined) continue;
     if (!isObject(record)) {
       issues.push({
         code: "unparsed_line",
-        lineNo: seq + 1,
+        lineNo,
         error: "Cursor message blob is not a JSON object",
         rawLine: canonicalJson(record),
       });
       continue;
     }
     const blocks: NormalizedBlock[] = [];
-    const content = Array.isArray(record.content) ? record.content : [];
+    let content: Json[] = [];
+    if (Array.isArray(record.content)) {
+      content = record.content;
+    } else if (typeof record.content === "string") {
+      // The AI SDK message format Cursor stores allows plain-string content.
+      content = [{ type: "text", text: record.content }];
+    } else {
+      issues.push({
+        code: "unparsed_line",
+        lineNo,
+        error: "Cursor message content is not an array; message kept without content",
+        rawLine: canonicalJson(record),
+      });
+    }
     for (const item of content) {
       if (!isObject(item)) {
-        countUnknown(unknownTypes, "<non-object>", seq + 1);
+        countUnknown(unknownTypes, "<non-object>", lineNo);
         continue;
       }
       const normalized = cursorBlock(item, blocks.length);
       if (normalized != null) {
         blocks.push(normalized);
       } else {
-        countUnknown(unknownTypes, asString(item.type) ?? "", seq + 1);
+        countUnknown(unknownTypes, typeLabel(item.type), lineNo);
       }
+    }
+    const role = cursorRole(asString(record.role));
+    if (role === "other") {
+      countUnknown(unknownRoles, typeLabel(record.role), lineNo);
     }
     messages.push({
       seq: messages.length,
       sourceUuid: asString(record.id),
       parentSourceUuid: null,
-      role: cursorRole(asString(record.role)),
+      role,
       model: null,
       stopReason: null,
       timestamp: null,
@@ -160,6 +219,14 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   }
 
   issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
+  for (const [role, seen] of unknownRoles) {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo: seen.firstLine,
+      error: `unknown Cursor message role "${role}" on ${seen.count} message(s); kept as role "other"`,
+      rawLine: null,
+    });
+  }
 
   const subagent = isObject(source.storeMeta.subagentInfo)
     ? source.storeMeta.subagentInfo
@@ -199,6 +266,51 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   };
   issues.push(...linkageIssues(session));
   return { session, issues };
+}
+
+/** Resolves a stored record to its JSON value, or to undefined after
+ * reporting a blob that holds none. */
+function readRecord(
+  stored: CursorRecord,
+  lineNo: number,
+  issues: ParsedSession["issues"],
+): Json | undefined {
+  if (!(stored instanceof CursorBlobProblem)) return stored;
+  if (stored.kind === "missing") {
+    issues.push({
+      code: "unparsed_line",
+      lineNo,
+      error: "Cursor message blob is missing from the store",
+      rawLine: null,
+    });
+    return undefined;
+  }
+  if (stored.kind === "text") {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo,
+      error: "Cursor message blob is stored as TEXT rather than BLOB; read as UTF-8",
+      rawLine: null,
+    });
+  }
+  try {
+    return JSON.parse(stored.text ?? "") as Json;
+  } catch {
+    issues.push({
+      code: "unparsed_line",
+      lineNo,
+      error: "Cursor message blob is not valid JSON",
+      rawLine: stored.text,
+    });
+    return undefined;
+  }
+}
+
+/** A diagnostic names a type or role only when it looks like an identifier,
+ * so a malformed record cannot copy transcript text into the message. */
+function typeLabel(value: Json | undefined): string {
+  if (typeof value !== "string") return "<non-string>";
+  return /^[A-Za-z0-9_.:-]{1,40}$/.test(value) ? value : "<unrecognized>";
 }
 
 function cursorBlock(item: JsonObject, ordinal: number): NormalizedBlock | null {
@@ -262,18 +374,23 @@ function firstUserText(messages: NormalizedMessage[]): string | null {
 
 function readCursorFileMeta(storePath: string): CursorFileMeta {
   const path = storePath.replace(/store\.db$/, "meta.json");
-  const value = JSON.parse(readFileSync(path, "utf8")) as Json;
-  if (!isObject(value)) throw new Error("Cursor meta.json is not an object");
+  const text = readFileSync(path, "utf8");
+  let value: Json;
+  try {
+    value = JSON.parse(text) as Json;
+  } catch {
+    // A JSON syntax error quotes the text around it, so it is not rethrown.
+    throw new CursorSourceError("Cursor meta.json is not valid JSON");
+  }
+  if (!isObject(value)) throw new CursorSourceError("Cursor meta.json is not an object");
   return value;
 }
 
 function parseHexJson(value: string, label: string): Json {
   try {
     return JSON.parse(Buffer.from(value, "hex").toString("utf8")) as Json;
-  } catch (error) {
-    throw new Error(
-      `${label} is invalid: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  } catch {
+    throw new CursorSourceError(`${label} is not valid JSON`);
   }
 }
 
@@ -293,7 +410,7 @@ function protobufFieldOneHashes(data: Uint8Array): string[] {
       const length = readVarint(data, offset);
       offset = length.next;
       const end = offset + length.value;
-      if (end > data.length) throw new Error("Cursor root protobuf is truncated");
+      if (end > data.length) throw new CursorSourceError("Cursor root protobuf is truncated");
       if (field === 1 && length.value === 32) {
         ids.push(Buffer.from(data.subarray(offset, end)).toString("hex"));
       }
@@ -301,9 +418,9 @@ function protobufFieldOneHashes(data: Uint8Array): string[] {
     } else if (wire === 5) {
       offset += 4;
     } else {
-      throw new Error(`Cursor root protobuf uses unsupported wire type ${wire}`);
+      throw new CursorSourceError(`Cursor root protobuf uses unsupported wire type ${wire}`);
     }
-    if (offset > data.length) throw new Error("Cursor root protobuf is truncated");
+    if (offset > data.length) throw new CursorSourceError("Cursor root protobuf is truncated");
   }
   return ids;
 }
@@ -317,14 +434,14 @@ function readVarint(data: Uint8Array, start: number): { value: number; next: num
     if ((byte & 0x80) === 0) return { value, next: offset + 1 };
     shift += 7;
   }
-  throw new Error("Cursor root protobuf contains an invalid varint");
+  throw new CursorSourceError("Cursor root protobuf contains an invalid varint");
 }
 
 function skipVarint(data: Uint8Array, start: number): number {
   for (let offset = start; offset < data.length && offset < start + 10; offset += 1) {
     if (((data[offset] ?? 0) & 0x80) === 0) return offset + 1;
   }
-  throw new Error("Cursor root protobuf contains an invalid varint");
+  throw new CursorSourceError("Cursor root protobuf contains an invalid varint");
 }
 
 function bytes(value: unknown): Uint8Array | null {

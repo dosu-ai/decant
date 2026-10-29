@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import {
   closeSync,
   existsSync,
@@ -44,7 +44,12 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
-import { type CursorSource, parseCursorSession, readCursorSource } from "./sources/cursor.ts";
+import {
+  type CursorSource,
+  CursorSourceError,
+  parseCursorSession,
+  readCursorSource,
+} from "./sources/cursor.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
 import { parseOpenCodeSession } from "./sources/opencode.ts";
 import { parseOpenCodeLegacySession } from "./sources/opencode-legacy.ts";
@@ -756,11 +761,11 @@ function syncOpenCodeSession(
 }
 
 /** A Cursor CLI chat is a SQLite store with `meta.json` beside it. Its
- * recorded size and mtime cover `meta.json` and the `-wal` too, because a
- * running chat appends to the WAL without touching `store.db`. A store that
- * cannot be read fails alone and is retried on the next sync. */
+ * change key covers `meta.json` and the `-wal` too, because a running chat
+ * appends to the WAL without touching `store.db`. A store that cannot be read
+ * fails alone and is retried on the next sync. */
 function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
-  let signature: { size: number; mtime: number };
+  let signature: CursorStoreSignature;
   try {
     signature = cursorStoreSignature(file.path);
   } catch (error) {
@@ -769,15 +774,14 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
       ? { kind: "skipped" }
       : { kind: "failed" };
   }
-  const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
+  const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
     db,
-    "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
+    "SELECT hash, ingest_revision FROM ingest_source WHERE path = ?1",
     [file.path],
   );
   if (
     prior != null &&
-    prior.size === signature.size &&
-    prior.mtime === signature.mtime &&
+    prior.hash === signature.key &&
     prior.ingest_revision === INGEST_PIPELINE_REVISION
   ) {
     return { kind: "skipped" };
@@ -792,7 +796,12 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
       "event.name": "decant.ingest.source_read_failed",
       "file.path": file.path,
       "error.type": "cursor_read",
-      "error.message": error instanceof Error ? error.message : String(error),
+      // Only Decant's own fixed messages are logged. Anything else, a JSON or
+      // SQLite error, is reduced to its code so no store content can leak.
+      "error.message":
+        error instanceof CursorSourceError
+          ? error.message
+          : `Cursor store could not be read (${errorCode(error)})`,
     });
     return { kind: "failed" };
   }
@@ -803,6 +812,7 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     lineCount: parsed.session.messages.length,
     mtime: signature.mtime,
     size: signature.size,
+    hash: signature.key,
   };
   const outcome = writeIngestedFile(db, prepared, parsed);
   return outcome === "tombstoned"
@@ -810,24 +820,50 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     : { kind: "ingested", issues: parsed.issues };
 }
 
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,40}$/.test(code) ? code : "unknown error";
+}
+
 const CURSOR_STORE_NAME = "store.db";
 
-/** Combined size and latest mtime of a Cursor store and its sidecars. Throws
- * only when `store.db` itself cannot be stat'ed. */
-function cursorStoreSignature(path: string): { size: number; mtime: number } {
-  const store = statSync(path);
-  let size = store.size;
-  let mtime = mtimeSecs(store);
-  for (const sidecar of [cursorMetaPath(path), `${path}-wal`]) {
+interface CursorStoreSignature {
+  /** Per-file existence, size, and nanosecond mtime, stored in
+   * `ingest_source.hash`. A checkpoint can move bytes from the WAL into
+   * `store.db` and a new commit can follow within the same second, so a
+   * combined size or whole-second mtime can repeat across different
+   * content. */
+  key: string;
+  /** Combined size and latest whole-second mtime, kept in the size and mtime
+   * columns other sources use. */
+  size: number;
+  mtime: number;
+}
+
+/** Throws only when `store.db` itself cannot be stat'ed. */
+function cursorStoreSignature(path: string): CursorStoreSignature {
+  const parts: string[] = [];
+  let size = 0;
+  let mtime = 0;
+  for (const [name, file] of [
+    ["store", path],
+    ["wal", `${path}-wal`],
+    ["meta", cursorMetaPath(path)],
+  ] as const) {
+    let stats: BigIntStats;
     try {
-      const stats = statSync(sidecar);
-      size += stats.size;
-      mtime = Math.max(mtime, mtimeSecs(stats));
-    } catch {
+      stats = statSync(file, { bigint: true });
+    } catch (error) {
       // The WAL is optional; a missing meta.json fails the read instead.
+      if (name === "store") throw error;
+      parts.push(`${name}=-`);
+      continue;
     }
+    parts.push(`${name}=${stats.size}@${stats.mtimeNs}`);
+    size += Number(stats.size);
+    mtime = Math.max(mtime, Number(stats.mtimeNs / 1_000_000_000n));
   }
-  return { size, mtime };
+  return { key: `cursor:v1;${parts.join(";")}`, size, mtime };
 }
 
 function cursorMetaPath(path: string): string {
@@ -1356,6 +1392,7 @@ function writeIngestedFile(
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
     releaseMisfiledFork(db, prepared.file.path, parsed);
+    releaseReplacedCursorIdentity(db, prepared.file.path, parsed);
     const ref = prepared.file.opencode;
     if (ref != null && opencode != null) {
       const databases = opencode.sourceDatabases();
@@ -1411,6 +1448,25 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
   );
   if (misfiled != null) {
     deleteSessionRow(db, misfiled.id);
+  }
+}
+
+/** A Cursor store holds one chat, so when the agent ID it records changes,
+ * the session filed under its path is the same transcript under a stale
+ * identity and would otherwise count twice. As with a misfiled fork, user
+ * state stays keyed to the old identity. */
+function releaseReplacedCursorIdentity(db: Database, path: string, parsed: ParsedSession): void {
+  if (parsed.session.tool !== "cursor") {
+    return;
+  }
+  const previous = queryRow<{ id: number }>(
+    db,
+    `SELECT s.id FROM ingest_source i JOIN session s ON s.id = i.session_id
+      WHERE i.path = ?1 AND s.tool = 'cursor' AND s.source_session_id != ?2`,
+    [path, parsed.session.sourceSessionId],
+  );
+  if (previous != null) {
+    deleteSessionRow(db, previous.id);
   }
 }
 

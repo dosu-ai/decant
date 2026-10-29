@@ -63,17 +63,24 @@ By default Decant discovers:
   directory from `--cursor-dir` or `DECANT_CURSOR_DIR`. Each chat is a SQLite
   `store.db` with a `meta.json` beside it; Decant reads chats whose
   `meta.json` sets `hasConversation` and skips the rest. Stores are opened
-  read-only, falling back to SQLite's immutable mode for a store whose
-  directory cannot hold a `-shm` file (a read-only mount, for example).
-  A store another process has locked is not read in immutable mode, which
-  ignores locks; it counts as failed and the next sync retries it.
+  read-only. When a store's directory cannot hold a `-shm` file (a read-only
+  mount, for example), Decant falls back to SQLite's immutable mode, which
+  reads `store.db` alone and ignores locks and the WAL, so it does so only
+  when `store.db-wal` is absent or empty. A store with WAL data a read-only
+  open cannot see, or one another process has locked, counts as failed with
+  a diagnostic and is not recorded, so the next sync retries it. To read a
+  store with pending WAL data, mount the chats directory read-write or close
+  the chat in Cursor so it checkpoints. A store whose recorded agent ID
+  changes replaces the session Decant filed for it instead of adding a
+  second one.
   Cursor records no token usage, so these sessions keep token and cost
   totals unavailable.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
-chat, the combined size and latest modification time of `store.db`,
-`meta.json`, and `store.db-wal`, since a running chat appends to the WAL), and
+chat, the existence, size, and nanosecond modification time of each of
+`store.db`, `store.db-wal`, and `meta.json`, since a running chat appends to
+the WAL and a checkpoint can move bytes between files within one second), and
 unchanged OpenCode sessions by their per-session change key, unless an updated
 ingest pipeline requires reprocessing them. A 2.x session's change key is built
 from the session's update time and its message count, highest sequence, and

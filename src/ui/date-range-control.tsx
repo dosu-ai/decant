@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ALL_DATE_RANGE,
   applyDatePreset,
@@ -22,6 +22,16 @@ export function DateRangeControl({
   const menuRef = useRef<HTMLDetailsElement | null>(null);
   const [align, setAlign] = useState<"start" | "end">("end");
   const bounded = range.from != null && range.to != null;
+  useEffect(() => {
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const menu = menuRef.current;
+      if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) {
+        menu.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
+  }, []);
   const closeMenu = () => {
     if (menuRef.current == null) {
       return;
@@ -47,8 +57,11 @@ export function DateRangeControl({
           className="date-range-menu"
           data-align={align}
           onBlur={(event) => {
+            // Safari doesn't focus a button on click, so pressing a preset blurs
+            // the summary with no relatedTarget. Closing on that would hide the
+            // popover before the click lands; outside presses close it below.
             if (
-              !(event.relatedTarget instanceof Node) ||
+              event.relatedTarget instanceof Node &&
               !event.currentTarget.contains(event.relatedTarget)
             ) {
               event.currentTarget.open = false;

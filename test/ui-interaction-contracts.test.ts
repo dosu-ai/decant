@@ -209,6 +209,17 @@ describe("UI interaction contracts", () => {
     expect(control).not.toContain('name="chevronRight"');
   });
 
+  test("keeps the date-range menu open while Safari presses a preset", () => {
+    // Safari doesn't focus a clicked button, so the summary blurs with a null
+    // relatedTarget. Closing on that dropped every preset click in WebKit.
+    const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
+    const onBlur = control.slice(control.indexOf("onBlur="), control.indexOf("onKeyDown="));
+    expect(onBlur).toContain("event.relatedTarget instanceof Node &&");
+    expect(onBlur).not.toContain("!(event.relatedTarget instanceof Node)");
+    expect(control).toContain('document.addEventListener("pointerdown", closeOnOutsidePress)');
+    expect(control).toContain('document.removeEventListener("pointerdown", closeOnOutsidePress)');
+  });
+
   test("exposes session state actions through the shared accessible overflow menu", () => {
     const overflow = sourceFrom(readUiFile("common.tsx"), "function OverflowMenu(");
     const session = sourceBetween(

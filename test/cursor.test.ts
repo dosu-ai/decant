@@ -85,6 +85,15 @@ describe("Cursor source", () => {
     );
   });
 
+  test("out-of-range meta.json timestamps read as absent instead of throwing", () => {
+    const parsed = parseCursorSession("timestamps", {
+      fileMeta: { schemaVersion: 1, createdAtMs: 1e20, updatedAtMs: -1e20 },
+      storeMeta: {},
+      records: [],
+    });
+    expect(parsed.session).toMatchObject({ startedAt: null, endedAt: null });
+  });
+
   test("preserves Cursor subagent lineage metadata", () => {
     const parsed = parseCursorSession("child", {
       fileMeta: { schemaVersion: 1, isSubagent: true },

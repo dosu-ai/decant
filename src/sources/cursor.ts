@@ -10,6 +10,7 @@ import {
   type ParsedSession,
   type Role,
 } from "../model.ts";
+import { isoFromMillis } from "./opencode.ts";
 import { block, countUnknown, type UnknownTypes, unknownTypeIssues } from "./shared.ts";
 
 type CursorStoreMeta = JsonObject;
@@ -320,8 +321,7 @@ function bytes(value: unknown): Uint8Array | null {
 }
 
 function timestamp(value: Json | undefined): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return new Date(value).toISOString();
+  return typeof value === "number" ? isoFromMillis(value) : null;
 }
 
 /** Cursor writes empty strings for unset fields, so "" reads as absent. */

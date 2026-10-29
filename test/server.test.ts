@@ -50,6 +50,7 @@ function freshConfig(): Config {
     codexDir,
     geminiDir,
     opencodeDir,
+    cursorDir: join(root, "cursor"),
   };
 }
 
@@ -132,7 +133,7 @@ describe("server routes", () => {
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
     expect(sourceHead).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, and OpenCode sessions.",
+      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI sessions.",
     );
   });
 

@@ -10,12 +10,22 @@ import {
   WEEKDAY_LABELS,
   weekdayLabel,
 } from "../charts.tsx";
-import { Bar, EmptyState, Sparkline, StatCard, Tooltip } from "../common.tsx";
+import { Bar, CostValue, EmptyState, Sparkline, StatCard, Tooltip } from "../common.tsx";
 import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "../date-range.ts";
 import { DateRangeControl } from "../date-range-control.tsx";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "../dosu-cta.ts";
 import { dosuLink } from "../dosu-links.ts";
-import { basename, compact, duration, formatInt, money, roundedPercents } from "../format.ts";
+import {
+  basename,
+  compact,
+  costDisplay,
+  duration,
+  formatInt,
+  money,
+  NO_USAGE_TITLE,
+  roundedPercents,
+  usageMetric,
+} from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
 import { projectSessionsHref } from "../navigation.ts";
@@ -57,9 +67,9 @@ export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the session logs Claude Code, Codex, Gemini CLI, and OpenCode already write
-          and turns them into a searchable session-log index with token, cost, and context-window
-          analytics. Nothing leaves this machine.
+          Decant reads the session logs Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI
+          already write and turns them into a searchable session-log index with token, cost, and
+          context-window analytics wherever the source records usage. Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button
@@ -119,6 +129,11 @@ export function AnalyticsView({
     [data.byProject, projectSort],
   );
   const maxModelCost = Math.max(1.0e-9, ...modelRows.map((row) => row.estimated_cost_usd));
+  const estCost = costDisplay(
+    data.summary?.estimated_cost_usd ?? 0,
+    data.summary?.sessions ?? 0,
+    data.summary?.usage_sessions ?? 0,
+  );
   // Date bounds span the whole archive and ignore the active filter, so this
   // separates "nothing ingested" from "nothing in the selected range".
   if (data.dateBounds != null && data.dateBounds.min == null && data.dateBounds.max == null) {
@@ -158,21 +173,30 @@ export function AnalyticsView({
         <StatCard
           icon="download"
           label="Input tokens"
-          value={compact(data.summary?.input_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.input_tokens ?? 0),
+          )}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
-          value={compact(data.summary?.output_tokens ?? 0)}
+          value={usageMetric(
+            data.summary?.sessions ?? 0,
+            data.summary?.usage_sessions ?? 0,
+            compact(data.summary?.output_tokens ?? 0),
+          )}
         />
-        <StatCard
-          icon="money"
-          label="Est. cost"
-          value={money(data.summary?.estimated_cost_usd ?? 0)}
-        />
+        <StatCard icon="money" label="Est. cost" value={estCost.text} valueTitle={estCost.title} />
       </div>
 
-      <TokenEconomicsPanel economics={data.tokenEconomics} />
+      <TokenEconomicsPanel
+        costAvailable={
+          (data.summary?.sessions ?? 0) === 0 || (data.summary?.usage_sessions ?? 0) > 0
+        }
+        economics={data.tokenEconomics}
+      />
 
       <div className="split">
         <DailyPanel
@@ -297,8 +321,12 @@ export function AnalyticsView({
                     />
                   </td>
                   <td className="numeric">{formatInt(row.sessions)}</td>
-                  <td className="numeric muted">{compact(row.input_tokens)}</td>
-                  <td className="numeric muted">{compact(row.output_tokens)}</td>
+                  <td className="numeric muted">
+                    <UsageTokens row={row} value={row.input_tokens} />
+                  </td>
+                  <td className="numeric muted">
+                    <UsageTokens row={row} value={row.output_tokens} />
+                  </td>
                   <td className="numeric muted">
                     {row.reasoning_tokens > 0
                       ? compact(row.reasoning_tokens)
@@ -306,7 +334,14 @@ export function AnalyticsView({
                         ? `~${compact(row.est_reasoning_tokens)}`
                         : "-"}
                   </td>
-                  <td className="numeric">{money(row.estimated_cost_usd)}</td>
+                  <td className="numeric">
+                    <CostValue
+                      cost={row.estimated_cost_usd}
+                      dense
+                      sessions={row.sessions}
+                      usageSessions={row.usage_sessions}
+                    />
+                  </td>
                   <td className="share-cell">
                     <Bar
                       fraction={row.estimated_cost_usd / maxModelCost}
@@ -360,7 +395,14 @@ export function AnalyticsView({
                       <Link href={projectSessionsHref(row.key)}>{basename(row.key)}</Link>
                     </td>
                     <td className="numeric muted">{formatInt(row.sessions)}</td>
-                    <td className="numeric">{money(row.estimated_cost_usd)}</td>
+                    <td className="numeric">
+                      <CostValue
+                        cost={row.estimated_cost_usd}
+                        dense
+                        sessions={row.sessions}
+                        usageSessions={row.usage_sessions}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -369,6 +411,17 @@ export function AnalyticsView({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/** A dense token cell: "-" when none of the row's sessions recorded usage. */
+function UsageTokens({ row, value }: { row: DimensionRow; value: number }) {
+  return row.sessions > 0 && row.usage_sessions === 0 ? (
+    <span className="faint" title={NO_USAGE_TITLE}>
+      -
+    </span>
+  ) : (
+    compact(value)
   );
 }
 
@@ -418,12 +471,15 @@ export function ActivityPanel({
 
 export function TokenEconomicsPanel({
   compact: isCompact = false,
+  costAvailable = true,
   description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
   subagentRuns = 0,
   title = "Activity breakdown",
 }: {
   compact?: boolean;
+  /** False when none of the sessions in scope recorded token usage. */
+  costAvailable?: boolean;
   description?: string;
   economics: TokenEconomics | null;
   subagentRuns?: number;
@@ -445,7 +501,7 @@ export function TokenEconomicsPanel({
         {economics != null ? (
           <div className="activity-summary">
             <span>
-              <strong>{money(totalCost)}</strong>
+              <strong>{costAvailable ? money(totalCost) : "Unavailable"}</strong>
               total
             </span>
             <span>
@@ -537,18 +593,22 @@ export function TokenEconomicsPanel({
                           </span>
                         </td>
                         <td className="activity-share">
-                          <span className="activity-share-inner">
-                            <span className="activity-bar">
-                              <span
-                                className={`tone-${tone}`}
-                                style={{ width: `${share * 100}%` }}
-                              />
+                          {costAvailable ? (
+                            <span className="activity-share-inner">
+                              <span className="activity-bar">
+                                <span
+                                  className={`tone-${tone}`}
+                                  style={{ width: `${share * 100}%` }}
+                                />
+                              </span>
+                              <small>{costPercents[index]}%</small>
                             </span>
-                            <small>{costPercents[index]}%</small>
-                          </span>
+                          ) : (
+                            <span className="faint">-</span>
+                          )}
                         </td>
                         <td className="numeric activity-number">
-                          {money(bucket.estimated_cost_usd)}
+                          {costAvailable ? money(bucket.estimated_cost_usd) : "-"}
                         </td>
                         <td className="activity-share">
                           <span className="activity-share-inner">
@@ -641,11 +701,20 @@ export function DailyPanel({
   timezone: string | undefined;
   title: string;
 }) {
-  const labels = useMemo(() => rows.map((row) => row.key), [rows]);
-  const values = useMemo(
-    () => rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd)),
+  // A day whose sessions all lack recorded usage has no cost to plot, not a
+  // cost of zero, so the cost series leaves it out.
+  const plotted = useMemo(
+    () =>
+      metric === "cost" ? rows.filter((row) => row.sessions === 0 || row.usage_sessions > 0) : rows,
     [rows, metric],
   );
+  const labels = useMemo(() => plotted.map((row) => row.key), [plotted]);
+  const values = useMemo(
+    () => plotted.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd)),
+    [plotted, metric],
+  );
+  const missingUsage =
+    metric === "cost" ? rows.reduce((sum, row) => sum + row.sessions - row.usage_sessions, 0) : 0;
   const range = shareRange(labels);
   const shareInput: ShareCardCopyInput = {
     kind: metric === "sessions" ? "sessions_per_day" : "estimated_cost_per_day",
@@ -660,16 +729,24 @@ export function DailyPanel({
       <div className="panel-heading">
         <div>
           <h2>{title}</h2>
+          {missingUsage > 0 ? (
+            <p title={NO_USAGE_TITLE}>
+              Leaves out {formatInt(missingUsage)} {missingUsage === 1 ? "session" : "sessions"}{" "}
+              without usage data.
+            </p>
+          ) : null}
         </div>
         <ShareChartButton
-          disabled={rows.length === 0}
+          disabled={plotted.length === 0}
           input={shareInput}
           metric={metric === "cost" ? "money" : "int"}
           variant={metric === "cost" ? "line" : "bar"}
         />
       </div>
       <div className="panel-body">
-        {rows.length === 0 ? (
+        {rows.length > 0 && plotted.length === 0 ? (
+          <EmptyState icon="chart" message={NO_USAGE_TITLE} title="Cost unavailable" />
+        ) : rows.length === 0 ? (
           <EmptyState
             action={
               <button className="secondary-button" onClick={onShowAllTime} type="button">

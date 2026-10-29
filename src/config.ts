@@ -27,6 +27,7 @@ export interface Config {
    * database has no catalog of its own: `OPENCODE_MODELS_PATH`, else
    * `$XDG_CACHE_HOME/opencode/models.json`. */
   opencodeModelsPath?: string;
+  cursorDir: string;
 }
 
 export interface ConfigOverrides {
@@ -35,6 +36,7 @@ export interface ConfigOverrides {
   codexDir?: string | null;
   geminiDir?: string | null;
   opencodeDir?: string | null;
+  cursorDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
 }
@@ -70,6 +72,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
     opencodeModelsPath:
       nonEmpty(env.OPENCODE_MODELS_PATH) ??
       join(xdgCache ?? join(home, ".cache"), "opencode", "models.json"),
+    cursorDir: overrides.cursorDir ?? env.DECANT_CURSOR_DIR ?? join(home, ".cursor", "chats"),
   };
 }
 

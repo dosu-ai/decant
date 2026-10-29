@@ -551,6 +551,25 @@
     "timestamp": "2026-05-06T09:00:15.000Z"
   },
   {
+    "tool": "cursor",
+    "source_session_id": "cursor-synthetic-session",
+    "seq": 1,
+    "ordinal": 1,
+    "tool_kind": "builtin",
+    "tool_name": "read_file",
+    "mcp_server": null,
+    "tool_base_name": "read_file",
+    "tool_use_id": "call-1",
+    "input": "{\"path\":\"/Users/dev/cursor-demo/src/index.ts\"}",
+    "is_error": null,
+    "input_bytes": 46,
+    "has_result": 1,
+    "output_preview": "export const greeting = 'hello';",
+    "output_bytes": 32,
+    "duration_ms": null,
+    "timestamp": null
+  },
+  {
     "tool": "gemini",
     "source_session_id": "gemini-mcp-synthetic",
     "seq": 1,

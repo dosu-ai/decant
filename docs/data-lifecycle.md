@@ -2,8 +2,8 @@
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
-Claude Code, Codex, Gemini CLI, or OpenCode; `~/.decant/decant.db` is a
-searchable, rebuildable index plus Decant-owned user state.
+Claude Code, Codex, Gemini CLI, OpenCode, or Cursor CLI; `~/.decant/decant.db`
+is a searchable, rebuildable index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -59,9 +59,28 @@ By default Decant discovers:
   sync, and never fetches a catalog. When the file is missing (logged at info
   level) or unreadable (a warning), the context window stays unknown, and the
   affected sessions are re-derived once on the first sync that can read it.
+- Cursor CLI chats under `~/.cursor/chats/<workspace>/<chat>/`, or the
+  directory from `--cursor-dir` or `DECANT_CURSOR_DIR`. Each chat is a SQLite
+  `store.db` with a `meta.json` beside it; Decant reads chats whose
+  `meta.json` sets `hasConversation` and skips the rest. Stores are opened
+  read-only. When a store's directory cannot hold a `-shm` file (a read-only
+  mount, for example), Decant falls back to SQLite's immutable mode, which
+  reads `store.db` alone and ignores locks and the WAL, so it does so only
+  when `store.db-wal` is absent or empty. A store with WAL data a read-only
+  open cannot see, or one another process has locked, counts as failed with
+  a diagnostic and is not recorded, so the next sync retries it. To read a
+  store with pending WAL data, mount the chats directory read-write or close
+  the chat in Cursor so it checkpoints. A store whose recorded agent ID
+  changes replaces the session Decant filed for it instead of adding a
+  second one.
+  Cursor records no token usage, so these sessions keep token and cost
+  totals unavailable.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
-Unchanged files are skipped by size and modification-time checks, and
+Unchanged files are skipped by size and modification-time checks (for a Cursor
+chat, the existence, size, and nanosecond modification time of each of
+`store.db`, `store.db-wal`, and `meta.json`, since a running chat appends to
+the WAL and a checkpoint can move bytes between files within one second), and
 unchanged OpenCode sessions by their per-session change key, unless an updated
 ingest pipeline requires reprocessing them. A 2.x session's change key is built
 from the session's update time and its message count, highest sequence, and
@@ -88,7 +107,8 @@ non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
 only reads file metadata and never opens an OpenCode database; the sync it
-schedules opens it read-only.
+schedules opens it read-only. Cursor chat directories are watched recursively,
+ignoring `-shm` changes, which every read of a store makes.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
@@ -100,7 +120,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-and `opencode`.
+`opencode`, and `cursor`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -347,12 +367,12 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, Gemini CLI, or OpenCode record remains on disk. If the
-source record must also be removed, manage it through the owning tool or delete
-that source file only after deciding that losing the original transcript is
-intended. OpenCode keeps every session in one shared database, so deleting its
-file would remove all OpenCode history; remove an individual session from within
-OpenCode instead.
+Claude Code, Codex, Gemini CLI, OpenCode, or Cursor CLI record remains on disk.
+If the source record must also be removed, manage it through the owning tool or
+delete that source file only after deciding that losing the original transcript
+is intended. OpenCode keeps every session in one shared database, so deleting
+its file would remove all OpenCode history; remove an individual session from
+within OpenCode instead.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
 that was sensitive enough to delete, run both commands:

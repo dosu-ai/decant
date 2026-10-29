@@ -495,6 +495,7 @@ function fixtureConfig(root: string): Config {
     codexDir,
     geminiDir,
     opencodeDir,
+    cursorDir: join(root, "cursor"),
   };
 }
 

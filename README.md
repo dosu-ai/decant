@@ -6,10 +6,10 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code, Codex, Gemini CLI, and OpenCode session logs on
-your machine into tangible insights. See where tokens, cost, and agent time go,
-inspect context usage, find the files and tools agents touch, and search
-complete transcripts from a CLI or local web UI.
+Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI
+session logs on your machine into tangible insights. See where tokens, cost,
+and agent time go, inspect context usage, find the files and tools agents
+touch, and search complete transcripts from a CLI or local web UI.
 
 Decant is local-first. It makes no outbound network calls at runtime, and your
 transcripts never leave your machine.
@@ -41,11 +41,13 @@ npx @dosu/decant@latest
 ```
 
 This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
-Codex, Gemini CLI, and OpenCode logs on your machine, and watches for changes.
+Codex, Gemini CLI, OpenCode, and Cursor CLI logs on your machine, and watches
+for changes.
 
 ## What you get
 
-- One SQLite archive for Claude Code, Codex, Gemini CLI, and OpenCode sessions.
+- One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor
+  CLI sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -92,6 +94,7 @@ docker run --rm \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
   -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
+  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
@@ -128,11 +131,12 @@ Run `decant --help` or `decant <command> --help` for all commands and flags.
 Read commands support `--json`; global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`.
 
-Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, and
-`~/.local/share/opencode` by default. Override them with `DECANT_CLAUDE_DIR`,
-`DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`, and `DECANT_OPENCODE_DIR`, or with the
-corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`, and
-`--opencode-dir` flags on `sync`, `watch`, and `serve`. When the Decant
+Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
+`~/.local/share/opencode`, and `~/.cursor/chats` by default. Override them with
+`DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`,
+`DECANT_OPENCODE_DIR`, and `DECANT_CURSOR_DIR`, or with the corresponding
+`--claude-dir`, `--codex-dir`, `--gemini-dir`, `--opencode-dir`, and
+`--cursor-dir` flags on `sync`, `watch`, and `serve`. When the Decant
 variable and flag are unset, the OpenCode directory falls back to OpenCode's own
 `OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`. `OPENCODE_DB` names an
 explicit extra database file that is read alongside the discovered directory.
@@ -159,6 +163,12 @@ For context windows Decant uses the models.dev catalog OpenCode caches: 2.x
 keeps it in the database, and for a database without one (as 1.x leaves it)
 Decant reads `OPENCODE_MODELS_PATH`, else `$XDG_CACHE_HOME/opencode/models.json`
 (default `~/.cache/opencode/models.json`), read-only. `--path` also accepts an OpenCode `.db` file.
+
+Cursor CLI keeps each chat in its own `store.db` with a `meta.json` beside it.
+Decant reads those stores read-only and skips chats whose `meta.json` records
+no conversation. Cursor records no token usage, so Decant shows tokens and cost
+for Cursor sessions as unavailable instead of $0. `--path` also accepts a
+Cursor `store.db`.
 
 To index selected files or a temporary source tree:
 

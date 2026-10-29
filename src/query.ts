@@ -23,7 +23,11 @@ import {
   sessionUserStatePredicateForDatabase,
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
-import { durationRankSql, NEAREST_RANK_PERCENTILES_SQL } from "./stats.ts";
+import {
+  durationRankSql,
+  NEAREST_RANK_PERCENTILES_SQL,
+  sessionUsageAvailableSql,
+} from "./stats.ts";
 import { preview, previewHeadTail } from "./tools.ts";
 
 export interface SessionSummary {
@@ -42,6 +46,7 @@ export interface SessionSummary {
   message_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  usage_available: boolean;
   estimated_cost_usd: number;
   /** Where `estimated_cost_usd` came from; `reported` means the source's own
    * recorded cost was used because Decant has no rate for the model. */
@@ -108,10 +113,12 @@ interface SessionSummaryRow
     | "reasoning_effort_levels"
     | "subagents"
     | "cost_source"
+    | "usage_available"
   > {
   is_archived: number;
   is_user_archived: number;
   is_subagent: number;
+  usage_available: number;
   reasoning_effort_levels_json: string | null;
   /** `{reported, other}` from the session's model-usage rows; mapped to
    * `cost_source` in TypeScript so it follows the read-time pricing rule. */
@@ -126,6 +133,7 @@ function sessionSummarySelect(subagentVisibility: string): string {
          s.total_reasoning_tokens, s.reasoning_source,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
+         ${sessionUsageAvailableSql("s")} AS usage_available,
          (SELECT json_object(
                    'reported', json_group_array(u.model)
                                  FILTER (WHERE u.reported_cost_usd IS NOT NULL),
@@ -984,6 +992,8 @@ export interface ProjectSummary {
   path: string;
   name: string | null;
   sessions: number;
+  /** Top-level sessions whose source records token usage. */
+  usage_sessions: number;
   estimated_cost_usd: number;
   last_seen_at: string | null;
   is_worktree: boolean;
@@ -1006,6 +1016,8 @@ export function listProjects(db: Database): ProjectSummary[] {
     .query(
       `SELECT p.id, p.path, p.name,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+              COALESCE(SUM(CASE WHEN s.is_subagent = 0 AND ${sessionUsageAvailableSql("s")}
+                                THEN 1 ELSE 0 END), 0) AS usage_sessions,
               COALESCE(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd,
               MAX(s.ended_at) AS last_seen_at,
               p.is_worktree, p.root_path, p.worktree_label, p.worktree_tool, p.root_source,
@@ -1041,6 +1053,7 @@ function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
     ...summary,
     cost_source: costSourceFor(usage.reported, usage.other),
     reasoning_effort_levels: parseReasoningEffortLevels(levelsJson),
+    usage_available: row.usage_available !== 0,
     is_user_archived: row.is_user_archived !== 0,
     is_archived: row.is_archived !== 0,
     is_subagent: row.is_subagent !== 0,

@@ -133,7 +133,17 @@ later reads as `decant` even if a figure was stored earlier.
 Token-economics totals expose the reported share as `reported_cost_usd`.
 `model_provider` is the provider route the model ran through when the source
 records one. `GET /api/config` includes `opencodeDir`, the OpenCode data
-directory being read.
+directory being read, and `cursorDir`, the Cursor CLI chats directory.
+
+Session summaries also carry `usage_available`. It is false for a session from
+a source that records no token usage: Cursor CLI, unless one of the session's
+messages carries usage. Such a session reports `estimated_cost_usd` and token
+totals of 0; show them as unavailable, not free. Stats totals,
+`/api/stats/by-dimension` rows, and `/api/projects` rows carry
+`usage_sessions`, the number of top-level sessions in that scope or row with
+usage available. A row whose `usage_sessions` is 0 has unavailable cost; one
+where it is below `sessions` reports the cost of the sessions with usage
+only.
 
 ### Session listing and command-palette index
 

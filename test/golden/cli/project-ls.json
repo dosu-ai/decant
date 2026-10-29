@@ -3,6 +3,7 @@
     "path": "/Users/dev/proj",
     "name": "proj",
     "sessions": 8,
+    "usage_sessions": 8,
     "estimated_cost_usd": 0.10869999999999999,
     "last_seen_at": "2026-05-06T09:00:15.000Z",
     "is_worktree": false,
@@ -20,6 +21,7 @@
     "path": "/decant-fixture/example",
     "name": "example",
     "sessions": 3,
+    "usage_sessions": 3,
     "estimated_cost_usd": 0.0109688,
     "last_seen_at": "2026-10-12T07:27:40.000Z",
     "is_worktree": false,
@@ -36,6 +38,7 @@
     "path": "/synthetic/gemini-project",
     "name": "gemini-project",
     "sessions": 2,
+    "usage_sessions": 2,
     "estimated_cost_usd": 0,
     "last_seen_at": "2026-06-03T10:00:03.000Z",
     "is_worktree": false,
@@ -46,6 +49,23 @@
     "worktree_count": 0,
     "session_tools": [
       "gemini"
+    ]
+  },
+  {
+    "path": "/Users/dev/cursor-demo",
+    "name": "cursor-demo",
+    "sessions": 1,
+    "usage_sessions": 0,
+    "estimated_cost_usd": 0,
+    "last_seen_at": "2025-07-14T10:31:00.000Z",
+    "is_worktree": false,
+    "root_path": "/Users/dev/cursor-demo",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "cursor"
     ]
   }
 ]

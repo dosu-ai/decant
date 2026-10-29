@@ -642,7 +642,9 @@ export function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         </span>
         <small>
           {formatInt(subagent.summary.message_count)} msgs ·{" "}
-          {money(subagent.summary.estimated_cost_usd)}
+          {subagent.summary.usage_available
+            ? money(subagent.summary.estimated_cost_usd)
+            : "cost n/a"}
         </small>
       </summary>
       {messages.length === 0 ? (

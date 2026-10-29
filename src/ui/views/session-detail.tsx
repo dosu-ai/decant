@@ -856,10 +856,23 @@ export function SessionDetailView({
               <strong>{formatInt(stats.toolCalls)}</strong> tool calls
             </span>
             <span>
-              <strong>{compact(stats.tokens)}</strong> tokens
+              <strong>
+                {detail.summary.usage_available ? compact(stats.tokens) : "Unavailable"}
+              </strong>{" "}
+              tokens
             </span>
-            <span title={costSourceTooltip(detail.summary.cost_source)}>
-              <strong>{money(detail.summary.estimated_cost_usd)}</strong>
+            <span
+              title={
+                detail.summary.usage_available
+                  ? costSourceTooltip(detail.summary.cost_source)
+                  : "This source records no token usage, so Decant cannot estimate its cost."
+              }
+            >
+              <strong>
+                {detail.summary.usage_available
+                  ? money(detail.summary.estimated_cost_usd)
+                  : "Unavailable"}
+              </strong>
               {costSourceLabel(detail.summary.cost_source) != null ? (
                 <span className="faint"> {costSourceLabel(detail.summary.cost_source)}</span>
               ) : null}
@@ -939,6 +952,7 @@ export function SessionDetailView({
       {economics != null ? (
         <TokenEconomicsPanel
           compact
+          costAvailable={detail.summary.usage_available}
           description="Estimated agent activity inside this session, including nested subagents; capped user response time is shown separately."
           economics={economics}
           subagentRuns={subagentRuns}

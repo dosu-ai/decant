@@ -6,13 +6,13 @@ import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
 import { paletteShortcutLabel, shouldOpenCommandPalette } from "./command-palette.ts";
 import { CommandPalette } from "./command-palette-view.tsx";
-import { EmptyState, ErrorState } from "./common.tsx";
+import { CostValue, EmptyState, ErrorState } from "./common.tsx";
 import { emptyData, SLICE_LOADERS, slicesForView } from "./data-slices.ts";
 import { ALL_DATE_RANGE, dateRangeQuery, withDateQuery } from "./date-range.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { useDisabledFocusRescue } from "./focus.ts";
-import { formatDay, formatInt, latestSessionDay, money, versionLabel } from "./format.ts";
+import { formatDay, formatInt, latestSessionDay, versionLabel } from "./format.ts";
 import { isFramed } from "./frame-guard.ts";
 import { Icon } from "./icons.tsx";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
@@ -640,7 +640,14 @@ function App() {
               <Icon name="money" />
             </span>
             <span>
-              <strong>{money(metrics?.estimated_cost_usd ?? 0)}</strong> tracked
+              <strong>
+                <CostValue
+                  cost={metrics?.estimated_cost_usd ?? 0}
+                  sessions={metrics?.sessions ?? 0}
+                  usageSessions={metrics?.usage_sessions ?? 0}
+                />
+              </strong>{" "}
+              tracked
             </span>
           </div>
           {lastActivity != null ? (

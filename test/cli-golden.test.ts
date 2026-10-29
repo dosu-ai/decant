@@ -6,6 +6,7 @@ import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
 import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
+import { buildCursorChat, cursorFixtureNames } from "./cursor-fixture.ts";
 import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
@@ -25,11 +26,13 @@ function stageFixtures(caseDir: string): {
   geminiDir: string;
   opencodeDir: string;
   opencodeConfigPath: string;
+  cursorDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
   const geminiDir = join(caseDir, "sources", "gemini");
   const opencodeDir = join(caseDir, "sources", "opencode");
+  const cursorDir = join(caseDir, "sources", "cursor");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -62,7 +65,10 @@ function stageFixtures(caseDir: string): {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
+  for (const chat of cursorFixtureNames()) {
+    buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
+  }
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -118,7 +124,7 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath } =
+    const { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir } =
       stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
@@ -135,6 +141,8 @@ describe("CLI golden parity", () => {
         geminiDir,
         "--opencode-dir",
         opencodeDir,
+        "--cursor-dir",
+        cursorDir,
       ],
       {
         env: {

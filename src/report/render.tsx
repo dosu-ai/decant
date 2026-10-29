@@ -52,10 +52,33 @@ export function renderAnalyticsReport(
           <Stat label="Sessions" value={formatInteger(data.totals.sessions)} />
           <Stat label="Messages" value={formatInteger(data.totals.messages)} />
           <Stat label="Tool calls" value={formatInteger(data.totals.tool_calls)} />
-          <Stat label="Input tokens" value={formatCompact(data.totals.input_tokens)} />
-          <Stat label="Output tokens" value={formatCompact(data.totals.output_tokens)} />
-          <Stat label="Estimated cost" value={formatCurrency(data.totals.estimated_cost_usd)} />
+          <Stat
+            label="Input tokens"
+            value={
+              data.totals.usage_sessions > 0
+                ? formatCompact(data.totals.input_tokens)
+                : "Unavailable"
+            }
+          />
+          <Stat
+            label="Output tokens"
+            value={
+              data.totals.usage_sessions > 0
+                ? formatCompact(data.totals.output_tokens)
+                : "Unavailable"
+            }
+          />
+          <Stat
+            label="Estimated cost"
+            value={reportCost(
+              data.totals.estimated_cost_usd,
+              data.totals.sessions,
+              data.totals.usage_sessions,
+              "Unavailable",
+            )}
+          />
         </div>
+        <UsageGapNote missing={data.totals.sessions - data.totals.usage_sessions} />
       </section>
 
       <section className="section">
@@ -72,13 +95,19 @@ export function renderAnalyticsReport(
         </dl>
       </section>
 
-      <EconomicsSection economics={data.economics} />
+      <EconomicsSection
+        costAvailable={data.totals.sessions === 0 || data.totals.usage_sessions > 0}
+        economics={data.economics}
+      />
 
       <section className="section">
         <h2>Activity over time</h2>
         <div className="figure-grid">
           <ReportFigure caption="Sessions per day" svg={sessionsSvg} />
-          <ReportFigure caption="Estimated cost per day" svg={costSvg} />
+          <ReportFigure
+            caption="Estimated cost per day, for sessions with usage data"
+            svg={costSvg}
+          />
         </div>
       </section>
 
@@ -157,13 +186,23 @@ export function renderSessionReport(
           <Stat label="Turns" value={formatInteger(data.facets?.turn_count ?? 0)} />
           <Stat label="Replies" value={formatInteger(data.replyCount)} />
           <Stat label="Tool calls" value={formatInteger(data.toolCallCount)} />
-          <Stat label="Tokens" value={formatCompact(totalTokens)} />
-          <Stat label="Estimated cost" value={formatCurrency(summary.estimated_cost_usd)} />
+          <Stat
+            label="Tokens"
+            value={summary.usage_available ? formatCompact(totalTokens) : "Unavailable"}
+          />
+          <Stat
+            label="Estimated cost"
+            value={
+              summary.usage_available ? formatCurrency(summary.estimated_cost_usd) : "Unavailable"
+            }
+          />
           <Stat label="Duration" value={formatDuration(data.durationSeconds)} />
         </div>
       </section>
 
-      {data.economics == null ? null : <EconomicsSection economics={data.economics} />}
+      {data.economics == null ? null : (
+        <EconomicsSection costAvailable={summary.usage_available} economics={data.economics} />
+      )}
 
       <section className="section">
         <h2>Context window</h2>
@@ -290,33 +329,48 @@ function DimensionTable({
   if (rows.length === 0) {
     return <p className="empty">No data for this range.</p>;
   }
+  const missing = rows.reduce((sum, row) => sum + row.sessions - row.usage_sessions, 0);
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>{path ? "Project" : "Model"}</th>
-          <th className="number">Sessions</th>
-          <th className="number">Input</th>
-          <th className="number">Output</th>
-          <th className="number">Cost</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.key}>
-            <td className={path ? "path" : undefined}>{row.key || "(unknown)"}</td>
-            <td className="number">{formatInteger(row.sessions)}</td>
-            <td className="number">{formatCompact(row.input_tokens)}</td>
-            <td className="number">{formatCompact(row.output_tokens)}</td>
-            <td className="number">{formatCurrency(row.estimated_cost_usd)}</td>
+    <>
+      <table>
+        <thead>
+          <tr>
+            <th>{path ? "Project" : "Model"}</th>
+            <th className="number">Sessions</th>
+            <th className="number">Input</th>
+            <th className="number">Output</th>
+            <th className="number">Cost</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const unavailable = row.sessions > 0 && row.usage_sessions === 0;
+            return (
+              <tr key={row.key}>
+                <td className={path ? "path" : undefined}>{row.key || "(unknown)"}</td>
+                <td className="number">{formatInteger(row.sessions)}</td>
+                <td className="number">{unavailable ? "-" : formatCompact(row.input_tokens)}</td>
+                <td className="number">{unavailable ? "-" : formatCompact(row.output_tokens)}</td>
+                <td className="number" title={unavailable ? NO_USAGE_NOTE : undefined}>
+                  {reportCost(row.estimated_cost_usd, row.sessions, row.usage_sessions, "-")}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <UsageGapNote missing={missing} />
+    </>
   );
 }
 
-function EconomicsSection({ economics }: { economics: TokenEconomics }) {
+function EconomicsSection({
+  costAvailable,
+  economics,
+}: {
+  costAvailable: boolean;
+  economics: TokenEconomics;
+}) {
   return (
     <section className="section">
       <h2>Token economics</h2>
@@ -333,7 +387,7 @@ function EconomicsSection({ economics }: { economics: TokenEconomics }) {
         </thead>
         <tbody>
           {economics.buckets.map((bucket) => (
-            <EconomicsRow bucket={bucket} key={bucket.bucket} />
+            <EconomicsRow bucket={bucket} costAvailable={costAvailable} key={bucket.bucket} />
           ))}
         </tbody>
       </table>
@@ -341,7 +395,13 @@ function EconomicsSection({ economics }: { economics: TokenEconomics }) {
   );
 }
 
-function EconomicsRow({ bucket }: { bucket: TokenEconomicsBucket }) {
+function EconomicsRow({
+  bucket,
+  costAvailable,
+}: {
+  bucket: TokenEconomicsBucket;
+  costAvailable: boolean;
+}) {
   return (
     <tr>
       <td>{formatBucket(bucket.bucket)}</td>
@@ -349,7 +409,7 @@ function EconomicsRow({ bucket }: { bucket: TokenEconomicsBucket }) {
       <td className="number">{formatCompact(bucket.context_window_tokens)}</td>
       <td className="number">{formatInteger(bucket.tool_calls)}</td>
       <td className="number">{formatDuration(Math.round(bucket.active_ms / 1000))}</td>
-      <td className="number">{formatCurrency(bucket.estimated_cost_usd)}</td>
+      <td className="number">{costAvailable ? formatCurrency(bucket.estimated_cost_usd) : "-"}</td>
     </tr>
   );
 }
@@ -473,6 +533,31 @@ function formatCompact(value: number): string {
     notation: Math.abs(value) >= 1_000 ? "compact" : "standard",
     maximumFractionDigits: 1,
   }).format(value);
+}
+
+const NO_USAGE_NOTE =
+  "Cursor CLI records no token usage, so Decant cannot estimate cost for its sessions.";
+
+/** A cost over sessions of which only `usageSessions` recorded usage: the
+ * `unavailable` text with none, and an asterisk when some are missing. */
+function reportCost(
+  cost: number,
+  sessions: number,
+  usageSessions: number,
+  unavailable: string,
+): string {
+  if (sessions > 0 && usageSessions === 0) return unavailable;
+  return `${formatCurrency(cost)}${usageSessions < sessions ? "*" : ""}`;
+}
+
+function UsageGapNote({ missing }: { missing: number }) {
+  if (missing <= 0) return null;
+  return (
+    <p className="empty">
+      * Costs leave out {formatInteger(missing)} {missing === 1 ? "session" : "sessions"} without
+      usage data. {NO_USAGE_NOTE}
+    </p>
+  );
 }
 
 function formatCurrency(value: number): string {

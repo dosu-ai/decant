@@ -1423,7 +1423,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, version]
       properties:
         dbPath:
           type: string
@@ -1434,6 +1434,8 @@ components:
         geminiDir:
           type: string
         opencodeDir:
+          type: string
+        cursorDir:
           type: string
         version:
           type: string
@@ -1765,6 +1767,7 @@ components:
         - message_count
         - total_input_tokens
         - total_output_tokens
+        - usage_available
         - estimated_cost_usd
         - cost_source
         - model_provider
@@ -1829,6 +1832,13 @@ components:
         total_output_tokens:
           type: integer
           minimum: 0
+        usage_available:
+          type: boolean
+          description: >-
+            False for a session from a source that records no token usage
+            (Cursor CLI, unless one of its messages carries usage). Token
+            totals and estimated_cost_usd are then 0 because usage is unknown,
+            not because the session was free.
         estimated_cost_usd:
           type: number
           minimum: 0
@@ -2116,6 +2126,7 @@ components:
         - path
         - name
         - sessions
+        - usage_sessions
         - estimated_cost_usd
         - last_seen_at
         - is_worktree
@@ -2136,6 +2147,14 @@ components:
         sessions:
           type: integer
           minimum: 0
+        usage_sessions:
+          type: integer
+          minimum: 0
+          description: >-
+            Top-level sessions in the row with usage_available. When this is
+            below sessions, token and cost figures cover only these sessions;
+            when sessions is positive and this is 0, they are unavailable
+            rather than zero.
         estimated_cost_usd:
           type: number
           minimum: 0
@@ -2256,6 +2275,7 @@ components:
       type: object
       required:
         - sessions
+        - usage_sessions
         - messages
         - tool_calls
         - input_tokens
@@ -2269,6 +2289,13 @@ components:
         sessions:
           type: integer
           minimum: 0
+        usage_sessions:
+          type: integer
+          minimum: 0
+          description: >-
+            Top-level sessions in scope with usage_available. When sessions is
+            positive and this is 0, token and cost totals are unavailable
+            rather than zero.
         messages:
           type: integer
           minimum: 0
@@ -2302,6 +2329,7 @@ components:
       required:
         - key
         - sessions
+        - usage_sessions
         - input_tokens
         - output_tokens
         - reasoning_tokens
@@ -2313,6 +2341,14 @@ components:
         sessions:
           type: integer
           minimum: 0
+        usage_sessions:
+          type: integer
+          minimum: 0
+          description: >-
+            Top-level sessions in the row with usage_available. When this is
+            below sessions, token and cost figures cover only these sessions;
+            when sessions is positive and this is 0, they are unavailable
+            rather than zero.
         input_tokens:
           type: integer
           minimum: 0

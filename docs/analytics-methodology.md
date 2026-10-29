@@ -160,6 +160,17 @@ session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
 
+Cursor CLI records no token usage, so its sessions store zero tokens and zero
+cost. Session summaries mark them `usage_available: false`. Stats totals,
+per-model, per-project, and per-day rows, and project rollups count only the
+sessions with usage in `usage_sessions`. Wherever Decant shows cost, a total or
+row made up only of sessions without usage reads "Unavailable" (or "-" in dense
+tables) rather than free, and a mixed one shows the cost of the sessions that
+recorded usage with an asterisk whose tooltip or footnote counts the rest. The
+cost-per-day charts leave out days with no usage data, and `decant tokens`
+prints "-" for cost, with a note on stderr, when no session in scope records
+usage.
+
 When Decant has no rate for a model, the cost OpenCode recorded for those
 requests is used instead and the session's `cost_source` is `reported` (or
 `mixed` when only some of its model rows fell back). A recorded cost of zero

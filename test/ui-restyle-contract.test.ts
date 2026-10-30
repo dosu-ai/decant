@@ -119,6 +119,7 @@ describe("restyle contract", () => {
       ".command-palette",
       ".share-review-backdrop",
       ".overflow-menu-popover",
+      ".date-range-popover",
       ".sidebar-backdrop.is-open",
     ]);
     const blurred = [...styles.matchAll(/([^{}]+)\{([^{}]*backdrop-filter[^{}]*)\}/g)].map(
@@ -126,6 +127,29 @@ describe("restyle contract", () => {
     );
     expect(blurred.length).toBeGreaterThan(0);
     expect(blurred.filter((selector) => !overlays.has(selector))).toEqual([]);
+  });
+
+  test("the date-range popover stays inside the page gutter", () => {
+    // The trigger sits 16px from the viewport edge. A -30px offset pushed the
+    // popover 11px off-screen: a horizontal scrollbar at 1024-1200px, and a
+    // clipped left border on phones.
+    const blocks = [
+      ...styles.matchAll(
+        /^\s*(?:\.date-range-menu\S*\s*>\s*)?\.date-range-popover\s*\{([^}]*)\}/gm,
+      ),
+    ].map((match) => match[1] ?? "");
+    expect(blocks.length).toBeGreaterThanOrEqual(3);
+    for (const block of blocks) {
+      expect(block).not.toMatch(/(^|\s)(left|right):\s*-/m);
+    }
+    // Where the heading wraps the trigger to the left edge, the control flips the
+    // popover to open rightward instead.
+    const start =
+      /^\.date-range-menu\[data-align="start"\]\s*>\s*\.date-range-popover\s*\{([^}]*)\}/m.exec(
+        styles,
+      )?.[1] ?? "";
+    expect(start).toContain("left: 0");
+    expect(start).toContain("right: auto");
   });
 
   test("the display serif is only asked for a weight that ships", () => {

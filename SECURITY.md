@@ -23,9 +23,13 @@ we investigate and prepare a fix.
 
 ## Scope and threat model
 
-Decant is a local-first, offline tool. It reads CLI session logs that already
-exist on disk (`~/.claude`, `~/.codex`), writes a local SQLite archive, and makes
-no outbound runtime network requests. `decant serve` is intended for local use
+Decant is a local-first tool. It reads CLI session logs that already
+exist on disk (`~/.claude`, `~/.codex`) and writes a local SQLite archive.
+Outbound runtime networking is limited to the update paths in `src/update.ts`:
+opt-in daily npm registry version checks and user-initiated updates through
+`decant update`. Neither sends session or archive data. Checks are off by
+default; enable them in Settings or with `DECANT_UPDATE_CHECK=1`, or force them
+off with `DECANT_UPDATE_CHECK=0`. `decant serve` is intended for local use
 and binds to `127.0.0.1` by default.
 
 In scope:

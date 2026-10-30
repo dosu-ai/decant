@@ -12,6 +12,7 @@ const settings: UserSettings = {
   agent: "claude",
   terminal: "ghostty",
   ide: "cursor",
+  updateCheck: false,
 };
 
 describe("launcher", () => {

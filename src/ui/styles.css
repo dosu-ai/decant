@@ -6690,3 +6690,155 @@ a:focus-visible .ctx-strip-compaction-marker rect {
 .session-context-peak.is-hot {
   color: var(--danger-text);
 }
+
+/* ===========================================================================
+   Updates
+   =========================================================================== */
+
+.update-nudge {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 4px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent);
+  padding: 9px 10px 10px;
+}
+
+.update-nudge-title {
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: var(--font-weight-strong);
+}
+
+.update-nudge-title:hover {
+  color: var(--fg);
+}
+
+.update-nudge-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.update-nudge-command code {
+  overflow: hidden;
+  font: var(--text-mono-xs-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-nudge-command svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.update-nudge-command:hover svg,
+.update-nudge-command:focus-visible svg {
+  color: var(--fg);
+}
+
+.update-nudge-error {
+  color: var(--muted);
+  font-size: var(--text-micro-size);
+}
+
+/* Declared after the narrow-screen .setting-select rule so the switch stays
+   beside its label instead of dropping under it. */
+.setting-switch {
+  grid-template-columns: minmax(0, 1fr) auto;
+  cursor: pointer;
+}
+
+.setting-select .setting-switch-status {
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.setting-switch:has(.switch:disabled) {
+  cursor: not-allowed;
+}
+
+.switch {
+  display: inline-flex;
+  width: 36px;
+  height: 20px;
+  min-height: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-components-switch-switch);
+  cursor: inherit;
+  padding: 2px;
+  transition: background-color var(--duration-hover) var(--ease-out);
+}
+
+.switch-handle {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-components-switch-switch-handle);
+  box-shadow: var(--shadow-switch-handle);
+  transition: transform var(--duration-press) var(--ease-out);
+}
+
+.switch[aria-checked="true"] {
+  background: var(--bg-components-switch-switch-active);
+}
+
+.switch[aria-checked="true"] .switch-handle {
+  transform: translateX(16px);
+}
+
+.setting-switch:hover .switch:not(:disabled) {
+  background: var(--bg-components-switch-switch-hover);
+}
+
+.setting-switch:hover .switch[aria-checked="true"]:not(:disabled) {
+  background: var(--bg-components-switch-switch-active-hover);
+}
+
+.switch:disabled {
+  background: var(--bg-components-switch-switch-disabled);
+}
+
+.switch:disabled[aria-checked="true"] {
+  background: var(--bg-components-switch-switch-active-disabled);
+}
+
+.switch:disabled .switch-handle {
+  background: var(--bg-components-switch-switch-handle-disabled);
+  box-shadow: none;
+}
+
+/* The track and handle are background colours, which forced-colours mode drops. */
+@media (forced-colors: active) {
+  .switch {
+    border: 1px solid ButtonText;
+  }
+
+  .switch-handle {
+    background: ButtonText;
+  }
+
+  .switch[aria-checked="true"] {
+    background: Highlight;
+  }
+
+  .switch[aria-checked="true"] .switch-handle {
+    background: HighlightText;
+  }
+}

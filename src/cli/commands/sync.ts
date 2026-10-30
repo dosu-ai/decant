@@ -12,6 +12,7 @@ import {
 } from "../../watch.ts";
 import type { CliContext } from "../context.ts";
 import { collectOption, parseInteger } from "../parse.ts";
+import { renderUpdateNotice } from "../update-notice.ts";
 
 export function registerSyncCommands(ctx: CliContext): void {
   const { program, io } = ctx;
@@ -282,6 +283,15 @@ export function registerSyncCommands(ctx: CliContext): void {
           if (!ctx.globals().quiet) {
             io.writeErr(serveBanner(url, decision.open));
           }
+          void ctx.pendingUpdateNotice?.then(
+            (status) => {
+              const notice = renderUpdateNotice(status);
+              if (notice != null) {
+                io.writeErr(notice);
+              }
+            },
+            () => undefined,
+          );
           if (decision.open && decision.command != null) {
             openBrowser(url, decision.command);
           }

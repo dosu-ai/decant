@@ -25,7 +25,7 @@ describe("Dosu product copy", () => {
     expect(main).toContain("readStorage(DOSU_ANALYTICS_DISMISSAL_KEY)");
     expect(main).toContain('writeStorage(DOSU_ANALYTICS_DISMISSAL_KEY, "1")');
     expect(badge).toContain('"Optimized"');
-    expect(main).toContain('["summary", "dateBounds", "config"]');
+    expect(main).toContain('["summary", "dateBounds", "config", "update"]');
     expect(main).toContain("Decant {versionLabel(data.config?.version)}");
     expect(main).not.toContain("Decant {versionLabel(data.config?.version)} ↗");
     expect(main).toContain('context.fillText("Decant", 114, 83)');

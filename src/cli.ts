@@ -9,9 +9,16 @@ import { registerRecommendationsCommands } from "./cli/commands/recommendations.
 import { registerSessionCommands } from "./cli/commands/session.ts";
 import { registerStatsCommands } from "./cli/commands/stats.ts";
 import { registerSyncCommands } from "./cli/commands/sync.ts";
+import { registerUpdateCommand } from "./cli/commands/update.ts";
 import { type CliResult, type CliRunOptions, createContext, type Io } from "./cli/context.ts";
 import { parseOutputFormat } from "./cli/parse.ts";
+import {
+  renderUpdateNotice,
+  shouldShowUpdateNotice,
+  UPDATE_NOTICE_WAIT_MS,
+} from "./cli/update-notice.ts";
 import { configureLogging } from "./logging.ts";
+import { checkForUpdate } from "./update.ts";
 import { DECANT_VERSION } from "./version.ts";
 
 export type { CliResult, CliRunOptions };
@@ -81,9 +88,52 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   registerCompletionCommand(ctx);
   registerStatsCommands(ctx);
   registerExportCommand(ctx);
+  registerUpdateCommand(ctx);
+
+  let noticeCommand: string | null = null;
+  program.hook("preAction", (_root, actionCommand) => {
+    const command = topLevelName(actionCommand);
+    const deps = ctx.updateDeps;
+    const show = shouldShowUpdateNotice({
+      command,
+      json: ctx.isJson(),
+      quiet: ctx.globals().quiet === true,
+      stderrIsTTY: deps.stderrIsTTY ?? (streamOutput && process.stderr.isTTY === true),
+      env: options.env ?? process.env,
+    });
+    if (!show) {
+      return;
+    }
+    noticeCommand = command;
+    // Started before the command runs so a slow registry overlaps its work.
+    // checkForUpdate does nothing over the network unless the user opted in.
+    ctx.pendingUpdateNotice = checkForUpdate({
+      env: options.env,
+      homeDir: options.homeDir,
+      install: deps.install,
+      current: deps.current,
+      fetch: deps.fetch,
+      now: deps.now,
+      // A short command exits only after this request settles, so it gets the
+      // notice's wait. serve stays up and shares this check with /api/update,
+      // so a slow registry there should not count as a failed day.
+      timeoutMs: command === "serve" ? undefined : UPDATE_NOTICE_WAIT_MS,
+    });
+  });
 
   try {
     await program.parseAsync(defaultArgv(argv), { from: "user" });
+    // serve prints its own notice under the banner; it never gets here
+    // until the server stops.
+    if (ctx.pendingUpdateNotice != null && noticeCommand !== "serve") {
+      const notice = await settleWithin(
+        ctx.pendingUpdateNotice.then(renderUpdateNotice, () => null),
+        UPDATE_NOTICE_WAIT_MS,
+      );
+      if (notice != null) {
+        io.writeErr(notice);
+      }
+    }
   } catch (error) {
     if (typeof error === "object" && error !== null && "exitCode" in error) {
       setCode(commanderExitCode(error as { exitCode: number; code?: string }));
@@ -93,6 +143,28 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     }
   }
   return { code, stdout: io.stdout, stderr: io.stderr };
+}
+
+// The entrypoint sets process.exitCode and lets the event loop drain, so a
+// timer left running would hold every command open for the full wait.
+async function settleWithin<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function topLevelName(command: Command): string {
+  let current = command;
+  while (current.parent?.parent != null) {
+    current = current.parent;
+  }
+  return current.name();
 }
 
 function commanderExitCode(error: { exitCode: number; code?: string }): number {

@@ -1,23 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { getJson } from "../api.ts";
 import dosuDecantUrl from "../assets/dosu-decant.png";
 import { dosuLink } from "../dosu-links.ts";
 import { errorMessage, versionLabel } from "../format.ts";
 import { Icon } from "../icons.tsx";
-import type { ConfigView, SettingsInfo, UserSettings } from "../types.ts";
+import type { ConfigView, SettingsInfo, UpdateStatus, UserSettings } from "../types.ts";
 
 export function SettingsView({
   config,
   onSaved,
   settingsInfo,
+  update,
 }: {
   config: ConfigView | null;
   onSaved: () => void;
   settingsInfo: SettingsInfo | null;
+  update: UpdateStatus | null;
 }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setSettings(settingsInfo?.settings ?? null);
@@ -33,7 +34,6 @@ export function SettingsView({
     const next = { ...base, ...patch };
     setSettings(next);
     setSaveError(null);
-    setSaving(true);
     void getJson<SettingsInfo>("/api/settings", {
       method: "POST",
       body: JSON.stringify(next),
@@ -45,8 +45,7 @@ export function SettingsView({
       .catch((err: unknown) => {
         setSettings(previous ?? base);
         setSaveError(errorMessage(err));
-      })
-      .finally(() => setSaving(false));
+      });
   };
 
   return (
@@ -84,13 +83,23 @@ export function SettingsView({
           />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
-        <p className="settings-note">
-          {saving
-            ? "Saving preferences..."
-            : settingsInfo?.can_launch === true
-              ? "Native launcher is available on this Mac."
-              : "Native launcher is unavailable on this platform."}
-        </p>
+      </section>
+
+      <section className="panel">
+        <div className="settings-form">
+          {/* With DECANT_UPDATE_CHECK set, the switch shows what is in effect
+              and saving the setting would change nothing. */}
+          <SettingSwitch
+            checked={
+              update?.envOverride === true ? update.enabled : (settings?.updateCheck ?? false)
+            }
+            disabled={update?.envOverride === true}
+            help="Once a day, ask the npm registry for the newest Decant version. The request carries no session data."
+            label="Check for updates"
+            onChange={(updateCheck) => save({ updateCheck })}
+            status={updateNote(update, settings?.updateCheck ?? false)}
+          />
+        </div>
       </section>
 
       <section className="panel about-decant">
@@ -122,12 +131,48 @@ export function SettingsView({
           </div>
           <p className="about-version">Version {versionLabel(config?.version)}</p>
           <p className="about-privacy">
-            Decant makes no outbound network calls. Your session logs stay on this machine.
+            {update?.enabled === true && update.channel !== "source"
+              ? "Decant contacts the npm registry once a day to check for a newer version. Your session logs stay on this machine."
+              : "Decant makes no outbound network calls. Your session logs stay on this machine."}
           </p>
         </div>
       </section>
     </div>
   );
+}
+
+function updateNote(update: UpdateStatus | null, saved: boolean): string {
+  if (update == null) {
+    return "Loading update status...";
+  }
+  // A failed save rolls the toggle back, so a mismatch without an override
+  // means the status reload after a save has not finished yet.
+  if (!update.envOverride && update.enabled !== saved) {
+    return saved ? "Checking for updates..." : "Saving...";
+  }
+  const override = update.envOverride
+    ? " DECANT_UPDATE_CHECK in the environment overrides this setting."
+    : "";
+  if (!update.enabled) {
+    return `Checks are off. Run decant update to check and install by hand.${override}`;
+  }
+  if (update.updateAvailable && update.latest != null) {
+    return `Decant ${versionLabel(update.latest)} is available. Run ${update.command} to install it.${override}`;
+  }
+  if (update.channel === "source") {
+    return `This is a source checkout, so Decant does not check for releases. Update it with git pull.${override}`;
+  }
+  if (update.latest != null) {
+    const checked =
+      update.checkedAt == null
+        ? ""
+        : ` Last checked ${new Date(update.checkedAt).toLocaleString()}.`;
+    return `You have the newest release.${checked}${override}`;
+  }
+  if (update.error != null) {
+    return `The last check failed: ${update.error}. Decant tries again tomorrow.${override}`;
+  }
+  return `No check has finished yet.${override}`;
 }
 
 export function SettingSelect({
@@ -159,6 +204,51 @@ export function SettingSelect({
         </select>
         <Icon name="chevronDown" />
       </span>
+    </label>
+  );
+}
+
+export function SettingSwitch({
+  checked,
+  disabled = false,
+  help,
+  label,
+  onChange,
+  status,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  help: string;
+  label: string;
+  onChange: (checked: boolean) => void;
+  status?: string;
+}) {
+  const id = useId();
+  return (
+    // A label activates its button, so clicking the title or help text flips the switch too.
+    <label className="setting-select setting-switch" htmlFor={id}>
+      <span>
+        <strong id={`${id}-label`}>{label}</strong>
+        <small id={`${id}-help`}>{help}</small>
+        {status != null ? (
+          <small aria-live="polite" className="setting-switch-status">
+            {status}
+          </small>
+        ) : null}
+      </span>
+      <button
+        aria-checked={checked}
+        aria-describedby={`${id}-help`}
+        aria-labelledby={`${id}-label`}
+        className="switch"
+        disabled={disabled}
+        id={id}
+        onClick={() => onChange(!checked)}
+        role="switch"
+        type="button"
+      >
+        <span className="switch-handle" />
+      </button>
     </label>
   );
 }

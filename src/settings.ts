@@ -25,6 +25,8 @@ export interface UserSettings {
   agent: AgentKey;
   terminal: TerminalKey;
   ide: IdeKey;
+  /** Opt-in daily check for a newer release; the only outbound request Decant makes. */
+  updateCheck: boolean;
 }
 
 export interface SettingsOptions {
@@ -80,6 +82,7 @@ export function detectedSettings(options: SettingsOptions = {}): UserSettings {
     agent: "claude",
     terminal: detectTerminal(options.env ?? process.env),
     ide: detectIde(options.appExists ?? ((name) => existsSync(`/Applications/${name}.app`))),
+    updateCheck: false,
   };
 }
 
@@ -174,6 +177,9 @@ function sanitize(attrs: unknown): Partial<UserSettings> {
   }
   if (typeof raw.ide === "string" && validIdes.has(raw.ide as IdeKey)) {
     out.ide = raw.ide as IdeKey;
+  }
+  if (typeof raw.updateCheck === "boolean") {
+    out.updateCheck = raw.updateCheck;
   }
   return out;
 }

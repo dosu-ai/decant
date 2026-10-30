@@ -116,6 +116,8 @@ not fit the schema lives in [Local Serve API](api/routes.md).
 The default loopback listener is unauthenticated. A broad bind must pass the
 trusted-peer source-address guard; `Host` and browser-origin checks are defense
 in depth, not credentials. The app never adds an outbound runtime dependency.
+The opt-in release check in `src/update.ts` is the only outbound request, and it
+sends no archive data.
 
 Dashboard requests publish their results independently, so available data can
 render while another slice is still loading. Tools aggregates scan a covering

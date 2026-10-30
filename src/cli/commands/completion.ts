@@ -45,6 +45,8 @@ const completionWords = [
   "mcp",
   "export",
   "completion",
+  "update",
+  "--check",
   "--db",
   "--json",
   "--format",

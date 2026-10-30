@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "../config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "../db.ts";
 import { sync as ingestSync } from "../ingest.ts";
+import type { FetchLike, InstallInfo, UpdateStatus } from "../update.ts";
 import type { OutputFormat } from "./parse.ts";
 
 export interface CliResult {
@@ -18,6 +19,20 @@ export interface CliRunOptions {
   liveOutput?: boolean;
   writeStdout?: (value: string) => void;
   writeStderr?: (value: string) => void;
+  /** Test seams for `decant update` and the update notice. */
+  update?: UpdateDeps;
+}
+
+export interface UpdateDeps {
+  fetch?: FetchLike;
+  install?: InstallInfo;
+  current?: string;
+  now?: () => Date;
+  /** Runs a package manager command and returns its exit code. */
+  runCommand?: (argv: string[]) => number;
+  /** The `decant` on PATH and the version it reports, checked after a package manager runs. */
+  installedOnPath?: () => { path: string; version: string | null } | null;
+  stderrIsTTY?: boolean;
 }
 
 export interface GlobalOptions {
@@ -54,6 +69,8 @@ export interface CliContext {
   program: Command;
   io: Io;
   env: Record<string, string | undefined> | undefined;
+  homeDir: string | null | undefined;
+  updateDeps: UpdateDeps;
   globals(): GlobalOptions;
   isJson(): boolean;
   shouldSync(): boolean;
@@ -61,6 +78,8 @@ export interface CliContext {
   writeJson(value: unknown): void;
   output(value: unknown, renderHuman: () => string): void;
   run(action: CliAction): Promise<void>;
+  /** Set before a command runs when it should print an update notice. */
+  pendingUpdateNotice: Promise<UpdateStatus> | null;
   withArchive<T>(fn: (archive: Archive) => T, options?: WithArchiveOptions): T;
 }
 
@@ -92,6 +111,8 @@ export function createContext(
     program,
     io,
     env: options.env,
+    homeDir: options.homeDir,
+    updateDeps: options.update ?? {},
     globals,
     isJson: () => isJsonOutput(globals()),
     shouldSync: () => shouldSyncOnRead(globals(), options.env),
@@ -112,6 +133,7 @@ export function createContext(
         io.writeOut(renderHuman());
       }
     },
+    pendingUpdateNotice: null,
     run: async (action) => {
       try {
         setCode((await action()) ?? 0);

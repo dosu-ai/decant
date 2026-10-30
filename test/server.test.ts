@@ -1223,6 +1223,98 @@ describe("server routes", () => {
     });
   });
 
+  test("analytics routes filter combined provider and client sources", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    db.exec(`
+      UPDATE session
+      SET raw_meta = '{"originator":"Codex Desktop","source":"vscode"}'
+      WHERE tool = 'codex';
+    `);
+    db.close();
+
+    expect(await route(config, "/api/stats/summary?source=codex_app")).toMatchObject({
+      status: 200,
+      body: { sessions: 1 },
+    });
+    expect(await route(config, "/api/analytics/activity?source=codex_app")).toMatchObject({
+      status: 200,
+      body: { by_hour: expect.any(Array), by_weekday: expect.any(Array) },
+    });
+    expect(await route(config, "/api/metadata/session-sources")).toMatchObject({
+      status: 200,
+      body: [
+        { key: "claude_code", label: "Claude Code" },
+        { key: "codex_app", label: "Codex App" },
+      ],
+    });
+    const codexSessions = await route(config, "/api/sessions?tool=codex");
+    const codexId = (codexSessions.body as { id: number }[])[0]?.id;
+    expect(codexId).toBeNumber();
+    expect(
+      await route(config, `/api/sessions/${codexId}/state`, {
+        method: "POST",
+        body: JSON.stringify({ state: "archived" }),
+      }),
+    ).toMatchObject({ status: 200, body: { state: "archived" } });
+    expect(await route(config, "/api/metadata/session-sources")).toMatchObject({
+      status: 200,
+      body: [{ key: "claude_code", label: "Claude Code" }],
+    });
+    for (const path of [
+      "/api/stats/summary?source=unknown",
+      "/api/stats/by-dimension?dim=model&source=unknown",
+      "/api/analytics/activity?source=unknown",
+      "/api/analytics/model-sparklines?source=unknown",
+      "/api/analytics/token-economics?source=unknown",
+      "/api/reports/analytics.html?source=unknown",
+    ]) {
+      expect(await route(config, path)).toMatchObject({
+        status: 400,
+        body: {
+          code: "invalid_request",
+          error: "unknown source",
+          allowed: ["claude_code", "codex_app", "codex_cli", "gemini_cli", "opencode"],
+        },
+      });
+    }
+  });
+
+  test("source-scoped token economics bypasses the archive-wide cache", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    let builds = 0;
+    // An empty cached model makes any answer that came from the cache obvious.
+    const economics = new EconomicsCache({
+      db,
+      dbPath: config.dbPath,
+      computeVectors: async () => {
+        builds += 1;
+        return [];
+      },
+    });
+    try {
+      const get = async (path: string) => {
+        const response = await handleRequest(new Request(`http://127.0.0.1:3000${path}`), config, {
+          db,
+          economics,
+        });
+        return (await response.json()) as { totals: { estimated_cost_usd: number } };
+      };
+      const scoped = await get("/api/analytics/token-economics?source=claude_code");
+      expect(builds).toBe(0);
+      expect(scoped.totals.estimated_cost_usd).toBeGreaterThan(0);
+      const archiveWide = await get("/api/analytics/token-economics");
+      expect(builds).toBe(1);
+      expect(archiveWide.totals.estimated_cost_usd).toBe(0);
+    } finally {
+      await economics.settled();
+      db.close();
+    }
+  });
+
   test("returns metadata and extended analytics routes", async () => {
     const config = freshConfig();
     seed(config);

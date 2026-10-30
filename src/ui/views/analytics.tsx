@@ -37,6 +37,7 @@ import {
   type SortState,
   sortRows,
 } from "../sorting.tsx";
+import { type DashboardSource, dashboardSourceOptions, sourceScopeQuery } from "../source-scope.ts";
 import type {
   Activity,
   ActivityBucket,
@@ -82,15 +83,20 @@ export function AnalyticsView({
   data,
   dateRange,
   onDateRangeChange,
+  onSourceChange,
   onSync,
+  source,
   syncing,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
+  onSourceChange: (source: DashboardSource) => void;
   onSync: () => void;
+  source: DashboardSource;
   syncing: boolean;
 }) {
+  const analyticsQuery = sourceScopeQuery(dateRangeQuery(dateRange), source);
   const [dosuDismissed, setDosuDismissed] = useState(
     () => readStorage(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
   );
@@ -138,11 +144,12 @@ export function AnalyticsView({
         <div className="page-heading-actions">
           <ReportExportButton
             excluded={ANALYTICS_REPORT_NEVER_INCLUDES}
-            href={withDateQuery("/api/reports/analytics.html", dateRangeQuery(dateRange))}
+            href={withDateQuery("/api/reports/analytics.html", analyticsQuery)}
             includes={ANALYTICS_REPORT_INCLUDES}
-            previewHref={withDateQuery("/reports/analytics", dateRangeQuery(dateRange))}
+            previewHref={withDateQuery("/reports/analytics", analyticsQuery)}
             title="Review analytics report"
           />
+          <SourceControl onChange={onSourceChange} sources={data.sessionSources} value={source} />
           <DateRangeControl
             bounds={data.dateBounds}
             range={dateRange}
@@ -730,4 +737,34 @@ export function activityTone(bucket: ActivityBucket): BadgeTone {
     case "code":
       return "success";
   }
+}
+
+function SourceControl({
+  onChange,
+  sources,
+  value,
+}: {
+  onChange: (source: DashboardSource) => void;
+  sources: DashboardData["sessionSources"];
+  value: DashboardSource;
+}) {
+  return (
+    <label className="source-filter-control">
+      <span className="sr-only">Source</span>
+      <span className="select-shell">
+        <select
+          aria-label="Source"
+          onChange={(event) => onChange(event.target.value as DashboardSource)}
+          value={value}
+        >
+          {dashboardSourceOptions(sources).map((option) => (
+            <option key={option.key} value={option.key}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <Icon name="chevronDown" />
+      </span>
+    </label>
+  );
 }

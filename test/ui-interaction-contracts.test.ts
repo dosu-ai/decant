@@ -186,6 +186,38 @@ describe("UI interaction contracts", () => {
     expect(summaryLoader).not.toContain("sessionSummaryPath");
   });
 
+  test("applies one Analytics source scope to every rendered aggregate and report", () => {
+    const app = sourceBetween(readUiFile("main.tsx"), "function App()", "function renderView(");
+    const analytics = sourceBetween(
+      readUiFile("views/analytics.tsx"),
+      "function AnalyticsView(",
+      "function ActivityPanel(",
+    );
+    const slices = readUiFile("data-slices.ts");
+    const routes = sourceBetween(slices, "const ROUTE_SLICES:", "function slicesForView(");
+    const shell = sourceBetween(slices, "const SHELL_SLICES:", "const ROUTE_SLICES:");
+
+    expect(app).toContain(
+      'activeView === "analytics" ? sourceScopeQuery(dateQuery, sourceSelection) : dateQuery',
+    );
+    expect(app).toContain("SLICE_LOADERS[slice].load(dashboardQuery)");
+    expect(shell).toContain('"summary"');
+    for (const slice of [
+      "sessionSources",
+      "byDay",
+      "byModel",
+      "byProject",
+      "activity",
+      "modelSparklines",
+      "tokenEconomics",
+    ]) {
+      expect(routes).toContain(`"${slice}"`);
+    }
+    expect(analytics).toContain("sourceScopeQuery(dateRangeQuery(dateRange), source)");
+    expect(analytics).toContain('withDateQuery("/api/reports/analytics.html", analyticsQuery)');
+    expect(analytics).toContain('withDateQuery("/reports/analytics", analyticsQuery)');
+  });
+
   test("exposes session state actions through the shared accessible overflow menu", () => {
     const overflow = sourceFrom(readUiFile("common.tsx"), "function OverflowMenu(");
     const session = sourceBetween(

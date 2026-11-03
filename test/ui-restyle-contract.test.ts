@@ -86,6 +86,15 @@ describe("restyle contract", () => {
     expect(th).not.toContain("var(--font-mono)");
   });
 
+  test("the Analytics source select uses the toolbar's 13px strong type", () => {
+    // The form-field default is larger and lighter than the date-range control
+    // beside it, so the select reads as a different component without this.
+    const source =
+      /^\.source-filter-control \.select-shell select \{([^}]*)\}/m.exec(styles)?.[1] ?? "";
+    expect(source).toContain("font-size: 13px");
+    expect(source).toContain("font-weight: var(--font-weight-strong)");
+  });
+
   test("persistent sticky headers stay opaque during scrolling", () => {
     for (const selector of ["topbar", "thread-header"]) {
       const block = new RegExp(`^\\s*\\.${selector}\\s*\\{([^}]*)\\}`, "m").exec(styles)?.[1] ?? "";

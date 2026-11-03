@@ -72,7 +72,7 @@ By default Decant discovers:
   store with pending WAL data, mount the chats directory read-write or close
   the chat in Cursor so it checkpoints. A store whose recorded agent ID
   changes replaces the session Decant filed for it instead of adding a
-  second one.
+  second one, and the new ID keeps the old one's archived or deleted state.
   Cursor records no token usage, so these sessions keep token and cost
   totals unavailable.
 

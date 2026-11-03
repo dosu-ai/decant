@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,6 +19,7 @@ import { closeDb, openDb } from "../src/db.ts";
 import { discover, discoverSourcePaths, type IngestConfig, sync } from "../src/ingest.ts";
 import { configureLogging } from "../src/logging.ts";
 import { listSessions } from "../src/query.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { CursorBlobProblem, parseCursorSession, readCursorSource } from "../src/sources/cursor.ts";
 import { totals } from "../src/stats.ts";
 import { buildCursorChat, writeCursorStore } from "./cursor-fixture.ts";
@@ -280,6 +282,58 @@ describe("Cursor source", () => {
         { source_session_id: "cursor-renamed-session" },
       ]);
       expect(totals(db)).toMatchObject({ sessions: 1, messages: 4 });
+    } finally {
+      closeDb(db);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  function rewriteAgentId(chatDir: string, agentId: string): void {
+    const fixture = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "fixtures", "cursor", "sample", "store.json"),
+        "utf8",
+      ),
+    );
+    rmSync(join(chatDir, "store.db"));
+    writeCursorStore(join(chatDir, "store.db"), { ...fixture.store, agentId }, fixture.records);
+  }
+
+  test("a deleted chat stays deleted when its agent ID changes", () => {
+    const { root, chatDir, config } = cursorCase();
+    const db = openDb(join(root, "archive.db"));
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 1 });
+      const { id } = db.query("SELECT id FROM session").get() as { id: number };
+      expect(setSessionUserState(db, id, "deleted")).toBe(true);
+      rewriteAgentId(chatDir, "cursor-renamed-session");
+      expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 0 });
+      expect(totals(db)).toMatchObject({ sessions: 0 });
+      expect(db.query("SELECT count(*) AS n FROM session").get()).toEqual({ n: 0 });
+    } finally {
+      closeDb(db);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a copied chat keeps its transcript when the other copy changes agent ID", () => {
+    const { root, cursorDir, chatDir, config } = cursorCase();
+    const copy = join(cursorDir, "workspace", "copy");
+    cpSync(chatDir, copy, { recursive: true });
+    const db = openDb(join(root, "archive.db"));
+    const ids = () =>
+      (
+        db.query("SELECT source_session_id FROM session ORDER BY 1").all() as {
+          source_session_id: string;
+        }[]
+      ).map((row) => row.source_session_id);
+    try {
+      sync(db, config);
+      expect(ids()).toEqual(["cursor-synthetic-session"]);
+      rewriteAgentId(copy, "cursor-copy-session");
+      sync(db, config);
+      sync(db, config);
+      expect(ids()).toEqual(["cursor-copy-session", "cursor-synthetic-session"]);
     } finally {
       closeDb(db);
       rmSync(root, { recursive: true, force: true });

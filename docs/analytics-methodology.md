@@ -167,9 +167,10 @@ sessions with usage in `usage_sessions`. Wherever Decant shows cost, a total or
 row made up only of sessions without usage reads "Unavailable" (or "-" in dense
 tables) rather than free, and a mixed one shows the cost of the sessions that
 recorded usage with an asterisk whose tooltip or footnote counts the rest. The
-cost-per-day charts leave out days with no usage data, and `decant tokens`
+cost-per-day charts leave out days with no usage data. `decant tokens`
 prints "-" for cost, with a note on stderr, when no session in scope records
-usage.
+usage, and `decant project ls` prints "-" for such a project and an asterisk
+after a cost that leaves sessions out.
 
 When Decant has no rate for a model, the cost OpenCode recorded for those
 requests is used instead and the session's `cost_source` is `reported` (or

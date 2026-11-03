@@ -179,6 +179,18 @@ describe("cost for sessions without recorded usage", () => {
     expect(mixed).not.toContain("Cost unavailable");
   });
 
+  test("decant project ls prints no cost for a project without usage", async () => {
+    const result = await runCli(["--db", mixedArchive(), "--no-sync", "project", "ls"]);
+    expect(result.code).toBe(0);
+    const cost = (path: string) =>
+      result.stdout
+        .split("\n")
+        .find((line) => line.split("\t")[2] === path)
+        ?.split("\t")[5];
+    expect(cost("/Users/dev/cursor-demo")).toBe("-");
+    expect(cost("/Users/dev/proj")).toMatch(/^\d+\.\d{2}$/);
+  });
+
   test("decant tokens prints no cost when nothing in scope records usage", async () => {
     const dir = mkdtempSync(join(root, "tokens-"));
     const cursorDir = join(dir, "cursor");

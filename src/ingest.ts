@@ -781,7 +781,7 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
   );
   if (
     prior != null &&
-    prior.hash === signature.key &&
+    prior.hash?.startsWith(`${signature.key}#`) === true &&
     prior.ingest_revision === INGEST_PIPELINE_REVISION
   ) {
     return { kind: "skipped" };
@@ -812,7 +812,7 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     lineCount: parsed.session.messages.length,
     mtime: signature.mtime,
     size: signature.size,
-    hash: signature.key,
+    hash: `${signature.key}#${parsed.session.sourceSessionId}`,
   };
   const outcome = writeIngestedFile(db, prepared, parsed);
   return outcome === "tombstoned"
@@ -829,7 +829,9 @@ const CURSOR_STORE_NAME = "store.db";
 
 interface CursorStoreSignature {
   /** Per-file existence, size, and nanosecond mtime, stored in
-   * `ingest_source.hash`. A checkpoint can move bytes from the WAL into
+   * `ingest_source.hash` followed by `#` and the agent ID read with it, so an
+   * identity change can still name the old one after its session row is
+   * gone. A checkpoint can move bytes from the WAL into
    * `store.db` and a new commit can follow within the same second, so a
    * combined size or whole-second mtime can repeat across different
    * content. */
@@ -1452,22 +1454,56 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
 }
 
 /** A Cursor store holds one chat, so when the agent ID it records changes,
- * the session filed under its path is the same transcript under a stale
- * identity and would otherwise count twice. As with a misfiled fork, user
- * state stays keyed to the old identity. */
+ * the session filed under the old ID is the same transcript under a stale
+ * identity and would otherwise count twice. The old ID comes from the store's
+ * recorded change key rather than its session row, which a user delete
+ * removes. The new ID takes over the old one's archive or delete state, so a
+ * deleted chat stays deleted. Another store recorded under the old ID (a
+ * copied chat directory) shared the removed row, so it is re-read next sync. */
 function releaseReplacedCursorIdentity(db: Database, path: string, parsed: ParsedSession): void {
   if (parsed.session.tool !== "cursor") {
     return;
   }
-  const previous = queryRow<{ id: number }>(
+  const next = parsed.session.sourceSessionId;
+  const prior = queryRow<{ hash: string | null; source_session_id: string | null }>(
     db,
-    `SELECT s.id FROM ingest_source i JOIN session s ON s.id = i.session_id
-      WHERE i.path = ?1 AND s.tool = 'cursor' AND s.source_session_id != ?2`,
-    [path, parsed.session.sourceSessionId],
+    `SELECT i.hash, s.source_session_id
+       FROM ingest_source i LEFT JOIN session s ON s.id = i.session_id
+      WHERE i.path = ?1`,
+    [path],
   );
-  if (previous != null) {
-    deleteSessionRow(db, previous.id);
+  const separator = prior?.hash?.indexOf("#") ?? -1;
+  // A key recorded before it carried the agent ID falls back to the row.
+  const previous =
+    separator < 0
+      ? (prior?.source_session_id ?? null)
+      : (prior?.hash?.slice(separator + 1) ?? null);
+  if (previous == null || previous === next) {
+    return;
   }
+  runStatement(
+    db,
+    `INSERT INTO session_user_state(tool, source_session_id, state, updated_at)
+     SELECT tool, ?2, state, updated_at FROM session_user_state
+      WHERE tool = 'cursor' AND source_session_id = ?1
+     ON CONFLICT(tool, source_session_id) DO NOTHING`,
+    [previous, next],
+  );
+  const stale = queryRow<{ id: number }>(
+    db,
+    "SELECT id FROM session WHERE tool = 'cursor' AND source_session_id = ?1",
+    [previous],
+  );
+  if (stale != null) {
+    deleteSessionRow(db, stale.id);
+  }
+  runStatement(
+    db,
+    `UPDATE ingest_source SET hash = NULL
+      WHERE tool = 'cursor' AND path != ?1
+        AND substr(hash, instr(hash, '#') + 1) = ?2`,
+    [path, previous],
+  );
 }
 
 /** A session read from a newer copy in another database no longer belongs to

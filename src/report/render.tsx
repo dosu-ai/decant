@@ -37,6 +37,8 @@ export function renderAnalyticsReport(
   const range = formatRange(data.range.from, data.range.to);
   const sessionsSvg = renderSessionsByDayChart(data.sessionsByDay, { width: 380, height: 220 });
   const costSvg = renderCostByDayChart(data.sessionsByDay, { width: 380, height: 220 });
+  // An empty scope, or one holding only subagents, has real token counts.
+  const usageUnavailable = data.totals.sessions > 0 && data.totals.usage_sessions === 0;
   const body = (
     <main className="report">
       <ReportHeader
@@ -54,19 +56,11 @@ export function renderAnalyticsReport(
           <Stat label="Tool calls" value={formatInteger(data.totals.tool_calls)} />
           <Stat
             label="Input tokens"
-            value={
-              data.totals.usage_sessions > 0
-                ? formatCompact(data.totals.input_tokens)
-                : "Unavailable"
-            }
+            value={usageUnavailable ? "Unavailable" : formatCompact(data.totals.input_tokens)}
           />
           <Stat
             label="Output tokens"
-            value={
-              data.totals.usage_sessions > 0
-                ? formatCompact(data.totals.output_tokens)
-                : "Unavailable"
-            }
+            value={usageUnavailable ? "Unavailable" : formatCompact(data.totals.output_tokens)}
           />
           <Stat
             label="Estimated cost"

@@ -299,6 +299,14 @@ describe("report charts", () => {
     expect(html).toContain("Costs leave out 1 session without usage data.");
   });
 
+  test("shows token totals for a scope without top-level sessions", () => {
+    const html = renderAnalyticsReport({
+      ...analytics,
+      totals: { ...totals, sessions: 0, usage_sessions: 0 },
+    });
+    expect(html).not.toContain("Unavailable");
+  });
+
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {
     const svg = renderSessionsByDayChart([
       {

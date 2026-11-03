@@ -20,7 +20,7 @@ describe("source and provenance marks", () => {
     expect(html).toContain('aria-label="Optimized with Dosu; Dosu MCP used 5 times"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('<img alt=""');
-    expect(html.replace(/<[^>]*>/g, "")).toBe("");
+    expect(html).toMatch(/<a\b[^>]*><img\b[^>]*\/><\/a>$/);
     expect(
       renderToStaticMarkup(
         <DosuProvenanceBadge session={{ dosu_mcp_direct_calls: 0, dosu_mcp_tree_calls: 0 }} />,

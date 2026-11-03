@@ -1195,7 +1195,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, gemini_cli, opencode]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode]
     Model:
       name: model
       in: query
@@ -2732,7 +2732,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, gemini_cli, opencode]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode]
         label:
           type: string
       additionalProperties: false

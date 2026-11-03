@@ -1275,7 +1275,14 @@ describe("server routes", () => {
         body: {
           code: "invalid_request",
           error: "unknown source",
-          allowed: ["claude_code", "codex_app", "codex_cli", "gemini_cli", "opencode"],
+          allowed: [
+            "claude_code",
+            "codex_app",
+            "codex_cli",
+            "codex_other",
+            "gemini_cli",
+            "opencode",
+          ],
         },
       });
     }

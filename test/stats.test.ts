@@ -7,7 +7,7 @@ import { openDb } from "../src/db.ts";
 import type { Operation } from "../src/enrich.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
-import { availableSessionSources } from "../src/source-filter.ts";
+import { availableSessionSources, type SessionSource } from "../src/source-filter.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
@@ -88,6 +88,8 @@ describe("stats rollups", () => {
         JSON.stringify({ originator: "Codex Desktop", source: "cli" }),
       ],
       [7, "opencode", "opencode", null],
+      [8, "codex", "codex-t3", JSON.stringify({ originator: "T3 Code", source: "vscode" })],
+      [9, "codex", "codex-exec", JSON.stringify({ originator: "codex_exec", source: "exec" })],
     ] as const;
     // A model keeps the Codex rows out of the never-prompted thread rule in
     // visibleSessionPredicate, which would otherwise hide them.
@@ -103,6 +105,14 @@ describe("stats rollups", () => {
     expect(totals(db, { source: "claude_code" }).sessions).toBe(1);
     expect(totals(db, { source: "codex_app" }).sessions).toBe(2);
     expect(totals(db, { source: "codex_cli" }).sessions).toBe(1);
+    // Malformed metadata, T3 Code, and exec runs are neither app nor CLI.
+    expect(totals(db, { source: "codex_other" }).sessions).toBe(3);
+    expect(
+      ["codex_app", "codex_cli", "codex_other"].reduce(
+        (sum, source) => sum + totals(db, { source: source as SessionSource }).sessions,
+        0,
+      ),
+    ).toBe(byDimension(db, "tool").find((row) => row.key === "codex")?.sessions ?? -1);
     expect(totals(db, { source: "gemini_cli" }).sessions).toBe(1);
     expect(totals(db, { source: "opencode" }).sessions).toBe(1);
     expect(byDimension(db, "tool", { source: "codex_app" })).toMatchObject([
@@ -112,6 +122,7 @@ describe("stats rollups", () => {
       { key: "claude_code", label: "Claude Code" },
       { key: "codex_app", label: "Codex App" },
       { key: "codex_cli", label: "Codex CLI" },
+      { key: "codex_other", label: "Codex (other clients)" },
       { key: "gemini_cli", label: "Gemini CLI" },
       { key: "opencode", label: "OpenCode" },
     ]);

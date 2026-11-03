@@ -23,7 +23,7 @@ RUN case "${TARGETPLATFORM}" in \
     bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin --version "${DECANT_VERSION}"; \
     cp "/tmp/decant-bin/${DECANT_TARGET}/decant" /usr/local/bin/decant
 
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS runtime
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
 
 RUN groupadd --system decant \
     && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \

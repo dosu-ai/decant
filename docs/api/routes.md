@@ -33,9 +33,9 @@ HTML, and Save as PDF controls. They read the local-only report operations;
 the session preview intentionally omits transcript content.
 
 Analytics statistics and reports accept a combined `source` filter. The
-current values are `claude_code`, `codex_app`, `codex_cli`, `gemini_cli`,
-`opencode`, and `cursor_cli`. An unknown value returns `400` with the accepted
-values in `allowed`, before the archive is read. The `codex_app`/`codex_cli` split reads
+current values are `claude_code`, `codex_app`, `codex_cli`, `codex_other`,
+`gemini_cli`, `opencode`, and `cursor_cli`. An unknown value returns `400` with
+the accepted values in `allowed`, before the archive is read. The Codex split reads
 the source session's recorded `originator`/`source` metadata; the filter does
 not infer an account identity. `GET /api/metadata/session-sources` returns only
 source values represented by visible sessions in the local archive; the

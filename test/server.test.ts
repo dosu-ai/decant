@@ -1280,6 +1280,7 @@ describe("server routes", () => {
             "claude_code",
             "codex_app",
             "codex_cli",
+            "codex_other",
             "gemini_cli",
             "opencode",
             "cursor_cli",

@@ -33,12 +33,13 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
 OpenCode, `cursor_cli` for Cursor CLI, and, for Codex, the recorded producer
-metadata splits `codex_app` from `codex_cli`. That split
-reads only the session's own `originator` and `source` metadata: desktop
+metadata splits sessions into `codex_app`, `codex_cli`, and `codex_other`. That
+split reads only the session's own `originator` and `source` metadata: desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
-origins (`source: cli`, or the legacy `codex-tui` originator) count as the
-CLI. Codex sessions recorded by other producers, such as editor extensions or
-scripted runs, match neither bucket; they remain visible under "All sources".
+origins (`source: cli`, or the legacy `codex-tui` originator) count as the CLI.
+Every other Codex session, such as one from an editor extension, the SDK,
+`codex exec`, or a third-party client, counts as `codex_other`, so the three
+Codex buckets add up to the Codex total.
 The filter describes the producing client only and never infers an account
 identity, email address, or organization.
 

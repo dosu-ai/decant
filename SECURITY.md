@@ -26,12 +26,18 @@ we investigate and prepare a fix.
 Decant is a local-first tool. It reads CLI session logs that already exist on
 disk (by default `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, OpenCode's
 `~/.local/share/opencode`, and `~/.cursor/chats`) and writes a local SQLite
-archive. Outbound runtime networking is limited to the update paths in
-`src/update.ts`: opt-in daily npm registry version checks and user-initiated
-updates through `decant update`. Neither sends session or archive data. Checks
-are off by default; enable them in Settings or with `DECANT_UPDATE_CHECK=1`, or
-force them off with `DECANT_UPDATE_CHECK=0`. `decant serve` is intended for
-local use and binds to `127.0.0.1` by default.
+archive. Its only outbound network requests are for updates, and none of them
+send session or archive data:
+
+- A daily version check against the npm registry. Checks are off by default.
+  Turn them on in Settings or with `DECANT_UPDATE_CHECK=1`.
+  `DECANT_UPDATE_CHECK=0` turns them off whatever Settings says.
+- `decant update`, which runs only when you start it. It always asks the npm
+  registry for the latest version, even with checks off and with `--check`.
+  It then updates through npm or Homebrew, or downloads the binary from GitHub
+  Releases, or from the mirror in `DECANT_BASE_URL` when that is set.
+
+`decant serve` is intended for local use and binds to `127.0.0.1` by default.
 
 In scope:
 

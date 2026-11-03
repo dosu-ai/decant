@@ -1257,8 +1257,14 @@ function readableUserTitle(text: string | null | undefined, isSubagent: boolean)
   if (isAgentContextText(trimmed)) {
     return null;
   }
-  return preview(trimmed.replace(/\s+/g, " "), 180);
+  const prompt = CURSOR_USER_QUERY.exec(trimmed)?.[1] ?? trimmed;
+  return prompt === "" ? null : preview(prompt.replace(/\s+/g, " "), 180);
 }
+
+/** The Cursor CLI sends each prompt as `<timestamp>...</timestamp>` followed by
+ * the text in `<user_query>`; the title is the text alone. */
+const CURSOR_USER_QUERY =
+  /^(?:<timestamp>[^<]*<\/timestamp>\s*)?<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
 
 function subagentTaskTitle(text: string): string | null {
   if (/^<teammate-message\b/i.test(text)) {
@@ -1306,6 +1312,7 @@ const AGENT_CONTEXT_SQL = `
   OR b.text GLOB '*<INSTRUCTIONS>*'
   OR LTRIM(b.text) LIKE 'The following is the Codex agent history%'
   OR LTRIM(b.text) LIKE 'Use prior reviews as context%'
+  OR LTRIM(b.text) LIKE '<system_reminder>%'
 `;
 
 function isAgentContextText(text: string): boolean {
@@ -1326,7 +1333,8 @@ function isAgentContextText(text: string): boolean {
     trimmed.startsWith("# AGENTS.md instructions") ||
     trimmed.includes("<INSTRUCTIONS>") ||
     /^The following is the Codex agent history/i.test(trimmed) ||
-    /^Use prior reviews as context/i.test(trimmed)
+    /^Use prior reviews as context/i.test(trimmed) ||
+    /^<system_reminder>/i.test(trimmed)
   );
 }
 

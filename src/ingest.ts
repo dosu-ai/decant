@@ -760,10 +760,10 @@ function syncOpenCodeSession(
     : { kind: "ingested", issues: parsed.issues };
 }
 
-/** A Cursor CLI chat is a SQLite store with `meta.json` beside it. Its
- * change key covers `meta.json` and the `-wal` too, because a running chat
- * appends to the WAL without touching `store.db`. A store that cannot be read
- * fails alone and is retried on the next sync. */
+/** A Cursor CLI chat is a SQLite store, with `meta.json` beside it for a chat
+ * the user opened. Its change key covers `meta.json` and the `-wal` too,
+ * because a running chat appends to the WAL without touching `store.db`. A
+ * store that cannot be read fails alone and is retried on the next sync. */
 function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
   let signature: CursorStoreSignature;
   try {
@@ -804,6 +804,11 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
           : `Cursor store could not be read (${errorCode(error)})`,
     });
     return { kind: "failed" };
+  }
+  // Without `meta.json`, only a subagent's own link says the store holds a
+  // conversation.
+  if (source.fileMeta == null && get(source.storeMeta, "subagentInfo") == null) {
+    return { kind: "skipped" };
   }
   const parsed = parseCursorSession(pathBasename(dirname(file.path)), source);
   parsed.session.isArchived = file.archived;
@@ -856,7 +861,7 @@ function cursorStoreSignature(path: string): CursorStoreSignature {
     try {
       stats = statSync(file, { bigint: true });
     } catch (error) {
-      // The WAL is optional; a missing meta.json fails the read instead.
+      // The WAL is optional, and so is meta.json: a subagent's store has none.
       if (name === "store") throw error;
       parts.push(`${name}=-`);
       continue;
@@ -873,11 +878,18 @@ function cursorMetaPath(path: string): string {
 }
 
 /** Cursor creates a store for every chat it opens; only those whose
- * `meta.json` says a conversation happened hold a transcript. */
+ * `meta.json` says a conversation happened hold a transcript. A subagent's
+ * store has no `meta.json`, so a store without one stays a candidate and
+ * `syncCursorStore` keeps it only when it names a parent agent. */
 function isCursorConversationStore(path: string): boolean {
+  let text: string;
   try {
-    const meta = JSON.parse(readFileSync(cursorMetaPath(path), "utf8")) as Json;
-    return get(meta, "hasConversation") === true;
+    text = readFileSync(cursorMetaPath(path), "utf8");
+  } catch (error) {
+    return (error as { code?: string }).code === "ENOENT";
+  }
+  try {
+    return get(JSON.parse(text) as Json, "hasConversation") === true;
   } catch {
     return false;
   }

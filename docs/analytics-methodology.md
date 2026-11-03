@@ -76,7 +76,11 @@ that a change shipped or achieved its goal. Work type starts with keywords in
 the first user prompt and can fall back to the mix of file and web activity.
 Codex `developer` messages and the AGENTS.md or environment context Codex
 injects as a user message are system rows, so they are neither the first prompt
-nor a turn.
+nor a turn. The same holds for the `<user_info>` environment block and
+`<system_reminder>` text the Cursor CLI sends as a user message. Cursor runs a
+subagent, and an MCP tool, through `CallDynamicTool`. Decant records the call
+under the tool it ran, `Task` or `mcp__<server>__<tool>`, so subagent spawns
+and MCP calls count the same way as in other sources.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 

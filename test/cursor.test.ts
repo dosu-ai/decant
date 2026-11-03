@@ -72,6 +72,129 @@ function cursorCase(): { root: string; cursorDir: string; chatDir: string; confi
   return { root, cursorDir, chatDir, config };
 }
 
+/** Hand-written records in the shape the Cursor CLI writes: an injected
+ * `<user_info>` environment message, prompts wrapped in `<user_query>`, and
+ * deferred tools run through `CallDynamicTool`. A subagent's store sits beside
+ * its parent's with no `meta.json`, linked only by `subagentInfo`. */
+function writeCliShapedChats(workspaceDir: string): { parent: string; child: string } {
+  const userInfo = {
+    role: "user",
+    content:
+      "<user_info>\nOS Version: synthetic\n\nWorkspace Path: /Users/dev/cli-demo\n</user_info>",
+  };
+  const parent = join(workspaceDir, "cli-parent");
+  mkdirSync(parent, { recursive: true });
+  writeCursorStore(
+    join(parent, "store.db"),
+    { agentId: "cli-parent", name: "New Agent", createdAt: 1752489000000 },
+    [
+      { role: "system", content: "Synthetic system prompt." },
+      userInfo,
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "<timestamp>Monday, Jul 14, 2025, 10:30 AM (UTC+0)</timestamp>\n<user_query>\nExplore the demo with a subagent.\n</user_query>",
+          },
+        ],
+      },
+      {
+        id: "a-1",
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "spawn-1",
+            toolName: "CallDynamicTool",
+            args: {
+              namespace: "cursor",
+              toolName: "Task",
+              arguments: { description: "Explore", subagent_type: "explore" },
+            },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "mcp-1",
+            toolName: "CallDynamicTool",
+            args: { namespace: "docs", toolName: "search", arguments: { query: "demo" } },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "edit-1",
+            toolName: "StrReplace",
+            args: { path: "/Users/dev/cli-demo/src/index.ts", old_string: "a", new_string: "b" },
+          },
+        ],
+      },
+      {
+        id: "t-1",
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "spawn-1",
+            toolName: "CallDynamicTool",
+            result: "done",
+          },
+          { type: "tool-result", toolCallId: "mcp-1", toolName: "CallDynamicTool", result: "[]" },
+          { type: "tool-result", toolCallId: "edit-1", toolName: "StrReplace", result: "ok" },
+        ],
+      },
+    ],
+  );
+  writeFileSync(
+    join(parent, "meta.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      hasConversation: true,
+      cwd: "/Users/dev/cli-demo",
+      createdAtMs: 1752489000000,
+      updatedAtMs: 1752489060000,
+    }),
+  );
+  const child = join(workspaceDir, "cli-child");
+  mkdirSync(child, { recursive: true });
+  writeCursorStore(
+    join(child, "store.db"),
+    {
+      agentId: "cli-child",
+      name: "New Agent",
+      createdAt: 1752489010000,
+      subagentInfo: {
+        parentAgentId: "cli-parent",
+        rootParentAgentId: "cli-parent",
+        toolCallId: "spawn-1",
+        typeName: "explore",
+      },
+    },
+    [
+      { role: "system", content: "Synthetic subagent prompt." },
+      userInfo,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "<system_reminder>\nYou are a subagent.\n</system_reminder>" },
+          { type: "text", text: "<user_query>\nList the demo's exports.\n</user_query>" },
+        ],
+      },
+      {
+        id: "c-1",
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "read-1",
+            toolName: "Read",
+            args: { path: "/Users/dev/cli-demo/src/index.ts" },
+          },
+        ],
+      },
+    ],
+  );
+  return { parent, child };
+}
+
 const workDir = mkdtempSync(join(tmpdir(), "decant-cursor-fixture-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 const sampleChat = join(workDir, "sample");
@@ -583,6 +706,120 @@ describe("Cursor source", () => {
       writeFileSync(metaPath, JSON.stringify({ ...meta, title: "Renamed chat" }));
       expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
       expect(db.query("SELECT title FROM session").get()).toEqual({ title: "Renamed chat" });
+    } finally {
+      closeDb(db);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reads the CLI's injected context, wrapped prompts, and dynamic tools", () => {
+    const dir = mkdtempSync(join(tmpdir(), "decant-cursor-cli-"));
+    try {
+      const { parent, child } = writeCliShapedChats(dir);
+      const { session } = parseCursorSession(
+        "cli-parent",
+        readCursorSource(join(parent, "store.db")),
+      );
+      expect(session.title).toBe("Explore the demo with a subagent.");
+      expect(session.messages.map((message) => message.role)).toEqual([
+        "system",
+        "system",
+        "user",
+        "assistant",
+        "tool",
+      ]);
+      expect(
+        session.messages.flatMap((message) =>
+          message.blocks.map((b) => [b.blockType, b.toolName, b.toolInput ?? null]),
+        ),
+      ).toEqual([
+        ["text", null, null],
+        ["text", null, null],
+        ["text", null, null],
+        ["tool_use", "Task", { description: "Explore", subagent_type: "explore" }],
+        ["tool_use", "mcp__docs__search", { query: "demo" }],
+        [
+          "tool_use",
+          "StrReplace",
+          { path: "/Users/dev/cli-demo/src/index.ts", old_string: "a", new_string: "b" },
+        ],
+        ["tool_result", "Task", null],
+        ["tool_result", "mcp__docs__search", null],
+        ["tool_result", "StrReplace", null],
+      ]);
+
+      const sub = readCursorSource(join(child, "store.db"));
+      expect(sub.fileMeta).toBeNull();
+      const parsed = parseCursorSession("cli-child", sub);
+      expect(parsed.issues).toEqual([]);
+      expect(parsed.session).toMatchObject({
+        title: "List the demo's exports.",
+        cwd: "/Users/dev/cli-demo",
+        startedAt: "2025-07-14T10:30:10.000Z",
+        isSubagent: true,
+        spawnToolUseId: "spawn-1",
+        agentType: "explore",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("ingests a subagent store without meta.json under its parent", () => {
+    const root = mkdtempSync(join(tmpdir(), "decant-cursor-test-"));
+    const cursorDir = join(root, "cursor");
+    writeCliShapedChats(join(cursorDir, "workspace"));
+    // A store with neither meta.json nor a parent link is not a chat.
+    const stray = join(cursorDir, "workspace", "stray");
+    mkdirSync(stray, { recursive: true });
+    writeCursorStore(join(stray, "store.db"), { agentId: "stray" }, []);
+    const config = { claudeDir: join(root, "claude"), codexDir: join(root, "codex"), cursorDir };
+    const db = openDb(join(root, "archive.db"));
+    try {
+      expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 2, skipped: 1, failed: 0 });
+      expect(
+        db
+          .query(
+            `SELECT s.source_session_id AS id, s.turn_count, s.agent_spawn_count,
+                    p.source_session_id AS parent, s.cwd
+               FROM session s LEFT JOIN session p ON p.id = s.parent_session_id
+              ORDER BY s.source_session_id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "cli-child",
+          turn_count: 1,
+          agent_spawn_count: 0,
+          parent: "cli-parent",
+          cwd: "/Users/dev/cli-demo",
+        },
+        {
+          id: "cli-parent",
+          turn_count: 1,
+          agent_spawn_count: 1,
+          parent: null,
+          cwd: "/Users/dev/cli-demo",
+        },
+      ]);
+      expect(db.query("SELECT rel_path, operation FROM file_ref ORDER BY operation").all()).toEqual(
+        [
+          { rel_path: "src/index.ts", operation: "edit" },
+          { rel_path: "src/index.ts", operation: "read" },
+        ],
+      );
+      expect(
+        listSessions(db, { includeSubagents: true }).map((session) => [
+          session.source_session_id,
+          session.title,
+        ]),
+      ).toEqual(
+        expect.arrayContaining([
+          ["cli-parent", "Explore the demo with a subagent."],
+          ["cli-child", "List the demo's exports."],
+        ]),
+      );
+      expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 0 });
     } finally {
       closeDb(db);
       rmSync(root, { recursive: true, force: true });

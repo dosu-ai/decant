@@ -17,7 +17,9 @@ type CursorStoreMeta = JsonObject;
 type CursorFileMeta = JsonObject;
 
 export interface CursorSource {
-  fileMeta: CursorFileMeta;
+  /** `meta.json`, which Cursor writes only for chats the user opens. A
+   * subagent's store has none; its link to the parent is in `storeMeta`. */
+  fileMeta: CursorFileMeta | null;
   storeMeta: CursorStoreMeta;
   records: CursorRecord[];
 }
@@ -72,7 +74,7 @@ export function readCursorSource(storePath: string): CursorSource {
   }
 }
 
-function readWith(fileMeta: CursorFileMeta, open: () => Database): CursorSource {
+function readWith(fileMeta: CursorFileMeta | null, open: () => Database): CursorSource {
   const db = open();
   try {
     return readCursorDatabase(fileMeta, db);
@@ -98,7 +100,7 @@ function isLockError(error: unknown): boolean {
   );
 }
 
-function readCursorDatabase(fileMeta: CursorFileMeta, db: Database): CursorSource {
+function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): CursorSource {
   const metaRow = db.query("SELECT value FROM meta LIMIT 1").get() as { value?: unknown } | null;
   if (typeof metaRow?.value !== "string") {
     throw new CursorSourceError("Cursor store metadata is missing");
@@ -150,8 +152,8 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   const messages: NormalizedMessage[] = [];
   const unknownTypes: UnknownTypes = new Map();
   const unknownRoles: UnknownTypes = new Map();
-  const schemaVersion = source.fileMeta.schemaVersion;
-  if (schemaVersion !== 1) {
+  const schemaVersion = source.fileMeta?.schemaVersion;
+  if (source.fileMeta != null && schemaVersion !== 1) {
     issues.push({
       code: "unknown_record_type",
       lineNo: null,
@@ -160,6 +162,7 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
     });
   }
 
+  const dynamicCalls = new Map<string, DynamicCall>();
   for (const [seq, stored] of source.records.entries()) {
     const lineNo = seq + 1;
     const record = readRecord(stored, lineNo, issues);
@@ -193,14 +196,16 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
         countUnknown(unknownTypes, "<non-object>", lineNo);
         continue;
       }
-      const normalized = cursorBlock(item, blocks.length);
+      const normalized = cursorBlock(item, blocks.length, dynamicCalls);
       if (normalized != null) {
         blocks.push(normalized);
       } else {
         countUnknown(unknownTypes, typeLabel(item.type), lineNo);
       }
     }
-    const role = cursorRole(asString(record.role));
+    const role = isInjectedContext(record.role, content)
+      ? "system"
+      : cursorRole(asString(record.role));
     if (role === "other") {
       countUnknown(unknownRoles, typeLabel(record.role), lineNo);
     }
@@ -231,17 +236,17 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   const subagent = isObject(source.storeMeta.subagentInfo)
     ? source.storeMeta.subagentInfo
     : undefined;
-  const isSubagent = source.fileMeta.isSubagent === true || subagent != null;
+  const fileMeta = source.fileMeta ?? {};
+  const isSubagent = fileMeta.isSubagent === true || subagent != null;
   const sourceSessionId = asString(source.storeMeta.agentId) ?? fallbackId;
-  const startedAt = timestamp(source.fileMeta.createdAtMs);
-  const endedAt = timestamp(source.fileMeta.updatedAtMs) ?? startedAt;
-  const cwd = asString(source.fileMeta.cwd);
+  const startedAt = timestamp(fileMeta.createdAtMs) ?? timestamp(source.storeMeta.createdAt);
+  const endedAt = timestamp(fileMeta.updatedAtMs) ?? startedAt;
+  const cwd = asString(fileMeta.cwd) ?? workspacePath(messages);
   const session = {
     tool: "cursor" as const,
     sourceSessionId,
     projectPath: cwd,
-    title:
-      asString(source.fileMeta.title) ?? asString(source.storeMeta.name) ?? firstUserText(messages),
+    title: asString(fileMeta.title) ?? chatName(source.storeMeta.name) ?? firstUserText(messages),
     cwd,
     gitBranch: null,
     model: cursorModel(source.storeMeta.lastUsedModel),
@@ -313,7 +318,33 @@ function typeLabel(value: Json | undefined): string {
   return /^[A-Za-z0-9_.:-]{1,40}$/.test(value) ? value : "<unrecognized>";
 }
 
-function cursorBlock(item: JsonObject, ordinal: number): NormalizedBlock | null {
+/** A deferred tool Cursor ran through `CallDynamicTool`, under the name the
+ * rest of Decant knows it by. */
+interface DynamicCall {
+  toolName: string;
+  input: Json | undefined;
+}
+
+/** `CallDynamicTool` dispatches by `namespace`: `cursor` holds Cursor's own
+ * deferred tools, such as `Task` for a subagent, and any other namespace is an
+ * MCP server. Unwrapping it lets spawn counts, MCP grouping, and tool stats
+ * see the tool that actually ran. */
+function dynamicCall(item: JsonObject): DynamicCall | null {
+  if (asString(item.toolName) !== "CallDynamicTool" || !isObject(item.args)) return null;
+  const namespace = asString(item.args.namespace);
+  const toolName = asString(item.args.toolName);
+  if (namespace == null || toolName == null) return null;
+  return {
+    toolName: namespace === "cursor" ? toolName : `mcp__${namespace}__${toolName}`,
+    input: item.args.arguments,
+  };
+}
+
+function cursorBlock(
+  item: JsonObject,
+  ordinal: number,
+  dynamicCalls: Map<string, DynamicCall>,
+): NormalizedBlock | null {
   const type = asString(item.type);
   if (type === "text" || type === "reasoning") {
     return block(ordinal, type === "reasoning" ? "thinking" : "text", {
@@ -324,16 +355,22 @@ function cursorBlock(item: JsonObject, ordinal: number): NormalizedBlock | null 
     return block(ordinal, "thinking");
   }
   if (type === "tool-call") {
+    const toolUseId = asString(item.toolCallId);
+    const dynamic = dynamicCall(item);
+    if (dynamic != null && toolUseId != null) dynamicCalls.set(toolUseId, dynamic);
     return block(ordinal, "tool_use", {
-      toolName: asString(item.toolName),
-      toolUseId: asString(item.toolCallId),
-      toolInput: item.args,
+      toolName: dynamic?.toolName ?? asString(item.toolName),
+      toolUseId,
+      toolInput: dynamic != null ? (dynamic.input ?? null) : item.args,
     });
   }
   if (type === "tool-result") {
+    const toolUseId = asString(item.toolCallId);
     return block(ordinal, "tool_result", {
-      toolName: asString(item.toolName),
-      toolUseId: asString(item.toolCallId),
+      toolName:
+        (toolUseId == null ? undefined : dynamicCalls.get(toolUseId)?.toolName) ??
+        asString(item.toolName),
+      toolUseId,
       toolResult: item.result === undefined ? null : renderResult(item.result),
       isError: explicitError(item),
     });
@@ -363,18 +400,69 @@ function cursorModel(value: Json | undefined): string | null {
   return asString(value.model) ?? asString(value.id) ?? asString(value.name);
 }
 
+// Context the Cursor CLI sends as a "user" message: the environment, rules,
+// skills, and tool lists, and reminders addressed to a subagent. The user never
+// typed it, so, as with Codex, it is a system row rather than a turn.
+const INJECTED_CONTEXT = /^\s*<(?:user_info|system_reminder)>/;
+
+function isInjectedContext(role: Json | undefined, content: Json[]): boolean {
+  return (
+    role === "user" &&
+    content.length > 0 &&
+    content.every((part) => {
+      const text = isObject(part) && part.type === "text" ? asString(part.text) : null;
+      return text != null && INJECTED_CONTEXT.test(text);
+    })
+  );
+}
+
+/** Cursor names every chat "New Agent" until it picks a title, and `-p` runs
+ * never do, so the placeholder reads as no name. */
+function chatName(value: Json | undefined): string | null {
+  const name = asString(value);
+  return name === "New Agent" ? null : name;
+}
+
+/** The CLI wraps each prompt in `<user_query>` after a `<timestamp>` line. */
+const USER_QUERY = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
+
 function firstUserText(messages: NormalizedMessage[]): string | null {
   for (const message of messages) {
     if (message.role !== "user") continue;
-    const text = message.blocks.find((block) => block.blockType === "text")?.text?.trim();
-    if (text) return text.slice(0, 200);
+    for (const part of message.blocks) {
+      if (part.blockType !== "text") continue;
+      const text = part.text ?? "";
+      // A subagent's prompt follows a reminder in the same message.
+      if (INJECTED_CONTEXT.test(text)) continue;
+      const query = USER_QUERY.exec(text)?.[1] ?? text;
+      if (query.trim()) return query.trim().slice(0, 200);
+    }
   }
   return null;
 }
 
-function readCursorFileMeta(storePath: string): CursorFileMeta {
+/** A subagent's store has no `meta.json`, but the environment block Cursor
+ * injects names the workspace. */
+function workspacePath(messages: NormalizedMessage[]): string | null {
+  for (const message of messages) {
+    if (message.role !== "system") continue;
+    for (const part of message.blocks) {
+      const match = /^Workspace Path: (\S.*)$/m.exec(part.text ?? "");
+      if (match?.[1] != null) return match[1].trim();
+    }
+  }
+  return null;
+}
+
+function readCursorFileMeta(storePath: string): CursorFileMeta | null {
   const path = storePath.replace(/store\.db$/, "meta.json");
-  const text = readFileSync(path, "utf8");
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return null;
+    throw error;
+  }
   let value: Json;
   try {
     value = JSON.parse(text) as Json;

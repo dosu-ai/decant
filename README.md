@@ -184,7 +184,8 @@ Decant reads `OPENCODE_MODELS_PATH`, else `$XDG_CACHE_HOME/opencode/models.json`
 
 Cursor CLI keeps each chat in its own `store.db` with a `meta.json` beside it.
 Decant reads those stores read-only and skips chats whose `meta.json` records
-no conversation. Cursor records no token usage, so Decant shows tokens and cost
+no conversation. A subagent's store has no `meta.json`, so Decant reads it
+when the store names its parent chat and files it under that chat. Cursor records no token usage, so Decant shows tokens and cost
 for Cursor sessions as unavailable instead of $0. `--path` also accepts a
 Cursor `store.db`.
 

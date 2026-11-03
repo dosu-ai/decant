@@ -62,7 +62,10 @@ By default Decant discovers:
 - Cursor CLI chats under `~/.cursor/chats/<workspace>/<chat>/`, or the
   directory from `--cursor-dir` or `DECANT_CURSOR_DIR`. Each chat is a SQLite
   `store.db` with a `meta.json` beside it; Decant reads chats whose
-  `meta.json` sets `hasConversation` and skips the rest. Stores are opened
+  `meta.json` sets `hasConversation` and skips the rest. A subagent's store
+  has no `meta.json`. Decant reads it when its metadata names a parent agent,
+  links it to that chat, and takes its working directory from the
+  environment block Cursor injects. Stores are opened
   read-only. When a store's directory cannot hold a `-shm` file (a read-only
   mount, for example), Decant falls back to SQLite's immutable mode, which
   reads `store.db` alone and ignores locks and the WAL, so it does so only
@@ -79,7 +82,7 @@ By default Decant discovers:
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
 chat, the existence, size, and nanosecond modification time of each of
-`store.db`, `store.db-wal`, and `meta.json`, since a running chat appends to
+`store.db`, `store.db-wal`, and `meta.json` if present, since a running chat appends to
 the WAL and a checkpoint can move bytes between files within one second), and
 unchanged OpenCode sessions by their per-session change key, unless an updated
 ingest pipeline requires reprocessing them. A 2.x session's change key is built

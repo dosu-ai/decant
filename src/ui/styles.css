@@ -2601,34 +2601,22 @@ td a:hover {
 
 .dosu-provenance-badge {
   display: inline-flex;
-  min-width: 0;
-  height: 23px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
-  border: 1px solid color-mix(in oklab, var(--dosu) 45%, var(--line));
-  border-radius: var(--radius-full);
-  background: color-mix(in oklab, var(--dosu) 12%, var(--surface));
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: var(--font-weight-strong);
-  line-height: 1;
-  padding: 0 8px 0 5px;
+  justify-content: center;
+  border-radius: var(--radius-sm);
 }
 
 .dosu-provenance-badge:hover,
 .dosu-provenance-badge:focus-visible {
-  border-color: color-mix(in oklab, var(--dosu) 72%, var(--line-strong));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--dosu) 18%, transparent);
 }
 
 .dosu-provenance-badge img {
   width: 16px;
   height: 16px;
-}
-
-.dosu-label-compact {
-  display: none;
 }
 
 .dosu-evidence-tooltip {
@@ -5869,17 +5857,6 @@ mark {
   height: 17px;
 }
 
-.dosu-tool-badge {
-  border: 1px solid color-mix(in oklab, var(--dosu) 48%, var(--line));
-  border-radius: var(--radius-full);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: var(--font-weight-strong);
-  line-height: 1;
-  padding: 4px 7px;
-  white-space: nowrap;
-}
-
 .tool-result {
   background: var(--elevated);
 }
@@ -6421,14 +6398,6 @@ pre {
   .overflow-menu-popover {
     right: auto;
     left: 0;
-  }
-
-  .dosu-label-full {
-    display: none;
-  }
-
-  .dosu-label-compact {
-    display: inline;
   }
 
   .dosu-callout {

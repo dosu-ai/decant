@@ -3,10 +3,6 @@ export interface DosuEvidence {
   treeCalls: number;
 }
 
-export function dosuBadgeVisualLabel(_compact: boolean): "Optimized" {
-  return "Optimized";
-}
-
 export function dosuNestedCalls(evidence: DosuEvidence): number {
   return Math.max(0, evidence.treeCalls - evidence.directCalls);
 }

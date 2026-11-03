@@ -60,6 +60,10 @@ export const GEMINI_ICON_PATH =
 export const OPENCODE_ICON_PATH =
   "M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v12h16V6Zm3.3 2.6L11.7 12l-4.4 3.4-1.2-1.6L8.4 12 6.1 10.2Zm4.7 5.4h5v2h-5Z";
 
+// Simple Icons (CC0): https://github.com/simple-icons/simple-icons/blob/develop/icons/cursor.svg
+export const CURSOR_ICON_PATH =
+  "M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23";
+
 export const ZAI_ICON_PATH = "M4 4h16v3.2L9.6 17H20v3H4v-3.2L14.4 7H4Z";
 
 export const META_ICON_PATH =
@@ -179,6 +183,8 @@ export function brandIconPath(name: BrandIconName): string {
       return GEMINI_ICON_PATH;
     case "opencode":
       return OPENCODE_ICON_PATH;
+    case "cursor":
+      return CURSOR_ICON_PATH;
     case "zai":
       return ZAI_ICON_PATH;
     case "meta":

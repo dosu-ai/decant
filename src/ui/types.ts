@@ -362,6 +362,7 @@ export type BrandIconName =
   | "openai"
   | "gemini"
   | "opencode"
+  | "cursor"
   | "zai"
   | "meta";
 

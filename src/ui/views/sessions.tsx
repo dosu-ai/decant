@@ -7,7 +7,7 @@ import { EMPTY_SESSION_IDS, SESSION_PAGE_SIZE, SESSION_TABLE_SKELETON_KEYS } fro
 import { dateRangeQuery } from "../date-range.ts";
 import { DateRangeControl } from "../date-range-control.tsx";
 import { fullDateTime, sessionListDate } from "../date-time.ts";
-import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "../dosu-badge.ts";
+import { dosuBadgeAriaLabel, dosuEvidenceSummary } from "../dosu-badge.ts";
 import { dosuLink } from "../dosu-links.ts";
 import { basename, compact, costDisplay, formatInt, money } from "../format.ts";
 import { Icon } from "../icons.tsx";
@@ -520,7 +520,11 @@ export const SessionTableRow = memo(function SessionTableRow({
   );
 });
 
-export function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
+export function DosuProvenanceBadge({
+  session,
+}: {
+  session: Pick<SessionSummary, "dosu_mcp_direct_calls" | "dosu_mcp_tree_calls">;
+}) {
   if (session.dosu_mcp_tree_calls <= 0) {
     return null;
   }
@@ -532,7 +536,7 @@ export function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
     <Tooltip
       content={
         <div className="dosu-evidence-tooltip">
-          <strong>Dosu MCP used in this session</strong>
+          <strong>Optimized with Dosu</strong>
           <p>{dosuEvidenceSummary(evidence)}</p>
         </div>
       }
@@ -547,8 +551,6 @@ export function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
           target="_blank"
         >
           <img alt="" src={dosuOfficialUrl} />
-          <span className="dosu-label-full">{dosuBadgeVisualLabel(false)}</span>
-          <span className="dosu-label-compact">{dosuBadgeVisualLabel(true)}</span>
         </a>
       )}
     </Tooltip>

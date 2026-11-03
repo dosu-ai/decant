@@ -249,6 +249,19 @@ export type UserSettings = {
   agent: string;
   terminal: string;
   ide: string;
+  updateCheck: boolean;
+};
+
+export type UpdateStatus = {
+  enabled: boolean;
+  envOverride: boolean;
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  checkedAt: string | null;
+  channel: string;
+  command: string;
+  error: string | null;
 };
 
 export type SettingsInfo = {
@@ -274,6 +287,7 @@ export type DashboardData = {
   recommendations: Recommendation[];
   config: ConfigView | null;
   settings: SettingsInfo | null;
+  update: UpdateStatus | null;
   activity: Activity | null;
   modelSparklines: ModelSparklines | null;
   tokenEconomics: TokenEconomics | null;

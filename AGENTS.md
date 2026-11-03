@@ -74,7 +74,10 @@ A change is ready when:
    opens the database behind a separate contract.
 3. **Runtime stays local-first.** Do not add outbound network calls, hosted
    service dependencies, or LLM calls. The only runtime networking is the local
-   UI and API served by `decant serve`, bound to loopback by default.
+   UI and API served by `decant serve`, bound to loopback by default. The one
+   exception lives in `src/update.ts`: a once-a-day npm registry version check
+   that stays off until the user turns it on, and the release downloads
+   `decant update` makes when the user runs it. Neither sends archive data.
 4. **Costs reflect current pricing.** `estimateCost` in `src/cost.ts` is applied
    when a session is written. Every sync reconciles stored session and activity
    costs with current rates, preserving transcripts and user state.

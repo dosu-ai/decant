@@ -8,6 +8,7 @@ export const API_ROUTE_PATHS = [
   "/api/events",
   "/api/config",
   "/api/settings",
+  "/api/update",
   "/api/launch/agent",
   "/api/launch/ide",
   "/api/sync-status",

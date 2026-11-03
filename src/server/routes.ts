@@ -60,6 +60,7 @@ import {
   totals,
 } from "../stats.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "../token-economics.ts";
+import { checkForUpdate } from "../update.ts";
 import { DECANT_VERSION } from "../version.ts";
 import { type Db, type RequestContext, withDb } from "./context.ts";
 import { errorResponse, isJsonObject, json } from "./http.ts";
@@ -138,6 +139,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         json({ ...settingsResponse(saveSettings(body as Record<string, unknown>)), saved: true }),
     },
   },
+  "/api/update": { GET: async () => json(await checkForUpdate()) },
   "/api/launch/agent": {
     POST: { body: "object", rejectExtras: { ok: false }, handle: launchAgentRoute },
   },

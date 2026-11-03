@@ -66,6 +66,7 @@ import type {
   SyncProgress,
   ThemeChoice,
 } from "./types.ts";
+import { UpdateNudge } from "./update-nudge.tsx";
 import { AnalyticsView } from "./views/analytics.tsx";
 import { FilesView } from "./views/files.tsx";
 import { InsightsView } from "./views/insights.tsx";
@@ -657,6 +658,7 @@ function App() {
             <img alt="" src={dosuOfficialUrl} />
             <span>Created by Dosu</span>
           </a>
+          <UpdateNudge status={data.update} />
           <a
             className="sidebar-version"
             href="https://github.com/dosu-ai/decant/releases"
@@ -934,7 +936,12 @@ function renderView(
       );
     case "settings":
       return (
-        <SettingsView config={data.config} onSaved={actions.refresh} settingsInfo={data.settings} />
+        <SettingsView
+          config={data.config}
+          onSaved={actions.refresh}
+          settingsInfo={data.settings}
+          update={data.update}
+        />
       );
     default:
       return <NotFoundView pathname={pathname} />;

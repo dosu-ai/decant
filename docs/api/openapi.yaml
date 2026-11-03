@@ -190,6 +190,29 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /api/update:
+    get:
+      tags: [System]
+      operationId: getUpdateStatus
+      summary: Report whether a newer Decant release is available
+      description: >-
+        Reads the cached result of the daily release check. When the user has
+        turned update checks on and the cached answer is at least a day old,
+        the server first asks the npm registry for the latest `@dosu/decant`
+        version. With checks off, no request leaves the machine and `latest`
+        is null.
+      responses:
+        "200":
+          description: Update status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateStatus"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /api/launch/agent:
     post:
       tags: [Launch]
@@ -1438,9 +1461,49 @@ components:
         version:
           type: string
       additionalProperties: false
+    UpdateStatus:
+      type: object
+      required:
+        - enabled
+        - envOverride
+        - current
+        - latest
+        - updateAvailable
+        - checkedAt
+        - channel
+        - command
+        - error
+      properties:
+        enabled:
+          type: boolean
+          description: Whether daily update checks are on, from the setting or `DECANT_UPDATE_CHECK`.
+        envOverride:
+          type: boolean
+          description: True when `DECANT_UPDATE_CHECK` decided `enabled` instead of the saved setting.
+        current:
+          type: string
+        latest:
+          type: [string, "null"]
+          description: Newest release from the last check; null until a check succeeds or while checks are off.
+        updateAvailable:
+          type: boolean
+        checkedAt:
+          type: [string, "null"]
+          format: date-time
+        channel:
+          type: string
+          enum: [npm, npx, npm-local, homebrew, installer, docker, source]
+          description: How this copy of Decant was installed, which decides how it updates.
+        command:
+          type: string
+          description: The command that updates this install, such as `decant update`.
+        error:
+          type: [string, "null"]
+          description: Why the check this request made failed, if it made one.
+      additionalProperties: false
     UserSettings:
       type: object
-      required: [agent, terminal, ide]
+      required: [agent, terminal, ide, updateCheck]
       properties:
         agent:
           type: string
@@ -1451,6 +1514,9 @@ components:
         ide:
           type: string
           enum: [vscode, cursor, zed, sublime, intellij]
+        updateCheck:
+          type: boolean
+          description: Whether Decant checks the npm registry once a day for a newer release.
         dosuSuggestions:
           type: string
           enum: [show, hide]
@@ -1469,6 +1535,8 @@ components:
         ide:
           type: string
           enum: [vscode, cursor, zed, sublime, intellij]
+        updateCheck:
+          type: boolean
         dosuSuggestions:
           type: string
           enum: [show, hide]

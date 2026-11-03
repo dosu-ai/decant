@@ -114,6 +114,12 @@ Their rows stay in the archive and remain readable by id through
 `GET /api/sessions/:id`. Each becomes visible once its source gains a real
 prompt or reply.
 
+`GET /api/update` is the only operation that can make an outbound request. It
+asks the npm registry for the latest `@dosu/decant` version only when the
+`updateCheck` setting or `DECANT_UPDATE_CHECK=1` turned checks on and the
+cached answer in `update-check.json` is at least a day old. A failed check is
+also cached, so an offline machine retries once a day.
+
 `POST /api/launch/agent` accepts a `key` only when it uses the characters
 recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
 `POST /api/launch/ide` requires an absolute `dir` that matches a project path or

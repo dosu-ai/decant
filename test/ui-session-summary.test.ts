@@ -8,12 +8,13 @@ import {
 describe("session summary cards", () => {
   const archiveSummary = {
     sessions: 12,
+    usage_sessions: 12,
     messages: 50,
     estimated_cost_usd: 9.5,
   };
   const visibleRows = [
-    { message_count: 4, estimated_cost_usd: 0.75 },
-    { message_count: 7, estimated_cost_usd: 1.25 },
+    { message_count: 4, usage_available: true, estimated_cost_usd: 0.75 },
+    { message_count: 7, usage_available: true, estimated_cost_usd: 1.25 },
   ];
 
   test("uses the server summary until a client text filter is active", () => {
@@ -23,6 +24,7 @@ describe("session summary cards", () => {
   test("derives cards from visible rows for a client text filter", () => {
     expect(sessionCardMetrics(archiveSummary, visibleRows, "codex")).toEqual({
       sessions: 2,
+      usage_sessions: 2,
       messages: 11,
       estimated_cost_usd: 2,
     });
@@ -31,20 +33,33 @@ describe("session summary cards", () => {
   test("falls back to loaded rows when a scoped summary request is unavailable", () => {
     expect(sessionCardMetrics(null, visibleRows, "")).toEqual({
       sessions: 2,
+      usage_sessions: 2,
       messages: 11,
       estimated_cost_usd: 2,
     });
+  });
+
+  test("keeps sessions without native usage out of usage-backed metrics", () => {
+    expect(
+      sessionCardMetrics(
+        null,
+        [{ message_count: 3, usage_available: false, estimated_cost_usd: 0 }],
+        "cursor",
+      ),
+    ).toEqual({ sessions: 1, usage_sessions: 0, messages: 3, estimated_cost_usd: 0 });
   });
 
   test("uses root messages but recursive displayed cost when a query matched a child", () => {
     const matchingRoots = [
       {
         message_count: 4,
+        usage_available: true,
         estimated_cost_usd: 1,
         subagent_estimated_cost_usd: 99,
         subagents: [
           {
             message_count: 7,
+            usage_available: true,
             estimated_cost_usd: 0.5,
             subagent_estimated_cost_usd: 0.25,
           },
@@ -54,6 +69,7 @@ describe("session summary cards", () => {
 
     expect(sessionCardMetrics(archiveSummary, matchingRoots, "child title")).toEqual({
       sessions: 1,
+      usage_sessions: 1,
       messages: 4,
       estimated_cost_usd: 1.75,
     });

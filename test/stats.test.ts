@@ -7,6 +7,7 @@ import { openDb } from "../src/db.ts";
 import type { Operation } from "../src/enrich.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
+import { availableSessionSources, type SessionSource } from "../src/source-filter.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
@@ -72,6 +73,65 @@ function seededEnriched(): Database {
 }
 
 describe("stats rollups", () => {
+  test("filters provider and client combinations from recorded session metadata", () => {
+    const db = freshDb();
+    const rows = [
+      [1, "claude_code", "claude", null],
+      [2, "codex", "codex-app", JSON.stringify({ originator: "Codex Desktop", source: "vscode" })],
+      [3, "codex", "codex-cli", JSON.stringify({ originator: "codex-tui", source: "cli" })],
+      [4, "gemini", "gemini-cli", JSON.stringify({ type: "session" })],
+      [5, "codex", "malformed-meta", "not-json"],
+      [
+        6,
+        "codex",
+        "codex-app-conflict",
+        JSON.stringify({ originator: "Codex Desktop", source: "cli" }),
+      ],
+      [7, "opencode", "opencode", null],
+      [8, "codex", "codex-t3", JSON.stringify({ originator: "T3 Code", source: "vscode" })],
+      [9, "codex", "codex-exec", JSON.stringify({ originator: "codex_exec", source: "exec" })],
+      [10, "cursor", "cursor-cli", JSON.stringify({ file: { schemaVersion: 1 } })],
+    ] as const;
+    // A model keeps the Codex rows out of the never-prompted thread rule in
+    // visibleSessionPredicate, which would otherwise hide them.
+    const insert = db.prepare(
+      `INSERT INTO session(id, tool, source_session_id, raw_meta, started_at, model)
+       VALUES (?1, ?2, ?3, ?4, '2026-08-26T12:00:00Z', 'test-model')`,
+    );
+    for (const row of rows) {
+      insert.run(...row);
+    }
+    insert.finalize();
+
+    expect(totals(db, { source: "claude_code" }).sessions).toBe(1);
+    expect(totals(db, { source: "codex_app" }).sessions).toBe(2);
+    expect(totals(db, { source: "codex_cli" }).sessions).toBe(1);
+    // Malformed metadata, T3 Code, and exec runs are neither app nor CLI.
+    expect(totals(db, { source: "codex_other" }).sessions).toBe(3);
+    expect(
+      ["codex_app", "codex_cli", "codex_other"].reduce(
+        (sum, source) => sum + totals(db, { source: source as SessionSource }).sessions,
+        0,
+      ),
+    ).toBe(byDimension(db, "tool").find((row) => row.key === "codex")?.sessions ?? -1);
+    expect(totals(db, { source: "gemini_cli" }).sessions).toBe(1);
+    expect(totals(db, { source: "opencode" }).sessions).toBe(1);
+    expect(totals(db, { source: "cursor_cli" }).sessions).toBe(1);
+    expect(byDimension(db, "tool", { source: "codex_app" })).toMatchObject([
+      { key: "codex", sessions: 2 },
+    ]);
+    expect(availableSessionSources(db)).toEqual([
+      { key: "claude_code", label: "Claude Code" },
+      { key: "codex_app", label: "Codex App" },
+      { key: "codex_cli", label: "Codex CLI" },
+      { key: "codex_other", label: "Codex (other clients)" },
+      { key: "gemini_cli", label: "Gemini CLI" },
+      { key: "opencode", label: "OpenCode" },
+      { key: "cursor_cli", label: "Cursor CLI" },
+    ]);
+    db.close();
+  });
+
   test("all archive rollup modules use the database-aware visibility shortcut", () => {
     for (const file of ["token-economics.ts", "recommendations.ts", "distill.ts", "query.ts"]) {
       const source = readFileSync(join(import.meta.dir, "..", "src", file), "utf8");

@@ -6,6 +6,7 @@ import { closeDb, openDb } from "../src/db.ts";
 import { type IngestConfig, sync } from "../src/ingest.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
+import { buildCursorChat } from "../test/cursor-fixture.ts";
 import { decodeGoldenRows, ROW_QUERIES } from "../test/golden-rows.ts";
 import { buildOpenCodeFixtureDb } from "../test/opencode-fixture.ts";
 import { stripGoldenVolatility } from "./golden-normalize.ts";
@@ -34,6 +35,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const codexDir = join(caseDir, "sources", "codex");
   const geminiDir = join(caseDir, "sources", "gemini");
   const opencodeDir = join(caseDir, "sources", "opencode");
+  const cursorDir = join(caseDir, "sources", "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -49,6 +51,9 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       copyFileSync(source, join(geminiDir, "synthetic-project", "chats", `session-${name}`));
     } else if (fixture.startsWith("fixtures/opencode/")) {
       opencodeFixtures.push(name);
+    } else if (fixture.startsWith("fixtures/cursor/")) {
+      const chat = basename(dirname(source));
+      buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -64,7 +69,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {

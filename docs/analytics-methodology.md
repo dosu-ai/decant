@@ -28,6 +28,27 @@ Archived and deleted sessions are excluded by default. Statistics endpoints
 that accept `include_archived=true` can include user-archived sessions; deleted
 sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 
+## Session source
+
+The `source` filter scopes analytics to the client that produced a session:
+`claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
+OpenCode, `cursor_cli` for Cursor CLI, and, for Codex, the recorded producer
+metadata splits sessions into `codex_app`, `codex_cli`, and `codex_other`. That
+split reads only the session's own `originator` and `source` metadata: desktop
+origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
+origins (`source: cli`, or the legacy `codex-tui` originator) count as the CLI.
+Every other Codex session, such as one from an editor extension, the SDK,
+`codex exec`, or a third-party client, counts as `codex_other`, so the three
+Codex buckets add up to the Codex total.
+The filter describes the producing client only and never infers an account
+identity, email address, or organization.
+
+A selected source narrows which sessions are in scope; the metric definitions
+do not change. `GET /api/metadata/session-sources` lists the source
+values represented by visible sessions so the picker can omit empty ones, and
+the analytics report names the selected source. Source-filtered reports omit
+archive-wide insights because signals use archive-wide evidence.
+
 ## Sessions, runs, and subagents
 
 A top-level session is a run that is not marked as a subagent. A subagent is a
@@ -55,7 +76,11 @@ that a change shipped or achieved its goal. Work type starts with keywords in
 the first user prompt and can fall back to the mix of file and web activity.
 Codex `developer` messages and the AGENTS.md or environment context Codex
 injects as a user message are system rows, so they are neither the first prompt
-nor a turn.
+nor a turn. The same holds for the `<user_info>` environment block and
+`<system_reminder>` text the Cursor CLI sends as a user message. Cursor runs a
+subagent, and an MCP tool, through `CallDynamicTool`. Decant records the call
+under the tool it ran, `Task` or `mcp__<server>__<tool>`, so subagent spawns
+and MCP calls count the same way as in other sources.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -159,6 +184,18 @@ is the sum of each model's share. Locally generated Claude records labeled
 session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
+
+Cursor CLI records no token usage, so its sessions store zero tokens and zero
+cost. Session summaries mark them `usage_available: false`. Stats totals,
+per-model, per-project, and per-day rows, and project rollups count only the
+sessions with usage in `usage_sessions`. Wherever Decant shows cost, a total or
+row made up only of sessions without usage reads "Unavailable" (or "-" in dense
+tables) rather than free, and a mixed one shows the cost of the sessions that
+recorded usage with an asterisk whose tooltip or footnote counts the rest. The
+cost-per-day charts leave out days with no usage data. `decant tokens`
+prints "-" for cost, with a note on stderr, when no session in scope records
+usage, and `decant project ls` prints "-" for such a project and an asterisk
+after a cost that leaves sessions out.
 
 When Decant has no rate for a model, the cost OpenCode recorded for those
 requests is used instead and the session's `cost_source` is `reported` (or

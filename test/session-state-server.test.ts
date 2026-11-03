@@ -22,7 +22,14 @@ function freshConfig(): Config {
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
-  return { dbPath: join(root, "archive.db"), claudeDir, codexDir, geminiDir, opencodeDir };
+  return {
+    dbPath: join(root, "archive.db"),
+    claudeDir,
+    codexDir,
+    geminiDir,
+    opencodeDir,
+    cursorDir: join(root, "cursor"),
+  };
 }
 
 function seed(config: Config): void {

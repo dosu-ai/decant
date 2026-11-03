@@ -49,12 +49,16 @@ describe("OpenCode source copy", () => {
   });
 
   test("names OpenCode alongside the other sources in product copy", () => {
-    expect(main).toContain(
-      "Every Claude Code, Codex, Gemini CLI, and OpenCode session log on this device.",
+    // JSX text wraps wherever the formatter puts it, so compare it as rendered.
+    const copy = main.replace(/\s+/g, " ");
+    expect(copy).toContain(
+      "Every Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI session log on this device.",
     );
-    expect(main).toMatch(/session logs Claude Code, Codex, Gemini CLI, and OpenCode already write/);
-    expect(main).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, and OpenCode sessions.",
+    expect(copy).toContain(
+      "session logs Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI already write",
+    );
+    expect(copy).toContain(
+      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI sessions.",
     );
   });
 });

@@ -9,6 +9,7 @@ service, bearer token, or second application process.
 
 ```text
 ~/.claude + ~/.codex + ~/.gemini + ~/.local/share/opencode/opencode.db
+  + ~/.cursor/chats/<workspace>/<chat>/store.db
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -55,7 +56,10 @@ pure parser for that layout (`src/sources/opencode.ts` or
 or in several databases, ingest reads the copy updated last, preferring 2.x on
 a tie within one database. A 2.x session that OpenCode migrated from 1.x is
 handed to the 2.x parser with its 1.x copy, whose per-step usage corrects the
-migrated rows. Parsers retain canonical raw records while mapping
+migrated rows. A Cursor CLI chat is one SQLite store per chat:
+`src/sources/cursor.ts` opens it read-only, follows the root blob's list of
+message blobs, and parses them; ingest treats the store, its `meta.json`, and
+its `-wal` as one source file for change detection. Parsers retain canonical raw records while mapping
 provider-specific roles, blocks, usage, tool calls, and lineage into shared
 tables. Malformed lines and unknown record types become diagnostics rather than
 aborting the file.

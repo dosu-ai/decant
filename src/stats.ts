@@ -5,9 +5,11 @@ import type { Operation } from "./enrich.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
+import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
 
 export interface Totals {
   sessions: number;
+  usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
@@ -22,13 +24,30 @@ export interface Totals {
 export interface StatsFilter extends DateFilter {
   includeArchived?: boolean;
   project?: string | null;
+  source?: SessionSource | null;
   tool?: string | null;
+}
+
+/** 1 unless the session comes from a source that records no token usage.
+ * Cursor CLI stores none, so a Cursor session's zero cost means "unknown",
+ * not "free", unless one of its messages does carry usage. Other sources
+ * always count: Codex can report usage only as session totals, and a zero
+ * total there is a real zero. */
+export function sessionUsageAvailableSql(alias: string): string {
+  return `(${alias}.tool != 'cursor' OR EXISTS (
+           SELECT 1 FROM message usage_message
+           WHERE usage_message.session_id = ${alias}.id
+             AND (usage_message.input_tokens IS NOT NULL
+               OR usage_message.output_tokens IS NOT NULL
+               OR usage_message.cache_read_tokens IS NOT NULL
+               OR usage_message.cache_creation_tokens IS NOT NULL)
+         ))`;
 }
 
 const TOTALS_COLUMNS = `s.id, s.is_subagent,
          s.total_input_tokens, s.total_output_tokens, s.total_cache_read_tokens,
          s.total_cache_creation_tokens, s.total_reasoning_tokens, s.est_reasoning_tokens,
-         s.estimated_cost_usd`;
+         s.estimated_cost_usd, ${sessionUsageAvailableSql("s")} AS usage_available`;
 
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
@@ -39,6 +58,8 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
        )
        SELECT
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
+         (SELECT COUNT(*) FROM filtered_session
+          WHERE is_subagent = 0 AND usage_available = 1) AS usage_sessions,
          (SELECT COUNT(*) FROM message m JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
          (SELECT COALESCE(SUM(total_input_tokens), 0) FROM filtered_session) AS input_tokens,
@@ -67,6 +88,9 @@ export function parseDimension(value: string): Dimension | null {
 export interface DimRow {
   key: string;
   sessions: number;
+  /** Top-level sessions in the row whose source records token usage. When
+   * this is below `sessions`, the row's tokens and cost cover only these. */
+  usage_sessions: number;
   input_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;
@@ -92,11 +116,14 @@ export function byDimension(
     `WITH filtered_session AS (
          SELECT s.id, s.tool, s.model, s.project_id, s.started_at, s.is_subagent,
                 s.total_input_tokens, s.total_output_tokens, s.total_reasoning_tokens,
-                s.est_reasoning_tokens, s.estimated_cost_usd
+                s.est_reasoning_tokens, s.estimated_cost_usd,
+                ${sessionUsageAvailableSql("s")} AS usage_available
          FROM session s ${whereClause(visible)}
        )
        SELECT ${groupExpr} AS key,
               COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+              COALESCE(SUM(CASE WHEN s.is_subagent = 0 AND s.usage_available = 1 THEN 1 ELSE 0 END), 0)
+                AS usage_sessions,
               COALESCE(SUM(s.total_input_tokens), 0) AS input_tokens,
               COALESCE(SUM(s.total_output_tokens), 0) AS output_tokens,
               COALESCE(SUM(s.total_reasoning_tokens), 0) AS reasoning_tokens,
@@ -124,13 +151,15 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   const sessions = db
     .query(
       `SELECT s.id, s.model, s.is_subagent, s.total_input_tokens, s.total_output_tokens,
-              s.total_reasoning_tokens, s.est_reasoning_tokens, s.estimated_cost_usd
+              s.total_reasoning_tokens, s.est_reasoning_tokens, s.estimated_cost_usd,
+              ${sessionUsageAvailableSql("s")} AS usage_available
          FROM session s ${whereClause(visible)}`,
     )
     .all(...visible.params) as {
     id: number;
     model: string | null;
     is_subagent: number;
+    usage_available: number;
     total_input_tokens: number;
     total_output_tokens: number;
     total_reasoning_tokens: number;
@@ -153,6 +182,7 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
     const created: DimRow = {
       key,
       sessions: 0,
+      usage_sessions: 0,
       input_tokens: 0,
       output_tokens: 0,
       reasoning_tokens: 0,
@@ -165,6 +195,7 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   for (const session of sessions) {
     const label = row(session.model);
     label.sessions += session.is_subagent === 0 ? 1 : 0;
+    label.usage_sessions += session.is_subagent === 0 && session.usage_available === 1 ? 1 : 0;
     // Reasoning is recorded per session, not per request.
     label.reasoning_tokens += session.total_reasoning_tokens;
     label.est_reasoning_tokens += session.est_reasoning_tokens;
@@ -221,6 +252,11 @@ function statsScope(
   if (filter?.tool != null) {
     clauses.push(`${alias}.tool = ?`);
     params.push(filter.tool);
+  }
+  const source = sessionSourcePredicate(alias, filter?.source);
+  if (source.sql !== "") {
+    clauses.push(source.sql);
+    params.push(...source.params);
   }
   return {
     sql: clauses.filter((clause) => clause !== "").join(" AND "),
@@ -509,7 +545,7 @@ export interface Activity {
   peak_weekday: number | null;
 }
 
-export function activity(db: Database, filter?: DateFilter | null): Activity {
+export function activity(db: Database, filter?: StatsFilter | null): Activity {
   const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24, filter);
   const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7, filter);
   return {
@@ -526,7 +562,7 @@ export interface ModelSparklines {
   days: string[];
 }
 
-export function modelSparklines(db: Database, filter?: DateFilter | null): ModelSparklines {
+export function modelSparklines(db: Database, filter?: StatsFilter | null): ModelSparklines {
   const visible = statsScope(db, "s", filter);
   const rows = db
     .query(
@@ -596,6 +632,8 @@ export function todayTotals(db: Database, now: Date = new Date()): Totals {
        )
        SELECT
          COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
+         COALESCE(SUM(CASE WHEN is_subagent = 0 AND usage_available = 1 THEN 1 ELSE 0 END), 0)
+           AS usage_sessions,
          (SELECT COUNT(*) FROM message m
           JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t

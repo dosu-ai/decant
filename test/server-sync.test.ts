@@ -33,6 +33,7 @@ function freshConfig(): Config {
     codexDir,
     geminiDir,
     opencodeDir,
+    cursorDir: join(root, "cursor"),
   };
 }
 

@@ -76,13 +76,25 @@ export function registerStatsCommands(ctx: CliContext): void {
         ctx.withArchive(
           (archive) => {
             const row = tokenEconomics(archive.db);
+            const scope = totals(archive.db);
+            const missingUsage = scope.sessions - scope.usage_sessions;
+            // Cursor CLI records no token usage: with no session in scope
+            // reporting any, cost is unknown rather than zero.
+            const costUnavailable = scope.sessions > 0 && scope.usage_sessions === 0;
+            if (!ctx.isJson() && missingUsage > 0) {
+              io.writeErr(
+                costUnavailable
+                  ? "note: cost unavailable; no session in scope records token usage\n"
+                  : `note: cost leaves out ${missingUsage} session(s) without token usage\n`,
+              );
+            }
             ctx.output(row, () =>
               row.buckets
                 .map(
                   (bucket) =>
                     `${bucket.bucket}\t${formatNumber(bucket.generation_tokens)}\t` +
                     `${formatNumber(bucket.context_window_tokens)}\t` +
-                    `${bucket.estimated_cost_usd.toFixed(4)}\t` +
+                    `${costUnavailable ? "-" : bucket.estimated_cost_usd.toFixed(4)}\t` +
                     `${formatDuration(bucket.active_ms)}`,
                 )
                 .join("\n")

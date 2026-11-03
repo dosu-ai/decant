@@ -54,6 +54,7 @@ const session: SessionSummary = {
   message_count: 47662,
   total_input_tokens: 0,
   total_output_tokens: 0,
+  usage_available: true,
   estimated_cost_usd: 1124.88,
   cost_source: "decant",
   model_provider: null,

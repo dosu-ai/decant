@@ -12,6 +12,7 @@ describe("resolveConfig", () => {
         DECANT_CODEX_DIR: "/env/codex",
         DECANT_GEMINI_DIR: "/env/gemini",
         DECANT_OPENCODE_DIR: "/env/opencode",
+        DECANT_CURSOR_DIR: "/env/cursor",
       },
       homeDir: "/home/dev",
     });
@@ -21,6 +22,7 @@ describe("resolveConfig", () => {
     expect(config.codexDir).toBe("/env/codex");
     expect(config.geminiDir).toBe("/env/gemini");
     expect(config.opencodeDir).toBe("/flag/opencode");
+    expect(config.cursorDir).toBe("/env/cursor");
   });
 
   test("environment overrides beat defaults", () => {
@@ -32,6 +34,7 @@ describe("resolveConfig", () => {
         DECANT_GEMINI_DIR: "/env/gemini",
         DECANT_OPENCODE_DIR: "/env/opencode",
         DECANT_OPENCODE_CONFIG: "/env/opencode.json",
+        DECANT_CURSOR_DIR: "/env/cursor",
       },
       homeDir: "/home/dev",
     });
@@ -45,6 +48,7 @@ describe("resolveConfig", () => {
       opencodeConfigDir: "/home/dev/.config/opencode",
       opencodeConfigPath: "/env/opencode.json",
       opencodeModelsPath: "/home/dev/.cache/opencode/models.json",
+      cursorDir: "/env/cursor",
     });
   });
 
@@ -60,6 +64,7 @@ describe("resolveConfig", () => {
     expect(config.opencodeConfigPath).toBeUndefined();
     expect(config.opencodeExtraConfigPath).toBeUndefined();
     expect(config.opencodeModelsPath).toBe("/home/dev/.cache/opencode/models.json");
+    expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
   });
 
   test("follows OpenCode's own environment before XDG and home", () => {

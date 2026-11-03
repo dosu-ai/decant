@@ -90,13 +90,13 @@
     "last_used_at": "2026-10-12T07:20:03.200Z"
   },
   {
-    "tool_name": "Agent",
+    "tool_name": "read_file",
     "tool_kind": "builtin",
     "mcp_server": null,
-    "calls": 1,
+    "calls": 2,
     "errors": 0,
-    "p50_ms": null,
-    "p95_ms": null,
-    "last_used_at": "2026-05-03T10:01:00.000Z"
+    "p50_ms": 1000,
+    "p95_ms": 1000,
+    "last_used_at": "2026-06-01T10:00:02.000Z"
   }
 ]

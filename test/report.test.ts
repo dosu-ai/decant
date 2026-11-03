@@ -26,6 +26,7 @@ import { contextCurveTopology } from "../src/ui/context-window-layout.ts";
 
 const totals = {
   sessions: 2,
+  usage_sessions: 2,
   messages: 14,
   tool_calls: 8,
   input_tokens: 24_000,
@@ -66,6 +67,7 @@ const economics = {
 const firstDay = {
   key: "2026-07-27",
   sessions: 1,
+  usage_sessions: 1,
   input_tokens: 10_000,
   output_tokens: 2_000,
   reasoning_tokens: 0,
@@ -76,6 +78,7 @@ const firstDay = {
 const secondDay = {
   key: "2026-07-28",
   sessions: 1,
+  usage_sessions: 1,
   input_tokens: 14_000,
   output_tokens: 2_200,
   reasoning_tokens: 0,
@@ -88,10 +91,11 @@ const daily = [firstDay, secondDay];
 const analytics: AnalyticsReportData = {
   kind: "analytics",
   range: { from: "2026-07-27", to: "2026-07-28" },
+  source: null,
   totals,
   sessionsByDay: daily,
-  byModel: [{ ...firstDay, key: "claude-opus-4-6", sessions: 2 }],
-  byProject: [{ ...secondDay, key: "/Users/dev/decant", sessions: 2 }],
+  byModel: [{ ...firstDay, key: "claude-opus-4-6", sessions: 2, usage_sessions: 2 }],
+  byProject: [{ ...secondDay, key: "/Users/dev/decant", sessions: 2, usage_sessions: 2 }],
   activity: {
     by_hour: Array.from({ length: 24 }, (_, hour) => (hour === 10 ? 2 : 0)),
     by_weekday: [0, 0, 2, 0, 0, 0, 0],
@@ -149,6 +153,7 @@ const session: SessionReportData = {
     message_count: 6,
     total_input_tokens: 2_000,
     total_output_tokens: 500,
+    usage_available: true,
     estimated_cost_usd: 0.15,
     cost_source: "decant",
     model_provider: null,
@@ -279,6 +284,28 @@ describe("report charts", () => {
     expect(sanitized).not.toContain("<style");
     expect(sanitized).toHaveLength(svg.length);
     expect(sanitized).toContain('<rect width="1" height="1"/>');
+  });
+
+  test("marks model and project costs that lack usage data", () => {
+    const html = renderAnalyticsReport({
+      ...analytics,
+      totals: { ...totals, sessions: 3, usage_sessions: 2 },
+      byModel: [
+        { ...firstDay, key: "cursor-test-model", usage_sessions: 0, estimated_cost_usd: 0 },
+        { ...firstDay, key: "claude-opus-4-6", sessions: 2, usage_sessions: 1 },
+      ],
+    });
+    expect(html).toMatch(/title="Cursor CLI records no token usage[^"]*">-<\/td>/);
+    expect(html).toContain("$0.40*");
+    expect(html).toContain("Costs leave out 1 session without usage data.");
+  });
+
+  test("shows token totals for a scope without top-level sessions", () => {
+    const html = renderAnalyticsReport({
+      ...analytics,
+      totals: { ...totals, sessions: 0, usage_sessions: 0 },
+    });
+    expect(html).not.toContain("Unavailable");
   });
 
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {
@@ -458,7 +485,7 @@ describe("static report rendering", () => {
   test("omits archive-wide insights from date-filtered reports", () => {
     const html = renderAnalyticsReport(analytics);
     expect(html).toContain(
-      "Insights are omitted from date-filtered reports because signals use archive-wide evidence.",
+      "Insights are omitted from filtered reports because signals use archive-wide evidence.",
     );
     expect(html).not.toContain("Reduce repeated searches");
     expect(html).not.toContain("The same paths were searched repeatedly.");
@@ -469,6 +496,17 @@ describe("static report rendering", () => {
     });
     expect(allTimeHtml).toContain("Reduce repeated searches");
     expect(allTimeHtml).toContain("The same paths were searched repeatedly.");
+
+    const sourceHtml = renderAnalyticsReport({
+      ...analytics,
+      range: { from: null, to: null },
+      source: "codex_app",
+    });
+    expect(sourceHtml).toContain("Codex App");
+    expect(sourceHtml).toContain(
+      "Insights are omitted from filtered reports because signals use archive-wide evidence.",
+    );
+    expect(sourceHtml).not.toContain("Reduce repeated searches");
   });
 
   test("session reports always render the CTA alongside attribution", () => {

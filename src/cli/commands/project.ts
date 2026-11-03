@@ -1,4 +1,4 @@
-import { listProjects } from "../../query.ts";
+import { listProjects, type ProjectSummary } from "../../query.ts";
 import type { CliContext } from "../context.ts";
 
 export function registerProjectCommands(ctx: CliContext): void {
@@ -19,7 +19,7 @@ export function registerProjectCommands(ctx: CliContext): void {
                   (row) =>
                     `${row.id}\t${row.is_worktree ? "worktree" : "project"}\t${row.path}\t` +
                     `${row.worktree_tool ?? row.session_tools.join(",")}\t${row.sessions}\t` +
-                    `${row.estimated_cost_usd.toFixed(2)}\t${row.last_seen_at ?? ""}`,
+                    `${projectCost(row)}\t${row.last_seen_at ?? ""}`,
                 )
                 .join("\n")
                 .concat(rows.length > 0 ? "\n" : ""),
@@ -29,4 +29,11 @@ export function registerProjectCommands(ctx: CliContext): void {
         ),
       ),
     );
+}
+
+/** "-" when no session recorded usage (Cursor CLI records none), and an
+ * asterisk when the cost leaves some sessions out. */
+function projectCost(row: ProjectSummary): string {
+  if (row.sessions > 0 && row.usage_sessions === 0) return "-";
+  return `${row.estimated_cost_usd.toFixed(2)}${row.usage_sessions < row.sessions ? "*" : ""}`;
 }

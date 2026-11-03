@@ -18,6 +18,7 @@ function fixtureConfig(): Config {
     codexDir: join(root, "codex"),
     geminiDir: join(root, "gemini"),
     opencodeDir: join(root, "opencode"),
+    cursorDir: join(root, "cursor"),
   };
   for (const path of [config.claudeDir, config.codexDir, config.geminiDir, config.opencodeDir]) {
     mkdirSync(path, { recursive: true });

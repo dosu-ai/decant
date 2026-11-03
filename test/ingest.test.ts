@@ -36,6 +36,7 @@ import { parseCodexSession } from "../src/sources/codex.ts";
 import { block } from "../src/sources/shared.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
+import { buildCursorChat } from "./cursor-fixture.ts";
 import { decodeGoldenRows, ROW_QUERIES } from "./golden-rows.ts";
 import {
   buildOpenCodeDb,
@@ -80,6 +81,7 @@ function stageFixtures(dir: string): IngestConfig {
   const claudeDir = join(dir, "sources", "claude");
   const codexDir = join(dir, "sources", "codex");
   const geminiDir = join(dir, "sources", "gemini");
+  const cursorDir = join(dir, "sources", "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -113,8 +115,9 @@ function stageFixtures(dir: string): IngestConfig {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
+  buildCursorChat(join(cursorDir, "synthetic-workspace", "sample"));
 
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath };
+  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
 }
 
 async function golden<T>(relPath: string): Promise<T> {
@@ -788,6 +791,7 @@ describe("sync", () => {
     ).toEqual([]);
     expect(totals(db, { includeArchived: true })).toMatchObject({
       sessions: 0,
+      usage_sessions: 0,
       messages: 0,
       tool_calls: 0,
     });
@@ -878,6 +882,7 @@ describe("sync", () => {
     expect(listSessions(db, { includeSubagents: true, limit: 10 })).toEqual([]);
     expect(totals(db, { includeArchived: true })).toEqual({
       sessions: 0,
+      usage_sessions: 0,
       messages: 0,
       tool_calls: 0,
       input_tokens: 0,
@@ -2414,7 +2419,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 13, ingested: 13, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 14, ingested: 14, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2438,7 +2443,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 13, ingested: 0, skipped: 13, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 14, ingested: 0, skipped: 14, failed: 0 });
     expect(
       db
         .query(
@@ -2457,7 +2462,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 13, ingested: 0, skipped: 13, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 14, ingested: 0, skipped: 14, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

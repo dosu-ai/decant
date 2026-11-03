@@ -4819,6 +4819,19 @@ mark {
   transform: translateY(-50%);
 }
 
+.source-filter-control .select-shell {
+  min-width: 9.5rem;
+  width: 9.5rem;
+}
+
+/* Sits beside the date-range control in the Analytics toolbar, so it takes
+   that control's type rather than the larger form-field default. */
+.source-filter-control .select-shell select {
+  height: 34px;
+  font-size: 13px;
+  font-weight: var(--font-weight-strong);
+}
+
 .settings-note {
   color: var(--faint);
   font-size: 12px;

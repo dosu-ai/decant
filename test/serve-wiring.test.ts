@@ -91,10 +91,12 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
   const codexDir = join(dir, "codex");
   const geminiDir = join(dir, "gemini");
   const opencodeDir = join(dir, "opencode");
+  const cursorDir = join(dir, "cursor");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexDir, { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
 
   const env = { ...process.env, ...(c.env ?? {}) };
   if (!(c.env && "DECANT_TRUSTED_PEERS" in c.env)) delete env.DECANT_TRUSTED_PEERS;
@@ -118,6 +120,8 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
       geminiDir,
       "--opencode-dir",
       opencodeDir,
+      "--cursor-dir",
+      cursorDir,
       ...(c.flags ?? []),
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
@@ -196,6 +200,7 @@ async function withSeededServe<T>(
   const codexDir = join(dir, "codex");
   const geminiDir = join(dir, "gemini");
   const opencodeDir = join(dir, "opencode");
+  const cursorDir = join(dir, "cursor");
   const projectDir = join(claudeDir, "-Users-dev-proj");
   const codexSessionsDir = join(codexDir, "sessions");
   const claudeSessionPath = join(projectDir, "s1.jsonl");
@@ -204,6 +209,7 @@ async function withSeededServe<T>(
   mkdirSync(codexSessionsDir, { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
+  mkdirSync(cursorDir, { recursive: true });
   // Real, ingestible sessions. If the watcher runs, both land in the archive.
   copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), claudeSessionPath);
   copyFileSync(join(repoRoot, "fixtures", "codex", "sample.jsonl"), codexSessionPath);
@@ -234,6 +240,8 @@ async function withSeededServe<T>(
       geminiDir,
       "--opencode-dir",
       opencodeDir,
+      "--cursor-dir",
+      cursorDir,
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
   );

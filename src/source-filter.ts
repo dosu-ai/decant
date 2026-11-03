@@ -9,6 +9,7 @@ export const SESSION_SOURCES = [
   "codex_other",
   "gemini_cli",
   "opencode",
+  "cursor_cli",
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -36,6 +37,8 @@ export function sessionSourceLabel(source: SessionSource): string {
       return "Gemini CLI";
     case "opencode":
       return "OpenCode";
+    case "cursor_cli":
+      return "Cursor CLI";
   }
 }
 
@@ -84,6 +87,8 @@ export function sessionSourcePredicate(
       return { sql: `${alias}.tool = ?`, params: ["gemini"] };
     case "opencode":
       return { sql: `${alias}.tool = ?`, params: ["opencode"] };
+    case "cursor_cli":
+      return { sql: `${alias}.tool = ?`, params: ["cursor"] };
     default:
       return { sql: "", params: [] };
   }

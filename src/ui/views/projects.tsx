@@ -1,7 +1,7 @@
 import { Badge, ToolBadge } from "../badges.tsx";
-import { EmptyState, StatCard } from "../common.tsx";
+import { CostValue, EmptyState, StatCard } from "../common.tsx";
 import { relativeTime } from "../date-time.ts";
-import { basename, capitalize, formatInt, money } from "../format.ts";
+import { basename, capitalize, formatInt } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
 import { projectSessionsHref } from "../navigation.ts";
@@ -125,7 +125,14 @@ export function ProjectsView({
                       )}
                     </td>
                     <td className="numeric muted">{formatInt(project.sessions)}</td>
-                    <td className="numeric">{money(project.estimated_cost_usd)}</td>
+                    <td className="numeric">
+                      <CostValue
+                        cost={project.estimated_cost_usd}
+                        dense
+                        sessions={project.sessions}
+                        usageSessions={project.usage_sessions}
+                      />
+                    </td>
                     <td className="numeric muted">{relativeTime(project.last_seen_at)}</td>
                   </tr>
                 ))}

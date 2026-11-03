@@ -11,7 +11,7 @@ export function toMarkdown(detail: SessionDetail): string {
     `- **tool:** ${summary.tool}\n` +
     `- **model:** ${summary.model ?? ""}\n` +
     `- **messages:** ${summary.message_count}\n` +
-    `- **est. cost:** $${summary.estimated_cost_usd.toFixed(2)}\n` +
+    `- **est. cost:** ${summary.usage_available ? `$${summary.estimated_cost_usd.toFixed(2)}` : "unavailable"}\n` +
     `- **started:** ${summary.started_at ?? ""}\n\n`;
 
   for (const message of detail.messages) {
@@ -51,6 +51,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   codex: "codex",
   gemini: "gemini-cli",
   opencode: "opencode",
+  cursor: "cursor",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.

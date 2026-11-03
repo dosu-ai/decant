@@ -15,7 +15,12 @@ import {
 } from "./format.ts";
 import { BrandMark, Icon } from "./icons.tsx";
 import { Link } from "./link.tsx";
-import { cleanSessionTitle, isPermissionsText, tagAttribute } from "./session-title.ts";
+import {
+  cleanSessionTitle,
+  cursorUserQuery,
+  isPermissionsText,
+  tagAttribute,
+} from "./session-title.ts";
 import { TranscriptCodeBlock, TranscriptMarkdown } from "./transcript-markdown.tsx";
 import { revealTranscriptMessage } from "./transcript-navigation.ts";
 import {
@@ -279,7 +284,7 @@ export function TranscriptBlock({
   if (special != null) {
     return <SpecialTranscriptBlock block={special} tool={tool} />;
   }
-  return <TranscriptMarkdown>{block.text}</TranscriptMarkdown>;
+  return <TranscriptMarkdown>{cursorUserQuery(block.text) ?? block.text}</TranscriptMarkdown>;
 }
 
 export function ToolCallPresentation({
@@ -525,6 +530,30 @@ export function specialTranscriptBlock(text: string): SpecialTranscriptBlockData
       ),
     };
   }
+  if (/^<user_info>/i.test(trimmed)) {
+    const cwd = matchText(text, /^Workspace Path: (\S.*)$/m);
+    const shell = matchText(text, /^Shell: (\S.*)$/m);
+    return {
+      title: "Environment context",
+      description: "Workspace, rules, skills, and tools Cursor supplied to the agent.",
+      tooltip:
+        "Shows the environment block the Cursor CLI sends ahead of the first prompt. The user did not type it.",
+      icon: "desktop",
+      chips: [cwd == null ? null : shortPath(cwd), shell].filter(
+        (value): value is string => value != null,
+      ),
+    };
+  }
+  if (/^<system_reminder>/i.test(trimmed)) {
+    return {
+      title: "Agent context",
+      description: "Runtime reminder Cursor supplied to the agent.",
+      tooltip:
+        "Shows a reminder the Cursor CLI adds to a prompt, such as a subagent's instructions.",
+      icon: "cpu",
+      chips: ["cursor"],
+    };
+  }
   if (trimmed.startsWith("# AGENTS.md instructions") || text.includes("<INSTRUCTIONS>")) {
     return {
       title: "Repository instructions",
@@ -642,7 +671,9 @@ export function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
         </span>
         <small>
           {formatInt(subagent.summary.message_count)} msgs ·{" "}
-          {money(subagent.summary.estimated_cost_usd)}
+          {subagent.summary.usage_available
+            ? money(subagent.summary.estimated_cost_usd)
+            : "cost n/a"}
         </small>
       </summary>
       {messages.length === 0 ? (

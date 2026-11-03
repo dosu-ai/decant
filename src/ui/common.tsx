@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { clampNumber } from "./format.ts";
+import { clampNumber, costDisplay } from "./format.ts";
 import { Icon } from "./icons.tsx";
 import type { BadgeTone, IconName } from "./types.ts";
 
@@ -228,6 +228,26 @@ export function sparkPoints(values: number[]): string | null {
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
+}
+
+/** A cost over sessions that may lack recorded usage; see costDisplay. */
+export function CostValue({
+  cost,
+  dense = false,
+  sessions,
+  usageSessions,
+}: {
+  cost: number;
+  dense?: boolean;
+  sessions: number;
+  usageSessions: number;
+}) {
+  const { text, title } = costDisplay(cost, sessions, usageSessions, dense);
+  return (
+    <span className={sessions > 0 && usageSessions === 0 ? "faint" : undefined} title={title}>
+      {text}
+    </span>
+  );
 }
 
 export function StatCard({

@@ -2,6 +2,8 @@ import type { AvailableSessionSource } from "../source-filter.ts";
 
 export type Summary = {
   sessions: number;
+  /** Top-level sessions whose source records token usage. */
+  usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
@@ -24,6 +26,8 @@ export type SessionSummary = {
   message_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  /** False for a source that records no token usage (Cursor CLI). */
+  usage_available: boolean;
   estimated_cost_usd: number;
   cost_source: "decant" | "reported" | "mixed";
   model_provider: string | null;
@@ -128,6 +132,8 @@ export type TokenEconomics = {
 export type DimensionRow = {
   key: string;
   sessions: number;
+  /** Top-level sessions in the row whose source records token usage. */
+  usage_sessions: number;
   input_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;
@@ -140,6 +146,8 @@ export type ProjectSummary = {
   path: string;
   name: string | null;
   sessions: number;
+  /** Top-level sessions whose source records token usage. */
+  usage_sessions: number;
   estimated_cost_usd: number;
   last_seen_at: string | null;
   is_worktree: boolean;

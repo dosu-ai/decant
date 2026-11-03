@@ -25,8 +25,15 @@ export function cleanSessionTitle(value: string | null | undefined): string | nu
   if (/^<teammate-message\b/i.test(text)) {
     return tagAttribute(text, "summary") ?? "Subagent request";
   }
-  if (/^<environment_context>/i.test(text)) {
+  if (/^<environment_context>/i.test(text) || /^<user_info>/i.test(text)) {
     return "Environment context";
+  }
+  if (/^<system_reminder>/i.test(text)) {
+    return "Agent context";
+  }
+  const query = cursorUserQuery(text);
+  if (query != null) {
+    return firstLine(query, 96);
   }
   const withoutMarkup = stripMarkupTags(text);
   if (withoutMarkup !== text && withoutMarkup !== "") {
@@ -41,6 +48,16 @@ export function cleanSessionTitle(value: string | null | undefined): string | nu
     return firstLine(remainder.replace(/^Caveat:\s*/i, ""), 96);
   }
   return readableTagLabel(tag[1] ?? "");
+}
+
+/** The Cursor CLI sends each prompt as `<timestamp>...</timestamp>` followed by
+ * the text in `<user_query>`. Returns that text, or null for any other shape. */
+export function cursorUserQuery(value: string): string | null {
+  const match =
+    /^\s*(?:<timestamp>[^<]*<\/timestamp>\s*)?<user_query>\s*([\s\S]*?)\s*<\/user_query>\s*$/.exec(
+      value,
+    );
+  return match?.[1] ? match[1] : null;
 }
 
 export function stripMarkupTags(value: string): string {

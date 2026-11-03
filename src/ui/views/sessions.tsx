@@ -9,7 +9,7 @@ import { DateRangeControl } from "../date-range-control.tsx";
 import { fullDateTime, sessionListDate } from "../date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "../dosu-badge.ts";
 import { dosuLink } from "../dosu-links.ts";
-import { basename, compact, formatInt, money } from "../format.ts";
+import { basename, compact, costDisplay, formatInt, money } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link, visit } from "../link.tsx";
 import { shouldShowSessionSkeleton } from "../loading-state.ts";
@@ -26,6 +26,7 @@ import {
   sessionCardMetrics,
   sessionSummaryPath,
   sessionThreadCost,
+  sessionThreadUsageAvailable,
 } from "../session-summary.ts";
 import { sessionDisplayTitle, subagentDescriptor } from "../session-title.ts";
 import type {
@@ -85,6 +86,11 @@ export function SessionsView({
     scopedSummaryRequest == null ? data.summary : currentScopedSummary,
     filtered,
     query,
+  );
+  const estCost = costDisplay(
+    cardSummary.estimated_cost_usd,
+    cardSummary.sessions,
+    cardSummary.usage_sessions,
   );
   const visibleTotal =
     project == null ? (data.summary?.sessions ?? null) : (currentScopedSummary?.sessions ?? null);
@@ -180,7 +186,10 @@ export function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code, Codex, Gemini CLI, and OpenCode session log on this device.</p>
+          <p>
+            Every Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI session log on this
+            device.
+          </p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
@@ -188,7 +197,7 @@ export function SessionsView({
       <div className="stat-grid sessions-stat-grid">
         <StatCard icon="sessions" label="Sessions" value={formatInt(cardSummary.sessions)} />
         <StatCard icon="messages" label="Messages" value={formatInt(cardSummary.messages)} />
-        <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
+        <StatCard icon="money" label="Est. cost" value={estCost.text} valueTitle={estCost.title} />
       </div>
 
       <section aria-busy={pageLoading || refreshing} className="panel sessions-panel">
@@ -497,7 +506,13 @@ export const SessionTableRow = memo(function SessionTableRow({
         <SubagentRollup session={session} />
       </td>
       <td className="numeric muted">{formatInt(session.message_count)}</td>
-      <td className="numeric">{money(sessionThreadCost(session))}</td>
+      <td className="numeric">
+        {sessionThreadUsageAvailable(session) ? (
+          money(sessionThreadCost(session))
+        ) : (
+          <span className="faint">-</span>
+        )}
+      </td>
       <td className="numeric muted">
         <SessionStartedAt value={session.started_at} />
       </td>

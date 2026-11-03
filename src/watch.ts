@@ -190,6 +190,12 @@ type EventFilter = (filename: string | null) => boolean;
 
 const anyEvent: EventFilter = () => true;
 
+/** Cursor keeps each chat in its own SQLite store. Opening a store, even
+ * read-only during Decant's own sync, rewrites its `-shm` index, so that file
+ * says nothing about new content and reacting to it would sync twice per
+ * change. */
+const cursorEvents: EventFilter = (filename) => filename == null || !filename.endsWith("-shm");
+
 /**
  * Events beside an OpenCode database warrant a sync only when the database or
  * its `-wal` actually changed. Every connection that opens the database,
@@ -301,6 +307,9 @@ export function watchRoots(config: Config): WatchRoot[] {
               openCodeEvents(dirname(explicitDb), (name) => name === basename(explicitDb)),
           },
         ]
+      : []),
+    ...(config.cursorDir != null
+      ? [{ dir: config.cursorDir, recursive: true, accepts: () => cursorEvents }]
       : []),
   ];
   // One watcher per directory: a directory named twice reacts to the events

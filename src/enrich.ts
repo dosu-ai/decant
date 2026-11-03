@@ -54,6 +54,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (session.tool === "opencode") {
         keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "cursor") {
+        keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -87,6 +89,13 @@ const OPENCODE_FILE_TOOLS: FileToolTable = {
   edit: { key: "path", fallbackKey: "filePath", operation: "edit" },
   write: { key: "path", fallbackKey: "filePath", operation: "write" },
   multiedit: { key: "filePath", operation: "edit" },
+};
+
+// The Cursor CLI's file tools take an absolute `path`.
+const CURSOR_FILE_TOOLS: FileToolTable = {
+  Read: { key: "path", operation: "read" },
+  StrReplace: { key: "path", operation: "edit" },
+  Write: { key: "path", operation: "write" },
 };
 
 function keyedRef(

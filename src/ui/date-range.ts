@@ -46,6 +46,10 @@ export function checkCustomRange(from: string | null, to: string | null): Custom
   if (start != null && end != null && start > end) {
     return { status: "reversed" };
   }
+  if (start == null && end == null) {
+    // Clearing both fields means no bound at all, which the trigger should call All time.
+    return { status: "valid", range: ALL_DATE_RANGE };
+  }
   return { status: "valid", range: { preset: "custom", from: start, to: end } };
 }
 

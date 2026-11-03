@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ALL_DATE_RANGE,
   applyDatePreset,
   checkCustomRange,
   datePopoverAlign,
@@ -130,6 +131,10 @@ describe("custom date range validation", () => {
       status: "valid",
       range: { preset: "custom", from: "2026-10-01", to: null },
     });
+  });
+
+  test("treats clearing both fields as All time", () => {
+    expect(checkCustomRange("", "")).toEqual({ status: "valid", range: ALL_DATE_RANGE });
   });
 
   test("rejects a To date before the From date in either order of editing", () => {

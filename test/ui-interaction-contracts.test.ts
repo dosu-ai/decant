@@ -223,6 +223,19 @@ describe("UI interaction contracts", () => {
     expect(control).toContain('document.removeEventListener("pointerdown", closeOnOutsidePress)');
   });
 
+  test("aligns the date-range popover before it first paints", () => {
+    // Chromium fires toggle a frame after a details element opens. Measuring
+    // there painted the popover off the left edge at phone widths for a frame.
+    const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
+    const onToggle = control.slice(control.indexOf("onToggle="), control.indexOf("<summary"));
+    expect(onToggle).not.toContain("datePopoverAlign");
+    const summary = control.slice(control.indexOf("<summary"), control.indexOf("</summary>"));
+    const open = summary.indexOf("menu.open = true;");
+    expect(summary).toContain("event.preventDefault();");
+    expect(open).toBeGreaterThan(-1);
+    expect(summary.indexOf("setAlign(datePopoverAlign(", open)).toBeGreaterThan(open);
+  });
+
   test("clicking the From or To label focuses its date input inside the open menu", () => {
     // A label click blurs the summary with a null relatedTarget before the label
     // focuses its input. Closing the menu then removed the label mid-click and

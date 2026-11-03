@@ -136,19 +136,30 @@ export function DateRangeControl({
             }
           }}
           onToggle={(event) => {
-            const menu = event.currentTarget;
-            const popover = menu.querySelector<HTMLElement>(".date-range-popover");
-            if (menu.open && popover != null) {
-              setAlign(datePopoverAlign(menu.getBoundingClientRect().right, popover.offsetWidth));
-            }
-            if (!menu.open) {
+            if (!event.currentTarget.open) {
               // Reopening shows the applied range, not an abandoned invalid edit.
               setDraft(null);
             }
           }}
           ref={menuRef}
         >
-          <summary aria-label={`Time range: ${dateRangePresetLabel(range)}`}>
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: summary is the native disclosure button, so Enter and Space already reach this click. */}
+          <summary
+            aria-label={`Time range: ${dateRangePresetLabel(range)}`}
+            onClick={(event) => {
+              const menu = menuRef.current;
+              const popover = menu?.querySelector<HTMLElement>(".date-range-popover");
+              if (menu == null || menu.open || popover == null) {
+                return;
+              }
+              // Chromium fires toggle a frame after the menu opens, so aligning there
+              // painted the popover off-screen first on phones. Opening here measures
+              // it before that frame.
+              event.preventDefault();
+              menu.open = true;
+              setAlign(datePopoverAlign(menu.getBoundingClientRect().right, popover.offsetWidth));
+            }}
+          >
             <Icon name="clock" />
             <span>{dateRangePresetLabel(range)}</span>
             <Icon name="chevronDown" />

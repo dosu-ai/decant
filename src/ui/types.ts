@@ -1,3 +1,5 @@
+import type { AvailableSessionSource } from "../source-filter.ts";
+
 export type Summary = {
   sessions: number;
   messages: number;
@@ -292,6 +294,7 @@ export type DashboardData = {
   modelSparklines: ModelSparklines | null;
   tokenEconomics: TokenEconomics | null;
   dateBounds: DateBounds | null;
+  sessionSources: AvailableSessionSource[];
 };
 
 export type DataSlice = keyof DashboardData;

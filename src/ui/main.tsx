@@ -46,6 +46,7 @@ import {
   dateScopedSliceStatus,
   loadSlicesIndependently,
 } from "./slice-loading.ts";
+import { type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
 import {
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
@@ -99,6 +100,7 @@ function App() {
     () => resolveActiveRoute(locationPath(), navItems) === "Insights",
   );
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
+  const [sourceSelection, setSourceSelection] = useState<DashboardSource>("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [localSyncing, setLocalSyncing] = useState(false);
@@ -127,6 +129,9 @@ function App() {
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRouteKey(path, navItems);
+  // The source filter scopes Analytics only; other pages keep date-only slices.
+  const dashboardQuery =
+    activeView === "analytics" ? sourceScopeQuery(dateQuery, sourceSelection) : dateQuery;
   const showsSessions = activeView === "sessions";
   const sessionPageState = useSessionPage({
     dateQuery,
@@ -226,6 +231,15 @@ function App() {
     document.title = documentTitleFor(path, navItems);
   }, [path]);
 
+  useEffect(() => {
+    if (
+      sourceSelection !== "" &&
+      !data.sessionSources.some((source) => source.key === sourceSelection)
+    ) {
+      setSourceSelection("");
+    }
+  }, [data.sessionSources, sourceSelection]);
+
   useEffect(
     () => () => {
       if (refreshTimerRef.current != null) {
@@ -255,7 +269,7 @@ function App() {
 
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
-      SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
+      SLICE_LOADERS[slice].dateScoped ? `${dashboardQuery}|${reloadKey}` : `${reloadKey}`;
     const needed = slicesForView(activeView);
     const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice));
     failedSlicesRef.current = relevantFailures;
@@ -269,7 +283,7 @@ function App() {
     let cancelled = false;
     void loadSlicesIndependently<DataSlice, DashboardData>(
       missing,
-      (slice) => SLICE_LOADERS[slice].load(dateQuery),
+      (slice) => SLICE_LOADERS[slice].load(dashboardQuery),
       (slice, result) => {
         if (cancelled) {
           return;
@@ -293,7 +307,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeView, dateQuery, reloadKey]);
+  }, [activeView, dashboardQuery, reloadKey]);
 
   useEffect(() => {
     // Incrementing this key intentionally replaces the EventSource when the
@@ -801,6 +815,7 @@ function App() {
                 dateRange: dateRangeSelection,
                 onDateRangeChange: handleDateRangeChange,
                 onSessionTextFilterChange: setSessionTextFilterActive,
+                onSourceChange: setSourceSelection,
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
@@ -808,6 +823,7 @@ function App() {
                 loadedSlices: loadedSlicesRef.current,
                 recommendationsLoading,
                 sessionPageState,
+                source: sourceSelection,
                 syncing: syncInProgress,
               })
             )}
@@ -815,7 +831,7 @@ function App() {
         </main>
       </div>
       <CommandPalette
-        analyticsReportHref={withDateQuery("/reports/analytics", dateQuery)}
+        analyticsReportHref={withDateQuery("/reports/analytics", dashboardQuery)}
         onClose={() => setCommandPaletteOpen(false)}
         onNavigate={(href) => {
           setCommandPaletteOpen(false);
@@ -846,6 +862,7 @@ function renderView(
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
     onSessionTextFilterChange: (active: boolean) => void;
+    onSourceChange: (source: DashboardSource) => void;
     refresh: () => void;
     reloadKey: number;
     runSync: () => void;
@@ -853,6 +870,7 @@ function renderView(
     loadedSlices: ReadonlyMap<DataSlice, string>;
     recommendationsLoading: boolean;
     sessionPageState: SessionPageState;
+    source: DashboardSource;
     syncing: boolean;
   },
 ) {
@@ -900,7 +918,9 @@ function renderView(
           data={data}
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
+          onSourceChange={actions.onSourceChange}
           onSync={actions.runSync}
+          source={actions.source}
           syncing={actions.syncing}
         />
       );

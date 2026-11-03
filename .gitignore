@@ -1,6 +1,9 @@
 *.db
 *.db-shm
 *.db-wal
+# SQLite treats ":memory:" as in-memory only when it reaches the driver as-is;
+# a path-resolving caller creates an empty file by this name instead.
+:memory:
 
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/

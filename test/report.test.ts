@@ -91,6 +91,7 @@ const daily = [firstDay, secondDay];
 const analytics: AnalyticsReportData = {
   kind: "analytics",
   range: { from: "2026-07-27", to: "2026-07-28" },
+  source: null,
   totals,
   sessionsByDay: daily,
   byModel: [{ ...firstDay, key: "claude-opus-4-6", sessions: 2, usage_sessions: 2 }],
@@ -484,7 +485,7 @@ describe("static report rendering", () => {
   test("omits archive-wide insights from date-filtered reports", () => {
     const html = renderAnalyticsReport(analytics);
     expect(html).toContain(
-      "Insights are omitted from date-filtered reports because signals use archive-wide evidence.",
+      "Insights are omitted from filtered reports because signals use archive-wide evidence.",
     );
     expect(html).not.toContain("Reduce repeated searches");
     expect(html).not.toContain("The same paths were searched repeatedly.");
@@ -495,6 +496,17 @@ describe("static report rendering", () => {
     });
     expect(allTimeHtml).toContain("Reduce repeated searches");
     expect(allTimeHtml).toContain("The same paths were searched repeatedly.");
+
+    const sourceHtml = renderAnalyticsReport({
+      ...analytics,
+      range: { from: null, to: null },
+      source: "codex_app",
+    });
+    expect(sourceHtml).toContain("Codex App");
+    expect(sourceHtml).toContain(
+      "Insights are omitted from filtered reports because signals use archive-wide evidence.",
+    );
+    expect(sourceHtml).not.toContain("Reduce repeated searches");
   });
 
   test("session reports always render the CTA alongside attribution", () => {

@@ -148,7 +148,9 @@ describe("cost for sessions without recorded usage", () => {
         }}
         dateRange={ALL_DATE_RANGE}
         onDateRangeChange={() => {}}
+        onSourceChange={() => {}}
         onSync={() => {}}
+        source=""
         syncing={false}
       />,
     );

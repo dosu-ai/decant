@@ -108,6 +108,7 @@ describe("local API OpenAPI contract", () => {
         { path: "/api/config", method: "get", url: "/api/config" },
         { path: "/api/settings", method: "get", url: "/api/settings" },
         { path: "/api/settings", method: "post", url: "/api/settings", body: {} },
+        { path: "/api/update", method: "get", url: "/api/update" },
         {
           path: "/api/launch/agent",
           method: "post",

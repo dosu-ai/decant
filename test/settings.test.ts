@@ -32,6 +32,7 @@ describe("settings", () => {
       agent: "claude",
       terminal: "iterm",
       ide: "cursor",
+      updateCheck: false,
     });
   });
 
@@ -54,6 +55,7 @@ describe("settings", () => {
       agent: "codex",
       terminal: "wezterm",
       ide: "vscode",
+      updateCheck: false,
     });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       agent: "codex",
@@ -152,6 +154,7 @@ describe("settings", () => {
       agent: "codex",
       terminal: "ghostty",
       ide: "zed",
+      updateCheck: false,
     });
     expect(JSON.parse(readFileSync(settingsPath({ env }), "utf8"))).toEqual({
       agent: "codex",

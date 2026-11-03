@@ -224,14 +224,23 @@ export function TranscriptBlock({
       <div className={`tool-call${isDosu ? " is-dosu" : ""}`}>
         <div className="tool-call-header">
           {isDosu ? (
-            <span className="dosu-tool-mark">
-              <img alt="" src={dosuOfficialUrl} />
-            </span>
+            <Tooltip content="Optimized with Dosu · verified Dosu MCP tool call">
+              {(tooltipProps) => (
+                <span
+                  {...tooltipProps}
+                  aria-label="Dosu MCP tool call"
+                  className="dosu-tool-mark"
+                  role="img"
+                >
+                  <img alt="" src={dosuOfficialUrl} />
+                </span>
+              )}
+            </Tooltip>
           ) : (
             <Icon name="bolt" />
           )}
           <span className="tool-call-name">{block.tool_name ?? "tool_use"}</span>
-          {isDosu ? <span className="dosu-tool-badge">Optimized</span> : <small>tool call</small>}
+          <small>tool call</small>
         </div>
         {isPresent(block.tool_input) ? (
           <ToolCallPresentation forceOpen={isDosu} presentation={presentation} />

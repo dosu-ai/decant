@@ -95,18 +95,12 @@ describe("responsive Dosu surfaces", () => {
     expect(rule(".dosu-attribution:hover")).toContain("color: var(--fg)");
   });
 
-  test("gives the badge a compact mobile label without removing its full accessible name", () => {
-    expect(rule(".dosu-label-compact")).toContain("display: none");
-    const mobileStart = styles.indexOf("@media (max-width: 640px)");
-    const reducedMotionStart = styles.indexOf(
-      "@media (prefers-reduced-motion: reduce)",
-      mobileStart,
-    );
-    const mobileRules = styles.slice(mobileStart, reducedMotionStart);
-    expect(mobileRules).toContain(".dosu-label-full");
-    expect(mobileRules).toContain("display: none");
-    expect(mobileRules).toContain(".dosu-label-compact");
-    expect(mobileRules).toContain("display: inline");
+  test("keeps provenance marks compact at every screen size", () => {
+    expect(rule(".dosu-provenance-badge")).toContain("width: 24px");
+    expect(rule(".dosu-provenance-badge")).toContain("height: 24px");
+    expect(rule(".dosu-provenance-badge")).toContain("flex: 0 0 auto");
+    expect(styles).not.toContain(".dosu-label-full");
+    expect(styles).not.toContain(".dosu-label-compact");
   });
 
   test("contains the share review sheet and stacks its privacy contract on mobile", () => {

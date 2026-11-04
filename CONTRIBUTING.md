@@ -44,8 +44,8 @@ Install the optional hooks with:
 pre-commit install
 ```
 
-Formatting and the type check run on each commit. The test suite runs on
-`git push`.
+Once the hooks are installed, formatting and the type check run on each
+commit, and the test suite runs on `git push`.
 
 ## Before you start
 

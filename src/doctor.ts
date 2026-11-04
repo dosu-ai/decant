@@ -146,6 +146,8 @@ function sourceRoots(config: Config, tool: Tool): string[] {
         : [config.opencodeDir, config.opencodeDb];
     case "cursor":
       return [config.cursorDir];
+    case "copilot":
+      return [config.copilotDir];
   }
 }
 

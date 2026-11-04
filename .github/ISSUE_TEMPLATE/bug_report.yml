@@ -7,10 +7,10 @@ body:
       value: |
         # Do not paste real session transcripts
 
-        **This issue is public.** Your Claude Code, Codex, Gemini CLI, OpenCode, and
-        Cursor CLI sessions contain your own source code, file paths, prompts, and
-        everything else you typed into those tools. decant keeps them on your
-        machine. Pasting one here would not.
+        **This issue is public.** Your Claude Code, Codex, Gemini CLI, OpenCode,
+        Cursor CLI, and GitHub Copilot CLI sessions contain your own source code,
+        file paths, prompts, and everything else you typed into those tools.
+        decant keeps them on your machine. Pasting one here would not.
 
         Reproduce the bug with a **synthetic** session file instead. Hand-write a small
         file that triggers the same failure and ingest it into a scratch archive:
@@ -104,6 +104,7 @@ body:
         - Gemini CLI
         - OpenCode
         - Cursor CLI
+        - GitHub Copilot CLI
         - Not applicable
     validations:
       required: true

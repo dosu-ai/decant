@@ -77,6 +77,7 @@ describe("collectDoctorReport", () => {
       "gemini",
       "opencode",
       "cursor",
+      "copilot",
     ]);
     expect(report.archive).toMatchObject({ path: "~/.decant/decant.db", exists: false });
     expect(report.env).toEqual(["DECANT_CONFIG_DIR", "DECANT_NO_SYNC", "XDG_DATA_HOME"]);

@@ -1,0 +1,122 @@
+language: en-US
+
+reviews:
+  profile: chill
+  high_level_summary: false
+  poem: false
+  review_status: false
+  auto_review:
+    enabled: true
+    drafts: false
+  # Keep the paths below in step with .github/CODEOWNERS.
+  auto_approvals:
+    enabled: true
+    allow_author_approval: false
+    overrides:
+      - enabled: false
+        paths:
+          - ".coderabbit.yaml"
+          - ".github/**"
+          - ".pre-commit-config.yaml"
+          - "AGENTS.md"
+          - "Dockerfile"
+          - "bun.lock"
+          - "bunfig.toml"
+          - "install.sh"
+          - "npm/**"
+          - "package.json"
+          - "packaging/**"
+          - "scripts/**"
+          - "src/db.ts"
+          - "src/schema-manifest.ts"
+          - "src/schema.sql"
+          - "src/route-paths.ts"
+          - "src/server.ts"
+          - "src/server/**"
+          - "src/update.ts"
+          - "tsconfig.json"
+  path_filters:
+    - "!test/golden/**"
+    - "!bun.lock"
+  path_instructions:
+    - path: "src/sources/**"
+      instructions: >-
+        Hold parser changes to docs/adding-a-source.md. Malformed records must
+        become diagnostics, never crashes, and diagnostics must not quote
+        transcript content. A change that alters what a parser derives from
+        unchanged source files needs an INGEST_PIPELINE_REVISION bump in
+        src/ingest.ts.
+    - path: "src/{db.ts,schema.sql,schema-manifest.ts}"
+      instructions: >-
+        A migration already on main is frozen; adjustments go in a new
+        migration with a LATEST_SCHEMA_VERSION bump. src/schema.sql and
+        src/schema-manifest.ts must match the result of every migration.
+        Docs refer to LATEST_SCHEMA_VERSION instead of copying the number.
+    - path: "src/{server.ts,route-paths.ts,server/**}"
+      instructions: >-
+        This is the only network listener. Routes, parameters, limits, status
+        codes, and response shapes must match docs/api/openapi.yaml,
+        docs/api/routes.md, and the contract tests. Binding beyond loopback
+        must require explicit trusted-peer configuration; Host and Origin
+        checks are defense in depth, not authentication.
+    - path: "src/cost.ts"
+      instructions: >-
+        Every rate needs a matching row and a dated first-party source in
+        docs/pricing.md. Retired models without a published rate stay unpriced
+        instead of inheriting a newer tier.
+    - path: "src/**/*.ts"
+      instructions: >-
+        Runtime stays local-first: flag any new outbound network call, hosted
+        service, or LLM call outside src/update.ts. Core modules return data or
+        structured errors; only src/cli.ts and src/cli/ print or set exit codes.
+    - path: "{fixtures/**,test/**}"
+      instructions: >-
+        Fixtures must be hand-written synthetic data. Flag anything that looks
+        copied from a real transcript: real names, home directories other than
+        /Users/dev or /home/dev, company domains, or credential-shaped strings.
+        Do not ask for more tests than the change needs.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Actions are pinned to full commit SHAs with a version comment, jobs
+        declare least-privilege permissions, and untrusted event fields reach
+        shell steps only through env. pull_request_target jobs must never check
+        out or run pull request code.
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "warning"
+      requirements: >-
+        Conventional Commit prefix (feat, fix, docs, test, refactor, perf,
+        chore) followed by a plain-language description of the user-visible
+        outcome.
+    description:
+      mode: "warning"
+    custom_checks:
+      - name: "Pull request template"
+        mode: "warning"
+        instructions: >-
+          Pass when the description keeps the Problem, Change, Verification,
+          Archive schema, and Docs and privacy headings from
+          .github/PULL_REQUEST_TEMPLATE.md, and Verification names specific
+          commands or checks with their observed results. Fail when
+          Verification only says that tests pass.
+      - name: "Local-first"
+        mode: "error"
+        instructions: >-
+          Only code under src/, which ships in the decant binary, counts.
+          Fail when it adds an outbound network call, a hosted service
+          dependency, or an LLM call outside src/update.ts, or adds a Bun
+          macro import (`with { type: "macro" }`), which runs at build time
+          inside the release job. Pass otherwise.
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - "AGENTS.md"
+      - files: "docs/adding-a-source.md"
+        applyTo: "src/sources/**"
+      - files: "docs/analytics-methodology.md"
+        applyTo: "src/{stats,classify,buckets,apportion,token-economics}.ts"
+      - files: "docs/data-lifecycle.md"
+        applyTo: "src/{db,ingest,watch}.ts"

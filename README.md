@@ -145,6 +145,7 @@ decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
 decant db compact              # losslessly compress stored source records
 decant update                  # update Decant with the tool that installed it
+decant doctor                  # redacted environment report for bug reports
 ```
 
 Run `decant --help` or `decant <command> --help` for all commands and flags.

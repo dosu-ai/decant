@@ -30,6 +30,8 @@ Start with these files and guides:
 - `docs/distribution.md` covers npm, installer, Homebrew, Docker, and source
   builds.
 - `docs/adding-a-source.md` provides the parser contribution checklist.
+- `docs/contribution-triage.md` is the procedure for triaging outside pull
+  requests.
 
 ## Setup and commands
 
@@ -121,6 +123,25 @@ A change is ready when:
 - Comments explain why a constraint exists, not what the code already says.
 - Branch from `main`, open a pull request, and keep CI green.
 - Do not edit unrelated user changes in a dirty worktree.
+
+## Pull requests
+
+- Open a pull request only when the developer asks for one.
+- Fill in every heading of `.github/PULL_REQUEST_TEMPLATE.md`, including the
+  schema and privacy checkboxes. Do not replace it with your own layout.
+- Verification lists the focused commands or manual checks you ran and what
+  they showed. "Tests pass" alone is not evidence.
+- Upload screenshots and recordings with the pull request
+  (`gh pr edit <n> --body-file <file> --attach <image>`). Never commit PR-only
+  assets.
+- End the description with the model and harness that wrote the change.
+- `bun run scripts/pr-policy.ts` runs the same policy checks as CI: committed
+  migrations unchanged, docs updated alongside rate and route-manifest
+  changes, and a pattern scan of fixtures for real-looking home paths, emails,
+  and credentials. Passing the scan does not prove a fixture is synthetic.
+- When babysitting a pull request, wait for check and review events instead of
+  polling. Check each bot finding against the source, fix the real ones, and
+  answer false positives with a reason.
 
 ## Documentation expectations
 

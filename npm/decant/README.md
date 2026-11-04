@@ -34,6 +34,7 @@ npx @dosu/decant@latest --help
 npx @dosu/decant@latest ls
 npx @dosu/decant@latest search "auth bug"
 npx @dosu/decant@latest db info  # what the archive holds and where
+npx @dosu/decant@latest doctor   # redacted environment report for bug reports
 ```
 
 ## Install globally

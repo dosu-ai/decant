@@ -7,21 +7,23 @@ body:
       value: |
         # Do not paste real session transcripts
 
-        **This issue is public.** Your Claude Code and Codex sessions contain your own
-        source code, file paths, prompts, and everything else you typed into those
-        tools. decant keeps them on your machine — pasting one here would not.
+        **This issue is public.** Your Claude Code, Codex, Gemini CLI, OpenCode,
+        Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions contain
+        your own source code, file paths, prompts, and
+        everything else you typed into those tools. decant keeps them on your
+        machine. Pasting one here would not.
 
         Reproduce the bug with a **synthetic** session file instead. Hand-write a small
-        JSONL file that triggers the same failure and ingest it into a scratch archive:
+        file that triggers the same failure and ingest it into a scratch archive:
 
         ```
-        decant sync --db /tmp/decant-repro.db --path ./repro.jsonl
-        decant ls --db /tmp/decant-repro.db
+        decant --no-sync --db /tmp/decant-repro.db sync --path ./repro.jsonl
+        decant --no-sync --db /tmp/decant-repro.db ls
         ```
 
-        The `fixtures/` directory in this repository shows the shape of both source
-        formats. If you cannot reproduce it synthetically, describe the *structure* of
-        the input that breaks — message kinds, field names, sizes, encodings — without
+        The `fixtures/` directory in this repository shows the shape of each source
+        format. If you cannot reproduce it synthetically, describe the *structure* of
+        the input that breaks (message kinds, field names, sizes, encodings) without
         the content. Redact paths, code, and prompts from any output you paste,
         including error messages and logs.
 
@@ -30,7 +32,7 @@ body:
     attributes:
       label: Transcript privacy
       options:
-        - label: This report contains no real transcript content — no source code, file paths, or prompts from my own sessions.
+        - label: This report contains no real transcript content, meaning no source code, file paths, or prompts from my own sessions.
           required: true
 
   - type: textarea
@@ -59,17 +61,22 @@ body:
       description: Numbered steps starting from a clean archive. Inline the synthetic session file if the bug depends on input shape.
       placeholder: |
         1. Write ./repro.jsonl containing ...
-        2. decant sync --db /tmp/decant-repro.db --path ./repro.jsonl
-        3. decant ls --db /tmp/decant-repro.db
+        2. decant --no-sync --db /tmp/decant-repro.db sync --path ./repro.jsonl
+        3. decant --no-sync --db /tmp/decant-repro.db ls
     validations:
       required: true
 
-  - type: input
-    id: version
+  - type: textarea
+    id: doctor
     attributes:
-      label: decant version
-      description: Output of `decant --version`. For archive or migration bugs, add the `schema:` line from `decant db info`.
-      placeholder: Output of `decant --version`
+      label: decant doctor output
+      description: |
+        Paste the output of `decant doctor`. It reports the version, install method,
+        platform, schema versions, what discovery finds for each source, and how many sessions the archive holds.
+        It prints no transcript content and hides paths outside your home directory.
+        On releases before `doctor` existed, paste `decant --version` and the
+        `schema:` line from `decant db info` instead.
+      render: text
     validations:
       required: true
 
@@ -86,24 +93,37 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: platform
-    attributes:
-      label: OS and architecture
-      description: For example `macOS 15.5 arm64`, `Ubuntu 24.04 x86_64`, or `Windows 11 x86_64 (WSL2)`.
-    validations:
-      required: true
-
   - type: dropdown
     id: source-tool
     attributes:
       label: Source tool
-      description: Which CLI wrote the sessions involved.
+      description: Which tools wrote the sessions involved.
+      multiple: true
       options:
         - Claude Code
         - Codex
-        - Both
+        - Gemini CLI
+        - OpenCode
+        - Cursor CLI
+        - GitHub Copilot CLI
+        - Copilot Chat in VS Code
         - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where you saw the problem.
+      options:
+        - Sync and parsing
+        - CLI output
+        - Web UI
+        - Local API
+        - Costs and pricing
+        - Install, update, or packaging
+        - Not sure
     validations:
       required: true
 
@@ -111,4 +131,4 @@ body:
     id: context
     attributes:
       label: Anything else
-      description: Relevant `DECANT_*` environment variables, non-default settings, or operational logs from `DECANT_LOG_LEVEL=debug`. Redact before pasting.
+      description: Non-default settings, or operational logs from `DECANT_LOG_LEVEL=debug`. Redact before pasting.

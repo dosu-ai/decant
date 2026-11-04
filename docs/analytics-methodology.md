@@ -183,6 +183,8 @@ reads that copy instead.
 File references preserve the original tool path. For Windows workspaces,
 relative file paths normalize separators and compare drive and workspace names
 without case differences. Files outside the workspace have no relative path.
+Extension grouping uses the leaf filename with either separator. Names such as
+`.env` and `Makefile` have no extension.
 
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,

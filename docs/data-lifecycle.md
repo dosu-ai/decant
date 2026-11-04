@@ -449,9 +449,10 @@ archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
 
-Session facets such as `active_seconds` are derived from the source file at
-ingest, so a correction to them reaches existing sessions through the
-pipeline-revision re-ingest and needs the source to still exist. Persisted
+Session facets such as `active_seconds` and file references, including their
+extensions, are derived from the source file at ingest. Corrections reach
+existing sessions through a pipeline-revision re-ingest, which requires the
+source to still exist. Persisted
 economics vectors are versioned separately and recompute from the archive's
 own rows, so they refresh even when the source is gone.
 

@@ -324,6 +324,20 @@ describe("path helpers", () => {
     ).toBe("src/app.ts");
   });
 
+  test("Windows file refs use the leaf name for extension grouping", () => {
+    for (const [path, ext] of [
+      [String.raw`C:\proj\.env`, null],
+      [String.raw`C:\proj.d\Makefile`, null],
+      [String.raw`C:\proj.d\file.`, null],
+      [String.raw`C:\proj.d\src\APP.TS`, "ts"],
+      [String.raw`\\server\share.d\Makefile`, null],
+      [String.raw`C:\proj.d/src\app.TSX`, "tsx"],
+    ] as const) {
+      const session = oneBlockSession("vscode_copilot", toolUse("read_file", { filePath: path }));
+      expect(fileRefs(session)[0]).toMatchObject({ path, ext });
+    }
+  });
+
   test("relativize and extension edge cases", () => {
     expect(relativize("/a/b/c.rs", "/a/b")).toBe("c.rs");
     expect(relativize("/a/b/c.rs", "/a/b/")).toBe("c.rs");

@@ -303,7 +303,7 @@ export function relativize(path: string, cwd: string | null): string | null {
 }
 
 export function extension(path: string): string | null {
-  const leaf = path.split("/").at(-1) ?? path;
+  const leaf = path.split(/[\\/]/).at(-1) ?? path;
   const index = leaf.lastIndexOf(".");
   if (index <= 0 || index === leaf.length - 1) {
     return null;

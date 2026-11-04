@@ -30,6 +30,7 @@ describe("message source storage", () => {
       type: "compaction",
       isCompactSummary: true,
       compactMetadata: { trigger: "auto", preTokens: 12345 },
+      data: { preCompactionTokens: 23456 },
       payload: { role: "developer" },
       message: {
         id: "response-1",

@@ -293,8 +293,9 @@ export function sessionCostParts(
     reported: 0,
   };
   for (const row of rows) {
+    // An unnamed source-reported cost must not also acquire a list-price charge.
     const parts = estimateCostParts(
-      row.model === "" ? null : row.model,
+      row.model === "" && row.reportedCostUsd == null ? fallback.model : row.model || null,
       row.usage,
       pricing,
       row.tier,

@@ -192,7 +192,10 @@ the whole session is priced at its model.
 
 GitHub Copilot CLI 1.0.105 and later write each model call's usage as a
 `session.usage_record` event, and Decant puts it on the assistant message with
-the same `apiCallId`. Older builds write only output tokens on each assistant
+the same `apiCallId`. Split assistant messages share one call, so its usage
+is counted once on the first message. Replayed usage records with the same
+`apiCallId` also count once. Reasoning text is deduplicated within a call,
+while identical reasoning in later calls stays in the transcript. Older builds write only output tokens on each assistant
 message (`assistant.message.outputTokens`). Copilot also writes cumulative
 per-model usage snapshots: the `modelMetrics` of each `session.shutdown` and
 the `providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot
@@ -213,7 +216,8 @@ models is not priced entirely at one model. The session model is the one with
 the most output tokens. Without any usage record or snapshot, as in a running
 session on an older build, only the output tokens are known. Cost is
 the underlying model's API list-price estimate, not a count of Copilot premium
-requests.
+requests. Legacy aggregate checkpoints that omit a model are priced at the
+session model when it is known; they remain unpriced when no model is known.
 
 Copilot Chat in VS Code records usage on each request, and only in builds from
 April 2026 on. `completionTokens` sums the output of every model call the
@@ -540,7 +544,8 @@ For one model call, occupancy is:
 `input_tokens + cache_read_tokens + cache_creation_tokens`
 
 It is the prompt resident in the window for that call, not cumulative token
-consumption. Peak occupancy is the largest observed call. Codex logs can carry
+consumption. Peak occupancy is the largest observed call or recorded
+pre-compaction occupancy. Codex logs can carry
 an explicit model window, Copilot CLI records the main agent's prompt limit
 (`maxPromptTokens`) on each usage record, and OpenCode sessions take theirs from the models.dev
 catalog OpenCode caches (in its database for 2.x; for a database with no

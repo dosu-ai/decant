@@ -12,7 +12,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, extname, join, basename as pathBasename } from "node:path";
+import { dirname, extname, join, basename as pathBasename, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
@@ -21,7 +21,11 @@ import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
-import { encodeMessageRaw, MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import {
+  backfillCopilotCompactionMetadata,
+  encodeMessageRaw,
+  MESSAGE_METADATA_SQL,
+} from "./message-storage.ts";
 import {
   type IngestIssueCode,
   type Issue,
@@ -119,7 +123,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 13;
+export const INGEST_PIPELINE_REVISION = 15;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -176,7 +180,7 @@ export function discover(
   warn: DiscoveryWarn = logDiscoveryWarning,
 ): SourceFile[] {
   if (config.sourcePaths != null && config.sourcePaths.length > 0) {
-    return discoverSourcePaths(config.sourcePaths, warn);
+    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir);
   }
 
   const out: SourceFile[] = [];
@@ -200,11 +204,12 @@ export function discover(
 export function discoverSourcePaths(
   paths: string[],
   warn: DiscoveryWarn = logDiscoveryWarning,
+  copilotDir?: string,
 ): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out, databases);
+    collectSourcePath(path, out, databases, copilotDir);
   }
   return [...preferVscodeLogs(dedupeSourceFiles(out)), ...discoverOpenCode(databases, warn)];
 }
@@ -543,6 +548,7 @@ function refreshDerivedState(
     resolveSubagentParents(db);
   }
   const materializedEconomics = materializeMissingSessionEconomics(db);
+  backfillCopilotCompactionMetadata(db);
   const materializedWindows = materializeMissingContextWindows(db);
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
@@ -1984,7 +1990,12 @@ function collect(
   }
 }
 
-function collectSourcePath(path: string, out: SourceFile[], databases: string[]): void {
+function collectSourcePath(
+  path: string,
+  out: SourceFile[],
+  databases: string[],
+  copilotDir?: string,
+): void {
   let stats: Stats;
   try {
     stats = statSync(path);
@@ -2003,7 +2014,7 @@ function collectSourcePath(path: string, out: SourceFile[], databases: string[])
       databases.push(path);
       return;
     }
-    const source = sourceFileForPath(path);
+    const source = sourceFileForPath(path, copilotDir);
     if (source != null) {
       out.push(source);
     }
@@ -2019,14 +2030,14 @@ function collectSourcePath(path: string, out: SourceFile[], databases: string[])
       databases.push(child);
       continue;
     }
-    const source = sourceFileForPath(child);
+    const source = sourceFileForPath(child, copilotDir);
     if (source != null) {
       out.push(source);
     }
   }
 }
 
-function sourceFileForPath(path: string): SourceFile | null {
+function sourceFileForPath(path: string, copilotDir?: string): SourceFile | null {
   const name = pathBasename(path);
   if (name === CURSOR_STORE_NAME) {
     return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
@@ -2037,10 +2048,10 @@ function sourceFileForPath(path: string): SourceFile | null {
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }
-  if (isCopilotSessionLog(path)) {
+  if (isCopilotSessionLog(path, copilotDir)) {
     return { tool: "copilot", path, archived: false };
   }
-  if (isInCopilotSessionState(path)) {
+  if (isInCopilotSessionState(path, copilotDir)) {
     // Rotated `events.N.jsonl` archives and files a session wrote into its
     // own directory are not transcripts of any source.
     return null;
@@ -2094,19 +2105,23 @@ function collectCopilot(copilotDir: string, out: SourceFile[]): void {
   }
 }
 
-/** Requiring the `session-state` segment keeps `--path` from claiming some
- * other tool's `events.jsonl`. */
-function isCopilotSessionLog(path: string): boolean {
+/** Match the configured root or the standard `session-state` layout so an
+ * unrelated `events.jsonl` is not claimed as a Copilot journal. */
+function isCopilotSessionLog(path: string, copilotDir?: string): boolean {
   return (
     pathBasename(path) === COPILOT_EVENTS_NAME &&
-    pathBasename(dirname(dirname(path))) === "session-state"
+    (pathBasename(dirname(dirname(path))) === "session-state" ||
+      (copilotDir != null && resolve(dirname(dirname(path))) === resolve(copilotDir)))
   );
 }
 
-function isInCopilotSessionState(path: string): boolean {
+function isInCopilotSessionState(path: string, copilotDir?: string): boolean {
   let dir = dirname(path);
   while (dirname(dir) !== dir) {
-    if (pathBasename(dirname(dir)) === "session-state") {
+    if (
+      pathBasename(dirname(dir)) === "session-state" ||
+      (copilotDir != null && resolve(dirname(dir)) === resolve(copilotDir))
+    ) {
       return true;
     }
     dir = dirname(dir);

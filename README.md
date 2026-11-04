@@ -204,7 +204,12 @@ the underlying model's API rates. That estimate is not a count of
 Copilot premium requests. Decant does not read the rotated `events.<n>.jsonl`
 archives Copilot writes only when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is
 set. The current `events.jsonl` replays the earlier history at its start.
-`--path` also accepts a Copilot `events.jsonl`.
+`--path` accepts a Copilot journal under `session-state/<session id>/events.jsonl`.
+For a custom layout, pass its session root with `--copilot-dir`:
+
+```sh
+decant --no-sync --db /tmp/decant-repro.db sync --copilot-dir ./copilot --path ./copilot/example/events.jsonl
+```
 
 Copilot Chat in VS Code keeps each chat session in VS Code's `User` directory:
 `~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on

@@ -83,7 +83,8 @@ By default Decant discovers:
   `~/.copilot/session-state/<session id>/events.jsonl`, or the directory from
   `--copilot-dir` or `DECANT_COPILOT_DIR`. With neither set, Decant follows
   `COPILOT_HOME` to `$COPILOT_HOME/session-state`. Each session is an
-  append-only event log, read read-only. Subagent events are in the same file
+  append-only event log, read read-only. Explicit `--path` imports also honor
+  the configured Copilot directory when it has a custom name. Subagent events are in the same file
   and stay part of the parent session. When
   `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set, Copilot moves older
   history into `events.<n>.jsonl` archives and starts a new `events.jsonl`
@@ -141,6 +142,11 @@ also keeps in each session directory. VS Code's `workspaceStorage` directory is
 watched recursively, reacting only to files directly in a workspace's
 `chatSessions` directory, and its `emptyWindowChatSessions` directory is
 watched on its own.
+
+Sync repairs Copilot compaction metadata from retained message records and
+recomputes affected context peaks. This also works for compressed messages
+whose original journals are gone. Records without a pre-compaction token count
+keep it unavailable, and completed repairs are skipped on later syncs.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local

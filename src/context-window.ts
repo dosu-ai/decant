@@ -107,7 +107,7 @@ export interface MessageRawMeta {
  * per row, so large raw payloads are parsed once, not once per field. */
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
-  '$.agentId')`;
+  '$.agentId', '$.data.preCompactionTokens')`;
 
 /** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults.
  * `tool` names the session's source, whose sidechain marker may differ. */
@@ -132,8 +132,17 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
   if (!Array.isArray(parsed)) {
     return none;
   }
-  const [sidechain, subtype, rawType, compactSummary, trigger, preTokens, agentId] =
-    parsed as unknown[];
+  const [
+    sidechain,
+    subtype,
+    rawType,
+    compactSummary,
+    trigger,
+    preTokens,
+    agentId,
+    copilotPreTokens,
+  ] = parsed as unknown[];
+  const recordedPreTokens = tool === "copilot" ? copilotPreTokens : preTokens;
   return {
     // Copilot CLI marks a subagent's events in the parent journal with the
     // subagent's agentId instead of isSidechain.
@@ -143,8 +152,10 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     isCompactSummary: compactSummary === true,
     compactTrigger: typeof trigger === "string" ? trigger : null,
     compactPreTokens:
-      typeof preTokens === "number" && Number.isFinite(preTokens) && preTokens >= 0
-        ? preTokens
+      typeof recordedPreTokens === "number" &&
+      Number.isFinite(recordedPreTokens) &&
+      recordedPreTokens >= 0
+        ? recordedPreTokens
         : null,
   };
 }
@@ -303,6 +314,7 @@ export function contextWindowForSession(
   for (const compaction of compactions) {
     maxSeen = Math.max(maxSeen, compaction.pre_tokens ?? 0);
   }
+  peak = maxSeen;
   const inferredWindow =
     maxSeen <= 0
       ? null

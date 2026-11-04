@@ -131,7 +131,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
   const unknownTypes: UnknownTypes = new Map();
   const messages: NormalizedMessage[] = [];
   const toolUses = new Map<string, NormalizedBlock>();
-  const reasoningSeen = new Set<string>();
+  const reasoningSeen = new Map<string, Set<string>>();
   const seenEventIds = new Set<string>();
   const efforts: string[] = [];
   const snapshots: UsageSnapshot[] = [];
@@ -201,6 +201,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
     }
     const data = isObject(record.data) ? record.data : {};
     const timestamp = asString(record.timestamp);
+    const reasoningKey = JSON.stringify([record.agentId ?? null, data.apiCallId ?? null]);
     if (timestamp != null) {
       startedAt ??= timestamp;
       endedAt = timestamp;
@@ -248,7 +249,9 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         if (text === "") {
           break;
         }
-        reasoningSeen.add(text);
+        const seen = reasoningSeen.get(reasoningKey) ?? new Set<string>();
+        seen.add(text);
+        reasoningSeen.set(reasoningKey, seen);
         push("assistant", record, [block(0, "thinking", { text })], {
           model: asString(data.model) ?? currentModel,
         });
@@ -260,9 +263,14 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         // The same reasoning may also arrive as its own assistant.reasoning
         // event; store it once.
         const reasoning = asString(data.reasoningText) ?? "";
-        if (reasoning !== "" && !reasoningSeen.has(reasoning)) {
-          reasoningSeen.add(reasoning);
+        const seen = reasoningSeen.get(reasoningKey) ?? new Set<string>();
+        if (reasoning !== "" && !seen.has(reasoning)) {
+          seen.add(reasoning);
+          reasoningSeen.set(reasoningKey, seen);
           blocks.push(block(blocks.length, "thinking", { text: reasoning }));
+        }
+        if (asString(data.apiCallId) == null) {
+          reasoningSeen.delete(reasoningKey);
         }
         const text = asString(data.content) ?? "";
         if (text !== "") {
@@ -282,7 +290,14 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         // One call can answer in several messages; its usage goes on the first.
         const claimed = apiCallId != null && callMessages.has(apiCallId);
         const recorded = apiCallId == null || claimed ? undefined : callUsage.get(apiCallId);
-        const outputTokens = asInteger(data.outputTokens);
+        const reportedOutput = asInteger(data.outputTokens);
+        if (apiCallId != null && claimed && reportedOutput != null && !callUsage.has(apiCallId)) {
+          const first = callMessages.get(apiCallId);
+          if (first != null) {
+            first.usage = { ...emptyUsage(), output: reportedOutput };
+          }
+        }
+        const outputTokens = claimed ? null : reportedOutput;
         if (blocks.length === 0 && outputTokens == null && recorded == null) {
           break;
         }
@@ -378,6 +393,10 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         if (!isObject(usage)) {
           break;
         }
+        const apiCallId = asString(usage.apiCallId);
+        if (apiCallId != null && callUsage.has(apiCallId)) {
+          break;
+        }
         const recordUsage = { ...usageFromMetric(usage, undefined), requests: 1 };
         const model = asString(usage.model) ?? "";
         // Copilot's prompt limit for the main agent's model. A subagent can run
@@ -387,8 +406,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         }
         const prior = ledger.get(model);
         ledger.set(model, prior == null ? recordUsage : sumCopilotUsage(prior, recordUsage));
-        const apiCallId = asString(usage.apiCallId);
-        if (apiCallId == null || callUsage.has(apiCallId)) {
+        if (apiCallId == null) {
           break;
         }
         const converted = toDecantUsage(recordUsage);

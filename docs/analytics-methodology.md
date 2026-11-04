@@ -192,7 +192,10 @@ the whole session is priced at its model.
 
 GitHub Copilot CLI 1.0.105 and later write each model call's usage as a
 `session.usage_record` event, and Decant puts it on the assistant message with
-the same `apiCallId`. Older builds write only output tokens on each assistant
+the same `apiCallId`. Split assistant messages share one call, so its usage
+is counted once on the first message. Replayed usage records with the same
+`apiCallId` also count once. Reasoning text is deduplicated within a call,
+while identical reasoning in later calls stays in the transcript. Older builds write only output tokens on each assistant
 message (`assistant.message.outputTokens`). Copilot also writes cumulative
 per-model usage snapshots: the `modelMetrics` of each `session.shutdown` and
 the `providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot

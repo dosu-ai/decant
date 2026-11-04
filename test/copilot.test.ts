@@ -198,6 +198,87 @@ describe("parseCopilotSession", () => {
     ]);
   });
 
+  test("counts output once across chunks of the same model call", () => {
+    for (const receipt of ["none", "before", "after"]) {
+      const records = [
+        event(
+          "assistant.message",
+          { content: "first", apiCallId: "split", outputTokens: 10 },
+          "m1",
+        ),
+        event(
+          "assistant.message",
+          { content: "second", apiCallId: "split", outputTokens: 10 },
+          "m2",
+        ),
+      ];
+      const usage = usageRecord("u1", "split", "gpt-5.4", { inputTokens: 100, outputTokens: 10 });
+      if (receipt === "before") records.unshift(usage);
+      if (receipt === "after") records.push(usage);
+      const { session } = parseCopilotSession("split", records.join("\n"));
+      expect(session.messages.reduce((sum, message) => sum + (message.usage?.output ?? 0), 0)).toBe(
+        10,
+      );
+      expect(session.totals.output).toBe(10);
+      expect(session.messages[1]?.usage).toBeNull();
+    }
+  });
+
+  test("keeps output reported only on a call's final chunk", () => {
+    const { session } = parseCopilotSession(
+      "final-chunk",
+      [
+        event("assistant.message", { content: "first", apiCallId: "split" }, "m1"),
+        event(
+          "assistant.message",
+          { content: "second", apiCallId: "split", outputTokens: 10 },
+          "m2",
+        ),
+      ].join("\n"),
+    );
+    expect(session.totals.output).toBe(10);
+    expect(session.messages[0]?.usage?.output).toBe(10);
+    expect(session.messages[1]?.usage).toBeNull();
+  });
+
+  test("counts a replayed usage receipt once even with a new event ID", () => {
+    const { session } = parseCopilotSession(
+      "receipts",
+      [
+        usageRecord("u1", "call-a", "gpt-5.4", { inputTokens: 100, outputTokens: 10 }),
+        usageRecord("u2", "call-a", "gpt-5.4", { inputTokens: 100, outputTokens: 10 }),
+        event("assistant.message", { content: "done", apiCallId: "call-a" }, "m1"),
+      ].join("\n"),
+    );
+    expect(session.totals).toEqual({ ...emptyUsage(), input: 100, output: 10 });
+    expect(session.rawMeta).toMatchObject({ modelUsage: [{ requests: 1 }] });
+  });
+
+  test("keeps repeated reasoning from separate model calls", () => {
+    const { session } = parseCopilotSession(
+      "reasoning",
+      [
+        event("assistant.reasoning", { content: "Check the result.", apiCallId: "call-a" }, "r1"),
+        event(
+          "assistant.message",
+          { content: "first", reasoningText: "Check the result.", apiCallId: "call-a" },
+          "m1",
+        ),
+        event(
+          "assistant.message",
+          { content: "second", reasoningText: "Check the result.", apiCallId: "call-b" },
+          "m2",
+        ),
+      ].join("\n"),
+    );
+    expect(
+      session.messages
+        .flatMap((message) => message.blocks)
+        .filter((block) => block.blockType === "thinking")
+        .map((block) => block.text),
+    ).toEqual(["Check the result.", "Check the result."]);
+  });
+
   test("attaches each call's usage record to its message, net of cache", () => {
     const { session, issues } = parseCopilotSession(
       "fallback",
@@ -561,6 +642,29 @@ describe("Copilot ingest", () => {
         basename(file.path),
       ]),
     ).toEqual([["copilot", "sample", "events.jsonl"]]);
+  });
+
+  test("explicit paths honor a relocated Copilot root and exclude its sidecars", () => {
+    const dir = freshDir();
+    const copilotDir = join(dir, "relocated");
+    const journal = join(copilotDir, "sample", "events.jsonl");
+    write(journal, fixture("sample"));
+    write(join(copilotDir, "sample", "events.1.jsonl"), "{}");
+    write(join(copilotDir, "sample", "files", "notes.jsonl"), "{}");
+    const config = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex"), copilotDir };
+    expect(discover({ ...config, sourcePaths: [journal] })).toEqual([
+      { tool: "copilot", path: journal, archived: false },
+    ]);
+    expect(discover({ ...config, sourcePaths: [copilotDir] })).toEqual([
+      { tool: "copilot", path: journal, archived: false },
+    ]);
+    const db = open(dir);
+    expect(sync(db, { ...config, sourcePaths: [journal] })).toMatchObject({
+      ingested: 1,
+      issues: 0,
+    });
+    expect(db.query("SELECT tool FROM session").get()).toEqual({ tool: "copilot" });
+    closeDb(db);
   });
 
   test("ingests sessions with per-model cost, file references, and facets", () => {

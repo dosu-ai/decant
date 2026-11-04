@@ -83,7 +83,8 @@ By default Decant discovers:
   `~/.copilot/session-state/<session id>/events.jsonl`, or the directory from
   `--copilot-dir` or `DECANT_COPILOT_DIR`. With neither set, Decant follows
   `COPILOT_HOME` to `$COPILOT_HOME/session-state`. Each session is an
-  append-only event log, read read-only. Subagent events are in the same file
+  append-only event log, read read-only. Explicit `--path` imports also honor
+  the configured Copilot directory when it has a custom name. Subagent events are in the same file
   and stay part of the parent session. When
   `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set, Copilot moves older
   history into `events.<n>.jsonl` archives and starts a new `events.jsonl`

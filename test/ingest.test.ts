@@ -82,6 +82,7 @@ function stageFixtures(dir: string): IngestConfig {
   const codexDir = join(dir, "sources", "codex");
   const geminiDir = join(dir, "sources", "gemini");
   const cursorDir = join(dir, "sources", "cursor");
+  const copilotDir = join(dir, "sources", "copilot", "session-state");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -116,8 +117,22 @@ function stageFixtures(dir: string): IngestConfig {
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
   buildCursorChat(join(cursorDir, "synthetic-workspace", "sample"));
+  for (const session of ["resumed", "sample"]) {
+    write(
+      join(copilotDir, session, "events.jsonl"),
+      readFileSync(join(fixtureRoot, "copilot", session, "events.jsonl"), "utf8"),
+    );
+  }
 
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
+  return {
+    claudeDir,
+    codexDir,
+    geminiDir,
+    opencodeDir,
+    opencodeConfigPath,
+    cursorDir,
+    copilotDir,
+  };
 }
 
 async function golden<T>(relPath: string): Promise<T> {
@@ -2419,7 +2434,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 14, ingested: 14, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 16, ingested: 16, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2443,7 +2458,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 14, ingested: 0, skipped: 14, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 16, ingested: 0, skipped: 16, failed: 0 });
     expect(
       db
         .query(
@@ -2462,7 +2477,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 14, ingested: 0, skipped: 14, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 16, ingested: 0, skipped: 16, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

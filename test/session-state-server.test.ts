@@ -29,6 +29,7 @@ function freshConfig(): Config {
     geminiDir,
     opencodeDir,
     cursorDir: join(root, "cursor"),
+    copilotDir: join(root, "copilot"),
   };
 }
 

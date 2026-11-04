@@ -144,15 +144,16 @@ export function parseMessageRawMeta(value: string | null): MessageRawMeta {
   };
 }
 
-/** True for both compaction shapes: Claude's system/compact_boundary records
- * and Codex's top-level `compacted` records. */
+/** True for every source's compaction record shape. */
 export function isCompactBoundary(meta: MessageRawMeta): boolean {
-  // Claude writes subtype compact_boundary, Codex a `compacted` record, and
-  // OpenCode a `compaction` row.
+  // Claude writes subtype compact_boundary, Codex a `compacted` record,
+  // OpenCode a `compaction` row, and Copilot CLI a
+  // `session.compaction_complete` event.
   return (
     meta.subtype === "compact_boundary" ||
     meta.rawType === "compacted" ||
-    meta.rawType === "compaction"
+    meta.rawType === "compaction" ||
+    meta.rawType === "session.compaction_complete"
   );
 }
 

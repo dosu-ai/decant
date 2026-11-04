@@ -1195,7 +1195,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli]
     Model:
       name: model
       in: query
@@ -1488,7 +1488,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, version]
       properties:
         dbPath:
           type: string
@@ -1501,6 +1501,8 @@ components:
         opencodeDir:
           type: string
         cursorDir:
+          type: string
+        copilotDir:
           type: string
         version:
           type: string
@@ -2768,7 +2770,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli]
         label:
           type: string
       additionalProperties: false

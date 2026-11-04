@@ -32,8 +32,9 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 
 The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
-OpenCode, `cursor_cli` for Cursor CLI, and, for Codex, the recorded producer
-metadata splits sessions into `codex_app`, `codex_cli`, and `codex_other`. That
+OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
+and, for Codex, the recorded producer metadata splits sessions into
+`codex_app`, `codex_cli`, and `codex_other`. That
 split reads only the session's own `originator` and `source` metadata: desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
 origins (`source: cli`, or the legacy `codex-tui` originator) count as the CLI.
@@ -184,6 +185,27 @@ is the sum of each model's share. Locally generated Claude records labeled
 session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
+
+GitHub Copilot CLI writes only output tokens on each assistant message
+(`assistant.message.outputTokens`), because its per-request usage events are
+never written to disk. Session totals come from Copilot's cumulative per-model
+usage snapshots: the `modelMetrics` of each `session.shutdown` and the
+`providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot
+builds carry usage across a resume, so the last snapshot is the session total.
+Older builds restarted usage at zero after a resume, so a snapshot that falls
+below the one before it starts a new run, and Decant adds the earlier run's
+usage. A restarted run that grows past the earlier run cannot be told apart
+from a carried-over one, so such a session undercounts.
+
+Copilot's `inputTokens` counts every prompt token, so Decant stores input net
+of `cacheReadTokens` and `cacheWriteTokens`, records `cacheWriteTokens` as
+cache creation, and reports reasoning tokens when Copilot records them. Each
+model's totals are priced at that model's rate, so a session that switches
+models is not priced entirely at one model. The session model is the one with
+the most output tokens. Without any snapshot, as in a running session on a
+build that writes no checkpoints, only the output tokens are known. Cost is
+the underlying model's API list-price estimate, not a count of Copilot premium
+requests.
 
 Cursor CLI records no token usage, so its sessions store zero tokens and zero
 cost. Session summaries mark them `usage_available: false`. Stats totals,

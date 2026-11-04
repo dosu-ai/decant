@@ -13,6 +13,19 @@ describe("source and provenance marks", () => {
     expect(providerIdentity("cursor").icon).toBe("cursor");
   });
 
+  test("GitHub Copilot CLI has a brand mark in source badges and assistant turns", () => {
+    const html = renderToStaticMarkup(<ToolBadge tool="copilot" />);
+    expect(html).toContain('class="brand-mark"');
+    expect(html).toContain("<path d=");
+    expect(html).toContain("Copilot");
+    expect(providerIdentity("copilot")).toEqual({
+      key: "assistant",
+      label: "Copilot",
+      tone: "accent",
+      icon: "copilot",
+    });
+  });
+
   test("Dosu session evidence has an accessible logo with no visible label", () => {
     const html = renderToStaticMarkup(
       <DosuProvenanceBadge session={{ dosu_mcp_direct_calls: 2, dosu_mcp_tree_calls: 5 }} />,

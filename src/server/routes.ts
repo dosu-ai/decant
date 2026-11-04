@@ -148,6 +148,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         geminiDir: config.geminiDir,
         opencodeDir: config.opencodeDir,
         cursorDir: config.cursorDir,
+        copilotDir: config.copilotDir,
         version: DECANT_VERSION,
       }),
   },

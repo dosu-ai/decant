@@ -190,6 +190,11 @@ type EventFilter = (filename: string | null) => boolean;
 
 const anyEvent: EventFilter = () => true;
 
+/** A Copilot session directory also holds plans, checkpoints, and files the
+ * agent wrote; only its event journal is a transcript. */
+const copilotEvents: EventFilter = (filename) =>
+  filename == null || basename(filename) === "events.jsonl";
+
 /** Cursor keeps each chat in its own SQLite store. Opening a store, even
  * read-only during Decant's own sync, rewrites its `-shm` index, so that file
  * says nothing about new content and reacting to it would sync twice per
@@ -310,6 +315,9 @@ export function watchRoots(config: Config): WatchRoot[] {
       : []),
     ...(config.cursorDir != null
       ? [{ dir: config.cursorDir, recursive: true, accepts: () => cursorEvents }]
+      : []),
+    ...(config.copilotDir != null
+      ? [{ dir: config.copilotDir, recursive: true, accepts: () => copilotEvents }]
       : []),
   ];
   // One watcher per directory: a directory named twice reacts to the events

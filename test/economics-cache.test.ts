@@ -343,6 +343,7 @@ describe("economics cache", () => {
       geminiDir: join(workDir, "none"),
       opencodeDir: join(workDir, "none"),
       cursorDir: join(workDir, "none"),
+      copilotDir: join(workDir, "none"),
     };
     const cache = new EconomicsCache({
       dbPath,

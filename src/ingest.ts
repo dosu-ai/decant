@@ -44,6 +44,7 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
+import { parseCopilotSession } from "./sources/copilot.ts";
 import {
   type CursorSource,
   CursorSourceError,
@@ -92,6 +93,8 @@ export interface IngestConfig {
   opencodeModelsPath?: string;
   /** Cursor CLI chats directory: `<workspace>/<chat>/store.db` plus `meta.json`. */
   cursorDir?: string;
+  /** GitHub Copilot CLI session-state directory: `<session id>/events.jsonl`. */
+  copilotDir?: string;
   sourcePaths?: string[];
 }
 
@@ -167,6 +170,9 @@ export function discover(config: IngestConfig): SourceFile[] {
   out.push(...discoverOpenCode(openCodeDatabasePaths(config)));
   if (config.cursorDir != null) {
     collect(config.cursorDir, "cursor", false, (name) => name === CURSOR_STORE_NAME, out);
+  }
+  if (config.copilotDir != null) {
+    collectCopilot(config.copilotDir, out);
   }
   return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
 }
@@ -449,6 +455,9 @@ export function sync(
             sourcePath: file.path,
             sidecarMeta: readClaudeSidecarMeta(file.path),
           });
+        } else if (file.tool === "copilot") {
+          // Every Copilot log is named events.jsonl; its directory names the session.
+          parsed = parseCopilotSession(pathBasename(dirname(file.path)), content);
         } else if (file.tool === "gemini") {
           const layout = geminiSessionLayout(file.path);
           parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
@@ -1998,6 +2007,14 @@ function sourceFileForPath(path: string): SourceFile | null {
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }
+  if (isCopilotSessionLog(path)) {
+    return { tool: "copilot", path, archived: false };
+  }
+  if (isInCopilotSessionState(path)) {
+    // Rotated `events.N.jsonl` archives and files a session wrote into its
+    // own directory are not transcripts of any source.
+    return null;
+  }
   if (isCodexRollout(name)) {
     return { tool: "codex", path, archived: hasPathSegment(path, "archived_sessions") };
   }
@@ -2026,6 +2043,45 @@ function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
  * <uuid>.jsonl mains and agent-*.jsonl subagents, which must keep flowing. */
 function isSessionJsonl(name: string): boolean {
   return name.endsWith(".jsonl") && name !== "journal.jsonl";
+}
+
+/** Copilot CLI keeps one directory per session under `session-state`, with
+ * the live journal at `<session id>/events.jsonl`. */
+const COPILOT_EVENTS_NAME = "events.jsonl";
+
+function collectCopilot(copilotDir: string, out: SourceFile[]): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(copilotDir);
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort()) {
+    const path = join(copilotDir, entry, COPILOT_EVENTS_NAME);
+    if (existsSync(path)) {
+      out.push({ tool: "copilot", path, archived: false });
+    }
+  }
+}
+
+/** Requiring the `session-state` segment keeps `--path` from claiming some
+ * other tool's `events.jsonl`. */
+function isCopilotSessionLog(path: string): boolean {
+  return (
+    pathBasename(path) === COPILOT_EVENTS_NAME &&
+    pathBasename(dirname(dirname(path))) === "session-state"
+  );
+}
+
+function isInCopilotSessionState(path: string): boolean {
+  let dir = dirname(path);
+  while (dirname(dir) !== dir) {
+    if (pathBasename(dirname(dir)) === "session-state") {
+      return true;
+    }
+    dir = dirname(dir);
+  }
+  return false;
 }
 
 interface GeminiSessionLayout {

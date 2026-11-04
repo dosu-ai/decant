@@ -25,9 +25,9 @@ we investigate and prepare a fix.
 
 Decant is a local-first tool. It reads CLI session logs that already exist on
 disk (by default `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, OpenCode's
-`~/.local/share/opencode`, and `~/.cursor/chats`) and writes a local SQLite
-archive. Its only outbound network requests are for updates, and none of them
-send session or archive data:
+`~/.local/share/opencode`, `~/.cursor/chats`, and `~/.copilot/session-state`)
+and writes a local SQLite archive. Its only outbound network requests are for
+updates, and none of them send session or archive data:
 
 - A daily version check against the npm registry. Checks are off by default.
   Turn them on in Settings or with `DECANT_UPDATE_CHECK=1`.

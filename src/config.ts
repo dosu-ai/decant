@@ -28,6 +28,9 @@ export interface Config {
    * `$XDG_CACHE_HOME/opencode/models.json`. */
   opencodeModelsPath?: string;
   cursorDir: string;
+  /** GitHub Copilot CLI session-state directory: one `<session id>/events.jsonl`
+   * per session. */
+  copilotDir: string;
 }
 
 export interface ConfigOverrides {
@@ -37,6 +40,7 @@ export interface ConfigOverrides {
   geminiDir?: string | null;
   opencodeDir?: string | null;
   cursorDir?: string | null;
+  copilotDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
 }
@@ -73,6 +77,11 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       nonEmpty(env.OPENCODE_MODELS_PATH) ??
       join(xdgCache ?? join(home, ".cache"), "opencode", "models.json"),
     cursorDir: overrides.cursorDir ?? env.DECANT_CURSOR_DIR ?? join(home, ".cursor", "chats"),
+    // COPILOT_HOME relocates all of Copilot CLI's data, session state included.
+    copilotDir:
+      overrides.copilotDir ??
+      nonEmpty(env.DECANT_COPILOT_DIR) ??
+      join(nonEmpty(env.COPILOT_HOME) ?? join(home, ".copilot"), "session-state"),
   };
 }
 

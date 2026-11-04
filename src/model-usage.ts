@@ -37,6 +37,7 @@ export interface ModelUsageRow {
 interface SessionTotalsRow {
   tool: string;
   model: string | null;
+  raw_meta: string | null;
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_read_tokens: number;
@@ -61,7 +62,7 @@ interface BilledMessageRow {
 export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow[] | null {
   const session = queryRow<SessionTotalsRow>(
     db,
-    `SELECT tool, model, total_input_tokens, total_output_tokens, total_cache_read_tokens,
+    `SELECT tool, model, raw_meta, total_input_tokens, total_output_tokens, total_cache_read_tokens,
             total_cache_creation_tokens, total_cache_creation_1h_tokens
        FROM session WHERE id = ?1`,
     [sessionId],
@@ -71,6 +72,15 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   }
   const sessionModel = session.model ?? "";
   const totals = sessionTotals(session);
+  if (session.tool === "copilot") {
+    // Copilot records input and cache usage only as per-model session
+    // totals, which the parser keeps in raw_meta.modelUsage. Splitting them
+    // from per-response output would charge every model's input to one.
+    const rows = copilotModelUsage(session.raw_meta);
+    if (rows != null) {
+      return rows;
+    }
+  }
   // Only Claude Code records the 1-hour cache split and fast-mode speed on the
   // request, and only OpenCode records a cost per request; other sources keep
   // their usage in other shapes.
@@ -328,6 +338,43 @@ export function costSourceFor(reportedModels: readonly string[], otherRows: numb
 
 export function totalCost(parts: SessionCostParts): number {
   return parts.input + parts.output + parts.cacheRead + parts.cacheCreation + parts.reported;
+}
+
+function copilotModelUsage(rawMeta: string | null): ModelUsageRow[] | null {
+  if (rawMeta == null) {
+    return null;
+  }
+  let parsed: Json;
+  try {
+    parsed = JSON.parse(rawMeta) as Json;
+  } catch {
+    return null;
+  }
+  const entries = isObject(parsed) ? parsed.modelUsage : undefined;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+  const rows: ModelUsageRow[] = [];
+  for (const entry of entries) {
+    if (!isObject(entry)) {
+      return null;
+    }
+    rows.push({
+      model: asString(entry.model) ?? "",
+      tier: "standard",
+      requests: asInteger(entry.requests) ?? 0,
+      usage: {
+        input: asInteger(entry.input) ?? 0,
+        output: asInteger(entry.output) ?? 0,
+        cacheRead: asInteger(entry.cacheRead) ?? 0,
+        cacheCreation: asInteger(entry.cacheCreation) ?? 0,
+        cacheCreation1h: 0,
+        reasoning: 0,
+      },
+      reportedCostUsd: null,
+    });
+  }
+  return rows.sort(compareRows);
 }
 
 function sessionTotals(session: SessionTotalsRow): TokenUsage {

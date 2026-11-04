@@ -34,8 +34,8 @@ the session preview intentionally omits transcript content.
 
 Analytics statistics and reports accept a combined `source` filter. The
 current values are `claude_code`, `codex_app`, `codex_cli`, `codex_other`,
-`gemini_cli`, `opencode`, and `cursor_cli`. An unknown value returns `400` with
-the accepted values in `allowed`, before the archive is read. The Codex split reads
+`gemini_cli`, `opencode`, `cursor_cli`, and `copilot_cli`. An unknown value
+returns `400` with the accepted values in `allowed`, before the archive is read. The Codex split reads
 the source session's recorded `originator`/`source` metadata; the filter does
 not infer an account identity. `GET /api/metadata/session-sources` returns only
 source values represented by visible sessions in the local archive; the
@@ -148,7 +148,8 @@ later reads as `decant` even if a figure was stored earlier.
 Token-economics totals expose the reported share as `reported_cost_usd`.
 `model_provider` is the provider route the model ran through when the source
 records one. `GET /api/config` includes `opencodeDir`, the OpenCode data
-directory being read, and `cursorDir`, the Cursor CLI chats directory.
+directory being read, `cursorDir`, the Cursor CLI chats directory, and
+`copilotDir`, the GitHub Copilot CLI session-state directory.
 
 Session summaries also carry `usage_available`. It is false for a session from
 a source that records no token usage: Cursor CLI, unless one of the session's

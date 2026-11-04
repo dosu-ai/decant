@@ -69,6 +69,14 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "copilot") {
+    return (
+      <Badge tone="accent">
+        <BrandMark name="copilot" />
+        Copilot
+      </Badge>
+    );
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -266,6 +274,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "cursor") {
     return { key: "assistant", label: "Cursor", tone: "accent", icon: "cursor" };
+  }
+  if (tool === "copilot") {
+    return { key: "assistant", label: "Copilot", tone: "accent", icon: "copilot" };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

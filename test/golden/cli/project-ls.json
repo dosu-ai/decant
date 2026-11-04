@@ -35,6 +35,23 @@
     ]
   },
   {
+    "path": "/synthetic/copilot-project",
+    "name": "copilot-project",
+    "sessions": 2,
+    "usage_sessions": 2,
+    "estimated_cost_usd": 0.059370000000000006,
+    "last_seen_at": "2026-10-02T11:01:00.000Z",
+    "is_worktree": false,
+    "root_path": "/synthetic/copilot-project",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "copilot"
+    ]
+  },
+  {
     "path": "/synthetic/gemini-project",
     "name": "gemini-project",
     "sessions": 2,

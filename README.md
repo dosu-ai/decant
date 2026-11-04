@@ -6,8 +6,8 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI
-session logs on your machine into tangible insights. See where tokens, cost,
+Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and
+GitHub Copilot CLI session logs on your machine into tangible insights. See where tokens, cost,
 and agent time go, inspect context usage, find the files and tools agents
 touch, and search complete transcripts from a CLI or local web UI.
 
@@ -42,13 +42,13 @@ npx @dosu/decant@latest
 ```
 
 This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
-Codex, Gemini CLI, OpenCode, and Cursor CLI logs on your machine, and watches
-for changes.
+Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI logs on your
+machine, and watches for changes.
 
 ## What you get
 
-- One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor
-  CLI sessions.
+- One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+  and GitHub Copilot CLI sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -112,6 +112,7 @@ docker run --rm \
   -v "$HOME/.codex:/sources/codex:ro" \
   -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
   -v "$HOME/.cursor/chats:/sources/cursor:ro" \
+  -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
@@ -150,13 +151,15 @@ Read commands support `--json`; global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`.
 
 Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
-`~/.local/share/opencode`, and `~/.cursor/chats` by default. Override them with
-`DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`,
-`DECANT_OPENCODE_DIR`, and `DECANT_CURSOR_DIR`, or with the corresponding
-`--claude-dir`, `--codex-dir`, `--gemini-dir`, `--opencode-dir`, and
-`--cursor-dir` flags on `sync`, `watch`, and `serve`. When the Decant
-variable and flag are unset, the OpenCode directory falls back to OpenCode's own
-`OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`. `OPENCODE_DB` names an
+`~/.local/share/opencode`, `~/.cursor/chats`, and `~/.copilot/session-state`
+by default. Override them with `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`,
+`DECANT_GEMINI_DIR`, `DECANT_OPENCODE_DIR`, `DECANT_CURSOR_DIR`, and
+`DECANT_COPILOT_DIR`, or with the corresponding `--claude-dir`, `--codex-dir`,
+`--gemini-dir`, `--opencode-dir`, `--cursor-dir`, and `--copilot-dir` flags on
+`sync`, `watch`, and `serve`. When the Decant variable and flag are unset, the
+OpenCode directory falls back to OpenCode's own `OPENCODE_DATA_DIR`, then
+`$XDG_DATA_HOME/opencode`, and the Copilot directory follows `COPILOT_HOME` to
+`$COPILOT_HOME/session-state`. `OPENCODE_DB` names an
 explicit extra database file that is read alongside the discovered directory.
 Decant recognizes OpenCode MCP tool calls by the server names in OpenCode's
 config. It reads the global `opencode.json` and `opencode.jsonc` in OpenCode's
@@ -188,6 +191,17 @@ no conversation. A subagent's store has no `meta.json`, so Decant reads it
 when the store names its parent chat and files it under that chat. Cursor records no token usage, so Decant shows tokens and cost
 for Cursor sessions as unavailable instead of $0. `--path` also accepts a
 Cursor `store.db`.
+
+GitHub Copilot CLI writes each session to
+`~/.copilot/session-state/<session id>/events.jsonl`. Decant reads that file
+read-only. Subagent work stays in its parent session because Copilot records it
+in the same file. Copilot writes output tokens on each reply and per-model
+totals when a session exits or checkpoints its usage, so Decant prices those
+totals at the underlying model's API rates. That estimate is not a count of
+Copilot premium requests. Decant does not read the rotated `events.<n>.jsonl`
+archives Copilot writes only when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is
+set. The current `events.jsonl` replays the earlier history at its start.
+`--path` also accepts a Copilot `events.jsonl`.
 
 To index selected files or a temporary source tree:
 

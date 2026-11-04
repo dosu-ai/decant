@@ -321,7 +321,11 @@ export function facets(session: NormalizedSession): Facets {
   let previousTimestamp: number | null = null;
 
   for (const message of session.messages) {
-    const sidechain = rawBoolean(message.raw, "isSidechain") === true;
+    // Copilot CLI marks a subagent's events in the parent journal with the
+    // subagent's agentId instead of isSidechain.
+    const sidechain =
+      rawBoolean(message.raw, "isSidechain") === true ||
+      (session.tool === "copilot" && rawString(message.raw, "agentId") != null);
     const compactSummary = rawBoolean(message.raw, "isCompactSummary") === true;
     if (sidechain) {
       got.sidechainMessageCount += 1;

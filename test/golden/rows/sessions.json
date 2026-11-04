@@ -322,7 +322,7 @@
     "error_count": 0,
     "interruption_count": 0,
     "compaction_count": 0,
-    "sidechain_message_count": 0,
+    "sidechain_message_count": 2,
     "agent_spawn_count": 1,
     "skill_count": 0,
     "command_count": 0,

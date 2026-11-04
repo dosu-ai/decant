@@ -198,9 +198,9 @@ Cursor `store.db`.
 GitHub Copilot CLI writes each session to
 `~/.copilot/session-state/<session id>/events.jsonl`. Decant reads that file
 read-only. Subagent work stays in its parent session because Copilot records it
-in the same file. Copilot writes output tokens on each reply and per-model
-totals when a session exits or checkpoints its usage, so Decant prices those
-totals at the underlying model's API rates. That estimate is not a count of
+in the same file. Copilot writes each model call's usage, and per-model totals
+when a session exits or checkpoints its usage, so Decant prices those totals at
+the underlying model's API rates. That estimate is not a count of
 Copilot premium requests. Decant does not read the rotated `events.<n>.jsonl`
 archives Copilot writes only when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is
 set. The current `events.jsonl` replays the earlier history at its start.

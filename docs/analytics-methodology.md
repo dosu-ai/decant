@@ -81,7 +81,11 @@ nor a turn. The same holds for the `<user_info>` environment block and
 `<system_reminder>` text the Cursor CLI sends as a user message. Cursor runs a
 subagent, and an MCP tool, through `CallDynamicTool`. Decant records the call
 under the tool it ran, `Task` or `mcp__<server>__<tool>`, so subagent spawns
-and MCP calls count the same way as in other sources.
+and MCP calls count the same way as in other sources. Copilot CLI writes a
+subagent's events into its parent's journal and marks them with the
+subagent's `agentId`. Decant counts them as sidechain rows, like Claude Code's
+`isSidechain` rows in a parent transcript, so the subagent's prompt is not a
+turn and its calls stay off the parent's context-window curve.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -186,24 +190,28 @@ session's model. When a session's per-request usage does not add up to its
 totals, for example when a stream `result` record disagrees with the journal,
 the whole session is priced at its model.
 
-GitHub Copilot CLI writes only output tokens on each assistant message
-(`assistant.message.outputTokens`), because its per-request usage events are
-never written to disk. Session totals come from Copilot's cumulative per-model
-usage snapshots: the `modelMetrics` of each `session.shutdown` and the
-`providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot
+GitHub Copilot CLI 1.0.105 and later write each model call's usage as a
+`session.usage_record` event, and Decant puts it on the assistant message with
+the same `apiCallId`. Older builds write only output tokens on each assistant
+message (`assistant.message.outputTokens`). Copilot also writes cumulative
+per-model usage snapshots: the `modelMetrics` of each `session.shutdown` and
+the `providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot
 builds carry usage across a resume, so the last snapshot is the session total.
 Older builds restarted usage at zero after a resume, so a snapshot that falls
 below the one before it starts a new run, and Decant adds the earlier run's
 usage. A restarted run that grows past the earlier run cannot be told apart
-from a carried-over one, so such a session undercounts.
+from a carried-over one, so such a session undercounts. When the usage records
+summed per model are at least the snapshot total for every model, they are the
+session total, which also counts a call made after the last snapshot, as in a
+session that stopped mid-turn. Otherwise the snapshots are.
 
 Copilot's `inputTokens` counts every prompt token, so Decant stores input net
 of `cacheReadTokens` and `cacheWriteTokens`, records `cacheWriteTokens` as
 cache creation, and reports reasoning tokens when Copilot records them. Each
 model's totals are priced at that model's rate, so a session that switches
 models is not priced entirely at one model. The session model is the one with
-the most output tokens. Without any snapshot, as in a running session on a
-build that writes no checkpoints, only the output tokens are known. Cost is
+the most output tokens. Without any usage record or snapshot, as in a running
+session on an older build, only the output tokens are known. Cost is
 the underlying model's API list-price estimate, not a count of Copilot premium
 requests.
 
@@ -533,7 +541,8 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window, and OpenCode sessions take theirs from the models.dev
+an explicit model window, Copilot CLI records the main agent's prompt limit
+(`maxPromptTokens`) on each usage record, and OpenCode sessions take theirs from the models.dev
 catalog OpenCode caches (in its database for 2.x; for a database with no
 catalog, which is how 1.x leaves it, the `models.json` cache file 1.x keeps; the
 window is unknown when neither exists). Claude and Gemini infer the window from the model

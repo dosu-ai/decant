@@ -180,6 +180,10 @@ reasoning. Migrated rows keep their 1.x tool names and inputs: `read`, `edit`,
 keeps writing a session after the migration, its 1.x copy is newer, and Decant
 reads that copy instead.
 
+File references preserve the original tool path. For Windows workspaces,
+relative file paths normalize separators and compare drive and workspace names
+without case differences. Files outside the workspace have no relative path.
+
 Costs are priced per API request, not per session. Each billed request is
 charged at the model that served it and at its price tier: standard, fast mode,
 or a long-prompt surcharge (see [pricing](pricing.md)). A session that switched

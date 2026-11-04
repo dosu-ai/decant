@@ -284,15 +284,22 @@ function makeRef(
 }
 
 export function relativize(path: string, cwd: string | null): string | null {
-  if (!path.startsWith("/")) {
-    return path;
+  const windows =
+    /^(?:[a-z]:[\\/]|[\\/]{2})/i.test(path) ||
+    (cwd != null && /^(?:[a-z]:[\\/]|[\\/]{2})/i.test(cwd));
+  const normalize = (value: string): string => (windows ? value.replace(/\\/g, "/") : value);
+  const normalizedPath = normalize(path);
+  if (!normalizedPath.startsWith("/") && !/^[a-z]:\//i.test(normalizedPath)) {
+    return normalizedPath;
   }
   if (cwd == null) {
     return null;
   }
-  const normalizedCwd = cwd.replace(/\/+$/, "");
-  const prefix = `${normalizedCwd}/`;
-  return path.startsWith(prefix) ? path.slice(prefix.length) || null : null;
+  const prefix = `${normalize(cwd).replace(/\/+$/, "")}/`;
+  const matches = windows
+    ? normalizedPath.toLowerCase().startsWith(prefix.toLowerCase())
+    : normalizedPath.startsWith(prefix);
+  return matches ? normalizedPath.slice(prefix.length) || null : null;
 }
 
 export function extension(path: string): string | null {

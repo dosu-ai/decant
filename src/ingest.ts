@@ -12,7 +12,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, extname, join, basename as pathBasename, resolve } from "node:path";
+import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
@@ -123,7 +123,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 17;
+export const INGEST_PIPELINE_REVISION = 18;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -180,7 +180,10 @@ export function discover(
   warn: DiscoveryWarn = logDiscoveryWarning,
 ): SourceFile[] {
   if (config.sourcePaths != null && config.sourcePaths.length > 0) {
-    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir);
+    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir, [
+      config.vscodeCopilotDir,
+      config.vscodeCopilotInsidersDir,
+    ]);
   }
 
   const out: SourceFile[] = [];
@@ -205,11 +208,12 @@ export function discoverSourcePaths(
   paths: string[],
   warn: DiscoveryWarn = logDiscoveryWarning,
   copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
 ): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out, databases, copilotDir);
+    collectSourcePath(path, out, databases, copilotDir, vscodeUserDirs);
   }
   return [...preferVscodeLogs(dedupeSourceFiles(out)), ...discoverOpenCode(databases, warn)];
 }
@@ -1995,6 +1999,7 @@ function collectSourcePath(
   out: SourceFile[],
   databases: string[],
   copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
 ): void {
   let stats: Stats;
   try {
@@ -2004,6 +2009,7 @@ function collectSourcePath(
   }
 
   if (stats.isFile()) {
+    if (isInVscodeStorage(path, vscodeUserDirs) && !isVscodeChatSessionFile(path)) return;
     if (pathBasename(path) === CURSOR_STORE_NAME) {
       if (isCursorConversationStore(path)) {
         out.push({ tool: "cursor", path, archived: false });
@@ -2014,7 +2020,7 @@ function collectSourcePath(
       databases.push(path);
       return;
     }
-    const source = sourceFileForPath(path, copilotDir);
+    const source = sourceFileForPath(path, copilotDir, vscodeUserDirs);
     if (source != null) {
       out.push(source);
     }
@@ -2026,18 +2032,23 @@ function collectSourcePath(
   }
 
   for (const child of walk(path)) {
+    if (isInVscodeStorage(child, vscodeUserDirs) && !isVscodeChatSessionFile(child)) continue;
     if (isOpenCodeDatabaseName(pathBasename(child))) {
       databases.push(child);
       continue;
     }
-    const source = sourceFileForPath(child, copilotDir);
+    const source = sourceFileForPath(child, copilotDir, vscodeUserDirs);
     if (source != null) {
       out.push(source);
     }
   }
 }
 
-function sourceFileForPath(path: string, copilotDir?: string): SourceFile | null {
+function sourceFileForPath(
+  path: string,
+  copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
+): SourceFile | null {
   const name = pathBasename(path);
   if (name === CURSOR_STORE_NAME) {
     return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
@@ -2045,6 +2056,7 @@ function sourceFileForPath(path: string, copilotDir?: string): SourceFile | null
   if (isVscodeChatSessionFile(path)) {
     return { tool: "vscode_copilot", path, archived: false };
   }
+  if (isInVscodeStorage(path, vscodeUserDirs)) return null;
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }
@@ -2226,6 +2238,27 @@ function preferVscodeLogs(files: SourceFile[]): SourceFile[] {
       file.tool !== "vscode_copilot" ||
       !file.path.endsWith(".json") ||
       !logs.has(file.path.slice(0, -".json".length)),
+  );
+}
+
+/** Exclude extension state from broad imports, including relocated User roots. */
+function isInVscodeStorage(path: string, userDirs: readonly (string | undefined)[]): boolean {
+  const segments = path.split(/[\\/]+/);
+  if (
+    segments.some(
+      (segment, i) =>
+        segment === "User" &&
+        (segments[i + 1] === "workspaceStorage" || segments[i + 1] === "globalStorage"),
+    )
+  )
+    return true;
+  const absolute = resolve(path);
+  return userDirs.some(
+    (userDir) =>
+      userDir != null &&
+      ["workspaceStorage", "globalStorage"].some((storage) =>
+        absolute.startsWith(`${resolve(join(userDir, storage))}${sep}`),
+      ),
   );
 }
 

@@ -102,6 +102,9 @@ By default Decant discovers:
   the `.jsonl` when both exist. When VS Code copies an empty window's session
   into a workspace, Decant reads the copy written most recently. It skips
   `globalStorage/transferredChatSessions`, which holds short-lived copies.
+  Explicit `--path` imports of these storage trees also exclude extension
+  journals and databases outside the chat-session directories, including when
+  `--vscode-copilot-dir` points at a relocated root.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
@@ -461,6 +464,11 @@ Subagent parent links are resolved at the end of any sync that wrote or
 tombstoned a session. A sync that finds every source unchanged leaves the
 existing links alone, so a change to the inference rules ships with an ingest
 pipeline revision bump that re-derives them.
+
+Activity vectors are versioned separately from source ingest. When activity
+classification rules change, the next sync rebuilds older vectors from retained
+archive rows, including sessions whose source journals are gone. Later syncs
+skip the rebuilt vectors.
 
 Each session's usage is also stored split by model and price tier in
 `session_model_usage`, derived from the per-request usage already kept on its

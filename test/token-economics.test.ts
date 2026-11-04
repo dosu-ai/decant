@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { refreshDerivedMetadata } from "../src/derived.ts";
-import { upsertSession } from "../src/ingest.ts";
+import { sync, upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
@@ -355,6 +355,50 @@ describe("token economics", () => {
     expect(
       aggregateEconomicsVectors(computeSessionEconomicsVectors(db)).totals.generation_tokens,
     ).toBeGreaterThan(0);
+    db.close();
+  });
+
+  test("reclassifies cached create_file activity even when its source journal is gone", () => {
+    const db = freshDb();
+    const parsed = parseClaudeSession(
+      "legacy-create",
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a",
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-4-5",
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "create_file",
+              input: { filePath: "/synthetic/a.ts", content: "hello" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 20 },
+        },
+      }),
+    );
+    const id = upsertSession(db, parsed, "/decant-fixture/missing/source.jsonl", 1, 2);
+    const row = db
+      .query("SELECT vector_json FROM session_economics WHERE session_id = ?1")
+      .get(id) as { vector_json: string };
+    const oldVector = JSON.parse(row.vector_json);
+    [oldVector.buckets.context, oldVector.buckets.code] = [
+      oldVector.buckets.code,
+      oldVector.buckets.context,
+    ];
+    db.query(
+      "UPDATE session_economics SET format_version = 11, vector_json = ?1 WHERE session_id = ?2",
+    ).run(JSON.stringify(oldVector), id);
+    expect(
+      sync(db, { claudeDir: "/decant-fixture/missing", codexDir: "/decant-fixture/missing" }),
+    ).toMatchObject({ ingested: 0 });
+    const result = tokenEconomicsForSession(db, id);
+    expect(result?.buckets.find((b) => b.bucket === "code")?.generation_tokens).toBe(20);
+    expect(result?.buckets.find((b) => b.bucket === "context")?.generation_tokens).toBe(0);
+    expect(materializeMissingSessionEconomics(db)).toBe(0);
     db.close();
   });
 

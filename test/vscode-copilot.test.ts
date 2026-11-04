@@ -503,6 +503,33 @@ describe("VS Code Copilot discovery and ingest", () => {
     ]);
   });
 
+  test("explicit storage imports exclude extension journals for default and relocated roots", () => {
+    for (const relocated of [false, true]) {
+      const root = freshDir();
+      const userDir = join(root, relocated ? "relocated" : "User");
+      cpSync(fixtureUser, userDir, { recursive: true });
+      write(join(userDir, "workspaceStorage", "abc", "extension", "events.jsonl"), "not JSON");
+      write(join(userDir, "globalStorage", "extension", "events.jsonl"), "not JSON");
+      write(join(userDir, "globalStorage", "extension", "opencode.db"), "not a database");
+      const ingestConfig = config(root, { vscodeCopilotDir: userDir, sourcePaths: [userDir] });
+      const files = discover(ingestConfig);
+      expect(files).toHaveLength(3);
+      expect(files.every((file) => file.tool === "vscode_copilot")).toBe(true);
+      if (!relocated) expect(discoverSourcePaths([userDir])).toEqual(files);
+      const db = openDb(join(root, "archive.db"));
+      try {
+        expect(sync(db, ingestConfig)).toMatchObject({
+          scanned: 3,
+          ingested: 3,
+          issues: 0,
+          failed: 0,
+        });
+      } finally {
+        closeDb(db);
+      }
+    }
+  });
+
   test("ingests sessions, and a session with no usage shows cost as unavailable", () => {
     const root = freshDir();
     const userDir = stageUser(root);

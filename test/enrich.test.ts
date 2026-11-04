@@ -310,6 +310,20 @@ describe("facets", () => {
 });
 
 describe("path helpers", () => {
+  test("relativizes Windows file refs without rewriting the original path", () => {
+    const path = String.raw`C:\project\src\app.ts`;
+    const session = oneBlockSession("vscode_copilot", toolUse("read_file", { filePath: path }));
+    session.cwd = "c:/project";
+    expect(fileRefs(session)[0]).toMatchObject({ path, relPath: "src/app.ts", ext: "ts" });
+    expect(relativize(String.raw`C:\other\app.ts`, "c:/project")).toBeNull();
+    expect(relativize(String.raw`C:\project-other\app.ts`, "c:/project")).toBeNull();
+    expect(relativize(String.raw`C:\project\app.ts`, null)).toBeNull();
+    expect(relativize(String.raw`src\app.ts`, "c:/project")).toBe("src/app.ts");
+    expect(
+      relativize(String.raw`\\server\share\project\src\app.ts`, "//server/share/project"),
+    ).toBe("src/app.ts");
+  });
+
   test("relativize and extension edge cases", () => {
     expect(relativize("/a/b/c.rs", "/a/b")).toBe("c.rs");
     expect(relativize("/a/b/c.rs", "/a/b/")).toBe("c.rs");

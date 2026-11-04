@@ -152,7 +152,7 @@ export function compactMessageStorage(
  * A projected null marks a compaction that did not record its occupancy. */
 export function backfillCopilotCompactionMetadata(db: Database): number {
   const ids = db.prepare(`SELECT m.id FROM message m JOIN session s ON s.id = m.session_id
-    WHERE s.tool = 'copilot' AND m.id > ?1
+    WHERE s.tool = 'copilot' AND m.id > ?1 AND m.role = 'system'
       AND json_extract(${MESSAGE_METADATA_SQL}, '$.type') = 'session.compaction_complete'
       AND json_type(m.raw_meta, '$.data.preCompactionTokens') IS NULL
     ORDER BY m.id LIMIT ?2`);

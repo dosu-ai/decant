@@ -10,8 +10,9 @@ only. See [Security and privacy](#security-and-privacy) below.
 ## Report a bug or propose a feature
 
 Use the repository's issue templates. Paste the output of `decant doctor`,
-which reports the version, install method, platform, schema versions, and
-per-source session counts without any transcript content. Add the exact
+which reports the version, install method, platform, schema versions,
+discovery counts for each source, and archived session counts without any
+transcript content. Add the exact
 command, the expected result, and the actual result. A small, hand-written
 synthetic reproduction is especially helpful.
 

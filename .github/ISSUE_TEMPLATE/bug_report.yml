@@ -71,7 +71,7 @@ body:
       label: decant doctor output
       description: |
         Paste the output of `decant doctor`. It reports the version, install method,
-        platform, schema versions, and how many sessions each source directory holds.
+        platform, schema versions, what discovery finds for each source, and how many sessions the archive holds.
         It prints no transcript content and hides paths outside your home directory.
         On releases before `doctor` existed, paste `decant --version` and the
         `schema:` line from `decant db info` instead.

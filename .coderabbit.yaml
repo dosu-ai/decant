@@ -104,10 +104,11 @@ reviews:
       - name: "Local-first"
         mode: "error"
         instructions: >-
-          Fail when the pull request adds an outbound network call, a hosted
-          service dependency, or an LLM call anywhere outside src/update.ts,
-          or adds a Bun macro import (`with { type: "macro" }`), which runs
-          at build time inside the release job. Pass otherwise.
+          Only code under src/, which ships in the decant binary, counts.
+          Fail when it adds an outbound network call, a hosted service
+          dependency, or an LLM call outside src/update.ts, or adds a Bun
+          macro import (`with { type: "macro" }`), which runs at build time
+          inside the release job. Pass otherwise.
 
 knowledge_base:
   code_guidelines:

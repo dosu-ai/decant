@@ -14,7 +14,7 @@ import {
 const workDir = mkdtempSync(join(tmpdir(), "decant-pr-policy-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-function dbSource(latest: number, blocks: Record<number, string>): string {
+function dbSource(latest: number, blocks: Record<number, string>, baseline = 0): string {
   const body = Object.entries(blocks)
     .map(([version, sql]) =>
       [`    if (current < ${version}) {`, `      db.exec("${sql}");`, "    }"].join("\n"),
@@ -22,6 +22,9 @@ function dbSource(latest: number, blocks: Record<number, string>): string {
     .join("\n");
   return [
     `export const LATEST_SCHEMA_VERSION = ${latest};`,
+    `  if (version < ${baseline}) {`,
+    "    throw new SchemaTooOldError(version);",
+    "  }",
     "function migrate(db, current) {",
     body,
     "}",
@@ -69,30 +72,28 @@ describe("frozen migrations", () => {
     expect(checkFrozenMigrations(base, head)).toEqual([]);
   });
 
-  test("allows dropping the oldest versions but not a middle one", () => {
-    const dropOldest = dbSource(3, { 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" });
-    expect(checkFrozenMigrations(base, dropOldest)).toEqual([]);
-    const dropMiddle = dbSource(3, { 1: "CREATE TABLE a (x)", 3: "CREATE INDEX i" });
-    expect(checkFrozenMigrations(base, dropMiddle)[0]?.message).toContain(
-      "migration 2 was removed",
+  test("allows dropping a migration only when the baseline moves past it", () => {
+    const blocks = { 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" };
+    expect(checkFrozenMigrations(base, dbSource(3, blocks, 1))).toEqual([]);
+    expect(checkFrozenMigrations(base, dbSource(3, blocks))[0]?.message).toContain(
+      "migration 1 is missing",
     );
+    const dropMiddle = dbSource(3, { 1: "CREATE TABLE a (x)", 3: "CREATE INDEX i" }, 1);
+    expect(checkFrozenMigrations(base, dropMiddle)[0]?.message).toContain("migration 2 is missing");
   });
 
-  test("rejects an oldest migration whose opening line no longer parses", () => {
-    const head = base
-      .replace("    if (current < 1) {", "    if (current < 1) { // first")
-      .replace("CREATE TABLE a (x)", "DROP TABLE session");
-    expect(checkFrozenMigrations(base, head)[0]?.message).toContain(
-      "migration 1 no longer matches",
-    );
-  });
-
-  test("rejects an oldest migration whose condition was rewritten", () => {
-    for (const opening of ["    if (current <= 1) {", "    if (1 > current) {"]) {
-      const head = base.replace("    if (current < 1) {", opening);
-      expect(checkFrozenMigrations(base, head)[0]?.message).toContain(
-        "migration 1 no longer matches",
-      );
+  test("rejects a migration whose opening line no longer parses", () => {
+    const openings = [
+      "    if (current < 1) { // first",
+      "    if (current <= 1) {",
+      "    if (1 > current) {",
+      "    if (\n      current < 1\n    ) {",
+    ];
+    for (const opening of openings) {
+      const head = base
+        .replace("    if (current < 1) {", opening)
+        .replace("CREATE TABLE a (x)", "DROP TABLE session");
+      expect(checkFrozenMigrations(base, head)[0]?.message).toContain("migration 1 is missing");
     }
   });
 

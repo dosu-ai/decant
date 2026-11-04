@@ -22,6 +22,7 @@ export interface ChangedFile {
 const MIGRATION_START = /^ {4}if \(current < (\d+)\) \{$/;
 const MIGRATION_END = /^ {4}\}$/;
 const LATEST_VERSION = /^export const LATEST_SCHEMA_VERSION = (\d+);$/m;
+const BASELINE_VERSION = /if \(version < (\d+)\) \{\s*throw new SchemaTooOldError/;
 
 /**
  * Each `if (current < N) { ... }` block in migrate(), keyed by N, without
@@ -46,22 +47,16 @@ export function extractMigrations(source: string): Map<number, string> {
   return blocks;
 }
 
-// Any `if` line that compares `current` with this version, however it is spelled.
-function stillReferencesVersion(source: string, version: number): boolean {
-  const number = new RegExp(`\\b${version}\\b`);
-  return source
-    .split("\n")
-    .some((line) => /\bif\s*\(/.test(line) && /\bcurrent\b/.test(line) && number.test(line));
-}
-
 export function latestSchemaVersion(source: string): number | null {
   const match = LATEST_VERSION.exec(source);
   return match == null ? null : Number(match[1]);
 }
 
 /**
- * Committed migrations may already have run on someone's archive. Dropping the
- * oldest versions is allowed; that is how old archives become rebuild-only.
+ * Committed migrations may already have run on someone's archive. One may only
+ * disappear when the oldest supported version moves past it, which is how old
+ * archives become rebuild-only. Anything else, including an opening line that
+ * no longer parses, counts as a change.
  */
 export function checkFrozenMigrations(baseSource: string, headSource: string): Finding[] {
   const file = "src/db.ts";
@@ -78,22 +73,15 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
       },
     ];
   }
-  const oldestKept = Math.min(...head.keys());
+  const baseline = Number(BASELINE_VERSION.exec(headSource)?.[1] ?? Number.NaN);
   for (const [version, block] of base) {
     const current = head.get(version);
     if (current == null) {
-      // A block that is still there but no longer parses could hide an edit.
-      if (stillReferencesVersion(headSource, version)) {
+      if (!(version <= baseline)) {
         findings.push({
           rule: "frozen-migration",
           file,
-          message: `migration ${version} no longer matches \`    if (current < ${version}) {\`. Restore its opening line so the check can compare it.`,
-        });
-      } else if (version > oldestKept) {
-        findings.push({
-          rule: "frozen-migration",
-          file,
-          message: `migration ${version} was removed while older migrations remain. Only the oldest versions may be dropped.`,
+          message: `migration ${version} is missing or no longer starts with \`    if (current < ${version}) {\`. Drop a migration only by raising the oldest supported version in assertSupportedSchemaVersion to at least ${version}.`,
         });
       }
     } else if (current !== block) {

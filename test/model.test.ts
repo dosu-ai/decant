@@ -18,7 +18,7 @@ import {
 // these are the wire strings stored in SQLite — they must never drift.
 describe("model wire strings", () => {
   test("every enum string is pinned", () => {
-    expect(TOOLS).toEqual(["claude_code", "codex", "gemini", "opencode", "cursor"]);
+    expect(TOOLS).toEqual(["claude_code", "codex", "gemini", "opencode", "cursor", "copilot"]);
     expect(ROLES).toEqual(["user", "assistant", "system", "tool", "other"]);
     expect(BLOCK_TYPES).toEqual([
       "text",

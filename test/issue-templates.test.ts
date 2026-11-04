@@ -12,6 +12,7 @@ const BUG_FORM_LABELS: Record<Tool, string> = {
   gemini: "Gemini CLI",
   opencode: "OpenCode",
   cursor: "Cursor CLI",
+  copilot: "GitHub Copilot CLI",
 };
 
 interface FormField {

@@ -36,6 +36,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const geminiDir = join(caseDir, "sources", "gemini");
   const opencodeDir = join(caseDir, "sources", "opencode");
   const cursorDir = join(caseDir, "sources", "cursor");
+  const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -54,6 +55,10 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     } else if (fixture.startsWith("fixtures/cursor/")) {
       const chat = basename(dirname(source));
       buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
+    } else if (fixture.startsWith("fixtures/copilot/")) {
+      const session = basename(dirname(source));
+      mkdirSync(join(copilotDir, session), { recursive: true });
+      copyFileSync(source, join(copilotDir, session, "events.jsonl"));
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -69,7 +74,15 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
+  return {
+    claudeDir,
+    codexDir,
+    geminiDir,
+    opencodeDir,
+    opencodeConfigPath,
+    cursorDir,
+    copilotDir,
+  };
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {

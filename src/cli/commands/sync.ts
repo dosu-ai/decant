@@ -25,6 +25,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     geminiDir?: string;
     opencodeDir?: string;
     cursorDir?: string;
+    copilotDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -81,6 +82,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           geminiDir: commandOptions.geminiDir,
           opencodeDir: commandOptions.opencodeDir,
           cursorDir: commandOptions.cursorDir,
+          copilotDir: commandOptions.copilotDir,
         },
       },
     );
@@ -94,6 +96,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
+    .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
@@ -107,6 +110,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         geminiDir?: string;
         opencodeDir?: string;
         cursorDir?: string;
+        copilotDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -132,6 +136,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
+    .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -150,6 +155,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         geminiDir?: string;
         opencodeDir?: string;
         cursorDir?: string;
+        copilotDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -161,6 +167,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             geminiDir: commandOptions.geminiDir,
             opencodeDir: commandOptions.opencodeDir,
             cursorDir: commandOptions.cursorDir,
+            copilotDir: commandOptions.copilotDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -187,6 +194,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
+    .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -214,6 +222,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         geminiDir?: string;
         opencodeDir?: string;
         cursorDir?: string;
+        copilotDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -227,6 +236,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             geminiDir: commandOptions.geminiDir,
             opencodeDir: commandOptions.opencodeDir,
             cursorDir: commandOptions.cursorDir,
+            copilotDir: commandOptions.copilotDir,
           });
           // --no-sync must stop the watcher, or serving a scratch archive would
           // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how

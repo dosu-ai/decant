@@ -29,6 +29,7 @@ function freshCase(): {
   geminiDir: string;
   opencodeDir: string;
   cursorDir: string;
+  copilotDir: string;
 } {
   caseCounter += 1;
   const dir = join(workDir, `case-${caseCounter}`);
@@ -37,11 +38,13 @@ function freshCase(): {
   const geminiDir = join(dir, "sources", "gemini");
   const opencodeDir = join(dir, "sources", "opencode");
   const cursorDir = join(dir, "sources", "cursor");
+  const copilotDir = join(dir, "sources", "copilot");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(cursorDir, { recursive: true });
+  mkdirSync(copilotDir, { recursive: true });
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", name), join(claudeDir, name));
   }
@@ -58,6 +61,7 @@ function freshCase(): {
     geminiDir,
     opencodeDir,
     cursorDir,
+    copilotDir,
   };
 }
 
@@ -78,6 +82,8 @@ async function syncedCase(): Promise<{ dbPath: string }> {
     fixtureCase.opencodeDir,
     "--cursor-dir",
     fixtureCase.cursorDir,
+    "--copilot-dir",
+    fixtureCase.copilotDir,
   ]);
   expect(result).toMatchObject({ code: 0, stderr: "" });
   expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 7, ingested: 7, issues: 0 });

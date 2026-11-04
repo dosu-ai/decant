@@ -3,8 +3,8 @@
 [![npm version](https://img.shields.io/npm/v/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/dosu-ai/decant/blob/main/LICENSE)
 
-Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor
-CLI sessions: token and cost breakdowns, context-window usage, full-text search,
+Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+and GitHub Copilot CLI sessions: token and cost breakdowns, context-window usage, full-text search,
 files touched, tool usage, and complete transcript browsing.
 
 Decant is local-first. It makes no outbound network calls at runtime,

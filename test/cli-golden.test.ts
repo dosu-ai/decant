@@ -20,6 +20,14 @@ function fixtureFiles(tool: string, extension = ".jsonl"): string[] {
     .sort();
 }
 
+/** Each Copilot fixture is a session directory holding its `events.jsonl`. */
+function copilotFixtureNames(): string[] {
+  return readdirSync(join(import.meta.dir, "..", "fixtures", "copilot"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
 function stageFixtures(caseDir: string): {
   claudeDir: string;
   codexDir: string;
@@ -27,12 +35,14 @@ function stageFixtures(caseDir: string): {
   opencodeDir: string;
   opencodeConfigPath: string;
   cursorDir: string;
+  copilotDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
   const geminiDir = join(caseDir, "sources", "gemini");
   const opencodeDir = join(caseDir, "sources", "opencode");
   const cursorDir = join(caseDir, "sources", "cursor");
+  const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -68,7 +78,22 @@ function stageFixtures(caseDir: string): {
   for (const chat of cursorFixtureNames()) {
     buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
   }
-  return { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir };
+  for (const session of copilotFixtureNames()) {
+    mkdirSync(join(copilotDir, session), { recursive: true });
+    copyFileSync(
+      join(import.meta.dir, "..", "fixtures", "copilot", session, "events.jsonl"),
+      join(copilotDir, session, "events.jsonl"),
+    );
+  }
+  return {
+    claudeDir,
+    codexDir,
+    geminiDir,
+    opencodeDir,
+    opencodeConfigPath,
+    cursorDir,
+    copilotDir,
+  };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -124,8 +149,15 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir, geminiDir, opencodeDir, opencodeConfigPath, cursorDir } =
-      stageFixtures(caseDir);
+    const {
+      claudeDir,
+      codexDir,
+      geminiDir,
+      opencodeDir,
+      opencodeConfigPath,
+      cursorDir,
+      copilotDir,
+    } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
       [
@@ -143,6 +175,8 @@ describe("CLI golden parity", () => {
         opencodeDir,
         "--cursor-dir",
         cursorDir,
+        "--copilot-dir",
+        copilotDir,
       ],
       {
         env: {

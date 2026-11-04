@@ -13,6 +13,7 @@ describe("resolveConfig", () => {
         DECANT_GEMINI_DIR: "/env/gemini",
         DECANT_OPENCODE_DIR: "/env/opencode",
         DECANT_CURSOR_DIR: "/env/cursor",
+        DECANT_COPILOT_DIR: "/env/copilot",
       },
       homeDir: "/home/dev",
     });
@@ -23,6 +24,7 @@ describe("resolveConfig", () => {
     expect(config.geminiDir).toBe("/env/gemini");
     expect(config.opencodeDir).toBe("/flag/opencode");
     expect(config.cursorDir).toBe("/env/cursor");
+    expect(config.copilotDir).toBe("/env/copilot");
   });
 
   test("environment overrides beat defaults", () => {
@@ -35,6 +37,7 @@ describe("resolveConfig", () => {
         DECANT_OPENCODE_DIR: "/env/opencode",
         DECANT_OPENCODE_CONFIG: "/env/opencode.json",
         DECANT_CURSOR_DIR: "/env/cursor",
+        DECANT_COPILOT_DIR: "/env/copilot",
       },
       homeDir: "/home/dev",
     });
@@ -49,6 +52,7 @@ describe("resolveConfig", () => {
       opencodeConfigPath: "/env/opencode.json",
       opencodeModelsPath: "/home/dev/.cache/opencode/models.json",
       cursorDir: "/env/cursor",
+      copilotDir: "/env/copilot",
     });
   });
 
@@ -65,6 +69,20 @@ describe("resolveConfig", () => {
     expect(config.opencodeExtraConfigPath).toBeUndefined();
     expect(config.opencodeModelsPath).toBe("/home/dev/.cache/opencode/models.json");
     expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
+    expect(config.copilotDir).toBe("/home/dev/.copilot/session-state");
+  });
+
+  test("follows COPILOT_HOME for the Copilot CLI session state", () => {
+    expect(resolveConfig({ env: { COPILOT_HOME: "/cp" }, homeDir: "/h" }).copilotDir).toBe(
+      "/cp/session-state",
+    );
+    expect(
+      resolveConfig({ env: { COPILOT_HOME: "/cp", DECANT_COPILOT_DIR: "/d" }, homeDir: "/h" })
+        .copilotDir,
+    ).toBe("/d");
+    expect(resolveConfig({ env: { COPILOT_HOME: "" }, homeDir: "/h" }).copilotDir).toBe(
+      "/h/.copilot/session-state",
+    );
   });
 
   test("follows OpenCode's own environment before XDG and home", () => {

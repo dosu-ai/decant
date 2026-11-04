@@ -51,6 +51,7 @@ function freshConfig(): Config {
     geminiDir,
     opencodeDir,
     cursorDir: join(root, "cursor"),
+    copilotDir: join(root, "copilot"),
   };
 }
 
@@ -133,7 +134,7 @@ describe("server routes", () => {
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
     expect(sourceHead).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, and Cursor CLI sessions.",
+      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI sessions.",
     );
   });
 
@@ -1284,6 +1285,7 @@ describe("server routes", () => {
             "gemini_cli",
             "opencode",
             "cursor_cli",
+            "copilot_cli",
           ],
         },
       });

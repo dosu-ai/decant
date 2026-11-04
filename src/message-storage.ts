@@ -21,6 +21,7 @@ const METADATA_PATHS = [
   ["isCompactSummary"],
   ["compactMetadata", "trigger"],
   ["compactMetadata", "preTokens"],
+  ["data", "preCompactionTokens"],
   ["payload", "role"],
   ["message", "id"],
   ["message", "usage"],
@@ -56,6 +57,10 @@ function rawMetadata(raw: Json): string {
       target = target[key] as Record<string, Json>;
     }
     target[path[path.length - 1] as string] = value;
+  }
+  if (get(raw, "type") === "session.compaction_complete") {
+    metadata.data ??= {};
+    (metadata.data as Record<string, Json>).preCompactionTokens ??= null;
   }
   return canonicalJson(metadata);
 }
@@ -141,4 +146,41 @@ export function compactMessageStorage(
     update.finalize();
   }
   return result;
+}
+
+/** Repair projections from retained source records, even when journals are gone.
+ * A projected null marks a compaction that did not record its occupancy. */
+export function backfillCopilotCompactionMetadata(db: Database): number {
+  const ids = db.prepare(`SELECT m.id FROM message m JOIN session s ON s.id = m.session_id
+    WHERE s.tool = 'copilot' AND m.id > ?1 AND m.role = 'system'
+      AND json_extract(${MESSAGE_METADATA_SQL}, '$.type') = 'session.compaction_complete'
+      AND json_type(m.raw_meta, '$.data.preCompactionTokens') IS NULL
+    ORDER BY m.id LIMIT ?2`);
+  const read = db.prepare("SELECT raw, session_id FROM message WHERE id = ?1");
+  const update = db.prepare("UPDATE message SET raw_meta = ?1 WHERE id = ?2");
+  const invalidate = db.prepare("UPDATE session SET peak_context_tokens = NULL WHERE id = ?1");
+  let after = 0;
+  let repaired = 0;
+  try {
+    while (true) {
+      const batch = ids.all(after, COMPACT_BATCH_SIZE) as { id: number }[];
+      if (batch.length === 0) break;
+      withImmediateTransaction(db, () => {
+        for (const { id } of batch) {
+          const row = read.get(id) as { raw: string | Uint8Array; session_id: number };
+          const raw = JSON.parse(decodeMessageRaw(row.raw)) as Json;
+          update.run(rawMetadata(raw), id);
+          invalidate.run(row.session_id);
+          repaired += 1;
+        }
+      });
+      after = batch[batch.length - 1]?.id ?? after;
+    }
+  } finally {
+    ids.finalize();
+    read.finalize();
+    update.finalize();
+    invalidate.finalize();
+  }
+  return repaired;
 }

@@ -5,7 +5,14 @@ import type { Json } from "./model.ts";
 export const ACTIVITY_BUCKETS = ["context", "planning", "code", "communicating"] as const;
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
-const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "run_shell_command", "shell"]);
+const SHELL_TOOLS = new Set([
+  "bash",
+  "exec_command",
+  "local_shell",
+  "powershell",
+  "run_shell_command",
+  "shell",
+]);
 const CODE_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -14,6 +21,8 @@ const CODE_TOOLS = new Set([
   "multiedit",
   "write_file",
   "replace",
+  // Copilot CLI's new-file tool.
+  "create",
 ]);
 // Codex polls a long-running `exec_command` (almost always a build or test run)
 // through `write_stdin`; the poll carries that command's output and wait. It is
@@ -25,6 +34,8 @@ const PLANNING_TOOLS = new Set([
   "todowrite",
   "update_plan",
   "write_todos",
+  // Copilot CLI's todo list.
+  "update_todo",
   // Claude Code's task list, which replaced TodoWrite.
   "taskcreate",
   "taskupdate",

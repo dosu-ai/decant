@@ -778,7 +778,7 @@ export function getSession(
   for (const row of rows) {
     if (currentMessageId !== row.message_id) {
       currentMessageId = row.message_id;
-      const rawMeta = parseMessageRawMeta(row.raw_meta);
+      const rawMeta = parseMessageRawMeta(row.raw_meta, summaryRow.tool);
       messages.push({
         seq: row.seq,
         role: row.role ?? "unknown",

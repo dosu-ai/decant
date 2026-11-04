@@ -2,8 +2,9 @@
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
-Claude Code, Codex, Gemini CLI, OpenCode, or Cursor CLI; `~/.decant/decant.db`
-is a searchable, rebuildable index plus Decant-owned user state.
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, or GitHub Copilot CLI;
+`~/.decant/decant.db` is a searchable, rebuildable index plus Decant-owned user
+state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -78,6 +79,16 @@ By default Decant discovers:
   second one, and the new ID keeps the old one's archived or deleted state.
   Cursor records no token usage, so these sessions keep token and cost
   totals unavailable.
+- GitHub Copilot CLI sessions under
+  `~/.copilot/session-state/<session id>/events.jsonl`, or the directory from
+  `--copilot-dir` or `DECANT_COPILOT_DIR`. With neither set, Decant follows
+  `COPILOT_HOME` to `$COPILOT_HOME/session-state`. Each session is an
+  append-only event log, read read-only. Explicit `--path` imports also honor
+  the configured Copilot directory when it has a custom name. Subagent events are in the same file
+  and stay part of the parent session. When
+  `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set, Copilot moves older
+  history into `events.<n>.jsonl` archives and starts a new `events.jsonl`
+  that replays that history. Decant reads only `events.jsonl`.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
@@ -111,7 +122,15 @@ file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
 only reads file metadata and never opens an OpenCode database; the sync it
 schedules opens it read-only. Cursor chat directories are watched recursively,
-ignoring `-shm` changes, which every read of a store makes.
+ignoring `-shm` changes, which every read of a store makes. The Copilot
+session-state directory is watched recursively, reacting only to changes to a
+session's `events.jsonl`, not to the plans, checkpoints, and files Copilot
+also keeps in each session directory.
+
+Sync repairs Copilot compaction metadata from retained message records and
+recomputes affected context peaks. This also works for compressed messages
+whose original journals are gone. Records without a pre-compaction token count
+keep it unavailable, and completed repairs are skipped on later syncs.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
@@ -123,7 +142,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-`opencode`, and `cursor`.
+`opencode`, `cursor`, and `copilot-cli`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -376,7 +395,8 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, Gemini CLI, OpenCode, or Cursor CLI record remains on disk.
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, or GitHub Copilot CLI
+record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting

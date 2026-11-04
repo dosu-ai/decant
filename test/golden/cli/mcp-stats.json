@@ -54,6 +54,15 @@
     "last_used_at": "2026-06-03T10:00:02.000Z"
   },
   {
+    "mcp_server": "example",
+    "tools": 1,
+    "calls": 1,
+    "errors": 0,
+    "p50_ms": 3400,
+    "p95_ms": 3400,
+    "last_used_at": "2026-10-01T10:00:16.100Z"
+  },
+  {
     "mcp_server": "node_repl",
     "tools": 1,
     "calls": 1,

@@ -38,10 +38,16 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
   if (toolName === "Agent" || toolName === "Task") {
     return true;
   }
+  if (tool === "copilot") {
+    return toolName === "task";
+  }
   return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
 }
 
 export function fileRefs(session: NormalizedSession): FileRef[] {
+  if (session.tool === "copilot") {
+    return copilotRefs(session);
+  }
   const refs: FileRef[] = [];
   for (const [messageIdx, message] of session.messages.entries()) {
     for (const block of message.blocks) {
@@ -97,6 +103,66 @@ const CURSOR_FILE_TOOLS: FileToolTable = {
   StrReplace: { key: "path", operation: "edit" },
   Write: { key: "path", operation: "write" },
 };
+
+// Copilot CLI's file tools take an absolute `path`. A finished tool reports
+// the files it changed in `fileEdits`, which also covers `apply_patch` and
+// shell redirections, so the tool table is read only for reads and for edits
+// from a build that predates `fileEdits`.
+const COPILOT_FILE_TOOLS: FileToolTable = {
+  view: { key: "path", operation: "read" },
+  edit: { key: "path", operation: "edit" },
+  create: { key: "path", operation: "write" },
+};
+
+const COPILOT_EDIT_KINDS: Record<string, Operation> = {
+  create: "write",
+  edit: "edit",
+  delete: "delete",
+};
+
+function copilotRefs(session: NormalizedSession): FileRef[] {
+  const refs: FileRef[] = [];
+  const reportedEdits = new Set<string>();
+  for (const message of session.messages) {
+    const data = isObject(message.raw) ? message.raw.data : undefined;
+    const toolCallId = isObject(data) ? data.toolCallId : undefined;
+    if (
+      message.role === "tool" &&
+      isObject(data) &&
+      Array.isArray(data.fileEdits) &&
+      typeof toolCallId === "string"
+    ) {
+      reportedEdits.add(toolCallId);
+    }
+  }
+  for (const [messageIdx, message] of session.messages.entries()) {
+    if (message.role === "tool") {
+      const data = isObject(message.raw) ? message.raw.data : undefined;
+      const edits = isObject(data) && Array.isArray(data.fileEdits) ? data.fileEdits : [];
+      for (const edit of edits) {
+        const path = isObject(edit) ? edit.path : undefined;
+        const kind = isObject(edit) ? edit.kind : undefined;
+        if (typeof path === "string" && typeof kind === "string") {
+          const operation = Object.hasOwn(COPILOT_EDIT_KINDS, kind)
+            ? COPILOT_EDIT_KINDS[kind]
+            : "edit";
+          refs.push(makeRef(messageIdx, message, path, operation ?? "edit", session.cwd));
+        }
+      }
+      continue;
+    }
+    for (const block of message.blocks) {
+      if (block.blockType !== "tool_use") {
+        continue;
+      }
+      if (block.toolName !== "view" && reportedEdits.has(block.toolUseId ?? "")) {
+        continue;
+      }
+      keyedRef(COPILOT_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+    }
+  }
+  return refs;
+}
 
 function keyedRef(
   table: FileToolTable,
@@ -203,7 +269,11 @@ export function facets(session: NormalizedSession): Facets {
   let previousTimestamp: number | null = null;
 
   for (const message of session.messages) {
-    const sidechain = rawBoolean(message.raw, "isSidechain") === true;
+    // Copilot CLI marks a subagent's events in the parent journal with the
+    // subagent's agentId instead of isSidechain.
+    const sidechain =
+      rawBoolean(message.raw, "isSidechain") === true ||
+      (session.tool === "copilot" && rawString(message.raw, "agentId") != null);
     const compactSummary = rawBoolean(message.raw, "isCompactSummary") === true;
     if (sidechain) {
       got.sidechainMessageCount += 1;
@@ -211,9 +281,14 @@ export function facets(session: NormalizedSession): Facets {
     if (
       rawString(message.raw, "subtype") === "compact_boundary" ||
       rawString(message.raw, "type") === "compacted" ||
-      rawString(message.raw, "type") === "compaction"
+      rawString(message.raw, "type") === "compaction" ||
+      (session.tool === "copilot" &&
+        rawString(message.raw, "type") === "session.compaction_complete")
     ) {
       got.compactionCount += 1;
+    }
+    if (session.tool === "copilot" && rawString(message.raw, "type") === "abort") {
+      got.interruptionCount += 1;
     }
 
     let hasRealText = false;

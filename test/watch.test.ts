@@ -38,11 +38,13 @@ function freshConfig(): Config {
   const geminiDir = join(root, "gemini");
   const opencodeDir = join(root, "opencode");
   const cursorDir = join(root, "cursor", "chats");
+  const copilotDir = join(root, "copilot", "session-state");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(cursorDir, { recursive: true });
+  mkdirSync(copilotDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
@@ -50,6 +52,7 @@ function freshConfig(): Config {
     geminiDir,
     opencodeDir,
     cursorDir,
+    copilotDir,
   };
 }
 
@@ -87,6 +90,7 @@ describe("watch mode", () => {
       config.geminiDir,
       config.opencodeDir,
       config.cursorDir,
+      config.copilotDir,
     ]);
   });
 
@@ -106,6 +110,7 @@ describe("watch mode", () => {
       [config.opencodeDir, false],
       [realpathSync(dirname(explicit)), false],
       [config.cursorDir, true],
+      [config.copilotDir, true],
     ]);
     const [claude, , , data, other] = roots;
     // Only OpenCode roots are polled.
@@ -115,6 +120,7 @@ describe("watch mode", () => {
       false,
       true,
       true,
+      false,
       false,
     ]);
     expect(claude?.accepts(null)).toBe(true);
@@ -165,6 +171,17 @@ describe("watch mode", () => {
     expect(root?.accepts("workspace/chat/store.db-wal")).toBe(true);
     expect(root?.accepts("workspace/chat/store.db")).toBe(true);
     expect(root?.accepts("workspace/chat/meta.json")).toBe(true);
+    expect(root?.accepts(null)).toBe(true);
+  });
+
+  test("Copilot roots react only to a session's event journal", () => {
+    const config = freshConfig();
+    const root = watchRoots(config).find((candidate) => candidate.dir === config.copilotDir);
+    expect(root?.poll).toBeUndefined();
+    expect(root?.accepts("0a1b/events.jsonl")).toBe(true);
+    expect(root?.accepts("0a1b/plan.md")).toBe(false);
+    expect(root?.accepts("0a1b/checkpoints/index.md")).toBe(false);
+    expect(root?.accepts("0a1b/events.1.jsonl")).toBe(false);
     expect(root?.accepts(null)).toBe(true);
   });
 

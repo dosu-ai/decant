@@ -110,6 +110,36 @@
     "timestamp": "2026-05-04T09:00:05.000Z"
   },
   {
+    "tool": "copilot",
+    "source_session_id": "copilot-sample-session",
+    "seq": 3,
+    "path": "/synthetic/copilot-project/README.md",
+    "rel_path": "README.md",
+    "ext": "md",
+    "operation": "read",
+    "timestamp": "2026-10-01T10:00:08.000Z"
+  },
+  {
+    "tool": "copilot",
+    "source_session_id": "copilot-sample-session",
+    "seq": 7,
+    "path": "/synthetic/copilot-project/README.md",
+    "rel_path": "README.md",
+    "ext": "md",
+    "operation": "edit",
+    "timestamp": "2026-10-01T10:00:14.200Z"
+  },
+  {
+    "tool": "copilot",
+    "source_session_id": "copilot-sample-session",
+    "seq": 14,
+    "path": "/synthetic/copilot-project/CHANGELOG.md",
+    "rel_path": "CHANGELOG.md",
+    "ext": "md",
+    "operation": "write",
+    "timestamp": "2026-10-01T10:01:09.300Z"
+  },
+  {
     "tool": "gemini",
     "source_session_id": "gemini-synthetic",
     "seq": 1,

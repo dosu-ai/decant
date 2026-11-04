@@ -65,6 +65,7 @@ docker run --rm \
   -v "$HOME/.codex:/sources/codex:ro" \
   -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
   -v "$HOME/.cursor/chats:/sources/cursor:ro" \
+  -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 

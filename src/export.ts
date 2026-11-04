@@ -52,6 +52,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   gemini: "gemini-cli",
   opencode: "opencode",
   cursor: "cursor",
+  copilot: "copilot-cli",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.

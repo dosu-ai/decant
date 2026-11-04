@@ -3,11 +3,21 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { contextWindowForSession } from "../src/context-window.ts";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { closeDb, openDb } from "../src/db.ts";
-import { discover, discoverSourcePaths, type IngestConfig, sync } from "../src/ingest.ts";
+import {
+  discover,
+  discoverSourcePaths,
+  type IngestConfig,
+  sync,
+  upsertSession,
+} from "../src/ingest.ts";
+import { decodeMessageRaw } from "../src/message-storage.ts";
 import { emptyUsage } from "../src/model.ts";
+import { sessionCostParts } from "../src/model-usage.ts";
 import { getSession } from "../src/query.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import {
   type CopilotModelUsage,
   chooseTotals,
@@ -762,6 +772,114 @@ describe("Copilot ingest", () => {
 
     expect(statsTotals(db, { source: "copilot_cli" }).sessions).toBe(2);
     closeDb(db);
+  });
+
+  test("prices unnamed legacy checkpoint usage with a known session model", () => {
+    for (const model of ["gpt-5.4", null]) {
+      const dir = freshDir();
+      const db = open(dir);
+      const parsed = parseCopilotSession(
+        "legacy-cost",
+        [
+          event("session.start", { selectedModel: model }, "s"),
+          event(
+            "session.usage_checkpoint",
+            {
+              providerModelMetrics: [
+                {
+                  modelId: null,
+                  metrics: {
+                    requests: { count: 1 },
+                    usage: {
+                      inputTokens: 1000,
+                      outputTokens: 100,
+                      cacheReadTokens: 0,
+                      cacheWriteTokens: 0,
+                    },
+                  },
+                },
+              ],
+            },
+            "c",
+          ),
+        ].join("\n"),
+      );
+      upsertSession(db, parsed, join(dir, "missing.jsonl"), 1, 2);
+      expect(db.query("SELECT estimated_cost_usd FROM session").get()).toEqual({
+        estimated_cost_usd: model == null ? 0 : 0.004,
+      });
+      db.exec("UPDATE session SET estimated_cost_usd = 0");
+      sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none") });
+      expect(db.query("SELECT estimated_cost_usd FROM session").get()).toEqual({
+        estimated_cost_usd: model == null ? 0 : 0.004,
+      });
+      closeDb(db);
+    }
+    expect(
+      sessionCostParts(
+        [
+          {
+            model: "",
+            tier: "standard",
+            requests: 1,
+            usage: { ...emptyUsage(), input: 1000 },
+            reportedCostUsd: 0.123,
+          },
+        ],
+        { model: "gpt-5.4", usage: emptyUsage() },
+      ),
+    ).toMatchObject({ input: 0, reported: 0.123 });
+  });
+
+  test("keeps recorded compaction occupancy and repairs old compressed metadata without a source", () => {
+    for (const [compressed, preTokens] of [
+      [false, 9000],
+      [true, 9000],
+      [true, undefined],
+    ] as const) {
+      const dir = freshDir();
+      const db = open(dir);
+      const parsed = parseCopilotSession(
+        "compaction",
+        event(
+          "session.compaction_complete",
+          {
+            success: true,
+            summaryContent: compressed ? "synthetic summary ".repeat(200) : "summary",
+            preCompactionTokens: preTokens,
+            postCompactionTokens: 1200,
+          },
+          "compact",
+        ),
+      );
+      upsertSession(db, parsed, join(dir, "missing.jsonl"), 1, 2);
+      const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+      expect(contextWindowForSession(db, id)).toMatchObject({
+        peak_tokens: preTokens ?? 0,
+        compactions: [{ pre_tokens: preTokens ?? null }],
+      });
+      const before = db.query("SELECT raw FROM message").get() as { raw: string | Uint8Array };
+      expect(typeof before.raw === "string").toBe(!compressed);
+      db.exec(
+        "UPDATE message SET raw_meta = CASE WHEN typeof(raw) = 'blob' THEN '{\"type\":\"session.compaction_complete\"}' ELSE NULL END; UPDATE session SET peak_context_tokens = 0",
+      );
+      setSessionUserState(db, id, "archived");
+      const config = { claudeDir: join(dir, "none"), codexDir: join(dir, "none") };
+      expect(sync(db, config)).toMatchObject({ ingested: 0, scanned: 0 });
+      expect(db.query("SELECT peak_context_tokens FROM session").get()).toEqual({
+        peak_context_tokens: preTokens ?? 0,
+      });
+      expect(getSession(db, id)?.messages[0]).toMatchObject({
+        compact_pre_tokens: preTokens ?? null,
+      });
+      const after = db.query("SELECT raw FROM message").get() as { raw: string | Uint8Array };
+      expect(decodeMessageRaw(after.raw)).toBe(decodeMessageRaw(before.raw));
+      expect(db.query("SELECT state FROM session_user_state").get()).toEqual({ state: "archived" });
+      const writes = db.query("SELECT total_changes() AS n").get() as { n: number };
+      sync(db, config);
+      expect(db.query("SELECT total_changes() AS n").get()).toEqual(writes);
+      closeDb(db);
+    }
   });
 
   test("files a subagent's inline events as sidechain rows outside the parent's turns and context", () => {

@@ -20,6 +20,11 @@ body:
         decant --no-sync --db /tmp/decant-repro.db ls
         ```
 
+        For a Copilot CLI reproduction, keep its journal at
+        `./session-state/example/events.jsonl` and pass that path instead of
+        `./repro.jsonl`. A custom session root also works when passed with
+        `--copilot-dir`, such as `--copilot-dir ./copilot --path ./copilot/example/events.jsonl`.
+
         The `fixtures/` directory in this repository shows the shape of each source
         format. If you cannot reproduce it synthetically, describe the *structure* of
         the input that breaks (message kinds, field names, sizes, encodings) without

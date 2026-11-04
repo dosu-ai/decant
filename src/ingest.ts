@@ -21,7 +21,11 @@ import { withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
-import { encodeMessageRaw, MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import {
+  backfillCopilotCompactionMetadata,
+  encodeMessageRaw,
+  MESSAGE_METADATA_SQL,
+} from "./message-storage.ts";
 import {
   type IngestIssueCode,
   type Issue,
@@ -113,7 +117,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 14;
+export const INGEST_PIPELINE_REVISION = 15;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -533,6 +537,7 @@ function refreshDerivedState(
     resolveSubagentParents(db);
   }
   const materializedEconomics = materializeMissingSessionEconomics(db);
+  backfillCopilotCompactionMetadata(db);
   const materializedWindows = materializeMissingContextWindows(db);
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {

@@ -184,7 +184,7 @@
     "agent_type": null,
     "spawn_depth": null,
     "context_window_tokens": null,
-    "peak_context_tokens": 0,
+    "peak_context_tokens": 9000,
     "compaction_count": 1,
     "subagent_count": 0,
     "subagent_estimated_cost_usd": 0,

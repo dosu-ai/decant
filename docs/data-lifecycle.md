@@ -127,6 +127,11 @@ session-state directory is watched recursively, reacting only to changes to a
 session's `events.jsonl`, not to the plans, checkpoints, and files Copilot
 also keeps in each session directory.
 
+Sync repairs Copilot compaction metadata from retained message records and
+recomputes affected context peaks. This also works for compressed messages
+whose original journals are gone. Records without a pre-compaction token count
+keep it unavailable, and completed repairs are skipped on later syncs.
+
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
 session state. Deleting or rebuilding the archive does not delete the source

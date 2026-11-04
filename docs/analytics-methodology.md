@@ -208,6 +208,11 @@ summed per model are at least the snapshot total for every model, they are the
 session total, which also counts a call made after the last snapshot, as in a
 session that stopped mid-turn. Otherwise the snapshots are.
 
+Successful Copilot compaction completions remain in the transcript even when
+they have no summary, so their recorded occupancy and compaction count stay
+available. Failed compaction attempts do not create a context boundary and
+are excluded from the compaction count.
+
 Copilot's `inputTokens` counts every prompt token, so Decant stores input net
 of `cacheReadTokens` and `cacheWriteTokens`, records `cacheWriteTokens` as
 cache creation, and reports reasoning tokens when Copilot records them. Each

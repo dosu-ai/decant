@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
@@ -36,6 +44,7 @@ function stageFixtures(caseDir: string): {
   opencodeConfigPath: string;
   cursorDir: string;
   copilotDir: string;
+  vscodeCopilotDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
@@ -43,6 +52,7 @@ function stageFixtures(caseDir: string): {
   const opencodeDir = join(caseDir, "sources", "opencode");
   const cursorDir = join(caseDir, "sources", "cursor");
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
+  const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -85,6 +95,10 @@ function stageFixtures(caseDir: string): {
       join(copilotDir, session, "events.jsonl"),
     );
   }
+  // The VS Code fixtures are laid out as a `User` directory already.
+  cpSync(join(import.meta.dir, "..", "fixtures", "vscode-copilot", "User"), vscodeCopilotDir, {
+    recursive: true,
+  });
   return {
     claudeDir,
     codexDir,
@@ -93,6 +107,7 @@ function stageFixtures(caseDir: string): {
     opencodeConfigPath,
     cursorDir,
     copilotDir,
+    vscodeCopilotDir,
   };
 }
 
@@ -157,6 +172,7 @@ describe("CLI golden parity", () => {
       opencodeConfigPath,
       cursorDir,
       copilotDir,
+      vscodeCopilotDir,
     } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
@@ -177,6 +193,8 @@ describe("CLI golden parity", () => {
         cursorDir,
         "--copilot-dir",
         copilotDir,
+        "--vscode-copilot-dir",
+        vscodeCopilotDir,
       ],
       {
         env: {

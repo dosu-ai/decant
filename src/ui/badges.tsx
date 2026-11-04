@@ -77,6 +77,14 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "vscode_copilot") {
+    return (
+      <Badge tone="accent">
+        <BrandMark name="copilot" />
+        Copilot Chat
+      </Badge>
+    );
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -277,6 +285,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "copilot") {
     return { key: "assistant", label: "Copilot", tone: "accent", icon: "copilot" };
+  }
+  if (tool === "vscode_copilot") {
+    return { key: "assistant", label: "Copilot Chat", tone: "accent", icon: "copilot" };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

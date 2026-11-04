@@ -8,9 +8,10 @@ body:
         # Do not paste real session transcripts
 
         **This issue is public.** Your Claude Code, Codex, Gemini CLI, OpenCode,
-        Cursor CLI, and GitHub Copilot CLI sessions contain your own source code,
-        file paths, prompts, and everything else you typed into those tools.
-        decant keeps them on your machine. Pasting one here would not.
+        Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions contain
+        your own source code, file paths, prompts, and
+        everything else you typed into those tools. decant keeps them on your
+        machine. Pasting one here would not.
 
         Reproduce the bug with a **synthetic** session file instead. Hand-write a small
         file that triggers the same failure and ingest it into a scratch archive:
@@ -110,6 +111,7 @@ body:
         - OpenCode
         - Cursor CLI
         - GitHub Copilot CLI
+        - Copilot Chat in VS Code
         - Not applicable
     validations:
       required: true

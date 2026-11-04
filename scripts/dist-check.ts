@@ -106,6 +106,7 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   const opencodeDir = join(serveDir, "opencode");
   const cursorDir = join(serveDir, "cursor");
   const copilotDir = join(serveDir, "copilot");
+  const vscodeCopilotDir = join(serveDir, "vscode", "User");
   const codexSessionsDir = join(codexDir, "sessions");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexSessionsDir, { recursive: true });
@@ -113,6 +114,7 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(cursorDir, { recursive: true });
   mkdirSync(copilotDir, { recursive: true });
+  mkdirSync(vscodeCopilotDir, { recursive: true });
   copyFileSync(
     join(import.meta.dir, "..", "fixtures", "codex", "sample.jsonl"),
     join(codexSessionsDir, "rollout-sample.jsonl"),
@@ -140,6 +142,8 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
       cursorDir,
       "--copilot-dir",
       copilotDir,
+      "--vscode-copilot-dir",
+      vscodeCopilotDir,
     ],
     {
       env: {

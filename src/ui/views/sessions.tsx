@@ -187,8 +187,8 @@ export function SessionsView({
         <div>
           <h1>Sessions</h1>
           <p>
-            Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI
-            session log on this device.
+            Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and
+            Copilot Chat in VS Code session log on this device.
           </p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />

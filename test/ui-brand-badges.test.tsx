@@ -13,6 +13,18 @@ describe("source and provenance marks", () => {
     expect(providerIdentity("cursor").icon).toBe("cursor");
   });
 
+  test("Copilot Chat in VS Code has a brand mark in source badges and assistant turns", () => {
+    const html = renderToStaticMarkup(<ToolBadge tool="vscode_copilot" />);
+    expect(html).toContain('class="brand-mark"');
+    expect(html).toContain("Copilot Chat");
+    expect(providerIdentity("vscode_copilot")).toEqual({
+      key: "assistant",
+      label: "Copilot Chat",
+      tone: "accent",
+      icon: "copilot",
+    });
+  });
+
   test("GitHub Copilot CLI has a brand mark in source badges and assistant turns", () => {
     const html = renderToStaticMarkup(<ToolBadge tool="copilot" />);
     expect(html).toContain('class="brand-mark"');

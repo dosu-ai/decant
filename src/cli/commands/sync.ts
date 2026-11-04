@@ -26,6 +26,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     opencodeDir?: string;
     cursorDir?: string;
     copilotDir?: string;
+    vscodeCopilotDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -83,6 +84,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           opencodeDir: commandOptions.opencodeDir,
           cursorDir: commandOptions.cursorDir,
           copilotDir: commandOptions.copilotDir,
+          vscodeCopilotDir: commandOptions.vscodeCopilotDir,
         },
       },
     );
@@ -98,6 +100,10 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
     .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
     .option(
+      "--vscode-copilot-dir <dir>",
+      "override the VS Code User directory read for Copilot Chat",
+    )
+    .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
       collectOption,
@@ -111,6 +117,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         opencodeDir?: string;
         cursorDir?: string;
         copilotDir?: string;
+        vscodeCopilotDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -137,6 +144,10 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
     .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
+    .option(
+      "--vscode-copilot-dir <dir>",
+      "override the VS Code User directory read for Copilot Chat",
+    )
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -156,6 +167,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         opencodeDir?: string;
         cursorDir?: string;
         copilotDir?: string;
+        vscodeCopilotDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -168,6 +180,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             opencodeDir: commandOptions.opencodeDir,
             cursorDir: commandOptions.cursorDir,
             copilotDir: commandOptions.copilotDir,
+            vscodeCopilotDir: commandOptions.vscodeCopilotDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -195,6 +208,10 @@ export function registerSyncCommands(ctx: CliContext): void {
     .option("--opencode-dir <dir>", "override the OpenCode data directory")
     .option("--cursor-dir <dir>", "override the Cursor CLI chats directory")
     .option("--copilot-dir <dir>", "override the GitHub Copilot CLI session-state directory")
+    .option(
+      "--vscode-copilot-dir <dir>",
+      "override the VS Code User directory read for Copilot Chat",
+    )
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -223,6 +240,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         opencodeDir?: string;
         cursorDir?: string;
         copilotDir?: string;
+        vscodeCopilotDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -237,6 +255,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             opencodeDir: commandOptions.opencodeDir,
             cursorDir: commandOptions.cursorDir,
             copilotDir: commandOptions.copilotDir,
+            vscodeCopilotDir: commandOptions.vscodeCopilotDir,
           });
           // --no-sync must stop the watcher, or serving a scratch archive would
           // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how

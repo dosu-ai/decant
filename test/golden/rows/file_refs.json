@@ -168,5 +168,25 @@
     "ext": "txt",
     "operation": "read",
     "timestamp": "2026-10-12T07:26:43.000Z"
+  },
+  {
+    "tool": "vscode_copilot",
+    "source_session_id": "vscode-sample-session",
+    "seq": 1,
+    "path": "/synthetic/vscode-project/README.md",
+    "rel_path": "README.md",
+    "ext": "md",
+    "operation": "read",
+    "timestamp": "2026-10-06T09:00:04.000Z"
+  },
+  {
+    "tool": "vscode_copilot",
+    "source_session_id": "vscode-sample-session",
+    "seq": 3,
+    "path": "/synthetic/vscode-project/README.md",
+    "rel_path": "README.md",
+    "ext": "md",
+    "operation": "edit",
+    "timestamp": "2026-10-06T09:00:09.000Z"
   }
 ]

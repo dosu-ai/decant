@@ -4,7 +4,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/dosu-ai/decant/blob/main/LICENSE)
 
 Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-and GitHub Copilot CLI sessions: token and cost breakdowns, context-window usage, full-text search,
+GitHub Copilot CLI, and Copilot Chat in VS Code sessions: token and cost breakdowns, context-window usage, full-text search,
 files touched, tool usage, and complete transcript browsing.
 
 Decant is local-first. It makes no outbound network calls at runtime,

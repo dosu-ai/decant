@@ -33,6 +33,13 @@ const COMMAND_MARKER = "<command-name>";
  * the tool `task`. Scoped to OpenCode so another source's lowercase tool of
  * the same name is not counted. */
 const OPENCODE_SPAWN_TOOLS = new Set(["subagent", "task"]);
+/** Copilot Chat in VS Code's general subagent and its built-in specialists. */
+const VSCODE_COPILOT_SPAWN_TOOLS = new Set([
+  "runSubagent",
+  "search_subagent",
+  "explore_subagent",
+  "execution_subagent",
+]);
 
 function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null): boolean {
   if (toolName === "Agent" || toolName === "Task") {
@@ -40,6 +47,9 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
   }
   if (tool === "copilot") {
     return toolName === "task";
+  }
+  if (tool === "vscode_copilot") {
+    return toolName != null && VSCODE_COPILOT_SPAWN_TOOLS.has(toolName);
   }
   return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
 }
@@ -62,6 +72,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (session.tool === "cursor") {
         keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "vscode_copilot") {
+        vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -164,6 +176,46 @@ function copilotRefs(session: NormalizedSession): FileRef[] {
   return refs;
 }
 
+// Copilot Chat in VS Code's file tools take an absolute `filePath`. Its
+// `apply_patch` wraps a Codex-style patch in `input`, and a multi-file replace
+// lists one `filePath` per replacement.
+const VSCODE_COPILOT_FILE_TOOLS: FileToolTable = {
+  read_file: { key: "filePath", operation: "read" },
+  create_file: { key: "filePath", operation: "write" },
+  replace_string_in_file: { key: "filePath", operation: "edit" },
+  insert_edit_into_file: { key: "filePath", operation: "edit" },
+  edit_notebook_file: { key: "filePath", operation: "edit" },
+};
+
+function vscodeCopilotRefs(
+  messageIdx: number,
+  message: NormalizedMessage,
+  block: NormalizedBlock,
+  cwd: string | null,
+  refs: FileRef[],
+): void {
+  const input = block.toolInput;
+  if (block.toolName === "apply_patch" && isObject(input) && typeof input.input === "string") {
+    codexRefs(messageIdx, message, { ...block, toolInput: input.input }, cwd, refs);
+    return;
+  }
+  if (block.toolName === "multi_replace_string_in_file" && isObject(input)) {
+    const replacements = Array.isArray(input.replacements) ? input.replacements : [];
+    const paths = new Set<string>();
+    for (const replacement of replacements) {
+      const path = isObject(replacement) ? replacement.filePath : undefined;
+      if (typeof path === "string") {
+        paths.add(path);
+      }
+    }
+    for (const path of paths) {
+      refs.push(makeRef(messageIdx, message, path, "edit", cwd));
+    }
+    return;
+  }
+  keyedRef(VSCODE_COPILOT_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+}
+
 function keyedRef(
   table: FileToolTable,
   messageIdx: number,
@@ -232,19 +284,26 @@ function makeRef(
 }
 
 export function relativize(path: string, cwd: string | null): string | null {
-  if (!path.startsWith("/")) {
-    return path;
+  const windows =
+    /^(?:[a-z]:[\\/]|[\\/]{2})/i.test(path) ||
+    (cwd != null && /^(?:[a-z]:[\\/]|[\\/]{2})/i.test(cwd));
+  const normalize = (value: string): string => (windows ? value.replace(/\\/g, "/") : value);
+  const normalizedPath = normalize(path);
+  if (!normalizedPath.startsWith("/") && !/^[a-z]:\//i.test(normalizedPath)) {
+    return normalizedPath;
   }
   if (cwd == null) {
     return null;
   }
-  const normalizedCwd = cwd.replace(/\/+$/, "");
-  const prefix = `${normalizedCwd}/`;
-  return path.startsWith(prefix) ? path.slice(prefix.length) || null : null;
+  const prefix = `${normalize(cwd).replace(/\/+$/, "")}/`;
+  const matches = windows
+    ? normalizedPath.toLowerCase().startsWith(prefix.toLowerCase())
+    : normalizedPath.startsWith(prefix);
+  return matches ? normalizedPath.slice(prefix.length) || null : null;
 }
 
 export function extension(path: string): string | null {
-  const leaf = path.split("/").at(-1) ?? path;
+  const leaf = path.split(/[\\/]/).at(-1) ?? path;
   const index = leaf.lastIndexOf(".");
   if (index <= 0 || index === leaf.length - 1) {
     return null;
@@ -288,6 +347,9 @@ export function facets(session: NormalizedSession): Facets {
       got.compactionCount += 1;
     }
     if (session.tool === "copilot" && rawString(message.raw, "type") === "abort") {
+      got.interruptionCount += 1;
+    }
+    if (session.tool === "vscode_copilot" && rawBoolean(message.raw, "canceled") === true) {
       got.interruptionCount += 1;
     }
 

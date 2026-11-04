@@ -148,6 +148,10 @@ function sourceRoots(config: Config, tool: Tool): string[] {
       return [config.cursorDir];
     case "copilot":
       return [config.copilotDir];
+    case "vscode_copilot":
+      return config.vscodeCopilotInsidersDir == null
+        ? [config.vscodeCopilotDir]
+        : [config.vscodeCopilotDir, config.vscodeCopilotInsidersDir];
   }
 }
 

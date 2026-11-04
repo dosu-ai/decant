@@ -1,4 +1,12 @@
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { runCli } from "../src/cli.ts";
@@ -37,6 +45,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const opencodeDir = join(caseDir, "sources", "opencode");
   const cursorDir = join(caseDir, "sources", "cursor");
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
+  const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -59,6 +68,8 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       const session = basename(dirname(source));
       mkdirSync(join(copilotDir, session), { recursive: true });
       copyFileSync(source, join(copilotDir, session, "events.jsonl"));
+    } else if (fixture.startsWith(`${VSCODE_FIXTURES}/`)) {
+      stageVscodeSession(fixture, vscodeCopilotDir);
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -82,7 +93,23 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     opencodeConfigPath,
     cursorDir,
     copilotDir,
+    vscodeCopilotDir,
   };
+}
+
+const VSCODE_FIXTURES = "fixtures/vscode-copilot/User";
+
+/** Copies a VS Code session file to the same place under the staged `User`
+ * directory, with its workspace's `workspace.json` when it has one. */
+function stageVscodeSession(fixture: string, userDir: string): void {
+  const relative = fixture.slice(VSCODE_FIXTURES.length + 1);
+  const target = join(userDir, relative);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(join(repoRoot, fixture), target);
+  const workspace = join(repoRoot, dirname(dirname(fixture)), "workspace.json");
+  if (basename(dirname(fixture)) === "chatSessions" && existsSync(workspace)) {
+    copyFileSync(workspace, join(dirname(dirname(target)), "workspace.json"));
+  }
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {

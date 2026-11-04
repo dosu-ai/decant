@@ -11,6 +11,7 @@ export const SESSION_SOURCES = [
   "opencode",
   "cursor_cli",
   "copilot_cli",
+  "vscode_copilot",
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -42,6 +43,8 @@ export function sessionSourceLabel(source: SessionSource): string {
       return "Cursor CLI";
     case "copilot_cli":
       return "Copilot CLI";
+    case "vscode_copilot":
+      return "VS Code Copilot Chat";
   }
 }
 
@@ -94,6 +97,8 @@ export function sessionSourcePredicate(
       return { sql: `${alias}.tool = ?`, params: ["cursor"] };
     case "copilot_cli":
       return { sql: `${alias}.tool = ?`, params: ["copilot"] };
+    case "vscode_copilot":
+      return { sql: `${alias}.tool = ?`, params: ["vscode_copilot"] };
     default:
       return { sql: "", params: [] };
   }

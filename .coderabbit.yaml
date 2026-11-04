@@ -16,15 +16,18 @@ reviews:
       - enabled: false
         paths:
           - ".coderabbit.yaml"
-          - ".github/CODEOWNERS"
-          - ".github/actions/**"
-          - ".github/workflows/**"
+          - ".github/**"
+          - ".pre-commit-config.yaml"
+          - "AGENTS.md"
           - "Dockerfile"
+          - "bun.lock"
           - "install.sh"
           - "npm/**"
+          - "package.json"
           - "packaging/**"
-          - "scripts/pr-policy.ts"
+          - "scripts/**"
           - "src/db.ts"
+          - "src/schema-manifest.ts"
           - "src/schema.sql"
           - "src/route-paths.ts"
           - "src/server.ts"
@@ -96,6 +99,12 @@ reviews:
           .github/PULL_REQUEST_TEMPLATE.md, and Verification names specific
           commands or checks with their observed results. Fail when
           Verification only says that tests pass.
+      - name: "Local-first"
+        mode: "error"
+        instructions: >-
+          Fail when the pull request adds an outbound network call, a hosted
+          service dependency, or an LLM call anywhere outside src/update.ts.
+          Pass otherwise.
 
 knowledge_base:
   code_guidelines:

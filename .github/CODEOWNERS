@@ -3,15 +3,18 @@
 # .coderabbit.yaml.
 
 /.coderabbit.yaml @teedole
-/.github/CODEOWNERS @teedole
-/.github/actions/ @teedole
-/.github/workflows/ @teedole
+/.github/ @teedole
+/.pre-commit-config.yaml @teedole
+/AGENTS.md @teedole
 /Dockerfile @teedole
+/bun.lock @teedole
 /install.sh @teedole
 /npm/ @teedole
+/package.json @teedole
 /packaging/ @teedole
-/scripts/pr-policy.ts @teedole
+/scripts/ @teedole
 /src/db.ts @teedole
+/src/schema-manifest.ts @teedole
 /src/schema.sql @teedole
 /src/route-paths.ts @teedole
 /src/server.ts @teedole

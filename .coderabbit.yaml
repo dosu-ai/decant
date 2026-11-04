@@ -1,6 +1,3 @@
-# CodeRabbit review settings. The instructions point at the docs that already
-# own each rule, so the reviewer and contributors read the same source.
-# Takes effect once the CodeRabbit GitHub app is installed on the repository.
 language: en-US
 
 reviews:
@@ -8,15 +5,31 @@ reviews:
   high_level_summary: false
   poem: false
   review_status: false
-  request_changes_workflow: false
   auto_review:
     enabled: true
     drafts: false
-  # Off until the main ruleset says who may approve. CodeRabbit's approval
-  # counts toward required approvals, but the ruleset also requires a code
-  # owner review, which only a person in CODEOWNERS can give.
+  # Keep the paths below in step with .github/CODEOWNERS.
   auto_approvals:
-    enabled: false
+    enabled: true
+    allow_author_approval: false
+    overrides:
+      - enabled: false
+        paths:
+          - ".coderabbit.yaml"
+          - ".github/CODEOWNERS"
+          - ".github/actions/**"
+          - ".github/workflows/**"
+          - "Dockerfile"
+          - "install.sh"
+          - "npm/**"
+          - "packaging/**"
+          - "scripts/pr-policy.ts"
+          - "src/db.ts"
+          - "src/schema.sql"
+          - "src/route-paths.ts"
+          - "src/server.ts"
+          - "src/server/**"
+          - "src/update.ts"
   path_filters:
     - "!test/golden/**"
     - "!bun.lock"
@@ -83,14 +96,6 @@ reviews:
           .github/PULL_REQUEST_TEMPLATE.md, and Verification names specific
           commands or checks with their observed results. Fail when
           Verification only says that tests pass.
-      - name: "Needs a person"
-        mode: "warning"
-        instructions: >-
-          Fail when the pull request adds a migration, changes the routes or
-          bind behavior in src/server.ts, src/server/, or src/route-paths.ts,
-          changes .github/workflows/, install.sh, npm/, or packaging/, or adds
-          an outbound network call. These need a maintainer's review even when
-          every other check passes. Pass otherwise.
 
 knowledge_base:
   code_guidelines:

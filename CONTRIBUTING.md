@@ -127,7 +127,9 @@ Do not weaken or remove tests to make a change pass.
 - Link the issue the pull request closes when one exists.
 - Keep `main` green, as every pull request needs passing CI and review.
 
-Maintainers squash-merge pull requests.
+CodeRabbit reviews every pull request once it leaves draft. Its approval is
+enough to merge unless the change touches a path in `.github/CODEOWNERS`, which
+needs a maintainer's review. Maintainers squash-merge pull requests.
 
 ## Security and privacy
 

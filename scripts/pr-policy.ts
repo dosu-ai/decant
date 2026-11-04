@@ -1,15 +1,6 @@
-// Mechanical checks for AGENTS.md rules that review keeps missing:
-//
-//   frozen-migration  a committed migration block in src/db.ts changed
-//   docs              pricing or the route manifest changed without their docs
-//   private-data      a fixture or golden holds a real home path, email, or key
-//
-//   bun run scripts/pr-policy.ts                 compare with the merge base of origin/main
-//   bun run scripts/pr-policy.ts --base <ref>    compare with the merge base of <ref>
-//
-// Uncommitted and untracked files count, so it can run before a commit. CI
-// passes the pull request's labels in PR_LABELS; DOCS_OVERRIDE_LABEL skips the
-// docs rule when a change truly needs no doc update.
+// Checks AGENTS.md rules against the merge base with --base (default
+// origin/main): frozen migrations, docs for pricing and routes, and synthetic
+// fixtures. Usage: bun run scripts/pr-policy.ts [--base <ref>]
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -27,17 +18,13 @@ export interface ChangedFile {
   diff: string;
 }
 
-// ---------------------------------------------------------------------------
-// Frozen migrations
-
 const MIGRATION_START = /^ {4}if \(current < (\d+)\) \{$/;
 const MIGRATION_END = /^ {4}\}$/;
 const LATEST_VERSION = /^export const LATEST_SCHEMA_VERSION = (\d+);$/m;
 
 /**
- * Each `if (current < N) { ... }` block in migrate(), keyed by N. Whole-line
- * `//` comments and trailing whitespace are dropped, so rewording a comment
- * does not count as changing a migration.
+ * Each `if (current < N) { ... }` block in migrate(), keyed by N, without
+ * comments or trailing whitespace so rewording a comment is not a change.
  */
 export function extractMigrations(source: string): Map<number, string> {
   const blocks = new Map<number, string>();
@@ -64,9 +51,8 @@ export function latestSchemaVersion(source: string): number | null {
 }
 
 /**
- * Someone may already have opened an archive with any migration on the base
- * branch, so their code must stay identical. Dropping the oldest
- * versions is allowed: that is how unsupported archives become rebuild-only.
+ * Committed migrations may already have run on someone's archive. Dropping the
+ * oldest versions is allowed; that is how old archives become rebuild-only.
  */
 export function checkFrozenMigrations(baseSource: string, headSource: string): Finding[] {
   const file = "src/db.ts";
@@ -114,9 +100,6 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
   return findings;
 }
 
-// ---------------------------------------------------------------------------
-// Docs that must move with the code
-
 export interface DocRule {
   /** Why the docs matter, shown when the rule fires. */
   reason: string;
@@ -124,9 +107,7 @@ export interface DocRule {
   docs: string[];
 }
 
-// Price constructors, exact model-ID entries, and per-token fields are the
-// rates themselves. Refactors elsewhere in cost.ts do not change what
-// docs/pricing.md states.
+// Lines that set a rate. Other cost.ts changes do not affect docs/pricing.md.
 const RATE_LINE = /\b(?:claude|openAi|gemini)Price\(|^\s*\[\s*"[^"]+",|\b\w*PerMtok\s*:/;
 
 export function changedLines(diff: string): string[] {
@@ -178,9 +159,6 @@ export function checkDocs(
   return findings;
 }
 
-// ---------------------------------------------------------------------------
-// Private data in fixtures and goldens
-
 export const PRIVATE_DATA_ROOTS = ["fixtures/", "test/golden/"];
 
 // Placeholder home directories that fixtures use on purpose.
@@ -228,15 +206,11 @@ export function scanForPrivateData(path: string, content: string): Finding[] {
       }
     }
   }
-  // One line per kind of problem is enough to act on, and repeating a
-  // matched value in CI logs would leak it a second time.
+  // Never echo the matched value into CI logs.
   return findings.filter(
     (finding, index) => findings.findIndex((other) => other.message === finding.message) === index,
   );
 }
-
-// ---------------------------------------------------------------------------
-// Git plumbing
 
 function git(args: string[], cwd: string): string {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });

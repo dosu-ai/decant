@@ -1,10 +1,5 @@
 name: PR policy
 
-# Runs scripts/pr-policy.ts: committed migrations stay unchanged, pricing and
-# route changes bring their docs, and fixtures hold no real paths or secrets.
-# Labeling events rerun it so the docs-not-needed label takes effect without
-# a new push. It runs on pull requests only: a push to main has no labels, so
-# the docs rules would fail changes the label already approved.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -23,7 +18,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Full history so the merge base with the base branch is available.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

@@ -7,8 +7,10 @@ import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { discover, discoverSourcePaths, type IngestConfig, sync } from "../src/ingest.ts";
 import { emptyUsage } from "../src/model.ts";
+import { getSession } from "../src/query.ts";
 import {
   type CopilotModelUsage,
+  chooseTotals,
   mergeSnapshots,
   parseCopilotSession,
   type UsageSnapshot,
@@ -53,6 +55,34 @@ function event(
     timestamp: "2026-10-05T08:00:00.000Z",
     ...extra,
   });
+}
+
+/** A `session.usage_record` line, trimmed to the fields Decant reads. */
+function usageRecord(
+  id: string,
+  apiCallId: string,
+  model: string,
+  fields: Record<string, number>,
+  extra: Record<string, unknown> = {},
+): string {
+  return event(
+    "session.usage_record",
+    {
+      usage: {
+        model,
+        apiCallId,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        maxPromptTokens: 200000,
+        ...fields,
+      },
+    },
+    id,
+    extra,
+  );
 }
 
 function usage(fields: Partial<CopilotModelUsage>): CopilotModelUsage {
@@ -166,6 +196,132 @@ describe("parseCopilotSession", () => {
       ["gpt-5.4", 50, 0],
       ["gpt-5.4", 20, 0],
     ]);
+  });
+
+  test("attaches each call's usage record to its message, net of cache", () => {
+    const { session, issues } = parseCopilotSession(
+      "fallback",
+      [
+        event("session.start", { sessionId: "records", context: { cwd: "/synthetic/p" } }, "e1"),
+        event("user.message", { content: "say pong" }, "e2"),
+        usageRecord("e3", "call-1", "claude-sonnet-4.5", {
+          inputTokens: 27417,
+          outputTokens: 4,
+          cacheWriteTokens: 27413,
+        }),
+        event(
+          "assistant.message",
+          { messageId: "m1", content: "pong", model: "claude-sonnet-4.5", apiCallId: "call-1" },
+          "e4",
+        ),
+        // The second call's record follows its message, and its two messages
+        // share one call; the usage goes on the first.
+        event(
+          "assistant.message",
+          { messageId: "m2", content: "more", model: "claude-sonnet-4.5", apiCallId: "call-2" },
+          "e5",
+        ),
+        event(
+          "assistant.message",
+          { messageId: "m3", content: "again", model: "claude-sonnet-4.5", apiCallId: "call-2" },
+          "e6",
+        ),
+        usageRecord("e7", "call-2", "claude-sonnet-4.5", {
+          inputTokens: 27500,
+          outputTokens: 9,
+          cacheReadTokens: 27413,
+          cacheWriteTokens: 80,
+          reasoningTokens: 3,
+        }),
+      ].join("\n"),
+    );
+    expect(issues).toEqual([]);
+    expect(session.messages.filter((m) => m.role === "assistant").map((m) => m.usage)).toEqual([
+      { ...emptyUsage(), input: 4, output: 4, cacheCreation: 27413 },
+      { ...emptyUsage(), input: 7, output: 9, cacheRead: 27413, cacheCreation: 80, reasoning: 3 },
+      null,
+    ]);
+    // No snapshot was written, so the records are the totals.
+    expect(session.totals).toEqual({
+      ...emptyUsage(),
+      input: 11,
+      output: 13,
+      cacheRead: 27413,
+      cacheCreation: 27493,
+      reasoning: 3,
+    });
+    expect(session.reasoningSource).toBe("reported");
+    expect(session.rawMeta).toMatchObject({
+      model_context_window: 200000,
+      modelUsage: [{ model: "claude-sonnet-4.5", requests: 2, input: 11, output: 13 }],
+    });
+  });
+
+  test("counts a call made after the last snapshot from its usage record", () => {
+    const lines = [
+      event("user.message", { content: "go" }, "e1"),
+      usageRecord("e2", "c1", "claude-haiku-4.5", { inputTokens: 1000, outputTokens: 10 }),
+      event("assistant.message", { content: "a", apiCallId: "c1" }, "e3"),
+      event(
+        "session.usage_checkpoint",
+        {
+          providerModelMetrics: [
+            {
+              modelId: "claude-haiku-4.5",
+              metrics: { requests: { count: 1 }, usage: { inputTokens: 1000, outputTokens: 10 } },
+            },
+          ],
+        },
+        "e4",
+      ),
+      // The session stopped mid-turn: this call has a record but no snapshot.
+      usageRecord("e5", "c2", "claude-haiku-4.5", { inputTokens: 1200, outputTokens: 20 }),
+      event("assistant.message", { content: "b", apiCallId: "c2" }, "e6"),
+    ];
+    const { session } = parseCopilotSession("fallback", lines.join("\n"));
+    expect(session.totals).toMatchObject({ input: 2200, output: 30 });
+  });
+
+  test("keeps a subagent's model and prompt limit out of the main agent's", () => {
+    const sub = { agentId: "agent-1" };
+    const { session, issues } = parseCopilotSession(
+      "fallback",
+      [
+        event("session.model_change", { newModel: "claude-haiku-4.5" }, "e1"),
+        event("user.message", { content: "explore" }, "e2"),
+        usageRecord("e3", "c1", "claude-haiku-4.5", { inputTokens: 500, outputTokens: 5 }),
+        event(
+          "assistant.message",
+          {
+            content: "",
+            apiCallId: "c1",
+            toolRequests: [{ toolCallId: "t1", name: "task", arguments: {} }],
+          },
+          "e4",
+        ),
+        event("session.model_change", { newModel: "gpt-5.4" }, "e5", sub),
+        event("user.message", { content: "list files" }, "e6", sub),
+        usageRecord(
+          "e7",
+          "c2",
+          "gpt-5.4",
+          { inputTokens: 300, outputTokens: 7, maxPromptTokens: 400000 },
+          sub,
+        ),
+        event(
+          "assistant.message",
+          { content: "two files", model: "gpt-5.4", apiCallId: "c2" },
+          "e8",
+          sub,
+        ),
+        event("tool.execution_complete", { toolCallId: "t1", success: true }, "e9"),
+        event("assistant.message", { content: "done" }, "e10"),
+      ].join("\n"),
+    );
+    expect(issues).toEqual([]);
+    // The last message names no model, so it takes the main agent's.
+    expect(session.messages.at(-1)?.model).toBe("claude-haiku-4.5");
+    expect(session.rawMeta).toMatchObject({ model_context_window: 200000 });
   });
 
   test("keeps subagent events in the parent and sums runs a resume restarted", () => {
@@ -319,6 +475,25 @@ describe("parseCopilotSession", () => {
       ],
     });
     expect(session.model).toBe("gpt-5.4");
+  });
+});
+
+describe("chooseTotals", () => {
+  test("takes the usage records when they cover the snapshots", () => {
+    const ledger = snapshot({ m: { requests: 3, input: 30, output: 3 } });
+    expect(chooseTotals(ledger, snapshot({ m: { requests: 2, input: 20, output: 2 } }))).toBe(
+      ledger,
+    );
+    expect(chooseTotals(ledger, new Map())).toBe(ledger);
+  });
+
+  test("keeps the snapshots when a call wrote no record or no records exist", () => {
+    const merged = snapshot({ m: { requests: 3, input: 30, output: 3 } });
+    expect(chooseTotals(snapshot({ m: { requests: 2, input: 20, output: 2 } }), merged)).toBe(
+      merged,
+    );
+    expect(chooseTotals(snapshot({ other: { requests: 9, input: 90 } }), merged)).toBe(merged);
+    expect(chooseTotals(new Map(), merged)).toBe(merged);
   });
 });
 
@@ -482,6 +657,72 @@ describe("Copilot ingest", () => {
     ).toEqual({ agent_spawn_count: 1 });
 
     expect(statsTotals(db, { source: "copilot_cli" }).sessions).toBe(2);
+    closeDb(db);
+  });
+
+  test("files a subagent's inline events as sidechain rows outside the parent's turns and context", () => {
+    const dir = freshDir();
+    const copilotDir = join(dir, "copilot", "session-state");
+    const sub = { agentId: "agent-1" };
+    write(
+      join(copilotDir, "inline-subagent", "events.jsonl"),
+      [
+        event("session.start", { sessionId: "inline-subagent" }, "e1"),
+        event("user.message", { content: "explore the repo" }, "e2"),
+        usageRecord("e3", "c1", "claude-haiku-4.5", {
+          inputTokens: 1000,
+          outputTokens: 5,
+          cacheReadTokens: 900,
+        }),
+        event(
+          "assistant.message",
+          {
+            content: "",
+            model: "claude-haiku-4.5",
+            apiCallId: "c1",
+            toolRequests: [{ toolCallId: "t1", name: "task", arguments: {} }],
+          },
+          "e4",
+        ),
+        event("user.message", { content: "list the files" }, "e5", sub),
+        usageRecord("e6", "c2", "gpt-5.4", { inputTokens: 9000, outputTokens: 7 }, sub),
+        event(
+          "assistant.message",
+          { content: "two files", model: "gpt-5.4", apiCallId: "c2" },
+          "e7",
+          sub,
+        ),
+        event("tool.execution_complete", { toolCallId: "t1", success: true }, "e8"),
+        usageRecord("e9", "c3", "claude-haiku-4.5", { inputTokens: 1100, outputTokens: 4 }),
+        event(
+          "assistant.message",
+          { content: "done", model: "claude-haiku-4.5", apiCallId: "c3" },
+          "e10",
+        ),
+      ].join("\n"),
+    );
+    const db = open(dir);
+    expect(
+      sync(db, { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex"), copilotDir }),
+    ).toMatchObject({ ingested: 1, issues: 0 });
+    const row = db
+      .query(
+        `SELECT id, turn_count, sidechain_message_count, context_window_tokens, peak_context_tokens
+           FROM session`,
+      )
+      .get() as { id: number } & Record<string, number>;
+    // The subagent's 9000-token prompt is its own context, not the parent's.
+    expect(row).toMatchObject({
+      turn_count: 1,
+      sidechain_message_count: 2,
+      context_window_tokens: 200000,
+      peak_context_tokens: 1100,
+    });
+    const transcript = getSession(db, row.id)?.messages ?? [];
+    expect(transcript.filter((m) => m.is_sidechain).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
     closeDb(db);
   });
 });

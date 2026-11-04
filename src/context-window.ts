@@ -106,10 +106,12 @@ export interface MessageRawMeta {
  * message table aliased as `m`. Multi-path json_extract returns one JSON array
  * per row, so large raw payloads are parsed once, not once per field. */
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
-  '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens')`;
+  '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
+  '$.agentId')`;
 
-/** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults. */
-export function parseMessageRawMeta(value: string | null): MessageRawMeta {
+/** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults.
+ * `tool` names the session's source, whose sidechain marker may differ. */
+export function parseMessageRawMeta(value: string | null, tool?: string): MessageRawMeta {
   const none: MessageRawMeta = {
     isSidechain: false,
     subtype: null,
@@ -130,9 +132,12 @@ export function parseMessageRawMeta(value: string | null): MessageRawMeta {
   if (!Array.isArray(parsed)) {
     return none;
   }
-  const [sidechain, subtype, rawType, compactSummary, trigger, preTokens] = parsed as unknown[];
+  const [sidechain, subtype, rawType, compactSummary, trigger, preTokens, agentId] =
+    parsed as unknown[];
   return {
-    isSidechain: sidechain === true,
+    // Copilot CLI marks a subagent's events in the parent journal with the
+    // subagent's agentId instead of isSidechain.
+    isSidechain: sidechain === true || (tool === "copilot" && typeof agentId === "string"),
     subtype: typeof subtype === "string" ? subtype : null,
     rawType: typeof rawType === "string" ? rawType : null,
     isCompactSummary: compactSummary === true,
@@ -241,7 +246,7 @@ export function contextWindowForSession(
   let turn = 0;
   let lastContextSinceCompaction: number | null = null;
   for (const row of rows) {
-    const meta = parseMessageRawMeta(row.raw_meta);
+    const meta = parseMessageRawMeta(row.raw_meta, session.tool);
     // Main Claude transcripts can contain copied sidechain rows that belong to
     // a child agent, so exclude those from the parent's curve. In a standalone
     // subagent archive those same isSidechain rows are the session's primary

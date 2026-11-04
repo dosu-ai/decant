@@ -111,11 +111,15 @@ export interface CopilotModelUsageRow {
  * GitHub Copilot CLI session format (`~/.copilot/session-state/<id>/events.jsonl`).
  *
  * Each line is one event `{ type, data, id, parentId, timestamp, agentId?,
- * checkpoint? }`. Streaming deltas and per-call `assistant.usage` are
- * ephemeral and never reach the file, so usage comes from two places:
- *  - `assistant.message.outputTokens` dates each response's output tokens.
+ * checkpoint? }`. Streaming deltas and `assistant.usage` are ephemeral and
+ * never reach the file, so usage comes from three places:
+ *  - `session.usage_record` (1.0.105 and later) holds each model call's full
+ *    usage, joined to its `assistant.message` by `apiCallId`. Older builds
+ *    record only `assistant.message.outputTokens`.
  *  - `session.shutdown.modelMetrics` and `session.usage_checkpoint` hold
  *    cumulative per-model totals, read as snapshots (see `mergeSnapshots`).
+ *  - The usage records summed per model, which replace the snapshots when
+ *    they cover them (see `chooseTotals`).
  *
  * Subagent events carry an `agentId` and stay in the parent's transcript,
  * because they share its file and its usage totals. When journal rotation
@@ -132,6 +136,12 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
   const efforts: string[] = [];
   const snapshots: UsageSnapshot[] = [];
   const messageModels = new Map<string, number>();
+  // Each model call's usage keyed by `apiCallId`, and the per-model sum of
+  // every record in the file.
+  const callUsage = new Map<string, TokenUsage>();
+  const callMessages = new Map<string, NormalizedMessage>();
+  const ledger: UsageSnapshot = new Map();
+  let contextWindow: number | null = null;
 
   let sourceSessionId: string | null = null;
   let start: JsonObject | null = null;
@@ -216,6 +226,10 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         break;
       }
       case "session.model_change": {
+        // A subagent announces its own model; the main agent's is unchanged.
+        if (record.agentId != null) {
+          break;
+        }
         currentModel = asString(data.newModel) ?? currentModel;
         collectEffort(efforts, data.reasoningEffort);
         break;
@@ -264,8 +278,12 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
             toolUses.set(toolUse.toolUseId, toolUse);
           }
         }
+        const apiCallId = asString(data.apiCallId);
+        // One call can answer in several messages; its usage goes on the first.
+        const claimed = apiCallId != null && callMessages.has(apiCallId);
+        const recorded = apiCallId == null || claimed ? undefined : callUsage.get(apiCallId);
         const outputTokens = asInteger(data.outputTokens);
-        if (blocks.length === 0 && outputTokens == null) {
+        if (blocks.length === 0 && outputTokens == null && recorded == null) {
           break;
         }
         if (model != null) {
@@ -273,8 +291,12 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         }
         push("assistant", record, blocks, {
           model,
-          usage: outputTokens == null ? null : { ...emptyUsage(), output: outputTokens },
+          usage:
+            recorded ?? (outputTokens == null ? null : { ...emptyUsage(), output: outputTokens }),
         });
+        if (apiCallId != null && !claimed) {
+          callMessages.set(apiCallId, messages[messages.length - 1] as NormalizedMessage);
+        }
         break;
       }
       case "tool.execution_start": {
@@ -351,6 +373,33 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         currentModel = asString(data.currentModel) ?? currentModel;
         break;
       }
+      case "session.usage_record": {
+        const usage = data.usage;
+        if (!isObject(usage)) {
+          break;
+        }
+        const recordUsage = { ...usageFromMetric(usage, undefined), requests: 1 };
+        const model = asString(usage.model) ?? "";
+        // Copilot's prompt limit for the main agent's model. A subagent can run
+        // a model with a different limit.
+        if (record.agentId == null) {
+          contextWindow = asInteger(usage.maxPromptTokens) ?? contextWindow;
+        }
+        const prior = ledger.get(model);
+        ledger.set(model, prior == null ? recordUsage : sumCopilotUsage(prior, recordUsage));
+        const apiCallId = asString(usage.apiCallId);
+        if (apiCallId == null || callUsage.has(apiCallId)) {
+          break;
+        }
+        const converted = toDecantUsage(recordUsage);
+        callUsage.set(apiCallId, converted);
+        // The record normally precedes its message; attach it if it follows.
+        const message = callMessages.get(apiCallId);
+        if (message != null) {
+          message.usage = converted;
+        }
+        break;
+      }
       case "session.usage_checkpoint": {
         snapshots.push(checkpointSnapshot(data.providerModelMetrics));
         break;
@@ -365,7 +414,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
 
   issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
-  const modelUsage = toModelUsageRows(mergeSnapshots(snapshots));
+  const modelUsage = toModelUsageRows(chooseTotals(ledger, mergeSnapshots(snapshots)));
   const totals = emptyUsage();
   if (modelUsage.length > 0) {
     for (const row of modelUsage) {
@@ -380,7 +429,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
       }
     }
   }
-  const reasoningReported = snapshots.some((snapshot) =>
+  const reasoningReported = [ledger, ...snapshots].some((snapshot) =>
     [...snapshot.values()].some((usage) => usage.reasoning > 0),
   );
 
@@ -404,7 +453,7 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
     agentId: null,
     agentType: null,
     spawnDepth: null,
-    rawMeta: rawMetaFrom(start, shutdown, modelUsage),
+    rawMeta: rawMetaFrom(start, shutdown, modelUsage, contextWindow),
     totals,
     estReasoningTokens: 0,
     reasoningSource: reasoningReported ? "reported" : "none",
@@ -560,20 +609,38 @@ function sumCopilotUsage(a: CopilotModelUsage, b: CopilotModelUsage): CopilotMod
   };
 }
 
+/**
+ * The session's per-model totals: the summed usage records when they cover
+ * the merged snapshots, else the snapshots.
+ *
+ * On builds that write records, the records and the final snapshot agree, and
+ * only the records count a call made after the last checkpoint, as in a
+ * session that stopped mid-turn. A model call that wrote no record would leave
+ * the records short of the snapshot, so the snapshot wins and nothing is
+ * undercounted. Older builds write no records, which leaves the snapshots.
+ */
+export function chooseTotals(ledger: UsageSnapshot, merged: UsageSnapshot): UsageSnapshot {
+  return ledger.size > 0 && covers(ledger, merged) ? ledger : merged;
+}
+
 /** Copilot counts cache reads and writes inside `inputTokens`; Decant prices
  * them separately, so input is stored net of both. Reasoning is a part of
  * output in Decant's model and is capped there. */
+function toDecantUsage(usage: CopilotModelUsage): TokenUsage {
+  return {
+    input: Math.max(0, usage.input - usage.cacheRead - usage.cacheWrite),
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheCreation: usage.cacheWrite,
+    cacheCreation1h: 0,
+    reasoning: Math.min(usage.reasoning, usage.output),
+  };
+}
+
 function toModelUsageRows(snapshot: UsageSnapshot): CopilotModelUsageRow[] {
   const rows: CopilotModelUsageRow[] = [];
   for (const [model, usage] of snapshot) {
-    const converted: TokenUsage = {
-      input: Math.max(0, usage.input - usage.cacheRead - usage.cacheWrite),
-      output: usage.output,
-      cacheRead: usage.cacheRead,
-      cacheCreation: usage.cacheWrite,
-      cacheCreation1h: 0,
-      reasoning: Math.min(usage.reasoning, usage.output),
-    };
+    const converted = toDecantUsage(usage);
     if (
       usage.requests === 0 &&
       converted.input + converted.output + converted.cacheRead + converted.cacheCreation === 0
@@ -612,8 +679,12 @@ function rawMetaFrom(
   start: JsonObject | null,
   shutdown: JsonObject | null,
   modelUsage: CopilotModelUsageRow[],
+  contextWindow: number | null,
 ): Json {
   const meta: JsonObject = {};
+  if (contextWindow != null && contextWindow > 0) {
+    meta.model_context_window = contextWindow;
+  }
   if (start != null) {
     meta.start = start;
   }

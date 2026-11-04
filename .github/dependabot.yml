@@ -1,9 +1,14 @@
 version: 2
+# Cooldowns hold a version update until the release is a few days old, so a
+# quick follow-up release replaces the pending bump instead of opening a second
+# pull request. Security updates ignore cooldowns and still open right away.
 updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 5
     groups:
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
@@ -12,13 +17,19 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 5
 
+  # setup-homebrew publishes weekly, which kept replacing open bumps before
+  # they merged. Monthly batches every action into one pull request.
   - package-ecosystem: "github-actions"
     directories:
       - "/"
       - "/.github/actions/*"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]

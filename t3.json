@@ -1,0 +1,11 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "Setup Worktree",
+      "command": "bun install --frozen-lockfile",
+      "icon": "configure",
+      "runOnWorktreeCreate": true
+    }
+  ]
+}

@@ -9,10 +9,11 @@ only. See [Security and privacy](#security-and-privacy) below.
 
 ## Report a bug or propose a feature
 
-Use the repository's issue templates and include the Decant version, operating
-system and architecture, install method, exact command, expected result, and
-actual result. A small, hand-written synthetic JSONL reproduction is especially
-helpful.
+Use the repository's issue templates. Paste the output of `decant doctor`,
+which reports the version, install method, platform, schema versions, and
+per-source session counts without any transcript content. Add the exact
+command, the expected result, and the actual result. A small, hand-written
+synthetic reproduction is especially helpful.
 
 Report security vulnerabilities privately through [SECURITY.md](SECURITY.md),
 not a public issue.
@@ -24,6 +25,8 @@ Requirements:
 - Bun 1.3 or newer.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
+- Optional: [T3 Code](https://t3.codes) runs `t3.json`'s setup script, which
+  installs dependencies, in each new worktree.
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git
@@ -39,6 +42,25 @@ Install the optional hooks with:
 ```sh
 pre-commit install
 ```
+
+Formatting and the type check run on each commit. The test suite runs on
+`git push`.
+
+## Before you start
+
+Review time is limited, so agree on the problem before writing a large change:
+
+- Bug fixes, pricing updates, and documentation fixes can go straight to a
+  pull request. Link the issue if one exists.
+- New sources, new commands, new UI features, and changes to existing behavior
+  need an issue or a [discussion](https://github.com/dosu-ai/decant/discussions)
+  first, where a maintainer agrees on the direction and scope.
+- Solve one problem per pull request. A second fix or an unrelated cleanup
+  goes in its own pull request.
+
+If a maintainer picks up a stalled pull request, they continue it on a
+maintainer branch with your commits squashed into one and a `Co-authored-by`
+trailer crediting you, then close the original with a link to the new one.
 
 ## Make a change
 
@@ -75,8 +97,15 @@ a pull request:
 bun test
 bunx tsc --noEmit
 bunx biome check .
+bun run scripts/pr-policy.ts
 just check
 ```
+
+`scripts/pr-policy.ts` compares your branch with `origin/main` and fails if a
+committed migration changed, if pricing or routes changed without their docs,
+or if a fixture contains a real home-directory path, email address, or
+key-shaped string. Add the `docs-not-needed` label to a pull request when a
+pricing or route change truly needs no doc update.
 
 `just check` also runs `scripts/dist-check.ts`, which builds and installs staged
 native/npm artifacts, so it needs network access. It validates that the
@@ -93,7 +122,8 @@ Do not weaken or remove tests to make a change pass.
   `refactor:`, and `chore:`.
 - Sign commits. The protected `main` branch requires verified commits.
 - Keep one concern per pull request and explain the user-visible outcome.
-- Include the commands you ran and their results.
+- Fill in every section of the pull request template. Verification names the
+  commands and checks you ran and what you saw.
 - Link the issue the pull request closes when one exists.
 - Keep `main` green, as every pull request needs passing CI and review.
 
@@ -101,8 +131,9 @@ Maintainers squash-merge pull requests.
 
 ## Security and privacy
 
-- Never commit real Claude Code or Codex transcripts, Gemini CLI or OpenCode
-  sessions (including OpenCode's `opencode.db`), a personal Decant archive,
+- Never commit real Claude Code or Codex transcripts, Gemini CLI, OpenCode, or
+  Cursor CLI sessions (including OpenCode's `opencode.db` and Cursor's
+  `store.db`), a personal Decant archive,
   exported real sessions, tokens, keys, or `.env` files. Do not put content from
   these sources in fixtures or issues without sanitising it first.
 - Write fixtures from scratch using invented prompts, paths, tool results, and

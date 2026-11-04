@@ -1,0 +1,41 @@
+name: PR policy
+
+# Runs scripts/pr-policy.ts: committed migrations stay unchanged, pricing and
+# route changes bring their docs, and fixtures hold no real paths or secrets.
+# Labeling events rerun it so the docs-not-needed label takes effect without
+# a new push.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  policy:
+    name: PR policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Full history so the merge base with the base branch is available.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install: "false"
+
+      - name: Check policy
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bun run scripts/pr-policy.ts --base "$BASE_SHA"

@@ -1,5 +1,9 @@
 # Pre-commit hooks for decant. CI remains the source of truth.
 minimum_pre_commit_version: "3.5.0"
+# `pre-commit install` sets up both hooks. The test suite takes tens of
+# seconds, so it runs on push instead of on every commit.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -38,3 +42,4 @@ repos:
         language: system
         files: '^(src|test|fixtures)/.*|^(package\.json|bun\.lock)$'
         pass_filenames: false
+        stages: [pre-push]

@@ -505,6 +505,7 @@ function fixtureConfig(root: string): Config {
     opencodeDir,
     cursorDir: join(root, "cursor"),
     copilotDir: join(root, "copilot"),
+    vscodeCopilotDir: join(root, "vscode"),
   };
 }
 

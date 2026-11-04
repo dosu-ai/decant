@@ -149,6 +149,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         opencodeDir: config.opencodeDir,
         cursorDir: config.cursorDir,
         copilotDir: config.copilotDir,
+        vscodeCopilotDir: config.vscodeCopilotDir,
         version: DECANT_VERSION,
       }),
   },

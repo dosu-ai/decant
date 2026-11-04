@@ -33,7 +33,7 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
 OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
-and, for Codex, the recorded producer metadata splits sessions into
+`vscode_copilot` for Copilot Chat in VS Code, and, for Codex, the recorded producer metadata splits sessions into
 `codex_app`, `codex_cli`, and `codex_other`. That
 split reads only the session's own `originator` and `source` metadata: desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
@@ -207,8 +207,25 @@ build that writes no checkpoints, only the output tokens are known. Cost is
 the underlying model's API list-price estimate, not a count of Copilot premium
 requests.
 
+Copilot Chat in VS Code records usage on each request, and only in builds from
+April 2026 on. `completionTokens` sums the output of every model call the
+request made, and Decant stores it as the turn's output. `promptTokens`, added
+in June 2026 builds, is the prompt size of the request's last model call only,
+with cache reads counted in and no cache split. Decant stores it as the turn's
+input. That figure is also the context the turn ended with, so context-window
+analytics read it directly. A turn with many tool calls sends many prompts, and
+only the last is recorded, so the earlier prompts go uncounted. The last
+prompt's cached part is charged at the full input rate. The cost of these sessions is therefore a rough list-price estimate, not a
+count of Copilot premium requests or credits. VS Code records no reasoning
+token count. Each turn is priced at the model that served it. When the "auto"
+model was selected, that is the model VS Code names in the turn's
+`autoModeResolution` part, else the `resolvedModel` the Copilot extension
+recorded.
+
 Cursor CLI records no token usage, so its sessions store zero tokens and zero
-cost. Session summaries mark them `usage_available: false`. Stats totals,
+cost. Neither does a Copilot Chat session from a VS Code build that predates
+the usage fields. Session summaries mark such sessions
+`usage_available: false`. Stats totals,
 per-model, per-project, and per-day rows, and project rollups count only the
 sessions with usage in `usage_sessions`. Wherever Decant shows cost, a total or
 row made up only of sessions without usage reads "Unavailable" (or "-" in dense

@@ -68,10 +68,10 @@ export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and
-          GitHub Copilot CLI already write and turns them into a searchable session-log index with
-          token, cost, and context-window analytics wherever the source records usage. Nothing
-          leaves this machine.
+          Decant reads the session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub
+          Copilot CLI, and Copilot Chat in VS Code already write and turns them into a searchable
+          session-log index with token, cost, and context-window analytics wherever the source
+          records usage. Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button

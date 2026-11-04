@@ -27,7 +27,7 @@ FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde
 
 RUN groupadd --system decant \
     && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \
-    && mkdir -p /var/lib/decant /sources/claude /sources/codex /sources/gemini /sources/cursor /sources/copilot \
+    && mkdir -p /var/lib/decant /sources/claude /sources/codex /sources/gemini /sources/cursor /sources/copilot /sources/vscode \
     && chown -R decant:decant /var/lib/decant /sources
 
 COPY --from=build /usr/local/bin/decant /usr/local/bin/decant
@@ -41,6 +41,7 @@ ENV DECANT_CODEX_DIR=/sources/codex
 ENV DECANT_GEMINI_DIR=/sources/gemini
 ENV DECANT_CURSOR_DIR=/sources/cursor
 ENV DECANT_COPILOT_DIR=/sources/copilot
+ENV DECANT_VSCODE_COPILOT_DIR=/sources/vscode
 # Tells `decant update` to print `docker pull` instead of rewriting a binary the
 # decant user cannot write. Marker files like /.dockerenv are not used because
 # devcontainers have them too, and Kubernetes and containerd create none.

@@ -1195,7 +1195,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot]
     Model:
       name: model
       in: query
@@ -1488,7 +1488,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, version]
       properties:
         dbPath:
           type: string
@@ -1503,6 +1503,8 @@ components:
         cursorDir:
           type: string
         copilotDir:
+          type: string
+        vscodeCopilotDir:
           type: string
         version:
           type: string
@@ -1947,8 +1949,9 @@ components:
         usage_available:
           type: boolean
           description: >-
-            False for a session from a source that records no token usage
-            (Cursor CLI, unless one of its messages carries usage). Token
+            False for a session from a source that may record no token usage
+            (Cursor CLI, or Copilot Chat in VS Code from builds that predate
+            its usage fields) when none of its messages carries usage. Token
             totals and estimated_cost_usd are then 0 because usage is unknown,
             not because the session was free.
         estimated_cost_usd:
@@ -2770,7 +2773,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot]
         label:
           type: string
       additionalProperties: false

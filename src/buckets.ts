@@ -11,6 +11,8 @@ const SHELL_TOOLS = new Set([
   "local_shell",
   "powershell",
   "run_shell_command",
+  // Copilot Chat in VS Code.
+  "run_in_terminal",
   "shell",
 ]);
 const CODE_TOOLS = new Set([
@@ -23,6 +25,12 @@ const CODE_TOOLS = new Set([
   "replace",
   // Copilot CLI's new-file tool.
   "create",
+  // Copilot Chat in VS Code's file edits.
+  "create_file",
+  "replace_string_in_file",
+  "multi_replace_string_in_file",
+  "insert_edit_into_file",
+  "edit_notebook_file",
 ]);
 // Codex polls a long-running `exec_command` (almost always a build or test run)
 // through `write_stdin`; the poll carries that command's output and wait. It is
@@ -36,6 +44,8 @@ const PLANNING_TOOLS = new Set([
   "write_todos",
   // Copilot CLI's todo list.
   "update_todo",
+  // Copilot Chat in VS Code's todo list.
+  "manage_todo_list",
   // Claude Code's task list, which replaced TodoWrite.
   "taskcreate",
   "taskupdate",
@@ -303,6 +313,8 @@ const USER_QUESTION_TOOLS = new Set([
   "askuserquestion",
   "request_user_input",
   "request_user_input_async",
+  // Copilot Chat in VS Code.
+  "vscode_askquestions",
 ]);
 
 /** True for a tool that asks the user a question, in any spelling, including

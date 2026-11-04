@@ -1,13 +1,13 @@
 {
-  "sessions": 16,
-  "usage_sessions": 15,
-  "messages": 121,
-  "tool_calls": 54,
-  "input_tokens": 29728,
-  "output_tokens": 2353,
+  "sessions": 19,
+  "usage_sessions": 17,
+  "messages": 144,
+  "tool_calls": 59,
+  "input_tokens": 57228,
+  "output_tokens": 3413,
   "cache_read_tokens": 53208,
   "cache_creation_tokens": 2832,
   "reasoning_tokens": 217,
   "est_reasoning_tokens": 494,
-  "estimated_cost_usd": 0.1790388
+  "estimated_cost_usd": 0.2696888
 }

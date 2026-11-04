@@ -2,8 +2,8 @@
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
-Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, or GitHub Copilot CLI;
-`~/.decant/decant.db` is a searchable, rebuildable index plus Decant-owned user
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
+Copilot Chat in VS Code; `~/.decant/decant.db` is a searchable, rebuildable index plus Decant-owned user
 state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
@@ -88,6 +88,19 @@ By default Decant discovers:
   `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set, Copilot moves older
   history into `events.<n>.jsonl` archives and starts a new `events.jsonl`
   that replays that history. Decant reads only `events.jsonl`.
+- Copilot Chat in VS Code sessions in VS Code's `User` directory, or the
+  directory from `--vscode-copilot-dir` or `DECANT_VSCODE_COPILOT_DIR`. With
+  neither set, Decant reads both VS Code's and VS Code Insiders' `User`
+  directories. A workspace window's sessions are
+  `workspaceStorage/<id>/chatSessions/<session id>.jsonl`, and an empty
+  window's are under `globalStorage/emptyWindowChatSessions/`. VS Code 1.109
+  and later write each session as a change log that it appends to and
+  sometimes rewrites whole; earlier builds wrote `<session id>.json`. Both are
+  read read-only, and Decant re-reads the whole file when it changes. VS Code
+  keeps the old `.json` after it moves a session to the log, so Decant reads
+  the `.jsonl` when both exist. When VS Code copies an empty window's session
+  into a workspace, Decant reads the copy written most recently. It skips
+  `globalStorage/transferredChatSessions`, which holds short-lived copies.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
@@ -124,7 +137,10 @@ schedules opens it read-only. Cursor chat directories are watched recursively,
 ignoring `-shm` changes, which every read of a store makes. The Copilot
 session-state directory is watched recursively, reacting only to changes to a
 session's `events.jsonl`, not to the plans, checkpoints, and files Copilot
-also keeps in each session directory.
+also keeps in each session directory. VS Code's `workspaceStorage` directory is
+watched recursively, reacting only to files directly in a workspace's
+`chatSessions` directory, and its `emptyWindowChatSessions` directory is
+watched on its own.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
@@ -389,8 +405,8 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, or GitHub Copilot CLI
-record remains on disk.
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
+VS Code record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting

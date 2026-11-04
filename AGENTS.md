@@ -9,8 +9,9 @@ truth.
 
 Decant is a local-first Bun and TypeScript application that turns Claude Code,
 Codex, Gemini CLI, and GitHub Copilot CLI JSONL session logs, OpenCode's
-SQLite session store, and Cursor CLI's per-chat SQLite stores into a
-normalized, full-text-searchable SQLite archive. The `decant` CLI owns
+SQLite session store, Cursor CLI's per-chat SQLite stores, and Copilot Chat in
+VS Code's chat session files into a normalized, full-text-searchable SQLite
+archive. The `decant` CLI owns
 parsing, ingest, reads, reports, distillation, recommendations, watch mode, and
 the React UI served by `decant serve`.
 
@@ -48,7 +49,8 @@ only needed when validating the container image.
 The default archive is `~/.decant/decant.db`. Override it with `DECANT_DB` or
 `--db`. Set `DECANT_NO_SYNC` or pass `--no-sync` whenever a command points at a
 scratch archive, or automatic sync may populate it from the real Claude Code,
-Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI directories.
+Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and VS Code
+directories.
 
 ## Definition of done
 
@@ -102,7 +104,8 @@ A change is ready when:
 
 - Never commit secrets, API keys, tokens, `.env` files, private keys, real
   transcripts, exports from real sessions, or personal archive databases.
-- `~/.claude`, `~/.codex`, `~/.copilot`, and the other source directories
+- `~/.claude`, `~/.codex`, `~/.copilot`, VS Code's `User` directory, and the
+  other source directories
   contain private content. Fixtures must be written from scratch, and
   `test/golden/` must be generated only from those synthetic fixtures.
 - Keep source parsing resilient, meaning malformed records should become

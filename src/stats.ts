@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
+import type { Tool } from "./model.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
@@ -28,13 +29,18 @@ export interface StatsFilter extends DateFilter {
   tool?: string | null;
 }
 
-/** 1 unless the session comes from a source that records no token usage.
- * Cursor CLI stores none, so a Cursor session's zero cost means "unknown",
- * not "free", unless one of its messages does carry usage. Other sources
- * always count: Codex can report usage only as session totals, and a zero
- * total there is a real zero. */
+/** Sources whose sessions may hold no token usage at all: Cursor CLI stores
+ * none, and VS Code builds from before April 2026 wrote none for Copilot
+ * Chat. */
+export const USAGE_OPTIONAL_TOOLS = ["cursor", "vscode_copilot"] as const satisfies readonly Tool[];
+
+/** 1 unless the session comes from a source that may record no token usage
+ * and none of its messages carries any. There a zero cost means "unknown",
+ * not "free". Other sources always count: Codex can report usage only as
+ * session totals, and a zero total there is a real zero. */
 export function sessionUsageAvailableSql(alias: string): string {
-  return `(${alias}.tool != 'cursor' OR EXISTS (
+  const optional = USAGE_OPTIONAL_TOOLS.map((tool) => `'${tool}'`).join(", ");
+  return `(${alias}.tool NOT IN (${optional}) OR EXISTS (
            SELECT 1 FROM message usage_message
            WHERE usage_message.session_id = ${alias}.id
              AND (usage_message.input_tokens IS NOT NULL

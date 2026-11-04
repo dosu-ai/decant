@@ -2,12 +2,12 @@
   {
     "key": "md",
     "project": null,
-    "reads": 1,
-    "edits": 1,
+    "reads": 2,
+    "edits": 2,
     "writes": 5,
     "deletes": 0,
-    "sessions": 5,
-    "last_touched_at": "2026-10-01T10:01:09.300Z"
+    "sessions": 6,
+    "last_touched_at": "2026-10-06T09:00:09.000Z"
   },
   {
     "key": "rs",

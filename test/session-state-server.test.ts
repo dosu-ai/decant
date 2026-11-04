@@ -30,6 +30,7 @@ function freshConfig(): Config {
     opencodeDir,
     cursorDir: join(root, "cursor"),
     copilotDir: join(root, "copilot"),
+    vscodeCopilotDir: join(root, "vscode"),
   };
 }
 

@@ -22,7 +22,8 @@ export interface ChangedFile {
 const MIGRATION_START = /^ {4}if \(current < (\d+)\) \{$/;
 const MIGRATION_END = /^ {4}\}$/;
 const LATEST_VERSION = /^export const LATEST_SCHEMA_VERSION = (\d+);$/m;
-const BASELINE_VERSION = /if \(version < (\d+)\) \{\s*throw new SchemaTooOldError/;
+const GUARD = /function assertSupportedSchemaVersion\([^)]*\)[^{]*\{([\s\S]*?)\n\}/;
+const BASELINE_VERSION = /if \(version < (\d+)\) \{\s*throw new SchemaTooOldError/g;
 
 /**
  * Each `if (current < N) { ... }` block in migrate(), keyed by N, without
@@ -45,6 +46,14 @@ export function extractMigrations(source: string): Map<number, string> {
     i = end;
   }
   return blocks;
+}
+
+// Read from the runtime guard only, without comments. The lowest bound wins, so
+// a stray match can only make the check stricter. NaN when the guard is gone.
+function oldestSupportedVersion(source: string): number {
+  const guard = (GUARD.exec(source)?.[1] ?? "").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+  const bounds = [...guard.matchAll(BASELINE_VERSION)].map((match) => Number(match[1]));
+  return bounds.length === 0 ? Number.NaN : Math.min(...bounds);
 }
 
 export function latestSchemaVersion(source: string): number | null {
@@ -73,7 +82,7 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
       },
     ];
   }
-  const baseline = Number(BASELINE_VERSION.exec(headSource)?.[1] ?? Number.NaN);
+  const baseline = oldestSupportedVersion(headSource);
   for (const [version, block] of base) {
     const current = head.get(version);
     if (current == null) {

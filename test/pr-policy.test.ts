@@ -22,9 +22,11 @@ function dbSource(latest: number, blocks: Record<number, string>, baseline = 0):
     .join("\n");
   return [
     `export const LATEST_SCHEMA_VERSION = ${latest};`,
+    "function assertSupportedSchemaVersion(version) {",
     `  if (version < ${baseline}) {`,
     "    throw new SchemaTooOldError(version);",
     "  }",
+    "}",
     "function migrate(db, current) {",
     body,
     "}",
@@ -80,6 +82,20 @@ describe("frozen migrations", () => {
     );
     const dropMiddle = dbSource(3, { 1: "CREATE TABLE a (x)", 3: "CREATE INDEX i" }, 1);
     expect(checkFrozenMigrations(base, dropMiddle)[0]?.message).toContain("migration 2 is missing");
+  });
+
+  test("reads the baseline only from the runtime guard", () => {
+    const blocks = { 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" };
+    const decoy = [
+      "// if (version < 1) { throw new SchemaTooOldError(version) }",
+      "function other(version) {",
+      "  if (version < 1) {",
+      "    throw new SchemaTooOldError(version);",
+      "  }",
+      "}",
+    ].join("\n");
+    const head = `${decoy}\n${dbSource(3, blocks)}`;
+    expect(checkFrozenMigrations(base, head)[0]?.message).toContain("migration 1 is missing");
   });
 
   test("rejects a migration whose opening line no longer parses", () => {

@@ -289,6 +289,62 @@ describe("parseVscodeCopilotSession", () => {
     });
     expect(session.messages[2]?.blocks[0]).toMatchObject({ isError: true });
   });
+
+  test("keeps a request that never finished, using its last recorded usage", () => {
+    // VS Code quit mid-turn: no `result`, so no toolCallRounds to supply
+    // arguments, and the encrypted reasoning leaves the thinking text empty.
+    const terminal = (pastTense: string) => ({
+      kind: "toolInvocationSerialized",
+      toolId: "run_in_terminal",
+      toolCallId: "call_term",
+      isComplete: true,
+      toolSpecificData: { kind: "terminal", commandLine: { original: "ls" } },
+      pastTenseMessage: { value: pastTense },
+    });
+    const content = logWith(
+      {
+        modelId: "copilot/auto",
+        promptTokens: 900,
+        completionTokens: 20,
+        response: [{ kind: "markdownContent", content: { value: "Looking around." } }],
+      },
+      [
+        { kind: 1, k: ["requests", 0, "modelState"], v: { value: 0 } },
+        { kind: 1, k: ["requests", 0, "completionTokens"], v: 70 },
+        { kind: 1, k: ["requests", 0, "promptTokens"], v: 1200 },
+        {
+          kind: 2,
+          k: ["requests", 0, "response"],
+          i: 1,
+          v: [
+            {
+              kind: "toolInvocationSerialized",
+              toolId: "copilot_listDirectory",
+              toolCallId: "call_list",
+              isComplete: true,
+              invocationMessage: { value: "Reading [](file:///synthetic)" },
+            },
+            {
+              kind: "thinking",
+              value: "",
+              id: "encrypted",
+              metadata: { vscodeReasoningDone: true },
+            },
+            terminal("Running `ls`"),
+          ],
+        },
+        { kind: 2, k: ["requests", 0, "response"], i: 3, v: [terminal("Ran `ls`")] },
+      ],
+    );
+    const { session, issues } = parseVscodeCopilotSession("fallback", content);
+    expect(issues).toEqual([]);
+    const blocks = session.messages.flatMap((message) => message.blocks);
+    expect(blocks.some((block) => block.blockType === "thinking")).toBe(false);
+    expect(
+      blocks.filter((block) => block.blockType === "tool_use").map((block) => block.toolName),
+    ).toEqual(["list_dir", "run_in_terminal"]);
+    expect(session.totals).toMatchObject({ input: 1200, output: 70 });
+  });
 });
 
 describe("VS Code naming helpers", () => {

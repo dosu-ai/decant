@@ -3,12 +3,11 @@ name: PR policy
 # Runs scripts/pr-policy.ts: committed migrations stay unchanged, pricing and
 # route changes bring their docs, and fixtures hold no real paths or secrets.
 # Labeling events rerun it so the docs-not-needed label takes effect without
-# a new push.
+# a new push. It runs on pull requests only: a push to main has no labels, so
+# the docs rules would fail changes the label already approved.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-  push:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,5 +36,5 @@ jobs:
       - name: Check policy
         env:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bun run scripts/pr-policy.ts --base "$BASE_SHA"

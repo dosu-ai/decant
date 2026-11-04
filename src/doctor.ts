@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { homedir, release } from "node:os";
-import { sep } from "node:path";
+import { resolve, sep } from "node:path";
 import type { Config } from "./config.ts";
 import { LATEST_SCHEMA_VERSION } from "./db.ts";
 import { discover, INGEST_PIPELINE_REVISION } from "./ingest.ts";
@@ -28,6 +28,8 @@ export interface DoctorReport {
   sources: DoctorSource[];
   /** Set by discovery failures; source counts are then incomplete. */
   discovery_error: string | null;
+  /** Event names of warnings discovery raised, such as an unreadable OpenCode database. */
+  discovery_warnings: string[];
   env: string[];
 }
 
@@ -69,8 +71,13 @@ export function collectDoctorReport(config: Config, options: DoctorOptions = {})
 
   let found: Partial<Record<Tool, number>> = {};
   let discoveryError: string | null = null;
+  const warnings = new Set<string>();
   try {
-    found = countByTool((options.discover ?? discover)(config).map((file) => file.tool));
+    const files = (options.discover ?? discover)(config, (_message, properties) => {
+      const name = properties["event.name"];
+      warnings.add(typeof name === "string" ? name : "unknown warning");
+    });
+    found = countByTool(files.map((file) => file.tool));
   } catch (error) {
     discoveryError = errorName(error);
   }
@@ -95,6 +102,7 @@ export function collectDoctorReport(config: Config, options: DoctorOptions = {})
       };
     }),
     discovery_error: discoveryError,
+    discovery_warnings: [...warnings].sort(),
     env: Object.keys(env)
       .filter(
         (name) =>
@@ -106,8 +114,15 @@ export function collectDoctorReport(config: Config, options: DoctorOptions = {})
 }
 
 /** `~/...` for paths under the home directory, CUSTOM_PATH for anything else. */
-export function displayPath(path: string, home: string): string {
-  if (home === "" || home === sep) {
+export function displayPath(rawPath: string, rawHome: string): string {
+  if (rawHome === "") {
+    return CUSTOM_PATH;
+  }
+  // Resolved first so `~/../other` cannot leave the home directory in the
+  // printed form, and so a trailing separator on either side does not matter.
+  const home = resolve(rawHome);
+  const path = resolve(rawPath);
+  if (home === resolve(sep)) {
     return CUSTOM_PATH;
   }
   if (path === home) {

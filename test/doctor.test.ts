@@ -26,12 +26,21 @@ const install = { channel: "source" as const, binaryPath: null };
 
 describe("displayPath", () => {
   test("shows home-relative paths and hides everything else", () => {
-    expect(displayPath("/home/al", "/home/al")).toBe("~");
-    expect(displayPath("/home/al/.codex", "/home/al")).toBe("~/.codex");
-    expect(displayPath("/home/al/", "/home/al/")).toBe("~");
-    expect(displayPath("/home/alice/.codex", "/home/al")).toBe(CUSTOM_PATH);
-    expect(displayPath("/data/sessions", "/home/al")).toBe(CUSTOM_PATH);
+    expect(displayPath("/home/dev", "/home/dev")).toBe("~");
+    expect(displayPath("/home/dev/.codex", "/home/dev")).toBe("~/.codex");
+    expect(displayPath("/home/dev/", "/home/dev/")).toBe("~");
+    // A sibling that shares the home directory's name as a prefix is outside it.
+    expect(displayPath("/home/dev/workspace/.codex", "/home/dev/work")).toBe(CUSTOM_PATH);
+    expect(displayPath("/data/sessions", "/home/dev")).toBe(CUSTOM_PATH);
     expect(displayPath("/anything", "")).toBe(CUSTOM_PATH);
+    expect(displayPath("/anything", "/")).toBe(CUSTOM_PATH);
+  });
+
+  test("resolves dot segments before deciding a path is under home", () => {
+    expect(displayPath("/home/dev/../client/archive.db", "/home/dev")).toBe(CUSTOM_PATH);
+    expect(displayPath("/home/dev/./a/../.decant/decant.db", "/home/dev")).toBe(
+      "~/.decant/decant.db",
+    );
   });
 });
 
@@ -90,9 +99,35 @@ describe("collectDoctorReport", () => {
     });
 
     expect(report.discovery_error).toBe("Error");
+    expect(report.discovery_warnings).toEqual([]);
     expect(report.archive.exists).toBe(true);
     expect(report.archive.error).not.toBeNull();
     expect(JSON.stringify(report)).not.toContain("private-project");
+  });
+
+  test("keeps only the event name of a discovery warning", () => {
+    const { home, env } = freshHome();
+    const report = collectDoctorReport(resolveConfig({ env, homeDir: home }), {
+      env,
+      homeDir: home,
+      install,
+      discover: (_config, warn) => {
+        warn?.("OpenCode database could not be opened.", {
+          "event.name": "decant.ingest.opencode_open_failed",
+          "file.path": join(home, "private-project", "opencode.db"),
+          "error.message": "unable to open database file",
+        });
+        warn?.("Unnamed warning.", {});
+        return [];
+      },
+    });
+
+    expect(report.discovery_warnings).toEqual([
+      "decant.ingest.opencode_open_failed",
+      "unknown warning",
+    ]);
+    expect(JSON.stringify(report)).not.toContain("private-project");
+    expect(JSON.stringify(report)).not.toContain("unable to open");
   });
 });
 

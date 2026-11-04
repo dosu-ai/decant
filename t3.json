@@ -5,7 +5,8 @@
       "name": "Setup Worktree",
       "command": "bun install --frozen-lockfile",
       "icon": "configure",
-      "runOnWorktreeCreate": true
+      "runOnWorktreeCreate": true,
+      "async": false
     }
   ]
 }

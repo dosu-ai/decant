@@ -53,6 +53,9 @@ export function renderDoctor(report: DoctorReport): string {
   if (report.discovery_error != null) {
     lines.push(row("discovery", `failed: ${report.discovery_error}`));
   }
+  if (report.discovery_warnings.length > 0) {
+    lines.push(row("warnings", report.discovery_warnings.join(", ")));
+  }
   lines.push(row("env", report.env.length === 0 ? "none set" : report.env.join(", ")));
   lines.push(
     `\nNo transcript content is included. Paths outside your home directory show as ${CUSTOM_PATH}.\n`,

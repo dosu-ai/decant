@@ -1,7 +1,7 @@
 // Checks AGENTS.md rules against the merge base with --base (default
 // origin/main): frozen migrations, docs for pricing and routes, and synthetic
 // fixtures. Usage: bun run scripts/pr-policy.ts [--base <ref>]
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const DOCS_OVERRIDE_LABEL = "docs-not-needed";
@@ -14,8 +14,9 @@ export interface Finding {
 
 export interface ChangedFile {
   path: string;
-  /** Unified diff of this file against the base; empty for deletions read elsewhere. */
+  /** Unified diff of this file against the base. */
   diff: string;
+  deleted?: boolean;
 }
 
 const MIGRATION_START = /^ {4}if \(current < (\d+)\) \{$/;
@@ -73,7 +74,14 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
   for (const [version, block] of base) {
     const current = head.get(version);
     if (current == null) {
-      if (version > oldestKept) {
+      // A block that is still there but no longer parses could hide an edit.
+      if (new RegExp(`current\\s*<\\s*${version}\\b`).test(headSource)) {
+        findings.push({
+          rule: "frozen-migration",
+          file,
+          message: `migration ${version} no longer matches \`    if (current < ${version}) {\`. Restore its opening line so the check can compare it.`,
+        });
+      } else if (version > oldestKept) {
         findings.push({
           rule: "frozen-migration",
           file,
@@ -142,7 +150,7 @@ export function checkDocs(
   rules: DocRule[] = DOC_RULES,
 ): Finding[] {
   if (labels.has(DOCS_OVERRIDE_LABEL)) return [];
-  const paths = new Set(changed.map((file) => file.path));
+  const paths = new Set(changed.filter((file) => !file.deleted).map((file) => file.path));
   const findings: Finding[] = [];
   for (const rule of rules) {
     const trigger = changed.find((file) => rule.triggeredBy(file));
@@ -181,7 +189,6 @@ const SECRETS: [string, RegExp][] = [
 ];
 
 export function scanForPrivateData(path: string, content: string): Finding[] {
-  if (content.includes("\0")) return [];
   const findings: Finding[] = [];
   const report = (message: string): void => {
     findings.push({ rule: "private-data", file: path, message });
@@ -233,7 +240,11 @@ export function runPolicy({ root, base, labels }: PolicyInput): Finding[] {
     .split("\n")
     .filter(Boolean);
   const changed: ChangedFile[] = [
-    ...tracked.map((path) => ({ path, diff: git(["diff", mergeBase, "--", path], root) })),
+    ...tracked.map((path) => ({
+      path,
+      diff: git(["diff", mergeBase, "--", path], root),
+      deleted: !existsSync(join(root, path)),
+    })),
     ...untracked.map((path) => ({
       path,
       diff: readFileSync(join(root, path), "utf8")

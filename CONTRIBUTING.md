@@ -102,10 +102,11 @@ just check
 ```
 
 `scripts/pr-policy.ts` compares your branch with `origin/main` and fails if a
-committed migration changed, if pricing or routes changed without their docs,
-or if a fixture contains a real home-directory path, email address, or
-key-shaped string. Add the `docs-not-needed` label to a pull request when a
-pricing or route change truly needs no doc update.
+committed migration changed, if a model rate or the route manifest
+(`src/route-paths.ts`) changed without its docs, or if a fixture contains a
+real home-directory path, email address, or key-shaped string. Add the
+`docs-not-needed` label to a pull request when such a change truly needs no
+doc update.
 
 `just check` also runs `scripts/dist-check.ts`, which builds and installs staged
 native/npm artifacts, so it needs network access. It validates that the

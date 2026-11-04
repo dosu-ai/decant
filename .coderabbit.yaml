@@ -21,6 +21,7 @@ reviews:
           - "AGENTS.md"
           - "Dockerfile"
           - "bun.lock"
+          - "bunfig.toml"
           - "install.sh"
           - "npm/**"
           - "package.json"
@@ -33,6 +34,7 @@ reviews:
           - "src/server.ts"
           - "src/server/**"
           - "src/update.ts"
+          - "tsconfig.json"
   path_filters:
     - "!test/golden/**"
     - "!bun.lock"
@@ -103,8 +105,9 @@ reviews:
         mode: "error"
         instructions: >-
           Fail when the pull request adds an outbound network call, a hosted
-          service dependency, or an LLM call anywhere outside src/update.ts.
-          Pass otherwise.
+          service dependency, or an LLM call anywhere outside src/update.ts,
+          or adds a Bun macro import (`with { type: "macro" }`), which runs
+          at build time inside the release job. Pass otherwise.
 
 knowledge_base:
   code_guidelines:

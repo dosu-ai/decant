@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -103,6 +104,26 @@ describe("collectDoctorReport", () => {
     expect(report.archive.exists).toBe(true);
     expect(report.archive.error).not.toBeNull();
     expect(JSON.stringify(report)).not.toContain("private-project");
+  });
+
+  test("reports a non-integer schema version as unreadable without printing it", () => {
+    const { home, env } = freshHome();
+    const dbPath = join(home, ".decant", "decant.db");
+    mkdirSync(join(home, ".decant"), { recursive: true });
+    const db = new Database(dbPath);
+    db.exec("CREATE TABLE schema_migrations (version INTEGER)");
+    db.query("INSERT INTO schema_migrations VALUES (?)").run("/private/customer/secret.db");
+    db.close();
+    const report = collectDoctorReport(resolveConfig({ env, homeDir: home }), {
+      env,
+      homeDir: home,
+      install,
+      discover: () => [],
+    });
+
+    expect(report.archive.schema_version).toBeNull();
+    expect(report.archive.error).toBe("unreadable schema_migrations");
+    expect(JSON.stringify(report)).not.toContain("secret.db");
   });
 
   test("keeps only the event name of a discovery warning", () => {

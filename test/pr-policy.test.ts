@@ -78,6 +78,15 @@ describe("frozen migrations", () => {
     );
   });
 
+  test("rejects an oldest migration whose opening line no longer parses", () => {
+    const head = base
+      .replace("    if (current < 1) {", "    if (current < 1) { // first")
+      .replace("CREATE TABLE a (x)", "DROP TABLE session");
+    expect(checkFrozenMigrations(base, head)[0]?.message).toContain(
+      "migration 1 no longer matches",
+    );
+  });
+
   test("rejects a lower LATEST_SCHEMA_VERSION and a restructured migrate()", () => {
     expect(checkFrozenMigrations(base, base.replace("= 3;", "= 2;"))[0]?.message).toContain(
       "went down",
@@ -128,6 +137,15 @@ describe("docs rules", () => {
     expect(findings[0]?.message).not.toContain("openapi.yaml and");
   });
 
+  test("deleting a required doc does not satisfy the rule", () => {
+    const changed = [
+      { path: "src/route-paths.ts", diff: diffOf(['  health: "/api/health",']) },
+      { path: "docs/api/openapi.yaml", diff: "", deleted: true },
+      { path: "docs/api/routes.md", diff: "", deleted: true },
+    ];
+    expect(checkDocs(changed, new Set())[0]?.message).toContain("docs/api/openapi.yaml");
+  });
+
   test("the override label skips the docs rules", () => {
     const changed = [{ path: "src/route-paths.ts", diff: "" }];
     expect(checkDocs(changed, new Set([DOCS_OVERRIDE_LABEL]))).toEqual([]);
@@ -155,6 +173,11 @@ describe("private data scan", () => {
       expect(findings).toHaveLength(1);
       expect(findings[0]?.rule).toBe("private-data");
     }
+  });
+
+  test("still scans a fixture that contains a NUL byte", () => {
+    const findings = scanForPrivateData("fixtures/x.jsonl", '{"cwd":"/home/jdoe/src"}\0\n');
+    expect(findings).toHaveLength(1);
   });
 
   test("flags emails and credentials without repeating the secret", () => {

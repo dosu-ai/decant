@@ -172,9 +172,14 @@ function inspectArchive(path: string, display: (path: string) => string): Doctor
       .get();
     if (hasMigrations != null) {
       const row = db.query("SELECT max(version) AS version FROM schema_migrations").get() as {
-        version: number | null;
+        version: unknown;
       };
-      archive.schema_version = row.version;
+      // A damaged archive can hold any text here, including a path.
+      if (Number.isSafeInteger(row.version) && (row.version as number) >= 0) {
+        archive.schema_version = row.version as number;
+      } else if (row.version != null) {
+        archive.error = "unreadable schema_migrations";
+      }
     }
     const hasSessions = db
       .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session'")

@@ -133,8 +133,8 @@ A change is ready when:
   assets.
 - End the description with the model and harness that wrote the change.
 - `bun run scripts/pr-policy.ts` runs the same policy checks as CI: committed
-  migrations unchanged, docs updated alongside pricing and routes, and
-  fixtures free of real paths and secrets.
+  migrations unchanged, docs updated alongside rate and route-manifest
+  changes, and fixtures free of real paths and secrets.
 - When babysitting a pull request, wait for check and review events instead of
   polling. Check each bot finding against the source, fix the real ones, and
   answer false positives with a reason.

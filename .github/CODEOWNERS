@@ -1,6 +1,8 @@
-# Changes here need a maintainer's review. Everything else can merge on a
-# CodeRabbit approval; keep this list in step with auto_approvals in
-# .coderabbit.yaml.
+# Changes here need a maintainer's review because they configure CI, the
+# release jobs, or what gets published. Everything else can merge on a
+# CodeRabbit approval, and src/ still ships in every release, so review the
+# changes since the last tag before tagging. Keep this list in step with
+# auto_approvals in .coderabbit.yaml.
 
 /.coderabbit.yaml @teedole
 /.github/ @teedole
@@ -8,6 +10,7 @@
 /AGENTS.md @teedole
 /Dockerfile @teedole
 /bun.lock @teedole
+/bunfig.toml @teedole
 /install.sh @teedole
 /npm/ @teedole
 /package.json @teedole
@@ -20,3 +23,4 @@
 /src/server.ts @teedole
 /src/server/ @teedole
 /src/update.ts @teedole
+/tsconfig.json @teedole

@@ -73,6 +73,16 @@ import { basename, resolveWorktreeRoots } from "./worktree.ts";
 
 const logger = getDecantLogger("ingest");
 
+/**
+ * Receives discovery warnings. Ingest logs them; `decant doctor` keeps only the
+ * event name, because the properties carry database paths and error messages
+ * that do not belong in a report pasted into a public issue.
+ */
+export type DiscoveryWarn = (message: string, properties: Record<string, unknown>) => void;
+
+const logDiscoveryWarning: DiscoveryWarn = (message, properties) =>
+  logger.warning(message, properties);
+
 export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
@@ -155,9 +165,12 @@ interface ToolUseBlock {
   block: NormalizedBlock;
 }
 
-export function discover(config: IngestConfig): SourceFile[] {
+export function discover(
+  config: IngestConfig,
+  warn: DiscoveryWarn = logDiscoveryWarning,
+): SourceFile[] {
   if (config.sourcePaths != null && config.sourcePaths.length > 0) {
-    return discoverSourcePaths(config.sourcePaths);
+    return discoverSourcePaths(config.sourcePaths, warn);
   }
 
   const out: SourceFile[] = [];
@@ -167,7 +180,7 @@ export function discover(config: IngestConfig): SourceFile[] {
   if (config.geminiDir != null) {
     collectGemini(config.geminiDir, out);
   }
-  out.push(...discoverOpenCode(openCodeDatabasePaths(config)));
+  out.push(...discoverOpenCode(openCodeDatabasePaths(config), warn));
   if (config.cursorDir != null) {
     collect(config.cursorDir, "cursor", false, (name) => name === CURSOR_STORE_NAME, out);
   }
@@ -177,13 +190,16 @@ export function discover(config: IngestConfig): SourceFile[] {
   return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
 }
 
-export function discoverSourcePaths(paths: string[]): SourceFile[] {
+export function discoverSourcePaths(
+  paths: string[],
+  warn: DiscoveryWarn = logDiscoveryWarning,
+): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
   for (const path of paths) {
     collectSourcePath(path, out, databases);
   }
-  return [...dedupeSourceFiles(out), ...discoverOpenCode(databases)];
+  return [...dedupeSourceFiles(out), ...discoverOpenCode(databases, warn)];
 }
 
 /** `opencode.db` and channel variants under the data directory, plus the
@@ -224,7 +240,7 @@ export function openCodeSourcePath(ref: OpenCodeSessionRef): string {
  * stable one, or both formats of one database once 2.x migrated it while a 1.x
  * binary still writes it) is read from the copy OpenCode updated last; see
  * `isNewerOpenCodeCopy`. Databases that cannot be opened are skipped. */
-function discoverOpenCode(dbPaths: string[]): SourceFile[] {
+function discoverOpenCode(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
   const best = new Map<string, OpenCodeSessionRef>();
   // One database reached through a symlink, a relative path, or both the data
   // directory and OPENCODE_DB is opened once and names one virtual path.
@@ -236,7 +252,7 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
     try {
       store = OpenCodeStore.open(dbPath);
     } catch (error) {
-      logger.warning("OpenCode database could not be opened.", {
+      warn("OpenCode database could not be opened.", {
         "event.name": "decant.ingest.opencode_open_failed",
         "file.path": dbPath,
         "error.message": error instanceof Error ? error.message : String(error),
@@ -247,7 +263,7 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
       if (store.isPreSplitDatabase()) {
         // Its `session` rows are 2.x-shaped, so the 1.x reader would misread
         // them; OpenCode converts the file the next time a 2.x release opens it.
-        logger.warning("OpenCode database uses a pre-release layout and was skipped.", {
+        warn("OpenCode database uses a pre-release layout and was skipped.", {
           "event.name": "decant.ingest.opencode_unsupported_layout",
           "file.path": dbPath,
         });
@@ -274,7 +290,7 @@ function discoverOpenCode(dbPaths: string[]): SourceFile[] {
         throw legacyError;
       }
     } catch (error) {
-      logger.warning("OpenCode database could not be listed.", {
+      warn("OpenCode database could not be listed.", {
         "event.name": "decant.ingest.opencode_list_failed",
         "file.path": dbPath,
         "error.message": error instanceof Error ? error.message : String(error),

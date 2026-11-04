@@ -1,19 +1,26 @@
-# Code owners for decant.
-#
-# The last matching pattern wins, so the global owner comes first and the
-# security-sensitive paths follow. Every path listed here exists in the tree;
-# a pattern that matches nothing silently owns nothing.
+# Changes here need a maintainer's review because they configure CI, the
+# release jobs, or what gets published. Everything else can merge on a
+# CodeRabbit approval, and src/ still ships in every release, so review the
+# changes since the last tag before tagging. Keep this list in step with
+# auto_approvals in .coderabbit.yaml.
 
-* @teedole
-
-# Release and supply chain: CI workflows, packaging manifests, the npm
-# launcher, and the curl-to-shell installer all run on other people's machines.
-/.github/workflows/ @teedole
-/packaging/ @teedole
-/npm/ @teedole
+/.coderabbit.yaml @teedole
+/.github/ @teedole
+/.pre-commit-config.yaml @teedole
+/AGENTS.md @teedole
+/Dockerfile @teedole
+/bun.lock @teedole
+/bunfig.toml @teedole
 /install.sh @teedole
-
-# The only network listener in the project.
+/npm/ @teedole
+/package.json @teedole
+/packaging/ @teedole
+/scripts/ @teedole
+/src/db.ts @teedole
+/src/schema-manifest.ts @teedole
+/src/schema.sql @teedole
+/src/route-paths.ts @teedole
 /src/server.ts @teedole
 /src/server/ @teedole
-/src/route-paths.ts @teedole
+/src/update.ts @teedole
+/tsconfig.json @teedole

@@ -56,6 +56,13 @@ function oldestSupportedVersion(source: string): number {
   return bounds.length === 0 ? Number.NaN : Math.min(...bounds);
 }
 
+function significantLines(source: string): string[] {
+  return source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("//"));
+}
+
 export function latestSchemaVersion(source: string): number | null {
   const match = LATEST_VERSION.exec(source);
   return match == null ? null : Number(match[1]);
@@ -83,10 +90,14 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
     ];
   }
   const baseline = oldestSupportedVersion(headSource);
+  const headLines = significantLines(headSource).join("\n");
   for (const [version, block] of base) {
     const current = head.get(version);
     if (current == null) {
-      if (!(version <= baseline)) {
+      // A body still in the file means the block was kept under a reworded opening.
+      const body = significantLines(block).slice(1, -1).join("\n");
+      const kept = body !== "" && headLines.includes(body);
+      if (kept || !(version <= baseline)) {
         findings.push({
           rule: "frozen-migration",
           file,

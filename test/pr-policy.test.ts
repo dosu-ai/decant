@@ -84,6 +84,24 @@ describe("frozen migrations", () => {
     expect(checkFrozenMigrations(base, dropMiddle)[0]?.message).toContain("migration 2 is missing");
   });
 
+  test("rejects a migration kept under a reworded opening even when the baseline allows dropping it", () => {
+    const raisedBaseline = dbSource(
+      3,
+      { 1: "CREATE TABLE a (x)", 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" },
+      1,
+    );
+    for (const opening of ["    if (1 >= current) {", "    if (\n      current <= 1\n    ) {"]) {
+      const head = raisedBaseline.replace("    if (current < 1) {", opening);
+      expect(checkFrozenMigrations(base, head)[0]?.message).toContain("migration 1 is missing");
+    }
+    expect(
+      checkFrozenMigrations(
+        base,
+        dbSource(3, { 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" }, 1),
+      ),
+    ).toEqual([]);
+  });
+
   test("reads the baseline only from the runtime guard", () => {
     const blocks = { 2: "ALTER TABLE a ADD y", 3: "CREATE INDEX i" };
     const decoy = [

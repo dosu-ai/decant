@@ -103,6 +103,11 @@ By default Decant discovers:
   into a workspace, Decant reads the copy written most recently. It skips
   `globalStorage/transferredChatSessions`, which holds short-lived copies.
 
+VS Code mutation logs are replayed in order. Malformed initial states, paths,
+and array updates produce diagnostics and are skipped without discarding the
+last valid state; later valid updates still apply. Mutation paths cannot
+replace an object's prototype.
+
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
 chat, the existence, size, and nanosecond modification time of each of

@@ -479,7 +479,11 @@ function replayLog(
       continue;
     }
     if (entry.kind === 0) {
-      state = isObject(entry.v) ? entry.v : null;
+      if (!isObject(entry.v)) {
+        notApplied(issues, lineNo, line, "log entry initial state is not an object");
+      } else {
+        state = entry.v;
+      }
       continue;
     }
     if (entry.kind !== 1 && entry.kind !== 2 && entry.kind !== 3) {
@@ -491,20 +495,46 @@ function replayLog(
       notApplied(issues, lineNo, line, "log entry has no initial state or path to apply to");
       continue;
     }
+    if (
+      !path.every(
+        (key) =>
+          (typeof key === "string" && key !== "__proto__") ||
+          (typeof key === "number" && Number.isSafeInteger(key) && key >= 0),
+      )
+    ) {
+      notApplied(issues, lineNo, line, "log entry path contains an invalid key");
+      continue;
+    }
     const parent = walk(state, path.slice(0, -1));
     const key = path.at(-1);
-    if (parent == null || (typeof key !== "string" && typeof key !== "number")) {
+    if (
+      parent == null ||
+      (typeof key !== "string" && typeof key !== "number") ||
+      (Array.isArray(parent) && (typeof key !== "number" || key >= parent.length))
+    ) {
       notApplied(issues, lineNo, line, "log entry path does not exist in the session");
       continue;
     }
     if (entry.kind === 2) {
       const existing = read(parent, key);
       const array: Json[] = Array.isArray(existing) ? existing : [];
-      if (typeof entry.i === "number" && entry.i >= 0) {
-        array.length = Math.min(array.length, entry.i);
+      if (
+        (existing != null && !Array.isArray(existing)) ||
+        (entry.i !== undefined &&
+          (typeof entry.i !== "number" ||
+            !Number.isSafeInteger(entry.i) ||
+            entry.i < 0 ||
+            entry.i > array.length)) ||
+        (entry.v !== undefined && !Array.isArray(entry.v))
+      ) {
+        notApplied(issues, lineNo, line, "log entry has an invalid array update");
+        continue;
+      }
+      if (typeof entry.i === "number") {
+        array.length = entry.i;
       }
       if (Array.isArray(entry.v)) {
-        array.push(...entry.v);
+        for (const item of entry.v) array.push(item);
       }
       write(parent, key, array);
     } else {

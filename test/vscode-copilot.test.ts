@@ -263,6 +263,52 @@ describe("parseVscodeCopilotSession", () => {
     expect(issues[3]?.error).toContain('response part "futurePart"');
   });
 
+  test("reports invalid array truncation without throwing or losing later updates", () => {
+    const content = logWith({ response: [{ value: "kept" }] }, [
+      { kind: 2, k: ["requests", 0, "response"], i: 0.5, v: [{ value: "bad" }] },
+      { kind: 1, k: ["requests", 0, "completionTokens"], v: 7 },
+    ]);
+    const { session, issues } = parseVscodeCopilotSession("fallback", content);
+    expect(issues).toMatchObject([{ code: "unparsed_line", lineNo: 2 }]);
+    expect(session.messages[1]?.blocks[0]?.text).toBe("kept");
+    expect(session.totals.output).toBe(7);
+  });
+
+  test("rejects a mutation that would replace the session object's prototype", () => {
+    const content = logWith({}, [
+      { kind: 1, k: ["__proto__"], v: { customTitle: "inherited title" } },
+      { kind: 1, k: ["requests", 0, "completionTokens"], v: 7 },
+    ]);
+    const { session, issues } = parseVscodeCopilotSession("fallback", content);
+    expect(issues).toMatchObject([{ code: "unparsed_line", lineNo: 2 }]);
+    expect(session.title).toBe("hello");
+    expect(session.totals.output).toBe(7);
+  });
+
+  test("rejects an invalid replacement state and preserves later valid updates", () => {
+    const content = logWith({ response: [{ value: "kept" }] }, [
+      { kind: 0, v: null },
+      { kind: 1, k: ["requests", 0, "completionTokens"], v: 7 },
+    ]);
+    const { session, issues } = parseVscodeCopilotSession("fallback", content);
+    expect(issues).toMatchObject([{ code: "unparsed_line", lineNo: 2 }]);
+    expect(session.messages[1]?.blocks[0]?.text).toBe("kept");
+    expect(session.totals.output).toBe(7);
+  });
+
+  test("replays a large response append without a function-argument overflow", () => {
+    const content = logWith({}, [
+      {
+        kind: 2,
+        k: ["requests", 0, "response"],
+        v: Array.from({ length: 150000 }, () => ({ value: "x" })),
+      },
+    ]);
+    const { session, issues } = parseVscodeCopilotSession("fallback", content);
+    expect(issues).toEqual([]);
+    expect(session.messages[1]?.blocks[0]?.text?.length).toBe(150000);
+  });
+
   test("falls back to the session file's name when the session has no ID", () => {
     const { session } = parseVscodeCopilotSession("from-name", '{"version":3,"requests":[]}');
     expect(session).toMatchObject({ sourceSessionId: "from-name", messages: [] });

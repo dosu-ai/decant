@@ -87,6 +87,15 @@ describe("frozen migrations", () => {
     );
   });
 
+  test("rejects an oldest migration whose condition was rewritten", () => {
+    for (const opening of ["    if (current <= 1) {", "    if (1 > current) {"]) {
+      const head = base.replace("    if (current < 1) {", opening);
+      expect(checkFrozenMigrations(base, head)[0]?.message).toContain(
+        "migration 1 no longer matches",
+      );
+    }
+  });
+
   test("rejects a lower LATEST_SCHEMA_VERSION and a restructured migrate()", () => {
     expect(checkFrozenMigrations(base, base.replace("= 3;", "= 2;"))[0]?.message).toContain(
       "went down",

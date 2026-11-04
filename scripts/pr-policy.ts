@@ -46,6 +46,14 @@ export function extractMigrations(source: string): Map<number, string> {
   return blocks;
 }
 
+// Any `if` line that compares `current` with this version, however it is spelled.
+function stillReferencesVersion(source: string, version: number): boolean {
+  const number = new RegExp(`\\b${version}\\b`);
+  return source
+    .split("\n")
+    .some((line) => /\bif\s*\(/.test(line) && /\bcurrent\b/.test(line) && number.test(line));
+}
+
 export function latestSchemaVersion(source: string): number | null {
   const match = LATEST_VERSION.exec(source);
   return match == null ? null : Number(match[1]);
@@ -75,7 +83,7 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
     const current = head.get(version);
     if (current == null) {
       // A block that is still there but no longer parses could hide an edit.
-      if (new RegExp(`current\\s*<\\s*${version}\\b`).test(headSource)) {
+      if (stillReferencesVersion(headSource, version)) {
         findings.push({
           rule: "frozen-migration",
           file,

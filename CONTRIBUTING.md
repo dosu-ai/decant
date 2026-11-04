@@ -107,7 +107,8 @@ committed migration changed, if a model rate or the route manifest
 (`src/route-paths.ts`) changed without its docs, or if a fixture contains a
 real home-directory path, email address, or key-shaped string. Add the
 `docs-not-needed` label to a pull request when such a change truly needs no
-doc update.
+doc update. Locally, set `PR_LABELS=docs-not-needed` before `just check` or
+`just policy` to do the same.
 
 `just check` also runs `scripts/dist-check.ts`, which builds and installs staged
 native/npm artifacts, so it needs network access. It validates that the

@@ -831,6 +831,34 @@ describe("Copilot ingest", () => {
     ).toMatchObject({ input: 0, reported: 0.123 });
   });
 
+  test("keeps a successful compaction without a summary and drops a failed one", () => {
+    const dir = freshDir();
+    const db = open(dir);
+    const parsed = parseCopilotSession(
+      "compaction-variants",
+      [
+        event("session.compaction_complete", { success: true, preCompactionTokens: 8000 }, "c1"),
+        event(
+          "session.compaction_complete",
+          { success: false, summaryContent: "partial", preCompactionTokens: 9000 },
+          "c2",
+        ),
+      ].join("\n"),
+    );
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.messages.map((message) => [message.role, message.blocks.length])).toEqual(
+      [["system", 0]],
+    );
+    upsertSession(db, parsed, join(dir, "missing.jsonl"), 1, 2);
+    const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+    expect(contextWindowForSession(db, id)).toMatchObject({
+      peak_tokens: 8000,
+      compactions: [{ pre_tokens: 8000 }],
+    });
+    expect(db.query("SELECT compaction_count FROM session").get()).toEqual({ compaction_count: 1 });
+    closeDb(db);
+  });
+
   test("keeps recorded compaction occupancy and repairs old compressed metadata without a source", () => {
     for (const [compressed, preTokens] of [
       [false, 9000],

@@ -362,10 +362,14 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         break;
       }
       case "session.compaction_complete": {
-        const summary = asString(data.summaryContent) ?? "";
-        if (data.success === true && summary !== "") {
-          push("system", record, [block(0, "text", { text: summary })]);
+        // A failed compaction left the context as it was, so it is not a
+        // boundary. A successful one without a summary still is, and its
+        // occupancy fields still count.
+        if (data.success === false) {
+          break;
         }
+        const summary = asString(data.summaryContent) ?? "";
+        push("system", record, summary === "" ? [] : [block(0, "text", { text: summary })]);
         break;
       }
       case "session.error":

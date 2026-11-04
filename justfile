@@ -13,6 +13,7 @@ ts-check:
     bun test
     bunx tsc --noEmit
     bunx biome check .
+    bun run scripts/pr-policy.ts
 
 [group('gates')]
 dist-check:
@@ -99,7 +100,7 @@ db-info *ARGS:
 
 # Data / maintenance
 [group('data')]
-[confirm("Delete ~/.decant/decant.db and re-ingest from ~/.claude + ~/.codex?")]
+[confirm("Delete ~/.decant/decant.db and re-ingest every source directory?")]
 db-rebuild:
     rm -f ~/.decant/decant.db ~/.decant/decant.db-wal ~/.decant/decant.db-shm
     bun run src/cli.ts sync
@@ -107,3 +108,13 @@ db-rebuild:
 [group('data')]
 hooks:
     pre-commit install
+
+# Print a redacted environment report for bug reports
+[group('cli')]
+doctor *ARGS:
+    bun run src/cli.ts doctor {{ARGS}}
+
+# The CI policy checks against origin/main (or BASE)
+[group('gates')]
+policy BASE="origin/main":
+    bun run scripts/pr-policy.ts --base {{BASE}}

@@ -46,6 +46,7 @@ const completionWords = [
   "export",
   "completion",
   "update",
+  "doctor",
   "--check",
   "--db",
   "--json",

@@ -603,6 +603,8 @@ describe("isPriceable", () => {
       "gemini-4-argon-latest",
       "gemini-4-argon-preview-11-2026",
       "gemini-4-argon-001",
+      "google/gemini-4-argon:floor",
+      "gemini-4-argon[1m]",
     ]) {
       expect(isPriceable(model)).toBe(true);
       expect(estimateCostParts(model, usage, pricing)).toEqual({

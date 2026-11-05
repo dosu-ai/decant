@@ -27,7 +27,8 @@ editing; this skill only lists the steps that are easy to miss.
    `src/sources/shared.ts`.
 3. The tool ID in `TOOLS` in `src/model.ts` (persisted; choose it once).
 4. `watchDirs()` in `src/watch.ts`.
-5. `SESSION_SOURCES` and `sessionSourceLabel` in `src/source-filter.ts`, the
+5. `SESSION_SOURCES`, `sessionSourceLabel`, and `sessionSourcePredicate` in
+   `src/source-filter.ts`, the
    `source` enums in the API docs, the source label maps in `src/export.ts` and
    `src/export-atif.ts`, and the source rows in `src/doctor.ts`.
 6. The capability report from the doc, filled in for the pull request.

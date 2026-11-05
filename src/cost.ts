@@ -444,8 +444,10 @@ function canonicalModel(raw: string): string | null {
       return null;
     }
     // Anchored so a future Argon variant such as -flash or -lite stays
-    // unpriced instead of borrowing this rate.
-    if (/(?:^|\/)gemini-4-argon(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.test(model)) {
+    // unpriced instead of borrowing this rate. Routing suffixes such as
+    // `:floor` and `[1m]` bill at list rate, so they are stripped first.
+    const routed = model.replace(/\[[^\]]*\]$/, "").replace(HOSTED_ROUTE_SUFFIX, "");
+    if (/(?:^|\/)gemini-4-argon(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.test(routed)) {
       return "gemini-4-argon";
     }
     if (model.includes("flash-lite")) {

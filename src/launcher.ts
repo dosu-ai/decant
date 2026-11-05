@@ -243,7 +243,7 @@ function openArgs(app: string, args: string[], run: Run): LaunchResult | Promise
   return run("open", ["-na", app, "--args", ...args]);
 }
 
-async function runCommand(bin: string, args: string[]): Promise<LaunchResult> {
+export async function runCommand(bin: string, args: string[]): Promise<LaunchResult> {
   try {
     const proc = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, status] = await Promise.all([
@@ -255,8 +255,10 @@ async function runCommand(bin: string, args: string[]): Promise<LaunchResult> {
       return { ok: true };
     }
     return { ok: false, error: (stderr || stdout || "launch failed").trim() };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } catch {
+    // The launch routes return this error to the browser, so a spawn
+    // exception's own text stays on the server.
+    return { ok: false, error: `Could not start ${bin}.` };
   }
 }
 

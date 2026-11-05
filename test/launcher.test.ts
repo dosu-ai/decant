@@ -2,7 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { canLaunch, command, launchAgent, openIde, warpLaunchUri } from "../src/launcher.ts";
+import {
+  canLaunch,
+  command,
+  launchAgent,
+  openIde,
+  runCommand,
+  warpLaunchUri,
+} from "../src/launcher.ts";
 import type { UserSettings } from "../src/settings.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-launcher-test-"));
@@ -21,6 +28,12 @@ describe("launcher", () => {
     expect(canLaunch("linux")).toBe(false);
     expect(command("claude", "fix 'this'")).toBe("claude 'fix '\\''this'\\'''");
     expect(command("unknown", "x")).toBeNull();
+  });
+
+  test("runCommand reports a spawn failure without the exception text", async () => {
+    const missing = join(workDir, "no-such-launcher-binary");
+    const result = await runCommand(missing, []);
+    expect(result).toEqual({ ok: false, error: `Could not start ${missing}.` });
   });
 
   test("launchAgent returns a copyable command off macOS", async () => {

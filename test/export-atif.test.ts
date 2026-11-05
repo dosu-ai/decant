@@ -493,6 +493,215 @@ describe("exportAtif", () => {
     }
   });
 
+  test("starts a new agent step when the model or sidechain status changes", () => {
+    const db = freshDb();
+    try {
+      const assistant = (uuid: string, model: string, text: string, extra = {}) => ({
+        type: "assistant",
+        uuid,
+        requestId: `req-${uuid}`,
+        timestamp: "2026-05-06T10:00:01.000Z",
+        ...extra,
+        message: {
+          role: "assistant",
+          model,
+          usage: claudeUsage(10, 1, 0, 0),
+          content: [{ type: "text", text }],
+        },
+      });
+      const id = upsertSession(
+        db,
+        parseClaudeSession(
+          "transitions",
+          records(
+            {
+              type: "user",
+              uuid: "u1",
+              timestamp: "2026-05-06T10:00:00.000Z",
+              message: { role: "user", content: "hello" },
+            },
+            assistant("a1", "model-a", "from a"),
+            assistant("a2", "model-b", "from b"),
+            assistant("a3", "model-b", "side", { isSidechain: true }),
+            assistant("a4", "model-b", "main again"),
+          ),
+        ),
+        "/synthetic/transitions.jsonl",
+        1,
+        2,
+      );
+      const doc = exportOk(db, id);
+      expect(
+        doc.steps
+          .filter((step) => step.source === "agent")
+          .map((step) => [step.model_name, step.message, step.extra?.is_sidechain ?? false]),
+      ).toEqual([
+        ["model-a", "from a", false],
+        ["model-b", "from b", false],
+        ["model-b", "side", true],
+        ["model-b", "main again", false],
+      ]);
+      for (const step of doc.steps.filter((step) => step.source === "agent")) {
+        expect(step.metrics?.prompt_tokens).toBe(10);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test("links each subagent to its own occurrence of a reused spawn id, or leaves it unlinked", () => {
+    const db = freshDb();
+    try {
+      const task = (uuid: string, at: string) => ({
+        type: "assistant",
+        uuid,
+        requestId: `req-${uuid}`,
+        timestamp: at,
+        message: {
+          role: "assistant",
+          model: "example-model",
+          content: [{ type: "tool_use", id: "reused", name: "Task", input: { prompt: uuid } }],
+        },
+      });
+      const result = (uuid: string, at: string) => ({
+        type: "user",
+        uuid,
+        timestamp: at,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "reused", content: `done ${uuid}` }],
+        },
+      });
+      const parentId = upsertSession(
+        db,
+        parseClaudeSession(
+          "spawner",
+          records(
+            {
+              type: "user",
+              uuid: "u0",
+              timestamp: "2026-05-07T10:00:00.000Z",
+              message: { role: "user", content: "two tasks" },
+            },
+            task("t1", "2026-05-07T10:01:00.000Z"),
+            result("r1", "2026-05-07T10:02:00.000Z"),
+            task("t2", "2026-05-07T10:03:00.000Z"),
+            result("r2", "2026-05-07T10:04:00.000Z"),
+          ),
+        ),
+        "/synthetic/spawner.jsonl",
+        1,
+        2,
+      );
+      const child = (name: string, at: string): number =>
+        upsertSession(
+          db,
+          parseClaudeSession(
+            name,
+            records({
+              type: "user",
+              uuid: `${name}-u`,
+              timestamp: at,
+              message: { role: "user", content: name },
+            }),
+          ),
+          `/synthetic/${name}.jsonl`,
+          1,
+          2,
+        );
+      const first = child("first", "2026-05-07T10:01:05.000Z");
+      const second = child("second", "2026-05-07T10:03:05.000Z");
+      const undated = child("undated", "2026-05-07T10:03:06.000Z");
+      for (const childId of [first, second, undated]) {
+        db.query(
+          `UPDATE session SET is_subagent = 1, parent_session_id = ?1, spawn_tool_use_id = 'reused'
+           WHERE id = ?2`,
+        ).run(parentId, childId);
+      }
+      db.query("UPDATE session SET started_at = NULL WHERE id = ?1").run(undated);
+
+      const out = exportAtif(db, parentId);
+      if (!out.ok) throw new Error(out.reason);
+      assertValidAtif(out.trajectory);
+      const links = out.trajectory.steps.flatMap((step) =>
+        (step.observation?.results ?? []).map((r) => [
+          r.source_call_id,
+          (r.subagent_trajectory_ref ?? []).map((ref) => ref.trajectory_id),
+        ]),
+      );
+      expect(links).toEqual([
+        ["reused", ["first"]],
+        ["reused__dup2", ["second"]],
+      ]);
+      expect(out.report).toMatchObject({ subagents_embedded: 3, subagents_unlinked: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("embeds the descendants of a subagent that has nothing to export", () => {
+    const db = freshDb();
+    try {
+      const rootId = upsertSession(
+        db,
+        parseClaudeSession("root", fixture("fixtures", "claude", "sample.jsonl")),
+        "/synthetic/root.jsonl",
+        1,
+        2,
+      );
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, is_subagent, parent_session_id, spawn_tool_use_id)
+         VALUES (500, 'claude_code', 'empty-child', 1, ?1, 'toolu_1')`,
+      ).run(rootId);
+      const grandchildId = upsertSession(
+        db,
+        parseClaudeSession(
+          "grandchild",
+          records(
+            {
+              type: "user",
+              uuid: "g1",
+              timestamp: "2026-05-08T10:00:00.000Z",
+              message: { role: "user", content: "deep work" },
+            },
+            {
+              type: "assistant",
+              uuid: "g2",
+              parentUuid: "g1",
+              requestId: "req-g2",
+              timestamp: "2026-05-08T10:00:01.000Z",
+              message: {
+                role: "assistant",
+                model: "claude-sonnet-4-6",
+                usage: claudeUsage(40, 4, 0, 0),
+                content: [{ type: "text", text: "ok" }],
+              },
+            },
+          ),
+        ),
+        "/synthetic/grandchild.jsonl",
+        1,
+        2,
+      );
+      db.query("UPDATE session SET is_subagent = 1, parent_session_id = 500 WHERE id = ?1").run(
+        grandchildId,
+      );
+
+      const out = exportAtif(db, rootId);
+      if (!out.ok) throw new Error(out.reason);
+      assertValidAtif(out.trajectory);
+      expect(out.trajectory.subagent_trajectories?.map((sub) => sub.trajectory_id)).toEqual([
+        "grandchild",
+      ]);
+      // The grandchild's spawner lives in the empty child, which has no steps.
+      expect(out.report).toMatchObject({ subagents_embedded: 1, subagents_unlinked: 1 });
+      expect(out.trajectory.trajectory_id).toBe("root");
+      expect(out.trajectory.final_metrics.total_prompt_tokens).toBe(14_500 + 40);
+    } finally {
+      db.close();
+    }
+  });
+
   test("exports Codex with object arguments and injected context as system steps", () => {
     const db = freshDb();
     try {

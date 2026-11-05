@@ -195,7 +195,8 @@ format Harbor and Terminal-Bench use, declared as `ATIF-v1.7`. `--all --out
 
 User text becomes `user` steps, and system messages and Codex injected context
 become `system` steps. Each run of consecutive assistant messages becomes one
-`agent` step holding its text, reasoning, and tool calls. Each tool result is
+`agent` step holding its text, reasoning, and tool calls. A change of model or
+of sidechain status starts a new step. Each tool result is
 attached to the step that made the call, because ATIF requires an observation's
 `source_call_id` to match a call in the same step. Recorded tool failures go in
 the result's `extra.is_error`. Repeated call IDs are renamed and paired with
@@ -215,6 +216,10 @@ such as Cursor CLI, gets no token totals rather than zeros.
 
 Subagent sessions are embedded in the root's `subagent_trajectories` and
 linked from the spawning call's observation with `subagent_trajectory_ref`.
+When a parent reuses a spawn call ID, each subagent links to the latest call
+recorded before it started. A subagent whose spawner cannot be identified,
+including the descendants of a subagent with nothing to export, is still
+embedded and counted as unlinked in the export report.
 The root's totals include its embedded subagents, as ATIF describes; each
 embedded trajectory's totals are its own. Claude compaction boundaries become
 `system` steps with `extra.context_management` set to a `replace` compaction,

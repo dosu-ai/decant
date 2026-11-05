@@ -212,8 +212,17 @@ interface BuildState {
 }
 
 interface BuiltTrajectory {
-  trajectory: AtifTrajectory;
+  /** Null when the session has nothing to export. Its descendants are still
+   * embedded in the root and its totals still roll up. */
+  trajectory: AtifTrajectory | null;
   totals: TreeTotals;
+}
+
+interface CallSite {
+  id: string;
+  step: AtifStep;
+  /** When the calling message was recorded, used to tell reused ids apart. */
+  at: string | undefined;
 }
 
 export function exportAtif(db: Database, sessionId: number): AtifExport {
@@ -235,7 +244,7 @@ export function exportAtif(db: Database, sessionId: number): AtifExport {
     embedded: [],
   };
   const built = buildTrajectory(db, detail, state);
-  if (built == null) {
+  if (built.trajectory == null) {
     return { ok: false, reason: "no_steps" };
   }
   if (state.embedded.length > 0) {
@@ -255,11 +264,7 @@ function uniqueTrajectoryId(base: string, used: Set<string>): string {
   return candidate;
 }
 
-function buildTrajectory(
-  db: Database,
-  detail: SessionDetail,
-  state: BuildState,
-): BuiltTrajectory | null {
+function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState): BuiltTrajectory {
   const summary = detail.summary;
   const id = summary.id;
   const report = state.report;
@@ -324,9 +329,12 @@ function buildTrajectory(
   const steps: AtifStep[] = [];
   // One agent step per run of consecutive assistant messages: Claude splits
   // one API response across several records, and Codex writes reasoning,
-  // text, and each call as separate items.
+  // text, and each call as separate items. A change of model or of sidechain
+  // status starts a new step, so neither label covers another speaker's words.
   let agent: {
     step: AtifStep;
+    model: string | null;
+    sidechain: boolean;
     text: string[];
     reasoning: string[];
     usage: Usage;
@@ -359,7 +367,7 @@ function buildTrajectory(
   // `__dup<n>` upward, as the trajectory-v1 export does, and its results are
   // paired with calls in occurrence order.
   const usedCallIds = new Set<string>();
-  const callsByOriginal = new Map<string, { id: string; step: AtifStep }[]>();
+  const callsByOriginal = new Map<string, CallSite[]>();
   const resultsTaken = new Map<string, number>();
   let callSites = 0;
 
@@ -371,15 +379,34 @@ function buildTrajectory(
     const sidechain = message.is_sidechain ? { is_sidechain: true } : undefined;
 
     if (message.role === "assistant") {
+      const model = message.model == null || message.model === "" ? null : message.model;
+      if (
+        agent != null &&
+        (agent.sidechain !== message.is_sidechain ||
+          (model != null && agent.model != null && model !== agent.model))
+      ) {
+        closeAgent();
+      }
       if (agent == null) {
         const step = pushStep({
           source: "agent",
           message: "",
           ...(timestamp == null ? {} : { timestamp }),
-          ...(message.model == null || message.model === "" ? {} : { model_name: message.model }),
+          ...(model == null ? {} : { model_name: model }),
           ...(sidechain == null ? {} : { extra: sidechain }),
         });
-        agent = { step, text: [], reasoning: [], usage: emptyUsage(), usageRows: 0 };
+        agent = {
+          step,
+          model,
+          sidechain: message.is_sidechain,
+          text: [],
+          reasoning: [],
+          usage: emptyUsage(),
+          usageRows: 0,
+        };
+      } else if (agent.model == null && model != null) {
+        agent.model = model;
+        agent.step.model_name = model;
       }
       const usage = usageBySeq.get(message.seq);
       if (usage != null) {
@@ -409,7 +436,7 @@ function buildTrajectory(
           }
           usedCallIds.add(assigned);
           const queue = callsByOriginal.get(original) ?? [];
-          queue.push({ id: assigned, step: agent.step });
+          queue.push({ id: assigned, step: agent.step, at: timestamp });
           callsByOriginal.set(original, queue);
           agent.step.tool_calls ??= [];
           agent.step.tool_calls.push({
@@ -498,11 +525,11 @@ function buildTrajectory(
   }
   closeAgent();
 
-  if (steps.length === 0) {
-    return null;
-  }
-
-  const trajectoryId = uniqueTrajectoryId(trajectoryIdFor(detail), state.usedTrajectoryIds);
+  // Claimed before descendants so a child cannot take this session's id.
+  const trajectoryId =
+    steps.length === 0
+      ? null
+      : uniqueTrajectoryId(trajectoryIdFor(detail), state.usedTrajectoryIds);
   const ownUsage: Usage = {
     input: row?.total_input_tokens ?? 0,
     output: row?.total_output_tokens ?? 0,
@@ -524,17 +551,21 @@ function buildTrajectory(
     // cycle guard for the whole document, which a fresh read would restart.
     childDetail.subagents = child.subagents;
     const builtChild = buildTrajectory(db, childDetail, state);
-    if (builtChild == null) {
+    addUsage(totals.usage, builtChild.totals.usage);
+    totals.costUsd += builtChild.totals.costUsd;
+    totals.usageAvailable ||= builtChild.totals.usageAvailable;
+    if (builtChild.trajectory == null) {
       continue;
     }
     state.embedded.push(builtChild.trajectory);
     report.subagents_embedded += 1;
-    addUsage(totals.usage, builtChild.totals.usage);
-    totals.costUsd += builtChild.totals.costUsd;
-    totals.usageAvailable ||= builtChild.totals.usageAvailable;
     if (!linkSubagent(child, builtChild.trajectory, callsByOriginal, resultFor)) {
       report.subagents_unlinked += 1;
     }
+  }
+
+  if (trajectoryId == null) {
+    return { trajectory: null, totals };
   }
 
   const finalMetrics: AtifFinalMetrics = { total_steps: steps.length };
@@ -614,16 +645,40 @@ function compactionStep(
   };
 }
 
+/** The call that spawned a child. A reused spawn id is resolved by time: the
+ * latest occurrence recorded at or before the child started. Without the
+ * timestamps to decide, the child stays unlinked rather than pointing at a
+ * call that may not be its own. */
+function spawningCall(child: SubagentDetail, calls: CallSite[] | undefined): CallSite | undefined {
+  if (calls == null || calls.length === 0) {
+    return undefined;
+  }
+  if (calls.length === 1) {
+    return calls[0];
+  }
+  const started = toIso(child.summary.started_at);
+  if (started == null || calls.some((call) => call.at == null)) {
+    return undefined;
+  }
+  let match: CallSite | undefined;
+  for (const call of calls) {
+    if ((call.at ?? "") <= started) {
+      match = call;
+    }
+  }
+  return match;
+}
+
 /** Point the spawning call's observation at the embedded subagent. Returns
- * false when the parent holds no call with the recorded spawn id. */
+ * false when no call in the parent can be identified as the spawner. */
 function linkSubagent(
   child: SubagentDetail,
   embedded: AtifTrajectory,
-  callsByOriginal: Map<string, { id: string; step: AtifStep }[]>,
+  callsByOriginal: Map<string, CallSite[]>,
   resultFor: (step: AtifStep, callId: string) => AtifObservationResult | undefined,
 ): boolean {
   const spawnId = child.spawn_tool_use_id;
-  const call = spawnId == null ? undefined : callsByOriginal.get(spawnId)?.[0];
+  const call = spawningCall(child, spawnId == null ? undefined : callsByOriginal.get(spawnId));
   if (call == null) {
     return false;
   }

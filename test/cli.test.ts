@@ -30,6 +30,7 @@ function freshCase(): {
   opencodeDir: string;
   cursorDir: string;
   copilotDir: string;
+  vscodeCopilotDir: string;
 } {
   caseCounter += 1;
   const dir = join(workDir, `case-${caseCounter}`);
@@ -39,12 +40,14 @@ function freshCase(): {
   const opencodeDir = join(dir, "sources", "opencode");
   const cursorDir = join(dir, "sources", "cursor");
   const copilotDir = join(dir, "sources", "copilot");
+  const vscodeCopilotDir = join(dir, "sources", "vscode", "User");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(cursorDir, { recursive: true });
   mkdirSync(copilotDir, { recursive: true });
+  mkdirSync(vscodeCopilotDir, { recursive: true });
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", name), join(claudeDir, name));
   }
@@ -62,6 +65,7 @@ function freshCase(): {
     opencodeDir,
     cursorDir,
     copilotDir,
+    vscodeCopilotDir,
   };
 }
 
@@ -84,6 +88,8 @@ async function syncedCase(): Promise<{ dbPath: string }> {
     fixtureCase.cursorDir,
     "--copilot-dir",
     fixtureCase.copilotDir,
+    "--vscode-copilot-dir",
+    fixtureCase.vscodeCopilotDir,
   ]);
   expect(result).toMatchObject({ code: 0, stderr: "" });
   expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 7, ingested: 7, issues: 0 });

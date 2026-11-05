@@ -14,6 +14,7 @@ describe("resolveConfig", () => {
         DECANT_OPENCODE_DIR: "/env/opencode",
         DECANT_CURSOR_DIR: "/env/cursor",
         DECANT_COPILOT_DIR: "/env/copilot",
+        DECANT_VSCODE_COPILOT_DIR: "/env/vscode",
       },
       homeDir: "/home/dev",
     });
@@ -25,6 +26,8 @@ describe("resolveConfig", () => {
     expect(config.opencodeDir).toBe("/flag/opencode");
     expect(config.cursorDir).toBe("/env/cursor");
     expect(config.copilotDir).toBe("/env/copilot");
+    expect(config.vscodeCopilotDir).toBe("/env/vscode");
+    expect(config.vscodeCopilotInsidersDir).toBeUndefined();
   });
 
   test("environment overrides beat defaults", () => {
@@ -38,6 +41,7 @@ describe("resolveConfig", () => {
         DECANT_OPENCODE_CONFIG: "/env/opencode.json",
         DECANT_CURSOR_DIR: "/env/cursor",
         DECANT_COPILOT_DIR: "/env/copilot",
+        DECANT_VSCODE_COPILOT_DIR: "/env/vscode",
       },
       homeDir: "/home/dev",
     });
@@ -53,6 +57,7 @@ describe("resolveConfig", () => {
       opencodeModelsPath: "/home/dev/.cache/opencode/models.json",
       cursorDir: "/env/cursor",
       copilotDir: "/env/copilot",
+      vscodeCopilotDir: "/env/vscode",
     });
   });
 
@@ -70,6 +75,43 @@ describe("resolveConfig", () => {
     expect(config.opencodeModelsPath).toBe("/home/dev/.cache/opencode/models.json");
     expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
     expect(config.copilotDir).toBe("/home/dev/.copilot/session-state");
+  });
+
+  test("reads VS Code and VS Code Insiders from each platform's user data directory", () => {
+    const at = (platform: NodeJS.Platform, env: Record<string, string> = {}) => {
+      const config = resolveConfig({ env, homeDir: "/h", platform });
+      return [config.vscodeCopilotDir, config.vscodeCopilotInsidersDir];
+    };
+    expect(at("darwin")).toEqual([
+      "/h/Library/Application Support/Code/User",
+      "/h/Library/Application Support/Code - Insiders/User",
+    ]);
+    expect(at("linux")).toEqual(["/h/.config/Code/User", "/h/.config/Code - Insiders/User"]);
+    expect(at("linux", { XDG_CONFIG_HOME: "/xdg" })).toEqual([
+      "/xdg/Code/User",
+      "/xdg/Code - Insiders/User",
+    ]);
+    expect(at("win32", { APPDATA: "/appdata" })).toEqual([
+      "/appdata/Code/User",
+      "/appdata/Code - Insiders/User",
+    ]);
+    expect(at("win32")).toEqual([
+      "/h/AppData/Roaming/Code/User",
+      "/h/AppData/Roaming/Code - Insiders/User",
+    ]);
+  });
+
+  test("one VS Code override replaces both default directories", () => {
+    const flag = resolveConfig({
+      vscodeCopilotDir: "/flag/User",
+      env: { DECANT_VSCODE_COPILOT_DIR: "/env/User" },
+      homeDir: "/h",
+      platform: "darwin",
+    });
+    expect(flag.vscodeCopilotDir).toBe("/flag/User");
+    expect(flag.vscodeCopilotInsidersDir).toBeUndefined();
+    const env = resolveConfig({ env: { DECANT_VSCODE_COPILOT_DIR: "" }, homeDir: "/h" });
+    expect(env.vscodeCopilotInsidersDir).toBeDefined();
   });
 
   test("follows COPILOT_HOME for the Copilot CLI session state", () => {

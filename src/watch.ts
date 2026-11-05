@@ -195,6 +195,24 @@ const anyEvent: EventFilter = () => true;
 const copilotEvents: EventFilter = (filename) =>
   filename == null || basename(filename) === "events.jsonl";
 
+/** Workspace storage also holds each window's state database and every
+ * extension's files, which change constantly; only a workspace's chat session
+ * files are transcripts. */
+const vscodeWorkspaceChatEvents: EventFilter = (filename) => {
+  if (filename == null) {
+    return true;
+  }
+  const parts = filename.split(/[\\/]/);
+  return parts.length === 3 && parts[1] === "chatSessions" && isVscodeChatFileName(parts[2] ?? "");
+};
+
+const vscodeEmptyWindowChatEvents: EventFilter = (filename) =>
+  filename == null || isVscodeChatFileName(basename(filename));
+
+function isVscodeChatFileName(name: string): boolean {
+  return name.endsWith(".jsonl") || name.endsWith(".json");
+}
+
 /** Cursor keeps each chat in its own SQLite store. Opening a store, even
  * read-only during Decant's own sync, rewrites its `-shm` index, so that file
  * says nothing about new content and reacting to it would sync twice per
@@ -319,6 +337,22 @@ export function watchRoots(config: Config): WatchRoot[] {
     ...(config.copilotDir != null
       ? [{ dir: config.copilotDir, recursive: true, accepts: () => copilotEvents }]
       : []),
+    ...[config.vscodeCopilotDir, config.vscodeCopilotInsidersDir].flatMap((userDir) =>
+      userDir == null
+        ? []
+        : [
+            {
+              dir: join(userDir, "workspaceStorage"),
+              recursive: true,
+              accepts: () => vscodeWorkspaceChatEvents,
+            },
+            {
+              dir: join(userDir, "globalStorage", "emptyWindowChatSessions"),
+              recursive: false,
+              accepts: () => vscodeEmptyWindowChatEvents,
+            },
+          ],
+    ),
   ];
   // One watcher per directory: a directory named twice reacts to the events
   // either source would, and recurses if either needs it.

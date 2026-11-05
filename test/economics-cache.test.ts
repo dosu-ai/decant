@@ -344,6 +344,7 @@ describe("economics cache", () => {
       opencodeDir: join(workDir, "none"),
       cursorDir: join(workDir, "none"),
       copilotDir: join(workDir, "none"),
+      vscodeCopilotDir: join(workDir, "none"),
     };
     const cache = new EconomicsCache({
       dbPath,

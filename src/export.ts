@@ -53,6 +53,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   opencode: "opencode",
   cursor: "cursor",
   copilot: "copilot-cli",
+  vscode_copilot: "vscode-copilot-chat",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.

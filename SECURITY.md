@@ -25,7 +25,8 @@ we investigate and prepare a fix.
 
 Decant is a local-first tool. It reads CLI session logs that already exist on
 disk (by default `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, OpenCode's
-`~/.local/share/opencode`, `~/.cursor/chats`, and `~/.copilot/session-state`)
+`~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`, and
+the chat session files in VS Code's `User` directory)
 and writes a local SQLite archive. Its only outbound network requests are for
 updates, and none of them send session or archive data:
 

@@ -20,6 +20,7 @@ function fixtureConfig(): Config {
     opencodeDir: join(root, "opencode"),
     cursorDir: join(root, "cursor"),
     copilotDir: join(root, "copilot"),
+    vscodeCopilotDir: join(root, "vscode"),
   };
   for (const path of [config.claudeDir, config.codexDir, config.geminiDir, config.opencodeDir]) {
     mkdirSync(path, { recursive: true });

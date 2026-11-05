@@ -6,8 +6,9 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and
-GitHub Copilot CLI session logs on your machine into tangible insights. See where tokens, cost,
+Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+GitHub Copilot CLI, and Copilot Chat in VS Code session logs on your machine
+into tangible insights. See where tokens, cost,
 and agent time go, inspect context usage, find the files and tools agents
 touch, and search complete transcripts from a CLI or local web UI.
 
@@ -42,13 +43,13 @@ npx @dosu/decant@latest
 ```
 
 This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
-Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI logs on your
-machine, and watches for changes.
+Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat
+in VS Code logs on your machine, and watches for changes.
 
 ## What you get
 
 - One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-  and GitHub Copilot CLI sessions.
+  GitHub Copilot CLI, and Copilot Chat in VS Code sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -152,12 +153,13 @@ Read commands support `--json`; global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`.
 
 Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
-`~/.local/share/opencode`, `~/.cursor/chats`, and `~/.copilot/session-state`
-by default. Override them with `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`,
-`DECANT_GEMINI_DIR`, `DECANT_OPENCODE_DIR`, `DECANT_CURSOR_DIR`, and
-`DECANT_COPILOT_DIR`, or with the corresponding `--claude-dir`, `--codex-dir`,
-`--gemini-dir`, `--opencode-dir`, `--cursor-dir`, and `--copilot-dir` flags on
-`sync`, `watch`, and `serve`. When the Decant variable and flag are unset, the
+`~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`, and
+VS Code's `User` directory by default. Override them with `DECANT_CLAUDE_DIR`,
+`DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`, `DECANT_OPENCODE_DIR`,
+`DECANT_CURSOR_DIR`, `DECANT_COPILOT_DIR`, and `DECANT_VSCODE_COPILOT_DIR`, or
+with the corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`,
+`--opencode-dir`, `--cursor-dir`, `--copilot-dir`, and `--vscode-copilot-dir`
+flags on `sync`, `watch`, and `serve`. When the Decant variable and flag are unset, the
 OpenCode directory falls back to OpenCode's own `OPENCODE_DATA_DIR`, then
 `$XDG_DATA_HOME/opencode`, and the Copilot directory follows `COPILOT_HOME` to
 `$COPILOT_HOME/session-state`. `OPENCODE_DB` names an
@@ -208,6 +210,28 @@ For a custom layout, pass its session root with `--copilot-dir`:
 ```sh
 decant --no-sync --db /tmp/decant-repro.db sync --copilot-dir ./copilot --path ./copilot/example/events.jsonl
 ```
+
+Copilot Chat in VS Code keeps each chat session in VS Code's `User` directory:
+`~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on
+Linux (following `XDG_CONFIG_HOME`), and `%APPDATA%\Code\User` on Windows.
+Decant reads VS Code Insiders' `Code - Insiders/User` directory too. A
+workspace's sessions are in `workspaceStorage/<id>/chatSessions/`, and the
+folder they belong to comes from `workspace.json` beside them. Sessions from a
+window with no folder open are in `globalStorage/emptyWindowChatSessions/`.
+Decant reads both the `.jsonl` change log that VS Code 1.109 and later write
+and the `.json` file earlier builds wrote, read-only. One override names a
+single `User` directory and replaces both defaults. Decant does not read
+Cursor, Windsurf, or other editors built from VS Code. Sessions that Copilot
+CLI, Claude, or Codex run inside VS Code keep their transcripts in those
+tools' own stores, which Decant reads as those sources.
+
+VS Code records the output tokens of every model call in a request in builds
+from April 2026 on, and the last call's prompt size from June 2026 on. The
+prompt size includes cache reads, and no cache split is written.
+Decant stores those numbers as written, so cost for these sessions is a rough
+list-price estimate. A session from an older build has no usage, and Decant
+shows its tokens and cost as unavailable instead of $0. `--path` also accepts
+a chat session file inside VS Code's storage layout.
 
 To index selected files or a temporary source tree:
 

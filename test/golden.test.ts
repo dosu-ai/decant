@@ -39,7 +39,15 @@ describe("golden harness", () => {
     expect(meta.regeneration).toContain("synthetic fixtures");
     const tools = new Set(sessions.map((s) => s.tool));
     expect(tools).toEqual(
-      new Set(["claude_code", "codex", "gemini", "opencode", "cursor", "copilot"]),
+      new Set([
+        "claude_code",
+        "codex",
+        "gemini",
+        "opencode",
+        "cursor",
+        "copilot",
+        "vscode_copilot",
+      ]),
     );
   });
 

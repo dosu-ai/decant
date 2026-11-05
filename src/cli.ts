@@ -64,7 +64,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .name("decant")
     .description(
-      "analyze Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot CLI sessions: tokens, context windows, and cost",
+      "analyze Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions: tokens, context windows, and cost",
     )
     .version(DECANT_VERSION)
     .exitOverride()

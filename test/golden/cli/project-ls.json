@@ -69,6 +69,23 @@
     ]
   },
   {
+    "path": "/synthetic/vscode-project",
+    "name": "vscode-project",
+    "sessions": 2,
+    "usage_sessions": 1,
+    "estimated_cost_usd": 0.0838,
+    "last_seen_at": "2026-10-06T09:06:02.000Z",
+    "is_worktree": false,
+    "root_path": "/synthetic/vscode-project",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "vscode_copilot"
+    ]
+  },
+  {
     "path": "/Users/dev/cursor-demo",
     "name": "cursor-demo",
     "sessions": 1,

@@ -92,6 +92,7 @@ describe("stats rollups", () => {
       [9, "codex", "codex-exec", JSON.stringify({ originator: "codex_exec", source: "exec" })],
       [10, "cursor", "cursor-cli", JSON.stringify({ file: { schemaVersion: 1 } })],
       [11, "copilot", "copilot-cli", JSON.stringify({ producer: "copilot-agent" })],
+      [12, "vscode_copilot", "vscode-copilot-chat", JSON.stringify({ storage: "log" })],
     ] as const;
     // A model keeps the Codex rows out of the never-prompted thread rule in
     // visibleSessionPredicate, which would otherwise hide them.
@@ -119,6 +120,7 @@ describe("stats rollups", () => {
     expect(totals(db, { source: "opencode" }).sessions).toBe(1);
     expect(totals(db, { source: "cursor_cli" }).sessions).toBe(1);
     expect(totals(db, { source: "copilot_cli" }).sessions).toBe(1);
+    expect(totals(db, { source: "vscode_copilot" }).sessions).toBe(1);
     expect(byDimension(db, "tool", { source: "codex_app" })).toMatchObject([
       { key: "codex", sessions: 2 },
     ]);
@@ -131,6 +133,7 @@ describe("stats rollups", () => {
       { key: "opencode", label: "OpenCode" },
       { key: "cursor_cli", label: "Cursor CLI" },
       { key: "copilot_cli", label: "Copilot CLI" },
+      { key: "vscode_copilot", label: "VS Code Copilot Chat" },
     ]);
     db.close();
   });

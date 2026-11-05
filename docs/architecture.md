@@ -11,6 +11,7 @@ service, bearer token, or second application process.
 ~/.claude + ~/.codex + ~/.gemini + ~/.local/share/opencode/opencode.db
   + ~/.cursor/chats/<workspace>/<chat>/store.db
   + ~/.copilot/session-state/<session>/events.jsonl
+  + <VS Code User>/workspaceStorage/<id>/chatSessions/<session>.jsonl
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -62,7 +63,10 @@ migrated rows. A Cursor CLI chat is one SQLite store per chat:
 message blobs, and parses them; ingest treats the store, its `meta.json`, and
 its `-wal` as one source file for change detection. A GitHub Copilot CLI
 session is one `events.jsonl` event log per session directory, parsed by
-`src/sources/copilot.ts`. Parsers retain canonical raw records while mapping
+`src/sources/copilot.ts`. A Copilot Chat in VS Code session is one file in a
+window's storage: `src/sources/vscode-copilot.ts` replays the `.jsonl` change
+log, or reads the older whole `.json` file, into one session object. Ingest
+reads the workspace's `workspace.json` to name the project. Parsers retain canonical raw records while mapping
 provider-specific roles, blocks, usage, tool calls, and lineage into shared
 tables. Malformed lines and unknown record types become diagnostics rather than
 aborting the file.

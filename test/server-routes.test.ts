@@ -61,6 +61,7 @@ describe("route dispatch edge cases", () => {
     opencodeDir: join(root, "opencode"),
     cursorDir: join(root, "cursor"),
     copilotDir: join(root, "copilot"),
+    vscodeCopilotDir: join(root, "vscode"),
   };
 
   async function call(

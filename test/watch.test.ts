@@ -39,12 +39,17 @@ function freshConfig(): Config {
   const opencodeDir = join(root, "opencode");
   const cursorDir = join(root, "cursor", "chats");
   const copilotDir = join(root, "copilot", "session-state");
+  const vscodeCopilotDir = join(root, "vscode", "User");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(cursorDir, { recursive: true });
   mkdirSync(copilotDir, { recursive: true });
+  mkdirSync(join(vscodeCopilotDir, "workspaceStorage"), { recursive: true });
+  mkdirSync(join(vscodeCopilotDir, "globalStorage", "emptyWindowChatSessions"), {
+    recursive: true,
+  });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
@@ -53,6 +58,7 @@ function freshConfig(): Config {
     opencodeDir,
     cursorDir,
     copilotDir,
+    vscodeCopilotDir,
   };
 }
 
@@ -91,6 +97,8 @@ describe("watch mode", () => {
       config.opencodeDir,
       config.cursorDir,
       config.copilotDir,
+      join(config.vscodeCopilotDir, "workspaceStorage"),
+      join(config.vscodeCopilotDir, "globalStorage", "emptyWindowChatSessions"),
     ]);
   });
 
@@ -111,6 +119,8 @@ describe("watch mode", () => {
       [realpathSync(dirname(explicit)), false],
       [config.cursorDir, true],
       [config.copilotDir, true],
+      [join(config.vscodeCopilotDir, "workspaceStorage"), true],
+      [join(config.vscodeCopilotDir, "globalStorage", "emptyWindowChatSessions"), false],
     ]);
     const [claude, , , data, other] = roots;
     // Only OpenCode roots are polled.
@@ -120,6 +130,8 @@ describe("watch mode", () => {
       false,
       true,
       true,
+      false,
+      false,
       false,
       false,
     ]);
@@ -183,6 +195,38 @@ describe("watch mode", () => {
     expect(root?.accepts("0a1b/checkpoints/index.md")).toBe(false);
     expect(root?.accepts("0a1b/events.1.jsonl")).toBe(false);
     expect(root?.accepts(null)).toBe(true);
+  });
+
+  test("VS Code roots react only to chat session files", () => {
+    const config = freshConfig();
+    const roots = watchRoots(config);
+    const workspace = roots.find(
+      (candidate) => candidate.dir === join(config.vscodeCopilotDir, "workspaceStorage"),
+    );
+    expect(workspace?.poll).toBeUndefined();
+    expect(workspace?.accepts("5f3e/chatSessions/abc.jsonl")).toBe(true);
+    expect(workspace?.accepts("5f3e/chatSessions/abc.json")).toBe(true);
+    expect(workspace?.accepts("5f3e/state.vscdb")).toBe(false);
+    expect(workspace?.accepts("5f3e/state.vscdb-journal")).toBe(false);
+    expect(workspace?.accepts("5f3e/workspace.json")).toBe(false);
+    expect(workspace?.accepts("5f3e/GitHub.copilot-chat/notes.json")).toBe(false);
+    expect(workspace?.accepts("5f3e/chatEditingSessions/abc/state.json")).toBe(false);
+    expect(workspace?.accepts(null)).toBe(true);
+    const empty = roots.find(
+      (candidate) =>
+        candidate.dir === join(config.vscodeCopilotDir, "globalStorage", "emptyWindowChatSessions"),
+    );
+    expect(empty?.recursive).toBe(false);
+    expect(empty?.accepts("abc.jsonl")).toBe(true);
+    expect(empty?.accepts("abc.tmp")).toBe(false);
+    // An Insiders directory that exists is watched beside the stable one.
+    const insiders = join(dirname(config.dbPath), "insiders", "User");
+    mkdirSync(join(insiders, "workspaceStorage"), { recursive: true });
+    expect(
+      watchDirs({ ...config, vscodeCopilotInsidersDir: insiders }).includes(
+        join(insiders, "workspaceStorage"),
+      ),
+    ).toBe(true);
   });
 
   test("a symlinked OPENCODE_DB is watched in its real directory", () => {

@@ -66,8 +66,13 @@ docker run --rm \
   -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
   -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
+  -v "$HOME/Library/Application Support/Code/User:/sources/vscode:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
+
+The VS Code mount shows the macOS path. On Linux, mount `$HOME/.config/Code/User`
+instead. The image reads one VS Code `User` directory, so mount VS Code
+Insiders' directory there if that is the build you use.
 
 The image runs as a non-root user and stores the archive in
 `/var/lib/decant`. Keep the host port bound to `127.0.0.1`; Decant's local API

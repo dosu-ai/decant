@@ -12,7 +12,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, extname, join, basename as pathBasename, resolve } from "node:path";
+import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
@@ -66,6 +66,7 @@ import {
   OpenCodeStore,
   readOpenCodeModelsCache,
 } from "./sources/opencode-store.ts";
+import { parseVscodeCopilotSession } from "./sources/vscode-copilot.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
   materializeMissingSessionEconomics,
@@ -109,6 +110,11 @@ export interface IngestConfig {
   cursorDir?: string;
   /** GitHub Copilot CLI session-state directory: `<session id>/events.jsonl`. */
   copilotDir?: string;
+  /** VS Code's `User` directory, holding Copilot Chat sessions in workspace
+   * and global storage. */
+  vscodeCopilotDir?: string;
+  /** VS Code Insiders' `User` directory, read beside `vscodeCopilotDir`. */
+  vscodeCopilotInsidersDir?: string;
   sourcePaths?: string[];
 }
 
@@ -117,7 +123,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 16;
+export const INGEST_PIPELINE_REVISION = 19;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -174,7 +180,10 @@ export function discover(
   warn: DiscoveryWarn = logDiscoveryWarning,
 ): SourceFile[] {
   if (config.sourcePaths != null && config.sourcePaths.length > 0) {
-    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir);
+    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir, [
+      config.vscodeCopilotDir,
+      config.vscodeCopilotInsidersDir,
+    ]);
   }
 
   const out: SourceFile[] = [];
@@ -191,6 +200,7 @@ export function discover(
   if (config.copilotDir != null) {
     collectCopilot(config.copilotDir, out);
   }
+  collectVscodeCopilot([config.vscodeCopilotDir, config.vscodeCopilotInsidersDir], out);
   return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
 }
 
@@ -198,13 +208,14 @@ export function discoverSourcePaths(
   paths: string[],
   warn: DiscoveryWarn = logDiscoveryWarning,
   copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
 ): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out, databases, copilotDir);
+    collectSourcePath(path, out, databases, copilotDir, vscodeUserDirs);
   }
-  return [...dedupeSourceFiles(out), ...discoverOpenCode(databases, warn)];
+  return [...preferVscodeLogs(dedupeSourceFiles(out)), ...discoverOpenCode(databases, warn)];
 }
 
 /** `opencode.db` and channel variants under the data directory, plus the
@@ -479,6 +490,10 @@ export function sync(
         } else if (file.tool === "copilot") {
           // Every Copilot log is named events.jsonl; its directory names the session.
           parsed = parseCopilotSession(pathBasename(dirname(file.path)), content);
+        } else if (file.tool === "vscode_copilot") {
+          parsed = parseVscodeCopilotSession(stem, content, {
+            workspace: readVscodeWorkspace(file.path),
+          });
         } else if (file.tool === "gemini") {
           const layout = geminiSessionLayout(file.path);
           parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
@@ -1984,6 +1999,7 @@ function collectSourcePath(
   out: SourceFile[],
   databases: string[],
   copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
 ): void {
   let stats: Stats;
   try {
@@ -1993,6 +2009,7 @@ function collectSourcePath(
   }
 
   if (stats.isFile()) {
+    if (isInVscodeStorage(path, vscodeUserDirs) && !isVscodeChatSessionFile(path)) return;
     if (pathBasename(path) === CURSOR_STORE_NAME) {
       if (isCursorConversationStore(path)) {
         out.push({ tool: "cursor", path, archived: false });
@@ -2003,7 +2020,7 @@ function collectSourcePath(
       databases.push(path);
       return;
     }
-    const source = sourceFileForPath(path, copilotDir);
+    const source = sourceFileForPath(path, copilotDir, vscodeUserDirs);
     if (source != null) {
       out.push(source);
     }
@@ -2015,22 +2032,31 @@ function collectSourcePath(
   }
 
   for (const child of walk(path)) {
+    if (isInVscodeStorage(child, vscodeUserDirs) && !isVscodeChatSessionFile(child)) continue;
     if (isOpenCodeDatabaseName(pathBasename(child))) {
       databases.push(child);
       continue;
     }
-    const source = sourceFileForPath(child, copilotDir);
+    const source = sourceFileForPath(child, copilotDir, vscodeUserDirs);
     if (source != null) {
       out.push(source);
     }
   }
 }
 
-function sourceFileForPath(path: string, copilotDir?: string): SourceFile | null {
+function sourceFileForPath(
+  path: string,
+  copilotDir?: string,
+  vscodeUserDirs: readonly (string | undefined)[] = [],
+): SourceFile | null {
   const name = pathBasename(path);
   if (name === CURSOR_STORE_NAME) {
     return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
   }
+  if (isVscodeChatSessionFile(path)) {
+    return { tool: "vscode_copilot", path, archived: false };
+  }
+  if (isInVscodeStorage(path, vscodeUserDirs)) return null;
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }
@@ -2113,6 +2139,164 @@ function isInCopilotSessionState(path: string, copilotDir?: string): boolean {
     dir = dirname(dir);
   }
   return false;
+}
+
+/** VS Code keeps a workspace window's chat sessions in
+ * `workspaceStorage/<workspace id>/chatSessions/` and an empty window's in
+ * `globalStorage/emptyWindowChatSessions/`. Each session is `<id>.jsonl` (a
+ * mutation log, VS Code 1.109 and later) or `<id>.json` (a whole snapshot,
+ * earlier builds). `transferredChatSessions` holds short-lived copies that
+ * VS Code deletes once another window opens them, so it is not read. */
+const VSCODE_WORKSPACE_CHAT_DIR = "chatSessions";
+const VSCODE_EMPTY_WINDOW_CHAT_DIR = "emptyWindowChatSessions";
+
+interface VscodeChatCandidate {
+  file: SourceFile;
+  id: string;
+  log: boolean;
+  mtime: number;
+}
+
+function collectVscodeCopilot(userDirs: (string | undefined)[], out: SourceFile[]): void {
+  const candidates: VscodeChatCandidate[] = [];
+  for (const userDir of new Set(userDirs)) {
+    if (userDir == null) {
+      continue;
+    }
+    const workspaceStorage = join(userDir, "workspaceStorage");
+    for (const workspace of listDir(workspaceStorage)) {
+      collectVscodeChatDir(
+        join(workspaceStorage, workspace, VSCODE_WORKSPACE_CHAT_DIR),
+        candidates,
+      );
+    }
+    collectVscodeChatDir(join(userDir, "globalStorage", VSCODE_EMPTY_WINDOW_CHAT_DIR), candidates);
+  }
+  out.push(...newestVscodeCopies(candidates));
+}
+
+function collectVscodeChatDir(dir: string, candidates: VscodeChatCandidate[]): void {
+  for (const name of listDir(dir)) {
+    const log = name.endsWith(".jsonl");
+    if (!log && !name.endsWith(".json")) {
+      continue;
+    }
+    const path = join(dir, name);
+    let mtime: number;
+    try {
+      const stats = statSync(path);
+      if (!stats.isFile()) {
+        continue;
+      }
+      mtime = stats.mtimeMs;
+    } catch {
+      continue;
+    }
+    candidates.push({
+      file: { tool: "vscode_copilot", path, archived: false },
+      id: fileStem(name),
+      log,
+      mtime,
+    });
+  }
+}
+
+/**
+ * One file per chat session. VS Code reads `<id>.jsonl` before `<id>.json`,
+ * and leaves the older `.json` behind after it switches a session to the log,
+ * so the log wins. Opening an empty window's chat in a folder copies its file
+ * into that workspace's storage and keeps the original, so of two copies of
+ * one session the more recently written one wins.
+ */
+function newestVscodeCopies(candidates: VscodeChatCandidate[]): SourceFile[] {
+  const best = new Map<string, VscodeChatCandidate>();
+  for (const candidate of candidates) {
+    const current = best.get(candidate.id);
+    if (
+      current == null ||
+      (candidate.log && !current.log) ||
+      (candidate.log === current.log && candidate.mtime > current.mtime)
+    ) {
+      best.set(candidate.id, candidate);
+    }
+  }
+  return [...best.values()]
+    .map((candidate) => candidate.file)
+    .sort((a, b) => compareCodePoints(a.path, b.path));
+}
+
+/** `--path` keeps every copy it is given, except a `.json` that sits beside
+ * its own session's `.jsonl`. */
+function preferVscodeLogs(files: SourceFile[]): SourceFile[] {
+  const logs = new Set(
+    files
+      .filter((file) => file.tool === "vscode_copilot" && file.path.endsWith(".jsonl"))
+      .map((file) => file.path.slice(0, -".jsonl".length)),
+  );
+  return files.filter(
+    (file) =>
+      file.tool !== "vscode_copilot" ||
+      !file.path.endsWith(".json") ||
+      !logs.has(file.path.slice(0, -".json".length)),
+  );
+}
+
+/** Exclude extension state from broad imports, including relocated User roots. */
+function isInVscodeStorage(path: string, userDirs: readonly (string | undefined)[]): boolean {
+  const segments = path.split(/[\\/]+/);
+  if (
+    segments.some(
+      (segment, i) =>
+        segment === "User" &&
+        (segments[i + 1] === "workspaceStorage" || segments[i + 1] === "globalStorage"),
+    )
+  )
+    return true;
+  const absolute = resolve(path);
+  return userDirs.some(
+    (userDir) =>
+      userDir != null &&
+      ["workspaceStorage", "globalStorage"].some((storage) =>
+        absolute.startsWith(`${resolve(join(userDir, storage))}${sep}`),
+      ),
+  );
+}
+
+/** Requiring the storage layout around the file keeps `--path` from claiming
+ * another tool's JSON. */
+function isVscodeChatSessionFile(path: string): boolean {
+  if (!path.endsWith(".json") && !path.endsWith(".jsonl")) {
+    return false;
+  }
+  const dir = dirname(path);
+  const dirName = pathBasename(dir);
+  if (dirName === VSCODE_WORKSPACE_CHAT_DIR) {
+    return pathBasename(dirname(dirname(dir))) === "workspaceStorage";
+  }
+  return dirName === VSCODE_EMPTY_WINDOW_CHAT_DIR && pathBasename(dirname(dir)) === "globalStorage";
+}
+
+/** `workspace.json` beside a workspace's `chatSessions` directory names the
+ * folder or `.code-workspace` file the window had open. */
+function readVscodeWorkspace(path: string): Json | null {
+  const dir = dirname(path);
+  if (pathBasename(dir) !== VSCODE_WORKSPACE_CHAT_DIR) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(join(dirname(dir), "workspace.json"), "utf8")) as Json;
+    return parsed != null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function listDir(dir: string): string[] {
+  try {
+    return readdirSync(dir).sort(compareCodePoints);
+  } catch {
+    return [];
+  }
 }
 
 interface GeminiSessionLayout {

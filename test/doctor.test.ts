@@ -78,12 +78,49 @@ describe("collectDoctorReport", () => {
       "opencode",
       "cursor",
       "copilot",
+      "vscode_copilot",
     ]);
     expect(report.archive).toMatchObject({ path: "~/.decant/decant.db", exists: false });
     expect(report.env).toEqual(["DECANT_CONFIG_DIR", "DECANT_NO_SYNC", "XDG_DATA_HOME"]);
     expect(report.supported_schema_version).toBe(LATEST_SCHEMA_VERSION);
     expect(JSON.stringify(report)).not.toContain(home);
     expect(JSON.stringify(report)).not.toContain("do-not-print");
+  });
+
+  test("reports both Copilot source roots and discovery counts", () => {
+    const { home, env } = freshHome();
+    const config = resolveConfig({ env, homeDir: home, platform: "darwin" });
+    mkdirSync(config.copilotDir, { recursive: true });
+    mkdirSync(config.vscodeCopilotDir, { recursive: true });
+    const report = collectDoctorReport(config, {
+      env,
+      homeDir: home,
+      install,
+      discover: () => [
+        { tool: "copilot", path: join(config.copilotDir, "events.jsonl"), archived: false },
+        {
+          tool: "vscode_copilot",
+          path: join(config.vscodeCopilotDir, "chat.jsonl"),
+          archived: false,
+        },
+      ],
+    });
+    expect(report.sources.find((source) => source.tool === "copilot")).toEqual({
+      tool: "copilot",
+      roots: ["~/.copilot/session-state"],
+      exists: true,
+      found: 1,
+    });
+    expect(report.sources.find((source) => source.tool === "vscode_copilot")).toEqual({
+      tool: "vscode_copilot",
+      roots: [
+        "~/Library/Application Support/Code/User",
+        "~/Library/Application Support/Code - Insiders/User",
+      ],
+      exists: true,
+      found: 1,
+    });
+    expect(JSON.stringify(report)).not.toContain(home);
   });
 
   test("keeps only the error name when discovery or the archive fails", () => {

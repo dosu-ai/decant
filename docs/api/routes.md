@@ -106,6 +106,12 @@ Sync responses include `repriced` when stored session or activity costs changed.
 A repricing-only sync also invalidates server economics caches and emits
 `archive_updated`, even when `ingested` is zero.
 
+`GET /api/date-bounds` covers visible sessions only, with no
+`include_archived` opt-in. `min` and `max` are the UTC calendar days of the
+earliest and latest session start. `latest_started_at` is the latest start
+time itself, so a client can name that day in its own time zone. Near midnight
+UTC the local day can differ from `max`.
+
 Session archive/delete state is local metadata. Archiving hides a session from
 default lists, searches, and aggregate statistics. The `include_archived`
 parameter on session-list and statistics operations opts it back into those

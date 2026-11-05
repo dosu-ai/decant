@@ -343,6 +343,28 @@ describe("per-model usage", () => {
   });
 });
 
+describe("model-less usage rows", () => {
+  test("count toward the session's model in the model breakdown", () => {
+    const db = freshDb();
+    const id = ingest(db, [OPUS_5], "sess-modelless");
+    // A Copilot checkpoint that names no model stores its usage under "".
+    db.query("DELETE FROM session_model_usage WHERE session_id = ?1").run(id);
+    db.query(
+      `INSERT INTO session_model_usage (session_id, model, tier, requests, input_tokens,
+         output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens,
+         format_version, reported_cost_usd)
+       SELECT ?1, '', 'standard', 1, total_input_tokens, total_output_tokens,
+              total_cache_read_tokens, total_cache_creation_tokens, 0, 1, NULL
+         FROM session WHERE id = ?1`,
+    ).run(id);
+    const rows = byDimension(db, "model");
+    expect(rows.map((row) => row.key)).toEqual(["claude-opus-5"]);
+    expect(rows[0]).toMatchObject({ input_tokens: OPUS_5.input, output_tokens: OPUS_5.output });
+    expect(rows[0]?.estimated_cost_usd).toBeCloseTo(storedCost(db, id), 12);
+    closeDb(db);
+  });
+});
+
 describe("reported cost fallback", () => {
   function ingestOpenCode(
     db: Database,

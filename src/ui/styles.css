@@ -2164,10 +2164,10 @@ table {
   min-width: 1080px;
 }
 
-/* The fixed columns at the narrowest tier (784px) plus the 280px title floor.
+/* The fixed columns at the narrowest tier (804px) plus the 280px title floor.
  * Below this the table scrolls instead of squeezing the title. */
 .sessions-table {
-  min-width: 1064px;
+  min-width: 1084px;
 }
 
 .sessions-panel {
@@ -2184,11 +2184,11 @@ table {
  * slack, badges and numbers keep their natural width, and percent widths stop
  * squeezing badges into clipped mid-character states like "la-hig" and
  * "claude-opus-4-…". Widths come from rendered audits of the widest archived
- * value plus 20px of cell padding ("OpenCode" with the disclosure,
+ * value plus 20px of cell padding ("Copilot Chat" with the disclosure,
  * claude-sonnet-5-5, "thinking on", "226 +$927.50", "47,662", "$1,124.88",
- * "Oct 18, 12:04 PM"); widen with the audit, not by eye. */
+ * "May 28, 12:08 AM"); widen with the audit, not by eye. */
 .sessions-table .col-session-tool {
-  width: 144px;
+  width: 156px;
 }
 
 .sessions-table .col-session-title {
@@ -2229,7 +2229,7 @@ table {
 }
 
 .sessions-table .col-session-started {
-  width: 136px;
+  width: 144px;
 }
 
 /* Every column fits only on wide screens, so narrower panels drop the
@@ -2237,7 +2237,7 @@ table {
  * breakpoint is the visible fixed width plus that floor. The session detail
  * page still shows effort, context, compactions, and subagents. The class sits
  * on the col, th, and td so one rule removes the whole column. */
-@container sessions-table (width < 1428px) {
+@container sessions-table (width < 1448px) {
   .sessions-table .col-session-effort,
   .sessions-table .col-session-context,
   .sessions-table .col-session-compactions {
@@ -2245,7 +2245,7 @@ table {
   }
 }
 
-@container sessions-table (width < 1176px) {
+@container sessions-table (width < 1196px) {
   .sessions-table .col-session-subagents {
     display: none;
   }

@@ -4,8 +4,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/dosu-ai/decant/blob/main/LICENSE)
 
 Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code sessions: token and cost breakdowns, context-window usage, full-text search,
-files touched, tool usage, and complete transcript browsing.
+GitHub Copilot CLI, and Copilot Chat in VS Code sessions. See token and cost
+breakdowns, context-window usage, files touched, and tool usage, and search and
+browse complete transcripts.
 
 Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine. The one exception is an update
@@ -16,8 +17,9 @@ It does keep a copy of them. To make sessions searchable, Decant writes prompts,
 tool inputs, tool output, and canonicalized raw records for retained transcript
 messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
 full-text index over the prompt and tool-argument text. Whatever your agents read
-is in there too — source code, file contents, local paths, and any credentials
-pasted into a session. Decant creates the archive owner-only (`0600`). If your
+is in there too, including source code, file contents, local paths, and any
+credentials pasted into a session. Decant creates the archive owner-only
+(`0600`). If your
 organization has a retention policy for agent transcripts, this archive is
 subject to it.
 

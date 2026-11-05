@@ -13,7 +13,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { getSettings, type SettingsOptions, settingsPath } from "./settings.ts";
 import { DECANT_VERSION } from "./version.ts";
 
@@ -22,7 +23,12 @@ export const LATEST_VERSION_URL = "https://registry.npmjs.org/@dosu/decant/lates
 export const RELEASES_URL = "https://github.com/dosu-ai/decant/releases";
 export const DOCKER_IMAGE = "ghcr.io/dosu-ai/decant:latest";
 export const HOMEBREW_FORMULA = "dosu-ai/dosu/decant";
+export const INSTALLER_COMMAND =
+  "curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh";
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** How soon a failed check is retried, so one slow request does not hide a release for a day. */
+export const FAILED_CHECK_RETRY_MS = 60 * 60 * 1000;
+const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 const CHECK_TIMEOUT_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -108,6 +114,7 @@ export type InstallChannel =
   | "npm-local"
   | "homebrew"
   | "installer"
+  | "standalone"
   | "docker"
   | "source";
 
@@ -121,6 +128,7 @@ export interface DetectInstallOptions {
   compiled?: boolean;
   env?: Record<string, string | undefined>;
   execPath?: string;
+  homeDir?: string;
   realpath?: (path: string) => string;
 }
 
@@ -138,16 +146,20 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
   // Only the official image sets this. Marker files like /.dockerenv also
   // exist in devcontainers and CI jobs, where decant came from npm, Homebrew,
   // or install.sh and updates the usual way.
-  if ((options.env ?? process.env).DECANT_INSTALL_CHANNEL === "docker") {
+  const env = options.env ?? process.env;
+  if (env.DECANT_INSTALL_CHANNEL === "docker") {
     return { channel: "docker", binaryPath: null };
   }
-  const execPath = options.execPath ?? process.execPath;
-  let path = execPath;
-  try {
-    path = (options.realpath ?? realpathSync)(execPath);
-  } catch {
-    // Fall back to the unresolved path; classification only reads its shape.
-  }
+  const realpath = options.realpath ?? realpathSync;
+  const resolveReal = (target: string): string => {
+    try {
+      return realpath(target);
+    } catch {
+      // Fall back to the unresolved path; classification only reads its shape.
+      return target;
+    }
+  };
+  const path = resolveReal(options.execPath ?? process.execPath);
   if (path.includes("/Cellar/decant/")) {
     return { channel: "homebrew", binaryPath: null };
   }
@@ -160,7 +172,25 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
     // another package manager such as bun or pnpm.
     return { channel: path.includes("/lib/node_modules/") ? "npm" : "npm-local", binaryPath: null };
   }
-  return { channel: "installer", binaryPath: path };
+  // Only a binary in the installer's directory is Decant's to replace. A copy
+  // somewhere else may belong to mise, aqua, a distro package, or a manual
+  // download, and renaming over it would desync whatever tracks that file.
+  const binaryDir = dirname(path);
+  const installDirs = [join(options.homeDir ?? homedir(), ".local", "bin")];
+  const customDir = nonEmpty(env.DECANT_INSTALL_DIR);
+  if (customDir != null) {
+    installDirs.push(customDir);
+  }
+  for (const dir of installDirs.map((candidate) => resolve(candidate))) {
+    if (binaryDir === dir || binaryDir === resolveReal(dir)) {
+      return { channel: "installer", binaryPath: path };
+    }
+  }
+  return { channel: "standalone", binaryPath: null };
+}
+
+function nonEmpty(value: string | undefined): string | null {
+  return value == null || value.trim() === "" ? null : value;
 }
 
 /** The command a nudge tells the user to run for this install. */
@@ -175,21 +205,43 @@ export function updateCommandFor(channel: InstallChannel): string {
     case "source":
       return "git pull && bun install";
     default:
+      // `decant update` explains what to do for a standalone copy. A bare
+      // installer command would install a second copy in ~/.local/bin.
       return "decant update";
   }
 }
 
+export interface PlanCommand {
+  argv: string[];
+  /** A failure is reported but does not stop the commands after it. */
+  bestEffort?: boolean;
+}
+
 export type UpdatePlan =
-  | { kind: "run"; argv: string[] }
+  /** Commands run in order; a failure stops the rest unless it is best effort. */
+  | { kind: "run"; commands: PlanCommand[] }
   | { kind: "replace"; binaryPath: string }
   | { kind: "manual"; instructions: string };
 
 export function planUpdate(install: InstallInfo, version: string): UpdatePlan {
   switch (install.channel) {
     case "npm":
-      return { kind: "run", argv: ["npm", "install", "--global", `${NPM_PACKAGE}@${version}`] };
+      return {
+        kind: "run",
+        commands: [{ argv: ["npm", "install", "--global", `${NPM_PACKAGE}@${version}`] }],
+      };
     case "homebrew":
-      return { kind: "run", argv: ["brew", "upgrade", HOMEBREW_FORMULA] };
+      // `brew upgrade` refreshes taps only once a day (HOMEBREW_AUTO_UPDATE_SECS),
+      // so without `brew update` a fresh tap push stays invisible until then.
+      // `brew update` exits 1 when any unrelated tap fails to fetch, so it must
+      // not block the upgrade; the PATH check afterwards catches a stale tap.
+      return {
+        kind: "run",
+        commands: [
+          { argv: ["brew", "update"], bestEffort: true },
+          { argv: ["brew", "upgrade", HOMEBREW_FORMULA] },
+        ],
+      };
     case "installer":
       if (install.binaryPath != null) {
         return { kind: "replace", binaryPath: install.binaryPath };
@@ -199,6 +251,15 @@ export function planUpdate(install: InstallInfo, version: string): UpdatePlan {
       return {
         kind: "manual",
         instructions: `npx runs a cached copy. Run \`npx ${NPM_PACKAGE}@latest\` to use the newest release.`,
+      };
+    case "standalone":
+      return {
+        kind: "manual",
+        instructions:
+          "Decant did not install this binary, so it will not replace it. Update it with the tool that " +
+          "installed it. If you used the shell installer with DECANT_INSTALL_DIR, set it to this " +
+          "binary's directory and run `decant update` again. Otherwise remove this copy and reinstall " +
+          `with \`${INSTALLER_COMMAND}\`, which installs into ~/.local/bin.`,
       };
     case "npm-local":
       return {
@@ -221,7 +282,7 @@ export function planUpdate(install: InstallInfo, version: string): UpdatePlan {
 
 export type FetchLike = (
   url: string,
-  init?: { signal?: AbortSignal; headers?: Record<string, string> },
+  init?: { method?: string; signal?: AbortSignal; headers?: Record<string, string> },
 ) => Promise<Response>;
 
 export async function fetchLatestVersion(
@@ -245,6 +306,8 @@ export async function fetchLatestVersion(
 export interface UpdateCheckRecord {
   checkedAt: string;
   latest: string | null;
+  /** Set when this attempt failed, which makes the next one due sooner. */
+  failed?: boolean;
 }
 
 export function updateCheckPath(options: SettingsOptions = {}): string {
@@ -260,7 +323,11 @@ export function readUpdateCheck(options: SettingsOptions = {}): UpdateCheckRecor
     if (typeof parsed.checkedAt !== "string" || Number.isNaN(Date.parse(parsed.checkedAt))) {
       return null;
     }
-    return { checkedAt: parsed.checkedAt, latest: cleanVersion(parsed.latest) };
+    return {
+      checkedAt: parsed.checkedAt,
+      latest: cleanVersion(parsed.latest),
+      ...(parsed.failed === true ? { failed: true } : {}),
+    };
   } catch {
     return null;
   }
@@ -304,9 +371,10 @@ async function attemptCheck(
     attempt = { record: { checkedAt: now.toISOString(), latest }, error: null };
   } catch (failure) {
     // Recording the failed attempt holds an offline machine to one timeout
-    // a day instead of one per command.
+    // an hour instead of one per command. Waiting a full day would let one
+    // slow answer to a short CLI timeout hide a release from serve too.
     attempt = {
-      record: { checkedAt: now.toISOString(), latest: previous?.latest ?? null },
+      record: { checkedAt: now.toISOString(), latest: previous?.latest ?? null, failed: true },
       error: failure instanceof Error ? failure.message : String(failure),
     };
   }
@@ -387,8 +455,8 @@ export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promi
   // A checkout is never nudged, so a passive check there would be a wasted request.
   // A negative age means the clock was wrong when the cache was written, and
   // trusting it would stop checks until that date.
-  const due =
-    enabled && install.channel !== "source" && (age < 0 || age >= UPDATE_CHECK_INTERVAL_MS);
+  const interval = record?.failed === true ? FAILED_CHECK_RETRY_MS : UPDATE_CHECK_INTERVAL_MS;
+  const due = enabled && install.channel !== "source" && (age < 0 || age >= interval);
   if (force || due) {
     let attempt = force ? undefined : inflightChecks.get(cachePath);
     if (attempt == null) {
@@ -437,6 +505,48 @@ export function releaseTarget(
   return `decant-${key}`;
 }
 
+/** Where npm serves the platform package `npm install` needs for this machine. */
+export function npmPlatformTarballUrl(
+  version: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  const target = releaseTarget(platform, arch);
+  return `${NPM_REGISTRY_URL}/@dosu/${target}/-/${target}-${version}.tgz`;
+}
+
+/**
+ * Confirms npm can serve this machine's platform package before
+ * `npm install --global` replaces a working install. The registry can name a
+ * new version minutes before its platform tarballs download, and npm skips an
+ * optional dependency it cannot fetch, leaving a launcher with no binary.
+ */
+export async function assertNpmPlatformPackage(options: {
+  version: string;
+  fetch?: FetchLike;
+  platform?: NodeJS.Platform;
+  arch?: string;
+}): Promise<void> {
+  if (parseVersion(options.version) == null) {
+    throw new Error(`refusing to install an invalid version: ${options.version}`);
+  }
+  const url = npmPlatformTarballUrl(options.version, options.platform, options.arch);
+  const response = await (options.fetch ?? fetch)(url, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+  });
+  if (response.status === 404) {
+    throw new Error(
+      `npm has not finished publishing v${options.version} for this platform yet. Try again in a few minutes.`,
+    );
+  }
+  if (!response.ok) {
+    throw new Error(
+      `could not confirm the npm package for v${options.version}: HTTP ${response.status}`,
+    );
+  }
+}
+
 export function checksumFor(sums: string, fileName: string): string | null {
   for (const line of sums.split("\n")) {
     const [hash, name] = line.trim().split(/\s+/, 2);
@@ -470,6 +580,17 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
   }
   const target = releaseTarget(options.platform, options.arch);
   const tarballName = `${target}.tar.gz`;
+  // Checked before downloading, so a read-only install fails without fetching
+  // the whole release first.
+  const installDir = dirname(options.binaryPath);
+  try {
+    accessSync(installDir, constants.W_OK);
+  } catch {
+    throw new Error(
+      `${installDir} is not writable. Run decant update as a user who can write there, or remove ` +
+        "this copy and reinstall into ~/.local/bin with the shell installer.",
+    );
+  }
   const releaseBase = `${(options.baseUrl ?? RELEASES_URL).replace(/\/+$/, "")}/download/v${version}`;
   const download = async (url: string): Promise<Uint8Array> => {
     const response = await (options.fetch ?? fetch)(url, {
@@ -501,14 +622,6 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
     throw new Error(`checksum mismatch for ${tarballName}: expected ${expected}, got ${actual}`);
   }
 
-  const installDir = dirname(options.binaryPath);
-  try {
-    accessSync(installDir, constants.W_OK);
-  } catch {
-    throw new Error(
-      `${installDir} is not writable. Re-run the installer with DECANT_INSTALL_DIR set to a directory you own.`,
-    );
-  }
   // Staging next to the target keeps the final rename on one filesystem,
   // where it is atomic: a running `decant` keeps its old inode, and the next
   // launch gets the complete new file.

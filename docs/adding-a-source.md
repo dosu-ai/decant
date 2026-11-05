@@ -40,7 +40,12 @@ Use this checklist when adding support for another coding-agent CLI.
    `src/model.ts`. It is persisted in SQLite, so choose a stable value.
 4. **Watch root** extends `watchDirs()` in `src/watch.ts` so `decant serve`
    notices new sessions.
-5. **Capability report** includes the table below in the pull-request
+5. **Analytics and exports** add the source to `SESSION_SOURCES` and
+   `sessionSourceLabel` in `src/source-filter.ts`, and to the `source` enums in
+   `docs/api/openapi.yaml` and `docs/api/routes.md`. Give it labels in the
+   source maps in `src/export.ts` and `src/export-atif.ts`, and a row in the
+   source directories `decant doctor` reports from `src/doctor.ts`.
+6. **Capability report** includes the table below in the pull-request
    description.
 
 ## Capability report

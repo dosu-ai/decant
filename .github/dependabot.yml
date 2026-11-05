@@ -1,6 +1,7 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
+  # Dependabot's npm ecosystem refuses to update bun.lock, so this must stay "bun".
+  - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "weekly"

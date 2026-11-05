@@ -135,7 +135,11 @@ describe("cost for sessions without recorded usage", () => {
       <AnalyticsView
         data={{
           ...emptyData,
-          dateBounds: { min: "2026-10-01", max: "2026-10-01" },
+          dateBounds: {
+            min: "2026-10-01",
+            max: "2026-10-01",
+            latest_started_at: "2026-10-01T12:00:00Z",
+          },
           byModel: [dimRow({ key: "cursor-only-model", usage_sessions: 0, input_tokens: 0 })],
           byProject: [
             dimRow({

@@ -1,5 +1,4 @@
 import { apportion } from "../apportion.ts";
-import type { SessionSummary } from "./types.ts";
 
 export function versionLabel(version: string | null | undefined): string {
   if (version == null || version === "") {
@@ -121,11 +120,6 @@ export function duration(ms: number): string {
 
 export function capitalize(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
-}
-
-export function latestSessionDay(sessions: SessionSummary[]): string | null {
-  const latest = sessions.find((session) => session.started_at != null)?.started_at;
-  return latest == null ? null : formatDay(latest);
 }
 
 export const dayFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit" });

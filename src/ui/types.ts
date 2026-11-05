@@ -101,6 +101,7 @@ export type ModelSparklines = {
 export type DateBounds = {
   min: string | null;
   max: string | null;
+  latest_started_at: string | null;
 };
 
 export type ActivityBucket = "context" | "planning" | "code" | "communicating";

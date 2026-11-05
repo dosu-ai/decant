@@ -368,7 +368,11 @@ describe("stats rollups", () => {
       days: ["2026-05-03"],
       models: { "visible-model": [1] },
     });
-    expect(dateBounds(db)).toEqual({ min: "2026-05-03", max: "2026-05-03" });
+    expect(dateBounds(db)).toEqual({
+      min: "2026-05-03",
+      max: "2026-05-03",
+      latest_started_at: "2026-05-03T10:00:00.000Z",
+    });
     db.close();
   });
 
@@ -832,6 +836,54 @@ describe("stats rollups", () => {
     const bounds = dateBounds(db);
     expect(bounds.min).toBe("2026-05-03");
     expect(bounds.max).toBe("2026-05-04");
+    expect(bounds.latest_started_at?.startsWith("2026-05-04T")).toBe(true);
+    db.close();
+  });
+
+  test("date bounds keep the newest start time for local-day display", () => {
+    const db = freshDb();
+    // 00:30 UTC on May 4 is still May 3 west of UTC, so the UTC day in max
+    // cannot name the local day by itself.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'evening', 'test-model', '2026-05-03T20:00:00Z', 0),
+        (2, 'claude_code', 'after-midnight', 'test-model', '2026-05-04T00:30:00Z', 0);
+    `);
+    expect(dateBounds(db)).toEqual({
+      min: "2026-05-03",
+      max: "2026-05-04",
+      latest_started_at: "2026-05-04T00:30:00.000Z",
+    });
+    db.close();
+  });
+
+  test("date bounds pick the latest start by instant and return it in UTC", () => {
+    const db = freshDb();
+    // 09:00+14:00 is 19:00 UTC the day before, so it sorts last as text but is
+    // the oldest instant here. The unparseable value must not win either.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'offset', 'test-model', '2026-05-04T09:00:00+14:00', 0),
+        (2, 'claude_code', 'utc', 'test-model', '2026-05-04T08:00:00.250Z', 0),
+        (3, 'claude_code', 'garbled', 'test-model', 'zz-not-a-date', 0);
+    `);
+    expect(dateBounds(db).latest_started_at).toBe("2026-05-04T08:00:00.250Z");
+    db.close();
+  });
+
+  test("date bounds read compact ±HHMM offsets as instants", () => {
+    const db = freshDb();
+    // 03:00-0700 is 10:00 UTC, the newest start here. Without the compact
+    // offset, julianday returns NULL and the older UTC start would win.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'compact', 'test-model', '2026-05-04T03:00:00-0700', 0),
+        (2, 'claude_code', 'utc', 'test-model', '2026-05-04T08:00:00Z', 0);
+    `);
+    expect(dateBounds(db).latest_started_at).toBe("2026-05-04T10:00:00.000Z");
     db.close();
   });
 

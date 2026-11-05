@@ -9,6 +9,7 @@ import { upsertSession } from "../src/ingest.ts";
 import type { TokenUsage } from "../src/model.ts";
 import {
   deriveModelUsage,
+  MODEL_USAGE_FORMAT_VERSION,
   materializeMissingModelUsage,
   materializeModelUsage,
 } from "../src/model-usage.ts";
@@ -354,9 +355,9 @@ describe("model-less usage rows", () => {
          output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens,
          format_version, reported_cost_usd)
        SELECT ?1, '', 'standard', 1, total_input_tokens, total_output_tokens,
-              total_cache_read_tokens, total_cache_creation_tokens, 0, 1, NULL
+              total_cache_read_tokens, total_cache_creation_tokens, 0, ?2, NULL
          FROM session WHERE id = ?1`,
-    ).run(id);
+    ).run(id, MODEL_USAGE_FORMAT_VERSION);
     const rows = byDimension(db, "model");
     expect(rows.map((row) => row.key)).toEqual(["claude-opus-5"]);
     expect(rows[0]).toMatchObject({ input_tokens: OPUS_5.input, output_tokens: OPUS_5.output });
@@ -414,6 +415,28 @@ describe("reported cost fallback", () => {
     // The fallback is part of what a repricing sync recomputes, so nothing is
     // pending and the total cannot flap between syncs.
     expect(refreshSessionCosts(db)).toBe(0);
+    closeDb(db);
+  });
+
+  test("a model that loses its rate recovers its recorded cost on the next sync", () => {
+    const db = freshDb();
+    // v0.12.1 priced this ID through a loose Gemini 3 Flash match, so it
+    // stored the rows at format 1 without the recorded cost.
+    const id = ingestOpenCode(db, "ses_lost_rate", [
+      { model: "gemini-4.3-flash", cost: 0.4, input: 100, output: 10 },
+    ]);
+    db.query(
+      "UPDATE session_model_usage SET reported_cost_usd = NULL, format_version = ?2 WHERE session_id = ?1",
+    ).run(id, 1);
+
+    db.query("UPDATE session SET estimated_cost_usd = 0.0001 WHERE id = ?1").run(id);
+
+    expect(materializeMissingModelUsage(db)).toBe(1);
+    expect(storedRows(db, id)).toMatchObject([
+      { model: "gemini-4.3-flash", reported_cost_usd: 0.4 },
+    ]);
+    expect(refreshSessionCosts(db)).toBe(1);
+    expect(storedCost(db, id)).toBeCloseTo(0.4, 12);
     closeDb(db);
   });
 

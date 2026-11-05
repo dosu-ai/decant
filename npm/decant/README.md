@@ -5,8 +5,8 @@
 
 Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
 GitHub Copilot CLI, and Copilot Chat in VS Code sessions. See token and cost
-breakdowns, context-window usage, files touched, and tool usage, and search and
-browse complete transcripts.
+breakdowns, context-window usage, files touched, and tool usage, search prompts
+and tool calls, and browse complete transcripts.
 
 Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine. The one exception is an update

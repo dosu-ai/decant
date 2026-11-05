@@ -136,12 +136,16 @@ jobs:
             dist/bin/*/decant
             dist/release/SHA256SUMS
 
-      - name: Stage attestation bundle as a release asset
+      # The .intoto.jsonl copy is the same SLSA provenance bundle, one per line.
+      # OpenSSF Scorecard's Signed-Releases check only counts provenance by
+      # that suffix, and `gh attestation verify --bundle` reads either file.
+      - name: Stage attestation bundle as release assets
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
           [ -s "$BUNDLE_PATH" ] || { echo "::error::actions/attest reported no bundle at '${BUNDLE_PATH}'"; exit 1; }
           cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
+          jq -c . "$BUNDLE_PATH" > "dist/release/decant-${VERSION}.intoto.jsonl"
 
       - name: Upload pre-signing hashes
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

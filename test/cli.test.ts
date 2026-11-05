@@ -172,6 +172,11 @@ describe("runCli", () => {
       { key: "gpt-5.4", sessions: 3 },
     ]);
 
+    // Plain rows end in a newline so the shell prompt starts on its own line.
+    const plainStats = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "model"]);
+    expect(plainStats.code).toBe(0);
+    expect(plainStats.stdout).toBe("claude-opus-4-7\t4\ngpt-5.4\t3\n");
+
     const tokens = await runCli([...base, "tokens"]);
     expect(tokens.code).toBe(0);
     expect(JSON.parse(tokens.stdout)).toMatchObject({

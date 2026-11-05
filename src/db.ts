@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 27;
+export const LATEST_SCHEMA_VERSION = 28;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -773,6 +773,16 @@ function migrate(db: Database, current: number): void {
         ON tool_call(session_id, tool_name, tool_kind, mcp_server, is_error, duration_ms, timestamp)`);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (27, datetime('now'))",
+      ).run();
+    }
+    if (current < 28) {
+      // The peak now includes the context a compaction reports it cleared.
+      // An ingest revision re-derives sessions whose sources still exist, so
+      // clearing the stored peak lets the next sync recompute it from stored
+      // rows for sessions whose transcripts are gone, as migration 13 did.
+      db.exec("UPDATE session SET peak_context_tokens = NULL WHERE compaction_count > 0");
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (28, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

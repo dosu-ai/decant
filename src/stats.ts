@@ -205,7 +205,14 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
     // Reasoning is recorded per session, not per request.
     label.reasoning_tokens += session.total_reasoning_tokens;
     label.est_reasoning_tokens += session.est_reasoning_tokens;
-    const served = usage.get(session.id) ?? [];
+    // A row with no model (Copilot's model-less usage checkpoints) is priced
+    // at the session's model when the session cost is stored, so it is
+    // priced and counted under that model here too.
+    const served = (usage.get(session.id) ?? []).map((part) =>
+      part.model === "" && part.reportedCostUsd == null && session.model
+        ? { ...part, model: session.model }
+        : part,
+    );
     const costs = served.map((part) =>
       totalCost(sessionCostParts([part], { model: part.model, usage: part.usage }, pricing)),
     );

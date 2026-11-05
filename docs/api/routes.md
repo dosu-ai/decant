@@ -37,9 +37,9 @@ current values are `claude_code`, `codex_app`, `codex_cli`, `codex_other`,
 `gemini_cli`, `opencode`, `cursor_cli`, `copilot_cli`, and `vscode_copilot`.
 An unknown value
 returns `400` with the accepted values in `allowed`, before the archive is read. The Codex split reads
-the source session's recorded `originator`/`source` metadata; the filter does
+the source session's recorded `originator`/`source` metadata. The filter does
 not infer an account identity. `GET /api/metadata/session-sources` returns only
-source values represented by visible sessions in the local archive; the
+source values represented by visible sessions in the local archive, and the
 Analytics picker uses that list.
 
 ## Access control
@@ -128,7 +128,7 @@ prompt or reply.
 asks the npm registry for the latest `@dosu/decant` version only when the
 `updateCheck` setting or `DECANT_UPDATE_CHECK=1` turned checks on and the
 cached answer in `update-check.json` is at least a day old. A failed check is
-also cached, so an offline machine retries once a day.
+also cached, so an offline machine retries once an hour.
 
 `POST /api/launch/agent` accepts a `key` only when it uses the characters
 recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
@@ -159,10 +159,10 @@ Session summaries also carry `usage_available`. It is false for a session from
 a source that may record no token usage, when none of the session's messages
 carries any. Those sources are Cursor CLI, which stores none, and Copilot Chat
 in VS Code, whose builds from before April 2026 wrote none. Such a session reports `estimated_cost_usd` and token
-totals of 0; show them as unavailable, not free. Stats totals,
+totals of 0. Show them as unavailable, not free. Stats totals,
 `/api/stats/by-dimension` rows, and `/api/projects` rows carry
 `usage_sessions`, the number of top-level sessions in that scope or row with
-usage available. A row whose `usage_sessions` is 0 has unavailable cost; one
+usage available. A row whose `usage_sessions` is 0 has unavailable cost. One
 where it is below `sessions` reports the cost of the sessions with usage
 only.
 

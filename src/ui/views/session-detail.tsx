@@ -847,13 +847,15 @@ export function SessionDetailView({
           </div>
           <div className="thread-stats">
             <span>
-              <strong>{formatInt(stats.turns)}</strong> turns
+              <strong>{formatInt(stats.turns)}</strong> {stats.turns === 1 ? "turn" : "turns"}
             </span>
             <span>
-              <strong>{formatInt(stats.replies)}</strong> replies
+              <strong>{formatInt(stats.replies)}</strong>{" "}
+              {stats.replies === 1 ? "reply" : "replies"}
             </span>
             <span>
-              <strong>{formatInt(stats.toolCalls)}</strong> tool calls
+              <strong>{formatInt(stats.toolCalls)}</strong>{" "}
+              {stats.toolCalls === 1 ? "tool call" : "tool calls"}
             </span>
             <span>
               <strong>

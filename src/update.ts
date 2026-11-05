@@ -32,6 +32,9 @@ const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 const CHECK_TIMEOUT_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+// GitHub takes one hop to reach its asset CDN. The rest is headroom for a
+// mirror that sits behind its own redirects.
+const MAX_DOWNLOAD_REDIRECTS = 10;
 const RELEASE_TARGETS = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
 
 interface Semver {
@@ -282,7 +285,12 @@ export function planUpdate(install: InstallInfo, version: string): UpdatePlan {
 
 export type FetchLike = (
   url: string,
-  init?: { method?: string; signal?: AbortSignal; headers?: Record<string, string> },
+  init?: {
+    method?: string;
+    signal?: AbortSignal;
+    headers?: Record<string, string>;
+    redirect?: RequestRedirect;
+  },
 ) => Promise<Response>;
 
 export async function fetchLatestVersion(
@@ -569,6 +577,42 @@ export interface ReplaceBinaryOptions {
 }
 
 /**
+ * SHA256SUMS is only as trustworthy as the channel it arrives on, so a mirror
+ * must be HTTPS. file:// and plain HTTP to this machine's own loopback
+ * address (an SSH port forward, say) stay allowed because neither crosses a
+ * network. install.sh accepts the same three forms and the same host names.
+ */
+export function releaseBaseUrl(baseUrl: string | undefined): string {
+  const base = (baseUrl ?? RELEASES_URL).replace(/\/+$/, "");
+  if (!isTrustedMirror(base)) {
+    throw new Error(
+      "DECANT_BASE_URL must be an https:// or file:// URL, or http:// to localhost, " +
+        `127.0.0.1, or [::1] (got ${JSON.stringify(base)})`,
+    );
+  }
+  return base;
+}
+
+const LOOPBACK_MIRROR_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function isTrustedMirror(base: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "https:" || url.protocol === "file:") {
+    return true;
+  }
+  return url.protocol === "http:" && LOOPBACK_MIRROR_HOSTS.has(url.hostname);
+}
+
+function isRedirect(response: Response): boolean {
+  return response.status >= 300 && response.status < 400 && response.headers.has("location");
+}
+
+/**
  * Downloads a release tarball, checks it against the release's SHA256SUMS,
  * and renames the new binary over `binaryPath`. Mirrors install.sh so both
  * paths trust the same artifacts.
@@ -578,6 +622,7 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
   if (version == null) {
     throw new Error(`not a release version: ${JSON.stringify(options.version)}`);
   }
+  const base = releaseBaseUrl(options.baseUrl);
   const target = releaseTarget(options.platform, options.arch);
   const tarballName = `${target}.tar.gz`;
   // Checked before downloading, so a read-only install fails without fetching
@@ -591,11 +636,26 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
         "this copy and reinstall into ~/.local/bin with the shell installer.",
     );
   }
-  const releaseBase = `${(options.baseUrl ?? RELEASES_URL).replace(/\/+$/, "")}/download/v${version}`;
+  const releaseBase = `${base}/download/v${version}`;
   const download = async (url: string): Promise<Uint8Array> => {
-    const response = await (options.fetch ?? fetch)(url, {
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-    });
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+    let current = url;
+    let response = await (options.fetch ?? fetch)(current, { redirect: "manual", signal });
+    // GitHub redirects release assets to its CDN, so redirects are followed
+    // here, one hop at a time. A hop to plain HTTP would let an on-path
+    // attacker swap the tarball and SHA256SUMS together, so only HTTPS hops
+    // are accepted, the same rule as install.sh's curl --proto-redir.
+    for (let hops = 0; isRedirect(response); hops++) {
+      if (hops === MAX_DOWNLOAD_REDIRECTS) {
+        throw new Error(`too many redirects downloading ${url}`);
+      }
+      const next = new URL(response.headers.get("location") ?? "", current);
+      if (next.protocol !== "https:") {
+        throw new Error(`refusing to follow a redirect from ${current} to ${next.href}`);
+      }
+      current = next.href;
+      response = await (options.fetch ?? fetch)(current, { redirect: "manual", signal });
+    }
     // The release workflow publishes to npm before it creates the GitHub
     // release, so for a few minutes the registry names a version with no assets.
     if (response.status === 404) {

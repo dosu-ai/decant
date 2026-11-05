@@ -36,7 +36,11 @@ Optional environment variables:
 - `DECANT_VERSION`: release to install; defaults to the latest release.
 - `DECANT_INSTALL_DIR`: destination; defaults to `~/.local/bin`.
 - `DECANT_NO_MODIFY_PATH=1`: do not edit a shell startup file.
-- `DECANT_BASE_URL`: release mirror with the same asset layout as GitHub.
+- `DECANT_BASE_URL`: release mirror with the same asset layout as GitHub. The
+  installer trusts the mirror's `SHA256SUMS`, so the mirror must be an
+  `https://` or `file://` URL, or `http://` to `localhost`, `127.0.0.1`, or
+  `[::1]` (for example, an SSH port forward to a mirror on another machine).
+  The installer also refuses to follow a redirect to plain HTTP.
 
 When the GitHub CLI is available, the installer also performs a best-effort
 provenance check.
@@ -122,10 +126,11 @@ and updates with the tool that owns the running binary:
 | Docker | Prints `docker pull ghcr.io/dosu-ai/decant:latest` |
 | Source checkout | Prints `git pull && bun install` |
 
-The shell installer download honors `DECANT_BASE_URL`, like the installer. The
-binary's directory must be writable. If you ran the installer with
-`DECANT_INSTALL_DIR`, set it to the same directory when you run
-`decant update`. `decant update` exits with status 1 when
+The shell installer download honors `DECANT_BASE_URL` and applies the same
+mirror and redirect rules as the installer. The binary's directory must be
+writable. If you ran the installer with `DECANT_INSTALL_DIR`, set it to the
+same directory when you run `decant update`. `decant update` exits with
+status 1 when
 the registry check fails, when a package manager fails (such as a global npm
 prefix that needs `sudo`), or when the package manager succeeds but the
 `decant` on `PATH` still reports the old version. The release workflow publishes
@@ -189,14 +194,30 @@ skipped and an existing GitHub Release only has its assets refreshed.
 
 ## Verify a release
 
-GitHub Releases include four platform tarballs, `SHA256SUMS`, and a Sigstore
-bundle. Download the latest release and verify the matching tarball:
+GitHub Releases include four platform tarballs, `SHA256SUMS`, and the SLSA
+build provenance for all of them. The provenance ships twice:
+`decant-<version>.sigstore.json` is the Sigstore bundle, and
+`decant-<version>.intoto.jsonl` holds the same bundle as JSON Lines, the name
+OpenSSF Scorecard looks for. Releases published before the `.intoto.jsonl`
+copy was added ship only the `.sigstore.json` file. Pick a release tag, here
+the latest, then download that release and verify the matching tarball:
 
 ```sh
-gh release download -R dosu-ai/decant
+TAG=$(gh release view -R dosu-ai/decant --json tagName -q .tagName)
+gh release download "$TAG" -R dosu-ai/decant
 sha256sum -c SHA256SUMS --ignore-missing      # Linux
 shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
 gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
+```
+
+To verify against the provenance published with the release instead of
+GitHub's attestation API, pass the bundle. `gh` still downloads Sigstore's
+trusted root unless it is already cached. The `.intoto.jsonl` file works in
+place of the `.sigstore.json` file on releases that include it.
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
+  --bundle "decant-${TAG#v}.sigstore.json"
 ```
 
 To check npm provenance, install into a scratch project and run

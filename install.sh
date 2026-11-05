@@ -19,7 +19,9 @@
 #                           PATH export line is printed instead
 #   DECANT_BASE_URL         release download base (default:
 #                           https://github.com/dosu-ai/decant/releases); point
-#                           it at a mirror that lays assets out the same way
+#                           it at a mirror that lays assets out the same way.
+#                           It must be https://, file://, or http:// to
+#                           localhost, 127.0.0.1, or [::1]
 
 set -eu
 
@@ -81,6 +83,29 @@ esac
 
 base_url="${DECANT_BASE_URL:-https://github.com/${repo}/releases}"
 base_url="${base_url%/}"
+# SHA256SUMS is only as trustworthy as the channel it arrives on, so a mirror
+# must be HTTPS. file:// and plain HTTP to this machine's own loopback address
+# (an SSH port forward, say) stay allowed because neither crosses a network.
+# src/update.ts accepts the same three forms and the same host names.
+mirror_ok=0
+case "$base_url" in
+  https://* | file://*) mirror_ok=1 ;;
+  http://*)
+    authority="${base_url#http://}"
+    authority="${authority%%/*}"
+    # Userinfo is rejected outright: http://127.0.0.1:80@example.com connects
+    # to example.com. A port must be all digits.
+    case "$authority" in
+      *@*) ;;
+      localhost | 127.0.0.1 | '[::1]') mirror_ok=1 ;;
+      localhost:*[!0-9]* | 127.0.0.1:*[!0-9]* | '[::1]:'*[!0-9]*) ;;
+      localhost:?* | 127.0.0.1:?* | '[::1]:'?*) mirror_ok=1 ;;
+    esac
+    ;;
+esac
+if [ "$mirror_ok" != 1 ]; then
+  err "DECANT_BASE_URL must be an https:// or file:// URL, or http:// to localhost, 127.0.0.1, or [::1] (got '${base_url}')"
+fi
 
 if [ "$version" = "latest" ]; then
   release_base="${base_url}/latest/download"
@@ -94,13 +119,24 @@ sums_url="${release_base}/SHA256SUMS"
 
 # --- 3. download + checksum verify --------------------------------------------
 
+# GitHub redirects release assets to its CDN, so redirects are followed. A
+# redirect to plain HTTP would let an on-path attacker swap the tarball and
+# SHA256SUMS together, so both downloaders refuse one.
 if need_cmd curl; then
   download() {
-    curl -fsSL -o "$1" "$2"
+    curl -fsSL --proto-redir '=https' -o "$1" "$2"
   }
 elif need_cmd wget; then
+  # wget has no switch that refuses an HTTPS-to-HTTP redirect, so it logs the
+  # response headers and every Location must be https: or a relative path
+  # (which keeps the current scheme and host). The file is not used otherwise.
   download() {
-    wget -q -O "$1" "$2"
+    wget -q -S -O "$1" "$2" 2>"$1.headers" || return 1
+    awk 'tolower($1) == "location:" {
+      target = tolower($2)
+      if ((target ~ /^[a-z][a-z0-9+.-]*:/ && target !~ /^https:/) || target ~ /^\/\//) insecure = 1
+    } END { exit insecure }' "$1.headers" ||
+      err "refusing a redirect away from HTTPS while downloading $2"
   }
 else
   err "curl or wget is required to install decant but neither was found on PATH"

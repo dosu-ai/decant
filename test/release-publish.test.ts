@@ -11,6 +11,7 @@ import {
   attestationBundleName,
   ghChannelFlags,
   ghReleaseArgs,
+  provenanceFileName,
   type ReleasePlan,
 } from "../scripts/release/publish-github-release.ts";
 import {
@@ -187,11 +188,13 @@ describe("GitHub Release publishing", () => {
     tag: "v1.2.3",
     tarballs: ["decant-darwin-arm64.tar.gz", "decant-linux-x64.tar.gz"],
     bundle: attestationBundleName("v1.2.3"),
+    provenance: provenanceFileName("v1.2.3"),
   };
   const assets = [
     "./decant-darwin-arm64.tar.gz",
     "./decant-linux-x64.tar.gz",
     "decant-1.2.3.sigstore.json",
+    "decant-1.2.3.intoto.jsonl",
     "SHA256SUMS",
     "install.sh",
   ];
@@ -213,7 +216,12 @@ describe("GitHub Release publishing", () => {
       "v1.2.3",
       ...assets,
     ]);
-    const beta = { ...plan, tag: "v1.2.3-beta.1", bundle: attestationBundleName("v1.2.3-beta.1") };
+    const beta = {
+      ...plan,
+      tag: "v1.2.3-beta.1",
+      bundle: attestationBundleName("v1.2.3-beta.1"),
+      provenance: provenanceFileName("v1.2.3-beta.1"),
+    };
     expect(ghReleaseArgs(beta, false, PRERELEASE).slice(2, 9)).toEqual([
       "--verify-tag",
       "--generate-notes",
@@ -224,6 +232,7 @@ describe("GitHub Release publishing", () => {
       "./decant-darwin-arm64.tar.gz",
     ]);
     expect(beta.bundle).toBe("decant-1.2.3-beta.1.sigstore.json");
+    expect(beta.provenance).toBe("decant-1.2.3-beta.1.intoto.jsonl");
   });
 
   test("refreshes assets on an existing release instead of recreating it", () => {

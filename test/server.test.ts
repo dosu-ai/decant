@@ -18,6 +18,7 @@ import { EconomicsCache } from "../src/economics-cache.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { listSessions } from "../src/query.ts";
 import { regenerate } from "../src/recommendations.ts";
+import { responseForError } from "../src/server/http.ts";
 import {
   handleRequest,
   resolveTrustedPeers,
@@ -1554,6 +1555,26 @@ describe("server routes", () => {
       error: "Decant could not complete this request.",
     });
     expect(body.error.toLowerCase()).not.toContain("closed");
+  });
+
+  test("never echoes a thrown non-Error value in the response", async () => {
+    const thrown = "TypeError: boom\n    at handler (src/server.ts:42:7)";
+    const response = responseForError(thrown);
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { code: string; error: string };
+    expect(body).toEqual({
+      code: "internal_error",
+      error: "Decant could not complete this request.",
+    });
+    expect(JSON.stringify(body)).not.toContain("server.ts");
+  });
+
+  test("still maps a thrown non-Error lock message to archive_locked", async () => {
+    const response = responseForError("database is locked");
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "archive_locked", retryable: true });
   });
 
   test("maps a busy archive to a retryable service response", async () => {

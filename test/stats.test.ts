@@ -371,7 +371,7 @@ describe("stats rollups", () => {
     expect(dateBounds(db)).toEqual({
       min: "2026-05-03",
       max: "2026-05-03",
-      latest_started_at: "2026-05-03T10:00:00Z",
+      latest_started_at: "2026-05-03T10:00:00.000Z",
     });
     db.close();
   });
@@ -853,8 +853,23 @@ describe("stats rollups", () => {
     expect(dateBounds(db)).toEqual({
       min: "2026-05-03",
       max: "2026-05-04",
-      latest_started_at: "2026-05-04T00:30:00Z",
+      latest_started_at: "2026-05-04T00:30:00.000Z",
     });
+    db.close();
+  });
+
+  test("date bounds pick the latest start by instant and return it in UTC", () => {
+    const db = freshDb();
+    // 09:00+14:00 is 19:00 UTC the day before, so it sorts last as text but is
+    // the oldest instant here. The unparseable value must not win either.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'offset', 'test-model', '2026-05-04T09:00:00+14:00', 0),
+        (2, 'claude_code', 'utc', 'test-model', '2026-05-04T08:00:00.250Z', 0),
+        (3, 'claude_code', 'garbled', 'test-model', 'zz-not-a-date', 0);
+    `);
+    expect(dateBounds(db).latest_started_at).toBe("2026-05-04T08:00:00.250Z");
     db.close();
   });
 

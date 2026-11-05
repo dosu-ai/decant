@@ -2772,8 +2772,9 @@ components:
           type: [string, "null"]
           format: date-time
           description: >-
-            Start time of the latest visible session. Clients convert it to a
-            local day, which can differ from `max` near midnight UTC.
+            Start time of the latest visible session, compared as an instant
+            and returned in UTC with millisecond precision. Clients convert it
+            to a local day, which can differ from `max` near midnight UTC.
       additionalProperties: false
     AvailableSessionSource:
       type: object

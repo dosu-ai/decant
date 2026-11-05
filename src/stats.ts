@@ -610,7 +610,7 @@ export function modelSparklines(db: Database, filter?: StatsFilter | null): Mode
 export interface DateBounds {
   min: string | null;
   max: string | null;
-  // min and max are UTC days. The newest start time lets a client name the
+  // min and max are UTC days. The newest start instant lets a client name the
   // latest day in its own time zone, which a UTC day alone cannot do.
   latest_started_at: string | null;
 }
@@ -621,7 +621,10 @@ export function dateBounds(db: Database): DateBounds {
     .query(
       `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
               MAX(substr(s.started_at, 1, 10)) AS max,
-              MAX(s.started_at) AS latest_started_at
+              -- julianday orders by instant, so an offset timestamp cannot win
+              -- on text alone. Unparseable values are NULL and drop out.
+              strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday(s.started_at)))
+                AS latest_started_at
        FROM session s
        ${whereClause({
          sql: ["s.started_at IS NOT NULL", visible.sql].join(" AND "),

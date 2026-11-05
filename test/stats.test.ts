@@ -368,7 +368,11 @@ describe("stats rollups", () => {
       days: ["2026-05-03"],
       models: { "visible-model": [1] },
     });
-    expect(dateBounds(db)).toEqual({ min: "2026-05-03", max: "2026-05-03" });
+    expect(dateBounds(db)).toEqual({
+      min: "2026-05-03",
+      max: "2026-05-03",
+      latest_started_at: "2026-05-03T10:00:00Z",
+    });
     db.close();
   });
 
@@ -832,6 +836,25 @@ describe("stats rollups", () => {
     const bounds = dateBounds(db);
     expect(bounds.min).toBe("2026-05-03");
     expect(bounds.max).toBe("2026-05-04");
+    expect(bounds.latest_started_at?.startsWith("2026-05-04T")).toBe(true);
+    db.close();
+  });
+
+  test("date bounds keep the newest start time for local-day display", () => {
+    const db = freshDb();
+    // 00:30 UTC on May 4 is still May 3 west of UTC, so the UTC day in max
+    // cannot name the local day by itself.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'evening', 'test-model', '2026-05-03T20:00:00Z', 0),
+        (2, 'claude_code', 'after-midnight', 'test-model', '2026-05-04T00:30:00Z', 0);
+    `);
+    expect(dateBounds(db)).toEqual({
+      min: "2026-05-03",
+      max: "2026-05-04",
+      latest_started_at: "2026-05-04T00:30:00Z",
+    });
     db.close();
   });
 

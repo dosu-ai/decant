@@ -83,8 +83,9 @@ describe("session loading state", () => {
     expect(sessionsView).toContain('"No sessions on this page."');
   });
 
-  test("reports archive-wide latest activity from page one only", () => {
-    expect(main).toMatch(/loadedPage === 1\s*\?\s*latestSessionDay\(/);
+  test("reports latest activity from the archive's newest start time on every page", () => {
+    expect(main).toContain("formatDay(data.dateBounds?.latest_started_at ?? null)");
+    expect(main).not.toContain("data.dateBounds?.max");
   });
 
   test("isolates page swaps from document paint and scroll anchoring", () => {

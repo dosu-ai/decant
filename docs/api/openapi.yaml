@@ -2758,14 +2758,22 @@ components:
       additionalProperties: true
     DateBounds:
       type: object
-      required: [min, max]
+      required: [min, max, latest_started_at]
       properties:
         min:
           type: [string, "null"]
           format: date
+          description: UTC day of the earliest visible session start.
         max:
           type: [string, "null"]
           format: date
+          description: UTC day of the latest visible session start.
+        latest_started_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Start time of the latest visible session. Clients convert it to a
+            local day, which can differ from `max` near midnight UTC.
       additionalProperties: false
     AvailableSessionSource:
       type: object

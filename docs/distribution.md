@@ -130,10 +130,10 @@ and updates with the tool that owns the running binary:
 
 The shell installer download honors `DECANT_BASE_URL` and applies the same
 mirror restrictions as the installer, but refuses any redirect that is not
-HTTPS. The binary's directory must be writable. If you ran the installer with `DECANT_INSTALL_DIR`, set it to the
-same directory when you run `decant update`. `decant update` exits with
-status 1 when
-the registry check fails, when a package manager fails (such as a global npm
+HTTPS. The binary's directory must be writable. If you ran the installer
+with `DECANT_INSTALL_DIR`, set it to the same directory when you run
+`decant update`. `decant update` exits with status 1 when the registry check
+fails, when a package manager fails (such as a global npm
 prefix that needs `sudo`), or when the package manager succeeds but the
 `decant` on `PATH` still reports the old version. The release workflow publishes
 to npm a few minutes before GitHub Releases and the Homebrew tap, and npm can

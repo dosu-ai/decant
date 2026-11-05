@@ -318,6 +318,8 @@ export function ReportRouteView({
           background: "#fff",
           borderBottom: "1px solid #dce1da",
           display: "flex",
+          // Wraps on phones so the export actions stay inside the viewport.
+          flexWrap: "wrap",
           gap: "10px",
           minHeight: "58px",
           padding: "10px 18px",

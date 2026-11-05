@@ -136,9 +136,10 @@ needs a maintainer's review. Maintainers squash-merge pull requests.
 
 ## Security and privacy
 
-- Never commit real Claude Code or Codex transcripts, Gemini CLI, OpenCode, or
-  Cursor CLI sessions (including OpenCode's `opencode.db` and Cursor's
-  `store.db`), a personal Decant archive,
+- Never commit real Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+  GitHub Copilot CLI, or Copilot Chat in VS Code sessions (including
+  OpenCode's `opencode.db`, Cursor's `store.db`, Copilot CLI's `events.jsonl`,
+  and VS Code's `chatSessions` files), a personal Decant archive,
   exported real sessions, tokens, keys, or `.env` files. Do not put content from
   these sources in fixtures or issues without sanitising it first.
 - Write fixtures from scratch using invented prompts, paths, tool results, and

@@ -3,8 +3,8 @@
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
-Copilot Chat in VS Code; `~/.decant/decant.db` is a searchable, rebuildable index plus Decant-owned user
-state.
+Copilot Chat in VS Code. `~/.decant/decant.db` is a searchable, rebuildable
+index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -62,7 +62,7 @@ By default Decant discovers:
   affected sessions are re-derived once on the first sync that can read it.
 - Cursor CLI chats under `~/.cursor/chats/<workspace>/<chat>/`, or the
   directory from `--cursor-dir` or `DECANT_CURSOR_DIR`. Each chat is a SQLite
-  `store.db` with a `meta.json` beside it; Decant reads chats whose
+  `store.db` with a `meta.json` beside it. Decant reads chats whose
   `meta.json` sets `hasConversation` and skips the rest. A subagent's store
   has no `meta.json`. Decant reads it when its metadata names a parent agent,
   links it to that chat, and takes its working directory from the
@@ -96,7 +96,7 @@ By default Decant discovers:
   `workspaceStorage/<id>/chatSessions/<session id>.jsonl`, and an empty
   window's are under `globalStorage/emptyWindowChatSessions/`. VS Code 1.109
   and later write each session as a change log that it appends to and
-  sometimes rewrites whole; earlier builds wrote `<session id>.json`. Both are
+  sometimes rewrites whole. Earlier builds wrote `<session id>.json`. Both are
   read read-only, and Decant re-reads the whole file when it changes. VS Code
   keeps the old `.json` after it moves a session to the log, so Decant reads
   the `.jsonl` when both exist. When VS Code copies an empty window's session
@@ -108,7 +108,7 @@ By default Decant discovers:
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
-last valid state; later valid updates still apply. Mutation paths cannot
+last valid state, and later valid updates still apply. Mutation paths cannot
 replace an object's prototype.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
@@ -166,7 +166,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-`opencode`, `cursor`, and `copilot-cli`.
+`opencode`, `cursor`, `copilot-cli`, and `vscode-copilot-chat`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -208,7 +208,7 @@ inclusive of reasoning. Decant stores input net of cache, so each step's
 `prompt_tokens` is input plus cache reads plus cache writes, and
 `cached_tokens` is cache reads. ATIF has no cache-write field, so writes go in
 `metrics.extra.cache_write_tokens`. `final_metrics` comes from the session
-totals: `total_cost_usd` is Decant's estimate at current rates, with
+totals. `total_cost_usd` is Decant's estimate at current rates, with
 `extra.cost_source` saying whether a source-recorded cost was used, and
 `extra.total_reasoning_tokens` appears when the source reports or Decant
 infers reasoning. Steps carry no `cost_usd`. A source that records no usage,
@@ -220,8 +220,11 @@ When a parent reuses a spawn call ID, each subagent links to the latest call
 recorded before it started. A subagent whose spawner cannot be identified,
 including the descendants of a subagent with nothing to export, is still
 embedded and counted as unlinked in the export report.
-The root's totals include its embedded subagents, as ATIF describes; each
-embedded trajectory's totals are its own. Claude compaction boundaries become
+The root's totals include its embedded subagents, as ATIF describes. An
+embedded trajectory's totals likewise include the subagents it spawned, and
+`final_metrics.extra.includes_subagents` marks any trajectory whose totals do.
+Sum only the root's totals to avoid counting nested subagents twice. Claude
+compaction boundaries become
 `system` steps with `extra.context_management` set to a `replace` compaction,
 and the summary that follows is a `user` step marked
 `extra.is_compact_summary`.
@@ -287,9 +290,10 @@ Decant uses the detected defaults and leaves it alone until the next save, which
 moves it aside as `settings.json.corrupt-<timestamp>` before writing a new one.
 
 When update checks are on, the result of the last check is cached next to it in
-`update-check.json`: the time of the check and the newest version it found.
-Decant asks the npm registry again only after a day has passed, including after
-a failed check. `decant update` and `decant update --check` always ask and
+`update-check.json`, holding the time of the check and the newest version it
+found.
+Decant asks the npm registry again only after a day has passed, or an hour
+after a failed check, which the file marks with `failed`. `decant update` and `decant update --check` always ask and
 refresh the cache. Deleting the file only causes one more check.
 
 ### Inspecting and removing it
@@ -467,7 +471,7 @@ VS Code record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting
-its file would remove all OpenCode history; remove an individual session from
+its file would remove all OpenCode history. Remove an individual session from
 within OpenCode instead.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
@@ -495,7 +499,9 @@ and context rollups when required.
 Session facets such as `active_seconds` and file references, including their
 extensions, are derived from the source file at ingest. Corrections reach
 existing sessions through a pipeline-revision re-ingest, which requires the
-source to still exist. Persisted
+source to still exist. A session whose source is gone keeps the totals it was
+stored with. Stored context peaks are the exception: when their rules change, a
+migration clears them and the next sync recomputes them from retained rows. Persisted
 economics vectors are versioned separately and recompute from the archive's
 own rows, so they refresh even when the source is gone.
 

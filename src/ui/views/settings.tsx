@@ -171,7 +171,7 @@ function updateNote(update: UpdateStatus | null, saved: boolean): string {
     return `You have the newest release.${checked}${override}`;
   }
   if (update.error != null) {
-    return `The last check failed: ${update.error}. Decant tries again tomorrow.${override}`;
+    return `The last check failed: ${update.error}. Decant can check again after an hour.${override}`;
   }
   return `No check has finished yet.${override}`;
 }

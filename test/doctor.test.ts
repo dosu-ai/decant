@@ -3,6 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { renderDoctor } from "../src/cli/commands/doctor.ts";
 import { runCli } from "../src/cli.ts";
 import { resolveConfig } from "../src/config.ts";
 import { LATEST_SCHEMA_VERSION } from "../src/db.ts";
@@ -121,6 +122,12 @@ describe("collectDoctorReport", () => {
       found: 1,
     });
     expect(JSON.stringify(report)).not.toContain(home);
+    // The longest tool name and the two VS Code roots still leave a gap before
+    // the next column.
+    const vscodeLine = renderDoctor(report)
+      .split("\n")
+      .find((line) => line.trimStart().startsWith("vscode_copilot"));
+    expect(vscodeLine).toMatch(/^ {2}vscode_copilot {2}~\/Library\/.*Insiders\/User {2}1 found$/);
   });
 
   test("keeps only the error name when discovery or the archive fails", () => {

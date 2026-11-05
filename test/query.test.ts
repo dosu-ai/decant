@@ -381,6 +381,32 @@ describe("query reads", () => {
     db.close();
   });
 
+  test("the title prefilter skips Cursor's system_reminder but not Claude's system-reminder", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent)
+      VALUES
+        (1, 'cursor', 'cursor-reminder', '2026-07-05T00:00:00Z', 0),
+        (2, 'claude_code', 'claude-reminder', '2026-07-05T00:00:01Z', 0);
+      INSERT INTO message(id, session_id, seq, role, raw)
+      VALUES (1, 1, 0, 'user', '{}'), (2, 1, 1, 'user', '{}'),
+             (3, 2, 0, 'user', '{}'), (4, 2, 1, 'user', '{}');
+      INSERT INTO block(message_id, session_id, ordinal, type, text)
+      VALUES
+        (1, 1, 0, 'text', '<system_reminder>You are a subagent.</system_reminder>'),
+        (2, 1, 0, 'text', 'Cursor prompt'),
+        (3, 2, 0, 'text', '<system-reminder>Hook context</system-reminder>'),
+        (4, 2, 0, 'text', 'Claude prompt');
+    `);
+    // LIKE reads "_" as any character. The SQL pass must skip no more than the
+    // JS check, which treats only the underscore tag as agent context.
+    expect(getSession(db, 1)?.summary.title).toBe("Cursor prompt");
+    expect(getSession(db, 2)?.summary.title).toBe(
+      "<system-reminder>Hook context</system-reminder>",
+    );
+    db.close();
+  });
+
   test("a real user prompt takes precedence over a stored summary title", () => {
     const db = freshDb();
     db.exec(`

@@ -40,9 +40,11 @@ Optional environment variables:
   installer trusts the mirror's `SHA256SUMS`, so the mirror must be an
   `https://` or `file://` URL, or `http://` to `localhost`, `127.0.0.1`, or
   `[::1]` (for example, an SSH port forward to a mirror on another machine).
-  The curl installer path refuses any redirect that is not HTTPS; the wget
-  installer path also allows relative redirects, which keep the same scheme
-  and host. Neither path follows redirects onto network-facing plain HTTP.
+  The curl installer path refuses any redirect that is not HTTPS. The wget
+  path follows redirects while it downloads, then checks the logged response
+  headers. A redirect to anything other than HTTPS or a relative path, which
+  keeps the same scheme and host, makes the installer discard the file and
+  exit before it verifies or installs anything.
 
 When the GitHub CLI is available, the installer also performs a best-effort
 provenance check.

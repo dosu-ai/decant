@@ -253,10 +253,10 @@ request-level modifiers where the source records what they need:
   times every rate above.
 
 Sources without per-request usage, such as Codex rollouts, are priced from
-session totals at the session's model and standard rates. Copilot CLI uses
-per-model totals at standard rates: usage receipts supply the totals when
-they cover every model's cumulative snapshot; otherwise the snapshots supply
-them.
+session totals at the session's model and standard rates. Copilot CLI sessions
+are priced from per-model totals at standard rates. The totals are the summed
+usage records when those reach every model's snapshot total, and the snapshots
+otherwise. See [token and cost totals](analytics-methodology.md#token-and-cost-totals).
 
 ## Scope and historical behavior
 

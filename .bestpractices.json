@@ -126,7 +126,7 @@
   "static_analysis_common_vulnerabilities_status": "Met",
   "static_analysis_common_vulnerabilities_justification": "CodeQL security-extended queries scan JavaScript/TypeScript and GitHub Actions for security defects. https://github.com/dosu-ai/decant/blob/main/.github/workflows/codeql.yml",
   "static_analysis_fixed_status": "Met",
-  "static_analysis_fixed_justification": "The maintainer triages CodeQL alerts as they arrive. Confirmed findings are fixed in code, and false positives are dismissed with a written reason. Open alert #24 (stack-trace exposure) is not exploitable because the catch-all handler already returns a generic message. https://github.com/dosu-ai/decant/pull/228 restructures that handler so CodeQL can verify it.",
+  "static_analysis_fixed_justification": "The maintainer triages CodeQL alerts as they arrive. Confirmed findings are fixed in code, and false positives are dismissed with a written reason. Open alert #24 (stack-trace exposure) traces the error.message of a failed process launch, not a stack trace, into the response of the agent and IDE launch routes. Those routes serve only the loopback UI, so no remote client receives it.",
   "static_analysis_often_status": "Met",
   "static_analysis_often_justification": "CodeQL runs on pull requests and main pushes, with an additional weekly schedule; Biome also runs in CI. https://github.com/dosu-ai/decant/blob/main/.github/workflows/codeql.yml",
   "dynamic_analysis_status": "Met",

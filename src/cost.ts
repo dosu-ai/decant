@@ -244,9 +244,8 @@ function buildDefaultPricing(): Map<string, Price> {
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
     // Gemini text rates (standard paid tier, per 1M tokens, ≤200k prompt).
-    // 4-argon carries a launch price through 2026-11-30 and doubles to
-    // $4.00 / $0.20 / $20.00 on 2026-12-01. It has implicit caching only.
-    ["gemini-4-argon", geminiPrice(2.0, 0.1, 10.0)],
+    // 4-argon's launch price ended on 2026-11-30. It has implicit caching only.
+    ["gemini-4-argon", geminiPrice(4.0, 0.2, 20.0)],
     // 3.8-flash, 3.7-flash, and 3.6-flash carry a promo price through 2026-12-31.
     ["gemini-3.8-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],

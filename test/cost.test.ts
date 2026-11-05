@@ -594,7 +594,7 @@ describe("isPriceable", () => {
     expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
 
-  test("prices Gemini 4 Argon at its launch rate under every ID form", () => {
+  test("prices Gemini 4 Argon at its standard rate under every ID form", () => {
     const pricing = defaultPricing();
     const usage = { ...emptyUsage(), input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000 };
     for (const model of [
@@ -608,9 +608,9 @@ describe("isPriceable", () => {
     ]) {
       expect(isPriceable(model)).toBe(true);
       expect(estimateCostParts(model, usage, pricing)).toEqual({
-        input: 2,
-        output: 10,
-        cacheRead: 0.1,
+        input: 4,
+        output: 20,
+        cacheRead: 0.2,
         cacheCreation: 0,
       });
     }

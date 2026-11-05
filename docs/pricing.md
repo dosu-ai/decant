@@ -86,7 +86,7 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
-| Gemini 4 Argon | $2.00 | $0.10 | $2.00-equiv | $10.00 |
+| Gemini 4 Argon | $4.00 | $0.20 | $4.00-equiv | $20.00 |
 | Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
 | Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
@@ -217,9 +217,10 @@ output, and cache-read rate than Opus 5. Claude Haiku 5.5 launched on October
 Fable 5's input, cache-write, and output rates but reduce cache reads from
 $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
-Google lists Gemini 4 Argon's rate above through November 30, 2026. It rises
-to $4.00 input / $0.20 cached / $20.00 output on December 1, 2026, and Argon
-supports implicit caching only.
+Google priced Gemini 4 Argon at $2.00 input, $0.10 cached, and $10.00 output
+through November 30, 2026. The rate above applies from December 1, 2026, and
+Decant reprices stored Argon usage at it on the next sync, as it does for
+every rate change. Argon supports implicit caching only.
 Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
 output on January 1, 2027. Google no longer lists the Gemini 2.0 line or Gemini 3

@@ -253,7 +253,10 @@ request-level modifiers where the source records what they need:
   times every rate above.
 
 Sources without per-request usage, such as Codex rollouts, are priced from
-session totals at the session's model and standard rates.
+session totals at the session's model and standard rates. Copilot CLI sessions
+are priced from per-model totals at standard rates. The totals are the summed
+usage records when those reach every model's snapshot total, and the snapshots
+otherwise. See [token and cost totals](analytics-methodology.md#token-and-cost-totals).
 
 ## Scope and historical behavior
 
@@ -261,7 +264,9 @@ The estimates use standard global API token rates. They do not attempt to
 convert ChatGPT subscription usage or Codex credits to dollars, and they do not
 apply Batch, Flex, Priority, regional-processing, data-residency, or
 partner-cloud modifiers. Requests made through subscription routes such as the
-GLM Coding Plan are estimated at the model's API list rate.
+GLM Coding Plan are estimated at the model's API list rate. GitHub Copilot CLI
+costs likewise estimate the underlying model's API list price, not Copilot
+subscription charges or premium requests.
 
 OpenAI applies long-context rates above 272,000 prompt tokens for eligible API
 models. Codex reports cumulative session usage rather than per-request usage,

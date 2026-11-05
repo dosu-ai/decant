@@ -67,17 +67,18 @@ export function responseForError(error: unknown): Response {
 }
 
 function classifyError(error: unknown): ApiError {
-  const message = error instanceof Error ? error.message : String(error);
+  // Only Decant's own error classes echo their message to the client. Any
+  // other value, including its string form, stays out of the response.
   if (error instanceof RequestBodyError) {
-    return { code: "malformed_body", message, status: 400 };
+    return { code: "malformed_body", message: error.message, status: 400 };
   }
   if (error instanceof SchemaDriftError) {
-    return { code: "schema_drift", message, status: 409 };
+    return { code: "schema_drift", message: error.message, status: 409 };
   }
   if (error instanceof SchemaTooNewError || error instanceof SchemaTooOldError) {
-    return { code: error.code, message, status: 409 };
+    return { code: error.code, message: error.message, status: 409 };
   }
-  const normalized = message.toLowerCase();
+  const normalized = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (isArchiveLockedError(error, normalized)) {
     return {
       code: "archive_locked",

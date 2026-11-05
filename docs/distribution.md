@@ -40,7 +40,9 @@ Optional environment variables:
   installer trusts the mirror's `SHA256SUMS`, so the mirror must be an
   `https://` or `file://` URL, or `http://` to `localhost`, `127.0.0.1`, or
   `[::1]` (for example, an SSH port forward to a mirror on another machine).
-  The installer also refuses to follow a redirect to plain HTTP.
+  The curl installer path refuses any redirect that is not HTTPS; the wget
+  installer path also allows relative redirects, which keep the same scheme
+  and host. Neither path follows redirects onto network-facing plain HTTP.
 
 When the GitHub CLI is available, the installer also performs a best-effort
 provenance check.
@@ -127,8 +129,8 @@ and updates with the tool that owns the running binary:
 | Source checkout | Prints `git pull && bun install` |
 
 The shell installer download honors `DECANT_BASE_URL` and applies the same
-mirror and redirect rules as the installer. The binary's directory must be
-writable. If you ran the installer with `DECANT_INSTALL_DIR`, set it to the
+mirror restrictions as the installer, but refuses any redirect that is not
+HTTPS. The binary's directory must be writable. If you ran the installer with `DECANT_INSTALL_DIR`, set it to the
 same directory when you run `decant update`. `decant update` exits with
 status 1 when
 the registry check fails, when a package manager fails (such as a global npm

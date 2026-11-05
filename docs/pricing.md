@@ -255,14 +255,16 @@ request-level modifiers where the source records what they need:
 Sources without per-request usage, such as Codex rollouts, are priced from
 session totals at the session's model and standard rates.
 
-Copilot Chat in VS Code records partial usage per turn. Output sums every
-model call in the turn, but input records only the last call's prompt,
-including cache reads without a cache split. Earlier prompts in tool-heavy
-turns go uncounted, and the cached portion is charged at the full input rate.
-Each turn is priced at the model that served it, so these costs are rough
-API list-price estimates, not Copilot premium requests or credits. Sessions
-from older builds that record no usage show tokens and cost as unavailable,
-not free. See [usage semantics](analytics-methodology.md).
+Copilot Chat in VS Code records partial usage per turn, and each turn is priced
+at the model that served it. Output sums every model call in the turn. Input is
+only the last call's prompt, so a turn with tool calls leaves its earlier
+prompts uncounted. VS Code writes no cache split, so cached prompt tokens are
+charged at the full input rate. Builds from April and May 2026 record output
+but no prompt size, so their turns are priced on output alone. Sessions from
+earlier builds record no usage, and Decant shows their tokens and cost as
+unavailable, not free. These costs are rough API list-price estimates, not
+Copilot premium requests or credits. See
+[token and cost totals](analytics-methodology.md#token-and-cost-totals).
 
 ## Scope and historical behavior
 

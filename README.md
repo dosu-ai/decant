@@ -4,6 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13840/badge)](https://www.bestpractices.dev/projects/13840)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,

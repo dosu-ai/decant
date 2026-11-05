@@ -35,7 +35,7 @@ The `source` filter scopes analytics to the client that produced a session:
 OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
 `vscode_copilot` for Copilot Chat in VS Code, and, for Codex, the recorded producer metadata splits sessions into
 `codex_app`, `codex_cli`, and `codex_other`. That
-split reads only the session's own `originator` and `source` metadata: desktop
+split reads only the session's own `originator` and `source` metadata. Desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
 origins (`source: cli`, or the legacy `codex-tui` originator) count as the CLI.
 Every other Codex session, such as one from an editor extension, the SDK,
@@ -44,7 +44,7 @@ Codex buckets add up to the Codex total.
 The filter describes the producing client only and never infers an account
 identity, email address, or organization.
 
-A selected source narrows which sessions are in scope; the metric definitions
+A selected source narrows which sessions are in scope. The metric definitions
 do not change. `GET /api/metadata/session-sources` lists the source
 values represented by visible sessions so the picker can omit empty ones, and
 the analytics report names the selected source. Source-filtered reports omit
@@ -203,7 +203,7 @@ is counted once on the first message. Replayed usage records with the same
 `apiCallId` also count once. Reasoning text is deduplicated within a call,
 while identical reasoning in later calls stays in the transcript. Older builds write only output tokens on each assistant
 message (`assistant.message.outputTokens`). Copilot also writes cumulative
-per-model usage snapshots: the `modelMetrics` of each `session.shutdown` and
+per-model usage snapshots, the `modelMetrics` of each `session.shutdown` and
 the `providerModelMetrics` of each `session.usage_checkpoint`. Current Copilot
 builds carry usage across a resume, so the last snapshot is the session total.
 Older builds restarted usage at zero after a resume, so a snapshot that falls
@@ -228,7 +228,7 @@ the most output tokens. Without any usage record or snapshot, as in a running
 session on an older build, only the output tokens are known. Cost is
 the underlying model's API list-price estimate, not a count of Copilot premium
 requests. Legacy aggregate checkpoints that omit a model are priced at the
-session model when it is known; they remain unpriced when no model is known.
+session model when it is known. They remain unpriced when no model is known.
 
 Copilot Chat in VS Code records usage on each request, and only in builds from
 April 2026 on. `completionTokens` sums the output of every model call the
@@ -245,10 +245,11 @@ model was selected, that is the model VS Code names in the turn's
 `autoModeResolution` part, else the `resolvedModel` the Copilot extension
 recorded.
 
-Cursor CLI records no token usage, so its sessions store zero tokens and zero
-cost. Neither does a Copilot Chat session from a VS Code build that predates
+Cursor CLI records no token usage, so its sessions carry zero token and cost
+columns. Neither does a Copilot Chat session from a VS Code build that predates
 the usage fields. Session summaries mark such sessions
-`usage_available: false`. Stats totals,
+`usage_available: false`, and the UI shows their tokens and cost as
+unavailable instead of $0. Stats totals,
 per-model, per-project, and per-day rows, and project rollups count only the
 sessions with usage in `usage_sessions`. Wherever Decant shows cost, a total or
 row made up only of sessions without usage reads "Unavailable" (or "-" in dense

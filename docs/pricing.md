@@ -7,8 +7,8 @@ September 28, 2026, against the Anthropic pricing and model deprecation pages
 below. GPT-6.1 Terra rates were verified on October 26, 2026, GPT-6.1 Sol
 rates on September 29, 2026, GPT-6 Sol and Luna rates on September 22, 2026,
 and other current OpenAI coding-agent rates retain their September 9, 2026
-verification. Legacy OpenAI rates were checked September 2, 2026, and Gemini
-rates September 28, 2026.
+verification. Legacy OpenAI rates were checked September 2, 2026, Gemini 4
+Argon rates November 5, 2026, and other Gemini rates September 28, 2026.
 Z.ai GLM, Meta Muse, DeepSeek, Moonshot Kimi, MiniMax, Xiaomi MiMo, Alibaba
 Qwen, StepFun, Tencent Hy, and Reflection Beam rates were verified on October
 26, 2026. The open-weight models in that list were chosen from the
@@ -35,7 +35,8 @@ a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
-- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked September 28, 2026)
+- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked November 5, 2026)
+- [Gemini models](https://ai.google.dev/gemini-api/docs/models) (Gemini 4 Argon model code, checked November 5, 2026)
 - [Z.ai pricing](https://docs.z.ai/guides/overview/pricing) (checked October 26, 2026)
 - [Meta Model API pricing](https://dev.meta.ai/docs/pricing-rate-limits) (checked October 26, 2026)
 - [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/) (checked October 26, 2026)
@@ -85,6 +86,7 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
+| Gemini 4 Argon | $4.00 | $0.20 | $4.00-equiv | $20.00 |
 | Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
 | Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
@@ -215,6 +217,10 @@ output, and cache-read rate than Opus 5. Claude Haiku 5.5 launched on October
 Fable 5's input, cache-write, and output rates but reduce cache reads from
 $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
+Google priced Gemini 4 Argon at $2.00 input, $0.10 cached, and $10.00 output
+through November 30, 2026. The rate above applies from December 1, 2026, and
+Decant reprices stored Argon usage at it on the next sync, as it does for
+every rate change. Argon supports implicit caching only.
 Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
 output on January 1, 2027. Google no longer lists the Gemini 2.0 line or Gemini 3

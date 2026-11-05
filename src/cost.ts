@@ -244,6 +244,8 @@ function buildDefaultPricing(): Map<string, Price> {
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
     // Gemini text rates (standard paid tier, per 1M tokens, ≤200k prompt).
+    // 4-argon's launch price ended on 2026-11-30. It has implicit caching only.
+    ["gemini-4-argon", geminiPrice(4.0, 0.2, 20.0)],
     // 3.8-flash, 3.7-flash, and 3.6-flash carry a promo price through 2026-12-31.
     ["gemini-3.8-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],
@@ -440,6 +442,13 @@ function canonicalModel(raw: string): string | null {
     ) {
       return null;
     }
+    // Anchored so a future Argon variant such as -flash or -lite stays
+    // unpriced instead of borrowing this rate. Routing suffixes such as
+    // `:floor` and `[1m]` bill at list rate, so they are stripped first.
+    const routed = model.replace(/\[[^\]]*\]$/, "").replace(HOSTED_ROUTE_SUFFIX, "");
+    if (/(?:^|\/)gemini-4-argon(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.test(routed)) {
+      return "gemini-4-argon";
+    }
     if (model.includes("flash-lite")) {
       if (model.includes("3.5")) {
         return "gemini-3.5-flash-lite";
@@ -473,7 +482,8 @@ function canonicalModel(raw: string): string | null {
     if (model.includes("3.5")) {
       return "gemini-3.5-flash";
     }
-    if (model.includes("3-flash")) {
+    // "gemini-3-flash", not "3-flash", which also matches gemini-4.3-flash.
+    if (model.includes("gemini-3-flash")) {
       return "gemini-3-flash-preview";
     }
     if (model.includes("2.5")) {

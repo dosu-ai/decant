@@ -1540,7 +1540,7 @@ components:
           format: date-time
         channel:
           type: string
-          enum: [npm, npx, npm-local, homebrew, installer, docker, source]
+          enum: [npm, npx, npm-local, homebrew, installer, standalone, docker, source]
           description: How this copy of Decant was installed, which decides how it updates.
         command:
           type: string

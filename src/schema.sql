@@ -1,5 +1,5 @@
--- decant:schema_version=27
--- Effective decant schema (migrations 1..27 applied), frozen as the current
+-- decant:schema_version=28
+-- Effective decant schema (migrations 1..28 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
@@ -8,6 +8,8 @@
 -- model and price tier that served it, so mixed-model sessions price correctly.
 -- v26 keeps a source-reported cost per usage row for models Decant cannot price.
 -- v27 keeps query metadata beside compressed source records and indexes tool usage.
+-- v28 changes no schema. It clears stored context peaks for sessions with
+-- compactions so the next sync recomputes them under the current rules.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,

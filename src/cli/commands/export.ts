@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exportTrajectory, toMarkdown } from "../../export.ts";
+import { exportAtif } from "../../export-atif.ts";
 import { getSession, listSessions } from "../../query.ts";
 import type { CliContext } from "../context.ts";
 import { optionalInteger } from "../parse.ts";
@@ -10,7 +11,7 @@ export function registerExportCommand(ctx: CliContext): void {
 
   ctx.program
     .command("export")
-    .description("export a session to Markdown, JSON, or a trajectory-v1 record file")
+    .description("export a session to Markdown, JSON, a trajectory-v1 record file, or ATIF")
     .argument("[id]", "session id", optionalInteger)
     .option("--all", "export every session")
     .option("--include-subagents", "with --all, also export subagent sessions")
@@ -18,7 +19,7 @@ export function registerExportCommand(ctx: CliContext): void {
     // collide with the global --format table|json|md: Commander resolves a
     // global option's flag anywhere in argv (before or after a subcommand),
     // so a same-named local option on export would be shadowed by the root's.
-    .option("--as <format>", "md | json | trajectory (default: md, or json with --json)")
+    .option("--as <format>", "md | json | trajectory | atif (default: md, or json with --json)")
     .option("--out <dir>", "output directory")
     .action(
       (
@@ -32,14 +33,49 @@ export function registerExportCommand(ctx: CliContext): void {
       ) =>
         ctx.run(() => {
           const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
-          if (format !== "md" && format !== "json" && format !== "trajectory") {
+          if (
+            format !== "md" &&
+            format !== "json" &&
+            format !== "trajectory" &&
+            format !== "atif"
+          ) {
             io.writeErr(`error: unknown export format: ${format}\n`);
             return 2;
           }
           return ctx.withArchive(
             (archive) => {
-              const ext = format === "md" ? "md" : format === "json" ? "json" : "trajectory.json";
+              const ext =
+                format === "md"
+                  ? "md"
+                  : format === "json"
+                    ? "json"
+                    : format === "atif"
+                      ? "atif.json"
+                      : "trajectory.json";
               const render = (sessionId: number): { content: string } | { error: string } => {
+                if (format === "atif") {
+                  const out = exportAtif(archive.db, sessionId);
+                  if (!out.ok) {
+                    return out.reason === "not_found"
+                      ? { error: `no session with id ${sessionId}` }
+                      : { error: `session ${sessionId} has no exportable steps` };
+                  }
+                  if (!ctx.globals().quiet) {
+                    const notes = Object.entries(out.report)
+                      .filter(([key, value]) => key !== "dropped_blocks" && (value as number) > 0)
+                      .map(([key, value]) => `${key}=${value}`);
+                    const dropped = Object.entries(out.report.dropped_blocks)
+                      .map(([kind, count]) => `${kind}=${count}`)
+                      .join(" ");
+                    if (dropped !== "") {
+                      notes.push(`dropped[${dropped}]`);
+                    }
+                    if (notes.length > 0) {
+                      io.writeErr(`session ${sessionId}: ${notes.join(" ")}\n`);
+                    }
+                  }
+                  return { content: JSON.stringify(out.trajectory, null, 2) };
+                }
                 if (format === "trajectory") {
                   const out = exportTrajectory(archive.db, sessionId);
                   if (!out.ok) {

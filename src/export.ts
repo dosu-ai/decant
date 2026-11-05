@@ -69,7 +69,7 @@ const TRAJECTORY_NOISE_PREFIXES = [
 
 /** Codex writes its harness context (developer instructions, environment
  * snapshots) as `user` messages. Their adapter drops these, and so do we. */
-const CODEX_INJECTED_PREFIXES = [
+export const CODEX_INJECTED_PREFIXES = [
   "<environment_context>",
   "<user_instructions>",
   "<permissions instructions>",

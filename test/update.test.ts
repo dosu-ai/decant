@@ -20,13 +20,16 @@ import { shouldShowUpdateNotice } from "../src/cli/update-notice.ts";
 import { runCli } from "../src/cli.ts";
 import { saveSettings } from "../src/settings.ts";
 import {
+  assertNpmPlatformPackage,
   checkForUpdate,
   checksumFor,
   compareVersions,
   detectInstall,
+  FAILED_CHECK_RETRY_MS,
   type FetchLike,
   isNewerVersion,
   LATEST_VERSION_URL,
+  npmPlatformTarballUrl,
   parseVersion,
   planUpdate,
   readUpdateCheck,
@@ -35,6 +38,7 @@ import {
   UPDATE_CHECK_INTERVAL_MS,
   updateCheckEnabled,
   updateCheckPath,
+  updateCommandFor,
 } from "../src/update.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-update-test-"));
@@ -84,7 +88,13 @@ describe("version comparison", () => {
 
 describe("install detection", () => {
   const compiled = (execPath: string, env: Record<string, string> = {}) =>
-    detectInstall({ compiled: true, env, execPath, realpath: (path) => path });
+    detectInstall({
+      compiled: true,
+      env,
+      execPath,
+      homeDir: "/Users/me",
+      realpath: (path) => path,
+    });
 
   test("maps the real binary path to the tool that owns it", () => {
     expect(detectInstall({ compiled: false }).channel).toBe("source");
@@ -109,22 +119,65 @@ describe("install detection", () => {
     });
   });
 
+  test("replaces only a binary in the installer's directory", () => {
+    expect(compiled("/opt/tools/decant", { DECANT_INSTALL_DIR: "/opt/tools" })).toEqual({
+      channel: "installer",
+      binaryPath: "/opt/tools/decant",
+    });
+    // The default directory still counts when DECANT_INSTALL_DIR names another.
+    expect(compiled("/Users/me/.local/bin/decant", { DECANT_INSTALL_DIR: "/opt/tools" })).toEqual({
+      channel: "installer",
+      binaryPath: "/Users/me/.local/bin/decant",
+    });
+    // Copies other tools manage, or that were placed by hand, are not Decant's to rename over.
+    for (const path of [
+      "/Users/me/.local/share/mise/installs/decant/0.12.1/decant",
+      "/Users/me/.local/share/aquaproj-aqua/pkgs/github_release/decant",
+      "/usr/bin/decant",
+      "/usr/local/bin/decant",
+      "/Users/me/.local/bin/nested/decant",
+    ]) {
+      expect(compiled(path)).toEqual({ channel: "standalone", binaryPath: null });
+    }
+    // A symlinked install directory still matches the binary's real path.
+    expect(
+      detectInstall({
+        compiled: true,
+        env: {},
+        execPath: "/Users/me/.local/bin/decant",
+        homeDir: "/Users/me",
+        realpath: (path) => path.replace("/Users/me/.local/bin", "/Volumes/tools/bin"),
+      }),
+    ).toEqual({ channel: "installer", binaryPath: "/Volumes/tools/bin/decant" });
+  });
+
   test("plans the update each channel supports", () => {
     expect(planUpdate({ channel: "npm", binaryPath: null }, "0.12.0")).toEqual({
       kind: "run",
-      argv: ["npm", "install", "--global", "@dosu/decant@0.12.0"],
+      commands: [{ argv: ["npm", "install", "--global", "@dosu/decant@0.12.0"] }],
     });
+    // `brew upgrade` alone can miss a tap pushed within the last day, and an
+    // unrelated broken tap fails `brew update` without making the upgrade unsafe.
     expect(planUpdate({ channel: "homebrew", binaryPath: null }, "0.12.0")).toEqual({
       kind: "run",
-      argv: ["brew", "upgrade", "dosu-ai/dosu/decant"],
+      commands: [
+        { argv: ["brew", "update"], bestEffort: true },
+        { argv: ["brew", "upgrade", "dosu-ai/dosu/decant"] },
+      ],
     });
     expect(planUpdate({ channel: "installer", binaryPath: "/x/decant" }, "0.12.0")).toEqual({
       kind: "replace",
       binaryPath: "/x/decant",
     });
-    for (const channel of ["npx", "npm-local", "docker", "source"] as const) {
+    for (const channel of ["npx", "npm-local", "standalone", "docker", "source"] as const) {
       expect(planUpdate({ channel, binaryPath: null }, "0.12.0").kind).toBe("manual");
     }
+    expect(planUpdate({ channel: "standalone", binaryPath: null }, "0.12.0")).toMatchObject({
+      instructions: expect.stringContaining("install.sh | sh"),
+    });
+    // The nudge points at `decant update`, which explains the options, instead
+    // of an installer command that would add a second copy in ~/.local/bin.
+    expect(updateCommandFor("standalone")).toBe("decant update");
   });
 });
 
@@ -188,7 +241,7 @@ describe("checkForUpdate", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("a failed check keeps the last answer and waits a day to retry", async () => {
+  test("a failed check keeps the last answer and retries after an hour", async () => {
     const env = configEnv({ DECANT_UPDATE_CHECK: "1" });
     const base = { env, install, current: "0.11.0" };
     await checkForUpdate({ ...base, fetch: registry("0.12.0"), now: () => now });
@@ -199,11 +252,28 @@ describe("checkForUpdate", () => {
     expect(readUpdateCheck({ env })).toEqual({
       checkedAt: nextDay.toISOString(),
       latest: "0.12.0",
+      failed: true,
     });
 
     const calls: string[] = [];
-    await checkForUpdate({ ...base, fetch: registry("0.13.0", calls), now: () => nextDay });
+    const soon = new Date(nextDay.getTime() + FAILED_CHECK_RETRY_MS - 1);
+    await checkForUpdate({ ...base, fetch: registry("0.13.0", calls), now: () => soon });
     expect(calls).toEqual([]);
+
+    // One timed-out short check must not hide a release for a whole day.
+    const hourLater = new Date(nextDay.getTime() + FAILED_CHECK_RETRY_MS);
+    const retried = await checkForUpdate({
+      ...base,
+      fetch: registry("0.13.0", calls),
+      now: () => hourLater,
+    });
+    expect(calls).toEqual([LATEST_VERSION_URL]);
+    expect(retried).toMatchObject({ latest: "0.13.0", error: null });
+    // A success clears the flag, so the next check waits the full day again.
+    expect(readUpdateCheck({ env })).toEqual({
+      checkedAt: hourLater.toISOString(),
+      latest: "0.13.0",
+    });
   });
 
   test("hides cached results when checks are off and never nudges a checkout", async () => {
@@ -317,6 +387,25 @@ describe("checkForUpdate", () => {
   });
 });
 
+describe("npm platform package check", () => {
+  test("names this platform's tarball and refuses a bad version before any request", async () => {
+    expect(npmPlatformTarballUrl("1.0.0", "darwin", "arm64")).toBe(
+      "https://registry.npmjs.org/@dosu/decant-darwin-arm64/-/decant-darwin-arm64-1.0.0.tgz",
+    );
+    const calls: string[] = [];
+    await expect(
+      assertNpmPlatformPackage({ version: "1.0.0/../x", fetch: registry("1.0.0", calls) }),
+    ).rejects.toThrow("invalid version");
+    expect(calls).toEqual([]);
+    await expect(
+      assertNpmPlatformPackage({
+        version: "1.0.0",
+        fetch: async () => new Response(null, { status: 503 }),
+      }),
+    ).rejects.toThrow("HTTP 503");
+  });
+});
+
 describe("replaceBinary", () => {
   const target = releaseTarget();
   const tarballName = `${target}.tar.gz`;
@@ -426,6 +515,22 @@ describe("replaceBinary", () => {
     expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
   });
 
+  test("refuses an install directory it cannot write before downloading", async () => {
+    const binaryPath = installed();
+    const dir = join(binaryPath, "..");
+    const calls: string[] = [];
+    chmodSync(dir, 0o555);
+    try {
+      await expect(
+        replaceBinary({ binaryPath, version: "0.12.0", fetch: releaseServer({}, calls) }),
+      ).rejects.toThrow("is not writable");
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(calls).toEqual([]);
+    expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
+  });
+
   test("refuses a version that is not a release before downloading", async () => {
     const binaryPath = installed();
     const calls: string[] = [];
@@ -505,7 +610,13 @@ describe("decant update", () => {
       });
     const result = await brew("0.12.0");
     expect(result.code).toBe(0);
-    expect(commands).toEqual([["brew", "upgrade", "dosu-ai/dosu/decant"]]);
+    expect(commands).toEqual([
+      ["brew", "update"],
+      ["brew", "upgrade", "dosu-ai/dosu/decant"],
+    ]);
+    expect(result.stdout).toContain(
+      "Updating Decant v0.11.0 to v0.12.0: brew update, then brew upgrade dosu-ai/dosu/decant",
+    );
     expect(result.stdout).toContain("Updated Decant to v0.12.0.");
 
     // The tap trails npm, so brew can exit 0 without installing anything.
@@ -513,7 +624,36 @@ describe("decant update", () => {
     expect(behind.code).toBe(1);
     expect(behind.stdout).not.toContain("Updated Decant");
     expect(behind.stderr).toContain(
-      "error: brew finished, but /opt/homebrew/bin/decant reports 0.11.0, not 0.12.0.",
+      "error: brew finished, but /opt/homebrew/bin/decant reports 0.11.0, not 0.12.0. New releases reach the Homebrew tap",
+    );
+
+    // A broken unrelated tap fails `brew update`, and the upgrade still runs.
+    const brewCalls: string[][] = [];
+    const tapFailed = await cli(["update"], {
+      install: { channel: "homebrew", binaryPath: null },
+      fetch: registry("0.12.0"),
+      runCommand: (argv) => {
+        brewCalls.push(argv);
+        return argv[1] === "update" ? 1 : 0;
+      },
+      installedOnPath: () => ({ path: "/opt/homebrew/bin/decant", version: "0.12.0" }),
+    });
+    expect(tapFailed.code).toBe(0);
+    expect(tapFailed.stderr).toContain("warning: brew update exited with code 1; continuing");
+    expect(brewCalls).toEqual([
+      ["brew", "update"],
+      ["brew", "upgrade", "dosu-ai/dosu/decant"],
+    ]);
+
+    // A failed upgrade is an error.
+    const upgradeFailed = await cli(["update"], {
+      install: { channel: "homebrew", binaryPath: null },
+      fetch: registry("0.12.0"),
+      runCommand: (argv) => (argv[1] === "upgrade" ? 1 : 0),
+    });
+    expect(upgradeFailed.code).toBe(1);
+    expect(upgradeFailed.stderr).toBe(
+      "error: brew upgrade dosu-ai/dosu/decant exited with code 1\n",
     );
 
     const failed = await cli(["update"], {
@@ -522,7 +662,46 @@ describe("decant update", () => {
       runCommand: () => 243,
     });
     expect(failed.code).toBe(1);
-    expect(failed.stderr).toBe("error: npm exited with code 243\n");
+    expect(failed.stderr).toBe(
+      "error: npm install --global @dosu/decant@0.12.0 exited with code 243\n",
+    );
+
+    // npm exits 0 after skipping a platform package it could not fetch.
+    const launcherOnly = await cli(["update"], {
+      install: { channel: "npm", binaryPath: null },
+      fetch: registry("0.12.0"),
+      runCommand: () => 0,
+      installedOnPath: () => ({ path: "/usr/local/bin/decant", version: null }),
+    });
+    expect(launcherOnly.code).toBe(1);
+    expect(launcherOnly.stderr).toContain(
+      "reports no version, not 0.12.0. Reinstall with `npm install --global @dosu/decant@0.12.0`.",
+    );
+  });
+
+  test("waits for npm to serve the platform package before replacing an npm install", async () => {
+    const calls: { url: string; method: string | undefined }[] = [];
+    const commands: string[][] = [];
+    const lagging: FetchLike = async (url, init) => {
+      calls.push({ url, method: init?.method });
+      return url === LATEST_VERSION_URL
+        ? Response.json({ name: "@dosu/decant", version: "0.12.0" })
+        : new Response(null, { status: 404 });
+    };
+    const result = await cli(["update"], {
+      install: { channel: "npm", binaryPath: null },
+      fetch: lagging,
+      runCommand: (argv) => {
+        commands.push(argv);
+        return 0;
+      },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toBe(
+      "error: npm has not finished publishing v0.12.0 for this platform yet. Try again in a few minutes.\n",
+    );
+    expect(commands).toEqual([]);
+    expect(calls).toContainEqual({ url: npmPlatformTarballUrl("0.12.0"), method: "HEAD" });
   });
 
   test("says so when already current, prints instructions for Docker, and fails offline", async () => {

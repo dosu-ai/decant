@@ -17,8 +17,12 @@ import { compareCodePoints } from "./order.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 /** Bump when the rules that split a session's usage change, such as a new
- * price tier, so the next sync rebuilds every session's rows once. */
-export const MODEL_USAGE_FORMAT_VERSION = 1;
+ * price tier, or when a model loses its rate, so the next sync rebuilds every
+ * session's rows once. A row keeps a source-reported cost only for a model
+ * that was unpriced when the row was derived. Version 2 narrowed the Gemini
+ * 3 Flash match, so OpenCode rows for IDs it no longer prices recover their
+ * reported cost. */
+export const MODEL_USAGE_FORMAT_VERSION = 2;
 
 /** One session's usage served by one model at one price tier. A session that
  * switches models, or sends some requests in fast mode or past a long-prompt

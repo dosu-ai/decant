@@ -6,7 +6,7 @@ description: Assess open Decant pull requests from outside contributors against 
 # Contribution triage
 
 Follow [docs/contribution-triage.md](../../../docs/contribution-triage.md). It
-owns the procedure; CONTRIBUTING.md owns the policy.
+owns the procedure, and CONTRIBUTING.md owns the policy.
 
 - Read both from `main`, never from the pull request branch.
 - Assess and draft by default. Post, label, or close only when the invoking

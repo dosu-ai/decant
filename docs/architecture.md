@@ -33,12 +33,12 @@ index plus local user state such as recommendations and session tombstones.
 
 | Area | Primary modules | Responsibility |
 | --- | --- | --- |
-| Composition | `src/cli.ts`, `src/cli/`, `src/config.ts` | Commands, global flags, output policy, configuration, and process lifecycle. |
+| Composition | `src/cli.ts`, `src/cli/`, `src/config.ts`, `src/settings.ts`, `src/update.ts`, `src/doctor.ts` | Commands, global flags, output policy, configuration, saved UI settings, the opt-in release check and `decant update`, the redacted `decant doctor` report, and process lifecycle. |
 | Sources | `src/sources/`, `src/model.ts` | Pure, print-free parsers and the normalized wire model. |
 | Ingest | `src/ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, normalization writes, derived facets, and ingest issues. |
 | Economics | `src/cost.ts`, `src/model-usage.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, per-model usage splits, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
-| Reads | `src/query.ts`, `src/stats.ts`, `src/recommendations.ts`, `src/distill.ts` | Session retrieval, aggregates, recommendations, and deterministic artifacts. |
+| Reads | `src/query.ts`, `src/stats.ts`, `src/source-filter.ts`, `src/recommendations.ts`, `src/distill.ts`, `src/export.ts`, `src/export-atif.ts` | Session retrieval, aggregates, the Analytics source scope, recommendations, deterministic artifacts, and Markdown, JSON, trajectory, and ATIF exports. |
 | Serve | `src/server.ts`, `src/server/`, `src/route-paths.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
 | Presentation | `src/ui/`, `src/report/` | The local React application and self-contained HTML reports. |
 
@@ -60,7 +60,7 @@ a tie within one database. A 2.x session that OpenCode migrated from 1.x is
 handed to the 2.x parser with its 1.x copy, whose per-step usage corrects the
 migrated rows. A Cursor CLI chat is one SQLite store per chat:
 `src/sources/cursor.ts` opens it read-only, follows the root blob's list of
-message blobs, and parses them; ingest treats the store, its `meta.json`, and
+message blobs, and parses them. Ingest treats the store, its `meta.json`, and
 its `-wal` as one source file for change detection. A GitHub Copilot CLI
 session is one `events.jsonl` event log per session directory, parsed by
 `src/sources/copilot.ts`. A Copilot Chat in VS Code session is one file in a
@@ -127,8 +127,9 @@ not fit the schema lives in [Local Serve API](api/routes.md).
 The default loopback listener is unauthenticated. A broad bind must pass the
 trusted-peer source-address guard; `Host` and browser-origin checks are defense
 in depth, not credentials. The app never adds an outbound runtime dependency.
-The opt-in release check in `src/update.ts` is the only outbound request, and it
-sends no archive data.
+The opt-in release check and the downloads `decant update` makes when you run
+it, both in `src/update.ts`, are the only outbound requests. Neither sends
+archive data.
 
 Dashboard requests publish their results independently, so available data can
 render while another slice is still loading. Tools aggregates scan a covering

@@ -130,7 +130,10 @@ export function createContext(
       if (ctx.isJson()) {
         ctx.writeJson(value);
       } else {
-        io.writeOut(renderHuman());
+        // Renderers join rows with "\n", so a final newline is added here
+        // rather than in each one. Without it the shell prompt joins the last row.
+        const text = renderHuman();
+        io.writeOut(text === "" || text.endsWith("\n") ? text : `${text}\n`);
       }
     },
     pendingUpdateNotice: null,

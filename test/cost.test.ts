@@ -593,6 +593,39 @@ describe("isPriceable", () => {
     expect(estimateCost("gemini-2.5-pro", u, pricing)).toBeCloseTo(11.25, 6);
     expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
   });
+
+  test("prices Gemini 4 Argon at its standard rate under every ID form", () => {
+    const pricing = defaultPricing();
+    const usage = { ...emptyUsage(), input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000 };
+    for (const model of [
+      "gemini-4-argon",
+      "models/gemini-4-argon",
+      "gemini-4-argon-latest",
+      "gemini-4-argon-preview-11-2026",
+      "gemini-4-argon-001",
+      "google/gemini-4-argon:floor",
+      "gemini-4-argon[1m]",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input: 4,
+        output: 20,
+        cacheRead: 0.2,
+        cacheCreation: 0,
+      });
+    }
+    // Carbon and unannounced Argon variants have no public rate, so they stay
+    // unpriced rather than borrowing Argon's or an older flash rate.
+    for (const model of [
+      "gemini-4-carbon",
+      "gemini-4-argon-flash",
+      "gemini-4-argon-lite",
+      "gemini-4.3-flash",
+    ]) {
+      expect(isPriceable(model)).toBe(false);
+    }
+    expect(isPriceable("models/gemini-3-flash-preview")).toBe(true);
+  });
 });
 
 describe("Kimi K3.1 Pro pricing", () => {

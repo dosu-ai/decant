@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  assertNpmPlatformPackage,
   checkForUpdate,
   detectInstall,
   planUpdate,
@@ -58,24 +59,49 @@ export function registerUpdateCommand(ctx: CliContext): void {
 
         const human = !ctx.isJson();
         if (plan.kind === "run") {
+          if (install.channel === "npm") {
+            try {
+              await assertNpmPlatformPackage({ version: status.latest, fetch: deps.fetch });
+            } catch (failure) {
+              ctx.io.writeErr(
+                `error: ${failure instanceof Error ? failure.message : String(failure)}\n`,
+              );
+              return 1;
+            }
+          }
           if (human) {
+            const commands = plan.commands.map((command) => command.argv.join(" ")).join(", then ");
             ctx.io.writeOut(
-              `Updating Decant ${label(status.current)} to ${label(status.latest)}: ${plan.argv.join(" ")}\n`,
+              `Updating Decant ${label(status.current)} to ${label(status.latest)}: ${commands}\n`,
             );
           }
-          const code = (deps.runCommand ?? runPackageManager)(plan.argv);
-          if (code !== 0) {
-            ctx.io.writeErr(`error: ${plan.argv[0]} exited with code ${code}\n`);
+          for (const command of plan.commands) {
+            const code = (deps.runCommand ?? runPackageManager)(command.argv);
+            if (code === 0) {
+              continue;
+            }
+            if (command.bestEffort === true) {
+              ctx.io.writeErr(
+                `warning: ${command.argv.join(" ")} exited with code ${code}; continuing\n`,
+              );
+              continue;
+            }
+            ctx.io.writeErr(`error: ${command.argv.join(" ")} exited with code ${code}\n`);
             return 1;
           }
           // brew says "already installed" and exits 0 when the tap is behind
-          // npm, so the exit code alone does not prove the update landed.
+          // npm, and npm exits 0 after skipping a platform package it could not
+          // fetch, so the exit code alone does not prove the update landed.
           const installed = (deps.installedOnPath ?? installedOnPath)();
           if (installed != null && !sameVersion(installed.version, status.latest)) {
+            const tool = plan.commands[0]?.argv[0] ?? "the package manager";
+            const advice =
+              install.channel === "homebrew"
+                ? "New releases reach the Homebrew tap a few minutes after npm, so try again shortly."
+                : `Reinstall with \`npm install --global @dosu/decant@${status.latest}\`.`;
             ctx.io.writeErr(
-              `error: ${plan.argv[0]} finished, but ${installed.path} reports ${installed.version ?? "no version"}, not ${status.latest}. ` +
-                "New releases reach npm a few minutes before Homebrew, so try again shortly. " +
-                "If another decant comes earlier on PATH, update that copy instead.\n",
+              `error: ${tool} finished, but ${installed.path} reports ${installed.version ?? "no version"}, not ${status.latest}. ` +
+                `${advice} If another decant comes earlier on PATH, update that copy instead.\n`,
             );
             return 1;
           }

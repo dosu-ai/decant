@@ -377,6 +377,29 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
+  test("clears stored context peaks of v27 sessions with compactions", () => {
+    const path = freshPath();
+    const legacy = openDb(path);
+    legacy.exec(`
+      INSERT INTO session(id, tool, source_session_id, compaction_count, peak_context_tokens)
+      VALUES (1, 'claude_code', 'compacted', 1, 50000),
+             (2, 'claude_code', 'uncompacted', 0, 40000);
+      DELETE FROM schema_migrations WHERE version > 27;
+    `);
+    closeDb(legacy);
+
+    // Sessions whose transcripts are gone are not re-ingested, so the next
+    // sync recomputes a cleared peak from stored rows instead.
+    const migrated = openDb(path);
+    expect(migrated.query("SELECT id, peak_context_tokens FROM session ORDER BY id").all()).toEqual(
+      [
+        { id: 1, peak_context_tokens: null },
+        { id: 2, peak_context_tokens: 40000 },
+      ],
+    );
+    closeDb(migrated);
+  });
+
   test("keeps the message parent index that backs the foreign key", () => {
     // parent_id is never written, but every deleted message still checks for
     // children referencing it. Without this index that check scans the whole

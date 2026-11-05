@@ -1299,7 +1299,9 @@ const HUMAN_TITLE_MESSAGE_SQL = `
 // SQL twin of isAgentContextText for early-exiting title scans. Keep the two in
 // sync and this side conservative: LIKE mirrors the case-insensitive prefixes,
 // GLOB the case-sensitive ones, and stripAnsi/trimStart nuances fall through
-// to the JS check rather than being approximated.
+// to the JS check rather than being approximated. LIKE reads `_` as any one
+// character, so Cursor's <system_reminder> escapes it to leave Claude's
+// <system-reminder> alone, as the JS check does.
 const AGENT_CONTEXT_SQL = `
   LTRIM(b.text) LIKE '<permissions instructions>%'
   OR LTRIM(b.text) LIKE '<local-command-caveat>%'
@@ -1312,7 +1314,7 @@ const AGENT_CONTEXT_SQL = `
   OR b.text GLOB '*<INSTRUCTIONS>*'
   OR LTRIM(b.text) LIKE 'The following is the Codex agent history%'
   OR LTRIM(b.text) LIKE 'Use prior reviews as context%'
-  OR LTRIM(b.text) LIKE '<system_reminder>%'
+  OR LTRIM(b.text) LIKE '<system\\_reminder>%' ESCAPE '\\'
 `;
 
 function isAgentContextText(text: string): boolean {

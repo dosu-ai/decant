@@ -140,7 +140,10 @@ export function formatDay(value: string | null): string | null {
   if (value == null) {
     return null;
   }
-  const date = new Date(value);
+  // A bare YYYY-MM-DD names a calendar day. `new Date` reads it as UTC
+  // midnight, which renders as the day before anywhere west of UTC.
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const date = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }

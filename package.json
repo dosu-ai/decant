@@ -22,8 +22,8 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.3",
-    "@letta-ai/trajectory": "^0.3.0",
+    "@biomejs/biome": "^2.6.4",
+    "@letta-ai/trajectory": "^0.4.3",
     "@types/bun": "^1.4.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -41,7 +41,7 @@
     "commander": "^15.0.0",
     "diff": "^9.0.0",
     "echarts": "^6.1.0",
-    "lucide-react": "^1.61.0",
+    "lucide-react": "^1.66.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",

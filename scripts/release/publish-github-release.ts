@@ -9,14 +9,29 @@ export interface ReleasePlan {
   tag: string;
   tarballs: readonly string[];
   bundle: string;
+  provenance: string;
 }
 
 export function attestationBundleName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.sigstore.json`;
 }
 
+/**
+ * The same provenance bundle as JSON Lines. OpenSSF Scorecard's
+ * Signed-Releases check only recognizes provenance by this suffix.
+ */
+export function provenanceFileName(tag: string): string {
+  return `decant-${tag.replace(/^v/, "")}.intoto.jsonl`;
+}
+
 export function releaseAssets(plan: ReleasePlan): string[] {
-  return [...plan.tarballs.map((name) => `./${name}`), plan.bundle, "SHA256SUMS", "install.sh"];
+  return [
+    ...plan.tarballs.map((name) => `./${name}`),
+    plan.bundle,
+    plan.provenance,
+    "SHA256SUMS",
+    "install.sh",
+  ];
 }
 
 /**
@@ -55,9 +70,12 @@ function main(): void {
   const tag = releaseTag("TAG", requireEnv("TAG"));
   const channel = channelFromEnv();
   const bundle = attestationBundleName(tag);
-  const bundlePath = join(releaseDir, bundle);
-  if (!existsSync(bundlePath) || !statSync(bundlePath).isFile()) {
-    fail(`attestation bundle ${bundle} missing from the release-tarballs artifact`);
+  const provenance = provenanceFileName(tag);
+  for (const name of [bundle, provenance]) {
+    const path = join(releaseDir, name);
+    if (!existsSync(path) || !statSync(path).isFile()) {
+      fail(`attestation bundle ${name} missing from the release-tarballs artifact`);
+    }
   }
   const tarballs = readdirSync(releaseDir)
     .filter((name) => !name.startsWith(".") && name.endsWith(".tar.gz"))
@@ -66,7 +84,7 @@ function main(): void {
   if (tarballs.length === 0) {
     fail(`no release tarballs found in ${releaseDir}`);
   }
-  const plan: ReleasePlan = { tag, tarballs, bundle };
+  const plan: ReleasePlan = { tag, tarballs, bundle, provenance };
 
   const exists = runQuiet("gh", ["release", "view", "--", tag], { cwd: releaseDir }) === 0;
   if (exists) {

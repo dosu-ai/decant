@@ -179,14 +179,26 @@ skipped and an existing GitHub Release only has its assets refreshed.
 
 ## Verify a release
 
-GitHub Releases include four platform tarballs, `SHA256SUMS`, and a Sigstore
-bundle. Download the latest release and verify the matching tarball:
+GitHub Releases include four platform tarballs, `SHA256SUMS`, and the SLSA
+build provenance for all of them. The provenance ships twice:
+`decant-<version>.sigstore.json` is the Sigstore bundle, and
+`decant-<version>.intoto.jsonl` holds the same bundle as JSON Lines, the name
+OpenSSF Scorecard looks for. Download the latest release and verify the
+matching tarball:
 
 ```sh
 gh release download -R dosu-ai/decant
 sha256sum -c SHA256SUMS --ignore-missing      # Linux
 shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
 gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
+```
+
+To verify offline against the published provenance instead of GitHub's
+attestation API, pass the bundle:
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
+  --bundle decant-<version>.intoto.jsonl
 ```
 
 To check npm provenance, install into a scratch project and run

@@ -258,6 +258,17 @@ are priced from per-model totals at standard rates. The totals are the summed
 usage records when those reach every model's snapshot total, and the snapshots
 otherwise. See [token and cost totals](analytics-methodology.md#token-and-cost-totals).
 
+Copilot Chat in VS Code records partial usage per turn, and each turn is priced
+at the model that served it. Output sums every model call in the turn. Input is
+only the last call's prompt, so a turn with tool calls leaves its earlier
+prompts uncounted. VS Code writes no cache split, so cached prompt tokens are
+charged at the full input rate. Builds from April and May 2026 record output
+but no prompt size, so their turns are priced on output alone. Sessions from
+earlier builds record no usage, and Decant shows their tokens and cost as
+unavailable, not free. These costs are rough API list-price estimates, not
+Copilot premium requests or credits. See
+[token and cost totals](analytics-methodology.md#token-and-cost-totals).
+
 ## Scope and historical behavior
 
 The estimates use standard global API token rates. They do not attempt to

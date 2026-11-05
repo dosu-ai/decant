@@ -112,7 +112,7 @@
   "crypto_random_status": "N/A",
   "crypto_random_justification": "Decant implements no application-level cryptographic key or nonce generation; HTTPS operations use the runtime implementation. https://github.com/dosu-ai/decant/blob/main/src/update.ts",
   "delivery_mitm_status": "Met",
-  "delivery_mitm_justification": "Default installation and release delivery use HTTPS, with SHA256SUMS and optional GitHub attestation verification documented for release artifacts. https://github.com/dosu-ai/decant/blob/main/docs/distribution.md",
+  "delivery_mitm_justification": "Every channel the project publishes through uses HTTPS: npm, the shell installer and decant update via GitHub Releases, the Homebrew tap, GHCR, and the git repository. Release artifacts also carry SHA256SUMS and GitHub attestations that users can verify. A plain http:// DECANT_BASE_URL mirror is a user-chosen override, not a project channel, and delivery_unsigned records that gap. https://github.com/dosu-ai/decant/blob/main/docs/distribution.md",
   "delivery_unsigned_status": "Unmet",
   "delivery_unsigned_justification": "By default, install.sh and decant update fetch releases and SHA256SUMS from GitHub Releases over HTTPS. Both still accept a plain http:// DECANT_BASE_URL mirror and would trust a SHA256SUMS file fetched from it without a signature check. https://github.com/dosu-ai/decant/pull/230 refuses plain HTTP mirrors, and this answer changes to Met once it merges.",
   "vulnerabilities_fixed_60_days_status": "Met",

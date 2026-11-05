@@ -193,12 +193,14 @@ shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
 gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant
 ```
 
-To verify offline against the published provenance instead of GitHub's
-attestation API, pass the bundle:
+To verify against the provenance published with the release instead of
+GitHub's attestation API, pass the bundle. `gh` still downloads Sigstore's
+trusted root unless it is already cached.
 
 ```sh
+VERSION=0.12.1  # the release you downloaded
 gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
-  --bundle decant-<version>.intoto.jsonl
+  --bundle "decant-${VERSION}.intoto.jsonl"
 ```
 
 To check npm provenance, install into a scratch project and run

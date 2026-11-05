@@ -13,7 +13,7 @@ import { useTodayRollover } from "./date-range-control.tsx";
 import { dosuLink } from "./dosu-links.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { useDisabledFocusRescue } from "./focus.ts";
-import { formatDay, formatInt, latestSessionDay, versionLabel } from "./format.ts";
+import { formatDay, formatInt, versionLabel } from "./format.ts";
 import { isFramed } from "./frame-guard.ts";
 import { Icon } from "./icons.tsx";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
@@ -498,11 +498,9 @@ function App() {
     slicesForView(activeView).includes(slice),
   );
   const metrics = data.summary;
-  // Only page one begins at the newest row, so a later page's first row is not
-  // the latest activity and the archive-wide bounds are the better fallback.
-  const lastActivity =
-    (sessionPageState.loadedPage === 1 ? latestSessionDay(sessionPageState.sessions) : null) ??
-    formatDay(data.dateBounds?.max ?? null);
+  // The full timestamp, not the UTC day in `max`, so every page shows the same
+  // local day as the newest session row.
+  const lastActivity = formatDay(data.dateBounds?.latest_started_at ?? null);
   const syncInProgress = localSyncing;
   const runSync = () => {
     if (syncInProgress) {

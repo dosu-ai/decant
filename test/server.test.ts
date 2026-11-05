@@ -1380,7 +1380,11 @@ describe("server routes", () => {
 
     const bounds = await route(config, "/api/date-bounds");
     expect(bounds.status).toBe(200);
-    expect(bounds.body).toMatchObject({ min: "2026-05-01", max: "2026-05-04" });
+    expect(bounds.body).toMatchObject({
+      min: "2026-05-01",
+      max: "2026-05-04",
+      latest_started_at: expect.stringMatching(/^2026-05-04T/),
+    });
   });
 
   test("mark recommendation updates status", async () => {

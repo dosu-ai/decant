@@ -64,7 +64,9 @@ describe("dashboard date ranges", () => {
 
   test("scopes Today to the current calendar date", () => {
     const today = new Date().toISOString().slice(0, 10);
-    expect(applyDatePreset("today", { min: "2026-01-01", max: "2026-08-26" })).toEqual({
+    expect(
+      applyDatePreset("today", { min: "2026-01-01", max: "2026-08-26", latest_started_at: null }),
+    ).toEqual({
       preset: "today",
       from: today,
       to: today,
@@ -72,7 +74,9 @@ describe("dashboard date ranges", () => {
   });
 
   test("anchors relative presets to the newest archived session date", () => {
-    expect(applyDatePreset("7d", { min: "2026-01-01", max: "2026-08-26" })).toEqual({
+    expect(
+      applyDatePreset("7d", { min: "2026-01-01", max: "2026-08-26", latest_started_at: null }),
+    ).toEqual({
       preset: "7d",
       from: "2026-08-20",
       to: "2026-08-26",
@@ -92,9 +96,11 @@ describe("dashboard date ranges", () => {
     expect(dateRangePresetLabel({ preset: "custom", from: "2026-04-03", to: "2026-05-17" })).toBe(
       "Custom range",
     );
-    expect(dateRangePresetLabel(applyDatePreset("30d", { min: null, max: "2026-08-26" }))).toBe(
-      "Last 30 days",
-    );
+    expect(
+      dateRangePresetLabel(
+        applyDatePreset("30d", { min: null, max: "2026-08-26", latest_started_at: null }),
+      ),
+    ).toBe("Last 30 days");
   });
 
   test("opens the popover toward whichever side has room for it", () => {

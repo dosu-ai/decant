@@ -342,6 +342,47 @@ describe("runCli", () => {
     expect(result.stderr).not.toContain("skipped");
   });
 
+  test("export --as atif prints one ATIF document, writes .atif.json files, and rejects empty sessions", async () => {
+    const dir = mkdtempSync(join(workDir, "atif-"));
+    const dbPath = join(dir, "archive.db");
+    const db = openDb(dbPath);
+    const goodId = upsertSession(
+      db,
+      parseClaudeSession(
+        "atif-good",
+        readFileSync(join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"), "utf8"),
+      ),
+      "/good.jsonl",
+      1,
+      2,
+      "hash-good",
+    );
+    db.exec(
+      `INSERT INTO session(id, tool, source_session_id) VALUES (900, 'claude_code', 'empty')`,
+    );
+    db.close();
+
+    const base = ["--db", dbPath, "--no-sync"];
+    const single = await runCli([...base, "export", String(goodId), "--as", "atif"]);
+    expect(single.code).toBe(0);
+    const doc = JSON.parse(single.stdout) as { schema_version: string; agent: { name: string } };
+    expect(doc.schema_version).toBe("ATIF-v1.7");
+    expect(doc.agent.name).toBe("claude-code");
+
+    const empty = await runCli([...base, "export", "900", "--as", "atif"]);
+    expect(empty).toMatchObject({
+      code: 1,
+      stderr: "error: session 900 has no exportable steps\n",
+    });
+
+    const outDir = join(dir, "out");
+    const all = await runCli([...base, "export", "--all", "--as", "atif", "--out", outDir]);
+    expect(all.code).toBe(0);
+    expect(existsSync(join(outDir, `${goodId}.atif.json`))).toBe(true);
+    expect(existsSync(join(outDir, "900.atif.json"))).toBe(false);
+    expect(all.stderr).toContain("(1 skipped)");
+  });
+
   test("export --as trajectory reports exit 1 for non-exportable or missing sessions, and tallies skips under --all", async () => {
     const dir = mkdtempSync(join(workDir, "traj-exit1-"));
     const dbPath = join(dir, "archive.db");

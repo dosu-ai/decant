@@ -540,6 +540,120 @@ describe("replaceBinary", () => {
     expect(calls).toEqual([]);
   });
 
+  test.each([
+    "http://mirror.example/releases",
+    // Userinfo, not the host: this connects to mirror.example.
+    "http://127.0.0.1:80@mirror.example/releases",
+    "http://127.0.0.1.mirror.example/releases",
+    "ftp://mirror.example/releases",
+    "not a url",
+  ])("refuses the mirror %s before downloading", async (baseUrl) => {
+    const binaryPath = installed();
+    const calls: string[] = [];
+    await expect(
+      replaceBinary({ binaryPath, version: "0.12.0", baseUrl, fetch: releaseServer({}, calls) }),
+    ).rejects.toThrow("DECANT_BASE_URL must be an https:// or file:// URL");
+    expect(calls).toEqual([]);
+    expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
+  });
+
+  test.each([
+    "http://localhost:8080/releases",
+    "http://127.0.0.1/releases",
+    "http://[::1]:8080/releases",
+  ])("accepts the loopback HTTP mirror %s", async (baseUrl) => {
+    const binaryPath = installed();
+    const { tarball, sums } = release("0.12.0");
+    const calls: string[] = [];
+    await replaceBinary({
+      binaryPath,
+      version: "0.12.0",
+      baseUrl,
+      fetch: releaseServer({ [tarballName]: tarball, SHA256SUMS: sums }, calls),
+    });
+    expect(calls).toHaveLength(2);
+    expect(spawnSync(binaryPath, [], { encoding: "utf8" }).stdout.trim()).toBe("0.12.0");
+  });
+
+  /** Answers every request under `from` with a redirect to the same path under `to`. */
+  function redirectingTo(from: string, to: string, inner: FetchLike, calls: string[]): FetchLike {
+    return async (url, init) => {
+      if (url.startsWith(from)) {
+        calls.push(url);
+        expect(init?.redirect).toBe("manual");
+        return new Response(null, {
+          status: 302,
+          headers: { location: to + url.slice(from.length) },
+        });
+      }
+      return inner(url, init);
+    };
+  }
+
+  test("follows HTTPS redirects to the asset CDN", async () => {
+    const binaryPath = installed();
+    const { tarball, sums } = release("0.12.0");
+    const calls: string[] = [];
+    await replaceBinary({
+      binaryPath,
+      version: "0.12.0",
+      baseUrl: "https://mirror.example/releases",
+      fetch: redirectingTo(
+        "https://mirror.example/",
+        "https://cdn.example/",
+        releaseServer({ [tarballName]: tarball, SHA256SUMS: sums }, calls),
+        calls,
+      ),
+    });
+    expect(calls.sort()).toEqual([
+      "https://cdn.example/releases/download/v0.12.0/SHA256SUMS",
+      `https://cdn.example/releases/download/v0.12.0/${tarballName}`,
+      "https://mirror.example/releases/download/v0.12.0/SHA256SUMS",
+      `https://mirror.example/releases/download/v0.12.0/${tarballName}`,
+    ]);
+    expect(spawnSync(binaryPath, [], { encoding: "utf8" }).stdout.trim()).toBe("0.12.0");
+  });
+
+  test.each([
+    ["an HTTPS mirror", "https://mirror.example/", "http://cdn.example/"],
+    ["a loopback HTTP mirror", "http://127.0.0.1:8080/", "http://cdn.example/"],
+    ["a scheme-relative Location", "http://127.0.0.1:8080/", "//cdn.example/"],
+  ])("refuses a redirect to plain HTTP from %s", async (_label, from, to) => {
+    const binaryPath = installed();
+    const { tarball, sums } = release("0.12.0");
+    const served: string[] = [];
+    await expect(
+      replaceBinary({
+        binaryPath,
+        version: "0.12.0",
+        baseUrl: `${from}releases`,
+        fetch: redirectingTo(
+          from,
+          to,
+          releaseServer({ [tarballName]: tarball, SHA256SUMS: sums }, served),
+          [],
+        ),
+      }),
+    ).rejects.toThrow("refusing to follow a redirect");
+    expect(served).toEqual([]);
+    expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
+  });
+
+  test("gives up on a redirect loop", async () => {
+    const binaryPath = installed();
+    const loop: FetchLike = async (url) =>
+      new Response(null, { status: 302, headers: { location: url } });
+    await expect(
+      replaceBinary({
+        binaryPath,
+        version: "0.12.0",
+        baseUrl: "https://mirror.example/releases",
+        fetch: loop,
+      }),
+    ).rejects.toThrow("too many redirects");
+    expect(readFileSync(binaryPath, "utf8")).toContain("echo 0.11.0");
+  });
+
   test("rejects a release whose decant entry is a symlink", async () => {
     const binaryPath = installed();
     const outside = join(workDir, "outside.txt");

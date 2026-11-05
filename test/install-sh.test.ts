@@ -111,6 +111,12 @@ while [ "$#" -gt 0 ]; do
       out="$2"
       shift 2
       ;;
+    --proto-redir)
+      if [ -n "\${CURL_PROTO_REDIR_LOG:-}" ]; then
+        printf '%s\\n' "$2" >> "$CURL_PROTO_REDIR_LOG"
+      fi
+      shift 2
+      ;;
     -*)
       shift
       ;;
@@ -225,6 +231,10 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -n "\${WGET_LOG:-}" ]; then
   printf '%s\\n' "$url" >> "$WGET_LOG"
+fi
+# What wget -S prints to stderr, such as a redirect's Location header.
+if [ -n "\${WGET_HEADERS:-}" ]; then
+  printf '%s\\n' "$WGET_HEADERS" >&2
 fi
 base=$(basename "$url")
 src="\${FIXTURE_DIR:-}/$base"
@@ -617,6 +627,117 @@ describe("install.sh", () => {
       expect(url.replace("https://", "")).not.toContain("//");
     }
   });
+
+  test.each([
+    "http://mirror.example.com/decant/releases",
+    // Userinfo, not the host: curl connects to evil.example.
+    "http://127.0.0.1:80@evil.example/releases",
+    "http://127.0.0.1.evil.example/releases",
+    "http://localhost:80.evil.example/releases",
+    "ftp://mirror.example.com/releases",
+  ])("refuses the mirror %s before downloading", (baseUrl) => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
+    const { binDir, curlLog } = buildStubBinDir(dir);
+    const installDir = join(dir, "install-target");
+
+    const result = runInstall(["1.2.3"], {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      HOME: freshHome(dir),
+      DECANT_BASE_URL: baseUrl,
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+      FIXTURE_DIR: fixture.fixtureDir,
+      CURL_LOG: curlLog,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DECANT_BASE_URL must be an https:// or file:// URL");
+    expect(existsSync(curlLog) ? readFileSync(curlLog, "utf8").trim() : "").toBe("");
+    expect(existsSync(join(installDir, "decant"))).toBe(false);
+  });
+
+  test.each([
+    "http://localhost:8080/decant/releases",
+    "http://127.0.0.1/decant/releases",
+    "http://[::1]:8080/decant/releases",
+  ])("accepts the loopback HTTP mirror %s and limits redirects to HTTPS", (baseUrl) => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
+    const { binDir, curlLog } = buildStubBinDir(dir);
+    const protoRedirLog = join(dir, "proto-redir.log");
+    const installDir = join(dir, "install-target");
+
+    const result = runInstall(["1.2.3"], {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      HOME: freshHome(dir),
+      DECANT_BASE_URL: baseUrl,
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+      FIXTURE_DIR: fixture.fixtureDir,
+      CURL_LOG: curlLog,
+      CURL_PROTO_REDIR_LOG: protoRedirLog,
+    });
+
+    expect(result.stderr).not.toContain("error:");
+    expect(result.status).toBe(0);
+    expect(readFileSync(curlLog, "utf8").trim().split("\n")).toEqual([
+      `${baseUrl}/download/v1.2.3/${tarballName}`,
+      `${baseUrl}/download/v1.2.3/SHA256SUMS`,
+    ]);
+    expect(readFileSync(protoRedirLog, "utf8").trim().split("\n")).toEqual(["=https", "=https"]);
+    expect(readFileSync(join(installDir, "decant"), "utf8")).toBe(fixture.binaryContents);
+  });
+
+  test.each([
+    "  Location: http://cdn.example/decant",
+    "  location: HTTP://cdn.example/decant",
+    "  Location: //cdn.example/decant",
+    "  Location: ftp://cdn.example/decant",
+  ])("wget refuses a redirect away from HTTPS (%s)", (header) => {
+    const dir = caseDir();
+    const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
+    const farm = buildToolFarm(dir, { wget: true });
+    const installDir = join(dir, "install-target");
+
+    const result = runInstall(["1.2.3"], {
+      PATH: farm.binDir,
+      HOME: freshHome(dir),
+      DECANT_INSTALL_DIR: installDir,
+      DECANT_NO_MODIFY_PATH: "1",
+      FIXTURE_DIR: fixture.fixtureDir,
+      WGET_LOG: farm.wgetLog,
+      WGET_HEADERS: `  HTTP/1.1 302 Found\n${header}\n  HTTP/1.1 200 OK`,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("refusing a redirect away from HTTPS");
+    expect(existsSync(join(installDir, "decant"))).toBe(false);
+  });
+
+  test.each(["  Location: https://release-assets.example/decant", "  Location: /releases/decant"])(
+    "wget follows an HTTPS or relative redirect (%s)",
+    (header) => {
+      const dir = caseDir();
+      const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
+      const farm = buildToolFarm(dir, { wget: true });
+      const installDir = join(dir, "install-target");
+
+      const result = runInstall(["1.2.3"], {
+        PATH: farm.binDir,
+        HOME: freshHome(dir),
+        DECANT_INSTALL_DIR: installDir,
+        DECANT_NO_MODIFY_PATH: "1",
+        FIXTURE_DIR: fixture.fixtureDir,
+        WGET_LOG: farm.wgetLog,
+        WGET_HEADERS: `  HTTP/1.1 302 Found\n${header}\n  HTTP/1.1 200 OK`,
+      });
+
+      expect(result.stderr).not.toContain("error:");
+      expect(result.status).toBe(0);
+      expect(readFileSync(join(installDir, "decant"), "utf8")).toBe(fixture.binaryContents);
+    },
+  );
 
   test("re-running with a different DECANT_INSTALL_DIR appends a second PATH entry", () => {
     const dir = caseDir();

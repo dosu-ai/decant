@@ -622,9 +622,19 @@ export function dateBounds(db: Database): DateBounds {
       `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
               MAX(substr(s.started_at, 1, 10)) AS max,
               -- julianday orders by instant, so an offset timestamp cannot win
-              -- on text alone. Unparseable values are NULL and drop out.
-              strftime('%Y-%m-%dT%H:%M:%fZ', MAX(julianday(s.started_at)))
-                AS latest_started_at
+              -- on text alone. It reads +05:30 but not +0530, which Claude
+              -- records may carry, so the colon is added first. Values that
+              -- still do not parse are NULL and drop out.
+              strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                MAX(julianday(
+                  CASE WHEN s.started_at GLOB '*T*[+-][0-9][0-9][0-9][0-9]'
+                    THEN substr(s.started_at, 1, length(s.started_at) - 2)
+                         || ':' || substr(s.started_at, -2)
+                    ELSE s.started_at
+                  END
+                ))
+              ) AS latest_started_at
        FROM session s
        ${whereClause({
          sql: ["s.started_at IS NOT NULL", visible.sql].join(" AND "),

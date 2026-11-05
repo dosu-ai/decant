@@ -873,6 +873,20 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("date bounds read compact ±HHMM offsets as instants", () => {
+    const db = freshDb();
+    // 03:00-0700 is 10:00 UTC, the newest start here. Without the compact
+    // offset, julianday returns NULL and the older UTC start would win.
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
+      VALUES
+        (1, 'claude_code', 'compact', 'test-model', '2026-05-04T03:00:00-0700', 0),
+        (2, 'claude_code', 'utc', 'test-model', '2026-05-04T08:00:00Z', 0);
+    `);
+    expect(dateBounds(db).latest_started_at).toBe("2026-05-04T10:00:00.000Z");
+    db.close();
+  });
+
   test("model sparklines share a day axis and today totals are scoped", () => {
     const db = seededEnriched();
     const sparks = modelSparklines(db);

@@ -183,6 +183,44 @@ requires at least one user and assistant record. Use JSON export when you need
 Decant's session totals and retained normalized transcript rather than this
 filtered format.
 
+## ATIF exports
+
+`decant export <id> --as atif` writes one
+[ATIF](https://harborframework.com/docs/agents/atif) document, the trajectory
+format Harbor and Terminal-Bench use, declared as `ATIF-v1.7`. `--all --out
+<dir>` writes `<id>.atif.json` files. Agent names follow Harbor's:
+`claude-code`, `codex`, `gemini-cli`, `opencode`, `cursor-cli`, and
+`copilot-cli`. Harbor has no VS Code agent, so Copilot Chat sessions use
+`vscode-copilot-chat`, the trajectory export's label.
+
+User text becomes `user` steps, and system messages and Codex injected context
+become `system` steps. Each run of consecutive assistant messages becomes one
+`agent` step holding its text, reasoning, and tool calls. Each tool result is
+attached to the step that made the call, because ATIF requires an observation's
+`source_call_id` to match a call in the same step. Recorded tool failures go in
+the result's `extra.is_error`. Repeated call IDs are renamed and paired with
+results as in trajectory exports. Tool arguments and results are not
+truncated.
+
+ATIF counts `prompt_tokens` inclusive of cached input and `completion_tokens`
+inclusive of reasoning. Decant stores input net of cache, so each step's
+`prompt_tokens` is input plus cache reads plus cache writes, and
+`cached_tokens` is cache reads. ATIF has no cache-write field, so writes go in
+`metrics.extra.cache_write_tokens`. `final_metrics` comes from the session
+totals: `total_cost_usd` is Decant's estimate at current rates, with
+`extra.cost_source` saying whether a source-recorded cost was used, and
+`extra.total_reasoning_tokens` appears when the source reports or Decant
+infers reasoning. Steps carry no `cost_usd`. A source that records no usage,
+such as Cursor CLI, gets no token totals rather than zeros.
+
+Subagent sessions are embedded in the root's `subagent_trajectories` and
+linked from the spawning call's observation with `subagent_trajectory_ref`.
+The root's totals include its embedded subagents, as ATIF describes; each
+embedded trajectory's totals are its own. Claude compaction boundaries become
+`system` steps with `extra.context_management` set to a `replace` compaction,
+and the summary that follows is a `user` step marked
+`extra.is_compact_summary`.
+
 ## What the archive stores
 
 The archive is a searchable copy of the transcript content Decant retains, not

@@ -54,7 +54,7 @@ in VS Code logs on your machine, and watches for changes.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
 - Browsable sessions, projects, files, and ingest diagnostics.
-- Markdown, JSON, report, and trajectory exports.
+- Markdown, JSON, report, trajectory, and ATIF exports.
 - Deterministic scripts, replays, and agent instructions distilled from command
   history.
 

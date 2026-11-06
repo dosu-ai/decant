@@ -107,8 +107,9 @@ By default Decant discovers:
   `--vscode-copilot-dir` points at a relocated root.
 - ATIF trajectory files under `~/.decant/atif`, or the directory from
   `--atif-dir` or `DECANT_ATIF_DIR`, read recursively and read-only. No agent
-  writes there; it holds trajectories a user copies or links in. See
-  [ATIF imports](#atif-imports).
+  writes there; it holds trajectories a user copies in. Symbolic links inside
+  it are not followed, so point the setting at a Harbor `jobs` directory
+  instead of linking one. See [ATIF imports](#atif-imports).
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the

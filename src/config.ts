@@ -39,8 +39,9 @@ export interface Config {
   vscodeCopilotInsidersDir?: string;
   /** ATIF trajectory files, such as Harbor job directories or `decant export
    * --as atif` output, read recursively on every sync. No tool writes to the
-   * default; a user copies or links trajectories into it. Absent in a config
-   * built by hand, which then reads no ATIF directory. */
+   * default; a user copies trajectories into it, because discovery does not
+   * follow symbolic links. Absent in a config built by hand, which then reads
+   * no ATIF directory. */
   atifDir?: string;
 }
 

@@ -249,8 +249,10 @@ a chat session file inside VS Code's storage layout.
 
 ATIF (Agent Trajectory Interchange Format) is the trajectory format Harbor
 writes for Terminal-Bench and its other evaluation runs. No agent writes to
-`~/.decant/atif`. Copy or link trajectories into it, point `DECANT_ATIF_DIR` at
-a Harbor `jobs` directory, or import files once with `--path`:
+`~/.decant/atif`. Copy trajectories into it, point `DECANT_ATIF_DIR` at a
+Harbor `jobs` directory, or import files once with `--path`. Discovery does
+not follow symbolic links inside the directory, so a linked file or job is not
+read:
 
 ```sh
 decant sync --path ./jobs/my-job

@@ -739,6 +739,40 @@ describe("context-window rollups", () => {
     db.close();
   });
 
+  test("plans ingest's block lookups by message on an archive without statistics", () => {
+    // A new archive has no sqlite_stat1 until the first sync ends. Without it
+    // SQLite once ran the has_text subquery through idx_block_type, scanning
+    // every text block per message and making the first sync quadratic.
+    const db = freshDb();
+    expect(db.query("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()).toBeNull();
+    const statements = new Set<string>();
+    const prepare = db.prepare.bind(db);
+    const query = db.query.bind(db);
+    db.prepare = ((sql: string, ...rest: unknown[]) => {
+      statements.add(sql);
+      return (prepare as (...args: unknown[]) => unknown)(sql, ...rest);
+    }) as typeof db.prepare;
+    db.query = ((sql: string) => {
+      statements.add(sql);
+      return query(sql);
+    }) as typeof db.query;
+    upsertSession(db, parseClaudeSession("sess-ctx", CONTEXT_FIXTURE), "/ctx.jsonl", 1, 2, "h");
+    db.prepare = prepare;
+    db.query = query;
+
+    const blockLookups = [...statements].filter(
+      (sql) => /^\s*(SELECT|WITH|UPDATE)\b/i.test(sql) && /\bblock\b/.test(sql),
+    );
+    expect(blockLookups.some((sql) => sql.includes("has_text"))).toBe(true);
+    const byType = blockLookups.filter((sql) =>
+      (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).some((row) =>
+        row.detail.includes("idx_block_type"),
+      ),
+    );
+    expect(byType).toEqual([]);
+    db.close();
+  });
+
   test("summaries expose the rollups", () => {
     const { db } = seeded();
     const summary = listSessions(db)[0];

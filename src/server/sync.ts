@@ -31,6 +31,9 @@ export interface SyncCoordinatorOptions {
   progressEveryFiles?: number;
   progressEveryMs?: number;
   now?: () => number;
+  /** Runs on the server thread after a worker sync succeeds, before callers
+   * see the report. */
+  onCompleted?: (report: SyncReport) => void;
 }
 
 export const syncStatus = {
@@ -248,6 +251,12 @@ export function createSyncCoordinator(
       .then(
         (report) => {
           flush();
+          try {
+            options.onCompleted?.(report);
+          } catch {
+            // Post-sync housekeeping must never fail a sync that already
+            // committed.
+          }
           return report;
         },
         (error) => {

@@ -1,3 +1,4 @@
+import { setSystemTime } from "bun:test";
 import {
   copyFileSync,
   existsSync,
@@ -15,7 +16,7 @@ import { type IngestConfig, sync } from "../src/ingest.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
 import { buildCursorChat } from "../test/cursor-fixture.ts";
-import { decodeGoldenRows, ROW_QUERIES } from "../test/golden-rows.ts";
+import { decodeGoldenRows, GOLDEN_NOW, ROW_QUERIES } from "../test/golden-rows.ts";
 import { buildOpenCodeFixtureDb } from "../test/opencode-fixture.ts";
 import { stripGoldenVolatility } from "./golden-normalize.ts";
 
@@ -158,7 +159,14 @@ async function regenerate(): Promise<void> {
   try {
     const db = openDb(dbPath);
     try {
-      const report = sync(db, stageFixtures(caseDir, meta.fixtures));
+      // Pin the clock the golden test syncs under (see GOLDEN_NOW).
+      setSystemTime(GOLDEN_NOW);
+      let report: ReturnType<typeof sync>;
+      try {
+        report = sync(db, stageFixtures(caseDir, meta.fixtures));
+      } finally {
+        setSystemTime();
+      }
       if (report.failed !== 0 || report.issues !== 0) {
         throw new Error(`Golden fixture sync was not clean: ${JSON.stringify(report)}`);
       }

@@ -131,6 +131,11 @@ Economics vectors are cached in memory. `PRAGMA data_version` detects writes by
 other connections; the server serves the previous model while rebuilding and
 then emits `archive_updated` so clients can refresh.
 
+The Tools page summary and tool usage table read every matching tool call.
+`src/read-cache.ts` keeps up to 32 of those results per connection, keyed by
+the SQL and its parameters. A change in `data_version`, `total_changes()`, or
+`schema_version` clears them, so the first read after any write recomputes.
+
 The worker files are also standalone-binary entrypoints and must remain in the
 compile entrypoint list in `scripts/distribution.ts`.
 

@@ -1,6 +1,6 @@
 import * as echarts from "echarts";
 import type { ContextWindowTimeline } from "../context-window.ts";
-import type { DimRow } from "../stats.ts";
+import type { DaySeries } from "../day-series.ts";
 import {
   groupContextMarkers,
   layoutContextAnnotations,
@@ -18,7 +18,6 @@ const INK = "#24302a";
 const MUTED = "#6d766f";
 const RULE = "#dce1da";
 const SAGE = "#778561";
-const SAGE_LIGHT = "#b4bb91";
 const REPORT_SANS_STACK =
   "'IBM Plex Sans', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const CONTEXT_GRID_TOP = 24;
@@ -219,8 +218,10 @@ function* svgAttributes(svg: string): Generator<[string, string]> {
   }
 }
 
-export function renderSessionsByDayChart(rows: readonly DimRow[], size?: ReportChartSize): string {
-  const ordered = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+/** Sessions per point of a continuous series (see buildDaySeries), drawn as
+ * bars: counts are discrete, and a line would imply values between days. */
+export function renderSessionsByDayChart(series: DaySeries, size?: ReportChartSize): string {
+  const ordered = series.points;
   return renderChartSvg(
     {
       grid: { top: 18, right: 16, bottom: 44, left: 48 },
@@ -241,13 +242,10 @@ export function renderSessionsByDayChart(rows: readonly DimRow[], size?: ReportC
       },
       series: [
         {
-          type: "line",
+          type: "bar",
           data: ordered.map((row) => row.sessions),
-          symbol: "circle",
-          symbolSize: 6,
-          lineStyle: { color: SAGE, width: 2.5 },
-          itemStyle: { color: SAGE },
-          areaStyle: { color: "rgba(180, 187, 145, 0.24)" },
+          itemStyle: { color: SAGE, borderRadius: [2, 2, 0, 0] },
+          barMaxWidth: 24,
         },
       ],
     },
@@ -255,11 +253,10 @@ export function renderSessionsByDayChart(rows: readonly DimRow[], size?: ReportC
   );
 }
 
-export function renderCostByDayChart(rows: readonly DimRow[], size?: ReportChartSize): string {
-  // A day whose sessions all lack recorded usage has no cost, not a zero one.
-  const ordered = rows
-    .filter((row) => row.sessions === 0 || row.usage_sessions > 0)
-    .sort((left, right) => left.key.localeCompare(right.key));
+/** Estimated cost per point. A point whose sessions all lack usage data has
+ * an unknown cost and draws as a gap, not as zero. */
+export function renderCostByDayChart(series: DaySeries, size?: ReportChartSize): string {
+  const ordered = series.points;
   return renderChartSvg(
     {
       grid: { top: 18, right: 16, bottom: 44, left: 58 },
@@ -282,10 +279,12 @@ export function renderCostByDayChart(rows: readonly DimRow[], size?: ReportChart
       },
       series: [
         {
-          type: "bar",
-          data: ordered.map((row) => row.estimated_cost_usd),
-          itemStyle: { color: SAGE_LIGHT, borderRadius: [3, 3, 0, 0] },
-          barMaxWidth: 30,
+          type: "line",
+          data: ordered.map((row) => row.cost),
+          connectNulls: false,
+          showSymbol: false,
+          lineStyle: { color: SAGE, width: 2 },
+          areaStyle: { color: "rgba(180, 187, 145, 0.24)" },
         },
       ],
     },

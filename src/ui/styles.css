@@ -1773,11 +1773,21 @@ nav a[aria-current="page"] svg {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-/* Six cards, so every column count below divides six exactly. auto-fit would
- * pick whatever fits -- five columns between 980px and 1151px -- and strand the
- * sixth card alone against an empty row. */
+/* Eight cards, so every column count below divides eight exactly. auto-fit
+ * would pick whatever fits -- three columns somewhere mid-width -- and strand
+ * the last cards alone against an empty row. */
 .analytics-stat-grid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Just above 1200px the sidebar returns and each card is at its narrowest, so
+ * "Per completed session" wrapped (measured up to 1216px) and made its row
+ * taller than the next. The icons repeat the labels, so they give up their
+ * 30px there instead. */
+@media (min-width: 1201px) and (max-width: 1279px) {
+  .analytics-stat-grid .stat-icon {
+    display: none;
+  }
 }
 
 .stat-card {
@@ -1806,6 +1816,37 @@ nav a[aria-current="page"] svg {
   font-size: 20px;
   font-weight: var(--font-weight-medium);
   line-height: 1.1;
+}
+
+/* A change against the previous period, or what the value is made of. Plain
+ * muted text: more sessions or more cost is not good or bad by itself. */
+.stat-card .stat-detail {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.stat-card .stat-skeleton {
+  width: 4.5rem;
+  height: 20px;
+}
+
+/* The previous filter's numbers stay visible while the new ones load, dimmed
+ * so they do not read as the answer for the new filter. */
+.stat-card[data-updating] strong,
+.stat-card[data-updating] .stat-detail,
+.panel[data-updating] > :not(.panel-heading) {
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stat-card strong,
+  .stat-card .stat-detail {
+    transition: opacity var(--duration-hover) var(--ease-out);
+  }
 }
 
 .stat-icon {
@@ -4230,6 +4271,19 @@ mark {
   min-width: 10rem;
 }
 
+.share-cell-inner {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) 4ch;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-cell-inner small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .bar {
   height: 6px;
   overflow: hidden;
@@ -6173,16 +6227,6 @@ pre {
 /* ===========================================================================
  * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
  * =========================================================================== */
-/* The sidebar is visible above 1200px and collapses at or below it, so the
- * content area jumps ~300px at that boundary. Six columns only keep every label
- * on one line at a viewport of 1328px or wider -- measured, not derived: at
- * 1327px "Output tokens" wraps and every card grows from 83px to 102px. Drop to
- * three below that rather than ship a band where the row renders taller. */
-@media (max-width: 1327px) {
-  .analytics-stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
 
 @media (max-width: 1200px) {
   .mobile-only {

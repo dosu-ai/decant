@@ -31,7 +31,10 @@ export interface AnalyticsReportData {
   totals: Totals;
   sessionsByDay: DimRow[];
   byModel: DimRow[];
-  byProject: DimRow[];
+  /** Worktrees folded into the repository they came from. */
+  byRepo: DimRow[];
+  /** Runs grouped by how their top-level session ended. */
+  byOutcome: DimRow[];
   activity: Activity;
   economics: TokenEconomics;
   insights: StoredRecommendation[];
@@ -86,9 +89,10 @@ export function assembleAnalyticsReport(
     byModel: byDimension(db, "model", filter).sort(
       (left, right) => right.estimated_cost_usd - left.estimated_cost_usd,
     ),
-    byProject: byDimension(db, "project", filter).sort(
+    byRepo: byDimension(db, "repo", filter).sort(
       (left, right) => right.estimated_cost_usd - left.estimated_cost_usd,
     ),
+    byOutcome: byDimension(db, "outcome", filter),
     activity: activity(db, filter),
     economics: tokenEconomics(db, filter),
     insights: scoped

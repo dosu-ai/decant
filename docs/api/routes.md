@@ -42,6 +42,13 @@ not infer an account identity. `GET /api/metadata/session-sources` returns only
 source values represented by visible sessions in the local archive, and the
 Analytics picker uses that list.
 
+`GET /api/sessions`, `GET /api/stats/summary`, and
+`GET /api/stats/by-dimension` also accept `repo`, a repository root path. It
+matches sessions whose project is that root or one of its worktrees, where
+`project` matches one exact path. `dim=repo` groups rows the same way, and
+`dim=outcome` groups every run under the outcome label of its top-level
+session: `completed`, `abandoned`, `failed`, or `(unclassified)`.
+
 ## Access control
 
 The API has no authentication. Any request that reaches the listener and passes

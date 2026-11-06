@@ -18,6 +18,7 @@ import {
   sessionIncludesArchived,
   sessionPageFromPath,
   sessionProjectFilter,
+  sessionRepoFilter,
   sessionsArchivedHref,
   sessionsPageHref,
 } from "../navigation.ts";
@@ -66,18 +67,19 @@ export function SessionsView({
   const { exhausted, loadedPage, loading, refreshing, sessions } = sessionPageState;
   const filtered = filterSessions(sessions, query);
   const project = sessionProjectFilter(path);
+  const repo = sessionRepoFilter(path);
   const includeArchived = sessionIncludesArchived(path);
   const page = sessionPageFromPath(path);
   const displayedPage = loadedPage ?? page;
   const pageLoading = loading || (loadedPage != null && page !== loadedPage);
   const dateQuery = dateRangeQuery(dateRange);
-  const sessionFilterKey = JSON.stringify([dateQuery, project, includeArchived, page]);
+  const sessionFilterKey = JSON.stringify([dateQuery, project, repo, includeArchived, page]);
   const expandedSessions =
     expandedSessionState.key === sessionFilterKey ? expandedSessionState.ids : EMPTY_SESSION_IDS;
   const scopedSummaryRequest =
-    project == null && !includeArchived
+    project == null && repo == null && !includeArchived
       ? null
-      : sessionSummaryPath(project, dateQuery, includeArchived);
+      : sessionSummaryPath(project, dateQuery, includeArchived, repo);
   const scopedSummaryRequestKey =
     scopedSummaryRequest == null ? null : scopedSessionSummaryKey(scopedSummaryRequest, reloadKey);
   const currentScopedSummary =
@@ -93,7 +95,9 @@ export function SessionsView({
     cardSummary.usage_sessions,
   );
   const visibleTotal =
-    project == null ? (data.summary?.sessions ?? null) : (currentScopedSummary?.sessions ?? null);
+    project == null && repo == null
+      ? (data.summary?.sessions ?? null)
+      : (currentScopedSummary?.sessions ?? null);
   const listTotal = includeArchived ? null : visibleTotal;
   const pageCount =
     listTotal == null ? null : Math.max(1, Math.ceil(listTotal / SESSION_PAGE_SIZE));
@@ -231,6 +235,19 @@ export function SessionsView({
               Project: <strong>{basename(project)}</strong>
               <Link
                 aria-label="Clear project filter"
+                href={sessionsArchivedHref("/sessions", includeArchived)}
+              >
+                <Icon name="x" />
+              </Link>
+            </span>
+          </div>
+        ) : null}
+        {repo != null ? (
+          <div className="active-filter-row">
+            <span className="filter-pill" title={`${repo}, including its worktrees`}>
+              Repository: <strong>{basename(repo)}</strong>
+              <Link
+                aria-label="Clear repository filter"
                 href={sessionsArchivedHref("/sessions", includeArchived)}
               >
                 <Icon name="x" />

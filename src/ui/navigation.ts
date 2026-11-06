@@ -48,6 +48,20 @@ export function projectSessionsHref(project: string): string {
   return `/sessions?${params.toString()}`;
 }
 
+/** The repository root a sessions page is scoped to, worktrees included. */
+export function sessionRepoFilter(path: string): string | null {
+  if (pathOnly(path) !== "/sessions") {
+    return null;
+  }
+  const repo = sessionParams(path).get("repo")?.trim();
+  return repo == null || repo === "" ? null : repo;
+}
+
+export function repoSessionsHref(repo: string): string {
+  const params = new URLSearchParams({ repo });
+  return `/sessions?${params.toString()}`;
+}
+
 export function sessionIncludesArchived(path: string): boolean {
   return pathOnly(path) === "/sessions" && sessionParams(path).get("include_archived") === "true";
 }

@@ -24,6 +24,17 @@ The live "today" totals are another exception. They cover the server's local
 calendar day, converted to a UTC range before it is compared with
 `started_at`.
 
+The per-day charts in Analytics and in the analytics report draw every UTC day
+from the start of the selected range to its end. The by-day rows from the API
+list only days that had sessions, so the charts add the missing days as zero:
+an idle stretch shows as empty bars instead of disappearing from the axis.
+"All time" spans the first to the last day with sessions. A range longer than
+92 days draws one point per UTC week starting Monday instead of one per day.
+The cost line leaves a gap, not a zero, on a day whose sessions all lack usage
+data, and it is not smoothed between points. The busiest-hour and
+busiest-weekday charts are the exception: they bucket session starts in the
+server's local time zone, which the chart names.
+
 Archived and deleted sessions are excluded by default. Statistics endpoints
 that accept `include_archived=true` can include user-archived sessions; deleted
 sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
@@ -78,6 +89,16 @@ subagent's file reads, edits, searches, and diagnostics to the top-level
 session that started it, so one session that fans out to five subagents counts
 once. The abandoned rate reads only top-level outcome labels.
 
+## Repositories and worktrees
+
+Each project path records the repository root it belongs to. A worktree created
+by Git, T3 Code, Conductor, or a similar tool points at the repository it came
+from; any other project is its own root. The `repo` dimension and the `repo`
+filter group by that root, so a repository's row and its filtered session list
+include every worktree's sessions. The `project` dimension and filter still
+match one exact path. The Analytics "By repository" table shows the twelve
+costliest repositories in the range, then applies the chosen sort to them.
+
 ## Work type and completion labels
 
 Work type and outcome are lightweight transcript-shape heuristics, not evidence
@@ -101,12 +122,38 @@ Use these labels to organize follow-up analysis. Do not treat `completed` as a
 merged change, a passing test suite, or a successful business outcome without
 joining Decant data to evidence from the system where the work landed.
 
+The `outcome` dimension groups runs by the label of their top-level session.
+A subagent's own label is usually empty, so its tokens and cost count under the
+session that started it, found by following parent links through the whole
+archive even when a date filter leaves the parent out. `sessions` in those rows
+counts top-level sessions only, as everywhere else. Sessions with no label
+(no main transcript to read) form the `(unclassified)` row, together with their
+subagents, whatever those subagents' own labels are. A subagent whose parent is
+not in the archive keeps its own label.
+
+"Cost per completed session" divides all estimated cost in scope, abandoned and
+failed sessions included, by the top-level sessions labelled `completed`. It
+answers how much spend each finished conversation carries, failed attempts
+included. It is not a cost per shipped change, for the reason above.
+
 ## Token and cost totals
 
 Decant preserves provider-reported input, output, cache-read, cache-creation,
 and reasoning usage when the source exposes it. Claude reasoning can be
 estimated by subtraction when the source does not report it directly; the API
 keeps reported and estimated reasoning separate.
+
+`input_tokens` counts prompt tokens sent without a cache hit. Prompt tokens
+read from the provider's cache are `cache_read_tokens`, and tokens written to it
+are `cache_creation_tokens`. For agents that resend a long context every turn,
+cache reads are usually most of the prompt volume, so Analytics shows them as
+their own tile. Its cache hit rate is
+`cache_read_tokens / (input_tokens + cache_read_tokens + cache_creation_tokens)`
+over the same scope.
+
+Estimated cost prices recorded usage at current API list prices (see
+[Pricing](pricing.md)). It is not an invoice: a subscription plan, a negotiated
+rate, or a free tier bills differently.
 
 Claude journal records can split one API message across content blocks and
 repeat its usage on each record. Decant counts that usage once, grouping by
@@ -601,6 +648,16 @@ call recorded a result for has a `null` rate. Script comments floor the
 percentage, so a command that ever failed never reads `100% ok`, and they omit
 the percentage when the rate is `null`. Commands whose recorded calls all failed
 are left out of scripts.
+
+## Comparison with the previous period
+
+When the date range has both a start and an end, the Analytics tiles compare
+each total with the range of the same length that ends the day before it
+starts. "Last 30 days" ending November 5 compares with the 30 days ending
+October 6. The change is shown as a percentage of the earlier value, or in
+percentage points for the cache hit rate. Open ranges, such as All time, have
+no previous period, and when the previous value is zero the tile shows no
+comparison line.
 
 ## Data quality signals
 

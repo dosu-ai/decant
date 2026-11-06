@@ -3,6 +3,7 @@ import { parseFileOperation } from "../../distill.ts";
 import { search } from "../../query.ts";
 import {
   byDimension,
+  DIMENSIONS,
   fileHotspots,
   mcpUsage,
   parseDimension,
@@ -39,7 +40,7 @@ export function registerStatsCommands(ctx: CliContext): void {
   program
     .command("stats")
     .description("usage and cost rollups")
-    .option("--by <dimension>", "tool | model | project | day")
+    .option("--by <dimension>", DIMENSIONS.join(" | "))
     .action((commandOptions: { by?: string }) =>
       ctx.run(() =>
         ctx.withArchive(
@@ -49,7 +50,7 @@ export function registerStatsCommands(ctx: CliContext): void {
               if (dimension == null) {
                 io.writeErr(
                   `error: unknown --by value ${JSON.stringify(commandOptions.by)} ` +
-                    "(expected: tool | model | project | day)\n",
+                    `(expected: ${DIMENSIONS.join(" | ")})\n`,
                 );
                 return 2;
               }

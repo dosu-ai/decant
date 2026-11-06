@@ -33,7 +33,7 @@ describe("restyle contract", () => {
   });
 
   test("the analytics stat grid never strands a card on a short row", () => {
-    // Six cards, so every column count it declares must divide six exactly.
+    // Eight cards, so every column count it declares must divide eight exactly.
     // `auto-fit` used to pick whatever fitted -- five columns anywhere between
     // 980px and 1151px -- which left the sixth card alone against an empty row.
     // Guard the marker so a renamed or reordered class names itself rather than
@@ -43,7 +43,7 @@ describe("restyle contract", () => {
     const markup = sourceFrom(readUiFile("views/analytics.tsx"), '"stat-grid analytics-stat-grid"');
     const grid = markup.slice(0, markup.indexOf("\n      </div>"));
     const cards = grid.match(/<StatCard/g)?.length ?? 0;
-    expect(cards).toBe(6);
+    expect(cards).toBe(8);
 
     expect(styles).not.toMatch(/\.analytics-stat-grid \{[^}]*auto-(?:fit|fill)/);
 

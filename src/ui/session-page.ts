@@ -72,6 +72,7 @@ export function useSessionPage({
   includeArchived,
   page,
   project,
+  repo = null,
   reloadKey,
 }: {
   dateQuery: string;
@@ -79,6 +80,8 @@ export function useSessionPage({
   includeArchived: boolean;
   page: number;
   project: string | null;
+  /** A repository root; its worktrees' sessions are included. */
+  repo?: string | null;
   reloadKey: number;
 }): SessionPageState {
   const cacheRef = useRef(new Map<string, LoadedSessionPage>());
@@ -86,7 +89,7 @@ export function useSessionPage({
     failed: { error: unknown; requestKey: string } | null;
     loaded: LoadedSessionPage | null;
   }>({ failed: null, loaded: null });
-  const scopeKey = JSON.stringify([dateQuery, project, includeArchived]);
+  const scopeKey = JSON.stringify([dateQuery, project, repo, includeArchived]);
   const requestKey = `${scopeKey}:${page}:${reloadKey}`;
   const cached = cacheRef.current.get(requestKey) ?? null;
   const currentError = settled.failed?.requestKey === requestKey ? settled.failed.error : null;
@@ -105,7 +108,9 @@ export function useSessionPage({
     }
     const controller = new AbortController();
     const plan = planSessionPageLoad({ page, pageSize: SESSION_PAGE_SIZE });
-    const projectParam = project == null ? "" : `&project=${encodeURIComponent(project)}`;
+    const projectParam =
+      (project == null ? "" : `&project=${encodeURIComponent(project)}`) +
+      (repo == null ? "" : `&repo=${encodeURIComponent(repo)}`);
     const archivedParam = includeArchived ? "&include_archived=true" : "";
     void getJson<SessionSummary[]>(
       withDateQuery(
@@ -136,7 +141,7 @@ export function useSessionPage({
         setSettled((current) => ({ ...current, failed: { error, requestKey } }));
       });
     return () => controller.abort();
-  }, [dateQuery, enabled, includeArchived, page, project, requestKey, scopeKey]);
+  }, [dateQuery, enabled, includeArchived, page, project, repo, requestKey, scopeKey]);
 
   return {
     error: currentError,

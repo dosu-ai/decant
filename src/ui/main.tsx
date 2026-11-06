@@ -29,6 +29,7 @@ import {
   sessionIncludesArchived,
   sessionPageFromPath,
   sessionProjectFilter,
+  sessionRepoFilter,
   sessionsPageHref,
   titleFor,
 } from "./navigation.ts";
@@ -124,6 +125,7 @@ function App() {
   useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionProject = sessionProjectFilter(path);
+  const sessionRepo = sessionRepoFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
   const sessionPage = sessionPageFromPath(path);
   const refreshTimerRef = useRef<number | null>(null);
@@ -139,6 +141,7 @@ function App() {
     includeArchived: includeArchivedSessions,
     page: sessionPage,
     project: sessionProject,
+    repo: sessionRepo,
     reloadKey,
   });
   const [theme, setTheme] = useState<ThemeChoice>(() => {
@@ -642,7 +645,7 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Session logs on this device">
+          <div className="sidebar-stat" title="Top-level sessions matching this page's filters">
             <span className="sidebar-stat-icon">
               <Icon name="trend" />
             </span>
@@ -817,6 +820,7 @@ function App() {
               />
             ) : (
               renderView(activeView, path, data, {
+                dashboardQuery,
                 dateRange: dateRangeSelection,
                 onDateRangeChange: handleDateRangeChange,
                 onSessionTextFilterChange: setSessionTextFilterActive,
@@ -864,6 +868,8 @@ function renderView(
   path: string,
   data: DashboardData,
   actions: {
+    /** The query the active page's slices load with (date range, plus source on Analytics). */
+    dashboardQuery: string;
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
     onSessionTextFilterChange: (active: boolean) => void;
@@ -925,6 +931,13 @@ function renderView(
           onDateRangeChange={actions.onDateRangeChange}
           onSourceChange={actions.onSourceChange}
           onSync={actions.runSync}
+          sliceStatus={(slice) =>
+            dateScopedSliceStatus(
+              actions.loadedSlices.get(slice),
+              actions.failedSlices.includes(slice),
+              actions.dashboardQuery,
+            )
+          }
           source={actions.source}
           syncing={actions.syncing}
         />

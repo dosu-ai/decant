@@ -1,4 +1,5 @@
 import type { AvailableSessionSource } from "../source-filter.ts";
+import { previousRange } from "./analytics-metrics.ts";
 import { getJson } from "./api.ts";
 import { TABLE_ROW_LIMIT } from "./constants.ts";
 import { withDateQuery } from "./date-range.ts";
@@ -24,8 +25,10 @@ import type {
 export const emptyData: DashboardData = {
   summary: null,
   byModel: [],
-  byProject: [],
+  byRepo: [],
+  byOutcome: [],
   byDay: [],
+  previousSummary: null,
   projects: [],
   tools: [],
   mcp: [],
@@ -61,13 +64,35 @@ export const SLICE_LOADERS: Record<
       byModel: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", q)),
     }),
   },
-  byProject: {
+  byRepo: {
     dateScoped: true,
     load: async (q) => ({
-      byProject: await getJson<DimensionRow[]>(
-        withDateQuery("/api/stats/by-dimension?dim=project", q),
+      byRepo: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=repo", q)),
+    }),
+  },
+  byOutcome: {
+    dateScoped: true,
+    load: async (q) => ({
+      byOutcome: await getJson<DimensionRow[]>(
+        withDateQuery("/api/stats/by-dimension?dim=outcome", q),
       ),
     }),
+  },
+  previousSummary: {
+    dateScoped: true,
+    // Open-ended ranges (All time, "since", "through") have no previous period.
+    load: async (q) => {
+      const params = new URLSearchParams(q);
+      const previous = previousRange(params.get("from"), params.get("to"));
+      if (previous == null) {
+        return { previousSummary: null };
+      }
+      params.set("from", previous.from);
+      params.set("to", previous.to);
+      return {
+        previousSummary: await getJson<Summary>(`/api/stats/summary?${params.toString()}`),
+      };
+    },
   },
   byDay: {
     dateScoped: true,
@@ -168,7 +193,9 @@ export const ROUTE_SLICES: Record<string, DataSlice[]> = {
     "sessionSources",
     "byDay",
     "byModel",
-    "byProject",
+    "byRepo",
+    "byOutcome",
+    "previousSummary",
     "activity",
     "modelSparklines",
     "tokenEconomics",

@@ -83,6 +83,8 @@ export interface ListFilter {
   tool?: string | null;
   model?: string | null;
   project?: string | null;
+  /** A repository root: matches sessions in the root and in its worktrees. */
+  repo?: string | null;
   includeSubagents?: boolean;
   includeNestedSubagents?: boolean;
   includeArchived?: boolean;
@@ -185,6 +187,10 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   if (filter.project != null) {
     clauses.push("COALESCE(p.path, '') = ?");
     params.push(filter.project);
+  }
+  if (filter.repo != null) {
+    clauses.push("COALESCE(p.root_path, p.path, '') = ?");
+    params.push(filter.repo);
   }
   if (filter.includeSubagents !== true) {
     clauses.push("s.is_subagent = 0");

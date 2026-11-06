@@ -8,6 +8,10 @@ export type Summary = {
   tool_calls: number;
   input_tokens: number;
   output_tokens: number;
+  /** Prompt tokens read from the provider's cache. */
+  cache_read_tokens: number;
+  /** Prompt tokens written to the provider's cache. */
+  cache_creation_tokens: number;
   estimated_cost_usd: number;
 };
 
@@ -289,8 +293,13 @@ export type SettingsInfo = {
 export type DashboardData = {
   summary: Summary | null;
   byModel: DimensionRow[];
-  byProject: DimensionRow[];
+  /** Usage per repository, with worktrees folded into their root. */
+  byRepo: DimensionRow[];
+  /** Usage per outcome label of each run's top-level session. */
+  byOutcome: DimensionRow[];
   byDay: DimensionRow[];
+  /** Summary for the same-length period just before a bounded range. */
+  previousSummary: Summary | null;
   projects: ProjectSummary[];
   tools: ToolRow[];
   mcp: McpRow[];
@@ -391,6 +400,7 @@ export type IconName =
   | "filePdf"
   | "folder"
   | "info"
+  | "layers"
   | "inbox"
   | "lightbulb"
   | "menu"

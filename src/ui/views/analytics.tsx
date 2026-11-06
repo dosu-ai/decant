@@ -1,4 +1,16 @@
 import { useMemo, useState } from "react";
+import { alignToSeries, buildDaySeries, type DaySeries } from "../../day-series.ts";
+import {
+  cacheDetail,
+  cacheHitRate,
+  costPerCompletedSession,
+  orderedOutcomes,
+  outcomeDescription,
+  outcomeLabel,
+  percentDelta,
+  previousPeriodLabel,
+  previousRange,
+} from "../analytics-metrics.ts";
 import dosuOfficialUrl from "../assets/dosu-official.svg";
 import { brandTone, ModelBadge } from "../badges.tsx";
 import {
@@ -28,7 +40,7 @@ import {
 } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
-import { projectSessionsHref } from "../navigation.ts";
+import { repoSessionsHref } from "../navigation.ts";
 import {
   ANALYTICS_REPORT_INCLUDES,
   ANALYTICS_REPORT_NEVER_INCLUDES,
@@ -53,10 +65,21 @@ import type {
   ActivityBucket,
   BadgeTone,
   DashboardData,
+  DataSlice,
   DateRangeSelection,
   DimensionRow,
   TokenEconomics,
 } from "../types.ts";
+
+/** Where a slice stands for the filter on screen. */
+export type SliceStatus = "ready" | "loading" | "failed";
+
+const ALWAYS_READY = (): SliceStatus => "ready";
+
+/** Repositories shown before the table stops; the cut keeps the costliest. */
+const REPO_ROW_LIMIT = 12;
+
+const NO_PROJECT_KEY = "(none)";
 
 /** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
 export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boolean }) {
@@ -96,6 +119,7 @@ export function AnalyticsView({
   onDateRangeChange,
   onSourceChange,
   onSync,
+  sliceStatus = ALWAYS_READY,
   source,
   syncing,
 }: {
@@ -104,6 +128,8 @@ export function AnalyticsView({
   onDateRangeChange: (range: DateRangeSelection) => void;
   onSourceChange: (source: DashboardSource) => void;
   onSync: () => void;
+  /** Whether each slice matches the current filter. Defaults to ready. */
+  sliceStatus?: (slice: DataSlice) => SliceStatus;
   source: DashboardSource;
   syncing: boolean;
 }) {
@@ -115,32 +141,67 @@ export function AnalyticsView({
     key: "cost",
     direction: "desc",
   });
-  const [projectSort, setProjectSort] = useState<SortState<ProjectSortKey>>({
+  const [repoSort, setRepoSort] = useState<SortState<ProjectSortKey>>({
     key: "cost",
     direction: "desc",
   });
-  const byDay = useMemo(
-    () =>
-      data.byDay
-        .filter((row) => row.key !== "")
-        .sort((left, right) => left.key.localeCompare(right.key)),
-    [data.byDay],
+  const daySeries = useMemo(
+    () => buildDaySeries(data.byDay, { from: dateRange.from, to: dateRange.to }),
+    [data.byDay, dateRange.from, dateRange.to],
   );
-  const rangeLabels = useMemo(() => byDay.map((row) => row.key), [byDay]);
+  const rangeLabels = useMemo(() => daySeries.points.map((point) => point.key), [daySeries]);
   const modelRows = useMemo(
     () => sortRows(data.byModel, modelSort, modelSortValue),
     [data.byModel, modelSort],
   );
-  const projectRows = useMemo(
-    () => sortRows(data.byProject, projectSort, projectSortValue).slice(0, 12),
-    [data.byProject, projectSort],
+  // Keep the costliest repositories, then apply the chosen order to those.
+  const repoRows = useMemo(
+    () =>
+      sortRows(
+        [...data.byRepo]
+          .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd)
+          .slice(0, REPO_ROW_LIMIT),
+        repoSort,
+        projectSortValue,
+      ),
+    [data.byRepo, repoSort],
   );
-  const maxModelCost = Math.max(1.0e-9, ...modelRows.map((row) => row.estimated_cost_usd));
-  const estCost = costDisplay(
-    data.summary?.estimated_cost_usd ?? 0,
-    data.summary?.sessions ?? 0,
-    data.summary?.usage_sessions ?? 0,
+  const modelCostPercents = useMemo(
+    () => roundedPercents(modelRows.map((row) => row.estimated_cost_usd)),
+    [modelRows],
   );
+  const totalModelCost = modelRows.reduce((sum, row) => sum + row.estimated_cost_usd, 0);
+
+  const status = (slice: DataSlice) => sliceStatus(slice);
+  const summary = data.summary;
+  const summaryStatus = status("summary");
+  const summaryLoading = summary == null && summaryStatus === "loading";
+  const summaryUpdating = summary != null && summaryStatus === "loading";
+  const sessions = summary?.sessions ?? 0;
+  const usageSessions = summary?.usage_sessions ?? 0;
+  const estCost = costDisplay(summary?.estimated_cost_usd ?? 0, sessions, usageSessions);
+  const hitRate = summary == null ? null : cacheHitRate(summary);
+  const summaryReady = summary != null && summaryStatus === "ready";
+  const previous = previousRange(dateRange.from, dateRange.to);
+  // Compare only once both sides describe the selected range; while one is
+  // still loading, a delta would mix the old filter with the new one.
+  const previousSummary =
+    summaryReady && status("previousSummary") === "ready" ? data.previousSummary : null;
+  const delta = (current: number, before: number | undefined) =>
+    previous == null || previousSummary == null
+      ? null
+      : percentDelta(current, before, previous.days);
+  const previousHitRate = previousSummary == null ? null : cacheHitRate(previousSummary);
+  const outcomesReady = status("byOutcome") === "ready";
+  const perCompleted =
+    !summaryReady || !outcomesReady
+      ? null
+      : costPerCompletedSession(summary.estimated_cost_usd, data.byOutcome);
+  const completed = data.byOutcome.find((row) => row.key === "completed")?.sessions ?? 0;
+  const usageUnavailable = sessions > 0 && usageSessions === 0;
+  // A summary that failed to load is unknown, not zero.
+  const tile = (text: string) => (summary == null ? "-" : text);
+
   // Date bounds span the whole archive and ignore the active filter, so this
   // separates "nothing ingested" from "nothing in the selected range".
   if (data.dateBounds != null && data.dateBounds.min == null && data.dateBounds.max == null) {
@@ -175,57 +236,142 @@ export function AnalyticsView({
       </header>
 
       <div className="stat-grid analytics-stat-grid">
-        <StatCard icon="sessions" label="Sessions" value={formatInt(data.summary?.sessions ?? 0)} />
-        <StatCard icon="messages" label="Messages" value={formatInt(data.summary?.messages ?? 0)} />
-        <StatCard icon="bolt" label="Tool calls" value={formatInt(data.summary?.tool_calls ?? 0)} />
         <StatCard
+          detail={delta(sessions, previousSummary?.sessions)}
+          icon="sessions"
+          label="Sessions"
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(formatInt(sessions))}
+          valueTitle="Top-level sessions. Subagent runs count toward the session that started them."
+        />
+        <StatCard
+          detail={delta(summary?.messages ?? 0, previousSummary?.messages)}
+          icon="messages"
+          label="Messages"
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(formatInt(summary?.messages ?? 0))}
+        />
+        <StatCard
+          detail={delta(summary?.tool_calls ?? 0, previousSummary?.tool_calls)}
+          icon="bolt"
+          label="Tool calls"
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(formatInt(summary?.tool_calls ?? 0))}
+        />
+        <StatCard
+          detail={
+            outcomesReady && sessions > 0
+              ? `${formatInt(completed)} of ${formatInt(sessions)} completed`
+              : null
+          }
+          detailTitle="Completed means the transcript ended on an assistant reply. It does not show that the work shipped."
+          icon="check"
+          label="Per completed session"
+          loading={
+            summaryLoading ||
+            (perCompleted == null &&
+              (summaryStatus === "loading" || status("byOutcome") === "loading"))
+          }
+          updating={summaryUpdating}
+          value={
+            usageUnavailable ? "Unavailable" : perCompleted == null ? "-" : money(perCompleted)
+          }
+          valueTitle="All estimated cost in range, abandoned and failed sessions included, divided by the sessions that completed."
+        />
+        <StatCard
+          detail={delta(summary?.input_tokens ?? 0, previousSummary?.input_tokens)}
           icon="download"
           label="Input tokens"
-          value={usageMetric(
-            data.summary?.sessions ?? 0,
-            data.summary?.usage_sessions ?? 0,
-            compact(data.summary?.input_tokens ?? 0),
-          )}
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(usageMetric(sessions, usageSessions, compact(summary?.input_tokens ?? 0)))}
+          valueTitle="Prompt tokens sent without a cache hit."
         />
         <StatCard
+          detail={cacheDetail(hitRate, previousHitRate)}
+          detailTitle={
+            hitRate == null
+              ? undefined
+              : `${Math.round(hitRate * 100)}% of prompt tokens were read from the provider's cache${
+                  previousHitRate == null || previous == null
+                    ? "."
+                    : `, against ${Math.round(previousHitRate * 100)}% in the ${previousPeriodLabel(previous.days)}.`
+                }`
+          }
+          icon="layers"
+          label="Cache reads"
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(
+            usageMetric(sessions, usageSessions, compact(summary?.cache_read_tokens ?? 0)),
+          )}
+          valueTitle="Prompt tokens read from the provider's cache. They bill at a fraction of the input rate but are usually most of the volume."
+        />
+        <StatCard
+          detail={delta(summary?.output_tokens ?? 0, previousSummary?.output_tokens)}
           icon="upload"
           label="Output tokens"
-          value={usageMetric(
-            data.summary?.sessions ?? 0,
-            data.summary?.usage_sessions ?? 0,
-            compact(data.summary?.output_tokens ?? 0),
-          )}
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(usageMetric(sessions, usageSessions, compact(summary?.output_tokens ?? 0)))}
         />
-        <StatCard icon="money" label="Est. cost" value={estCost.text} valueTitle={estCost.title} />
+        <StatCard
+          detail={delta(summary?.estimated_cost_usd ?? 0, previousSummary?.estimated_cost_usd)}
+          icon="money"
+          label="Est. cost"
+          loading={summaryLoading}
+          updating={summaryUpdating}
+          value={tile(estCost.text)}
+          valueTitle={
+            estCost.title ??
+            "Token usage priced at current API list prices. A subscription bill can differ."
+          }
+        />
       </div>
 
       <TokenEconomicsPanel
-        costAvailable={
-          (data.summary?.sessions ?? 0) === 0 || (data.summary?.usage_sessions ?? 0) > 0
-        }
+        costAvailable={sessions === 0 || usageSessions > 0}
         economics={data.tokenEconomics}
+        loading={status("tokenEconomics") === "loading"}
+      />
+
+      <OutcomesPanel
+        loading={status("byOutcome") === "loading"}
+        perCompleted={usageUnavailable ? null : perCompleted}
+        rows={data.byOutcome}
       />
 
       <div className="split">
         <DailyPanel
-          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
-          rows={byDay}
           metric="sessions"
-          timezone={data.activity?.timezone}
-          title="Sessions per day"
+          status={status("byDay")}
+          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
+          range={dateRange}
+          rows={data.byDay}
         />
         <DailyPanel
-          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
-          rows={byDay}
           metric="cost"
-          timezone={data.activity?.timezone}
-          title="Cost per day"
+          status={status("byDay")}
+          onShowAllTime={() => onDateRangeChange(ALL_DATE_RANGE)}
+          range={dateRange}
+          rows={data.byDay}
         />
       </div>
 
       <div className="split">
-        <ActivityPanel activity={data.activity} rangeLabels={rangeLabels} />
-        <WeekdayPanel activity={data.activity} rangeLabels={rangeLabels} />
+        <ActivityPanel
+          activity={data.activity}
+          loading={status("activity") === "loading"}
+          rangeLabels={rangeLabels}
+        />
+        <WeekdayPanel
+          activity={data.activity}
+          loading={status("activity") === "loading"}
+          rangeLabels={rangeLabels}
+        />
       </div>
 
       {shouldShowDosuCta({
@@ -255,11 +401,20 @@ export function AnalyticsView({
         </aside>
       ) : null}
 
-      <section className="panel">
+      <section
+        className="panel"
+        {...updatingProps(
+          modelRows.length > 0 &&
+            (status("byModel") === "loading" || status("modelSparklines") === "loading"),
+        )}
+      >
         <div className="panel-heading">
           <div>
             <h2>By model</h2>
-            <p>Trend is sessions per day over the selected range</p>
+            <p>
+              Trend is sessions per {daySeries.granularity} over the selected range. Share is each
+              model's part of the estimated cost.
+            </p>
           </div>
         </div>
         <div className="table-scroll">
@@ -308,16 +463,18 @@ export function AnalyticsView({
                   sort={modelSort}
                   sortKey="cost"
                 />
-                <th>Share</th>
+                <th>Share of cost</th>
               </tr>
             </thead>
             <tbody>
               {modelRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>No model activity.</td>
+                  <td colSpan={8}>
+                    {status("byModel") === "loading" ? "Loading models…" : "No model activity."}
+                  </td>
                 </tr>
               ) : null}
-              {modelRows.map((row) => (
+              {modelRows.map((row, index) => (
                 <tr key={row.key}>
                   <td>
                     <ModelBadge model={row.key} />
@@ -325,7 +482,17 @@ export function AnalyticsView({
                   <td>
                     <Sparkline
                       tone={brandTone(row.key)}
-                      values={data.modelSparklines?.models[row.key] ?? []}
+                      values={
+                        // Sparklines from another range would be padded with
+                        // zeros to this one, so show none until they match.
+                        data.modelSparklines == null || status("modelSparklines") !== "ready"
+                          ? []
+                          : alignToSeries(
+                              daySeries,
+                              data.modelSparklines.days,
+                              data.modelSparklines.models[row.key] ?? [],
+                            )
+                      }
                     />
                   </td>
                   <td className="numeric">{formatInt(row.sessions)}</td>
@@ -351,10 +518,13 @@ export function AnalyticsView({
                     />
                   </td>
                   <td className="share-cell">
-                    <Bar
-                      fraction={row.estimated_cost_usd / maxModelCost}
-                      tone={brandTone(row.key)}
-                    />
+                    <span className="share-cell-inner">
+                      <Bar
+                        fraction={totalModelCost > 0 ? row.estimated_cost_usd / totalModelCost : 0}
+                        tone={brandTone(row.key)}
+                      />
+                      <small>{modelCostPercents[index] ?? 0}%</small>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -363,11 +533,17 @@ export function AnalyticsView({
         </div>
       </section>
 
-      {projectRows.length > 0 ? (
-        <section className="panel">
+      {repoRows.length > 0 ? (
+        <section className="panel" {...updatingProps(status("byRepo") === "loading")}>
           <div className="panel-heading">
             <div>
-              <h2>By project</h2>
+              <h2>By repository</h2>
+              <p>
+                Worktrees count toward the repository they came from.
+                {data.byRepo.length > REPO_ROW_LIMIT
+                  ? ` The ${REPO_ROW_LIMIT} costliest of ${formatInt(data.byRepo.length)} are shown.`
+                  : ""}
+              </p>
             </div>
           </div>
           <div className="table-scroll">
@@ -375,32 +551,36 @@ export function AnalyticsView({
               <thead>
                 <tr>
                   <SortableHeader
-                    label="Project"
-                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
-                    sort={projectSort}
+                    label="Repository"
+                    onSort={(key) => setRepoSort((sort) => nextSort(sort, key))}
+                    sort={repoSort}
                     sortKey="key"
                   />
                   <SortableHeader
                     align="right"
                     label="Sessions"
-                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
-                    sort={projectSort}
+                    onSort={(key) => setRepoSort((sort) => nextSort(sort, key))}
+                    sort={repoSort}
                     sortKey="sessions"
                   />
                   <SortableHeader
                     align="right"
                     label="Cost"
-                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
-                    sort={projectSort}
+                    onSort={(key) => setRepoSort((sort) => nextSort(sort, key))}
+                    sort={repoSort}
                     sortKey="cost"
                   />
                 </tr>
               </thead>
               <tbody>
-                {projectRows.map((row) => (
+                {repoRows.map((row) => (
                   <tr key={row.key}>
                     <td className="mono truncate-cell" title={row.key}>
-                      <Link href={projectSessionsHref(row.key)}>{basename(row.key)}</Link>
+                      {row.key === NO_PROJECT_KEY ? (
+                        <span className="muted">No project</span>
+                      ) : (
+                        <Link href={repoSessionsHref(row.key)}>{basename(row.key)}</Link>
+                      )}
                     </td>
                     <td className="numeric muted">{formatInt(row.sessions)}</td>
                     <td className="numeric">
@@ -433,34 +613,158 @@ function UsageTokens({ row, value }: { row: DimensionRow; value: number }) {
   );
 }
 
+/** Marks a panel whose rows are from the previous filter while new ones load. */
+function updatingProps(updating: boolean): {
+  "aria-busy"?: true;
+  "data-updating"?: "true";
+} {
+  return updating ? { "aria-busy": true, "data-updating": "true" } : {};
+}
+
+function LoadingState({ what }: { what: string }) {
+  return <EmptyState icon="chart" message={`Reading ${what} from the archive.`} title="Loading" />;
+}
+
+function FailedState() {
+  return (
+    <EmptyState
+      icon="chart"
+      message="Decant could not read this chart. Reload the page or run Sync."
+      title="Not loaded"
+    />
+  );
+}
+
+export function OutcomesPanel({
+  loading = false,
+  perCompleted,
+  rows,
+}: {
+  loading?: boolean;
+  perCompleted: number | null;
+  rows: DimensionRow[];
+}) {
+  const ordered = orderedOutcomes(rows);
+  const sessionPercents = roundedPercents(ordered.map((row) => row.sessions));
+  const totalSessions = ordered.reduce((sum, row) => sum + row.sessions, 0);
+  return (
+    <section className="panel outcomes-panel" {...updatingProps(loading && rows.length > 0)}>
+      <div className="panel-heading">
+        <div>
+          <h2>How sessions ended</h2>
+          <p>
+            Labels come from how each transcript ended, not from whether the work shipped. Cost
+            includes each session's subagents.
+          </p>
+        </div>
+        {perCompleted != null ? (
+          <div className="activity-summary">
+            <span>
+              <strong>{money(perCompleted)}</strong>
+              per completed session
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {ordered.length === 0 ? (
+        <div className="panel-body">
+          {loading ? (
+            <LoadingState what="session outcomes" />
+          ) : (
+            <EmptyState icon="chart" message="Widen the date range." title="No sessions in range" />
+          )}
+        </div>
+      ) : (
+        <div className="table-scroll">
+          <table aria-label="Sessions by outcome">
+            <thead>
+              <tr>
+                <th scope="col">Outcome</th>
+                <th className="numeric" scope="col">
+                  Sessions
+                </th>
+                <th scope="col">Share of sessions</th>
+                <th className="numeric" scope="col">
+                  Est. cost
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {ordered.map((row, index) => (
+                <tr key={row.key}>
+                  <td title={outcomeDescription(row.key)}>{outcomeLabel(row.key)}</td>
+                  <td className="numeric">{formatInt(row.sessions)}</td>
+                  <td className="share-cell">
+                    <span className="share-cell-inner">
+                      <Bar
+                        fraction={totalSessions > 0 ? row.sessions / totalSessions : 0}
+                        tone={outcomeTone(row.key)}
+                      />
+                      <small>{sessionPercents[index] ?? 0}%</small>
+                    </span>
+                  </td>
+                  <td className="numeric">
+                    <CostValue
+                      cost={row.estimated_cost_usd}
+                      dense
+                      sessions={row.sessions}
+                      usageSessions={row.usage_sessions}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function outcomeTone(key: string): BadgeTone {
+  switch (key) {
+    case "completed":
+      return "success";
+    case "abandoned":
+      return "warning";
+    case "failed":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
 export function ActivityPanel({
   activity,
+  loading = false,
   rangeLabels,
 }: {
   activity: Activity | null;
+  loading?: boolean;
   rangeLabels: string[];
 }) {
   const labels = HOUR_LABELS;
   const values = activity?.by_hour ?? NO_VALUES;
   const peak = activity?.peak_hour ?? peakIndex(activity?.by_hour ?? []);
   const range = shareRange(rangeLabels);
+  const timezone = activity?.timezone ?? localTimezone();
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_hours",
     labels,
     values,
     start: range.start,
     end: range.end,
-    timezone: activity?.timezone ?? localTimezone(),
+    timezone,
   };
   return (
-    <section className="panel">
+    <section className="panel" {...updatingProps(loading && activity != null)}>
       <div className="panel-heading">
         <div>
           <h2>Busiest hours</h2>
           <p>
             {peak == null
-              ? "Sessions by hour, local time"
-              : `Local time, you ship most around ${hourLabel(peak)}`}
+              ? `Sessions started per hour, ${timezone}`
+              : `Most sessions start around ${hourLabel(peak)}, ${timezone}`}
           </p>
         </div>
         <ShareChartButton
@@ -471,7 +775,19 @@ export function ActivityPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
+        {activity == null && loading ? (
+          <LoadingState what="activity" />
+        ) : (
+          <AnalyticsChart
+            description={`Bar chart of sessions started per hour of the day in ${timezone}${
+              peak == null ? "" : `, peaking at ${hourLabel(peak)}`
+            }.`}
+            labels={labels}
+            metric="int"
+            values={values}
+            variant="bar"
+          />
+        )}
       </div>
     </section>
   );
@@ -482,6 +798,7 @@ export function TokenEconomicsPanel({
   costAvailable = true,
   description = "Estimated tokens, cost, and agent time by activity; capped user response time is shown separately.",
   economics,
+  loading = false,
   subagentRuns = 0,
   title = "Activity breakdown",
 }: {
@@ -490,6 +807,8 @@ export function TokenEconomicsPanel({
   costAvailable?: boolean;
   description?: string;
   economics: TokenEconomics | null;
+  /** True while the breakdown for the current filter is still loading. */
+  loading?: boolean;
   subagentRuns?: number;
   title?: string;
 }) {
@@ -500,7 +819,10 @@ export function TokenEconomicsPanel({
   const timePercents = roundedPercents(buckets.map((bucket) => bucket.active_ms));
   const showAgentRuns = !isCompact;
   return (
-    <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
+    <section
+      className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}
+      {...updatingProps(loading && economics != null)}
+    >
       <div className="panel-heading">
         <div>
           <h2>{title}</h2>
@@ -512,7 +834,7 @@ export function TokenEconomicsPanel({
               <strong>{costAvailable ? money(totalCost) : "Unavailable"}</strong>
               total
             </span>
-            <span>
+            <span title={WINDOW_TITLE}>
               <strong>{compact(economics.totals.context_window_tokens)}</strong>
               window
             </span>
@@ -535,11 +857,15 @@ export function TokenEconomicsPanel({
       </div>
       {buckets.length === 0 ? (
         <div className="panel-body">
-          <EmptyState
-            icon="chart"
-            message="Sync sessions to populate the breakdown."
-            title="No token data"
-          />
+          {economics == null && loading ? (
+            <LoadingState what="the activity breakdown" />
+          ) : (
+            <EmptyState
+              icon="chart"
+              message="Sync sessions to populate the breakdown."
+              title="No token data"
+            />
+          )}
         </div>
       ) : (
         <div className="activity-table-wrap">
@@ -569,7 +895,7 @@ export function TokenEconomicsPanel({
                   Generated
                 </th>
                 <th className="numeric activity-number" scope="col">
-                  Window
+                  <span title={WINDOW_TITLE}>Window</span>
                 </th>
                 {showAgentRuns ? (
                   <th className="numeric activity-number" scope="col">
@@ -656,31 +982,41 @@ export function TokenEconomicsPanel({
   );
 }
 
+const WINDOW_TITLE =
+  "Context-window volume: tokens each activity put into the model's context, such as tool results and file reads.";
+
 export function WeekdayPanel({
   activity,
+  loading = false,
   rangeLabels,
 }: {
   activity: Activity | null;
+  loading?: boolean;
   rangeLabels: string[];
 }) {
   const labels = WEEKDAY_LABELS;
   const values = activity?.by_weekday ?? NO_VALUES;
   const peak = activity?.peak_weekday ?? peakIndex(activity?.by_weekday ?? []);
   const range = shareRange(rangeLabels);
+  const timezone = activity?.timezone ?? localTimezone();
   const shareInput: ShareCardCopyInput = {
     kind: "busiest_days",
     labels,
     values,
     start: range.start,
     end: range.end,
-    timezone: activity?.timezone ?? localTimezone(),
+    timezone,
   };
   return (
-    <section className="panel">
+    <section className="panel" {...updatingProps(loading && activity != null)}>
       <div className="panel-heading">
         <div>
           <h2>Busiest days</h2>
-          <p>{peak == null ? "Sessions by weekday" : `You ship most on ${weekdayLabel(peak)}`}</p>
+          <p>
+            {peak == null
+              ? `Sessions started per weekday, ${timezone}`
+              : `Most sessions start on ${weekdayLabel(peak)}, ${timezone}`}
+          </p>
         </div>
         <ShareChartButton
           disabled={!hasShareCardValues(activity?.by_weekday)}
@@ -690,71 +1026,111 @@ export function WeekdayPanel({
         />
       </div>
       <div className="panel-body chart-panel-body">
-        <AnalyticsChart labels={labels} metric="int" values={values} variant="bar" />
+        {activity == null && loading ? (
+          <LoadingState what="activity" />
+        ) : (
+          <AnalyticsChart
+            description={`Bar chart of sessions started per weekday in ${timezone}${
+              peak == null ? "" : `, highest on ${weekdayLabel(peak)}`
+            }.`}
+            labels={labels}
+            metric="int"
+            values={values}
+            variant="bar"
+          />
+        )}
       </div>
     </section>
   );
 }
 
 export function DailyPanel({
-  onShowAllTime,
-  rows,
   metric,
-  timezone,
-  title,
+  onShowAllTime,
+  range,
+  rows,
+  status = "ready",
 }: {
-  onShowAllTime: () => void;
-  rows: DimensionRow[];
   metric: "sessions" | "cost";
-  timezone: string | undefined;
-  title: string;
+  onShowAllTime: () => void;
+  range?: Pick<DateRangeSelection, "from" | "to">;
+  rows: DimensionRow[];
+  /** Whether `rows` belong to the selected range yet. */
+  status?: SliceStatus;
 }) {
-  // A day whose sessions all lack recorded usage has no cost to plot, not a
-  // cost of zero, so the cost series leaves it out.
-  const plotted = useMemo(
-    () =>
-      metric === "cost" ? rows.filter((row) => row.sessions === 0 || row.usage_sessions > 0) : rows,
-    [rows, metric],
+  const series: DaySeries = useMemo(
+    () => buildDaySeries(rows, { from: range?.from, to: range?.to }),
+    [rows, range?.from, range?.to],
   );
-  const labels = useMemo(() => plotted.map((row) => row.key), [plotted]);
+  const weekly = series.granularity === "week";
+  const title =
+    metric === "sessions"
+      ? weekly
+        ? "Sessions per week"
+        : "Sessions per day"
+      : weekly
+        ? "Estimated cost per week"
+        : "Estimated cost per day";
+  const labels = useMemo(() => series.points.map((point) => point.key), [series]);
   const values = useMemo(
-    () => plotted.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd)),
-    [plotted, metric],
+    () => series.points.map((point) => (metric === "sessions" ? point.sessions : point.cost)),
+    [series, metric],
   );
-  const missingUsage =
-    metric === "cost" ? rows.reduce((sum, row) => sum + row.sessions - row.usage_sessions, 0) : 0;
-  const range = shareRange(labels);
+  const missingUsage = metric === "cost" ? series.missingUsage : 0;
+  // A bounded range pads every day with zeros, so "has data" must come from
+  // the rows themselves, not from the number of points.
+  const hasData = series.observedDays > 0 && series.points.length > 0;
+  const costUnknown = metric === "cost" && hasData && values.every((value) => value === null);
+  const shareSpan = shareRange(labels);
   const shareInput: ShareCardCopyInput = {
-    kind: metric === "sessions" ? "sessions_per_day" : "estimated_cost_per_day",
+    kind:
+      metric === "sessions"
+        ? weekly
+          ? "sessions_per_week"
+          : "sessions_per_day"
+        : weekly
+          ? "estimated_cost_per_week"
+          : "estimated_cost_per_day",
     labels,
+    missingUsage,
     values,
-    start: range.start,
-    end: range.end,
-    timezone: timezone ?? localTimezone(),
+    start: shareSpan.start,
+    end: shareSpan.end,
+    timezone: "UTC",
   };
+  const unit = weekly ? "UTC weeks starting Monday" : "UTC days";
   return (
-    <section className="panel">
+    <section
+      aria-busy={status === "loading" ? true : undefined}
+      className="panel"
+      data-updating={status === "loading" && hasData ? "true" : undefined}
+    >
       <div className="panel-heading">
         <div>
           <h2>{title}</h2>
-          {missingUsage > 0 ? (
-            <p title={NO_USAGE_TITLE}>
-              Leaves out {formatInt(missingUsage)} {missingUsage === 1 ? "session" : "sessions"}{" "}
-              without usage data.
-            </p>
-          ) : null}
+          <p title={missingUsage > 0 ? NO_USAGE_TITLE : undefined}>
+            {missingUsage > 0
+              ? `${unit}. Leaves out ${formatInt(missingUsage)} ${
+                  missingUsage === 1 ? "session" : "sessions"
+                } without usage data.`
+              : `${unit}.`}
+          </p>
         </div>
         <ShareChartButton
-          disabled={plotted.length === 0}
+          disabled={!hasData || costUnknown || status !== "ready"}
           input={shareInput}
           metric={metric === "cost" ? "money" : "int"}
           variant={metric === "cost" ? "line" : "bar"}
         />
       </div>
       <div className="panel-body">
-        {rows.length > 0 && plotted.length === 0 ? (
+        {status === "failed" && !hasData ? (
+          <FailedState />
+        ) : !hasData && status === "loading" ? (
+          <LoadingState what={metric === "cost" ? "daily cost" : "daily sessions"} />
+        ) : costUnknown ? (
           <EmptyState icon="chart" message={NO_USAGE_TITLE} title="Cost unavailable" />
-        ) : rows.length === 0 ? (
+        ) : !hasData ? (
           <EmptyState
             action={
               <button className="secondary-button" onClick={onShowAllTime} type="button">
@@ -767,8 +1143,10 @@ export function DailyPanel({
           />
         ) : (
           <AnalyticsChart
+            description={dailyDescription(title, series, metric)}
             labels={labels}
             metric={metric === "cost" ? "money" : "int"}
+            period={series.granularity}
             values={values}
             variant={metric === "cost" ? "line" : "bar"}
           />
@@ -776,6 +1154,16 @@ export function DailyPanel({
       </div>
     </section>
   );
+}
+
+function dailyDescription(title: string, series: DaySeries, metric: "sessions" | "cost"): string {
+  const first = series.points[0]?.key ?? "";
+  const last = series.points.at(-1)?.key ?? "";
+  const total =
+    metric === "sessions"
+      ? `${formatInt(series.points.reduce((sum, point) => sum + point.sessions, 0))} sessions`
+      : `${money(series.points.reduce((sum, point) => sum + (point.cost ?? 0), 0))} estimated`;
+  return `${title} from ${first} to ${last} (UTC): ${total} in total.`;
 }
 
 export function activityLabel(bucket: ActivityBucket): string {

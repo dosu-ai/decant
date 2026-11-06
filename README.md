@@ -7,91 +7,157 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13840/badge)](https://www.bestpractices.dev/projects/13840)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code session logs on your machine,
-plus the ATIF trajectories you import from Harbor or other agents,
-into tangible insights. See where tokens, cost,
-and agent time go, inspect context usage, find the files and tools agents
-touch, and search complete transcripts from a CLI or local web UI.
-
-Decant is local-first. It makes no outbound network calls at runtime, and your
-transcripts never leave your machine. The one exception is an update check that
-stays off until you turn it on. See [Updating](#updating).
-
-It does keep a copy of them. To make sessions searchable, Decant writes prompts,
-tool inputs, tool output, and canonicalized raw records for retained transcript
-messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
-full-text index over the prompt and tool-argument text. Whatever your agents read
-is in there too, including source code, file contents, local paths, and any
-credentials pasted into a session. Decant creates the archive owner-only
-(`0600`). If your
-organization has a retention policy for agent transcripts, this archive is
-subject to it. See
-[What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
-inspect, delete, or remove it.
+Decant shows where your coding agents spend tokens, money, and time. It reads
+the session logs that Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+GitHub Copilot CLI, and Copilot Chat in VS Code already write on your machine,
+plus [ATIF](https://harborframework.com/docs/agents/atif) trajectories you
+import, into one searchable archive. You explore it in a local web UI or from
+the command line.
 
 Built by
-[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme),
-Knowledge Infrastructure for Agents. Dosu helps make agents faster, cheaper,
-and more effective.
+[Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme).
 
 https://github.com/user-attachments/assets/188f7cca-5b0a-4504-8eb2-a317a606d91e
 
 ## Quick start
 
-Run Decant with `npx` with no Bun install or global package required.
-
 ```sh
 npx @dosu/decant@latest
 ```
 
-This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
-Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat
-in VS Code logs on your machine, and watches for changes.
+You don't need Bun or a global install. The command indexes the agent logs it
+finds, starts the web UI at <http://127.0.0.1:3000>, and keeps watching for new
+sessions. For a persistent `decant` command, see [Installation](#installation).
 
-## What you get
+## Features
 
-- One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-  GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and for imported
-  [ATIF](https://harborframework.com/docs/agents/atif) trajectories.
-- Full-text search across messages, tool calls, and transcripts.
-- Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
-  file analytics.
-- Browsable sessions, projects, files, and ingest diagnostics.
-- Markdown, JSON, report, trajectory, and ATIF exports, and ATIF imports.
-- Deterministic scripts, replays, and agent instructions distilled from command
-  history.
+- One SQLite archive for every supported agent, with full-text search across
+  prompts, responses, tool names, and tool inputs.
+- Full transcripts for every session, with diagnostics for records Decant could
+  not parse.
+- Token, [estimated cost](docs/pricing.md), context-window, and agent-time
+  analytics by agent, model, project, and day.
+- File hotspots, tool usage, and MCP server usage across sessions.
+- Recommendations drawn from patterns in your sessions, each with a suggested
+  change you can mark as implemented.
+- Session exports to Markdown, JSON, Letta's trajectory-v1, and ATIF.
+- HTML reports of the analytics view or a single session. Reports leave out
+  transcript messages and tool bodies but include project paths, and a session
+  report adds its title, a prompt preview, and file paths. Review a report
+  before you share it.
+- Workflow scripts, session replays, and agent instructions (`SKILL.md`,
+  `AGENTS.md` sections, and slash commands) distilled from command history.
+- A local HTTP API with an OpenAPI 3.1 contract.
 
-## Install
+## Supported agents
 
-Published binaries support macOS and Linux on x64 and arm64. Native Windows
-binaries are not currently available.
+Decant finds each agent's logs in its default location. To point it somewhere
+else, or for per-agent details, see [Sources](docs/sources.md).
 
-Install a persistent command with npm:
+| Agent | Default location | Token usage |
+| --- | --- | --- |
+| Claude Code | `~/.claude/projects` | Recorded |
+| Codex | `~/.codex` | Recorded |
+| Gemini CLI | `~/.gemini/tmp` | Recorded |
+| OpenCode 1.2 and later | `~/.local/share/opencode` | Recorded |
+| Cursor CLI | `~/.cursor/chats` | Not recorded by Cursor |
+| GitHub Copilot CLI | `~/.copilot/session-state` | Recorded, priced at the model's API rates |
+| Copilot Chat in VS Code | VS Code's `User` directory | VS Code builds from April 2026 on, as a rough estimate |
+| ATIF trajectories | `~/.decant/atif` | From step `metrics` or `final_metrics` |
+
+When an agent records no usage, Decant shows tokens and cost as unavailable
+instead of $0.
+
+## Where does my data go?
+
+Decant is local-first. It makes no outbound network calls at runtime, and your
+transcripts never leave your machine. The one exception is an update check that
+stays off until you turn it on. See [Updating](#updating).
+
+> [!IMPORTANT]
+> Decant does keep a copy of your transcripts. To make sessions searchable, it
+> writes prompts, tool inputs, tool output, and canonicalized raw records for
+> retained transcript messages into an **unencrypted** SQLite archive at
+> `~/.decant/decant.db`, with a full-text index over the prompt and
+> tool-argument text. Whatever your agents read is in there too, including
+> source code, file contents, local paths, and any credentials pasted into a
+> session.
+>
+> Decant creates the archive owner-only (`0600`). If your organization has a
+> retention policy for agent transcripts, the archive is subject to it. See
+> [What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
+> inspect, delete, or remove it.
+
+## Installation
+
+> [!NOTE]
+> Published binaries support macOS and Linux on x64 and arm64. Native Windows
+> binaries are not currently available.
+
+### npm
 
 ```sh
 npm install --global @dosu/decant@latest
 decant
 ```
 
-Or use Homebrew:
+The npm package is a small launcher that runs the matching native binary. It
+needs Node.js 18 or newer, and does not need Bun.
+
+### Homebrew
 
 ```sh
 brew install dosu-ai/dosu/decant
 decant
 ```
 
-Or install the latest release without Node.js or Bun:
+### Shell installer
+
+This installs the latest release without Node.js or Bun:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
 decant
 ```
 
-See [Distribution](docs/distribution.md) for installer options, Docker, source
-builds, and release verification.
+### Docker
 
-## Updating
+```sh
+docker run --rm \
+  -p 127.0.0.1:3000:3000 \
+  -v decant-data:/var/lib/decant \
+  -v "$HOME/.claude/projects:/sources/claude:ro" \
+  -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
+  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
+  -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
+  -v "$HOME/Library/Application Support/Code/User:/sources/vscode:ro" \
+  -v "$HOME/.decant/atif:/sources/atif:ro" \
+  ghcr.io/dosu-ai/decant:latest
+```
+
+The VS Code mount shows the macOS path. On Linux, mount
+`$HOME/.config/Code/User` instead.
+
+> [!WARNING]
+> Keep the `127.0.0.1:` prefix. Publishing `-p 3000:3000` exposes the
+> unauthenticated archive API on every host interface. Custom container
+> networks may need the trusted-peer setting documented under
+> [Docker distribution](docs/distribution.md#docker).
+
+The source mounts are read-only, but `decant-data` is a named volume. The
+archive outlives every container, and neither `--rm` nor `docker rm` removes
+it. Run `docker volume rm decant-data` when you want it gone.
+
+### From source
+
+Source builds need Bun 1.3 or newer. Follow the steps under
+[Contributing](#contributing).
+
+[Distribution](docs/distribution.md) covers installer options, native builds,
+and release verification.
+
+### Updating
 
 ```sh
 decant update           # install the newest release in place
@@ -109,35 +175,25 @@ To hear about new releases, turn on **Check for updates** in Settings or set
 version once a day and shows a notice in the sidebar and after CLI commands.
 The request carries no session data.
 
-## Docker
+## Usage
 
-```sh
-docker run --rm \
-  -p 127.0.0.1:3000:3000 \
-  -v decant-data:/var/lib/decant \
-  -v "$HOME/.claude/projects:/sources/claude:ro" \
-  -v "$HOME/.codex:/sources/codex:ro" \
-  -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
-  -v "$HOME/.cursor/chats:/sources/cursor:ro" \
-  -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
-  -v "$HOME/Library/Application Support/Code/User:/sources/vscode:ro" \
-  -v "$HOME/.decant/atif:/sources/atif:ro" \
-  ghcr.io/dosu-ai/decant:latest
-```
+### Web UI
 
-The VS Code mount shows the macOS path. On Linux, mount `$HOME/.config/Code/User`
-instead.
+Run `decant` with no arguments to sync your sessions, start the UI at
+<http://127.0.0.1:3000>, and open it in your browser. `decant serve --no-open`
+skips the browser, and `--host` and `--port` change the address.
 
-Keep the `127.0.0.1:` prefix. Publishing `-p 3000:3000` exposes the
-unauthenticated archive API on every host interface. Custom container networks
-may need the trusted-peer setting documented under
-[Docker distribution](docs/distribution.md#docker).
+| Page | What it shows |
+| --- | --- |
+| Analytics | Token, cost, context, and agent-time rollups across sessions |
+| Insights | Recommendations drawn from your history, and the ones you have implemented |
+| Sessions | Every session, with its full transcript |
+| Search | Full-text matches in prompts, responses, tool names, and tool inputs |
+| Projects | Sessions and cost for each project |
+| Files | The files agents read, edit, and write most |
+| Tools & MCP | Tool calls and MCP server usage |
 
-The source mounts are read-only, but `decant-data` is a **named volume**: the
-archive outlives every container, and neither `--rm` nor `docker rm` removes it.
-Use `docker volume rm decant-data` when you want it gone.
-
-## CLI
+### CLI
 
 ```sh
 decant                         # start the local web UI
@@ -152,6 +208,7 @@ decant tool stats              # tool usage
 decant mcp stats               # MCP server usage
 decant export 1 > session.md   # export a session
 decant export 1 --as atif      # also md, json, and trajectory
+decant distill script          # workflow script from command history
 decant db info                 # what the archive holds and where
 decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
@@ -160,152 +217,81 @@ decant update                  # update Decant with the tool that installed it
 decant doctor                  # redacted environment report for bug reports
 ```
 
-Run `decant --help` or `decant <command> --help` for all commands and flags.
-Read commands support `--json`; global flags include `--db`, `--format`,
-`--quiet`, `--no-color`, and `--no-sync`. `--db` or `DECANT_DB` sets the archive
-path.
+Run `decant --help` or `decant <command> --help` for every command and flag.
+Read commands support `--json`. Global flags include `--db`, `--format`,
+`--quiet`, `--no-color`, and `--no-sync`. `--db` or `DECANT_DB` sets the
+archive path.
 
-Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
-`~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`,
-VS Code's `User` directory, and `~/.decant/atif` by default. Override them with
-`DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`,
-`DECANT_OPENCODE_DIR`, `DECANT_CURSOR_DIR`, `DECANT_COPILOT_DIR`,
-`DECANT_VSCODE_COPILOT_DIR`, and `DECANT_ATIF_DIR`, or with the corresponding
-`--claude-dir`, `--codex-dir`, `--gemini-dir`, `--opencode-dir`, `--cursor-dir`,
-`--copilot-dir`, `--vscode-copilot-dir`, and `--atif-dir` flags on `sync`,
-`watch`, and `serve`. When the Decant variable and flag are unset, the
-OpenCode directory falls back to OpenCode's own `OPENCODE_DATA_DIR`, then
-`$XDG_DATA_HOME/opencode`, and the Copilot directory follows `COPILOT_HOME` to
-`$COPILOT_HOME/session-state`. `OPENCODE_DB` names an
-explicit extra database file that is read alongside the discovered directory.
-Decant recognizes OpenCode MCP tool calls by the server names in OpenCode's
-config. It reads the global `opencode.json` and `opencode.jsonc` in OpenCode's
-config directory (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`,
-default `~/.config/opencode`), plus `opencode.json`, `opencode.jsonc`,
-`.opencode/opencode.json`, and `.opencode/opencode.jsonc` in each session's
-directory and in every directory above it up to the filesystem root, and merges
-the names. As in OpenCode, files that resolve to the global config directory
-are not read again as project configs. Like OpenCode, it also reads the file
-named by `OPENCODE_CONFIG` in addition to those. `DECANT_OPENCODE_CONFIG` names
-one file that Decant reads in place of the global directory's two files. A
-missing or malformed config file names no servers. When a config edit changes
-the server names that apply to a session, the next sync re-derives that
-session; sessions whose names did not change are skipped as usual. Run
-`sync`, `watch`, and `serve` with the same `OPENCODE_CONFIG` and
-`DECANT_OPENCODE_CONFIG` values, or each switch re-derives those sessions.
-Decant supports OpenCode 1.2 and later, reading both its 1.x and its 2.x
-session storage. OpenCode sessions are read from `opencode.db` (and
-`opencode-<channel>.db`) read-only; Decant never writes to it. When the same
-session is stored in both layouts, Decant reads the copy OpenCode updated last.
-For context windows Decant uses the models.dev catalog OpenCode caches: 2.x
-keeps it in the database, and for a database without one (as 1.x leaves it)
-Decant reads `OPENCODE_MODELS_PATH`, else `$XDG_CACHE_HOME/opencode/models.json`
-(default `~/.cache/opencode/models.json`), read-only. `--path` also accepts an OpenCode `.db` file.
+### Local API
 
-Cursor CLI keeps each chat in its own `store.db` with a `meta.json` beside it.
-Decant reads those stores read-only and skips chats whose `meta.json` records
-no conversation. A subagent's store has no `meta.json`, so Decant reads it
-when the store names its parent chat and files it under that chat. Cursor records no token usage, so Decant shows tokens and cost
-for Cursor sessions as unavailable instead of $0. `--path` also accepts a
-Cursor `store.db`.
-
-GitHub Copilot CLI writes each session to
-`~/.copilot/session-state/<session id>/events.jsonl`. Decant reads that file
-read-only. Subagent work stays in its parent session because Copilot records it
-in the same file. Copilot writes each model call's usage, and per-model totals
-when a session exits or checkpoints its usage, so Decant prices those totals at
-the underlying model's API rates. That estimate is not a count of
-Copilot premium requests. Decant does not read the rotated `events.<n>.jsonl`
-archives Copilot writes only when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is
-set. The current `events.jsonl` replays the earlier history at its start.
-`--path` accepts a Copilot journal under `session-state/<session id>/events.jsonl`.
-For a custom layout, pass its session root with `--copilot-dir`:
-
-```sh
-decant --no-sync --db /tmp/decant-repro.db sync --copilot-dir ./copilot --path ./copilot/example/events.jsonl
-```
-
-Copilot Chat in VS Code keeps each chat session in VS Code's `User` directory:
-`~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on
-Linux (following `XDG_CONFIG_HOME`), and `%APPDATA%\Code\User` on Windows.
-Decant reads VS Code Insiders' `Code - Insiders/User` directory too. A
-workspace's sessions are in `workspaceStorage/<id>/chatSessions/`, and the
-folder they belong to comes from `workspace.json` beside them. Sessions from a
-window with no folder open are in `globalStorage/emptyWindowChatSessions/`.
-Decant reads both the `.jsonl` change log that VS Code 1.109 and later write
-and the `.json` file earlier builds wrote, read-only. One override names a
-single `User` directory and replaces both defaults. Decant does not read
-Cursor, Windsurf, or other editors built from VS Code. Sessions that Copilot
-CLI, Claude, or Codex run inside VS Code keep their transcripts in those
-tools' own stores, which Decant reads as those sources.
-
-VS Code records the output tokens of every model call in a request in builds
-from April 2026 on, and the last call's prompt size from June 2026 on. The
-prompt size includes cache reads, and no cache split is written.
-Decant stores those numbers as written, so cost for these sessions is a rough
-list-price estimate. A session from an older build has no usage, and Decant
-shows its tokens and cost as unavailable instead of $0. `--path` also accepts
-a chat session file inside VS Code's storage layout.
-
-ATIF (Agent Trajectory Interchange Format) is the trajectory format Harbor
-writes for Terminal-Bench and its other evaluation runs. No agent writes to
-`~/.decant/atif`. Copy trajectories into it, point `DECANT_ATIF_DIR` at a
-Harbor `jobs` directory, or import files once with `--path`. Discovery does
-not follow symbolic links inside the directory, so a linked file or job is not
-read:
-
-```sh
-decant sync --path ./jobs/my-job
-decant sync --path ./run.atif.json
-```
-
-Decant reads every `.json` file whose head declares an `ATIF-v1.x` schema,
-plus Harbor's `trajectory.json`, `trajectory.cont-<n>.json`, and
-`trajectory.summarization-<n>-*.json` names, read-only. Sessions are filed
-under the `ATIF` source. A trial under Harbor's `<job>/<trial>/agent/` layout
-is filed under its job directory as the project. Each embedded subagent becomes
-a linked subagent session, and so does a subagent another trajectory names by
-`trajectory_path`. Steps marked `is_copied_context` were copied from an earlier
-trajectory and are skipped. Tokens come from each step's `metrics`, with cache
-reads and writes taken back out of `prompt_tokens`. Decant prices models it has
-a rate for and keeps a step's recorded `cost_usd` for models it cannot price.
-A trajectory with no metrics shows tokens and cost as unavailable. See
-[ATIF imports](docs/data-lifecycle.md#atif-imports) for the full mapping.
-
-To index selected files or a temporary source tree:
-
-```sh
-decant --db /tmp/decant.db sync --path ./session.jsonl --path ./sessions
-```
-
-## Local API
-
-The OpenAPI 3.1 contract is [docs/api/openapi.yaml](docs/api/openapi.yaml), and
-a running server exposes it at
-<http://127.0.0.1:3000/api/openapi.json>. See [API recipes](docs/api/recipes.md)
-for examples.
+`decant serve` also serves a local HTTP API. Its OpenAPI 3.1 contract is
+[docs/api/openapi.yaml](docs/api/openapi.yaml), and a running server exposes it
+at <http://127.0.0.1:3000/api/openapi.json>. See
+[API recipes](docs/api/recipes.md) for examples.
 
 ## Documentation
 
-- [Analytics methodology](docs/analytics-methodology.md)
-- [Pricing estimates](docs/pricing.md)
-- [Archive and data lifecycle](docs/data-lifecycle.md)
-- [Local Serve API](docs/api/routes.md)
-- [Distribution and release verification](docs/distribution.md)
+Using Decant:
+
+- [Sources and where Decant finds them](docs/sources.md)
+- [How the analytics are calculated](docs/analytics-methodology.md)
+- [Pricing estimates and their sources](docs/pricing.md)
+- [What the archive stores, and how sync and deletion work](docs/data-lifecycle.md)
+- [Install channels, updates, and release verification](docs/distribution.md)
+- [Local API routes](docs/api/routes.md) and [recipes](docs/api/recipes.md)
+- [Operational logging](docs/logging.md)
+
+Working on Decant:
+
+- [Contributing guide](CONTRIBUTING.md)
 - [Architecture](docs/architecture.md)
+- [Adding a source](docs/adding-a-source.md)
+- [Guidance for coding agents](AGENTS.md)
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
-tests, and privacy requirements. Coding agents should also read
+Contributions are welcome. Bug fixes, pricing updates, and documentation fixes
+can go straight to a pull request. New sources, commands, UI features, and
+changes to existing behavior need an issue or a
+[discussion](https://github.com/dosu-ai/decant/discussions) first, where a
+maintainer agrees on the direction and scope.
+
+To run Decant from source, install Bun 1.3 or newer, then:
+
+```sh
+git clone https://github.com/dosu-ai/decant.git
+cd decant
+bun run dev
+```
+
+`bun run dev` installs dependencies, starts the UI at <http://127.0.0.1:3000>,
+indexes your sessions, and watches for changes. Before you open a pull request,
+run:
+
+```sh
+bun test
+bunx tsc --noEmit
+bunx biome check .
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist, including
+commit signing and the pull request template. Coding agents should also read
 [AGENTS.md](AGENTS.md).
 
 Use synthetic session data in issues and tests. Real transcripts can contain
 source code, prompts, credentials, and local paths.
 
-## Security
+## Community and support
 
-Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Ask questions and share ideas in
+  [GitHub Discussions](https://github.com/dosu-ai/decant/discussions).
+- Report bugs with the
+  [issue templates](https://github.com/dosu-ai/decant/issues/new/choose), and
+  paste the output of `decant doctor`. It reports versions, platform, and
+  per-source counts without any transcript content.
+- Report security vulnerabilities privately as described in
+  [SECURITY.md](SECURITY.md).
+- Everyone who takes part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## About Dosu
 

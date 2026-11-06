@@ -23,7 +23,8 @@ Use this checklist when adding support for another coding-agent CLI.
 
 1. **Discovery** teaches `discover()` in `src/ingest.ts` where session files
    live and which sidecars to exclude. Add a source-directory environment
-   override and document it in `README.md`. A database-backed source (see
+   override and document it in [Sources](sources.md), and add the source to
+   the supported agents table in `README.md`. A database-backed source (see
    `src/sources/opencode-store.ts`) adds a read-only store module that lists
    sessions with a per-session change key and loads one session's rows; each
    session is registered as a virtual source `<database>#<session id>` with

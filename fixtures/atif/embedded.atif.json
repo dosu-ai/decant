@@ -1,0 +1,199 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "synthetic-embedded",
+  "trajectory_id": "synthetic-embedded",
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.0",
+    "model_name": "claude-opus-4-7"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-02T10:00:00Z",
+      "source": "user",
+      "message": [
+        {
+          "type": "text",
+          "text": "Read the example config and explain it."
+        }
+      ]
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-02T10:00:04Z",
+      "source": "agent",
+      "model_name": "claude-opus-4-7",
+      "reasoning_effort": "high",
+      "message": "Reading the file.",
+      "reasoning_content": "Start with the config.",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_read",
+          "function_name": "Read",
+          "arguments": {
+            "file_path": "/tmp/example/config.toml"
+          }
+        },
+        {
+          "tool_call_id": "toolu_task",
+          "function_name": "Agent",
+          "arguments": {
+            "description": "Check the example tests",
+            "prompt": "Run the example tests."
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_read",
+            "content": "name = \"example\""
+          },
+          {
+            "source_call_id": "toolu_task",
+            "content": "Tests pass.",
+            "subagent_trajectory_ref": [
+              {
+                "trajectory_id": "synthetic-embedded:helper",
+                "session_id": "synthetic-embedded"
+              }
+            ]
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 5000,
+        "completion_tokens": 300,
+        "cached_tokens": 3000,
+        "extra": {
+          "cache_write_tokens": 1500,
+          "reasoning_tokens": 100
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-02T10:00:20Z",
+      "source": "system",
+      "message": "Context compaction performed",
+      "extra": {
+        "context_management": {
+          "type": "compaction",
+          "boundary": "replace"
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-10-02T10:00:21Z",
+      "source": "agent",
+      "model_name": "claude-opus-4-7",
+      "message": "The config names the example project.",
+      "metrics": {
+        "prompt_tokens": 2000,
+        "completion_tokens": 50,
+        "cached_tokens": 2000
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 8700,
+    "total_completion_tokens": 400,
+    "total_cached_tokens": 5800,
+    "total_cost_usd": 0.1,
+    "total_steps": 4,
+    "extra": {
+      "total_cache_write_tokens": 2300,
+      "cost_source": "decant",
+      "includes_subagents": true,
+      "session_metrics": {
+        "total_prompt_tokens": 7000,
+        "total_completion_tokens": 350,
+        "total_cached_tokens": 5000,
+        "total_cache_write_tokens": 1500,
+        "total_cost_usd": 0.023125
+      }
+    }
+  },
+  "extra": {
+    "exporter": "decant",
+    "cwd": "/tmp/example",
+    "git_branch": "main",
+    "title": "Explain the example config"
+  },
+  "subagent_trajectories": [
+    {
+      "schema_version": "ATIF-v1.7",
+      "trajectory_id": "synthetic-embedded:helper",
+      "session_id": "synthetic-embedded",
+      "agent": {
+        "name": "claude-code",
+        "version": "2.1.0",
+        "model_name": "claude-opus-4-7"
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "timestamp": "2026-10-02T10:00:05Z",
+          "source": "user",
+          "message": "Run the example tests."
+        },
+        {
+          "step_id": 2,
+          "timestamp": "2026-10-02T10:00:10Z",
+          "source": "agent",
+          "message": "Running them.",
+          "tool_calls": [
+            {
+              "tool_call_id": "toolu_bash",
+              "function_name": "Bash",
+              "arguments": {
+                "command": "bun test"
+              }
+            }
+          ],
+          "observation": {
+            "results": [
+              {
+                "source_call_id": "toolu_bash",
+                "content": "1 pass",
+                "extra": {
+                  "is_error": false
+                }
+              }
+            ]
+          },
+          "metrics": {
+            "prompt_tokens": 800,
+            "completion_tokens": 40,
+            "cached_tokens": 0,
+            "extra": {
+              "cache_write_tokens": 800
+            }
+          }
+        },
+        {
+          "step_id": 3,
+          "timestamp": "2026-10-02T10:00:12Z",
+          "source": "agent",
+          "message": "Tests pass.",
+          "metrics": {
+            "prompt_tokens": 900,
+            "completion_tokens": 10,
+            "cached_tokens": 800
+          }
+        }
+      ],
+      "final_metrics": {
+        "total_prompt_tokens": 1700,
+        "total_completion_tokens": 50,
+        "total_cached_tokens": 800,
+        "total_steps": 3
+      },
+      "extra": {
+        "agent_type": "general-purpose"
+      }
+    }
+  ]
+}

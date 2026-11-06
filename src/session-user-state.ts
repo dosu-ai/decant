@@ -443,6 +443,10 @@ function providerParentSourceSessionId(row: ProviderLineageSessionIdentity): str
   if (row.tool === "claude_code") {
     return claudeRootSourceSessionId(meta);
   }
+  if (row.tool === "atif") {
+    // The ATIF parser names an embedded subagent's direct parent.
+    return stringValue(meta.parentSessionId);
+  }
   const source = recordValue(meta.source);
   const subagent = recordValue(source?.subagent);
   const threadSpawn = recordValue(subagent?.thread_spawn);

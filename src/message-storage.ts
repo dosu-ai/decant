@@ -26,6 +26,7 @@ const METADATA_PATHS = [
   ["message", "id"],
   ["message", "usage"],
   ["cost"],
+  ["metrics", "cost_usd"],
   ["model", "providerID"],
   ["providerID"],
   ["reasoning_tokens"],
@@ -37,6 +38,7 @@ const METADATA_PATHS = [
   ["state", "metadata", "sessionId"],
   ["sessionId"],
   ["agentId"],
+  ["extra", "context_management", "type"],
 ] as const;
 
 export interface StoredMessageRaw {

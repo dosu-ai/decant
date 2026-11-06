@@ -7,6 +7,7 @@ import { normalizeTranscript } from "@letta-ai/trajectory";
 import { openDb } from "../src/db.ts";
 import { type AtifTrajectory, exportAtif } from "../src/export-atif.ts";
 import { upsertSession } from "../src/ingest.ts";
+import { parseAtifDocument } from "../src/sources/atif.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { parseCopilotSession } from "../src/sources/copilot.ts";
@@ -486,8 +487,26 @@ describe("exportAtif", () => {
       ]);
       // Root totals include the embedded subagent; the subagent's are its own.
       expect(doc.final_metrics.total_prompt_tokens).toBe(150);
-      expect(doc.final_metrics.extra).toMatchObject({ includes_subagents: true });
+      expect(doc.final_metrics.extra).toMatchObject({
+        includes_subagents: true,
+        // The root session's own share, for a reader that splits subagents out.
+        session_metrics: {
+          total_prompt_tokens: 100,
+          total_completion_tokens: 10,
+          total_cached_tokens: 0,
+          total_cache_write_tokens: 0,
+        },
+      });
       expect(doc.subagent_trajectories?.[0]?.final_metrics.total_prompt_tokens).toBe(50);
+      expect(doc.subagent_trajectories?.[0]?.final_metrics.extra).not.toHaveProperty(
+        "session_metrics",
+      );
+
+      // Importing the export gives each session back its own totals.
+      const imported = parseAtifDocument("fallback", JSON.stringify(doc)).sessions.map(
+        ({ parsed }) => parsed.session.totals.input,
+      );
+      expect(imported).toEqual([100, 50]);
     } finally {
       db.close();
     }
@@ -845,6 +864,47 @@ describe("exportAtif", () => {
       expect(doc.agent).toEqual({ name: "cursor-cli", version: "unknown" });
       expect(doc.final_metrics).toEqual({ total_steps: 2 });
       expect(doc.steps[1]?.metrics).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("round-trips through the ATIF import with the same token totals and agent name", () => {
+    const db = freshDb();
+    try {
+      const id = upsertSession(
+        db,
+        parseClaudeSession("sample", fixture("fixtures", "claude", "sample.jsonl")),
+        "/synthetic/sample.jsonl",
+        1,
+        2,
+      );
+      const doc = exportOk(db, id);
+      const imported = parseAtifDocument("fallback", JSON.stringify(doc));
+      const parsed = imported.sessions[0]?.parsed;
+      if (parsed == null) {
+        throw new Error("expected an imported root session");
+      }
+      const totals = parsed.session.totals;
+      expect({
+        input: totals.input,
+        output: totals.output,
+        cacheRead: totals.cacheRead,
+        cacheCreation: totals.cacheCreation,
+      }).toEqual(
+        db
+          .query(
+            `SELECT total_input_tokens AS input, total_output_tokens AS output,
+                    total_cache_read_tokens AS cacheRead,
+                    total_cache_creation_tokens AS cacheCreation
+               FROM session WHERE id = ?1`,
+          )
+          .get(id) as { input: number; output: number; cacheRead: number; cacheCreation: number },
+      );
+      expect(parsed.session.sourceSessionId).toBe(doc.session_id);
+
+      const importedId = upsertSession(db, parsed, "/synthetic/sample.atif.json", 1, 2);
+      expect(exportOk(db, importedId).agent.name).toBe("claude-code");
     } finally {
       db.close();
     }

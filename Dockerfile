@@ -42,6 +42,7 @@ ENV DECANT_GEMINI_DIR=/sources/gemini
 ENV DECANT_CURSOR_DIR=/sources/cursor
 ENV DECANT_COPILOT_DIR=/sources/copilot
 ENV DECANT_VSCODE_COPILOT_DIR=/sources/vscode
+ENV DECANT_ATIF_DIR=/sources/atif
 # Tells `decant update` to print `docker pull` instead of rewriting a binary the
 # decant user cannot write. Marker files like /.dockerenv are not used because
 # devcontainers have them too, and Kubernetes and containerd create none.

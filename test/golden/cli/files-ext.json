@@ -48,5 +48,15 @@
     "deletes": 0,
     "sessions": 1,
     "last_touched_at": "2026-05-01T10:00:05.000Z"
+  },
+  {
+    "key": "toml",
+    "project": null,
+    "reads": 1,
+    "edits": 0,
+    "writes": 0,
+    "deletes": 0,
+    "sessions": 1,
+    "last_touched_at": "2026-10-02T10:00:04.000Z"
   }
 ]

@@ -46,6 +46,7 @@ import {
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
+import { parseAtifDocument } from "./sources/atif.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { forkHistoryStart, parseCodexSession } from "./sources/codex.ts";
 import { parseCopilotSession } from "./sources/copilot.ts";
@@ -115,6 +116,8 @@ export interface IngestConfig {
   vscodeCopilotDir?: string;
   /** VS Code Insiders' `User` directory, read beside `vscodeCopilotDir`. */
   vscodeCopilotInsidersDir?: string;
+  /** Directory of ATIF trajectory files, read recursively. */
+  atifDir?: string;
   sourcePaths?: string[];
 }
 
@@ -201,7 +204,14 @@ export function discover(
     collectCopilot(config.copilotDir, out);
   }
   collectVscodeCopilot([config.vscodeCopilotDir, config.vscodeCopilotInsidersDir], out);
-  return out.filter((file) => file.tool !== "cursor" || isCursorConversationStore(file.path));
+  if (config.atifDir != null) {
+    collect(config.atifDir, "atif", false, () => true, out);
+  }
+  return out.filter(
+    (file) =>
+      (file.tool !== "cursor" || isCursorConversationStore(file.path)) &&
+      (file.tool !== "atif" || isAtifDocument(file.path)),
+  );
 }
 
 export function discoverSourcePaths(
@@ -419,14 +429,16 @@ export function sync(
       }
 
       try {
-        if (file.opencode != null || file.tool === "cursor") {
-          // Virtual `<db>#<session>` paths never exist on disk, and a Cursor
-          // store is a SQLite database with sidecars; the text read below fits
-          // neither.
+        if (file.opencode != null || file.tool === "cursor" || file.tool === "atif") {
+          // Virtual `<db>#<session>` paths never exist on disk, a Cursor store
+          // is a SQLite database with sidecars, and an ATIF document can hold
+          // several sessions; the one-session text read below fits none.
           const outcome =
             file.opencode != null
               ? syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers)
-              : syncCursorStore(db, file);
+              : file.tool === "cursor"
+                ? syncCursorStore(db, file)
+                : syncAtifFile(db, file);
           if (outcome.kind === "ingested") {
             report.ingested += 1;
             report.issues += outcome.issues.length;
@@ -888,6 +900,204 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     : { kind: "ingested", issues: parsed.issues };
 }
 
+/** An ATIF document holds a root trajectory and any embedded subagents, each
+ * filed as its own session: the root under the file's path and a subagent
+ * under `<file>#<trajectory_id>`. Only the root's source row is checked to
+ * skip an unchanged file, so the subagents are written first: a sync stopped
+ * part way re-reads the whole file next time. */
+function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
+  let fd: number;
+  try {
+    fd = openSync(file.path, "r");
+  } catch (error) {
+    return (error as { code?: string }).code === "ENOENT"
+      ? { kind: "skipped" }
+      : { kind: "failed" };
+  }
+  let stats: Stats;
+  let content: string;
+  let changeKey: string;
+  try {
+    stats = fstatSync(fd);
+    // A document is rewritten whole, so a rewrite of the same size within one
+    // second is possible; the sub-second modification time tells it apart.
+    changeKey = `mtime-ms:${stats.mtimeMs}`;
+    const prior = queryRow<{
+      size: number;
+      mtime: number;
+      ingest_revision: number;
+      hash: string | null;
+    }>(db, "SELECT size, mtime, ingest_revision, hash FROM ingest_source WHERE path = ?1", [
+      file.path,
+    ]);
+    if (
+      prior != null &&
+      prior.size === stats.size &&
+      prior.mtime === mtimeSecs(stats) &&
+      prior.hash === changeKey &&
+      prior.ingest_revision === INGEST_PIPELINE_REVISION
+    ) {
+      return { kind: "skipped" };
+    }
+    content = readFileSync(fd, "utf8");
+  } catch (error) {
+    logger.warning("Source file could not be read.", {
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": file.path,
+      "error.type": (error as { code?: string }).code ?? "unknown",
+      "error.message": error instanceof Error ? error.message : String(error),
+    });
+    return { kind: "failed" };
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // As for a JSONL source: a close failure cannot undo a completed read.
+    }
+  }
+
+  const document = parseAtifDocument(atifFallbackId(file.path), content, {
+    sourcePath: file.path,
+    projectPath: harborJobDir(file.path),
+  });
+  const mtime = mtimeSecs(stats);
+  const issues: Issue[] = [];
+  const subagentPaths = new Set<string>();
+  let root: ParsedSession | null = null;
+  const rootId = document.sessions.find((session) => session.key == null)?.parsed.session
+    .sourceSessionId;
+  // Another file holding the same document (a copy) was read before. Its root
+  // is about to be replaced, so its embedded subagents go too rather than
+  // hang off this file's root. Its source row stays, so it is not re-read.
+  const superseded =
+    rootId == null
+      ? null
+      : queryRow<{ source_path: string | null }>(
+          db,
+          "SELECT source_path FROM session WHERE tool = 'atif' AND source_session_id = ?1",
+          [rootId],
+        )?.source_path;
+  if (superseded != null && superseded !== file.path) {
+    releaseRemovedAtifSubagents(db, superseded, new Set());
+  }
+  for (const { key, parsed } of document.sessions) {
+    if (key == null) {
+      root = parsed;
+      continue;
+    }
+    const path = `${file.path}#${key}`;
+    subagentPaths.add(path);
+    const prepared: Prepared = {
+      file: { tool: "atif", path, archived: false },
+      lineCount: parsed.session.messages.length,
+      mtime,
+      size: stats.size,
+      hash: changeKey,
+    };
+    if (writeIngestedFile(db, prepared, parsed) === "ingested") {
+      issues.push(...parsed.issues);
+    }
+  }
+  releaseRemovedAtifSubagents(db, file.path, subagentPaths);
+  if (root == null) {
+    return { kind: "failed" };
+  }
+  const prepared: Prepared = {
+    file,
+    lineCount: lineCount(content),
+    mtime,
+    size: stats.size,
+    hash: changeKey,
+  };
+  if (writeIngestedFile(db, prepared, root) === "tombstoned") {
+    return { kind: "tombstoned" };
+  }
+  return { kind: "ingested", issues: [...root.issues, ...issues] };
+}
+
+/** A subagent the document no longer embeds would otherwise keep its session
+ * and source rows under a virtual path nothing backs. */
+function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<string>): void {
+  const prefix = `${path}#`;
+  const escaped = prefix.replace(/[\\%_]/g, (char) => `\\${char}`);
+  // LIKE ignores ASCII case, so the prefix is checked again exactly.
+  const stale = queryRows<{ path: string; session_id: number | null }>(
+    db,
+    "SELECT path, session_id FROM ingest_source WHERE tool = 'atif' AND path LIKE ?1 ESCAPE '\\'",
+    [`${escaped}%`],
+  ).filter((row) => row.path.startsWith(prefix) && !current.has(row.path));
+  if (stale.length === 0) {
+    return;
+  }
+  withImmediateTransaction(db, () => {
+    for (const row of stale) {
+      if (row.session_id != null) {
+        deleteSessionRow(db, row.session_id);
+      }
+      runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
+      runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
+    }
+  });
+}
+
+/** ATIF files carry no fixed name, so a `.json` file counts when its head
+ * declares an ATIF schema version. Harbor's own names are accepted without
+ * that check, in case a producer writes a large `agent` object first. */
+const ATIF_SNIFF_BYTES = 64 * 1024;
+const ATIF_SCHEMA_PATTERN = /"schema_version"\s*:\s*"ATIF-v/;
+const HARBOR_TRAJECTORY_NAME = /^trajectory(?:\.cont-\d+|\.summarization-[^/\\]+)?\.json$/;
+
+export function isAtifDocument(path: string): boolean {
+  const name = pathBasename(path);
+  if (!name.endsWith(".json")) {
+    return false;
+  }
+  if (HARBOR_TRAJECTORY_NAME.test(name) || name.endsWith(".atif.json")) {
+    return true;
+  }
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return false;
+  }
+  try {
+    const buffer = Buffer.allocUnsafe(ATIF_SNIFF_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return ATIF_SCHEMA_PATTERN.test(buffer.subarray(0, bytesRead).toString("utf8"));
+  } catch {
+    return false;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // Nothing was read that a close failure could invalidate.
+    }
+  }
+}
+
+/** Harbor writes a trial's trajectory to `<jobs>/<job>/<trial>/agent/`. The
+ * job directory groups a run's trials the way a project groups sessions; a
+ * container working directory recorded in the trajectory names nothing on
+ * this machine. */
+export function harborJobDir(path: string): string | null {
+  const agentDir = dirname(path);
+  if (pathBasename(agentDir) !== "agent") {
+    return null;
+  }
+  const trialDir = dirname(agentDir);
+  const jobDir = dirname(trialDir);
+  return jobDir === trialDir ? null : jobDir;
+}
+
+/** Identity for a document that names neither a `trajectory_id` nor a
+ * `session_id`. Harbor names every trial's file `trajectory.json`, so the
+ * file name alone would collide; a digest of the path keeps it stable. */
+function atifFallbackId(path: string): string {
+  const digest = createHash("sha256").update(path).digest("hex").slice(0, 12);
+  return `${fileStem(path)}-${digest}`;
+}
+
 function errorCode(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === "string" && /^[A-Z0-9_]{1,40}$/.test(code) ? code : "unknown error";
@@ -1120,15 +1330,16 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_fields
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode', 'cursor')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode', 'cursor', 'atif')`,
   );
 
   const sessionBySource = new Map<string, number>();
   const rootByClaudeSession = new Map<string, number>();
   const rootByChild = new Map<number, number>();
   const inferred = new Map<number, InferredSubagent>();
+  const atifFileRefs = atifFileRefParents(rows);
   for (const row of rows) {
-    const info = inferSubagent(row);
+    const info = row.tool === "atif" ? inferAtifSubagent(row, atifFileRefs) : inferSubagent(row);
     inferred.set(row.id, info);
     sessionBySource.set(sourceKey(row.tool, row.source_session_id), row.id);
     if (!info.isSubagent) {
@@ -1144,8 +1355,11 @@ export function resolveSubagentParents(db: Database): void {
       continue;
     }
     const rootKey = info.rootKey;
+    // An ATIF parent is always another ATIF session. A re-imported export
+    // shares its session ID with the native session it came from, so the
+    // Claude lookup would claim that one instead.
     const rootId =
-      (rootKey == null ? null : rootByClaudeSession.get(rootKey)) ??
+      (rootKey == null || row.tool === "atif" ? null : rootByClaudeSession.get(rootKey)) ??
       (rootKey == null ? null : sessionBySource.get(sourceKey(row.tool, rootKey))) ??
       null;
     if (rootId != null) {
@@ -1178,6 +1392,12 @@ export function resolveSubagentParents(db: Database): void {
      ORDER BY call.id DESC
      LIMIT 1`,
   );
+  const clearAtif = db.prepare(
+    `UPDATE session
+     SET is_subagent = 0, parent_session_id = NULL, spawn_tool_use_id = NULL,
+         agent_id = NULL, agent_type = NULL, spawn_depth = NULL
+     WHERE id = ?1`,
+  );
   const update = db.prepare(
     `UPDATE session
      SET is_subagent = ?1,
@@ -1193,6 +1413,11 @@ export function resolveSubagentParents(db: Database): void {
       for (const row of rows) {
         const info = inferred.get(row.id);
         if (info == null || !info.isSubagent) {
+          // An ATIF session linked only by a file ref that its parent has
+          // since dropped. Other sources never unlink here.
+          if (row.tool === "atif" && row.is_subagent !== 0) {
+            clearAtif.run(row.id);
+          }
           continue;
         }
         const rootId = rootByChild.get(row.id) ?? null;
@@ -1204,7 +1429,10 @@ export function resolveSubagentParents(db: Database): void {
           } | null;
           spawnToolUseId = spawner?.tool_use_id ?? null;
         }
-        if (spawnToolUseId != null) {
+        // ATIF call IDs are only unique within a document, so an archive-wide
+        // lookup could name another trial's session. The parser already
+        // named the parent, which is the session that made the call.
+        if (spawnToolUseId != null && row.tool !== "atif") {
           const spawner = findSpawner.get(spawnToolUseId) as { session_id: number } | null;
           if (spawner != null && spawner.session_id !== row.id) {
             parentId = spawner.session_id;
@@ -1236,6 +1464,7 @@ export function resolveSubagentParents(db: Database): void {
       }
     });
   } finally {
+    clearAtif.finalize();
     update.finalize();
     findCodexSpawner.finalize();
     findSpawner.finalize();
@@ -1313,7 +1542,8 @@ interface ReasoningEffortSummary {
  * every message/block/tool object from a potentially multi-GB archive and
  * leaves the database write transaction for the small update batch only. */
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
-  if (tool === "cursor") {
+  // Neither is a JSONL log, and both record effort at ingest.
+  if (tool === "cursor" || tool === "atif") {
     return { summary: null, levels: [] };
   }
   const efforts = new Set<string>();
@@ -1458,6 +1688,70 @@ function inferSubagent(row: {
       asString(get(cursorSubagent, "typeName")),
     spawnDepth:
       row.spawn_depth ?? asInteger(get(threadSpawn, "depth")) ?? asInteger(get(meta, "spawnDepth")),
+  };
+}
+
+type SubagentRow = Parameters<typeof inferSubagent>[0];
+
+/** A subagent stored in its own file (Harbor's Terminus 2 writes each
+ * summarization subagent beside the main trajectory) is named only by its
+ * parent's `trajectory_path` ref. The parser resolves those refs to paths, so
+ * the child is found by the path its own session was read from. */
+function atifFileRefParents(
+  rows: readonly SubagentRow[],
+): Map<string, { parent: string; spawnToolUseId: string | null }> {
+  const parents = new Map<string, { parent: string; spawnToolUseId: string | null }>();
+  for (const row of rows) {
+    if (row.tool !== "atif") {
+      continue;
+    }
+    const refs = get(parseObject(row.raw_meta), "subagentFileRefs");
+    if (!Array.isArray(refs)) {
+      continue;
+    }
+    for (const ref of refs) {
+      const path = asString(get(ref, "path"));
+      if (path != null && !parents.has(path)) {
+        parents.set(path, {
+          parent: row.source_session_id,
+          spawnToolUseId: asString(get(ref, "spawnToolUseId")),
+        });
+      }
+    }
+  }
+  return parents;
+}
+
+/** The ATIF parser records an embedded subagent's direct parent in
+ * `raw_meta.parentSessionId`; a file-ref subagent's parent comes from the
+ * referencing session. */
+function inferAtifSubagent(
+  row: SubagentRow,
+  fileRefs: ReadonlyMap<string, { parent: string; spawnToolUseId: string | null }>,
+): InferredSubagent {
+  const meta = parseObject(row.raw_meta);
+  const parent = asString(get(meta, "parentSessionId"));
+  const fileRef = row.source_path == null ? undefined : fileRefs.get(row.source_path);
+  if (parent == null && fileRef == null) {
+    // Nothing names this session as a subagent any more, so a link an earlier
+    // pass made from a file ref no longer holds.
+    return {
+      isSubagent: false,
+      rootKey: null,
+      spawnToolUseId: row.spawn_tool_use_id,
+      agentId: row.agent_id,
+      agentType: row.agent_type,
+      spawnDepth: row.spawn_depth,
+    };
+  }
+  return {
+    isSubagent: true,
+    rootKey: parent ?? fileRef?.parent ?? null,
+    spawnToolUseId: row.spawn_tool_use_id ?? fileRef?.spawnToolUseId ?? null,
+    // A file's identity can carry its name; the run ID reads better.
+    agentId: row.agent_id ?? asString(get(meta, "session_id")) ?? row.source_session_id,
+    agentType: row.agent_type ?? asString(get(get(meta, "agent"), "name")),
+    spawnDepth: row.spawn_depth,
   };
 }
 
@@ -2074,6 +2368,9 @@ function sourceFileForPath(
     return { tool: "vscode_copilot", path, archived: false };
   }
   if (isInVscodeStorage(path, vscodeUserDirs)) return null;
+  if (name.endsWith(".json")) {
+    return isAtifDocument(path) ? { tool: "atif", path, archived: false } : null;
+  }
   if (!isSessionJsonl(name) || name === "session_index.jsonl") {
     return null;
   }

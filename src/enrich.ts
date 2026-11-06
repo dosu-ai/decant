@@ -1,5 +1,6 @@
 import { byteLength, isObject } from "./json.ts";
-import type { NormalizedBlock, NormalizedMessage, NormalizedSession } from "./model.ts";
+import type { NormalizedBlock, NormalizedMessage, NormalizedSession, Tool } from "./model.ts";
+import { atifNativeTool } from "./sources/atif.ts";
 
 export type Operation = "read" | "edit" | "write" | "delete";
 
@@ -54,7 +55,16 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
   return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
 }
 
+/** An ATIF trajectory keeps the tool names of the agent that produced it, so
+ * its calls are read with that source's rules. An agent Decant does not read
+ * natively is read with Claude Code's names, the most common in Harbor's
+ * converters, then Codex's shell and patch rules. */
+function namingTool(session: NormalizedSession): Tool {
+  return session.tool === "atif" ? (atifNativeTool(session.rawMeta) ?? "atif") : session.tool;
+}
+
 export function fileRefs(session: NormalizedSession): FileRef[] {
+  const tool = namingTool(session);
   if (session.tool === "copilot") {
     return copilotRefs(session);
   }
@@ -64,15 +74,24 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
       if (block.blockType !== "tool_use") {
         continue;
       }
-      if (session.tool === "claude_code") {
+      if (tool === "atif") {
+        const before = refs.length;
         keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (session.tool === "gemini") {
+        if (refs.length === before) {
+          codexRefs(messageIdx, message, block, session.cwd, refs);
+        }
+      } else if (tool === "copilot") {
+        // An imported Copilot CLI trajectory has no `fileEdits` records.
+        keyedRef(COPILOT_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (tool === "claude_code") {
+        keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (tool === "gemini") {
         keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (session.tool === "opencode") {
+      } else if (tool === "opencode") {
         keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (session.tool === "cursor") {
+      } else if (tool === "cursor") {
         keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (session.tool === "vscode_copilot") {
+      } else if (tool === "vscode_copilot") {
         vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
@@ -311,6 +330,13 @@ export function extension(path: string): string | null {
   return leaf.slice(index + 1).toLowerCase();
 }
 
+/** ATIF-v1.7's context-management convention on a system step. */
+function atifCompaction(raw: NormalizedMessage["raw"]): boolean {
+  const extra = isObject(raw) ? raw.extra : undefined;
+  const management = isObject(extra) ? extra.context_management : undefined;
+  return isObject(management) && management.type === "compaction";
+}
+
 export function facets(session: NormalizedSession): Facets {
   const got: Facets = {
     turnCount: 0,
@@ -342,7 +368,8 @@ export function facets(session: NormalizedSession): Facets {
       rawString(message.raw, "type") === "compacted" ||
       rawString(message.raw, "type") === "compaction" ||
       (session.tool === "copilot" &&
-        rawString(message.raw, "type") === "session.compaction_complete")
+        rawString(message.raw, "type") === "session.compaction_complete") ||
+      (session.tool === "atif" && atifCompaction(message.raw))
     ) {
       got.compactionCount += 1;
     }
@@ -368,7 +395,7 @@ export function facets(session: NormalizedSession): Facets {
         got.thinkingBlockCount += 1;
         got.thinkingChars += byteLength(block.text ?? "");
       } else if (block.blockType === "tool_use") {
-        if (isAgentSpawn(session.tool, block.toolName)) {
+        if (isAgentSpawn(namingTool(session), block.toolName)) {
           got.agentSpawnCount += 1;
         } else if (block.toolName === "Skill") {
           got.skillCount += 1;

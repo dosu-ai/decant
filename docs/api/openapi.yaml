@@ -1195,7 +1195,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif]
     Model:
       name: model
       in: query
@@ -1488,7 +1488,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, atifDir, version]
       properties:
         dbPath:
           type: string
@@ -1506,6 +1506,9 @@ components:
           type: string
         vscodeCopilotDir:
           type: string
+        atifDir:
+          type: [string, "null"]
+          description: Directory read recursively for ATIF trajectory files. Null when the server's configuration names none.
         version:
           type: string
       additionalProperties: false
@@ -2782,7 +2785,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif]
         label:
           type: string
       additionalProperties: false

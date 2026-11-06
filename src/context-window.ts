@@ -41,6 +41,16 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
 /** Infer a Gemini window from the model id and observed usage, the way we do
  * for Claude. The 2.5/3.x line publishes 1M; flash-lite and image variants get
  * 128k unless a request already proved the window is larger. */
+/** An imported trajectory names its model but not the client that served
+ * it, so the model family alone selects the window rules. */
+function isClaudeModel(model: string | null): boolean {
+  return model != null && /claude/i.test(model);
+}
+
+function isGeminiModel(model: string | null): boolean {
+  return model != null && /gemini/i.test(model);
+}
+
 export function inferGeminiContextWindowTokens(model: string | null, maxSeen = 0): number {
   const normalized = (model ?? "").toLowerCase();
   if (
@@ -107,7 +117,7 @@ export interface MessageRawMeta {
  * per row, so large raw payloads are parsed once, not once per field. */
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
-  '$.agentId', '$.data.preCompactionTokens')`;
+  '$.agentId', '$.data.preCompactionTokens', '$.extra.context_management.type')`;
 
 /** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults.
  * `tool` names the session's source, whose sidechain marker may differ. */
@@ -141,6 +151,7 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     preTokens,
     agentId,
     copilotPreTokens,
+    contextManagement,
   ] = parsed as unknown[];
   const recordedPreTokens = tool === "copilot" ? copilotPreTokens : preTokens;
   return {
@@ -148,7 +159,14 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     // subagent's agentId instead of isSidechain.
     isSidechain: sidechain === true || (tool === "copilot" && typeof agentId === "string"),
     subtype: typeof subtype === "string" ? subtype : null,
-    rawType: typeof rawType === "string" ? rawType : null,
+    // An ATIF system step declares a compaction in `extra.context_management`
+    // and has no record type of its own.
+    rawType:
+      typeof rawType === "string"
+        ? rawType
+        : contextManagement === "compaction"
+          ? "compaction"
+          : null,
     isCompactSummary: compactSummary === true,
     compactTrigger: typeof trigger === "string" ? trigger : null,
     compactPreTokens:
@@ -320,9 +338,9 @@ export function contextWindowForSession(
   const inferredWindow =
     maxSeen <= 0
       ? null
-      : session.tool === "claude_code"
+      : session.tool === "claude_code" || (session.tool === "atif" && isClaudeModel(session.model))
         ? inferClaudeContextWindowTokens(session.model, maxSeen)
-        : session.tool === "gemini"
+        : session.tool === "gemini" || (session.tool === "atif" && isGeminiModel(session.model))
           ? inferGeminiContextWindowTokens(session.model, maxSeen)
           : null;
   const window = explicitWindow ?? inferredWindow;

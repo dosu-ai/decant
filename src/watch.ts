@@ -195,6 +195,10 @@ const anyEvent: EventFilter = () => true;
 const copilotEvents: EventFilter = (filename) =>
   filename == null || basename(filename) === "events.jsonl";
 
+/** Harbor writes logs, recordings, and test output beside each trajectory;
+ * only JSON files can be ATIF documents. */
+const atifEvents: EventFilter = (filename) => filename == null || filename.endsWith(".json");
+
 /** Workspace storage also holds each window's state database and every
  * extension's files, which change constantly; only a workspace's chat session
  * files are transcripts. */
@@ -353,6 +357,9 @@ export function watchRoots(config: Config): WatchRoot[] {
             },
           ],
     ),
+    ...(config.atifDir != null
+      ? [{ dir: config.atifDir, recursive: true, accepts: () => atifEvents }]
+      : []),
   ];
   // One watcher per directory: a directory named twice reacts to the events
   // either source would, and recurses if either needs it.

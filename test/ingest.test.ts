@@ -5,10 +5,12 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -126,6 +128,17 @@ function stageFixtures(dir: string): IngestConfig {
     );
   }
   cpSync(join(fixtureRoot, "vscode-copilot", "User"), vscodeCopilotDir, { recursive: true });
+  // Flat, as scripts/regen-goldens.ts stages them.
+  const atifDir = join(dir, "sources", "atif");
+  mkdirSync(atifDir, { recursive: true });
+  for (const file of readdirSync(join(fixtureRoot, "atif"), {
+    recursive: true,
+    encoding: "utf8",
+  })) {
+    if (file.endsWith(".json")) {
+      copyFileSync(join(fixtureRoot, "atif", file), join(atifDir, basename(file)));
+    }
+  }
 
   return {
     claudeDir,
@@ -136,6 +149,7 @@ function stageFixtures(dir: string): IngestConfig {
     cursorDir,
     copilotDir,
     vscodeCopilotDir,
+    atifDir,
   };
 }
 
@@ -2443,7 +2457,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 19, ingested: 19, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 22, ingested: 22, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2467,7 +2481,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 19, ingested: 0, skipped: 19, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
     expect(
       db
         .query(
@@ -2486,7 +2500,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 19, ingested: 0, skipped: 19, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });
@@ -4122,6 +4136,493 @@ describe("OpenCode ingest", () => {
       { tool: "claude_code", no_hash: 1 },
       { tool: "opencode", no_hash: 0 },
     ]);
+    closeDb(db);
+  });
+});
+
+describe("ATIF ingest", () => {
+  function atifCase(): { dir: string; atifDir: string; config: IngestConfig } {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    cpSync(join(fixtureRoot, "atif"), atifDir, { recursive: true });
+    return {
+      dir,
+      atifDir,
+      config: {
+        claudeDir: join(dir, "none", "claude"),
+        codexDir: join(dir, "none", "codex"),
+        atifDir,
+      },
+    };
+  }
+
+  function atifRows(db: Database) {
+    return db
+      .query(
+        `SELECT s.id, s.source_session_id, s.is_subagent, s.spawn_tool_use_id, s.spawn_depth,
+                s.compaction_count, s.agent_spawn_count, s.estimated_cost_usd,
+                (SELECT p.source_session_id FROM session p WHERE p.id = s.parent_session_id) AS parent,
+                (SELECT path FROM project WHERE id = s.project_id) AS project
+           FROM session s WHERE s.tool = 'atif' ORDER BY s.source_session_id`,
+      )
+      .all() as {
+      id: number;
+      source_session_id: string;
+      is_subagent: number;
+      spawn_tool_use_id: string | null;
+      spawn_depth: number | null;
+      compaction_count: number;
+      agent_spawn_count: number;
+      estimated_cost_usd: number;
+      parent: string | null;
+      project: string | null;
+    }[];
+  }
+
+  test("reads every trajectory in the directory and links subagents across files", () => {
+    const { dir, atifDir, config } = atifCase();
+    const db = openFreshDb(dir);
+    // The README beside the fixtures is not a trajectory.
+    expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
+    const rows = atifRows(db);
+    expect(
+      rows.map(({ source_session_id, is_subagent, parent, spawn_tool_use_id, spawn_depth }) => ({
+        source_session_id,
+        is_subagent,
+        parent,
+        spawn_tool_use_id,
+        spawn_depth,
+      })),
+    ).toEqual([
+      {
+        source_session_id: "synthetic-embedded",
+        is_subagent: 0,
+        parent: null,
+        spawn_tool_use_id: null,
+        spawn_depth: null,
+      },
+      {
+        source_session_id: "synthetic-embedded:helper",
+        is_subagent: 1,
+        parent: "synthetic-embedded",
+        spawn_tool_use_id: "toolu_task",
+        spawn_depth: 1,
+      },
+      {
+        source_session_id: "synthetic-trial-1",
+        is_subagent: 0,
+        parent: null,
+        spawn_tool_use_id: null,
+        spawn_depth: null,
+      },
+      {
+        // Stored in its own file and named only by the parent's trajectory_path.
+        source_session_id:
+          "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
+        is_subagent: 1,
+        parent: "synthetic-trial-1",
+        spawn_tool_use_id: "call_2",
+        spawn_depth: null,
+      },
+    ]);
+
+    const byId = new Map(rows.map((row) => [row.source_session_id, row]));
+    // A Harbor trial is filed under its job directory.
+    expect(byId.get("synthetic-trial-1")?.project).toBe(join(atifDir, "jobs", "synthetic-job"));
+    expect(byId.get("synthetic-embedded")?.project).toBe("/tmp/example");
+    // Claude Code tool names keep their meaning in an imported trajectory.
+    expect(byId.get("synthetic-embedded")?.agent_spawn_count).toBe(1);
+    expect(byId.get("synthetic-embedded")?.compaction_count).toBe(1);
+    expect(
+      db
+        .query("SELECT path, operation FROM file_ref WHERE session_id = ?1")
+        .all(byId.get("synthetic-embedded")?.id ?? 0),
+    ).toEqual([{ path: "/tmp/example/config.toml", operation: "read" }]);
+
+    // A model Decant prices is priced; one it cannot keeps the recorded cost.
+    expect(byId.get("synthetic-trial-1")?.estimated_cost_usd).toBeGreaterThan(0);
+    const summary = getSession(
+      db,
+      byId.get("synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary")
+        ?.id ?? 0,
+    );
+    expect(summary?.summary.estimated_cost_usd).toBeCloseTo(0.0042, 10);
+    expect(summary?.summary.cost_source).toBe("reported");
+    closeDb(db);
+  });
+
+  test("skips unchanged documents and drops a subagent the document no longer embeds", () => {
+    const { dir, atifDir, config } = atifCase();
+    const db = openFreshDb(dir);
+    sync(db, config);
+    expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 0, skipped: 3 });
+
+    const path = join(atifDir, "embedded.atif.json");
+    const document = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    delete document.subagent_trajectories;
+    writeFileSync(path, `${JSON.stringify(document)}\n`);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+    expect(atifRows(db).map((row) => row.source_session_id)).not.toContain(
+      "synthetic-embedded:helper",
+    );
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM ingest_source WHERE path LIKE ?1").get(`${path}#%`),
+    ).toEqual({ n: 0 });
+    closeDb(db);
+  });
+
+  test("finds ATIF documents under --path by name or declared schema and skips other JSON", () => {
+    const dir = freshCase();
+    write(join(dir, "run", "agent", "trajectory.json"), "{}");
+    write(join(dir, "export", "42.atif.json"), "{}");
+    write(join(dir, "named", "anything.json"), '{"schema_version": "ATIF-v1.8", "steps": []}');
+    write(join(dir, "other", "package.json"), '{"name": "example"}');
+    expect(discoverSourcePaths([dir]).map((file) => [file.tool, relative(dir, file.path)])).toEqual(
+      [
+        ["atif", join("export", "42.atif.json")],
+        ["atif", join("named", "anything.json")],
+        ["atif", join("run", "agent", "trajectory.json")],
+      ],
+    );
+  });
+
+  test("files continuation documents that share a run's session_id as separate sessions", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const doc = (message: string): string =>
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        session_id: "run",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message }],
+      });
+    write(join(atifDir, "agent", "trajectory.json"), doc("first"));
+    write(join(atifDir, "agent", "trajectory.cont-1.json"), doc("second"));
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    expect(
+      db.query("SELECT source_session_id, title FROM session ORDER BY source_session_id").all(),
+    ).toEqual([
+      { source_session_id: "run", title: "first" },
+      { source_session_id: "run/trajectory.cont-1", title: "second" },
+    ]);
+    closeDb(db);
+  });
+
+  test("keeps a deleted embedded subagent's later descendants deleted", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const path = join(atifDir, "run.atif.json");
+    const spawn = (callId: string, childId: string) => ({
+      step_id: 1,
+      source: "agent",
+      message: "",
+      tool_calls: [{ tool_call_id: callId, function_name: "Agent", arguments: {} }],
+      observation: {
+        results: [
+          { source_call_id: callId, subagent_trajectory_ref: [{ trajectory_id: childId }] },
+        ],
+      },
+    });
+    const sub = (id: string, steps: unknown[]) => ({
+      schema_version: "ATIF-v1.7",
+      trajectory_id: id,
+      agent: { name: "example-agent", version: "1.0.0" },
+      steps: [{ step_id: 1, source: "user", message: id }, ...steps],
+    });
+    const write = (grandchild: boolean): void =>
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schema_version: "ATIF-v1.7",
+          trajectory_id: "root",
+          agent: { name: "example-agent", version: "1.0.0" },
+          steps: [spawn("call-child", "child")],
+          subagent_trajectories: [
+            sub("child", grandchild ? [{ ...spawn("call-grand", "grand"), step_id: 2 }] : []),
+            ...(grandchild ? [sub("grand", [])] : []),
+          ],
+        }),
+      );
+    mkdirSync(atifDir, { recursive: true });
+    write(false);
+    const config = { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir };
+    const db = openFreshDb(dir);
+    sync(db, config);
+    const child = db
+      .query("SELECT id FROM session WHERE source_session_id = 'root:child'")
+      .get() as {
+      id: number;
+    };
+    expect(setSessionUserState(db, child.id, "deleted")).toBe(true);
+
+    write(true);
+    sync(db, config);
+    expect(
+      db.query("SELECT source_session_id FROM session ORDER BY source_session_id").all(),
+    ).toEqual([{ source_session_id: "root" }]);
+    closeDb(db);
+  });
+
+  test("prices a step that records only a cost, and counts run totals as usage", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "run.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "cost-only",
+        agent: { name: "example-agent", version: "1.0.0", model_name: "example-model" },
+        steps: [
+          { step_id: 1, source: "user", message: "hello" },
+          { step_id: 2, source: "agent", message: "hi", metrics: { cost_usd: 0.42 } },
+        ],
+        final_metrics: { total_prompt_tokens: 300, total_completion_tokens: 20, total_steps: 2 },
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+    const summary = getSession(db, id)?.summary;
+    expect(summary?.estimated_cost_usd).toBeCloseTo(0.42, 10);
+    expect(summary?.cost_source).toBe("reported");
+    expect(summary?.usage_available).toBe(true);
+    closeDb(db);
+  });
+
+  test("re-reads a document rewritten at the same size within one second", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const path = join(atifDir, "run.atif.json");
+    const doc = (message: string): string =>
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "rewrite",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message }],
+      });
+    write(path, doc("aaaa"));
+    utimesSync(path, 1_800_000_000.1, 1_800_000_000.1);
+    const config = { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir };
+    const db = openFreshDb(dir);
+    sync(db, config);
+    writeFileSync(path, doc("bbbb"));
+    utimesSync(path, 1_800_000_000.6, 1_800_000_000.6);
+    expect(sync(db, config)).toMatchObject({ ingested: 1 });
+    expect(db.query("SELECT title FROM session").get()).toEqual({ title: "bbbb" });
+    closeDb(db);
+  });
+
+  test("unlinks a file-ref subagent once its parent no longer names it", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const parent = (withRef: boolean): string =>
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "parent",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [
+          {
+            step_id: 1,
+            source: "agent",
+            message: withRef ? "spawning" : "spawning nothing",
+            tool_calls: [{ tool_call_id: "spawn", function_name: "Agent", arguments: {} }],
+            observation: {
+              results: [
+                {
+                  source_call_id: "spawn",
+                  ...(withRef
+                    ? { subagent_trajectory_ref: [{ trajectory_path: "child.atif.json" }] }
+                    : { content: "done" }),
+                },
+              ],
+            },
+          },
+        ],
+      });
+    write(join(atifDir, "parent.atif.json"), parent(true));
+    write(
+      join(atifDir, "child.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "child",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message: "child" }],
+      }),
+    );
+    const config = { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir };
+    const db = openFreshDb(dir);
+    const child = () =>
+      db
+        .query(
+          "SELECT is_subagent, parent_session_id IS NOT NULL AS linked FROM session WHERE source_session_id = 'child'",
+        )
+        .get();
+    sync(db, config);
+    expect(child()).toEqual({ is_subagent: 1, linked: 1 });
+    write(join(atifDir, "parent.atif.json"), parent(false));
+    sync(db, config);
+    expect(child()).toEqual({ is_subagent: 0, linked: 0 });
+    closeDb(db);
+  });
+
+  test("drops the embedded subagents of a copy another file supersedes", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const copy = (kid: string): string =>
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "dup",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message: kid }],
+        subagent_trajectories: [
+          {
+            schema_version: "ATIF-v1.7",
+            trajectory_id: kid,
+            agent: { name: "example-agent", version: "1.0.0" },
+            steps: [{ step_id: 1, source: "user", message: kid }],
+          },
+        ],
+      });
+    write(join(atifDir, "a", "run.atif.json"), copy("kid-a"));
+    write(join(atifDir, "b", "run.atif.json"), copy("kid-b"));
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    expect(
+      db.query("SELECT source_session_id FROM session ORDER BY source_session_id").all(),
+    ).toEqual([{ source_session_id: "dup" }, { source_session_id: "dup:kid-b" }]);
+    closeDb(db);
+  });
+
+  test("keeps a run cost recorded only in final_metrics when the session owns it", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    const doc = (id: string, extra: Record<string, unknown> = {}): string =>
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: id,
+        agent: { name: "example-agent", version: "1.0.0", model_name: "example-model" },
+        steps: [
+          {
+            step_id: 1,
+            source: "agent",
+            message: "hi",
+            metrics: { prompt_tokens: 10, completion_tokens: 5 },
+          },
+        ],
+        final_metrics: { total_prompt_tokens: 10, total_completion_tokens: 5, total_cost_usd: 0.5 },
+        ...extra,
+      });
+    write(join(atifDir, "alone.atif.json"), doc("alone"));
+    write(
+      join(atifDir, "shared.atif.json"),
+      doc("shared", {
+        subagent_trajectories: [
+          {
+            schema_version: "ATIF-v1.7",
+            trajectory_id: "kid",
+            agent: { name: "example-agent", version: "1.0.0" },
+            steps: [],
+          },
+        ],
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    const cost = (sourceId: string) =>
+      (
+        db
+          .query("SELECT estimated_cost_usd FROM session WHERE source_session_id = ?1")
+          .get(sourceId) as { estimated_cost_usd: number }
+      ).estimated_cost_usd;
+    expect(cost("alone")).toBeCloseTo(0.5, 10);
+    // That total may include the embedded subagent, a session of its own.
+    expect(cost("shared")).toBe(0);
+    closeDb(db);
+  });
+
+  test("reports usage unavailable for a trajectory with no metrics at all", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "bare.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "bare",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "agent", message: "no metrics" }],
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+    expect(getSession(db, id)?.summary.usage_available).toBe(false);
+    closeDb(db);
+  });
+
+  test("ignores document fields named like the keys the parser derives", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "spoof.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "spoof",
+        agent: { name: "example-agent", version: "1.0.0" },
+        parentSessionId: "victim",
+        subagentFileRefs: [{ path: join(atifDir, "victim.atif.json"), spawnToolUseId: null }],
+        steps: [{ step_id: 1, source: "user", message: "hello" }],
+      }),
+    );
+    write(
+      join(atifDir, "victim.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "victim",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message: "victim" }],
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    expect(
+      db
+        .query("SELECT source_session_id, is_subagent FROM session ORDER BY source_session_id")
+        .all(),
+    ).toEqual([
+      { source_session_id: "spoof", is_subagent: 0 },
+      { source_session_id: "victim", is_subagent: 0 },
+    ]);
+    closeDb(db);
+  });
+
+  test("counts recorded zero run totals as usage", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "zero.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "zero",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "agent", message: "cached" }],
+        final_metrics: { total_prompt_tokens: 0, total_completion_tokens: 0 },
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+    expect(getSession(db, id)?.summary.usage_available).toBe(true);
+    closeDb(db);
+  });
+
+  test("keeps syncing past an unreadable document and reports it as data loss", () => {
+    const { dir, atifDir, config } = atifCase();
+    write(join(atifDir, "broken", "trajectory.json"), "{ not json");
+    const db = openFreshDb(dir);
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 4, ingested: 4, failed: 0 });
+    expect(report.issuesByCode.unparsed_line).toBe(1);
     closeDb(db);
   });
 });

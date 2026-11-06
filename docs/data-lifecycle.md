@@ -3,7 +3,7 @@
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
-Copilot Chat in VS Code. `~/.decant/decant.db` is a searchable, rebuildable
+Copilot Chat in VS Code, or an ATIF trajectory file another agent wrote. `~/.decant/decant.db` is a searchable, rebuildable
 index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
@@ -105,6 +105,11 @@ By default Decant discovers:
   Explicit `--path` imports of these storage trees also exclude extension
   journals and databases outside the chat-session directories, including when
   `--vscode-copilot-dir` points at a relocated root.
+- ATIF trajectory files under `~/.decant/atif`, or the directory from
+  `--atif-dir` or `DECANT_ATIF_DIR`, read recursively and read-only. No agent
+  writes there; it holds trajectories a user copies in. Symbolic links inside
+  it are not followed, so point the setting at a Harbor `jobs` directory
+  instead of linking one. See [ATIF imports](#atif-imports).
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
@@ -225,12 +230,101 @@ including the descendants of a subagent with nothing to export, is still
 embedded and counted as unlinked in the export report.
 The root's totals include its embedded subagents, as ATIF describes. An
 embedded trajectory's totals likewise include the subagents it spawned, and
-`final_metrics.extra.includes_subagents` marks any trajectory whose totals do.
-Sum only the root's totals to avoid counting nested subagents twice. Claude
+`final_metrics.extra.includes_subagents` marks any trajectory whose totals do,
+and `final_metrics.extra.session_metrics` then gives that trajectory's own
+share (`total_prompt_tokens`, `total_completion_tokens`, `total_cached_tokens`,
+`total_cache_write_tokens`, and `total_cost_usd`). `session_metrics` is absent
+when the trajectory's own session records no usage, even if its subagents do,
+so the rolled-up totals are then not its own. Sum only the root's totals to
+avoid counting nested subagents twice. Claude
 compaction boundaries become
 `system` steps with `extra.context_management` set to a `replace` compaction,
 and the summary that follows is a `user` step marked
 `extra.is_compact_summary`.
+
+## ATIF imports
+
+Decant also reads ATIF documents as a source, with the tool ID `atif`. A
+`.json` file counts when its first 64 KiB declare an `ATIF-v` schema version,
+or when it carries one of Harbor's names (`trajectory.json`,
+`trajectory.cont-<n>.json`, `trajectory.summarization-<n>-*.json`) or the
+`.atif.json` suffix that `decant export --all --as atif` writes. Any
+`ATIF-v1.0` through `ATIF-v1.8` document is read. A newer version is read the
+same way and reported as an `unknown_record_type` diagnostic, as are unknown
+step sources and content part types. A file that is not valid JSON, or has no
+`steps` array, becomes one `unparsed_line` diagnostic and an empty session.
+
+Each trajectory becomes a session. The root is filed under the file's path, and
+each trajectory in `subagent_trajectories`, nested ones included, under the
+virtual path `<file>#<trajectory_id>`. The root's session ID is its
+`trajectory_id`, which names one document. Without one it is the `session_id`
+followed by `/` and the file name without its `.atif.json` or `.json`
+extension, because ATIF lets a
+trajectory and its continuation files share one `session_id`. The file name is
+left off for Harbor's plain `trajectory.json` and for a file named after the
+run. A document with neither ID uses the file name plus a digest of its path. A
+subagent's ID is its `trajectory_id` under the root's, with a `#<n>` suffix if
+two would otherwise match. A ref in an observation that names an embedded
+`trajectory_id` makes that trajectory a subagent of the one holding the ref,
+spawned by the result's `source_call_id`. An embedded trajectory no ref names
+is a subagent of the trajectory that embeds it, which for a top-level entry is
+the root. A ref whose `trajectory_path` is set and whose
+`trajectory_id` names nothing embedded resolves beside the document instead.
+Once the file at that path is in the archive, its session is linked as a
+subagent of the referencing session, and it becomes a top-level session again
+if the reference is later removed. Deleting a subagent session also deletes
+any subagent the document later adds beneath it. When a file drops an embedded
+subagent, the next sync removes that subagent's session. Two files holding the
+same document keep one copy: the one read last, with its own embedded
+subagents. A document is read again when its size or modification time,
+compared to the sub-second, changes.
+
+`system`, `user`, and `agent` steps become system, user, and assistant
+messages. An agent step's `reasoning_content`, text, and `tool_calls` become
+thinking, text, and tool-use blocks, and its `observation` becomes a following
+tool message: a result with a `source_call_id` is that call's result, with
+`extra.is_error` as its failure flag, and a result without one is text. Image
+parts become image blocks and audio parts other blocks, each holding the media
+path. Timestamps are stored in UTC, and a timestamp without a zone is read as
+UTC. Steps with `is_copied_context: true` repeat turns from another
+trajectory, so they are skipped and counted in the session's
+`raw_meta.copiedContextSteps`. A system step whose
+`extra.context_management.type` is `compaction` counts as a compaction.
+
+Token usage reverses the export mapping. Each agent step's input is
+`prompt_tokens` less `cached_tokens` and the cache writes in
+`metrics.extra.cache_write_tokens`, `cache_creation_input_tokens`, or
+`cache_write_input_tokens`. When that difference is negative, the producer left
+writes out of `prompt_tokens`, and only cache reads are subtracted.
+`completion_tokens` is output, and `metrics.extra.reasoning_tokens` (or
+`thoughts_tokens`) is the reasoning part of it. Session totals are the sum of
+the steps, because a root's `final_metrics` can count its subagents or earlier
+continuation files. Two cases take `final_metrics` instead. A trajectory with no
+per-step metrics and no embedded subagents uses them as its totals. A
+trajectory Decant exported (`extra.exporter: "decant"`) uses its
+`final_metrics`, or `final_metrics.extra.session_metrics` when they include
+subagents, because per-step metrics undercount sources such as Codex that
+record usage once per turn. A step that records `cost_usd` without token
+counts still counts toward cost. When no step records a cost, a model Decant
+cannot price takes the run's `final_metrics.total_cost_usd`, but only when
+nothing else shares that total: no embedded subagents and no `trajectory_path`
+refs, or a Decant `session_metrics.total_cost_usd`. A trajectory whose only
+usage is `final_metrics` (zero totals included) or a recorded cost is not shown
+as unavailable. Harbor's
+OpenCode converter currently writes `prompt_tokens` without cache writes,
+against the spec. Nothing in its output tells that apart from a corrected
+converter, so Decant follows the spec, and such a trajectory's input reads low
+by the cache-write count. A trial's Harbor job
+directory, the parent of `<trial>/agent/`, is its project. Otherwise the
+trajectory's `extra.cwd`, as Decant's export writes it, is. An embedded
+subagent that records neither takes its root's.
+
+Tool names keep the producing agent's conventions. When `agent.name` is one of
+Harbor's names for a source Decant reads natively (`claude-code`, `codex`,
+`gemini-cli`, `opencode`, `cursor-cli`, `copilot-cli`, or
+`vscode-copilot-chat`), file and subagent attribution use that source's rules.
+Other agents use Claude Code's file tool names, then the Codex shell and patch
+rules. Exporting an imported session as ATIF keeps its original agent name.
 
 ## What the archive stores
 

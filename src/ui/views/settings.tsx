@@ -108,8 +108,8 @@ export function SettingsView({
             <h2>About Decant</h2>
             <p>
               Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub
-              Copilot CLI, and Copilot Chat in VS Code sessions. Decant is an open source tool from
-              Dosu.
+              Copilot CLI, and Copilot Chat in VS Code sessions, and ATIF trajectories. Decant is an
+              open source tool from Dosu.
             </p>
           </div>
           <img alt="" src={dosuDecantUrl} />

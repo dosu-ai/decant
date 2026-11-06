@@ -8,8 +8,8 @@ body:
         # Do not paste real session transcripts
 
         **This issue is public.** Your Claude Code, Codex, Gemini CLI, OpenCode,
-        Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions contain
-        your own source code, file paths, prompts, and
+        Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and the
+        ATIF trajectories you import, contain your own source code, file paths, prompts, and
         everything else you typed into those tools. decant keeps them on your
         machine. Pasting one here would not.
 
@@ -112,6 +112,7 @@ body:
         - Cursor CLI
         - GitHub Copilot CLI
         - Copilot Chat in VS Code
+        - ATIF trajectories
         - Not applicable
     validations:
       required: true

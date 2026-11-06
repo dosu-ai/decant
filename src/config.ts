@@ -37,6 +37,12 @@ export interface Config {
   /** VS Code Insiders' `User` directory, read beside the stable one. Present
    * only when no override names a single directory. */
   vscodeCopilotInsidersDir?: string;
+  /** ATIF trajectory files, such as Harbor job directories or `decant export
+   * --as atif` output, read recursively on every sync. No tool writes to the
+   * default; a user copies trajectories into it, because discovery does not
+   * follow symbolic links. Absent in a config built by hand, which then reads
+   * no ATIF directory. */
+  atifDir?: string;
 }
 
 export interface ConfigOverrides {
@@ -48,6 +54,7 @@ export interface ConfigOverrides {
   cursorDir?: string | null;
   copilotDir?: string | null;
   vscodeCopilotDir?: string | null;
+  atifDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
   /** Defaults to the running platform; tests pass one to check each layout. */
@@ -92,6 +99,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       nonEmpty(env.DECANT_COPILOT_DIR) ??
       join(nonEmpty(env.COPILOT_HOME) ?? join(home, ".copilot"), "session-state"),
     ...vscodeCopilotDirs(overrides, env, home),
+    atifDir: overrides.atifDir ?? nonEmpty(env.DECANT_ATIF_DIR) ?? join(home, ".decant", "atif"),
   };
 }
 

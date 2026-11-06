@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
 import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
@@ -45,6 +45,7 @@ function stageFixtures(caseDir: string): {
   cursorDir: string;
   copilotDir: string;
   vscodeCopilotDir: string;
+  atifDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
@@ -53,6 +54,7 @@ function stageFixtures(caseDir: string): {
   const cursorDir = join(caseDir, "sources", "cursor");
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
+  const atifDir = join(caseDir, "sources", "atif");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -99,6 +101,7 @@ function stageFixtures(caseDir: string): {
   cpSync(join(import.meta.dir, "..", "fixtures", "vscode-copilot", "User"), vscodeCopilotDir, {
     recursive: true,
   });
+  stageAtifFlat(atifDir);
   return {
     claudeDir,
     codexDir,
@@ -108,7 +111,20 @@ function stageFixtures(caseDir: string): {
     cursorDir,
     copilotDir,
     vscodeCopilotDir,
+    atifDir,
   };
+}
+
+/** Flat, as scripts/regen-goldens.ts stages them: Harbor's job layout would
+ * make the temporary job directory a project. */
+function stageAtifFlat(atifDir: string): void {
+  mkdirSync(atifDir, { recursive: true });
+  const root = join(import.meta.dir, "..", "fixtures", "atif");
+  for (const file of readdirSync(root, { recursive: true, encoding: "utf8" })) {
+    if (file.endsWith(".json")) {
+      copyFileSync(join(root, file), join(atifDir, basename(file)));
+    }
+  }
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -173,6 +189,7 @@ describe("CLI golden parity", () => {
       cursorDir,
       copilotDir,
       vscodeCopilotDir,
+      atifDir,
     } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
@@ -195,6 +212,8 @@ describe("CLI golden parity", () => {
         copilotDir,
         "--vscode-copilot-dir",
         vscodeCopilotDir,
+        "--atif-dir",
+        atifDir,
       ],
       {
         env: {

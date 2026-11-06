@@ -150,6 +150,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         cursorDir: config.cursorDir,
         copilotDir: config.copilotDir,
         vscodeCopilotDir: config.vscodeCopilotDir,
+        atifDir: config.atifDir ?? null,
         version: DECANT_VERSION,
       }),
   },

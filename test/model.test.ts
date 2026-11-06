@@ -26,6 +26,7 @@ describe("model wire strings", () => {
       "cursor",
       "copilot",
       "vscode_copilot",
+      "atif",
     ]);
     expect(ROLES).toEqual(["user", "assistant", "system", "tool", "other"]);
     expect(BLOCK_TYPES).toEqual([

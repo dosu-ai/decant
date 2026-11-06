@@ -36,6 +36,8 @@ interface ProjectRow {
 interface ExternalContainer {
   tool: string;
   leaf: string;
+  /** The repository segment of a `<tool dir>/worktrees/<repo>/<name>` layout. */
+  repo?: string;
 }
 
 function segments(path: string): { absolute: boolean; parts: string[] } {
@@ -103,7 +105,7 @@ export function externalContainer(path: string): ExternalContainer | null {
     if (segment === "worktrees") {
       const repo = parts[index + 1];
       const leaf = parts[index + 2];
-      return repo != null && leaf != null ? { tool, leaf: `${repo}-${leaf}` } : null;
+      return repo != null && leaf != null ? { tool, leaf: `${repo}-${leaf}`, repo } : null;
     }
     const leaf = parts[index + 1];
     return leaf == null ? null : { tool, leaf };
@@ -116,7 +118,25 @@ export function classifyExternal(
   leaf: string,
   path: string,
   knownRoots: readonly KnownRoot[],
+  repo?: string,
 ): Resolution {
+  // A nested layout names its repository outright, so an exact match on that
+  // name wins over prefix matching: under worktrees/decant/, a known root
+  // named decant-t3 must not claim the leaf decant-t3-0cacd467.
+  if (repo != null && repo !== "") {
+    const label = leaf.startsWith(`${repo}-`) ? leaf.slice(repo.length + 1) : null;
+    const exact = knownRoots
+      .filter((root) => root.basename === repo)
+      .sort(compareKnownRoots)
+      .at(-1);
+    return {
+      isWorktree: true,
+      rootPath: exact?.path ?? repo,
+      worktreeLabel: label,
+      worktreeTool: tool,
+      source: exact == null ? "synthetic" : "namematch",
+    };
+  }
   const best = knownRoots
     .filter((root) => root.basename !== "")
     .filter((root) => leaf === root.basename || leaf.startsWith(`${root.basename}-`))
@@ -179,12 +199,7 @@ function compareNullableString(left: string | null, right: string | null): numbe
 function stripCodename(tool: string, leaf: string): string {
   if (tool === "t3") {
     const index = leaf.indexOf("-t3code-");
-    if (index !== -1) {
-      return leaf.slice(0, index);
-    }
-    // ~/.t3/worktrees/<repo>/t3-<hex> arrives as `<repo>-t3-<hex>`.
-    const generated = /^(.+)-t3-[0-9a-f]{6,}$/.exec(leaf);
-    return generated?.[1] ?? leaf;
+    return index === -1 ? leaf : leaf.slice(0, index);
   }
   if (tool === "warp") {
     const tokens = leaf.split("-");
@@ -269,7 +284,7 @@ export function resolveWorktreeRoots(db: Database): void {
   }
 
   const writes: { id: number; resolution: Resolution }[] = [];
-  const deferred: { id: number; path: string; tool: string; leaf: string }[] = [];
+  const deferred: { id: number; path: string; tool: string; leaf: string; repo?: string }[] = [];
   const roots = new Map<string, { sessions: number; lastSeen: string | null }>();
   const noteRoot = (rootPath: string, sessions: number, lastSeen: string | null): void => {
     const entry = roots.get(rootPath) ?? { sessions: 0, lastSeen: null };
@@ -331,6 +346,7 @@ export function resolveWorktreeRoots(db: Database): void {
         deferredProject.leaf,
         deferredProject.path,
         knownRoots,
+        deferredProject.repo,
       ),
     });
   }

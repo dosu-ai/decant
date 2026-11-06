@@ -26,6 +26,8 @@ Start with these files and guides:
 - `docs/architecture.md` maps module boundaries and data flow.
 - `docs/analytics-methodology.md` details metric definitions.
 - `docs/data-lifecycle.md` describes sync and local state.
+- `docs/sources.md` lists each source's default location, overrides, and
+  user-facing caveats.
 - `docs/api/openapi.yaml` defines the local API contract.
 - `docs/distribution.md` covers npm, installer, Homebrew, Docker, and source
   builds.

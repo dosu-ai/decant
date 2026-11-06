@@ -19,7 +19,8 @@ editing; this skill only lists the steps that are easy to miss.
 ## Touchpoints
 
 1. `discover()` in `src/ingest.ts` (where files live, which sidecars to skip)
-   plus a source-directory env override documented in `README.md`.
+   plus a source-directory env override documented in `docs/sources.md`, and
+   a row in the supported agents table in `README.md`.
 2. `src/sources/<tool>.ts`: pure and print-free, returns a `ParsedSession`,
    turns malformed lines into `unparsed_line` issues and unknown record types
    into one `unknown_record_type` issue per type, calls `linkageIssues`. Reuse

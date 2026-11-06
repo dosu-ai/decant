@@ -130,8 +130,10 @@ export function parseAtifDocument(
   let value: unknown;
   try {
     value = JSON.parse(content);
-  } catch (error) {
-    return unreadable(fallbackId, options, error instanceof Error ? error.message : String(error));
+  } catch {
+    // The runtime's message can quote the token it stopped at, which may be
+    // transcript text, and diagnostics never quote transcript content.
+    return unreadable(fallbackId, options, "document is not valid JSON");
   }
   if (!isObject(value) || !Array.isArray(value.steps)) {
     return unreadable(fallbackId, options, "not an ATIF trajectory: `steps` is not an array");
@@ -311,7 +313,7 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
 
   const schemaVersion = asString(trajectory.schema_version);
   if (schemaVersion != null && !KNOWN_SCHEMA_VERSIONS.has(schemaVersion)) {
-    countUnknown(unknownTypes, `schema_version ${schemaVersion}`, 1);
+    countUnknown(unknownTypes, `schema_version ${identifierLabel(schemaVersion)}`, 1);
   }
 
   const messages: NormalizedMessage[] = [];
@@ -415,7 +417,7 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
         push(source, { timestamp, raw: stepRecord, blocks });
       }
     } else {
-      countUnknown(unknownTypes, `step source ${source ?? "(missing)"}`, lineNo);
+      countUnknown(unknownTypes, `step source ${identifierLabel(source)}`, lineNo);
       const blocks: NormalizedBlock[] = [];
       messageBlocks(step.message, blocks, unknownTypes, lineNo);
       push("other", { timestamp, raw: stepRecord, blocks });
@@ -707,7 +709,7 @@ function messageBlocks(
       blocks.push(block(blocks.length, "image", { text: mediaPath(part) }));
     } else {
       if (type !== "audio") {
-        countUnknown(unknownTypes, `content part ${type ?? "(missing)"}`, lineNo);
+        countUnknown(unknownTypes, `content part ${identifierLabel(type)}`, lineNo);
       }
       blocks.push(block(blocks.length, "other", { text: mediaPath(part) }));
     }
@@ -785,6 +787,16 @@ function isoTimestamp(raw: string | null): string | null {
   const zoned = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(raw) ? raw : `${raw}Z`;
   const date = new Date(zoned);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** A value for a diagnostic. A format identifier such as `ATIF-v2.0` or
+ * `video` is the drift signal worth naming; anything else could be transcript
+ * text, which a diagnostic never quotes. */
+function identifierLabel(value: string | null): string {
+  if (value == null) {
+    return "(missing)";
+  }
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(value) ? value : "(not an identifier)";
 }
 
 function knownVersion(version: string | null): string | null {

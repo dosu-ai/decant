@@ -464,6 +464,22 @@ describe("parseAtifDocument", () => {
     ]);
   });
 
+  test("never quotes document text in a diagnostic", () => {
+    const secret = "a private sentence the user typed";
+    const broken = parseAtifDocument("broken", `{"steps": [${secret}]}`, {});
+    expect(broken.sessions[0]?.parsed.issues[0]?.error).toBe("document is not valid JSON");
+    const document = parse({
+      ...(trajectory([{ step_id: 1, source: secret, message: [{ type: secret }] }]) as object),
+      schema_version: secret,
+    });
+    const errors = document.sessions[0]?.parsed.issues.map((issue) => issue.error) ?? [];
+    expect(errors).toHaveLength(3);
+    for (const error of errors) {
+      expect(error).not.toContain(secret);
+      expect(error).toContain("(not an identifier)");
+    }
+  });
+
   test("falls back to the given id when the document names none", () => {
     const document = parse({
       schema_version: "ATIF-v1.7",

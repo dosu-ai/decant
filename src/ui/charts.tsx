@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from "react";
+import { isolatedPoints } from "../day-series.ts";
 import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
@@ -119,6 +120,7 @@ export function buildChartOption(
 ): AnalyticsChartOption {
   const moneyMetric = metric === "money";
   const seriesType = variant;
+  const isolated = isolatedPoints(values);
   const reduceMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -181,11 +183,20 @@ export function buildChartOption(
       {
         name: moneyMetric ? "cost" : "sessions",
         type: seriesType,
-        data: values,
+        // A line leaves gaps unconnected, so a known point between two gaps
+        // has no segment and needs a marker to show at all.
+        data:
+          seriesType === "line"
+            ? values.map((value, index) => ({
+                value,
+                symbol: isolated[index] === true ? "circle" : "none",
+              }))
+            : values,
         // Smoothing invents values between points; idle days are real zeros.
         smooth: false,
         connectNulls: false,
-        showSymbol: false,
+        showSymbol: seriesType === "line",
+        symbolSize: 6,
         barMaxWidth: 26,
         itemStyle: { borderRadius: seriesType === "bar" ? [3, 3, 0, 0] : 0 },
         lineStyle: { width: 2 },

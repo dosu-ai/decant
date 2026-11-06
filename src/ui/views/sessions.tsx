@@ -20,6 +20,7 @@ import {
   sessionProjectFilter,
   sessionRepoFilter,
   sessionsArchivedHref,
+  sessionsClearFilterHref,
   sessionsPageHref,
 } from "../navigation.ts";
 import {
@@ -235,7 +236,7 @@ export function SessionsView({
               Project: <strong>{basename(project)}</strong>
               <Link
                 aria-label="Clear project filter"
-                href={sessionsArchivedHref("/sessions", includeArchived)}
+                href={sessionsClearFilterHref(path, "project")}
               >
                 <Icon name="x" />
               </Link>
@@ -248,7 +249,7 @@ export function SessionsView({
               Repository: <strong>{basename(repo)}</strong>
               <Link
                 aria-label="Clear repository filter"
-                href={sessionsArchivedHref("/sessions", includeArchived)}
+                href={sessionsClearFilterHref(path, "repo")}
               >
                 <Icon name="x" />
               </Link>

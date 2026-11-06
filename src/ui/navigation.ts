@@ -98,6 +98,16 @@ export function sessionsArchivedHref(path: string, includeArchived: boolean): st
   return query === "" ? "/sessions" : `/sessions?${query}`;
 }
 
+/** Drop one scope filter from a sessions URL, keeping the others and the
+ * archived toggle, and start again from the first page. */
+export function sessionsClearFilterHref(path: string, filter: "project" | "repo"): string {
+  const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
+  params.delete(filter);
+  params.delete("page");
+  const query = params.toString();
+  return query === "" ? "/sessions" : `/sessions?${query}`;
+}
+
 function sessionParams(path: string): URLSearchParams {
   const query = path.includes("?") ? (path.split("?", 2)[1] ?? "") : "";
   return new URLSearchParams(query);

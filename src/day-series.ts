@@ -121,6 +121,17 @@ export function alignToSeries(
   return series.points.map((point) => byWeek.get(point.key) ?? 0);
 }
 
+/**
+ * Points a line chart cannot draw: a known value with no known neighbour has
+ * no segment to sit on once gaps are left unconnected, so it needs a marker.
+ * A one-point series is the simplest case.
+ */
+export function isolatedPoints(values: readonly (number | null)[]): boolean[] {
+  return values.map(
+    (value, index) => value != null && values[index - 1] == null && values[index + 1] == null,
+  );
+}
+
 function dayCost(row: DayRow | undefined): number | null {
   if (row == null) {
     return 0;

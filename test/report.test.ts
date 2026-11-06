@@ -9,6 +9,7 @@ import { upsertSession } from "../src/ingest.ts";
 import {
   renderChartSvg,
   renderContextWindowChart,
+  renderCostByDayChart,
   renderSessionsByDayChart,
   reportCompactionLabels,
   reportContextWindowGeometry,
@@ -291,6 +292,20 @@ describe("report charts", () => {
     expect(svg).not.toContain("<style");
     expect(svg).toContain("IBM Plex Sans");
     expect(renderSessionsByDayChart(buildDaySeries(daily))).toContain("<svg");
+  });
+
+  test("the cost line marks a known day that sits between unknown days", () => {
+    // ECharts draws each line marker as a small arc path.
+    const markers = (svg: string) => (svg.match(/<path d="M1 0A1 1 0 1 1/g) ?? []).length;
+    const series = (costs: (number | null)[]): DaySeries => ({
+      granularity: "day",
+      missingUsage: 0,
+      observedDays: costs.length,
+      points: costs.map((cost, index) => ({ key: `2026-07-2${index}`, sessions: 1, cost })),
+    });
+    expect(markers(renderCostByDayChart(series([null, 0.5, null])))).toBe(1);
+    expect(markers(renderCostByDayChart(series([0.5])))).toBe(1);
+    expect(markers(renderCostByDayChart(series([0.1, 0.5, 0.2])))).toBe(0);
   });
 
   test("removes safe ECharts style blocks without joining surrounding markup", () => {

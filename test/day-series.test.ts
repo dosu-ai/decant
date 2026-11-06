@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { alignToSeries, buildDaySeries, WEEKLY_AFTER_DAYS, weekStart } from "../src/day-series.ts";
+import {
+  alignToSeries,
+  buildDaySeries,
+  isolatedPoints,
+  WEEKLY_AFTER_DAYS,
+  weekStart,
+} from "../src/day-series.ts";
 
 const row = (key: string, sessions: number, usageSessions = sessions, cost = sessions) => ({
   key,
@@ -68,6 +74,13 @@ describe("buildDaySeries", () => {
   test("ignores malformed keys and ranges", () => {
     expect(buildDaySeries([row("", 3), row("2026-02-30", 1)]).points).toEqual([]);
     expect(buildDaySeries([], { from: "2026-03-05", to: "2026-03-01" }).points).toEqual([]);
+  });
+
+  test("isolatedPoints flags known values with no known neighbour", () => {
+    expect(isolatedPoints([5])).toEqual([true]);
+    expect(isolatedPoints([null, 5, null, 1, 2])).toEqual([false, true, false, false, false]);
+    expect(isolatedPoints([0, null])).toEqual([true, false]);
+    expect(isolatedPoints([])).toEqual([]);
   });
 
   test("weekStart returns the Monday of the ISO week", () => {

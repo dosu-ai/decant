@@ -1,6 +1,6 @@
 import * as echarts from "echarts";
 import type { ContextWindowTimeline } from "../context-window.ts";
-import type { DaySeries } from "../day-series.ts";
+import { type DaySeries, isolatedPoints } from "../day-series.ts";
 import {
   groupContextMarkers,
   layoutContextAnnotations,
@@ -257,6 +257,7 @@ export function renderSessionsByDayChart(series: DaySeries, size?: ReportChartSi
  * an unknown cost and draws as a gap, not as zero. */
 export function renderCostByDayChart(series: DaySeries, size?: ReportChartSize): string {
   const ordered = series.points;
+  const isolated = isolatedPoints(ordered.map((row) => row.cost));
   return renderChartSvg(
     {
       grid: { top: 18, right: 16, bottom: 44, left: 58 },
@@ -280,9 +281,15 @@ export function renderCostByDayChart(series: DaySeries, size?: ReportChartSize):
       series: [
         {
           type: "line",
-          data: ordered.map((row) => row.cost),
+          // Only points with no known neighbour get a marker; the rest sit on the line.
+          data: ordered.map((row, index) => ({
+            value: row.cost,
+            symbol: isolated[index] === true ? "circle" : "none",
+          })),
           connectNulls: false,
-          showSymbol: false,
+          showSymbol: true,
+          symbolSize: 6,
+          itemStyle: { color: SAGE },
           lineStyle: { color: SAGE, width: 2 },
           areaStyle: { color: "rgba(180, 187, 145, 0.24)" },
         },

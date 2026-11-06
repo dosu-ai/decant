@@ -10,6 +10,7 @@ import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { CostSource, Tool } from "./model.ts";
 import { costSourceFor } from "./model-usage.ts";
+import { cachedRead, statementKey } from "./read-cache.ts";
 import {
   bracketSearchMatches,
   buildFtsQuery,
@@ -23,11 +24,7 @@ import {
   sessionUserStatePredicateForDatabase,
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
-import {
-  durationRankSql,
-  NEAREST_RANK_PERCENTILES_SQL,
-  sessionUsageAvailableSql,
-} from "./stats.ts";
+import { nearestRankPercentiles, sessionUsageAvailableSql } from "./stats.ts";
 import { preview, previewHeadTail } from "./tools.ts";
 
 export interface SessionSummary {
@@ -495,33 +492,27 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     JOIN session s ON s.id = t.session_id
     ${filter.project == null ? "" : "LEFT JOIN project p ON p.id = s.project_id"}`;
   const where = `WHERE ${clauses.join(" AND ")}`;
+  const summarySql = `SELECT t.is_error, t.duration_ms
+    ${scanJoins}
+    WHERE ${summaryClauses.join(" AND ")}`;
   const summary =
     offset === 0
-      ? (db
-          .query(
-            `WITH filtered AS MATERIALIZED (
-         SELECT t.is_error, t.duration_ms
-         ${scanJoins}
-         WHERE ${summaryClauses.join(" AND ")}
-       ),
-       ranked AS (
-         SELECT duration_ms,
-                ${durationRankSql()}
-         FROM filtered
-         WHERE duration_ms IS NOT NULL
-       )
-       SELECT
-         (SELECT COUNT(*) FROM filtered) AS calls,
-         (SELECT COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
-          FROM filtered) AS errors,
-         ${NEAREST_RANK_PERCENTILES_SQL}
-       FROM ranked`,
-          )
-          .get(...summaryParams) as ToolCallSummary)
+      ? {
+          ...cachedRead(db, statementKey(summarySql, summaryParams), () =>
+            toolCallSummary(db, summarySql, summaryParams),
+          ),
+        }
       : null;
-  const { total } = db.query(`SELECT COUNT(*) AS total ${scanJoins} ${where}`).get(...params) as {
-    total: number;
-  };
+  // Without row-only filters the page and the summary count the same rows.
+  const rowOnlyFilter = filter.errorsOnly === true || date.sql !== "" || filter.minMs != null;
+  const total =
+    summary != null && !rowOnlyFilter
+      ? summary.calls
+      : (
+          db.query(`SELECT COUNT(*) AS total ${scanJoins} ${where}`).get(...params) as {
+            total: number;
+          }
+        ).total;
   const rows = db
     .query(
       `WITH page AS MATERIALIZED (
@@ -553,6 +544,30 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     offset,
     summary,
   };
+}
+
+/** One streaming pass yields the counts and the sorted durations together. */
+function toolCallSummary(
+  db: Database,
+  sql: string,
+  params: readonly (string | number)[],
+): ToolCallSummary {
+  let calls = 0;
+  let errors = 0;
+  const durations: number[] = [];
+  for (const row of db.query(sql).iterate(...params) as IterableIterator<{
+    is_error: number | null;
+    duration_ms: number | null;
+  }>) {
+    calls += 1;
+    if (row.is_error === 1) {
+      errors += 1;
+    }
+    if (row.duration_ms != null) {
+      durations.push(row.duration_ms);
+    }
+  }
+  return { calls, errors, ...nearestRankPercentiles(Float64Array.from(durations).sort()) };
 }
 
 export interface BlockView {

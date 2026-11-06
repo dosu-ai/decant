@@ -4,6 +4,7 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 import type { Operation } from "./enrich.ts";
 import type { Tool } from "./model.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
+import { cachedRead, statementKey } from "./read-cache.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
@@ -315,25 +316,24 @@ export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
                   THEN duration_ms
                 END) AS p95_ms`;
 
-/** Rank a histogram by the number of calls represented by each duration, so
- * repeated elapsed times do not need a window row for every individual call. */
-function durationHistogramRankSql(partitionBy: string): string {
-  return `SUM(frequency) OVER (PARTITION BY ${partitionBy} ORDER BY duration_ms
-                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_count,
-                SUM(frequency) OVER (PARTITION BY ${partitionBy} ORDER BY duration_ms
-                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS duration_count`;
+/**
+ * Nearest-rank p50 and p95 of durations sorted ascending, using the same ranks
+ * as NEAREST_RANK_PERCENTILES_SQL. On 160k calls the SQL window pass took about
+ * 150 ms, while sorting the same durations in memory takes about 20 ms.
+ */
+export function nearestRankPercentiles(sorted: ArrayLike<number>): {
+  p50_ms: number | null;
+  p95_ms: number | null;
+} {
+  const count = sorted.length;
+  if (count === 0) {
+    return { p50_ms: null, p95_ms: null };
+  }
+  return {
+    p50_ms: sorted[Math.floor((count + 1) / 2) - 1] ?? null,
+    p95_ms: sorted[Math.floor((count * 95 + 99) / 100) - 1] ?? null,
+  };
 }
-
-// The first histogram bucket reaching each nearest rank contains the same
-// duration as that position in the fully expanded, sorted call population.
-const HISTOGRAM_PERCENTILES_SQL = `MIN(CASE
-                  WHEN cumulative_count >= CAST((duration_count + 1) / 2 AS INTEGER)
-                  THEN duration_ms
-                END) AS p50_ms,
-                MIN(CASE
-                  WHEN cumulative_count >= CAST((duration_count * 95 + 99) / 100 AS INTEGER)
-                  THEN duration_ms
-                END) AS p95_ms`;
 
 export interface ToolStatRow {
   tool_name: string;
@@ -344,11 +344,6 @@ export interface ToolStatRow {
   p50_ms: number | null;
   p95_ms: number | null;
   last_used_at: string | null;
-}
-
-interface ToolStatDb extends Omit<ToolStatRow, "tool_name" | "tool_kind"> {
-  tool_name: string | null;
-  tool_kind: string | null;
 }
 
 export function toolUsage(
@@ -362,66 +357,105 @@ export function toolUsage(
   const visible = statsScope(db, "s", filter);
   const scope = `JOIN (SELECT id FROM session s ${whereClause(visible)}) fs
     ON fs.id = t.session_id`;
-  const statement = db.prepare(
-    `WITH scoped AS (
-         SELECT COALESCE(t.tool_name, '') AS tool_name,
-                COALESCE(t.tool_kind, '') AS tool_kind,
-                t.mcp_server, t.is_error,
-                t.duration_ms, t.timestamp
-         FROM tool_call t INDEXED BY idx_toolcall_usage
-         ${scope}
-       ),
-       histogram AS MATERIALIZED (
-         SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                COUNT(*) AS frequency,
-                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
-                MAX(timestamp) AS last_used_at
-         FROM scoped
-         GROUP BY tool_name, tool_kind, mcp_server, duration_ms
-       ),
-       ranked AS (
-         SELECT tool_name, tool_kind, mcp_server, duration_ms,
-                ${durationHistogramRankSql("tool_name, tool_kind, mcp_server")}
-         FROM histogram
-         WHERE duration_ms IS NOT NULL
-       ),
-       latency AS (
-         SELECT tool_name, tool_kind, mcp_server,
-                ${HISTOGRAM_PERCENTILES_SQL}
-         FROM ranked
-         GROUP BY tool_name, tool_kind, mcp_server
+  const from = `FROM tool_call t INDEXED BY idx_toolcall_usage
+       ${scope}`;
+  // Grouping by session first follows idx_toolcall_usage order, so SQLite
+  // sorts only the per-session rows by tool, not every call.
+  const aggregateSql = `WITH per_session AS (
+         SELECT t.tool_name, t.tool_kind, t.mcp_server,
+                COUNT(*) AS calls,
+                SUM(CASE WHEN t.is_error = 1 THEN 1 ELSE 0 END) AS errors,
+                MAX(t.timestamp) AS last_used_at
+         ${from}
+         GROUP BY t.session_id, t.tool_name, t.tool_kind, t.mcp_server
        ),
        aggregate AS (
-         SELECT tool_name, tool_kind, mcp_server,
-                SUM(frequency) AS calls,
+         SELECT COALESCE(tool_name, '') AS tool_name,
+                COALESCE(tool_kind, '') AS tool_kind,
+                mcp_server,
+                SUM(calls) AS calls,
                 SUM(errors) AS errors,
                 MAX(last_used_at) AS last_used_at
-         FROM histogram
-         GROUP BY tool_name, tool_kind, mcp_server
+         FROM per_session
+         GROUP BY COALESCE(tool_name, ''), COALESCE(tool_kind, ''), mcp_server
        )
-       SELECT a.tool_name, a.tool_kind, a.mcp_server, a.calls, a.errors,
-              l.p50_ms, l.p95_ms, a.last_used_at
+       SELECT a.tool_name, a.tool_kind, a.mcp_server, a.calls, a.errors, a.last_used_at
        FROM aggregate a
-       LEFT JOIN latency l
-         ON l.tool_name IS a.tool_name
-        AND l.tool_kind IS a.tool_kind
-        AND l.mcp_server IS a.mcp_server
        ${errorFilter}
        ORDER BY a.calls DESC, a.tool_name ASC, a.tool_kind ASC,
                 (a.mcp_server IS NOT NULL) ASC, COALESCE(a.mcp_server, '') ASC
-       LIMIT ?`,
+       LIMIT ?`;
+  const durationSql = `SELECT COALESCE(t.tool_name, '') AS tool_name,
+              COALESCE(t.tool_kind, '') AS tool_kind,
+              t.mcp_server, t.duration_ms
+       ${from}
+       WHERE t.duration_ms IS NOT NULL`;
+  const params = [...visible.params, limit];
+  // Both scans run in one read transaction so they see the same snapshot.
+  const rows = cachedRead(db, statementKey(aggregateSql, params), () =>
+    db.transaction(() => {
+      const aggregates = withStatement(
+        db,
+        aggregateSql,
+        (statement) => statement.all(...params) as ToolAggregateDb[],
+      );
+      const durations = new Map<string, number[]>();
+      for (const row of aggregates) {
+        durations.set(toolGroupKey(row.tool_name, row.tool_kind, row.mcp_server), []);
+      }
+      withStatement(db, durationSql, (statement) => {
+        for (const row of statement.iterate(
+          ...visible.params,
+        ) as IterableIterator<ToolDurationDb>) {
+          durations
+            .get(toolGroupKey(row.tool_name, row.tool_kind, row.mcp_server))
+            ?.push(row.duration_ms);
+        }
+      });
+      return aggregates.map(
+        ({ tool_name, tool_kind, mcp_server, calls, errors, last_used_at }): ToolStatRow => ({
+          tool_name,
+          tool_kind,
+          mcp_server,
+          calls,
+          errors,
+          ...nearestRankPercentiles(
+            Float64Array.from(
+              durations.get(toolGroupKey(tool_name, tool_kind, mcp_server)) ?? [],
+            ).sort(),
+          ),
+          last_used_at,
+        }),
+      );
+    })(),
   );
-  let rows: ToolStatDb[];
+  return rows.map((row) => ({ ...row }));
+}
+
+type ToolAggregateDb = Omit<ToolStatRow, "p50_ms" | "p95_ms">;
+
+interface ToolDurationDb {
+  tool_name: string;
+  tool_kind: string;
+  mcp_server: string | null;
+  duration_ms: number;
+}
+
+function toolGroupKey(toolName: string, toolKind: string, mcpServer: string | null): string {
+  return JSON.stringify([toolName, toolKind, mcpServer]);
+}
+
+function withStatement<T>(
+  db: Database,
+  sql: string,
+  use: (statement: ReturnType<Database["prepare"]>) => T,
+): T {
+  const statement = db.prepare(sql);
   try {
-    rows = statement.all(...visible.params, limit) as ToolStatDb[];
+    return use(statement);
   } finally {
     statement.finalize();
   }
-  return rows.map((row) => ({
-    ...row,
-    tool_name: row.tool_name ?? "",
-    tool_kind: row.tool_kind ?? "",
-  }));
 }
 
 export interface McpStatRow {

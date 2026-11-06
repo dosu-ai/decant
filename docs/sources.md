@@ -165,8 +165,14 @@ Each embedded subagent becomes a linked subagent session, and so does a
 subagent another trajectory names by `trajectory_path`. Steps marked
 `is_copied_context` were copied from an earlier trajectory and are skipped.
 
-Tokens come from each step's `metrics`, with cache reads and writes taken back
-out of `prompt_tokens`. Decant prices models it has a rate for and keeps a
-step's recorded `cost_usd` for models it cannot price. A trajectory with no
-metrics shows tokens and cost as unavailable. See
+Session tokens are the sum of each step's `metrics`, with cache reads and
+writes taken back out of `prompt_tokens`. Two kinds of trajectory use
+`final_metrics` instead:
+
+- a trajectory with no per-step metrics and no embedded subagents
+- a trajectory Decant exported, whose per-step metrics can undercount
+
+Decant prices models it has a rate for and keeps a recorded `cost_usd` for
+models it cannot price. A trajectory with neither step metrics nor
+`final_metrics` shows tokens and cost as unavailable. See
 [ATIF imports](data-lifecycle.md#atif-imports) for the full mapping.

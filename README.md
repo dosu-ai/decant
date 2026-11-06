@@ -32,7 +32,8 @@ sessions. For a persistent `decant` command, see [Installation](#installation).
 ## Features
 
 - One SQLite archive for every supported agent, with full-text search across
-  prompts, tool calls, and transcripts.
+  prompts, responses, tool names, and tool inputs. Tool output is stored but
+  not indexed.
 - Full transcripts for every session, with diagnostics for records Decant could
   not parse.
 - Token, [estimated cost](docs/pricing.md), context-window, and agent-time
@@ -41,8 +42,10 @@ sessions. For a persistent `decant` command, see [Installation](#installation).
 - Recommendations drawn from patterns in your sessions, each with a suggested
   change you can mark as implemented.
 - Session exports to Markdown, JSON, Letta's trajectory-v1, and ATIF.
-- HTML reports of the analytics view or a single session that leave out
-  transcript messages and tool bodies, so you can share them.
+- HTML reports of the analytics view or a single session. Reports leave out
+  transcript messages and tool bodies but include project paths, and a session
+  report adds its title, a prompt preview, and file paths. Review a report
+  before you share it.
 - Workflow scripts, session replays, and agent instructions (`SKILL.md`,
   `AGENTS.md` sections, and slash commands) distilled from command history.
 - A local HTTP API with an OpenAPI 3.1 contract.
@@ -61,7 +64,7 @@ else, or for per-agent details, see [Sources](docs/sources.md).
 | Cursor CLI | `~/.cursor/chats` | Not recorded by Cursor |
 | GitHub Copilot CLI | `~/.copilot/session-state` | Recorded, priced at the model's API rates |
 | Copilot Chat in VS Code | VS Code's `User` directory | VS Code builds from April 2026 on, as a rough estimate |
-| ATIF trajectories | `~/.decant/atif` | From each step's `metrics` |
+| ATIF trajectories | `~/.decant/atif` | From step `metrics` or `final_metrics` |
 
 When an agent records no usage, Decant shows tokens and cost as unavailable
 instead of $0.
@@ -186,7 +189,7 @@ skips the browser, and `--host` and `--port` change the address.
 | Analytics | Token, cost, context, and agent-time rollups across sessions |
 | Insights | Recommendations drawn from your history, and the ones you have implemented |
 | Sessions | Every session, with its full transcript |
-| Search | Full-text matches across prompts, tool calls, and transcripts |
+| Search | Full-text matches in prompts, responses, tool names, and tool inputs |
 | Projects | Sessions and cost for each project |
 | Files | The files agents read, edit, and write most |
 | Tools & MCP | Tool calls and MCP server usage |

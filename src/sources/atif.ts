@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { linkageIssues } from "../diagnostics.ts";
 import { asBoolean, asString, get, isObject, type JsonObject } from "../json.ts";
@@ -313,7 +314,7 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
 
   const schemaVersion = asString(trajectory.schema_version);
   if (schemaVersion != null && !KNOWN_SCHEMA_VERSIONS.has(schemaVersion)) {
-    countUnknown(unknownTypes, `schema_version ${identifierLabel(schemaVersion)}`, 1);
+    countUnknown(unknownTypes, `schema_version ${versionLabel(schemaVersion)}`, 1);
   }
 
   const messages: NormalizedMessage[] = [];
@@ -417,7 +418,7 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
         push(source, { timestamp, raw: stepRecord, blocks });
       }
     } else {
-      countUnknown(unknownTypes, `step source ${identifierLabel(source)}`, lineNo);
+      countUnknown(unknownTypes, `step source ${valueLabel(source)}`, lineNo);
       const blocks: NormalizedBlock[] = [];
       messageBlocks(step.message, blocks, unknownTypes, lineNo);
       push("other", { timestamp, raw: stepRecord, blocks });
@@ -709,7 +710,7 @@ function messageBlocks(
       blocks.push(block(blocks.length, "image", { text: mediaPath(part) }));
     } else {
       if (type !== "audio") {
-        countUnknown(unknownTypes, `content part ${identifierLabel(type)}`, lineNo);
+        countUnknown(unknownTypes, `content part ${valueLabel(type)}`, lineNo);
       }
       blocks.push(block(blocks.length, "other", { text: mediaPath(part) }));
     }
@@ -789,14 +790,20 @@ function isoTimestamp(raw: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-/** A value for a diagnostic. A format identifier such as `ATIF-v2.0` or
- * `video` is the drift signal worth naming; anything else could be transcript
- * text, which a diagnostic never quotes. */
-function identifierLabel(value: string | null): string {
+/** An unknown value for a diagnostic, which never quotes document content:
+ * even an identifier-shaped value can be a secret. A short digest still tells
+ * distinct values apart, so each gets its own count. */
+function valueLabel(value: string | null): string {
   if (value == null) {
     return "(missing)";
   }
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(value) ? value : "(not an identifier)";
+  return `(value ${createHash("sha256").update(value).digest("hex").slice(0, 8)})`;
+}
+
+/** An ATIF version string can hold only the spec's own format, so a newer
+ * version is named; anything else is labeled like any other unknown value. */
+function versionLabel(value: string): string {
+  return /^ATIF-v\d{1,3}(?:\.\d{1,3}){0,2}$/.test(value) ? value : valueLabel(value);
 }
 
 function knownVersion(version: string | null): string | null {

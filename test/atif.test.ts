@@ -191,7 +191,7 @@ describe("parseAtifDocument", () => {
     expect(document.sessions[0]?.parsed.issues).toEqual([
       expect.objectContaining({
         code: "unknown_record_type",
-        error: expect.stringContaining('"content part video"'),
+        error: expect.stringMatching(/"content part \(value [0-9a-f]{8}\)"/),
       }),
     ]);
   });
@@ -442,8 +442,9 @@ describe("parseAtifDocument", () => {
     const session = root(document);
     expect(session.messages[0]).toMatchObject({ role: "other" });
     expect(document.sessions[0]?.parsed.issues.map((i) => i.error)).toEqual([
+      // A version in the spec's own format is named; it cannot carry content.
       expect.stringContaining('"schema_version ATIF-v2.0"'),
-      expect.stringContaining('"step source environment"'),
+      expect.stringMatching(/"step source \(value [0-9a-f]{8}\)"/),
     ]);
   });
 
@@ -465,18 +466,21 @@ describe("parseAtifDocument", () => {
   });
 
   test("never quotes document text in a diagnostic", () => {
-    const secret = "a private sentence the user typed";
-    const broken = parseAtifDocument("broken", `{"steps": [${secret}]}`, {});
+    const sentence = "a private sentence the user typed";
+    const broken = parseAtifDocument("broken", `{"steps": [${sentence}]}`, {});
     expect(broken.sessions[0]?.parsed.issues[0]?.error).toBe("document is not valid JSON");
-    const document = parse({
-      ...(trajectory([{ step_id: 1, source: secret, message: [{ type: secret }] }]) as object),
-      schema_version: secret,
-    });
-    const errors = document.sessions[0]?.parsed.issues.map((issue) => issue.error) ?? [];
-    expect(errors).toHaveLength(3);
-    for (const error of errors) {
-      expect(error).not.toContain(secret);
-      expect(error).toContain("(not an identifier)");
+    // An identifier-shaped value can be a secret too.
+    for (const secret of [sentence, "privateToken123"]) {
+      const document = parse({
+        ...(trajectory([{ step_id: 1, source: secret, message: [{ type: secret }] }]) as object),
+        schema_version: secret,
+      });
+      const errors = document.sessions[0]?.parsed.issues.map((issue) => issue.error) ?? [];
+      expect(errors).toHaveLength(3);
+      for (const error of errors) {
+        expect(error).not.toContain(secret);
+        expect(error).toMatch(/\(value [0-9a-f]{8}\)/);
+      }
     }
   });
 

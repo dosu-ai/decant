@@ -3,10 +3,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
 import { closeDb, openDb } from "../src/db.ts";
 import { listToolCalls } from "../src/query.ts";
 import {
   durationRankSql,
+  mcpUsage,
   NEAREST_RANK_PERCENTILES_SQL,
   nearestRankPercentiles,
   toolUsage,
@@ -218,6 +220,84 @@ describe("tool aggregates", () => {
       (bashBefore ?? 0) + 1,
     );
     closeDb(writer);
+    closeDb(db);
+  });
+
+  test("mcp usage matches the window-function SQL on random calls", () => {
+    const db = openDb(freshPath());
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, model, started_at) VALUES
+        (1, 'claude_code', 's1', 'claude-sonnet-4-5', '2026-01-01T00:00:00.000Z'),
+        (2, 'codex', 's2', 'gpt-5', '2026-01-02T00:00:00.000Z');
+    `);
+    const insert = db.prepare(
+      `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    // The SQL mcpUsage ran before it moved its percentiles to TypeScript.
+    const oracle = (limit: number) =>
+      db
+        .query(
+          `WITH scoped AS (
+             SELECT mcp_server, tool_name, is_error, duration_ms, timestamp
+             FROM tool_call WHERE tool_kind = 'mcp' AND mcp_server IS NOT NULL
+           ),
+           ranked AS (
+             SELECT mcp_server, duration_ms, ${durationRankSql("mcp_server")}
+             FROM scoped WHERE duration_ms IS NOT NULL
+           ),
+           latency AS (
+             SELECT mcp_server, ${NEAREST_RANK_PERCENTILES_SQL} FROM ranked GROUP BY mcp_server
+           ),
+           aggregate AS (
+             SELECT mcp_server, COUNT(DISTINCT tool_name) AS tools, COUNT(*) AS calls,
+                    COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
+                    MAX(timestamp) AS last_used_at
+             FROM scoped GROUP BY mcp_server
+           )
+           SELECT a.mcp_server, a.tools, a.calls, a.errors, l.p50_ms, l.p95_ms, a.last_used_at
+           FROM aggregate a LEFT JOIN latency l ON l.mcp_server = a.mcp_server
+           ORDER BY a.calls DESC, a.mcp_server ASC
+           LIMIT ?`,
+        )
+        .all(limit);
+    // U+FFFD and U+1D538 order differently by code point and by UTF-16 unit.
+    const call = fc.record({
+      session: fc.integer({ min: 1, max: 2 }),
+      kind: fc.constantFrom("mcp", "mcp", "builtin", null),
+      server: fc.constantFrom(null, "", "linear", "dosu", "\uFFFD", "𝔸"),
+      name: fc.constantFrom(null, "", "read", "write", "search"),
+      isError: fc.constantFrom(null, 0, 1),
+      duration: fc.option(fc.integer({ min: 0, max: 30 }), { nil: null }),
+      timestamp: fc.option(
+        fc
+          .integer({ min: 0, max: 40 })
+          .map((hour) => new Date(Date.UTC(2026, 0, 1) + hour * 3_600_000).toISOString()),
+        { nil: null },
+      ),
+    });
+    fc.assert(
+      fc.property(
+        fc.array(call, { maxLength: 50 }),
+        fc.integer({ min: 1, max: 8 }),
+        (calls, limit) => {
+          db.exec("DELETE FROM tool_call");
+          for (const row of calls) {
+            insert.run(
+              row.session,
+              row.kind,
+              row.name,
+              row.server,
+              row.isError,
+              row.duration,
+              row.timestamp,
+            );
+          }
+          expect(mcpUsage(db, limit)).toEqual(oracle(limit) as never);
+        },
+      ),
+      { numRuns: 150 },
+    );
     closeDb(db);
   });
 

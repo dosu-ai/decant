@@ -75,9 +75,7 @@ const TOTALS_COLUMNS = `s.id, s.is_subagent,
 
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
-  return db
-    .query(
-      `WITH filtered_session AS (
+  const sql = `WITH filtered_session AS (
          SELECT ${TOTALS_COLUMNS} FROM session s ${whereClause(visible)}
        )
        SELECT
@@ -92,9 +90,14 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
          (SELECT COALESCE(SUM(total_cache_creation_tokens), 0) FROM filtered_session) AS cache_creation_tokens,
          (SELECT COALESCE(SUM(total_reasoning_tokens), 0) FROM filtered_session) AS reasoning_tokens,
          (SELECT COALESCE(SUM(est_reasoning_tokens), 0) FROM filtered_session) AS est_reasoning_tokens,
-         (SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM filtered_session) AS estimated_cost_usd`,
-    )
-    .get(...visible.params) as Totals;
+         (SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM filtered_session) AS estimated_cost_usd`;
+  return {
+    ...cachedRead(
+      db,
+      statementKey(sql, visible.params),
+      () => db.query(sql).get(...visible.params) as Totals,
+    ),
+  };
 }
 
 export type Dimension = "tool" | "model" | "project" | "day";
@@ -132,9 +135,19 @@ export function byDimension(
   filter?: StatsFilter | null,
 ): DimRow[] {
   const visible = statsScope(db, "s", filter);
-  if (dimension === "model") {
-    return byModel(db, visible);
-  }
+  const rows = cachedRead(
+    db,
+    statementKey(`byDimension:${dimension}:${visible.sql}`, visible.params),
+    () => (dimension === "model" ? byModel(db, visible) : groupedRows(db, dimension, visible)),
+  );
+  return rows.map((row) => ({ ...row }));
+}
+
+function groupedRows(
+  db: Database,
+  dimension: Exclude<Dimension, "model">,
+  visible: { sql: string; params: string[] },
+): DimRow[] {
   const { groupExpr, join } = dimensionSql(dimension);
   const statement = db.prepare(
     `WITH filtered_session AS (
@@ -468,58 +481,56 @@ export interface McpStatRow {
   last_used_at: string | null;
 }
 
-interface McpStatDb extends Omit<McpStatRow, "mcp_server"> {
-  mcp_server: string | null;
-}
+type McpAggregateDb = Omit<McpStatRow, "p50_ms" | "p95_ms">;
 
+/** Same approach as toolUsage: counts in one SQL pass, durations in another,
+ * percentiles from a sorted array instead of a window row per call. */
 export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | null): McpStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const visible = statsScope(db, "s", filter);
-  const statement = db.prepare(
-    `WITH filtered_session AS (
-         SELECT id, started_at FROM session s ${whereClause(visible)}
-       ),
-       scoped AS (
-         SELECT t.mcp_server, t.tool_name, t.is_error, t.duration_ms, t.timestamp
-         FROM tool_call t INDEXED BY idx_toolcall_usage
-         JOIN filtered_session s ON s.id = t.session_id
-         WHERE t.tool_kind = 'mcp' AND t.mcp_server IS NOT NULL
-       ),
-       ranked AS (
-         SELECT mcp_server, duration_ms,
-                ${durationRankSql("mcp_server")}
-         FROM scoped
-         WHERE duration_ms IS NOT NULL
-       ),
-       latency AS (
-         SELECT mcp_server,
-                ${NEAREST_RANK_PERCENTILES_SQL}
-         FROM ranked
-         GROUP BY mcp_server
-       ),
-       aggregate AS (
-         SELECT mcp_server,
-                COUNT(DISTINCT tool_name) AS tools,
-                COUNT(*) AS calls,
-                COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
-                MAX(timestamp) AS last_used_at
-         FROM scoped
-         GROUP BY mcp_server
-       )
-       SELECT a.mcp_server, a.tools, a.calls, a.errors,
-              l.p50_ms, l.p95_ms, a.last_used_at
-       FROM aggregate a
-       LEFT JOIN latency l ON l.mcp_server = a.mcp_server
-       ORDER BY a.calls DESC, a.mcp_server ASC
-       LIMIT ?`,
+  const from = `FROM tool_call t INDEXED BY idx_toolcall_usage
+       JOIN (SELECT id FROM session s ${whereClause(visible)}) fs ON fs.id = t.session_id
+       WHERE t.tool_kind = 'mcp' AND t.mcp_server IS NOT NULL`;
+  const aggregateSql = `SELECT t.mcp_server,
+              COUNT(DISTINCT t.tool_name) AS tools,
+              COUNT(*) AS calls,
+              COALESCE(SUM(CASE WHEN t.is_error = 1 THEN 1 ELSE 0 END), 0) AS errors,
+              MAX(t.timestamp) AS last_used_at
+       ${from}
+       GROUP BY t.mcp_server
+       ORDER BY calls DESC, t.mcp_server ASC
+       LIMIT ?`;
+  const durationSql = `SELECT t.mcp_server, t.duration_ms ${from} AND t.duration_ms IS NOT NULL`;
+  const params = [...visible.params, limit];
+  const rows = cachedRead(db, statementKey(aggregateSql, params), () =>
+    db.transaction(() => {
+      const aggregates = withStatement(
+        db,
+        aggregateSql,
+        (statement) => statement.all(...params) as McpAggregateDb[],
+      );
+      const durations = new Map<string, number[]>(aggregates.map((row) => [row.mcp_server, []]));
+      withStatement(db, durationSql, (statement) => {
+        for (const row of statement.iterate(...visible.params) as IterableIterator<{
+          mcp_server: string;
+          duration_ms: number;
+        }>) {
+          durations.get(row.mcp_server)?.push(row.duration_ms);
+        }
+      });
+      return aggregates.map(
+        ({ mcp_server, tools, calls, errors, last_used_at }): McpStatRow => ({
+          mcp_server,
+          tools,
+          calls,
+          errors,
+          ...nearestRankPercentiles(Float64Array.from(durations.get(mcp_server) ?? []).sort()),
+          last_used_at,
+        }),
+      );
+    })(),
   );
-  let rows: McpStatDb[];
-  try {
-    rows = statement.all(...visible.params, limit) as McpStatDb[];
-  } finally {
-    statement.finalize();
-  }
-  return rows.map((row) => ({ ...row, mcp_server: row.mcp_server ?? "" }));
+  return rows.map((row) => ({ ...row }));
 }
 
 export type FileGroup = "path" | "ext";
@@ -570,7 +581,11 @@ export function fileHotspots(
                GROUP BY key, project
                ORDER BY (reads + edits + writes + deletes) DESC, key ASC
                LIMIT ?`;
-  const rows = db.query(sql).all(...params, limit) as FileStatDb[];
+  const rows = cachedRead(
+    db,
+    statementKey(sql, [...params, limit]),
+    () => db.query(sql).all(...params, limit) as FileStatDb[],
+  );
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
@@ -610,15 +625,24 @@ export interface Activity {
 }
 
 export function activity(db: Database, filter?: StatsFilter | null): Activity {
-  const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24, filter);
-  const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7, filter);
-  return {
-    by_hour: byHour,
-    by_weekday: byWeekday,
-    timezone: localTimezone(),
-    peak_hour: peak(byHour),
-    peak_weekday: peak(byWeekday),
-  };
+  const visible = statsScope(db, "s", filter);
+  // Buckets use the server's local time, which moves at a daylight-saving
+  // change without any write, so the offset is part of the key.
+  const key = statementKey(`activity:${new Date().getTimezoneOffset()}:${visible.sql}`, [
+    ...visible.params,
+  ]);
+  const result = cachedRead(db, key, () => {
+    const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24, filter);
+    const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7, filter);
+    return {
+      by_hour: byHour,
+      by_weekday: byWeekday,
+      timezone: localTimezone(),
+      peak_hour: peak(byHour),
+      peak_weekday: peak(byWeekday),
+    };
+  });
+  return { ...result, by_hour: [...result.by_hour], by_weekday: [...result.by_weekday] };
 }
 
 export interface ModelSparklines {
@@ -628,6 +652,20 @@ export interface ModelSparklines {
 
 export function modelSparklines(db: Database, filter?: StatsFilter | null): ModelSparklines {
   const visible = statsScope(db, "s", filter);
+  const result = cachedRead(
+    db,
+    statementKey(`modelSparklines:${visible.sql}`, visible.params),
+    () => sparklineRows(db, visible),
+  );
+  return {
+    days: [...result.days],
+    models: Object.fromEntries(
+      Object.entries(result.models).map(([model, counts]) => [model, [...counts]]),
+    ),
+  };
+}
+
+function sparklineRows(db: Database, visible: { sql: string; params: string[] }): ModelSparklines {
   const rows = db
     .query(
       `SELECT COALESCE(s.model, '(unknown)') AS model,
@@ -668,9 +706,7 @@ export interface DateBounds {
 
 export function dateBounds(db: Database): DateBounds {
   const visible = statsScope(db, "s");
-  return db
-    .query(
-      `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
+  const sql = `SELECT MIN(substr(s.started_at, 1, 10)) AS min,
               MAX(substr(s.started_at, 1, 10)) AS max,
               -- julianday orders by instant, so an offset timestamp cannot win
               -- on text alone. It reads +05:30 but not +0530, which Claude
@@ -690,9 +726,8 @@ export function dateBounds(db: Database): DateBounds {
        ${whereClause({
          sql: ["s.started_at IS NOT NULL", visible.sql].join(" AND "),
          params: visible.params,
-       })}`,
-    )
-    .get() as DateBounds;
+       })}`;
+  return { ...cachedRead(db, statementKey(sql, []), () => db.query(sql).get() as DateBounds) };
 }
 
 // started_at is UTC, so "today" is the local calendar day as a UTC range.

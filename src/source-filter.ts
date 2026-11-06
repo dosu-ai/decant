@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { cachedRead, statementKey } from "./read-cache.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 
@@ -111,21 +112,23 @@ export function sessionSourcePredicate(
 
 export function availableSessionSources(db: Database): AvailableSessionSource[] {
   const userVisible = sessionUserStatePredicateForDatabase(db, "s");
-  return SESSION_SOURCES.flatMap((key) => {
-    const source = sessionSourcePredicate("s", key);
-    const statement = db.prepare(
-      `SELECT COUNT(*) AS sessions
+  // One scan with a conditional count per source, instead of a scan per source.
+  const predicates = SESSION_SOURCES.map((key) => sessionSourcePredicate("s", key));
+  const sql = `SELECT ${predicates
+    .map(
+      (source, index) => `COALESCE(SUM(CASE WHEN ${source.sql} THEN 1 ELSE 0 END), 0) AS s${index}`,
+    )
+    .join(", ")}
        FROM session s
        WHERE ${visibleSessionPredicate("s")}
-         AND ${userVisible}
-         AND ${source.sql}`,
-    );
-    let sessions: number;
-    try {
-      sessions = Number((statement.get(...source.params) as { sessions: number }).sessions);
-    } finally {
-      statement.finalize();
-    }
-    return sessions > 0 ? [{ key, label: sessionSourceLabel(key) }] : [];
-  });
+         AND ${userVisible}`;
+  const params = predicates.flatMap((source) => source.params);
+  const counts = cachedRead(
+    db,
+    statementKey(sql, params),
+    () => (db.query(sql).values(...params)[0] as number[] | undefined) ?? [],
+  );
+  return SESSION_SOURCES.flatMap((key, index) =>
+    Number(counts[index] ?? 0) > 0 ? [{ key, label: sessionSourceLabel(key) }] : [],
+  );
 }

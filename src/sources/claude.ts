@@ -41,6 +41,12 @@ const TITLE_META = new Set(["summary", "ai-title"]);
 const IGNORED_JOURNAL_META = new Set([
   "agent-name",
   "agent-setting",
+  // Request-shape logging (Claude Code, November 2026): cache-control and
+  // digest bookkeeping for each API call. None carries a `usage` object, so
+  // skipping them loses no tokens or cost.
+  "api-request",
+  "api-request-blob",
+  "api-request-shape",
   "atis-latch",
   "bridge-session",
   "cost-state",
@@ -56,6 +62,9 @@ const IGNORED_JOURNAL_META = new Set([
   "pr-link",
   "queue-operation",
   "relocated",
+  // Account and organization IDs for the session; not conversation content.
+  "session-owner",
+  "tools-used",
   "world_state",
   "worktree-state",
 ]);

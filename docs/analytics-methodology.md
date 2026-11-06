@@ -71,6 +71,13 @@ nested run linked to a parent session.
 This distinction matters when comparing throughput with cost: a single
 top-level session can coordinate many separately metered runs.
 
+Insights count sessions the same way. The search-heavy, abandoned-rate, and
+ingest-health signals divide by top-level sessions in the window. The
+hot-context, churn, search-heavy, and ingest-health signals credit a
+subagent's file reads, edits, searches, and diagnostics to the top-level
+session that started it, so one session that fans out to five subagents counts
+once. The abandoned rate reads only top-level outcome labels.
+
 ## Work type and completion labels
 
 Work type and outcome are lightweight transcript-shape heuristics, not evidence

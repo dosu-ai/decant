@@ -700,11 +700,24 @@ describe("recommendations", () => {
         ).run(sourcePath);
       }
     }
-    db.query(
-      `UPDATE session
-       SET is_subagent = 1, parent_session_id = 1
-       WHERE id != 1`,
-    ).run();
+    // Each evidence run is a subagent of its own top-level parent, so the
+    // signals still see many sessions and only the parents' state hides them.
+    const parents = (
+      db.query("SELECT id, outcome FROM session WHERE id != 1").all() as {
+        id: number;
+        outcome: string | null;
+      }[]
+    ).map((child) => {
+      const parentId = child.id + 10_000;
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+         VALUES (?1, 'claude_code', 'archive-parent-' || ?1, 1, datetime('now'), ?2)`,
+      ).run(parentId, child.outcome);
+      db.query(
+        "UPDATE session SET is_subagent = 1, parent_session_id = ?1, outcome = NULL WHERE id = ?2",
+      ).run(parentId, child.id);
+      return parentId;
+    });
 
     const expected = [
       "signal:hot-context:AGENTS.md",
@@ -718,11 +731,48 @@ describe("recommendations", () => {
       expect(before).toContain(key);
     }
 
-    expect(setSessionUserState(db, 1, "archived")).toBe(true);
+    for (const parentId of parents) {
+      expect(setSessionUserState(db, parentId, "archived")).toBe(true);
+    }
     const after = keys(signals(db));
     for (const key of expected) {
       expect(after).not.toContain(key);
     }
+    db.close();
+  });
+
+  test("subagents count toward their top-level session, not as sessions", () => {
+    const db = base();
+    // One session fans out to nine subagents that all read the same file.
+    seedFileSessions(db, 100, 9, "AGENTS.md", "read");
+    db.query("UPDATE session SET is_subagent = 1, parent_session_id = 1 WHERE id != 1").run();
+    // Twenty top-level sessions, each with a subagent that runs the searches
+    // and is labelled abandoned.
+    for (let index = 0; index < 20; index += 1) {
+      const parentId = 500 + index;
+      const childId = 600 + index;
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+         VALUES (?1, 'claude_code', 'top-' || ?1, 1, datetime('now'), 'completed')`,
+      ).run(parentId);
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome,
+                             is_subagent, parent_session_id)
+         VALUES (?1, 'claude_code', 'sub-' || ?1, 1, datetime('now'), 'abandoned', 1, ?2)`,
+      ).run(childId, parentId);
+      for (let call = 0; call < 6; call += 1) {
+        db.query(
+          `INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
+           VALUES (?1, 'builtin', 'Grep', datetime('now'))`,
+        ).run(childId);
+      }
+    }
+    const found = signals(db);
+    expect(keys(found)).not.toContain("signal:hot-context:AGENTS.md");
+    expect(keys(found)).not.toContain("signal:abandoned-rate");
+    const search = found.find((row) => row.key === "signal:search-heavy");
+    // 120 searches over 21 top-level sessions, not over 50 runs.
+    expect(search?.detail).toContain("120 searches across 21 sessions");
     db.close();
   });
 

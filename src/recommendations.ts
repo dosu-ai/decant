@@ -5,6 +5,7 @@ import { withImmediateTransaction } from "./db.ts";
 import { mcpServerLabel, mcpServerLabels } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
+import { visibleSessionPredicate } from "./session-visibility.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
 
 export interface Recommendation {
@@ -73,6 +74,25 @@ const WINDOW_DAYS = 30;
 // Bound to the cutoff recentWindowStart() computes, rather than SQLite's
 // date('now'), so every signal shares the JS clock that tests can freeze.
 const WINDOW = "s.started_at >= ?";
+
+// Session counts in the signals mean top-level sessions, as on the Analytics
+// tiles. Work a subagent does counts toward the top-level session that
+// spawned it, so one session fanning out to five subagents is one session.
+const SESSION_ROOT_CTE = `WITH RECURSIVE session_root(id, root_id) AS (
+         SELECT id, id FROM session WHERE is_subagent = 0
+         UNION ALL
+         SELECT child.id, session_root.root_id
+         FROM session child
+         JOIN session_root ON child.parent_session_id = session_root.id
+         WHERE child.is_subagent = 1
+       )`;
+// A subagent whose parent is not in the archive stands in for its own root.
+const ROOT_ID = "COALESCE(r.root_id, s.id)";
+const ROOT_JOIN = "LEFT JOIN session_root r ON r.id = s.id";
+
+function topLevelSession(visibleSession: string): string {
+  return `s.is_subagent = 0 AND ${visibleSessionPredicate("s")} AND ${visibleSession}`;
+}
 
 function queryOne<T>(db: Database, sql: string, params: string[] = []): T {
   const statement = db.prepare(sql);
@@ -789,10 +809,11 @@ function fmtUsd(value: number): string {
 function hotContextFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
   const rows = queryRows<{ key: string; readers: number }>(
     db,
-    `SELECT f.rel_path AS key,
-              COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN f.session_id END) AS readers,
-              COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN f.session_id END) AS editors
-       FROM file_ref f JOIN session s ON s.id = f.session_id
+    `${SESSION_ROOT_CTE}
+     SELECT f.rel_path AS key,
+              COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN ${ROOT_ID} END) AS readers,
+              COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN ${ROOT_ID} END) AS editors
+       FROM file_ref f JOIN session s ON s.id = f.session_id ${ROOT_JOIN}
        WHERE ${WINDOW} AND ${visibleSession} AND f.rel_path IS NOT NULL
        GROUP BY key
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
@@ -823,8 +844,9 @@ function hotContextFiles(db: Database, visibleSession: string, since: string): R
 function churnFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
   const rows = queryRows<{ key: string; editors: number }>(
     db,
-    `SELECT f.rel_path AS key, COUNT(DISTINCT f.session_id) AS editors
-       FROM file_ref f JOIN session s ON s.id = f.session_id
+    `${SESSION_ROOT_CTE}
+     SELECT f.rel_path AS key, COUNT(DISTINCT ${ROOT_ID}) AS editors
+       FROM file_ref f JOIN session s ON s.id = f.session_id ${ROOT_JOIN}
        WHERE ${WINDOW} AND ${visibleSession}
          AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
        GROUP BY key
@@ -883,7 +905,7 @@ function searchHeavy(db: Database, visibleSession: string, since: string): Recom
   const counts = { searches, sessions: searchSessions.size };
   const inWindow = queryOne<{ n: number }>(
     db,
-    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${visibleSession}`,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${topLevelSession(visibleSession)}`,
     [since],
   ).n;
   if (inWindow < SEARCH_HEAVY_MIN_SESSIONS || counts.sessions === 0) {
@@ -900,7 +922,7 @@ function searchHeavy(db: Database, visibleSession: string, since: string): Recom
       kind: "signal",
       category: null,
       title: `${rounded} searches per session — discovery is expensive`,
-      detail: `${counts.searches} searches across ${inWindow} sessions in the last 30 days, counting Grep and Glob calls plus shell searches such as rg, grep, and find.`,
+      detail: `${counts.searches} searches across ${inWindow} sessions in the last 30 days, counting Grep and Glob calls plus shell searches such as rg, grep, and find. A subagent's searches count toward the session that started it.`,
       suggestion:
         "Agents grep for structure the repo could state once: add a code map / module index to AGENTS.md so discovery is a read, not a search loop.",
       prompt: `Our agents average ${rounded} code searches per session (${counts.searches} over the last 30 days, across Grep and Glob calls and shell searches such as rg, grep, and find). Build a concise code map — key modules, their responsibilities, where common things live — and add it to AGENTS.md so agents can navigate by reading instead of searching.`,
@@ -920,7 +942,7 @@ function abandonedRate(db: Database, visibleSession: string, since: string): Rec
     `SELECT COUNT(*) AS classified,
               SUM(s.outcome = 'abandoned') AS abandoned
        FROM session s
-       WHERE ${WINDOW} AND ${visibleSession} AND s.outcome IS NOT NULL`,
+       WHERE ${WINDOW} AND ${topLevelSession(visibleSession)} AND s.outcome IS NOT NULL`,
     [since],
   );
   const abandoned = row.abandoned ?? 0;
@@ -953,16 +975,21 @@ function abandonedRate(db: Database, visibleSession: string, since: string): Rec
 }
 
 function ingestHealth(db: Database, visibleSession: string, since: string): Recommendation[] {
+  // A session is affected when its own transcript or a subagent's has issues.
   const counts = queryOne<{ affected: number }>(
     db,
-    `SELECT COUNT(DISTINCT s.id) AS affected
-       FROM session s JOIN ingest_issue ii ON ii.source_path = s.source_path
-       WHERE ${WINDOW} AND ${visibleSession} AND ii.code != 'unparsed_line'`,
+    `${SESSION_ROOT_CTE}
+     SELECT COUNT(DISTINCT s.id) AS affected
+       FROM session run
+       JOIN ingest_issue ii ON ii.source_path = run.source_path
+       LEFT JOIN session_root r ON r.id = run.id
+       JOIN session s ON s.id = COALESCE(r.root_id, run.id)
+      WHERE ${WINDOW} AND ${topLevelSession(visibleSession)} AND ii.code != 'unparsed_line'`,
     [since],
   );
   const inWindow = queryOne<{ n: number }>(
     db,
-    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${visibleSession}`,
+    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${topLevelSession(visibleSession)}`,
     [since],
   ).n;
   if (inWindow < INGEST_HEALTH_MIN_SESSIONS || counts.affected === 0) {

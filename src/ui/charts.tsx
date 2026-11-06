@@ -1,7 +1,9 @@
 import { memo, useEffect, useMemo, useRef } from "react";
+import { isolatedPoints } from "../day-series.ts";
 import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
+  type AnalyticsChartPeriod,
   type AnalyticsChartState,
   type AnalyticsChartVariant,
   prepareAnalyticsChartState,
@@ -15,22 +17,27 @@ export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const NO_VALUES: number[] = [];
 
 export const AnalyticsChart = memo(function AnalyticsChart({
+  description,
   labels,
   metric,
+  period = "category",
   values,
   variant,
 }: {
+  /** What the chart shows, read out by screen readers in place of the canvas. */
+  description: string;
   labels: string[];
   metric: AnalyticsChartMetric;
-  values: number[];
+  period?: AnalyticsChartPeriod;
+  values: readonly (number | null)[];
   variant: AnalyticsChartVariant;
 }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<EChartsInstance | null>(null);
   const lastDrawnKeyRef = useRef<string | null>(null);
   const chartState = useMemo(
-    () => prepareAnalyticsChartState({ labels, metric, values, variant }),
-    [labels, metric, values, variant],
+    () => prepareAnalyticsChartState({ labels, metric, period, values, variant }),
+    [labels, metric, period, values, variant],
   );
   const chartStateRef = useRef<AnalyticsChartState>(chartState);
   chartStateRef.current = chartState;
@@ -96,29 +103,34 @@ export const AnalyticsChart = memo(function AnalyticsChart({
     chart.resize();
   }, [chartState.key]);
 
-  return <div aria-label="Analytics chart" className="analytics-chart" ref={chartRef} role="img" />;
+  return <div aria-label={description} className="analytics-chart" ref={chartRef} role="img" />;
 });
 
-export function buildChartOption({
-  labels,
-  metric,
-  values,
-  variant,
-}: {
-  labels: string[];
-  metric: AnalyticsChartMetric;
-  values: number[];
-  variant: AnalyticsChartVariant;
-}): AnalyticsChartOption {
-  const colors = chartColors();
+export type ChartColors = ReturnType<typeof chartColors>;
+
+export function buildChartOption(
+  {
+    labels,
+    metric,
+    period,
+    values,
+    variant,
+  }: Pick<AnalyticsChartState, "labels" | "metric" | "period" | "values" | "variant">,
+  colors: ChartColors = chartColors(),
+): AnalyticsChartOption {
   const moneyMetric = metric === "money";
   const seriesType = variant;
+  const isolated = isolatedPoints(values);
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
   return {
     color:
       seriesType === "bar"
         ? [colors.success, colors.info, colors.warning, colors.accent]
         : [colors.accent, colors.info, colors.success, colors.warning],
     textStyle: { fontFamily: "inherit", color: colors.muted },
+    animation: !reduceMotion,
     animationDuration: 180,
     grid: { left: 6, right: 16, top: 18, bottom: 6, containLabel: true },
     tooltip: {
@@ -133,8 +145,17 @@ export function buildChartOption({
         lineStyle: { color: colors.faint, width: 1 },
         shadowStyle: { color: colors.hover },
       },
-      valueFormatter: (value) =>
-        moneyMetric ? money(Number(value ?? 0)) : formatInt(Number(value ?? 0)),
+      formatter: (params) => {
+        const items = Array.isArray(params) ? params : [params];
+        const heading = tooltipHeading(String(items[0]?.name ?? ""), period);
+        const rows = items.map(
+          (item) =>
+            `${typeof item.marker === "string" ? item.marker : ""}${escapeHtml(
+              tooltipValue(item.value, moneyMetric),
+            )}`,
+        );
+        return [escapeHtml(heading), ...rows].join("<br/>");
+      },
     },
     xAxis: {
       type: "category",
@@ -162,9 +183,20 @@ export function buildChartOption({
       {
         name: moneyMetric ? "cost" : "sessions",
         type: seriesType,
-        data: values,
-        smooth: seriesType === "line",
-        showSymbol: false,
+        // A line leaves gaps unconnected, so a known point between two gaps
+        // has no segment and needs a marker to show at all.
+        data:
+          seriesType === "line"
+            ? values.map((value, index) => ({
+                value,
+                symbol: isolated[index] === true ? "circle" : "none",
+              }))
+            : values,
+        // Smoothing invents values between points; idle days are real zeros.
+        smooth: false,
+        connectNulls: false,
+        showSymbol: seriesType === "line",
+        symbolSize: 6,
         barMaxWidth: 26,
         itemStyle: { borderRadius: seriesType === "bar" ? [3, 3, 0, 0] : 0 },
         lineStyle: { width: 2 },
@@ -172,6 +204,42 @@ export function buildChartOption({
       },
     ],
   };
+}
+
+const utcDayFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** Tooltip heading for one category: a UTC day, the week it starts, or the label. */
+export function tooltipHeading(label: string, period: AnalyticsChartPeriod): string {
+  if (period === "category" || !/^\d{4}-\d{2}-\d{2}$/.test(label)) {
+    return label;
+  }
+  const date = new Date(`${label}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    return label;
+  }
+  const day = utcDayFormatter.format(date);
+  return period === "week" ? `Week of ${day} (UTC)` : `${day} (UTC)`;
+}
+
+/** A null point is unknown (no usage data), which is not the same as zero. */
+export function tooltipValue(value: unknown, moneyMetric: boolean): string {
+  if (value == null || value === "-" || (typeof value === "number" && Number.isNaN(value))) {
+    return "No usage data";
+  }
+  return moneyMetric ? money(Number(value)) : formatInt(Number(value));
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 export function chartColors() {

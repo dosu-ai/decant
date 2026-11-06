@@ -59,10 +59,14 @@ export function sessionSummaryPath(
   project: string | null,
   dateQuery: string,
   includeArchived = false,
+  repo: string | null = null,
 ): string {
   const params = new URLSearchParams(dateQuery);
   if (project != null) {
     params.set("project", project);
+  }
+  if (repo != null) {
+    params.set("repo", repo);
   }
   if (includeArchived) {
     params.set("include_archived", "true");

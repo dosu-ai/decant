@@ -3,6 +3,7 @@ import {
   sessionIncludesArchived,
   sessionPageFromPath,
   sessionProjectFilter,
+  sessionRepoFilter,
 } from "./navigation.ts";
 
 /**
@@ -81,6 +82,7 @@ export function sessionsAutoRefresh({
     pathOnly(path) === "/sessions" &&
     sessionPageFromPath(path) === 1 &&
     sessionProjectFilter(path) == null &&
+    sessionRepoFilter(path) == null &&
     !sessionIncludesArchived(path) &&
     !textFilterActive &&
     !paletteOpen

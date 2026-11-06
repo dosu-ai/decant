@@ -23,6 +23,7 @@ import {
   Folder,
   Inbox,
   Info,
+  Layers,
   Lightbulb,
   Menu,
   MessageSquare,
@@ -114,6 +115,8 @@ export function iconComponent(name: IconName): LucideIcon {
       return Copy;
     case "cpu":
       return Cpu;
+    case "layers":
+      return Layers;
     case "desktop":
       return Monitor;
     case "download":

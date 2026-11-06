@@ -3,11 +3,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ContextWindowTimeline } from "../src/context-window.ts";
+import { buildDaySeries, type DaySeries } from "../src/day-series.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import {
   renderChartSvg,
   renderContextWindowChart,
+  renderCostByDayChart,
   renderSessionsByDayChart,
   reportCompactionLabels,
   reportContextWindowGeometry,
@@ -88,6 +90,17 @@ const secondDay = {
 
 const daily = [firstDay, secondDay];
 
+// Series keys are dates in practice; a free-text key checks that the renderer
+// escapes whatever label text reaches the SVG.
+function seriesWithKey(key: string): DaySeries {
+  return {
+    granularity: "day",
+    missingUsage: 0,
+    observedDays: 1,
+    points: [{ key, sessions: 1, cost: 1 }],
+  };
+}
+
 const analytics: AnalyticsReportData = {
   kind: "analytics",
   range: { from: "2026-07-27", to: "2026-07-28" },
@@ -95,7 +108,11 @@ const analytics: AnalyticsReportData = {
   totals,
   sessionsByDay: daily,
   byModel: [{ ...firstDay, key: "claude-opus-4-6", sessions: 2, usage_sessions: 2 }],
-  byProject: [{ ...secondDay, key: "/Users/dev/decant", sessions: 2, usage_sessions: 2 }],
+  byRepo: [{ ...secondDay, key: "/Users/dev/decant", sessions: 2, usage_sessions: 2 }],
+  byOutcome: [
+    { ...firstDay, key: "completed", sessions: 1, usage_sessions: 1 },
+    { ...secondDay, key: "abandoned", sessions: 1, usage_sessions: 1 },
+  ],
   activity: {
     by_hour: Array.from({ length: 24 }, (_, hour) => (hour === 10 ? 2 : 0)),
     by_weekday: [0, 0, 2, 0, 0, 0, 0],
@@ -274,7 +291,21 @@ describe("report charts", () => {
     expect(svg).not.toContain("<script");
     expect(svg).not.toContain("<style");
     expect(svg).toContain("IBM Plex Sans");
-    expect(renderSessionsByDayChart(daily)).toContain("<svg");
+    expect(renderSessionsByDayChart(buildDaySeries(daily))).toContain("<svg");
+  });
+
+  test("the cost line marks a known day that sits between unknown days", () => {
+    // ECharts draws each line marker as a small arc path.
+    const markers = (svg: string) => (svg.match(/<path d="M1 0A1 1 0 1 1/g) ?? []).length;
+    const series = (costs: (number | null)[]): DaySeries => ({
+      granularity: "day",
+      missingUsage: 0,
+      observedDays: costs.length,
+      points: costs.map((cost, index) => ({ key: `2026-07-2${index}`, sessions: 1, cost })),
+    });
+    expect(markers(renderCostByDayChart(series([null, 0.5, null])))).toBe(1);
+    expect(markers(renderCostByDayChart(series([0.5])))).toBe(1);
+    expect(markers(renderCostByDayChart(series([0.1, 0.5, 0.2])))).toBe(0);
   });
 
   test("removes safe ECharts style blocks without joining surrounding markup", () => {
@@ -308,13 +339,22 @@ describe("report charts", () => {
     expect(html).not.toContain("Unavailable");
   });
 
+  test("states the cost basis and groups work by repository and outcome", () => {
+    const html = renderAnalyticsReport(analytics);
+    expect(html).toContain("priced at current API list prices");
+    expect(html).toContain("not an invoice");
+    expect(html).toContain("<h2>How sessions ended</h2>");
+    expect(html).toContain("<h2>Repositories</h2>");
+    expect(html).not.toContain("<h2>Projects</h2>");
+    expect(html).toContain("Per completed session");
+    expect(html).toContain("Cache reads");
+    expect(html).toContain("Sessions per UTC day");
+  });
+
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {
-    const svg = renderSessionsByDayChart([
-      {
-        ...firstDay,
-        key: "</text><script>globalThis.pwned = true</script><text>",
-      },
-    ]);
+    const svg = renderSessionsByDayChart(
+      seriesWithKey("</text><script>globalThis.pwned = true</script><text>"),
+    );
     expect(svg).not.toContain("<script");
     expect(svg).toContain("&lt;script&gt;");
   });
@@ -337,7 +377,7 @@ describe("report charts", () => {
 
   test("attribute-like text in labels is not mistaken for an attribute", () => {
     const label = "my-src=2 onload=1 href=x url(https://example.com/a) style='//'";
-    const svg = renderSessionsByDayChart([{ ...firstDay, key: label }]);
+    const svg = renderSessionsByDayChart(seriesWithKey(label));
     expect(svg).toContain("my-src=2");
     expect(sanitizeReportSvg('<svg><text x="1">src=2 onclick=3 url(x)</text></svg>')).toContain(
       "src=2 onclick=3",

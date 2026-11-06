@@ -366,6 +366,7 @@ paths:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/Model"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Repo"
         - $ref: "#/components/parameters/IncludeSubagents"
         - $ref: "#/components/parameters/WithSubagents"
         - $ref: "#/components/parameters/IncludeArchived"
@@ -665,6 +666,7 @@ paths:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Repo"
         - $ref: "#/components/parameters/Source"
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/IncludeArchived"
@@ -696,12 +698,19 @@ paths:
         session's label (the model that served most of its requests), while
         tokens and estimated cost follow the model behind each request. A
         session that switched models adds to every model it used, and the rows
-        still sum to the archive totals.
+        still sum to the archive totals. The `repo` dimension groups by
+        repository root, so a worktree's sessions count toward the repository
+        it was created from; sessions without a project use the key `(none)`.
+        The `outcome` dimension groups every run by the outcome label of its
+        top-level session (`completed`, `abandoned`, `failed`, or
+        `(unclassified)`), so a subagent's tokens and cost land on the session
+        that started it, even when a date filter leaves that parent out.
       parameters:
         - $ref: "#/components/parameters/Dimension"
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Repo"
         - $ref: "#/components/parameters/Source"
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/IncludeArchived"
@@ -1208,6 +1217,14 @@ components:
       description: Exact project path filter
       schema:
         type: string
+    Repo:
+      name: repo
+      in: query
+      description: >-
+        Repository root filter. Matches sessions whose project is the root
+        itself or one of its worktrees.
+      schema:
+        type: string
     IncludeSubagents:
       name: include_subagents
       in: query
@@ -1266,7 +1283,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [tool, model, project, day]
+        enum: [tool, model, project, repo, outcome, day]
     FileGroup:
       name: group
       in: query

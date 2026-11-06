@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { buildDaySeries } from "../day-series.ts";
 import { mcpServerLabel, mcpServerLabels } from "../mcp-names.ts";
 import { sessionSourceLabel } from "../source-filter.ts";
 import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
@@ -37,8 +38,13 @@ export function renderAnalyticsReport(
   const scoped = data.range.from != null || data.range.to != null || data.source != null;
   const range = formatRange(data.range.from, data.range.to);
   const source = data.source == null ? null : sessionSourceLabel(data.source);
-  const sessionsSvg = renderSessionsByDayChart(data.sessionsByDay, { width: 380, height: 220 });
-  const costSvg = renderCostByDayChart(data.sessionsByDay, { width: 380, height: 220 });
+  const series = buildDaySeries(data.sessionsByDay, data.range);
+  const sessionsSvg = renderSessionsByDayChart(series, { width: 380, height: 220 });
+  const costSvg = renderCostByDayChart(series, { width: 380, height: 220 });
+  const period = series.granularity === "week" ? "UTC week (starting Monday)" : "UTC day";
+  const promptTokens =
+    data.totals.input_tokens + data.totals.cache_read_tokens + data.totals.cache_creation_tokens;
+  const completed = data.byOutcome.find((row) => row.key === "completed")?.sessions ?? 0;
   // An empty scope, or one holding only subagents, has real token counts.
   const usageUnavailable = data.totals.sessions > 0 && data.totals.usage_sessions === 0;
   const body = (
@@ -52,13 +58,33 @@ export function renderAnalyticsReport(
 
       <section className="section">
         <h2>At a glance</h2>
-        <div className="stat-grid">
+        <div className="stat-grid stat-grid-four">
           <Stat label="Sessions" value={formatInteger(data.totals.sessions)} />
           <Stat label="Messages" value={formatInteger(data.totals.messages)} />
           <Stat label="Tool calls" value={formatInteger(data.totals.tool_calls)} />
           <Stat
+            label="Per completed session"
+            value={
+              usageUnavailable || completed === 0
+                ? "-"
+                : formatCurrency(data.totals.estimated_cost_usd / completed)
+            }
+          />
+          <Stat
             label="Input tokens"
             value={usageUnavailable ? "Unavailable" : formatCompact(data.totals.input_tokens)}
+          />
+          <Stat
+            label="Cache reads"
+            value={
+              usageUnavailable
+                ? "Unavailable"
+                : promptTokens > 0
+                  ? `${formatCompact(data.totals.cache_read_tokens)} (${Math.round(
+                      (data.totals.cache_read_tokens / promptTokens) * 100,
+                    )}%)`
+                  : formatCompact(data.totals.cache_read_tokens)
+            }
           />
           <Stat
             label="Output tokens"
@@ -74,6 +100,13 @@ export function renderAnalyticsReport(
             )}
           />
         </div>
+        <p className="empty">
+          Costs are estimates: recorded token usage priced at current API list prices. They are not
+          an invoice, and subscription plans bill differently. Cache reads are prompt tokens served
+          from the provider's cache, shown with their share of all prompt tokens. Per completed
+          session divides all estimated cost by the sessions whose transcript ended on an assistant
+          reply.
+        </p>
         <UsageGapNote missing={data.totals.sessions - data.totals.usage_sessions} />
       </section>
 
@@ -99,11 +132,17 @@ export function renderAnalyticsReport(
       <section className="section">
         <h2>Activity over time</h2>
         <div className="figure-grid">
-          <ReportFigure caption="Sessions per day" svg={sessionsSvg} />
-          <ReportFigure
-            caption="Estimated cost per day, for sessions with usage data"
-            svg={costSvg}
-          />
+          {series.observedDays === 0 ? (
+            <p className="empty">No sessions in this range.</p>
+          ) : (
+            <>
+              <ReportFigure caption={`Sessions per ${period}`} svg={sessionsSvg} />
+              <ReportFigure
+                caption={`Estimated cost per ${period}, for sessions with usage data`}
+                svg={costSvg}
+              />
+            </>
+          )}
         </div>
       </section>
 
@@ -113,8 +152,14 @@ export function renderAnalyticsReport(
       </section>
 
       <section className="section">
-        <h2>Projects</h2>
-        <DimensionTable path rows={data.byProject} />
+        <h2>How sessions ended</h2>
+        <OutcomeTable rows={data.byOutcome} />
+      </section>
+
+      <section className="section">
+        <h2>Repositories</h2>
+        <p className="empty">Worktrees count toward the repository they came from.</p>
+        <DimensionTable path rows={data.byRepo} />
       </section>
 
       <section className="section">
@@ -330,7 +375,7 @@ function DimensionTable({
       <table>
         <thead>
           <tr>
-            <th>{path ? "Project" : "Model"}</th>
+            <th>{path ? "Repository" : "Model"}</th>
             <th className="number">Sessions</th>
             <th className="number">Input</th>
             <th className="number">Output</th>
@@ -543,6 +588,58 @@ function reportCost(
 ): string {
   if (sessions > 0 && usageSessions === 0) return unavailable;
   return `${formatCurrency(cost)}${usageSessions < sessions ? "*" : ""}`;
+}
+
+const OUTCOME_LABELS: Record<string, string> = {
+  completed: "Completed",
+  abandoned: "Abandoned",
+  failed: "Failed",
+  "(unclassified)": "Unclassified",
+};
+
+function OutcomeTable({ rows }: { rows: AnalyticsReportData["byOutcome"] }) {
+  if (rows.length === 0) {
+    return <p className="empty">No sessions in this range.</p>;
+  }
+  const order = Object.keys(OUTCOME_LABELS);
+  const ordered = [...rows].sort(
+    (left, right) =>
+      (order.indexOf(left.key) + 1 || order.length + 1) -
+      (order.indexOf(right.key) + 1 || order.length + 1),
+  );
+  const total = ordered.reduce((sum, row) => sum + row.sessions, 0);
+  return (
+    <>
+      <table>
+        <thead>
+          <tr>
+            <th>Outcome</th>
+            <th className="number">Sessions</th>
+            <th className="number">Share</th>
+            <th className="number">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ordered.map((row) => (
+            <tr key={row.key}>
+              <td>{OUTCOME_LABELS[row.key] ?? row.key}</td>
+              <td className="number">{formatInteger(row.sessions)}</td>
+              <td className="number">
+                {total > 0 ? `${Math.round((row.sessions / total) * 100)}%` : "-"}
+              </td>
+              <td className="number">
+                {reportCost(row.estimated_cost_usd, row.sessions, row.usage_sessions, "-")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="empty">
+        Outcome labels describe how each transcript ended, not whether the work shipped. Cost
+        includes each session's subagents.
+      </p>
+    </>
+  );
 }
 
 function UsageGapNote({ missing }: { missing: number }) {

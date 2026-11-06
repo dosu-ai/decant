@@ -7,7 +7,7 @@ import {
   type AnalyticsChartVariant,
   prepareAnalyticsChartState,
 } from "./chart-state.ts";
-import { buildChartOption } from "./charts.tsx";
+import { buildChartOption, type ChartColors } from "./charts.tsx";
 import { PrivacyReviewLists } from "./common.tsx";
 import { useDialogFocusTrap } from "./focus.ts";
 import { errorMessage } from "./format.ts";
@@ -19,6 +19,7 @@ import {
   SHARE_EXCLUDED_FIELDS,
   SHARE_INCLUDED_FIELDS,
   type ShareCardCopyInput,
+  type ShareCardKind,
   shareCardAltText,
   shareCardButtonLabel,
   shareCardCaption,
@@ -285,6 +286,35 @@ export function ShareChartButton({
   );
 }
 
+const SHARE_CARD_PANEL = "#11151f";
+
+/** The app's dark theme tokens, fixed so a light-mode export stays legible. */
+export const SHARE_CHART_COLORS: ChartColors = {
+  fg: "#e7eaf0",
+  hover: "rgba(255, 255, 255, 0.05)",
+  muted: "#9aa6b8",
+  faint: "#6b7689",
+  line: "rgba(255, 255, 255, 0.08)",
+  surface: "#1a1f2b",
+  accent: "#ee67d1",
+  info: "#38bdf8",
+  success: "#bef264",
+  warning: "#fcd34d",
+};
+
+function shareCardPeriod(kind: ShareCardKind): "category" | "day" | "week" {
+  switch (kind) {
+    case "sessions_per_day":
+    case "estimated_cost_per_day":
+      return "day";
+    case "sessions_per_week":
+    case "estimated_cost_per_week":
+      return "week";
+    default:
+      return "category";
+  }
+}
+
 export async function renderShareCardPng(
   input: ShareCardCopyInput,
   metric: AnalyticsChartMetric,
@@ -306,19 +336,22 @@ export async function renderShareCardPng(
     const state = prepareAnalyticsChartState({
       labels: input.labels,
       metric,
+      period: shareCardPeriod(input.kind),
       values: input.values,
       variant,
     });
     chart.setOption(
       {
-        ...buildChartOption(state),
+        // The card is always dark, so the chart takes the dark palette even
+        // when the app is in light mode.
+        ...buildChartOption(state, SHARE_CHART_COLORS),
         animation: false,
-        backgroundColor: "#11151f",
+        backgroundColor: SHARE_CARD_PANEL,
       },
       true,
     );
     chartUrl = chart.getDataURL({
-      backgroundColor: "#11151f",
+      backgroundColor: SHARE_CARD_PANEL,
       pixelRatio: Math.max(1, scale),
       type: "png",
     });
@@ -342,7 +375,7 @@ export async function renderShareCardPng(
   context.scale(scale, scale);
   context.fillStyle = "#0b0e14";
   context.fillRect(0, 0, SHARE_CARD_WIDTH, SHARE_CARD_HEIGHT);
-  context.fillStyle = "#11151f";
+  context.fillStyle = SHARE_CARD_PANEL;
   context.fillRect(42, 34, SHARE_CARD_WIDTH - 84, SHARE_CARD_HEIGHT - 68);
 
   context.drawImage(decantImage, 68, 58, 34, 34);
@@ -365,7 +398,7 @@ export async function renderShareCardPng(
 
   context.fillStyle = "#6b7689";
   context.font = "500 16px Inter, ui-sans-serif, system-ui, sans-serif";
-  context.fillText(shareCardQualifier(input.kind), 68, 557);
+  context.fillText(shareCardQualifier(input), 68, 557);
   context.drawImage(dosuImage, SHARE_CARD_WIDTH - 244, 537, 24, 25);
   context.fillStyle = "#9aa6b8";
   context.font = "600 16px Inter, ui-sans-serif, system-ui, sans-serif";

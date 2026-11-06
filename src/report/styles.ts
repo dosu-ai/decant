@@ -95,6 +95,7 @@ h3 { margin: 0 0 8px; font-size: 0.98rem; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
+.stat-grid-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stat {
   min-height: 92px;
   padding: 15px 16px;

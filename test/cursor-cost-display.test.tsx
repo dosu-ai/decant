@@ -130,7 +130,7 @@ describe("cost for sessions without recorded usage", () => {
     expect(html).toContain("2 sessions lack usage data and are not in this cost.");
   });
 
-  test("By model and By project rows show unavailable usage as a dash", () => {
+  test("By model and By repository rows show unavailable usage as a dash", () => {
     const html = renderToStaticMarkup(
       <AnalyticsView
         data={{
@@ -141,7 +141,7 @@ describe("cost for sessions without recorded usage", () => {
             latest_started_at: "2026-10-01T12:00:00Z",
           },
           byModel: [dimRow({ key: "cursor-only-model", usage_sessions: 0, input_tokens: 0 })],
-          byProject: [
+          byRepo: [
             dimRow({
               key: "/synthetic/mixed",
               sessions: 2,
@@ -166,22 +166,14 @@ describe("cost for sessions without recorded usage", () => {
 
   test("the cost-per-day chart leaves out days without usage data", () => {
     const render = (rows: DimensionRow[]) =>
-      renderToStaticMarkup(
-        <DailyPanel
-          metric="cost"
-          onShowAllTime={() => {}}
-          rows={rows}
-          timezone="UTC"
-          title="Cost per day"
-        />,
-      );
+      renderToStaticMarkup(<DailyPanel metric="cost" onShowAllTime={() => {}} rows={rows} />);
     const unavailable = render([dimRow({ usage_sessions: 0 })]);
     expect(unavailable).toContain("Cost unavailable");
     const mixed = render([
       dimRow({ key: "2026-10-01", usage_sessions: 0 }),
       dimRow({ key: "2026-10-02", sessions: 2, usage_sessions: 1, estimated_cost_usd: 1 }),
     ]);
-    expect(mixed).toContain("Leaves out 2 sessions without usage data.");
+    expect(mixed).toContain("UTC days. Leaves out 2 sessions without usage data.");
     expect(mixed).not.toContain("Cost unavailable");
   });
 

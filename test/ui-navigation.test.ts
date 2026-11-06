@@ -11,7 +11,9 @@ import {
   sessionIncludesArchived,
   sessionPageFromPath,
   sessionProjectFilter,
+  sessionRepoFilter,
   sessionsArchivedHref,
+  sessionsClearFilterHref,
   sessionsPageHref,
   titleFor,
 } from "../src/ui/navigation.ts";
@@ -125,6 +127,20 @@ describe("archived session filters", () => {
     expect(sessionIncludesArchived(withArchived)).toBe(true);
     expect(sessionProjectFilter(withArchived)).toBe(project);
     expect(sessionsArchivedHref(withArchived, false)).toBe(filtered);
+  });
+
+  test("clearing one scope filter keeps the other and the archived toggle", () => {
+    const both =
+      "/sessions?project=%2Fcode%2Fapp-wt&repo=%2Fcode%2Fapp&include_archived=true&page=3";
+    const withoutProject = sessionsClearFilterHref(both, "project");
+    expect(sessionProjectFilter(withoutProject)).toBeNull();
+    expect(sessionRepoFilter(withoutProject)).toBe("/code/app");
+    expect(sessionIncludesArchived(withoutProject)).toBe(true);
+    expect(withoutProject).not.toContain("page=");
+    const withoutRepo = sessionsClearFilterHref(both, "repo");
+    expect(sessionRepoFilter(withoutRepo)).toBeNull();
+    expect(sessionProjectFilter(withoutRepo)).toBe("/code/app-wt");
+    expect(sessionsClearFilterHref("/sessions?repo=%2Fcode%2Fapp", "repo")).toBe("/sessions");
   });
 
   test("does not treat the same query parameter on another route as a session filter", () => {

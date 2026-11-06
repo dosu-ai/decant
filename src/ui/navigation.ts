@@ -48,6 +48,20 @@ export function projectSessionsHref(project: string): string {
   return `/sessions?${params.toString()}`;
 }
 
+/** The repository root a sessions page is scoped to, worktrees included. */
+export function sessionRepoFilter(path: string): string | null {
+  if (pathOnly(path) !== "/sessions") {
+    return null;
+  }
+  const repo = sessionParams(path).get("repo")?.trim();
+  return repo == null || repo === "" ? null : repo;
+}
+
+export function repoSessionsHref(repo: string): string {
+  const params = new URLSearchParams({ repo });
+  return `/sessions?${params.toString()}`;
+}
+
 export function sessionIncludesArchived(path: string): boolean {
   return pathOnly(path) === "/sessions" && sessionParams(path).get("include_archived") === "true";
 }
@@ -80,6 +94,16 @@ export function sessionsArchivedHref(path: string, includeArchived: boolean): st
   } else {
     params.delete("include_archived");
   }
+  const query = params.toString();
+  return query === "" ? "/sessions" : `/sessions?${query}`;
+}
+
+/** Drop one scope filter from a sessions URL, keeping the others and the
+ * archived toggle, and start again from the first page. */
+export function sessionsClearFilterHref(path: string, filter: "project" | "repo"): string {
+  const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
+  params.delete(filter);
+  params.delete("page");
   const query = params.toString();
   return query === "" ? "/sessions" : `/sessions?${query}`;
 }

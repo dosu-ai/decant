@@ -9,6 +9,9 @@ export function versionLabel(version: string | null | undefined): string {
 
 export function compactAxis(value: number): string {
   const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) {
+    return `${trimNumber(value / 1_000_000_000)}B`;
+  }
   if (abs >= 1_000_000) {
     return `${trimNumber(value / 1_000_000)}M`;
   }
@@ -47,6 +50,10 @@ export function formatInt(value: number): string {
 
 export function compact(value: number): string {
   const abs = Math.abs(value);
+  // Cache reads pass a billion within weeks of agent use.
+  if (abs >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(1)}B`;
+  }
   if (abs >= 1_000_000) {
     return `${(value / 1_000_000).toFixed(1)}M`;
   }
@@ -70,8 +77,13 @@ export function roundedPercents(values: number[]): number[] {
   );
 }
 
+const moneyFormatter = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export function money(value: number): string {
-  return `$${value.toFixed(2)}`;
+  return `$${moneyFormatter.format(value)}`;
 }
 
 /** Token and cost totals over sessions that all lack recorded usage are
@@ -115,7 +127,10 @@ export function duration(ms: number): string {
     return `${minutes}m ${totalSeconds % 60}s`;
   }
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 export function capitalize(value: string): string {

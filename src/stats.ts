@@ -4,6 +4,7 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 import type { Operation } from "./enrich.ts";
 import type { Tool } from "./model.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
+import { compareCodePoints } from "./order.ts";
 import { cachedRead, statementKey } from "./read-cache.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
@@ -26,6 +27,8 @@ export interface Totals {
 export interface StatsFilter extends DateFilter {
   includeArchived?: boolean;
   project?: string | null;
+  /** A repository root: matches sessions in the root and in its worktrees. */
+  repo?: string | null;
   source?: SessionSource | null;
   tool?: string | null;
 }
@@ -100,13 +103,19 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
   };
 }
 
-export type Dimension = "tool" | "model" | "project" | "day";
+export type Dimension = "tool" | "model" | "project" | "repo" | "outcome" | "day";
 export const DIMENSIONS = [
   "tool",
   "model",
   "project",
+  "repo",
+  "outcome",
   "day",
 ] as const satisfies readonly Dimension[];
+
+/** Key for sessions with no project, or whose run has no outcome label. */
+export const NO_PROJECT_KEY = "(none)";
+export const UNCLASSIFIED_OUTCOME_KEY = "(unclassified)";
 
 export function parseDimension(value: string): Dimension | null {
   return DIMENSIONS.includes(value as Dimension) ? (value as Dimension) : null;
@@ -138,14 +147,19 @@ export function byDimension(
   const rows = cachedRead(
     db,
     statementKey(`byDimension:${dimension}:${visible.sql}`, visible.params),
-    () => (dimension === "model" ? byModel(db, visible) : groupedRows(db, dimension, visible)),
+    () =>
+      dimension === "model"
+        ? byModel(db, visible)
+        : dimension === "outcome"
+          ? byOutcome(db, visible)
+          : groupedRows(db, dimension, visible),
   );
   return rows.map((row) => ({ ...row }));
 }
 
 function groupedRows(
   db: Database,
-  dimension: Exclude<Dimension, "model">,
+  dimension: Exclude<Dimension, "model" | "outcome">,
   visible: { sql: string; params: string[] },
 ): DimRow[] {
   const { groupExpr, join } = dimensionSql(dimension);
@@ -270,6 +284,95 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   );
 }
 
+/** Each run counts under the outcome of the top-level session it belongs to,
+ * so a subagent's tokens and cost land on the session that spawned it rather
+ * than on the subagent's own label (usually none). Ancestors are read from the
+ * whole archive because a date filter can keep a subagent and drop its parent. */
+function byOutcome(db: Database, visible: { sql: string; params: string[] }): DimRow[] {
+  const sessions = db
+    .query(
+      `SELECT s.id, s.is_subagent, s.parent_session_id, s.outcome,
+              s.total_input_tokens, s.total_output_tokens, s.total_reasoning_tokens,
+              s.est_reasoning_tokens, s.estimated_cost_usd,
+              ${sessionUsageAvailableSql("s")} AS usage_available
+         FROM session s ${whereClause(visible)}`,
+    )
+    .all(...visible.params) as {
+    id: number;
+    is_subagent: number;
+    parent_session_id: number | null;
+    outcome: string | null;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    total_reasoning_tokens: number;
+    est_reasoning_tokens: number;
+    estimated_cost_usd: number;
+    usage_available: number;
+  }[];
+  const lineage = sessions.some((session) => session.is_subagent === 1)
+    ? new Map(
+        (
+          db.query("SELECT id, parent_session_id, is_subagent, outcome FROM session").all() as {
+            id: number;
+            parent_session_id: number | null;
+            is_subagent: number;
+            outcome: string | null;
+          }[]
+        ).map((row) => [row.id, row]),
+      )
+    : null;
+  // A run takes its top-level session's label, even when that label is empty.
+  // Only a subagent whose chain never reaches a top-level session (its parent
+  // is not in the archive) keeps its own label.
+  const rootOutcome = (session: (typeof sessions)[number]): string | null => {
+    if (session.is_subagent === 0 || lineage == null) {
+      return session.outcome;
+    }
+    let current = lineage.get(session.id);
+    const seen = new Set<number>();
+    while (current != null && current.is_subagent === 1 && current.parent_session_id != null) {
+      if (seen.has(current.id)) {
+        break;
+      }
+      seen.add(current.id);
+      const parent = lineage.get(current.parent_session_id);
+      if (parent == null) {
+        break;
+      }
+      current = parent;
+    }
+    return current != null && current.is_subagent === 0 ? current.outcome : session.outcome;
+  };
+  const rows = new Map<string, DimRow>();
+  for (const session of sessions) {
+    const key = rootOutcome(session) ?? UNCLASSIFIED_OUTCOME_KEY;
+    let row = rows.get(key);
+    if (row == null) {
+      row = {
+        key,
+        sessions: 0,
+        usage_sessions: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        est_reasoning_tokens: 0,
+        estimated_cost_usd: 0,
+      };
+      rows.set(key, row);
+    }
+    row.sessions += session.is_subagent === 0 ? 1 : 0;
+    row.usage_sessions += session.is_subagent === 0 && session.usage_available === 1 ? 1 : 0;
+    row.input_tokens += session.total_input_tokens;
+    row.output_tokens += session.total_output_tokens;
+    row.reasoning_tokens += session.total_reasoning_tokens;
+    row.est_reasoning_tokens += session.est_reasoning_tokens;
+    row.estimated_cost_usd += session.estimated_cost_usd;
+  }
+  return [...rows.values()].sort(
+    (left, right) => right.sessions - left.sessions || compareCodePoints(left.key, right.key),
+  );
+}
+
 function statsScope(
   db: Database,
   alias: string,
@@ -292,6 +395,17 @@ function statsScope(
        )`,
     );
     params.push(filter.project);
+  }
+  if (filter?.repo != null) {
+    clauses.push(
+      `EXISTS (
+         SELECT 1
+         FROM project stats_repo
+         WHERE stats_repo.id = ${alias}.project_id
+           AND COALESCE(stats_repo.root_path, stats_repo.path) = ?
+       )`,
+    );
+    params.push(filter.repo);
   }
   if (filter?.tool != null) {
     clauses.push(`${alias}.tool = ?`);
@@ -766,13 +880,23 @@ export function todayTotals(db: Database, now: Date = new Date()): Totals {
     .get(...scope.params) as Totals;
 }
 
-function dimensionSql(dimension: Exclude<Dimension, "model">): { groupExpr: string; join: string } {
+function dimensionSql(dimension: Exclude<Dimension, "model" | "outcome">): {
+  groupExpr: string;
+  join: string;
+} {
   switch (dimension) {
     case "tool":
       return { groupExpr: "s.tool", join: "" };
     case "project":
       return {
-        groupExpr: "COALESCE(p.path, '(none)')",
+        groupExpr: `COALESCE(p.path, '${NO_PROJECT_KEY}')`,
+        join: "LEFT JOIN project p ON p.id = s.project_id",
+      };
+    // Worktrees fold into the repository they were created from. A project that
+    // is not a worktree records itself as its own root.
+    case "repo":
+      return {
+        groupExpr: `COALESCE(p.root_path, p.path, '${NO_PROJECT_KEY}')`,
         join: "LEFT JOIN project p ON p.id = s.project_id",
       };
     case "day":

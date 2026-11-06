@@ -23,20 +23,25 @@ export type ShareCardKind =
   | "busiest_days"
   | "busiest_hours"
   | "estimated_cost_per_day"
-  | "sessions_per_day";
+  | "estimated_cost_per_week"
+  | "sessions_per_day"
+  | "sessions_per_week";
 
 export interface ShareCardCopyInput {
   end: string;
   kind: ShareCardKind;
   labels: string[];
+  /** Top-level sessions left out of a cost card because they lack usage data. */
+  missingUsage?: number;
   start: string;
   timezone: string;
-  values: number[];
+  /** null is an unknown value (no usage data), drawn as a gap. */
+  values: (number | null)[];
 }
 
 export function hasShareCardValues(
-  values: readonly number[] | null | undefined,
-): values is readonly number[] {
+  values: readonly (number | null)[] | null | undefined,
+): values is readonly (number | null)[] {
   return (values?.length ?? 0) > 0;
 }
 
@@ -44,14 +49,22 @@ const TITLES: Record<ShareCardKind, string> = {
   busiest_days: "Busiest days",
   busiest_hours: "Busiest hours",
   estimated_cost_per_day: "Estimated cost per day",
+  estimated_cost_per_week: "Estimated cost per week",
   sessions_per_day: "Sessions per day",
+  sessions_per_week: "Sessions per week",
 };
+
+// Decant re-prices every session at current rates on each sync, so the card
+// names current list prices rather than the prices in effect at the time.
+const COST_QUALIFIER = "Estimate at current API list prices, not a bill";
 
 const QUALIFIERS: Record<ShareCardKind, string> = {
   busiest_days: "Aggregate only · local session logs",
   busiest_hours: "Timezone included · aggregate only",
-  estimated_cost_per_day: "Estimate · model pricing at ingest",
+  estimated_cost_per_day: COST_QUALIFIER,
+  estimated_cost_per_week: COST_QUALIFIER,
   sessions_per_day: "Aggregate only · local session logs",
+  sessions_per_week: "Aggregate only · local session logs",
 };
 
 export function shareCardTitle(kind: ShareCardKind): string {
@@ -62,8 +75,20 @@ export function shareCardButtonLabel(kind: ShareCardKind): string {
   return `Share ${shareCardTitle(kind)}`;
 }
 
-export function shareCardQualifier(kind: ShareCardKind): string {
-  return QUALIFIERS[kind];
+export function shareCardQualifier(
+  input: Pick<ShareCardCopyInput, "kind" | "missingUsage">,
+): string {
+  const missing = input.missingUsage ?? 0;
+  if (missing > 0 && isCostKind(input.kind)) {
+    return `${QUALIFIERS[input.kind]} · leaves out ${formatInteger(missing)} ${
+      missing === 1 ? "session" : "sessions"
+    } without usage data`;
+  }
+  return QUALIFIERS[input.kind];
+}
+
+function isCostKind(kind: ShareCardKind): boolean {
+  return kind === "estimated_cost_per_day" || kind === "estimated_cost_per_week";
 }
 
 export function shareCardUrl(kind: ShareCardKind): string {
@@ -81,14 +106,17 @@ export function shareCardFilename(kind: ShareCardKind, start: string, end: strin
 }
 
 export function shareCardTakeaway(input: ShareCardCopyInput): string {
-  const { kind, labels, values } = input;
+  const { kind, labels } = input;
+  const values = knownValues(input.values);
   const total = values.reduce((sum, value) => sum + value, 0);
-  const peakIndex = maxIndex(values);
+  const peakIndex = maxIndex(input.values);
   const peakLabel = peakIndex == null ? null : (labels[peakIndex] ?? null);
   switch (kind) {
     case "sessions_per_day":
+    case "sessions_per_week":
       return `${formatInteger(total)} coding-agent ${total === 1 ? "session" : "sessions"} in the selected range`;
     case "estimated_cost_per_day":
+    case "estimated_cost_per_week":
       return `${formatMoney(total)} estimated across the selected range`;
     case "busiest_hours":
       return peakLabel == null
@@ -104,7 +132,7 @@ export function shareCardTakeaway(input: ShareCardCopyInput): string {
 export function shareCardCaption(input: ShareCardCopyInput): string {
   const takeaway = shareCardTakeaway(input);
   const link = shareCardUrl(input.kind);
-  return input.kind === "sessions_per_day"
+  return input.kind === "sessions_per_day" || input.kind === "sessions_per_week"
     ? `${takeaway}. Decant shows the pattern. Dosu can help the next agent use it. ${link}`
     : `${takeaway}. Shared from Decant. ${link}`;
 }
@@ -115,11 +143,16 @@ export function shareCardAltText(input: ShareCardCopyInput): string {
   const low = minIndex(values);
   const peakLabel = peak == null ? "no date" : (labels[peak] ?? "an unknown date");
   const peakValue = peak == null ? 0 : (values[peak] ?? 0);
+  const total = formatMoney(knownValues(values).reduce((sum, value) => sum + value, 0));
   switch (kind) {
     case "sessions_per_day":
       return `Decant analytics bar chart of daily sessions from ${start} to ${end}, peaking at ${formatInteger(peakValue)} on ${peakLabel}.`;
+    case "sessions_per_week":
+      return `Decant analytics bar chart of weekly sessions from ${start} to ${end}, peaking at ${formatInteger(peakValue)} in the week of ${peakLabel}.`;
     case "estimated_cost_per_day":
-      return `Decant analytics line chart of estimated daily model cost from ${start} to ${end}; selected-range total is ${formatMoney(values.reduce((sum, value) => sum + value, 0))}.`;
+      return `Decant analytics line chart of estimated daily model cost from ${start} to ${end}; selected-range total is ${total}.`;
+    case "estimated_cost_per_week":
+      return `Decant analytics line chart of estimated weekly model cost from ${start} to ${end}; selected-range total is ${total}.`;
     case "busiest_hours":
       return `Decant analytics hourly activity chart in ${timezone}, with the highest activity at ${peakLabel}.`;
     case "busiest_days":
@@ -147,22 +180,27 @@ function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }
 
-function maxIndex(values: number[]): number | null {
-  if (values.length === 0) {
-    return null;
-  }
-  return values.reduce(
-    (best, value, index) => (value > (values[best] ?? Number.NEGATIVE_INFINITY) ? index : best),
-    0,
-  );
+function knownValues(values: readonly (number | null)[]): number[] {
+  return values.filter((value): value is number => value != null);
 }
 
-function minIndex(values: number[]): number | null {
-  if (values.length === 0) {
-    return null;
+// Unknown (null) points never win the peak or the low.
+function maxIndex(values: readonly (number | null)[]): number | null {
+  let best: number | null = null;
+  for (const [index, value] of values.entries()) {
+    if (value != null && (best == null || value > (values[best] ?? Number.NEGATIVE_INFINITY))) {
+      best = index;
+    }
   }
-  return values.reduce(
-    (best, value, index) => (value < (values[best] ?? Number.POSITIVE_INFINITY) ? index : best),
-    0,
-  );
+  return best;
+}
+
+function minIndex(values: readonly (number | null)[]): number | null {
+  let best: number | null = null;
+  for (const [index, value] of values.entries()) {
+    if (value != null && (best == null || value < (values[best] ?? Number.POSITIVE_INFINITY))) {
+      best = index;
+    }
+  }
+  return best;
 }

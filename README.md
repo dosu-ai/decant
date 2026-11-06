@@ -36,7 +36,8 @@ sessions. For a persistent `decant` command, see [Installation](#installation).
 - Full transcripts for every session, with diagnostics for records Decant could
   not parse.
 - Token, [estimated cost](docs/pricing.md), context-window, and agent-time
-  analytics by agent, model, project, and day.
+  analytics by agent, model, project, repository (including worktrees), outcome,
+  and day.
 - File hotspots, tool usage, and MCP server usage across sessions.
 - Recommendations drawn from patterns in your sessions, each with a suggested
   change you can mark as implemented.

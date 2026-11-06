@@ -252,23 +252,50 @@ export function CostValue({
 
 export function StatCard({
   alert = false,
+  detail,
+  detailTitle,
   icon,
   label,
+  loading = false,
+  updating = false,
   value,
   valueTitle,
 }: {
   /** Danger colour is redundant emphasis on a number that already states the problem; stat icons are otherwise muted by design. */
   alert?: boolean;
+  /** One short line under the value, such as a change against the previous period. */
+  detail?: string | null;
+  detailTitle?: string;
   icon: IconName;
   label: string;
+  /** No value yet: show a placeholder rather than a zero that looks real. */
+  loading?: boolean;
+  /** A value from the previous filter is still shown while the new one loads. */
+  updating?: boolean;
   value: string;
   valueTitle?: string;
 }) {
   return (
-    <div className="stat-card" data-alert={alert ? "true" : undefined}>
+    <div
+      aria-busy={loading || updating ? true : undefined}
+      className="stat-card"
+      data-alert={alert ? "true" : undefined}
+      data-updating={updating ? "true" : undefined}
+    >
       <div>
         <span>{label}</span>
-        <strong title={valueTitle}>{value}</strong>
+        {loading ? (
+          <strong>
+            <i aria-label="Loading" className="skeleton-line stat-skeleton" role="img" />
+          </strong>
+        ) : (
+          <strong title={valueTitle}>{value}</strong>
+        )}
+        {detail != null && !loading ? (
+          <small className="stat-detail" title={detailTitle}>
+            {detail}
+          </small>
+        ) : null}
       </div>
       <span className="stat-icon">
         <Icon name={icon} />

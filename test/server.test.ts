@@ -1450,7 +1450,7 @@ describe("server routes", () => {
       body: {
         error: "unknown dimension",
         code: "unknown_dimension",
-        allowed: ["tool", "model", "project", "day"],
+        allowed: ["tool", "model", "project", "repo", "outcome", "day"],
       },
     });
     expect(await route(config, "/api/tools/calls?session=abc")).toMatchObject({

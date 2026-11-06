@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -515,6 +515,38 @@ describe("recommendations", () => {
       "35% abandoned",
     );
     db.close();
+  });
+
+  test("session-window signals follow the process clock, not SQLite's", () => {
+    // Golden runs freeze the JS clock with setSystemTime, which SQLite's
+    // date('now') ignores, so every window has to come from the same cutoff.
+    const db = freshDb();
+    db.exec("INSERT INTO project(id, path) VALUES (1, '/p')");
+    for (let index = 0; index < 20; index += 1) {
+      const id = 300 + index;
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+         VALUES (?1, 'claude_code', 'sh' || ?1, 1, '2026-03-10T12:00:00.000Z', ?2)`,
+      ).run(id, index < 7 ? "abandoned" : "completed");
+      for (let call = 0; call < 10; call += 1) {
+        db.query(
+          `INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
+           VALUES (?1, 'builtin', 'Grep', '2026-03-10T12:00:00.000Z')`,
+        ).run(id);
+      }
+    }
+    try {
+      setSystemTime(new Date("2026-03-20T00:00:00.000Z"));
+      expect(keys(signals(db))).toEqual(
+        expect.arrayContaining(["signal:abandoned-rate", "signal:search-heavy"]),
+      );
+      setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
+      expect(keys(signals(db))).not.toContain("signal:abandoned-rate");
+      expect(keys(signals(db))).not.toContain("signal:search-heavy");
+    } finally {
+      setSystemTime();
+      db.close();
+    }
   });
 
   describe("search-heavy signal counting", () => {

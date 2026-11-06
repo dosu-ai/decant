@@ -70,21 +70,23 @@ const INGEST_HEALTH_MIN_SHARE = 0.1;
 // signal's minimum possible score must stay above this.
 const USAGE_SIGNAL_SCORE = 2;
 const WINDOW_DAYS = 30;
-const WINDOW = "s.started_at >= date('now','-30 days')";
+// Bound to the cutoff recentWindowStart() computes, rather than SQLite's
+// date('now'), so every signal shares the JS clock that tests can freeze.
+const WINDOW = "s.started_at >= ?";
 
-function queryOne<T>(db: Database, sql: string): T {
+function queryOne<T>(db: Database, sql: string, params: string[] = []): T {
   const statement = db.prepare(sql);
   try {
-    return statement.get() as T;
+    return statement.get(...params) as T;
   } finally {
     statement.finalize();
   }
 }
 
-function queryRows<T>(db: Database, sql: string): T[] {
+function queryRows<T>(db: Database, sql: string, params: string[] = []): T[] {
   const statement = db.prepare(sql);
   try {
-    return statement.all() as T[];
+    return statement.all(...params) as T[];
   } finally {
     statement.finalize();
   }
@@ -104,7 +106,8 @@ export function signals(
   recentTools?: ReturnType<typeof toolUsage>,
 ): Recommendation[] {
   const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
-  const recent = { from: recentWindowStart() };
+  const since = recentWindowStart();
+  const recent = { from: since };
   const tools = recentTools?.slice(0, 500) ?? toolUsage(db, false, 500, recent);
   const mcp = mcpUsage(db, 500, recent);
   const models = byDimension(db, "model", recent).sort(
@@ -116,11 +119,11 @@ export function signals(
     ...heavyServers(mcp),
     ...heavyTools(tools),
     ...costConcentration(models),
-    ...hotContextFiles(db, visibleSession),
-    ...churnFiles(db, visibleSession),
-    ...searchHeavy(db, visibleSession),
-    ...abandonedRate(db, visibleSession),
-    ...ingestHealth(db, visibleSession),
+    ...hotContextFiles(db, visibleSession, since),
+    ...churnFiles(db, visibleSession, since),
+    ...searchHeavy(db, visibleSession, since),
+    ...abandonedRate(db, visibleSession, since),
+    ...ingestHealth(db, visibleSession, since),
   ];
   out.sort((left, right) => right.score - left.score || compareCodePoints(left.key, right.key));
   return out.slice(0, 12);
@@ -783,7 +786,7 @@ function fmtUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-function hotContextFiles(db: Database, visibleSession: string): Recommendation[] {
+function hotContextFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
   const rows = queryRows<{ key: string; readers: number }>(
     db,
     `SELECT f.rel_path AS key,
@@ -795,6 +798,7 @@ function hotContextFiles(db: Database, visibleSession: string): Recommendation[]
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
        ORDER BY readers DESC, key ASC
        LIMIT 2`,
+    [since],
   );
   return rows.map(({ key: relPath, readers }) => {
     const path = quoted(relPath);
@@ -816,7 +820,7 @@ function hotContextFiles(db: Database, visibleSession: string): Recommendation[]
   });
 }
 
-function churnFiles(db: Database, visibleSession: string): Recommendation[] {
+function churnFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
   const rows = queryRows<{ key: string; editors: number }>(
     db,
     `SELECT f.rel_path AS key, COUNT(DISTINCT f.session_id) AS editors
@@ -827,6 +831,7 @@ function churnFiles(db: Database, visibleSession: string): Recommendation[] {
        HAVING editors >= ${CHURN_MIN_SESSIONS}
        ORDER BY editors DESC, key ASC
        LIMIT 2`,
+    [since],
   );
   return rows.map(({ key: relPath, editors }) => {
     const path = quoted(relPath);
@@ -855,7 +860,7 @@ function churnFiles(db: Database, visibleSession: string): Recommendation[] {
 // into TypeScript, so it stays permissive by design.
 const SEARCH_CANDIDATE_TOOLS = ["grep", "glob", "bash", "shell", "exec_command", "local_shell"];
 
-function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
+function searchHeavy(db: Database, visibleSession: string, since: string): Recommendation[] {
   const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
     (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
   ).join(" OR ");
@@ -864,6 +869,7 @@ function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
     `SELECT tc.session_id AS session_id, tc.tool_name AS tool_name, tc.input AS input
        FROM tool_call tc JOIN session s ON s.id = tc.session_id
       WHERE ${WINDOW} AND ${visibleSession} AND (${namePredicate})`,
+    [since],
   );
   let searches = 0;
   const searchSessions = new Set<number>();
@@ -878,6 +884,7 @@ function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
   const inWindow = queryOne<{ n: number }>(
     db,
     `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${visibleSession}`,
+    [since],
   ).n;
   if (inWindow < SEARCH_HEAVY_MIN_SESSIONS || counts.sessions === 0) {
     return [];
@@ -907,13 +914,14 @@ function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
   ];
 }
 
-function abandonedRate(db: Database, visibleSession: string): Recommendation[] {
+function abandonedRate(db: Database, visibleSession: string, since: string): Recommendation[] {
   const row = queryOne<{ classified: number; abandoned: number | null }>(
     db,
     `SELECT COUNT(*) AS classified,
               SUM(s.outcome = 'abandoned') AS abandoned
        FROM session s
        WHERE ${WINDOW} AND ${visibleSession} AND s.outcome IS NOT NULL`,
+    [since],
   );
   const abandoned = row.abandoned ?? 0;
   if (row.classified < ABANDONED_MIN_CLASSIFIED) {
@@ -944,16 +952,18 @@ function abandonedRate(db: Database, visibleSession: string): Recommendation[] {
   ];
 }
 
-function ingestHealth(db: Database, visibleSession: string): Recommendation[] {
+function ingestHealth(db: Database, visibleSession: string, since: string): Recommendation[] {
   const counts = queryOne<{ affected: number }>(
     db,
     `SELECT COUNT(DISTINCT s.id) AS affected
        FROM session s JOIN ingest_issue ii ON ii.source_path = s.source_path
        WHERE ${WINDOW} AND ${visibleSession} AND ii.code != 'unparsed_line'`,
+    [since],
   );
   const inWindow = queryOne<{ n: number }>(
     db,
     `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${visibleSession}`,
+    [since],
   ).n;
   if (inWindow < INGEST_HEALTH_MIN_SESSIONS || counts.affected === 0) {
     return [];

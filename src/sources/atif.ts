@@ -56,6 +56,14 @@ export function atifNativeTool(rawMeta: Json | undefined): Exclude<Tool, "atif">
   return null;
 }
 
+/** `raw_meta` keys the parser writes from what it read, which ingest trusts. */
+const DERIVED_META_KEYS = new Set([
+  "parentSessionId",
+  "subagentFileRefs",
+  "copiedContextSteps",
+  "embeddedSubagents",
+]);
+
 /** Every version Harbor has published. A newer one is still read, and the
  * mismatch is reported as format drift. */
 const KNOWN_SCHEMA_VERSIONS = new Set([
@@ -658,8 +666,14 @@ function rawMeta(
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(trajectory)) {
     // Steps are normalized into messages and embedded subagents into their
-    // own sessions.
-    if (key !== "steps" && key !== "subagent_trajectories" && value !== undefined) {
+    // own sessions. A document field named like a key the parser derives is
+    // dropped, so it cannot pose as lineage or cost facts ingest relies on.
+    if (
+      key !== "steps" &&
+      key !== "subagent_trajectories" &&
+      !DERIVED_META_KEYS.has(key) &&
+      value !== undefined
+    ) {
       meta[key] = value as Json;
     }
   }

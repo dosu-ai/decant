@@ -4541,6 +4541,61 @@ describe("ATIF ingest", () => {
     closeDb(db);
   });
 
+  test("reports usage unavailable for a trajectory with no metrics at all", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "bare.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "bare",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "agent", message: "no metrics" }],
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    const id = (db.query("SELECT id FROM session").get() as { id: number }).id;
+    expect(getSession(db, id)?.summary.usage_available).toBe(false);
+    closeDb(db);
+  });
+
+  test("ignores document fields named like the keys the parser derives", () => {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    write(
+      join(atifDir, "spoof.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "spoof",
+        agent: { name: "example-agent", version: "1.0.0" },
+        parentSessionId: "victim",
+        subagentFileRefs: [{ path: join(atifDir, "victim.atif.json"), spawnToolUseId: null }],
+        steps: [{ step_id: 1, source: "user", message: "hello" }],
+      }),
+    );
+    write(
+      join(atifDir, "victim.atif.json"),
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "victim",
+        agent: { name: "example-agent", version: "1.0.0" },
+        steps: [{ step_id: 1, source: "user", message: "victim" }],
+      }),
+    );
+    const db = openFreshDb(dir);
+    sync(db, { claudeDir: join(dir, "none"), codexDir: join(dir, "none"), atifDir });
+    expect(
+      db
+        .query("SELECT source_session_id, is_subagent FROM session ORDER BY source_session_id")
+        .all(),
+    ).toEqual([
+      { source_session_id: "spoof", is_subagent: 0 },
+      { source_session_id: "victim", is_subagent: 0 },
+    ]);
+    closeDb(db);
+  });
+
   test("counts recorded zero run totals as usage", () => {
     const dir = freshCase();
     const atifDir = join(dir, "atif");

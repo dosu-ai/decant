@@ -46,7 +46,9 @@ export function sessionUsageAvailableSql(alias: string): string {
   const optional = USAGE_OPTIONAL_TOOLS.map((tool) => `'${tool}'`).join(", ");
   // An ATIF trajectory can record usage only as run totals (`final_metrics`),
   // zero included, or a cost only, with no per-step token counts.
-  return `(${alias}.tool NOT IN (${optional}) OR EXISTS (
+  // COALESCE: a JSON path the metadata lacks yields NULL, which a caller
+  // reading "not 0" as available would count as usage.
+  return `COALESCE((${alias}.tool NOT IN (${optional}) OR EXISTS (
            SELECT 1 FROM message usage_message
            WHERE usage_message.session_id = ${alias}.id
              AND (usage_message.input_tokens IS NOT NULL
@@ -62,7 +64,7 @@ export function sessionUsageAvailableSql(alias: string): string {
                         IN ('integer', 'real')
                    OR json_type(${alias}.raw_meta, '$.final_metrics.total_completion_tokens')
                         IN ('integer', 'real')
-               END) = 1)))`;
+               END) = 1))), 0)`;
 }
 
 const TOTALS_COLUMNS = `s.id, s.is_subagent,

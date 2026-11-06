@@ -233,6 +233,54 @@ export function openDb(path: string): Database {
   return db;
 }
 
+/**
+ * Analyze every table whose statistics are missing or stale, as SQLite advises
+ * when a long-lived connection opens. Since SQLite 3.46 optimize caps its own
+ * ANALYZE work, so this stays fast on multi-GB archives and does nothing when
+ * the stored statistics are current.
+ */
+export function optimizeLongLivedConnection(db: Database): void {
+  runAdvisoryStatistics(db, "PRAGMA optimize=0x10002;");
+}
+
+/**
+ * Analyze the tables this connection has queried whose statistics are missing
+ * or stale. It does nothing unless a table is unanalyzed or has grown 25x
+ * since its last ANALYZE.
+ */
+export function refreshPlannerStatistics(db: Database): void {
+  runAdvisoryStatistics(db, "PRAGMA optimize;");
+}
+
+/**
+ * Load the sqlite_stat1 rows another connection wrote. A connection reads
+ * statistics only with the schema, so without this a long-lived reader keeps
+ * the plans it chose before a sync worker analyzed the archive.
+ */
+export function reloadPlannerStatistics(db: Database): void {
+  runAdvisoryStatistics(db, "ANALYZE sqlite_schema;");
+}
+
+// Statistics only steer the planner, so a read-only archive or a writer that
+// holds the lock past busy_timeout must not stop the connection from serving.
+function runAdvisoryStatistics(db: Database, statement: string): void {
+  try {
+    db.exec(statement);
+  } catch (error) {
+    if (!isSqliteContention(error) && !isSqliteReadonly(error)) {
+      throw error;
+    }
+  }
+}
+
+function isSqliteReadonly(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error != null && "code" in error
+      ? String((error as { code?: unknown }).code).toUpperCase()
+      : "";
+  return code.startsWith("SQLITE_READONLY");
+}
+
 function negotiateWalMode(db: Database): void {
   try {
     const current = db.query("PRAGMA journal_mode;").get() as {

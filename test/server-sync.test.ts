@@ -40,6 +40,45 @@ function freshConfig(): Config {
 }
 
 describe("server sync coordination", () => {
+  test("runs the completion hook once per successful physical sync", async () => {
+    const config = freshConfig();
+    const report = {
+      scanned: 3,
+      ingested: 3,
+      skipped: 0,
+      issues: 0,
+      issuesByCode: {},
+      failed: 0,
+      cancelled: false,
+    };
+    let fail = false;
+    const runner: SyncWorkerRunner = async () => {
+      if (fail) {
+        throw new Error("worker failed");
+      }
+      return report;
+    };
+    const completed: number[] = [];
+    const coordinator = createSyncCoordinator(runner, {
+      onCompleted: (finished) => {
+        completed.push(finished.ingested);
+        // A failing hook must not turn a committed sync into an error.
+        throw new Error("statistics reload failed");
+      },
+    });
+
+    const first = coordinator.run(config);
+    const joined = coordinator.run(config);
+    expect(joined).toBe(first);
+    await expect(first).resolves.toEqual(report);
+    expect(completed).toEqual([3]);
+
+    fail = true;
+    await expect(coordinator.run(config)).rejects.toThrow("worker failed");
+    expect(completed).toEqual([3]);
+    await coordinator.close();
+  });
+
   test("coalesces overlapping runs and bounds progress updates", async () => {
     const config = freshConfig();
     const entered = Promise.withResolvers<void>();

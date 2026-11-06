@@ -138,7 +138,10 @@ configs that apply to its directory, so editing those names re-derives the
 affected sessions once. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
-archive state. This requires the source files to remain available. Watch mode
+archive state. This requires the source files to remain available. Sync also
+refreshes SQLite's planner statistics as it goes, so the first sync into a new
+archive stays linear in its size; see
+[Planner statistics](architecture.md#planner-statistics). Watch mode
 combines native filesystem events with a periodic sweep so missed notifications
 do not leave the archive stale. Events are debounced so a burst of writes becomes
 one sync, and a log an agent keeps writing still syncs about every 5 seconds

@@ -1,7 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
-import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
+import {
+  ARCHIVE_DIR_MODE,
+  closeDb,
+  openDb,
+  optimizeLongLivedConnection,
+  reloadPlannerStatistics,
+} from "./db.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { UI_ROUTE_PATHS } from "./route-paths.ts";
@@ -73,7 +79,16 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let db: Db | null = null;
   let economics: EconomicsCache | null = null;
   let watchHandle: WatchHandle | null = null;
-  const syncCoordinator = createSyncCoordinator(options.syncRunner);
+  const syncCoordinator = createSyncCoordinator(options.syncRunner, {
+    // The worker ends each ingesting sync with PRAGMA optimize on its own
+    // connection. This connection keeps the statistics it loaded until told to
+    // reread them, so on a first run it would plan every request without any.
+    onCompleted: (report) => {
+      if (db != null && report.ingested > 0) {
+        reloadPlannerStatistics(db);
+      }
+    },
+  });
 
   // Bind before touching the archive or starting background work. A second
   // `decant serve` should fail with the truthful port-in-use error, not leave a
@@ -140,6 +155,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   try {
     mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = openDb(options.config.dbPath);
+    optimizeLongLivedConnection(db);
     ensureDerivedMetadata(db);
     economics = new EconomicsCache({
       dbPath: options.config.dbPath,

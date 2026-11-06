@@ -251,14 +251,16 @@ export function contextWindowForSession(
 
   // has_text mirrors enrich's hasRealText turn rule (a text block that is not
   // an interruption marker and not a slash-command wrapper) so per-point turn
-  // numbers line up with the session's stored turn_count.
+  // numbers line up with the session's stored turn_count. INDEXED BY keeps the
+  // lookup per message: a first sync has no planner statistics, and SQLite
+  // would otherwise scan every text block in the archive for each message.
   const rows = queryRows<TimelineRow>(
     db,
     `SELECT m.seq, m.timestamp, m.role,
               m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
               ${MESSAGE_RAW_META_SQL} AS raw_meta,
               EXISTS(
-                SELECT 1 FROM block b
+                SELECT 1 FROM block b INDEXED BY idx_block_message
                 WHERE b.message_id = m.id AND b.type = 'text'
                   AND TRIM(COALESCE(b.text, '')) != ''
                   AND b.text NOT LIKE '[Request interrupted by user%'

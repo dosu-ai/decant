@@ -4571,3 +4571,123 @@ describe("ATIF ingest", () => {
     closeDb(db);
   });
 });
+
+describe("sync planner statistics", () => {
+  function writeSyntheticClaudeSession(path: string, sessionId: string, turns: number): void {
+    const lines: string[] = [];
+    let parent: string | null = null;
+    const record = (fields: Record<string, unknown>): void => {
+      const uuid = `${sessionId}-${lines.length}`;
+      const second = String(lines.length % 60).padStart(2, "0");
+      lines.push(
+        JSON.stringify({
+          uuid,
+          parentUuid: parent,
+          sessionId,
+          timestamp: `2026-05-01T10:${String(Math.floor(lines.length / 60)).padStart(2, "0")}:${second}.000Z`,
+          cwd: "/synthetic/proj",
+          gitBranch: "main",
+          version: "2.1.0",
+          ...fields,
+        }),
+      );
+      parent = uuid;
+    };
+    record({ type: "user", message: { role: "user", content: "Fix the synthetic test" } });
+    for (let turn = 0; turn < turns; turn += 1) {
+      const toolUseId = `toolu_${sessionId}_${turn}`;
+      record({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          stop_reason: "tool_use",
+          usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 1000 },
+          content: [
+            { type: "text", text: `Reading file ${turn}.` },
+            { type: "tool_use", id: toolUseId, name: "Read", input: { file_path: `/f${turn}` } },
+          ],
+        },
+      });
+      record({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: toolUseId, content: "ok" }],
+        },
+      });
+    }
+    write(path, `${lines.join("\n")}\n`);
+  }
+
+  // The per-message text lookup in contextWindowForSession, reduced to its join.
+  const HAS_TEXT_PLAN = `EXPLAIN QUERY PLAN
+    SELECT EXISTS(SELECT 1 FROM block b WHERE b.message_id = m.id AND b.type = 'text')
+      FROM message m WHERE m.session_id = 1`;
+
+  test("analyzes a fresh archive before the ingest loop finishes", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const total = 60;
+    for (let index = 0; index < total; index += 1) {
+      const sessionId = `sess-stats-${String(index).padStart(3, "0")}`;
+      writeSyntheticClaudeSession(
+        join(config.claudeDir, "-synthetic-proj", `${sessionId}.jsonl`),
+        sessionId,
+        8,
+      );
+    }
+    const db = openFreshDb(dir);
+    try {
+      // sqlite_stat1 does not exist until the first ANALYZE creates it.
+      const blockStatRows = (): number =>
+        db.query("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").get() == null
+          ? 0
+          : (
+              db.query("SELECT COUNT(*) AS n FROM sqlite_stat1 WHERE tbl = 'block'").get() as {
+                n: number;
+              }
+            ).n;
+      const seen: {
+        firstStatRows?: number;
+        beforeRefreshStatRows?: number;
+        afterRefreshStatRows?: number;
+        lastStatRows?: number;
+        lastPlan?: string;
+      } = {};
+      // Progress fires after each file and before the end-of-sync optimize,
+      // so the last callback shows what the loop itself left behind.
+      const report = sync(db, config, undefined, (progress) => {
+        if (progress.scanned === 1) {
+          seen.firstStatRows = blockStatRows();
+        }
+        // The first refresh runs once 25 sessions are in, before file 26.
+        if (progress.scanned === 25) {
+          seen.beforeRefreshStatRows = blockStatRows();
+        }
+        if (progress.scanned === 26) {
+          seen.afterRefreshStatRows = blockStatRows();
+        }
+        if (progress.scanned === total) {
+          seen.lastStatRows = blockStatRows();
+          seen.lastPlan = (db.query(HAS_TEXT_PLAN).all() as { detail: string }[])
+            .map((row) => row.detail)
+            .join("\n");
+        }
+      });
+
+      expect(report).toMatchObject({ scanned: total, ingested: total, failed: 0 });
+      expect(seen.firstStatRows).toBe(0);
+      expect(seen.beforeRefreshStatRows).toBe(0);
+      expect(seen.afterRefreshStatRows).toBeGreaterThan(0);
+      expect(seen.lastStatRows).toBeGreaterThan(0);
+      expect(seen.lastPlan).toContain("idx_block_message");
+      expect(seen.lastPlan).not.toContain("idx_block_type");
+    } finally {
+      closeDb(db);
+    }
+  });
+});

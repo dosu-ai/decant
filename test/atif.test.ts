@@ -150,6 +150,9 @@ describe("parseAtifDocument", () => {
       agentId: "synthetic-embedded:helper",
       agentType: "general-purpose",
       spawnDepth: 1,
+      // It records no directory, so it worked where its root did.
+      cwd: "/tmp/example",
+      projectPath: "/tmp/example",
     });
     expect((child?.rawMeta as { parentSessionId?: string } | undefined)?.parentSessionId).toBe(
       "synthetic-embedded",

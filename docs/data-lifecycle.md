@@ -283,7 +283,8 @@ the steps, because a root's `final_metrics` can count its subagents or earlier
 continuation files. Only a trajectory with no per-step metrics and no embedded
 subagents takes its totals from `final_metrics`. A trial's Harbor job
 directory, the parent of `<trial>/agent/`, is its project. Otherwise the
-trajectory's `extra.cwd`, as Decant's export writes it, is.
+trajectory's `extra.cwd`, as Decant's export writes it, is. An embedded
+subagent that records neither takes its root's.
 
 Tool names keep the producing agent's conventions. When `agent.name` is one of
 Harbor's names for a source Decant reads natively (`claude-code`, `codex`,

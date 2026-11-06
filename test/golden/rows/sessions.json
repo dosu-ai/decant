@@ -39,10 +39,10 @@
   {
     "tool": "atif",
     "source_session_id": "synthetic-embedded:helper",
-    "project_path": null,
-    "project_name": null,
+    "project_path": "/tmp/example",
+    "project_name": "example",
     "title": "Run the example tests.",
-    "cwd": null,
+    "cwd": "/tmp/example",
     "git_branch": null,
     "model": "claude-opus-4-7",
     "cli_version": "2.1.0",

@@ -107,7 +107,7 @@
     "name": "example",
     "sessions": 1,
     "usage_sessions": 1,
-    "estimated_cost_usd": 0.023125,
+    "estimated_cost_usd": 0.030275,
     "last_seen_at": "2026-10-02T10:00:21.000Z",
     "is_worktree": false,
     "root_path": "/tmp/example",

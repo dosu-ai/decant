@@ -163,6 +163,13 @@ export function parseAtifDocument(
       options,
     }),
   }));
+  // An embedded subagent ran inside its root's run, so where it records no
+  // directory of its own it worked where the root did.
+  const root = sessions[0]?.parsed.session;
+  for (const { parsed } of sessions.slice(1)) {
+    parsed.session.cwd ??= root?.cwd ?? null;
+    parsed.session.projectPath ??= root?.projectPath ?? null;
+  }
   return { sessions };
 }
 

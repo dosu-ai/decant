@@ -233,8 +233,10 @@ embedded trajectory's totals likewise include the subagents it spawned, and
 `final_metrics.extra.includes_subagents` marks any trajectory whose totals do,
 and `final_metrics.extra.session_metrics` then gives that trajectory's own
 share (`total_prompt_tokens`, `total_completion_tokens`, `total_cached_tokens`,
-`total_cache_write_tokens`, and `total_cost_usd`). Sum only the root's totals to avoid counting
-nested subagents twice. Claude
+`total_cache_write_tokens`, and `total_cost_usd`). `session_metrics` is absent
+when the trajectory's own session records no usage, even if its subagents do,
+so the rolled-up totals are then not its own. Sum only the root's totals to
+avoid counting nested subagents twice. Claude
 compaction boundaries become
 `system` steps with `extra.context_management` set to a `replace` compaction,
 and the summary that follows is a `user` step marked
@@ -265,7 +267,8 @@ subagent's ID is its `trajectory_id` under the root's, with a `#<n>` suffix if
 two would otherwise match. A ref in an observation that names an embedded
 `trajectory_id` makes that trajectory a subagent of the one holding the ref,
 spawned by the result's `source_call_id`. An embedded trajectory no ref names
-is a subagent of the root. A ref whose `trajectory_path` is set and whose
+is a subagent of the trajectory that embeds it, which for a top-level entry is
+the root. A ref whose `trajectory_path` is set and whose
 `trajectory_id` names nothing embedded resolves beside the document instead.
 Once the file at that path is in the archive, its session is linked as a
 subagent of the referencing session, and it becomes a top-level session again

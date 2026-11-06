@@ -42,6 +42,14 @@ describe("DailyPanel states", () => {
     expect(render([], "failed")).toContain("Not loaded");
   });
 
+  test("rows from another range never stand in for a failed load", () => {
+    const elsewhere = [day("2026-08-01"), day("2026-08-02")];
+    const failed = render(elsewhere, "failed");
+    expect(failed).toContain("Not loaded");
+    expect(failed).not.toContain("analytics-chart");
+    expect(render(elsewhere, "loading")).toContain("Loading");
+  });
+
   test("rows from the previous filter render dimmed while the new ones load", () => {
     const stale = render([day("2026-10-08")], "loading");
     expect(stale).toContain("analytics-chart");

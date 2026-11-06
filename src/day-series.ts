@@ -52,40 +52,42 @@ export function buildDaySeries(
   range: { from?: string | null; to?: string | null } = {},
 ): DaySeries {
   const byDay = new Map<string, DayRow>();
-  let missingUsage = 0;
   for (const row of rows) {
-    if (parseDay(row.key) == null) {
-      continue;
+    if (parseDay(row.key) != null) {
+      byDay.set(row.key, row);
     }
-    byDay.set(row.key, row);
-    missingUsage += Math.max(0, row.sessions - row.usage_sessions);
   }
   const keys = [...byDay.keys()].sort();
   const startKey = validDay(range.from) ?? keys[0];
   const endKey = validDay(range.to) ?? keys.at(-1);
   const start = startKey == null ? null : parseDay(startKey);
   const end = endKey == null ? null : parseDay(endKey);
-  if (start == null || end == null || end < start) {
-    return { granularity: "day", points: [], missingUsage, observedDays: byDay.size };
+  const span = start == null || end == null ? 0 : Math.round((end - start) / DAY_MS) + 1;
+  if (start == null || span < 1 || span > MAX_SPAN_DAYS) {
+    return { granularity: "day", points: [], missingUsage: 0, observedDays: 0 };
   }
-  const span = Math.round((end - start) / DAY_MS) + 1;
-  if (span > MAX_SPAN_DAYS) {
-    return { granularity: "day", points: [], missingUsage, observedDays: byDay.size };
-  }
+  // Rows can outlive a range change, so only days inside the range count as
+  // data or toward the missing-usage note.
+  let missingUsage = 0;
+  let observedDays = 0;
   const days: SeriesPoint[] = [];
   for (let index = 0; index < span; index += 1) {
     const key = formatDay(start + index * DAY_MS);
     const row = byDay.get(key);
+    if (row != null) {
+      observedDays += 1;
+      missingUsage += Math.max(0, row.sessions - row.usage_sessions);
+    }
     days.push({ key, sessions: row?.sessions ?? 0, cost: dayCost(row) });
   }
   if (span <= WEEKLY_AFTER_DAYS) {
-    return { granularity: "day", points: days, missingUsage, observedDays: byDay.size };
+    return { granularity: "day", points: days, missingUsage, observedDays };
   }
   return {
     granularity: "week",
     points: groupWeeks(days, byDay),
     missingUsage,
-    observedDays: byDay.size,
+    observedDays,
   };
 }
 

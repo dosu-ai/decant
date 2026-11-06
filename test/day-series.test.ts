@@ -80,6 +80,21 @@ describe("buildDaySeries", () => {
     expect(subagentOnly.points[0]).toEqual({ key: "2026-01-05", sessions: 0, cost: 4 });
   });
 
+  test("rows outside the range count as neither data nor missing usage", () => {
+    // Rows left over from the previous range while the new one loads.
+    const stale = [row("2026-02-01", 3, 1, 2), row("2026-02-02", 1)];
+    const series = buildDaySeries(stale, { from: "2026-03-01", to: "2026-03-07" });
+    expect(series.points).toHaveLength(7);
+    expect(series.observedDays).toBe(0);
+    expect(series.missingUsage).toBe(0);
+    const partly = buildDaySeries([...stale, row("2026-03-02", 2, 1, 1)], {
+      from: "2026-03-01",
+      to: "2026-03-07",
+    });
+    expect(partly.observedDays).toBe(1);
+    expect(partly.missingUsage).toBe(1);
+  });
+
   test("ignores malformed keys and ranges", () => {
     expect(buildDaySeries([row("", 3), row("2026-02-30", 1)]).points).toEqual([]);
     expect(buildDaySeries([], { from: "2026-03-05", to: "2026-03-01" }).points).toEqual([]);

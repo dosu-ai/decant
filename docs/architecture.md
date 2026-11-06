@@ -102,6 +102,23 @@ objects before Decant continues on a drifted archive.
 Archive files and sidecars are created or narrowed to owner-only permissions
 where the platform supports POSIX modes.
 
+### Planner statistics
+
+The query planner needs `sqlite_stat1` rows to choose good indexes, and a new
+archive has none. Without them, per-message block lookups go through
+`idx_block_type` and a first sync slows down with the square of the archive
+size. Sync therefore runs `PRAGMA optimize` between session files every 25
+ingested sessions. SQLite skips the work unless a table is unanalyzed or has
+grown 25x since its last `ANALYZE`, so the calls after the first are close to
+free. Sync also runs `PRAGMA optimize` once more after the ingest loop.
+
+A connection reads statistics only when it loads the schema, so it does not
+see rows another connection writes. The serve connection runs
+`PRAGMA optimize=0x10002` when it opens, and after each worker sync that
+ingested sessions it runs `ANALYZE sqlite_schema` to load the statistics that
+the worker wrote. Both steps skip a read-only archive or a write lock held past
+the busy timeout, because statistics only affect query speed.
+
 ## Serve, workers, and caches
 
 `decant serve` binds the HTTP listener before opening the archive. This makes a

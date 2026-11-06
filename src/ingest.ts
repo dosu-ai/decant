@@ -17,7 +17,7 @@ import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
-import { withImmediateTransaction } from "./db.ts";
+import { refreshPlannerStatistics, withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
@@ -352,6 +352,17 @@ function canonicalPath(path: string): string {
   }
 }
 
+/**
+ * Sessions written between mid-sync `PRAGMA optimize` calls. A new archive has
+ * no sqlite_stat1 rows, and without them the planner reads per-message block
+ * lookups through idx_block_type, which makes a cold sync quadratic in the
+ * archive size. Calls that find nothing to analyze cost nothing measurable. What
+ * costs time is the stretch before the first refresh: a cold sync of 500
+ * synthetic sessions took about 5s with an interval of 10, 25, or 50, 6.7s at
+ * 100, and 12s at 200.
+ */
+const PLANNER_STATISTICS_INTERVAL = 25;
+
 export function sync(
   db: Database,
   config: IngestConfig,
@@ -383,6 +394,7 @@ export function sync(
   // A tombstoned file writes no session but can delete lineage descendants and
   // null their parent links, so it counts as a lineage change like an ingest.
   let lineageMayHaveChanged = false;
+  let ingestedAtStatisticsRefresh = 0;
   const emitProgress = (): void =>
     onProgress?.({
       scanned: inspected,
@@ -399,6 +411,11 @@ export function sync(
       if (cancel?.aborted === true) {
         report.cancelled = true;
         break;
+      }
+      if (report.ingested - ingestedAtStatisticsRefresh >= PLANNER_STATISTICS_INTERVAL) {
+        // Each file commits its own transaction, so no write is open here.
+        refreshPlannerStatistics(db);
+        ingestedAtStatisticsRefresh = report.ingested;
       }
 
       try {

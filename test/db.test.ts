@@ -18,6 +18,9 @@ import {
   closeDb,
   LATEST_SCHEMA_VERSION,
   openDb,
+  optimizeLongLivedConnection,
+  refreshPlannerStatistics,
+  reloadPlannerStatistics,
   restrictArchiveFile,
   SchemaDriftError,
 } from "../src/db.ts";
@@ -1715,5 +1718,93 @@ describe("archive permissions", () => {
 
     expect(() => restrictArchiveFile(workDir)).not.toThrow();
     expect(statSync(workDir).mode & 0o7777).toBe(0o700);
+  });
+});
+
+describe("planner statistics helpers", () => {
+  const BLOCK_LOOKUP_PLAN = `EXPLAIN QUERY PLAN
+    SELECT EXISTS(SELECT 1 FROM block b WHERE b.message_id = m.id AND b.type = 'text')
+      FROM message m WHERE m.session_id = 1`;
+
+  function blockIndex(db: Database): string {
+    const details = (db.query(BLOCK_LOOKUP_PLAN).all() as { detail: string }[]).map(
+      (row) => row.detail,
+    );
+    return details.find((detail) => detail.includes(" b ")) ?? details.join("\n");
+  }
+
+  // Statistics shaped like a real archive: many blocks share a type, few share
+  // a message. Writing them by hand keeps the fixture free of transcript rows.
+  function writeBlockStatistics(path: string): void {
+    const writer = new Database(path, { strict: true });
+    try {
+      writer.exec("ANALYZE;");
+      writer.exec(`INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES
+        ('block', 'idx_block_message', '100000 3'),
+        ('block', 'idx_block_type', '100000 25000'),
+        ('message', NULL, '30000');`);
+    } finally {
+      writer.close();
+    }
+  }
+
+  test("optimizes a long-lived connection on a fresh, empty archive", () => {
+    const db = openDb(freshPath());
+    try {
+      expect(() => optimizeLongLivedConnection(db)).not.toThrow();
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("reloads statistics that another connection wrote", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    try {
+      expect(blockIndex(db)).toContain("idx_block_type");
+      writeBlockStatistics(path);
+      // The open connection keeps the statistics it loaded with the schema.
+      expect(blockIndex(db)).toContain("idx_block_type");
+      reloadPlannerStatistics(db);
+      expect(blockIndex(db)).toContain("idx_block_message");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("skips statistics work on a read-only connection", () => {
+    const path = freshPath();
+    openDb(path).close();
+    const reader = new Database(path, { readonly: true, strict: true });
+    try {
+      expect(() => optimizeLongLivedConnection(reader)).not.toThrow();
+      expect(() => refreshPlannerStatistics(reader)).not.toThrow();
+      expect(() => reloadPlannerStatistics(reader)).not.toThrow();
+    } finally {
+      reader.close();
+    }
+  });
+
+  test("skips statistics work while another connection holds the write lock", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    db.exec("PRAGMA busy_timeout = 0;");
+    const writer = new Database(path, { strict: true });
+    writer.exec("BEGIN IMMEDIATE;");
+    try {
+      expect(() => optimizeLongLivedConnection(db)).not.toThrow();
+      expect(() => refreshPlannerStatistics(db)).not.toThrow();
+      expect(() => reloadPlannerStatistics(db)).not.toThrow();
+    } finally {
+      writer.exec("ROLLBACK;");
+      writer.close();
+      closeDb(db);
+    }
+  });
+
+  test("still reports failures that are not contention or a read-only archive", () => {
+    const db = openDb(freshPath());
+    closeDb(db);
+    expect(() => reloadPlannerStatistics(db)).toThrow();
   });
 });

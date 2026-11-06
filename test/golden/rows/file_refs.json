@@ -1,5 +1,15 @@
 [
   {
+    "tool": "atif",
+    "source_session_id": "synthetic-embedded",
+    "seq": 1,
+    "path": "/tmp/example/config.toml",
+    "rel_path": "config.toml",
+    "ext": "toml",
+    "operation": "read",
+    "timestamp": "2026-10-02T10:00:04.000Z"
+  },
+  {
     "tool": "claude_code",
     "source_session_id": "distill",
     "seq": 5,

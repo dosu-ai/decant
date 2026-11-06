@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { CODEX_INJECTED_PREFIXES } from "./export.ts";
+import { asString, get } from "./json.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import type { Json } from "./model.ts";
 import { getSession, type SessionDetail, type SubagentDetail } from "./query.ts";
+import { ATIF_AGENT_NAMES } from "./sources/atif.ts";
 
 // ATIF (Agent Trajectory Interchange Format) emission, following Harbor's
 // rfcs/0001-trajectory-format.md and the Pydantic models under
@@ -11,17 +14,6 @@ import { getSession, type SessionDetail, type SubagentDetail } from "./query.ts"
 // v1.7 is the newest version whose features this export uses: v1.8 only adds
 // audio content parts, and Letta's ATIF reader stops at v1.7.
 export const ATIF_SCHEMA_VERSION = "ATIF-v1.7";
-
-const ATIF_AGENT_NAMES: Record<string, string> = {
-  claude_code: "claude-code",
-  codex: "codex",
-  gemini: "gemini-cli",
-  opencode: "opencode",
-  cursor: "cursor-cli",
-  copilot: "copilot-cli",
-  // Harbor has no VS Code agent; this matches the trajectory-v1 label.
-  vscode_copilot: "vscode-copilot-chat",
-};
 
 type JsonObject = Record<string, unknown>;
 
@@ -99,6 +91,7 @@ export type AtifExport =
   | { ok: false; reason: "not_found" | "no_steps" };
 
 interface SessionRow {
+  raw_meta: string | null;
   cwd: string | null;
   git_branch: string | null;
   cli_version: string | null;
@@ -274,7 +267,7 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
 
   const row = db
     .query(
-      `SELECT cwd, git_branch, cli_version, total_input_tokens, total_output_tokens,
+      `SELECT raw_meta, cwd, git_branch, cli_version, total_input_tokens, total_output_tokens,
               total_cache_read_tokens, total_cache_creation_tokens, total_cache_creation_1h_tokens
        FROM session WHERE id = ?1`,
     )
@@ -610,7 +603,7 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     session_id: summary.source_session_id,
     trajectory_id: trajectoryId,
     agent: {
-      name: ATIF_AGENT_NAMES[summary.tool] ?? summary.tool,
+      name: agentName(summary.tool, row?.raw_meta ?? null),
       version: row?.cli_version ?? "unknown",
       ...(summary.model == null || summary.model === "" ? {} : { model_name: summary.model }),
     },
@@ -619,6 +612,21 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     extra: rootExtra,
   };
   return { trajectory, totals };
+}
+
+/** Harbor's name for a native source. A session imported from ATIF keeps the
+ * name its producer wrote, so a round trip does not relabel it. */
+function agentName(tool: string, rawMeta: string | null): string {
+  if (tool === "atif") {
+    let meta: Json | undefined;
+    try {
+      meta = rawMeta == null ? undefined : (JSON.parse(rawMeta) as Json);
+    } catch {
+      meta = undefined;
+    }
+    return asString(get(get(meta, "agent"), "name")) ?? "unknown";
+  }
+  return ATIF_AGENT_NAMES[tool as keyof typeof ATIF_AGENT_NAMES] ?? tool;
 }
 
 /** A Claude-style compaction boundary, in the v1.7 `context_management`

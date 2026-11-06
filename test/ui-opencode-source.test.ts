@@ -52,13 +52,13 @@ describe("OpenCode source copy", () => {
     // JSX text wraps wherever the formatter puts it, so compare it as rendered.
     const copy = main.replace(/\s+/g, " ");
     expect(copy).toContain(
-      "Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code session log on this device.",
+      "Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code session log on this device, plus imported ATIF trajectories.",
     );
     expect(copy).toContain(
       "session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code already write",
     );
     expect(copy).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions.",
+      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and ATIF trajectories.",
     );
   });
 });

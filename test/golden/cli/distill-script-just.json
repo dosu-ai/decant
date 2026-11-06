@@ -1,6 +1,6 @@
 {
   "scope": "all sessions",
-  "session_count": 19,
+  "session_count": 23,
   "date_from": "2025-07-14T10:30:00.000Z",
   "date_to": "2026-10-12T07:26:40.000Z",
   "generated_with": "0.0.0-dev",
@@ -124,7 +124,19 @@
       "redacted": false,
       "sessions_seen": 3,
       "success_rate": 1
+    },
+    {
+      "ordinal": 1,
+      "kind": "command",
+      "raw": "bun test",
+      "normalized": "bun test",
+      "payload": null,
+      "phase": "test",
+      "is_error": false,
+      "redacted": false,
+      "sessions_seen": 1,
+      "success_rate": 1
     }
   ],
-  "artifact": "# Distilled by Decant 0.0.0-dev from all sessions\n# 19 session(s) (2025-07-14..2026-10-12). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n\ntest:\n    cargo test --workspace\n"
+  "artifact": "# Distilled by Decant 0.0.0-dev from all sessions\n# 23 session(s) (2025-07-14..2026-10-12). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n\ntest:\n    cargo test --workspace\n"
 }

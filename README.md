@@ -8,7 +8,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Decant turns the Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code session logs on your machine
+GitHub Copilot CLI, and Copilot Chat in VS Code session logs on your machine,
+plus the ATIF trajectories you import from Harbor or other agents,
 into tangible insights. See where tokens, cost,
 and agent time go, inspect context usage, find the files and tools agents
 touch, and search complete transcripts from a CLI or local web UI.
@@ -51,12 +52,13 @@ in VS Code logs on your machine, and watches for changes.
 ## What you get
 
 - One SQLite archive for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-  GitHub Copilot CLI, and Copilot Chat in VS Code sessions.
+  GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and for imported
+  [ATIF](https://harborframework.com/docs/agents/atif) trajectories.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
 - Browsable sessions, projects, files, and ingest diagnostics.
-- Markdown, JSON, report, trajectory, and ATIF exports.
+- Markdown, JSON, report, trajectory, and ATIF exports, and ATIF imports.
 - Deterministic scripts, replays, and agent instructions distilled from command
   history.
 
@@ -119,6 +121,7 @@ docker run --rm \
   -v "$HOME/.cursor/chats:/sources/cursor:ro" \
   -v "$HOME/.copilot/session-state:/sources/copilot:ro" \
   -v "$HOME/Library/Application Support/Code/User:/sources/vscode:ro" \
+  -v "$HOME/.decant/atif:/sources/atif:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
@@ -163,13 +166,14 @@ Read commands support `--json`; global flags include `--db`, `--format`,
 path.
 
 Decant reads `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`,
-`~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`, and
-VS Code's `User` directory by default. Override them with `DECANT_CLAUDE_DIR`,
-`DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`, `DECANT_OPENCODE_DIR`,
-`DECANT_CURSOR_DIR`, `DECANT_COPILOT_DIR`, and `DECANT_VSCODE_COPILOT_DIR`, or
-with the corresponding `--claude-dir`, `--codex-dir`, `--gemini-dir`,
-`--opencode-dir`, `--cursor-dir`, `--copilot-dir`, and `--vscode-copilot-dir`
-flags on `sync`, `watch`, and `serve`. When the Decant variable and flag are unset, the
+`~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`,
+VS Code's `User` directory, and `~/.decant/atif` by default. Override them with
+`DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, `DECANT_GEMINI_DIR`,
+`DECANT_OPENCODE_DIR`, `DECANT_CURSOR_DIR`, `DECANT_COPILOT_DIR`,
+`DECANT_VSCODE_COPILOT_DIR`, and `DECANT_ATIF_DIR`, or with the corresponding
+`--claude-dir`, `--codex-dir`, `--gemini-dir`, `--opencode-dir`, `--cursor-dir`,
+`--copilot-dir`, `--vscode-copilot-dir`, and `--atif-dir` flags on `sync`,
+`watch`, and `serve`. When the Decant variable and flag are unset, the
 OpenCode directory falls back to OpenCode's own `OPENCODE_DATA_DIR`, then
 `$XDG_DATA_HOME/opencode`, and the Copilot directory follows `COPILOT_HOME` to
 `$COPILOT_HOME/session-state`. `OPENCODE_DB` names an
@@ -242,6 +246,29 @@ Decant stores those numbers as written, so cost for these sessions is a rough
 list-price estimate. A session from an older build has no usage, and Decant
 shows its tokens and cost as unavailable instead of $0. `--path` also accepts
 a chat session file inside VS Code's storage layout.
+
+ATIF (Agent Trajectory Interchange Format) is the trajectory format Harbor
+writes for Terminal-Bench and its other evaluation runs. No agent writes to
+`~/.decant/atif`. Copy or link trajectories into it, point `DECANT_ATIF_DIR` at
+a Harbor `jobs` directory, or import files once with `--path`:
+
+```sh
+decant sync --path ./jobs/my-job
+decant sync --path ./run.atif.json
+```
+
+Decant reads every `.json` file whose head declares an `ATIF-v1.x` schema,
+plus Harbor's `trajectory.json`, `trajectory.cont-<n>.json`, and
+`trajectory.summarization-<n>-*.json` names, read-only. Sessions are filed
+under the `ATIF` source. A trial under Harbor's `<job>/<trial>/agent/` layout
+is filed under its job directory as the project. Each embedded subagent becomes
+a linked subagent session, and so does a subagent another trajectory names by
+`trajectory_path`. Steps marked `is_copied_context` were copied from an earlier
+trajectory and are skipped. Tokens come from each step's `metrics`, with cache
+reads and writes taken back out of `prompt_tokens`. Decant prices models it has
+a rate for and keeps a step's recorded `cost_usd` for models it cannot price.
+A trajectory with no metrics shows tokens and cost as unavailable. See
+[ATIF imports](docs/data-lifecycle.md#atif-imports) for the full mapping.
 
 To index selected files or a temporary source tree:
 

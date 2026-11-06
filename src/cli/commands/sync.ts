@@ -27,6 +27,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     cursorDir?: string;
     copilotDir?: string;
     vscodeCopilotDir?: string;
+    atifDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -85,6 +86,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           cursorDir: commandOptions.cursorDir,
           copilotDir: commandOptions.copilotDir,
           vscodeCopilotDir: commandOptions.vscodeCopilotDir,
+          atifDir: commandOptions.atifDir,
         },
       },
     );
@@ -103,6 +105,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "--vscode-copilot-dir <dir>",
       "override the VS Code User directory read for Copilot Chat",
     )
+    .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
@@ -118,6 +121,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         cursorDir?: string;
         copilotDir?: string;
         vscodeCopilotDir?: string;
+        atifDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -148,6 +152,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "--vscode-copilot-dir <dir>",
       "override the VS Code User directory read for Copilot Chat",
     )
+    .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -168,6 +173,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         cursorDir?: string;
         copilotDir?: string;
         vscodeCopilotDir?: string;
+        atifDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -181,6 +187,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             cursorDir: commandOptions.cursorDir,
             copilotDir: commandOptions.copilotDir,
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
+            atifDir: commandOptions.atifDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -212,6 +219,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "--vscode-copilot-dir <dir>",
       "override the VS Code User directory read for Copilot Chat",
     )
+    .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -241,6 +249,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         cursorDir?: string;
         copilotDir?: string;
         vscodeCopilotDir?: string;
+        atifDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -256,6 +265,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             cursorDir: commandOptions.cursorDir,
             copilotDir: commandOptions.copilotDir,
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
+            atifDir: commandOptions.atifDir,
           });
           // --no-sync must stop the watcher, or serving a scratch archive would
           // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how

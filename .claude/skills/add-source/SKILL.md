@@ -30,7 +30,7 @@ editing; this skill only lists the steps that are easy to miss.
 5. `SESSION_SOURCES`, `sessionSourceLabel`, and `sessionSourcePredicate` in
    `src/source-filter.ts`, the
    `source` enums in the API docs, the source label maps in `src/export.ts` and
-   `src/export-atif.ts`, and the source rows in `src/doctor.ts`.
+   `src/sources/atif.ts`, and the source rows in `src/doctor.ts`.
 6. The capability report from the doc, filled in for the pull request.
 
 ## Tests and goldens

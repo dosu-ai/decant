@@ -3,6 +3,9 @@
   "source_of_truth": "scripts/regen-goldens.ts",
   "regeneration": "mechanically regenerated from the listed synthetic fixtures",
   "fixtures": [
+    "fixtures/atif/embedded.atif.json",
+    "fixtures/atif/jobs/synthetic-job/trial-1/agent/trajectory.json",
+    "fixtures/atif/jobs/synthetic-job/trial-1/agent/trajectory.summarization-1-summary.json",
     "fixtures/claude/distill.jsonl",
     "fixtures/claude/enriched.jsonl",
     "fixtures/claude/mcp.jsonl",
@@ -36,7 +39,7 @@
       "distill",
       "script",
       "--min-frequency",
-      "0.15",
+      "0.12",
       "--json"
     ],
     "distill-script-just": [
@@ -45,7 +48,7 @@
       "--as",
       "just",
       "--min-frequency",
-      "0.15",
+      "0.12",
       "--json"
     ],
     "distill-skill-agents": [

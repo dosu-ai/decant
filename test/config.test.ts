@@ -42,6 +42,7 @@ describe("resolveConfig", () => {
         DECANT_CURSOR_DIR: "/env/cursor",
         DECANT_COPILOT_DIR: "/env/copilot",
         DECANT_VSCODE_COPILOT_DIR: "/env/vscode",
+        DECANT_ATIF_DIR: "/env/atif",
       },
       homeDir: "/home/dev",
     });
@@ -58,6 +59,7 @@ describe("resolveConfig", () => {
       cursorDir: "/env/cursor",
       copilotDir: "/env/copilot",
       vscodeCopilotDir: "/env/vscode",
+      atifDir: "/env/atif",
     });
   });
 
@@ -75,6 +77,7 @@ describe("resolveConfig", () => {
     expect(config.opencodeModelsPath).toBe("/home/dev/.cache/opencode/models.json");
     expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
     expect(config.copilotDir).toBe("/home/dev/.copilot/session-state");
+    expect(config.atifDir).toBe("/home/dev/.decant/atif");
   });
 
   test("reads VS Code and VS Code Insiders from each platform's user data directory", () => {

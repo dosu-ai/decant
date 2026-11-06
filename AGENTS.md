@@ -9,9 +9,9 @@ truth.
 
 Decant is a local-first Bun and TypeScript application that turns Claude Code,
 Codex, Gemini CLI, and GitHub Copilot CLI JSONL session logs, OpenCode's
-SQLite session store, Cursor CLI's per-chat SQLite stores, and Copilot Chat in
-VS Code's chat session files into a normalized, full-text-searchable SQLite
-archive. The `decant` CLI owns
+SQLite session store, Cursor CLI's per-chat SQLite stores, Copilot Chat in
+VS Code's chat session files, and imported ATIF trajectory files into a
+normalized, full-text-searchable SQLite archive. The `decant` CLI owns
 parsing, ingest, reads, reports, distillation, recommendations, watch mode, and
 the React UI served by `decant serve`.
 

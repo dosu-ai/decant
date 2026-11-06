@@ -86,14 +86,15 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
     }
   }
   // Only Claude Code records the 1-hour cache split and fast-mode speed on the
-  // request, and only OpenCode records a cost per request; other sources keep
-  // their usage in other shapes.
+  // request, and only OpenCode and ATIF steps record a cost per request; other
+  // sources keep their usage in other shapes.
   const messages = queryRows<BilledMessageRow>(
     db,
     `SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             CASE WHEN ?2 = 'claude_code' THEN json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage') END AS usage_json,
-            CASE WHEN ?2 = 'opencode' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost') END
-              AS reported_cost
+            CASE WHEN ?2 = 'opencode' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost')
+                 WHEN ?2 = 'atif' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.metrics.cost_usd')
+            END AS reported_cost
        FROM message m
       WHERE session_id = ?1
         AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL

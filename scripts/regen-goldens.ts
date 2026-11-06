@@ -46,6 +46,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const cursorDir = join(caseDir, "sources", "cursor");
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
+  const atifDir = join(caseDir, "sources", "atif");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -70,6 +71,12 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       copyFileSync(source, join(copilotDir, session, "events.jsonl"));
     } else if (fixture.startsWith(`${VSCODE_FIXTURES}/`)) {
       stageVscodeSession(fixture, vscodeCopilotDir);
+    } else if (fixture.startsWith(`${ATIF_FIXTURES}/`)) {
+      // Flat, because Harbor's job layout would make the temporary job
+      // directory a project. A trial's files stay side by side, so its
+      // trajectory_path refs still resolve.
+      mkdirSync(atifDir, { recursive: true });
+      copyFileSync(source, join(atifDir, name));
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -94,10 +101,12 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     cursorDir,
     copilotDir,
     vscodeCopilotDir,
+    atifDir,
   };
 }
 
 const VSCODE_FIXTURES = "fixtures/vscode-copilot/User";
+const ATIF_FIXTURES = "fixtures/atif";
 
 /** Copies a VS Code session file to the same place under the staged `User`
  * directory, with its workspace's `workspace.json` when it has one. */

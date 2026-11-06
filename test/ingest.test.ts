@@ -5,6 +5,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -126,6 +127,17 @@ function stageFixtures(dir: string): IngestConfig {
     );
   }
   cpSync(join(fixtureRoot, "vscode-copilot", "User"), vscodeCopilotDir, { recursive: true });
+  // Flat, as scripts/regen-goldens.ts stages them.
+  const atifDir = join(dir, "sources", "atif");
+  mkdirSync(atifDir, { recursive: true });
+  for (const file of readdirSync(join(fixtureRoot, "atif"), {
+    recursive: true,
+    encoding: "utf8",
+  })) {
+    if (file.endsWith(".json")) {
+      copyFileSync(join(fixtureRoot, "atif", file), join(atifDir, basename(file)));
+    }
+  }
 
   return {
     claudeDir,
@@ -136,6 +148,7 @@ function stageFixtures(dir: string): IngestConfig {
     cursorDir,
     copilotDir,
     vscodeCopilotDir,
+    atifDir,
   };
 }
 
@@ -2438,7 +2451,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 19, ingested: 19, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 22, ingested: 22, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2462,7 +2475,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 19, ingested: 0, skipped: 19, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
     expect(
       db
         .query(
@@ -2481,7 +2494,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 19, ingested: 0, skipped: 19, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });
@@ -4117,6 +4130,158 @@ describe("OpenCode ingest", () => {
       { tool: "claude_code", no_hash: 1 },
       { tool: "opencode", no_hash: 0 },
     ]);
+    closeDb(db);
+  });
+});
+
+describe("ATIF ingest", () => {
+  function atifCase(): { dir: string; atifDir: string; config: IngestConfig } {
+    const dir = freshCase();
+    const atifDir = join(dir, "atif");
+    cpSync(join(fixtureRoot, "atif"), atifDir, { recursive: true });
+    return {
+      dir,
+      atifDir,
+      config: {
+        claudeDir: join(dir, "none", "claude"),
+        codexDir: join(dir, "none", "codex"),
+        atifDir,
+      },
+    };
+  }
+
+  function atifRows(db: Database) {
+    return db
+      .query(
+        `SELECT s.id, s.source_session_id, s.is_subagent, s.spawn_tool_use_id, s.spawn_depth,
+                s.compaction_count, s.agent_spawn_count, s.estimated_cost_usd,
+                (SELECT p.source_session_id FROM session p WHERE p.id = s.parent_session_id) AS parent,
+                (SELECT path FROM project WHERE id = s.project_id) AS project
+           FROM session s WHERE s.tool = 'atif' ORDER BY s.source_session_id`,
+      )
+      .all() as {
+      id: number;
+      source_session_id: string;
+      is_subagent: number;
+      spawn_tool_use_id: string | null;
+      spawn_depth: number | null;
+      compaction_count: number;
+      agent_spawn_count: number;
+      estimated_cost_usd: number;
+      parent: string | null;
+      project: string | null;
+    }[];
+  }
+
+  test("reads every trajectory in the directory and links subagents across files", () => {
+    const { dir, atifDir, config } = atifCase();
+    const db = openFreshDb(dir);
+    // The README beside the fixtures is not a trajectory.
+    expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
+    const rows = atifRows(db);
+    expect(
+      rows.map(({ source_session_id, is_subagent, parent, spawn_tool_use_id, spawn_depth }) => ({
+        source_session_id,
+        is_subagent,
+        parent,
+        spawn_tool_use_id,
+        spawn_depth,
+      })),
+    ).toEqual([
+      {
+        source_session_id: "synthetic-embedded",
+        is_subagent: 0,
+        parent: null,
+        spawn_tool_use_id: null,
+        spawn_depth: null,
+      },
+      {
+        source_session_id: "synthetic-embedded:helper",
+        is_subagent: 1,
+        parent: "synthetic-embedded",
+        spawn_tool_use_id: "toolu_task",
+        spawn_depth: 1,
+      },
+      {
+        source_session_id: "synthetic-trial-1",
+        is_subagent: 0,
+        parent: null,
+        spawn_tool_use_id: null,
+        spawn_depth: null,
+      },
+      {
+        // Stored in its own file and named only by the parent's trajectory_path.
+        source_session_id: "synthetic-trial-1-summarization-1-summary",
+        is_subagent: 1,
+        parent: "synthetic-trial-1",
+        spawn_tool_use_id: "call_2",
+        spawn_depth: null,
+      },
+    ]);
+
+    const byId = new Map(rows.map((row) => [row.source_session_id, row]));
+    // A Harbor trial is filed under its job directory.
+    expect(byId.get("synthetic-trial-1")?.project).toBe(join(atifDir, "jobs", "synthetic-job"));
+    expect(byId.get("synthetic-embedded")?.project).toBe("/tmp/example");
+    // Claude Code tool names keep their meaning in an imported trajectory.
+    expect(byId.get("synthetic-embedded")?.agent_spawn_count).toBe(1);
+    expect(byId.get("synthetic-embedded")?.compaction_count).toBe(1);
+    expect(
+      db
+        .query("SELECT path, operation FROM file_ref WHERE session_id = ?1")
+        .all(byId.get("synthetic-embedded")?.id ?? 0),
+    ).toEqual([{ path: "/tmp/example/config.toml", operation: "read" }]);
+
+    // A model Decant prices is priced; one it cannot keeps the recorded cost.
+    expect(byId.get("synthetic-trial-1")?.estimated_cost_usd).toBeGreaterThan(0);
+    const summary = getSession(db, byId.get("synthetic-trial-1-summarization-1-summary")?.id ?? 0);
+    expect(summary?.summary.estimated_cost_usd).toBeCloseTo(0.0042, 10);
+    expect(summary?.summary.cost_source).toBe("reported");
+    closeDb(db);
+  });
+
+  test("skips unchanged documents and drops a subagent the document no longer embeds", () => {
+    const { dir, atifDir, config } = atifCase();
+    const db = openFreshDb(dir);
+    sync(db, config);
+    expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 0, skipped: 3 });
+
+    const path = join(atifDir, "embedded.atif.json");
+    const document = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    delete document.subagent_trajectories;
+    writeFileSync(path, `${JSON.stringify(document)}\n`);
+    expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+    expect(atifRows(db).map((row) => row.source_session_id)).not.toContain(
+      "synthetic-embedded:helper",
+    );
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM ingest_source WHERE path LIKE ?1").get(`${path}#%`),
+    ).toEqual({ n: 0 });
+    closeDb(db);
+  });
+
+  test("finds ATIF documents under --path by name or declared schema and skips other JSON", () => {
+    const dir = freshCase();
+    write(join(dir, "run", "agent", "trajectory.json"), "{}");
+    write(join(dir, "export", "42.atif.json"), "{}");
+    write(join(dir, "named", "anything.json"), '{"schema_version": "ATIF-v1.8", "steps": []}');
+    write(join(dir, "other", "package.json"), '{"name": "example"}');
+    expect(discoverSourcePaths([dir]).map((file) => [file.tool, relative(dir, file.path)])).toEqual(
+      [
+        ["atif", join("export", "42.atif.json")],
+        ["atif", join("named", "anything.json")],
+        ["atif", join("run", "agent", "trajectory.json")],
+      ],
+    );
+  });
+
+  test("keeps syncing past an unreadable document and reports it as data loss", () => {
+    const { dir, atifDir, config } = atifCase();
+    write(join(atifDir, "broken", "trajectory.json"), "{ not json");
+    const db = openFreshDb(dir);
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 4, ingested: 4, failed: 0 });
+    expect(report.issuesByCode.unparsed_line).toBe(1);
     closeDb(db);
   });
 });

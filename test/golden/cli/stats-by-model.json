@@ -11,13 +11,13 @@
   },
   {
     "key": "claude-opus-4-7",
-    "sessions": 4,
-    "usage_sessions": 4,
-    "input_tokens": 10320,
-    "output_tokens": 1470,
-    "reasoning_tokens": 0,
+    "sessions": 5,
+    "usage_sessions": 5,
+    "input_tokens": 10920,
+    "output_tokens": 1870,
+    "reasoning_tokens": 100,
     "est_reasoning_tokens": 494,
-    "estimated_cost_usd": 0.09885
+    "estimated_cost_usd": 0.129125
   },
   {
     "key": "claude-sonnet-4.5",
@@ -33,11 +33,11 @@
     "key": "example-model",
     "sessions": 2,
     "usage_sessions": 2,
-    "input_tokens": 18,
-    "output_tokens": 15,
+    "input_tokens": 418,
+    "output_tokens": 40,
     "reasoning_tokens": 2,
     "est_reasoning_tokens": 0,
-    "estimated_cost_usd": 0
+    "estimated_cost_usd": 0.0042
   },
   {
     "key": "glm-5.3-flash",
@@ -48,6 +48,16 @@
     "reasoning_tokens": 20,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.00016880000000000004
+  },
+  {
+    "key": "anthropic/claude-opus-4-7",
+    "sessions": 1,
+    "usage_sessions": 1,
+    "input_tokens": 850,
+    "output_tokens": 162,
+    "reasoning_tokens": 20,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0.01015
   },
   {
     "key": "claude-haiku-4.5",

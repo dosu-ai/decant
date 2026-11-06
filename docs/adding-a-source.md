@@ -45,8 +45,9 @@ Use this checklist when adding support for another coding-agent CLI.
    A source with no predicate case gets an empty SQL fragment that breaks the
    Analytics source list. Add it to the `source` enums in
    `docs/api/openapi.yaml` and `docs/api/routes.md`. Give it labels in the
-   source maps in `src/export.ts` and `src/export-atif.ts`, and a row in the
-   source directories `decant doctor` reports from `src/doctor.ts`.
+   source maps in `src/export.ts` and `ATIF_AGENT_NAMES` in
+   `src/sources/atif.ts`, which both the ATIF export and import read, and a row
+   in the source directories `decant doctor` reports from `src/doctor.ts`.
 6. **Capability report** includes the table below in the pull-request
    description.
 

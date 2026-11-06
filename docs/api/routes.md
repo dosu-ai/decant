@@ -34,7 +34,7 @@ the session preview intentionally omits transcript content.
 
 Analytics statistics and reports accept a combined `source` filter. The
 current values are `claude_code`, `codex_app`, `codex_cli`, `codex_other`,
-`gemini_cli`, `opencode`, `cursor_cli`, `copilot_cli`, and `vscode_copilot`.
+`gemini_cli`, `opencode`, `cursor_cli`, `copilot_cli`, `vscode_copilot`, and `atif`.
 An unknown value
 returns `400` with the accepted values in `allowed`, before the archive is read. The Codex split reads
 the source session's recorded `originator`/`source` metadata. The filter does
@@ -157,14 +157,16 @@ Token-economics totals expose the reported share as `reported_cost_usd`.
 records one. `GET /api/config` includes `opencodeDir`, the OpenCode data
 directory being read, `cursorDir`, the Cursor CLI chats directory,
 `copilotDir`, the GitHub Copilot CLI session-state directory, and
-`vscodeCopilotDir`, the VS Code `User` directory read for Copilot Chat. When
-no override is set, Decant also reads VS Code Insiders' `User` directory, which
-this field does not list.
+`vscodeCopilotDir`, the VS Code `User` directory read for Copilot Chat, and
+`atifDir`, the directory read for ATIF trajectory files (null when none is
+configured). When no override is set, Decant also reads VS Code Insiders'
+`User` directory, which `vscodeCopilotDir` does not list.
 
 Session summaries also carry `usage_available`. It is false for a session from
 a source that may record no token usage, when none of the session's messages
-carries any. Those sources are Cursor CLI, which stores none, and Copilot Chat
-in VS Code, whose builds from before April 2026 wrote none. Such a session reports `estimated_cost_usd` and token
+carries any. Those sources are Cursor CLI, which stores none, Copilot Chat in
+VS Code, whose builds from before April 2026 wrote none, and ATIF
+trajectories, where every metric is optional. Such a session reports `estimated_cost_usd` and token
 totals of 0. Show them as unavailable, not free. Stats totals,
 `/api/stats/by-dimension` rows, and `/api/projects` rows carry
 `usage_sessions`, the number of top-level sessions in that scope or row with

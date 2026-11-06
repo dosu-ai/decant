@@ -85,6 +85,9 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "atif") {
+    return <Badge tone="info">ATIF</Badge>;
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -288,6 +291,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "vscode_copilot") {
     return { key: "assistant", label: "Copilot Chat", tone: "accent", icon: "copilot" };
+  }
+  if (tool === "atif") {
+    return { key: "assistant", label: "Agent", tone: "info", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

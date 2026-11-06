@@ -33,7 +33,8 @@ sessions remain excluded. See [Archive and data lifecycle](data-lifecycle.md).
 The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
 OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
-`vscode_copilot` for Copilot Chat in VS Code, and, for Codex, the recorded producer metadata splits sessions into
+`vscode_copilot` for Copilot Chat in VS Code, `atif` for imported ATIF
+trajectories, and, for Codex, the recorded producer metadata splits sessions into
 `codex_app`, `codex_cli`, and `codex_other`. That
 split reads only the session's own `originator` and `source` metadata. Desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
@@ -245,9 +246,18 @@ model was selected, that is the model VS Code names in the turn's
 `autoModeResolution` part, else the `resolvedModel` the Copilot extension
 recorded.
 
+An imported ATIF trajectory carries the usage its producer wrote in each agent
+step's `metrics`. ATIF counts cache reads and writes inside `prompt_tokens`, so
+Decant subtracts `cached_tokens` and the cache writes in `metrics.extra` to get
+input, and reads reasoning from `metrics.extra.reasoning_tokens`. Session
+totals are the sum of the steps, not `final_metrics`, which can also count the
+trajectory's subagents. Steps marked `is_copied_context` repeat another
+trajectory's turns and count nothing. See
+[ATIF imports](data-lifecycle.md#atif-imports).
+
 Cursor CLI records no token usage, so its sessions carry zero token and cost
 columns. Neither does a Copilot Chat session from a VS Code build that predates
-the usage fields. Session summaries mark such sessions
+the usage fields, nor an ATIF trajectory whose steps carry no metrics. Session summaries mark such sessions
 `usage_available: false`, and the UI shows their tokens and cost as
 unavailable instead of $0. Stats totals,
 per-model, per-project, and per-day rows, and project rollups count only the
@@ -261,7 +271,7 @@ usage, and `decant project ls` prints "-" for such a project and an asterisk
 after a cost that leaves sessions out.
 
 When Decant has no rate for a model, the cost OpenCode recorded for those
-requests is used instead and the session's `cost_source` is `reported` (or
+requests, or an ATIF step's `metrics.cost_usd`, is used instead and the session's `cost_source` is `reported` (or
 `mixed` when only some of its model rows fell back). A recorded cost of zero
 is never used: subscription routes such as the GLM Coding Plan record zero,
 which is a placeholder, not a price. A reported cost has no input/output
@@ -563,11 +573,13 @@ an explicit model window, Copilot CLI records the main agent's prompt limit
 catalog OpenCode caches (in its database for 2.x; for a database with no
 catalog, which is how 1.x leaves it, the `models.json` cache file 1.x keeps; the
 window is unknown when neither exists). Claude and Gemini infer the window from the model
-when the source does not record one, and the API marks inferred values. An
+when the source does not record one, as do ATIF trajectories whose model is a
+Claude or Gemini model, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.
 
-Compactions come from provider boundary records. Pre- and post-compaction token
+Compactions come from provider boundary records, and for ATIF from system
+steps whose `extra.context_management.type` is `compaction`. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing
 values remain unavailable rather than being invented.
 

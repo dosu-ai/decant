@@ -1,0 +1,42 @@
+{
+  "schema_version": "ATIF-v1.6",
+  "session_id": "synthetic-trial-1-summarization-1-summary",
+  "agent": {
+    "name": "terminus-2-summarization-summary",
+    "version": "2.0.0",
+    "model_name": "example-model"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "user",
+      "message": "Create hello.txt containing hello.",
+      "is_copied_context": true
+    },
+    {
+      "step_id": 2,
+      "source": "agent",
+      "message": "I will write the file.",
+      "is_copied_context": true
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-01T09:00:07Z",
+      "source": "user",
+      "message": "Summarize the work so far."
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-10-01T09:00:08Z",
+      "source": "agent",
+      "model_name": "example-model",
+      "message": "Summary: hello.txt was written.",
+      "metrics": {
+        "prompt_tokens": 400,
+        "completion_tokens": 25,
+        "cached_tokens": 0,
+        "cost_usd": 0.0042
+      }
+    }
+  ]
+}

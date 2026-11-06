@@ -12,6 +12,7 @@ export const SESSION_SOURCES = [
   "cursor_cli",
   "copilot_cli",
   "vscode_copilot",
+  "atif",
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -45,6 +46,8 @@ export function sessionSourceLabel(source: SessionSource): string {
       return "Copilot CLI";
     case "vscode_copilot":
       return "VS Code Copilot Chat";
+    case "atif":
+      return "ATIF trajectories";
   }
 }
 
@@ -99,6 +102,8 @@ export function sessionSourcePredicate(
       return { sql: `${alias}.tool = ?`, params: ["copilot"] };
     case "vscode_copilot":
       return { sql: `${alias}.tool = ?`, params: ["vscode_copilot"] };
+    case "atif":
+      return { sql: `${alias}.tool = ?`, params: ["atif"] };
     default:
       return { sql: "", params: [] };
   }

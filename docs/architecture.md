@@ -12,6 +12,7 @@ service, bearer token, or second application process.
   + ~/.cursor/chats/<workspace>/<chat>/store.db
   + ~/.copilot/session-state/<session>/events.jsonl
   + <VS Code User>/workspaceStorage/<id>/chatSessions/<session>.jsonl
+  + ~/.decant/atif/**/*.json (ATIF trajectories, such as Harbor jobs)
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -66,7 +67,11 @@ session is one `events.jsonl` event log per session directory, parsed by
 `src/sources/copilot.ts`. A Copilot Chat in VS Code session is one file in a
 window's storage: `src/sources/vscode-copilot.ts` replays the `.jsonl` change
 log, or reads the older whole `.json` file, into one session object. Ingest
-reads the workspace's `workspace.json` to name the project. Parsers retain canonical raw records while mapping
+reads the workspace's `workspace.json` to name the project. An ATIF file can
+hold a root trajectory and embedded subagents: `src/sources/atif.ts` returns
+one session for each, and ingest files the root under the file's path and each
+subagent under `<file>#<trajectory_id>`, removing a subagent the file no longer
+holds. Parsers retain canonical raw records while mapping
 provider-specific roles, blocks, usage, tool calls, and lineage into shared
 tables. Malformed lines and unknown record types become diagnostics rather than
 aborting the file.

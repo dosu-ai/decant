@@ -80,7 +80,14 @@ describe("collectDoctorReport", () => {
       "cursor",
       "copilot",
       "vscode_copilot",
+      "atif",
     ]);
+    expect(report.sources.find((source) => source.tool === "atif")).toEqual({
+      tool: "atif",
+      roots: ["~/.decant/atif"],
+      exists: false,
+      found: 0,
+    });
     expect(report.archive).toMatchObject({ path: "~/.decant/decant.db", exists: false });
     expect(report.env).toEqual(["DECANT_CONFIG_DIR", "DECANT_NO_SYNC", "XDG_DATA_HOME"]);
     expect(report.supported_schema_version).toBe(LATEST_SCHEMA_VERSION);

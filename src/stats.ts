@@ -30,9 +30,13 @@ export interface StatsFilter extends DateFilter {
 }
 
 /** Sources whose sessions may hold no token usage at all: Cursor CLI stores
- * none, and VS Code builds from before April 2026 wrote none for Copilot
- * Chat. */
-export const USAGE_OPTIONAL_TOOLS = ["cursor", "vscode_copilot"] as const satisfies readonly Tool[];
+ * none, VS Code builds from before April 2026 wrote none for Copilot Chat,
+ * and ATIF makes every metric optional. */
+export const USAGE_OPTIONAL_TOOLS = [
+  "cursor",
+  "vscode_copilot",
+  "atif",
+] as const satisfies readonly Tool[];
 
 /** 1 unless the session comes from a source that may record no token usage
  * and none of its messages carries any. There a zero cost means "unknown",

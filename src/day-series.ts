@@ -83,7 +83,7 @@ export function buildDaySeries(
   }
   return {
     granularity: "week",
-    points: groupWeeks(days),
+    points: groupWeeks(days, byDay),
     missingUsage,
     observedDays: byDay.size,
   };
@@ -141,22 +141,36 @@ function dayCost(row: DayRow | undefined): number | null {
   return row.sessions === 0 || row.usage_sessions > 0 ? row.estimated_cost_usd : null;
 }
 
-/** A week's cost sums its known days and is null only when no day is known. */
-function groupWeeks(days: readonly SeriesPoint[]): SeriesPoint[] {
-  const weeks: SeriesPoint[] = [];
+/**
+ * A week sums the known cost of its days that had sessions. It is unknown when
+ * it had sessions and none of them recorded usage: the idle days around them
+ * must not turn that unknown into $0. A week with no sessions at all is a
+ * real zero.
+ */
+function groupWeeks(
+  days: readonly SeriesPoint[],
+  observed: ReadonlyMap<string, DayRow>,
+): SeriesPoint[] {
+  const weeks: { point: SeriesPoint; observed: boolean; known: boolean }[] = [];
   for (const day of days) {
     const key = weekStart(day.key);
     let week = weeks.at(-1);
-    if (week?.key !== key) {
-      week = { key, sessions: 0, cost: null };
+    if (week?.point.key !== key) {
+      week = { point: { key, sessions: 0, cost: 0 }, observed: false, known: false };
       weeks.push(week);
     }
-    week.sessions += day.sessions;
-    if (day.cost != null) {
-      week.cost = (week.cost ?? 0) + day.cost;
+    week.point.sessions += day.sessions;
+    if (observed.has(day.key)) {
+      week.observed = true;
+      if (day.cost != null) {
+        week.known = true;
+        week.point.cost = (week.point.cost ?? 0) + day.cost;
+      }
     }
   }
-  return weeks;
+  return weeks.map(({ point, observed: hadSessions, known }) =>
+    hadSessions && !known ? { ...point, cost: null } : point,
+  );
 }
 
 function validDay(value: string | null | undefined): string | null {

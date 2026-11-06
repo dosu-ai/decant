@@ -30,8 +30,9 @@ list only days that had sessions, so the charts add the missing days as zero:
 an idle stretch shows as empty bars instead of disappearing from the axis.
 "All time" spans the first to the last day with sessions. A range longer than
 92 days draws one point per UTC week starting Monday instead of one per day.
-The cost line leaves a gap, not a zero, on a day whose sessions all lack usage
-data, and it is not smoothed between points. The busiest-hour and
+The cost line leaves a gap, not a zero, on a day or a week whose sessions all
+lack usage data, and it is not smoothed between points. Idle days stay zero and
+do not make such a week known. The busiest-hour and
 busiest-weekday charts are the exception: they bucket session starts in the
 server's local time zone, which the chart names.
 

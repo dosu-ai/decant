@@ -61,14 +61,23 @@ describe("buildDaySeries", () => {
     expect(past.granularity).toBe("week");
   });
 
-  test("a week is unknown only when none of its days is known", () => {
+  test("a week is unknown when every session in it lacks usage", () => {
     const rows = [row("2026-01-05", 1, 0, 0), row("2026-01-12", 1, 0, 0), row("2026-01-13", 1)];
     const series = buildDaySeries(rows, { from: "2026-01-05", to: "2026-06-30" });
-    expect(series.points.slice(0, 2)).toEqual([
-      // Its idle days are known zeros, so the week costs zero, not unknown.
-      { key: "2026-01-05", sessions: 1, cost: 0 },
+    expect(series.points.slice(0, 3)).toEqual([
+      // Idle days around a no-usage session do not make the week $0.
+      { key: "2026-01-05", sessions: 1, cost: null },
+      // One known day makes the week known; the unknown day stays out of it.
       { key: "2026-01-12", sessions: 2, cost: 1 },
+      // A week with no sessions is a real zero.
+      { key: "2026-01-19", sessions: 0, cost: 0 },
     ]);
+    // A day with only subagent runs has a real cost and makes its week known.
+    const subagentOnly = buildDaySeries([row("2026-01-07", 0, 0, 4)], {
+      from: "2026-01-05",
+      to: "2026-06-30",
+    });
+    expect(subagentOnly.points[0]).toEqual({ key: "2026-01-05", sessions: 0, cost: 4 });
   });
 
   test("ignores malformed keys and ranges", () => {

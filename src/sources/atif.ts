@@ -672,6 +672,11 @@ function rawMeta(
   if (copied > 0) {
     meta.copiedContextSteps = copied;
   }
+  const embedded = trajectory.subagent_trajectories;
+  if (Array.isArray(embedded) && embedded.length > 0) {
+    // Cost reconciliation must know `final_metrics` may count these too.
+    meta.embeddedSubagents = embedded.length;
+  }
   return meta;
 }
 

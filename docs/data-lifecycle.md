@@ -230,7 +230,7 @@ embedded trajectory's totals likewise include the subagents it spawned, and
 `final_metrics.extra.includes_subagents` marks any trajectory whose totals do,
 and `final_metrics.extra.session_metrics` then gives that trajectory's own
 share (`total_prompt_tokens`, `total_completion_tokens`, `total_cached_tokens`,
-and `total_cache_write_tokens`). Sum only the root's totals to avoid counting
+`total_cache_write_tokens`, and `total_cost_usd`). Sum only the root's totals to avoid counting
 nested subagents twice. Claude
 compaction boundaries become
 `system` steps with `extra.context_management` set to a `replace` compaction,
@@ -264,10 +264,13 @@ spawned by the result's `source_call_id`. An embedded trajectory no ref names
 is a subagent of the root. A ref whose `trajectory_path` is set and whose
 `trajectory_id` names nothing embedded resolves beside the document instead.
 Once the file at that path is in the archive, its session is linked as a
-subagent of the referencing session. Deleting a subagent session also deletes
+subagent of the referencing session, and it becomes a top-level session again
+if the reference is later removed. Deleting a subagent session also deletes
 any subagent the document later adds beneath it. When a file drops an embedded
-subagent, the next sync removes that subagent's session. Only the file's size
-and modification time decide whether a document is read again.
+subagent, the next sync removes that subagent's session. Two files holding the
+same document keep one copy: the one read last, with its own embedded
+subagents. A document is read again when its size or modification time,
+compared to the sub-second, changes.
 
 `system`, `user`, and `agent` steps become system, user, and assistant
 messages. An agent step's `reasoning_content`, text, and `tool_calls` become
@@ -295,8 +298,12 @@ trajectory Decant exported (`extra.exporter: "decant"`) uses its
 `final_metrics`, or `final_metrics.extra.session_metrics` when they include
 subagents, because per-step metrics undercount sources such as Codex that
 record usage once per turn. A step that records `cost_usd` without token
-counts still counts toward cost, and a trajectory whose only usage is
-`final_metrics` or a recorded cost is not shown as unavailable. Harbor's
+counts still counts toward cost. When no step records a cost, a model Decant
+cannot price takes the run's `final_metrics.total_cost_usd`, but only when
+nothing else shares that total: no embedded subagents and no `trajectory_path`
+refs, or a Decant `session_metrics.total_cost_usd`. A trajectory whose only
+usage is `final_metrics` (zero totals included) or a recorded cost is not shown
+as unavailable. Harbor's
 OpenCode converter currently writes `prompt_tokens` without cache writes,
 against the spec. Nothing in its output tells that apart from a corrected
 converter, so Decant follows the spec, and such a trajectory's input reads low

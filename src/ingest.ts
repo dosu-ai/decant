@@ -899,17 +899,25 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   }
   let stats: Stats;
   let content: string;
+  let changeKey: string;
   try {
     stats = fstatSync(fd);
-    const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
-      db,
-      "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
-      [file.path],
-    );
+    // A document is rewritten whole, so a rewrite of the same size within one
+    // second is possible; the sub-second modification time tells it apart.
+    changeKey = `mtime-ms:${stats.mtimeMs}`;
+    const prior = queryRow<{
+      size: number;
+      mtime: number;
+      ingest_revision: number;
+      hash: string | null;
+    }>(db, "SELECT size, mtime, ingest_revision, hash FROM ingest_source WHERE path = ?1", [
+      file.path,
+    ]);
     if (
       prior != null &&
       prior.size === stats.size &&
       prior.mtime === mtimeSecs(stats) &&
+      prior.hash === changeKey &&
       prior.ingest_revision === INGEST_PIPELINE_REVISION
     ) {
       return { kind: "skipped" };
@@ -939,6 +947,22 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   const issues: Issue[] = [];
   const subagentPaths = new Set<string>();
   let root: ParsedSession | null = null;
+  const rootId = document.sessions.find((session) => session.key == null)?.parsed.session
+    .sourceSessionId;
+  // Another file holding the same document (a copy) was read before. Its root
+  // is about to be replaced, so its embedded subagents go too rather than
+  // hang off this file's root. Its source row stays, so it is not re-read.
+  const superseded =
+    rootId == null
+      ? null
+      : queryRow<{ source_path: string | null }>(
+          db,
+          "SELECT source_path FROM session WHERE tool = 'atif' AND source_session_id = ?1",
+          [rootId],
+        )?.source_path;
+  if (superseded != null && superseded !== file.path) {
+    releaseRemovedAtifSubagents(db, superseded, new Set());
+  }
   for (const { key, parsed } of document.sessions) {
     if (key == null) {
       root = parsed;
@@ -951,6 +975,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
       lineCount: parsed.session.messages.length,
       mtime,
       size: stats.size,
+      hash: changeKey,
     };
     if (writeIngestedFile(db, prepared, parsed) === "ingested") {
       issues.push(...parsed.issues);
@@ -965,6 +990,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     lineCount: lineCount(content),
     mtime,
     size: stats.size,
+    hash: changeKey,
   };
   if (writeIngestedFile(db, prepared, root) === "tombstoned") {
     return { kind: "tombstoned" };
@@ -1349,6 +1375,12 @@ export function resolveSubagentParents(db: Database): void {
      ORDER BY call.id DESC
      LIMIT 1`,
   );
+  const clearAtif = db.prepare(
+    `UPDATE session
+     SET is_subagent = 0, parent_session_id = NULL, spawn_tool_use_id = NULL,
+         agent_id = NULL, agent_type = NULL, spawn_depth = NULL
+     WHERE id = ?1`,
+  );
   const update = db.prepare(
     `UPDATE session
      SET is_subagent = ?1,
@@ -1364,6 +1396,11 @@ export function resolveSubagentParents(db: Database): void {
       for (const row of rows) {
         const info = inferred.get(row.id);
         if (info == null || !info.isSubagent) {
+          // An ATIF session linked only by a file ref that its parent has
+          // since dropped. Other sources never unlink here.
+          if (row.tool === "atif" && row.is_subagent !== 0) {
+            clearAtif.run(row.id);
+          }
           continue;
         }
         const rootId = rootByChild.get(row.id) ?? null;
@@ -1410,6 +1447,7 @@ export function resolveSubagentParents(db: Database): void {
       }
     });
   } finally {
+    clearAtif.finalize();
     update.finalize();
     findCodexSpawner.finalize();
     findSpawner.finalize();
@@ -1678,8 +1716,10 @@ function inferAtifSubagent(
   const parent = asString(get(meta, "parentSessionId"));
   const fileRef = row.source_path == null ? undefined : fileRefs.get(row.source_path);
   if (parent == null && fileRef == null) {
+    // Nothing names this session as a subagent any more, so a link an earlier
+    // pass made from a file ref no longer holds.
     return {
-      isSubagent: row.is_subagent !== 0,
+      isSubagent: false,
       rootKey: null,
       spawnToolUseId: row.spawn_tool_use_id,
       agentId: row.agent_id,

@@ -110,6 +110,7 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const reportedByGroup = new Map<string, number>();
   const billed = emptyUsage();
   let unpricedReportedTotal = 0;
+  let sawReported = false;
   for (const message of messages) {
     const recorded = parseUsageJson(message.usage_json);
     const cacheCreation = message.cache_creation_tokens ?? 0;
@@ -129,6 +130,7 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
       typeof message.reported_cost === "number" && message.reported_cost > 0
         ? message.reported_cost
         : 0;
+    sawReported ||= reported > 0;
     if (!isPriceableModel(model)) {
       unpricedReportedTotal += reported;
     }
@@ -143,13 +145,14 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   // recorded cost there counts only requests served by models Decant cannot
   // price, because every other request is priced at list rates.
   if (single || !isNonNegative(residual)) {
+    const runCost = session.tool === "atif" && !sawReported ? atifRunCost(session.raw_meta) : 0;
     return [
       {
         model: sessionModel,
         tier: "standard",
         requests: messages.length,
         usage: totals,
-        reportedCostUsd: reportedFallback(sessionModel, unpricedReportedTotal),
+        reportedCostUsd: reportedFallback(sessionModel, unpricedReportedTotal || runCost),
       },
     ];
   }
@@ -401,6 +404,38 @@ function sessionTotals(session: SessionTotalsRow): TokenUsage {
 // which no model served.
 function isRecordedModel(model: string | null): model is string {
   return model != null && model !== "" && !/^<.*>$/.test(model);
+}
+
+/** An ATIF trajectory whose steps record no cost can still record one for
+ * the run. It is the session's own only when nothing else shares it: Decant's
+ * export gives its own share in `session_metrics` when subagents are rolled
+ * in, and another producer's total may include embedded or file-ref
+ * subagents, which are sessions of their own. */
+function atifRunCost(rawMeta: string | null): number {
+  let meta: unknown;
+  try {
+    meta = rawMeta == null ? null : JSON.parse(rawMeta);
+  } catch {
+    return 0;
+  }
+  if (!isObject(meta) || !isObject(meta.final_metrics)) {
+    return 0;
+  }
+  const final = meta.final_metrics;
+  const extra = isObject(final.extra) ? final.extra : {};
+  const positive = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  if (isObject(extra.session_metrics)) {
+    return positive(extra.session_metrics.total_cost_usd);
+  }
+  if (
+    extra.includes_subagents === true ||
+    meta.embeddedSubagents != null ||
+    meta.subagentFileRefs != null
+  ) {
+    return 0;
+  }
+  return positive(final.total_cost_usd);
 }
 
 /** The source's recorded cost stands in only where Decant has no rate. A

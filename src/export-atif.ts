@@ -583,6 +583,7 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
         total_completion_tokens: ownUsage.output,
         total_cached_tokens: ownUsage.cacheRead,
         total_cache_write_tokens: ownUsage.cacheCreation,
+        total_cost_usd: summary.estimated_cost_usd,
       };
     }
     if (summary.reasoning_source != null && summary.reasoning_source !== "none") {

@@ -44,8 +44,8 @@ export const USAGE_OPTIONAL_TOOLS = [
  * session totals, and a zero total there is a real zero. */
 export function sessionUsageAvailableSql(alias: string): string {
   const optional = USAGE_OPTIONAL_TOOLS.map((tool) => `'${tool}'`).join(", ");
-  // An ATIF trajectory can record usage only as run totals (`final_metrics`)
-  // or a cost only, with no per-step token counts.
+  // An ATIF trajectory can record usage only as run totals (`final_metrics`),
+  // zero included, or a cost only, with no per-step token counts.
   return `(${alias}.tool NOT IN (${optional}) OR EXISTS (
            SELECT 1 FROM message usage_message
            WHERE usage_message.session_id = ${alias}.id
@@ -56,7 +56,13 @@ export function sessionUsageAvailableSql(alias: string): string {
          ) OR (${alias}.tool = 'atif' AND (
            ${alias}.total_input_tokens + ${alias}.total_output_tokens
              + ${alias}.total_cache_read_tokens + ${alias}.total_cache_creation_tokens > 0
-           OR ${alias}.estimated_cost_usd > 0)))`;
+           OR ${alias}.estimated_cost_usd > 0
+           OR (CASE WHEN json_valid(${alias}.raw_meta)
+                 THEN json_type(${alias}.raw_meta, '$.final_metrics.total_prompt_tokens')
+                        IN ('integer', 'real')
+                   OR json_type(${alias}.raw_meta, '$.final_metrics.total_completion_tokens')
+                        IN ('integer', 'real')
+               END) = 1)))`;
 }
 
 const TOTALS_COLUMNS = `s.id, s.is_subagent,

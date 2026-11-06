@@ -111,7 +111,8 @@
         "total_prompt_tokens": 7000,
         "total_completion_tokens": 350,
         "total_cached_tokens": 5000,
-        "total_cache_write_tokens": 1500
+        "total_cache_write_tokens": 1500,
+        "total_cost_usd": 0.023125
       }
     }
   },

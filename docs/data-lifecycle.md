@@ -253,7 +253,8 @@ Each trajectory becomes a session. The root is filed under the file's path, and
 each trajectory in `subagent_trajectories`, nested ones included, under the
 virtual path `<file>#<trajectory_id>`. The root's session ID is its
 `trajectory_id`, which names one document. Without one it is the `session_id`
-followed by `/` and the file name without `.json`, because ATIF lets a
+followed by `/` and the file name without its `.atif.json` or `.json`
+extension, because ATIF lets a
 trajectory and its continuation files share one `session_id`. The file name is
 left off for Harbor's plain `trajectory.json` and for a file named after the
 run. A document with neither ID uses the file name plus a digest of its path. A

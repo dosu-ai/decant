@@ -140,6 +140,13 @@ The Tools page summary and tool usage table read every matching tool call.
 `src/read-cache.ts` keeps up to 32 of those results per connection, keyed by
 the SQL and its parameters. A change in `data_version`, `total_changes()`, or
 `schema_version` clears them, so the first read after any write recomputes.
+The Analytics aggregates use the same cache: totals, every `by-dimension`
+grouping, hour and weekday activity (keyed by the server's UTC offset too, since
+a daylight-saving change moves local-time buckets without a write), model
+sparklines, MCP usage, file hotspots, date bounds, and the source list. Each
+returns a copy, so a caller that sorts or edits its result cannot change the
+cached value. Every request runs on the server's one connection in turn, so a
+cache hit also keeps a repeat Analytics load from holding up other requests.
 
 The worker files are also standalone-binary entrypoints and must remain in the
 compile entrypoint list in `scripts/distribution.ts`.

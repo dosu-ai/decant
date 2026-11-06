@@ -32,8 +32,7 @@ sessions. For a persistent `decant` command, see [Installation](#installation).
 ## Features
 
 - One SQLite archive for every supported agent, with full-text search across
-  prompts, responses, tool names, and tool inputs. Tool output is stored but
-  not indexed.
+  prompts, responses, tool names, and tool inputs.
 - Full transcripts for every session, with diagnostics for records Decant could
   not parse.
 - Token, [estimated cost](docs/pricing.md), context-window, and agent-time

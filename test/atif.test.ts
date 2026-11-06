@@ -16,7 +16,7 @@ function parseFixture(path: string): ParsedAtifDocument {
   return parseAtifDocument("fallback", readFileSync(path, "utf8"), { sourcePath: path });
 }
 
-function parse(document: Json, sourcePath = "/tmp/example/run.json"): ParsedAtifDocument {
+function parse(document: Json, sourcePath = "/tmp/example/trajectory.json"): ParsedAtifDocument {
   return parseAtifDocument("fallback", JSON.stringify(document), { sourcePath });
 }
 
@@ -264,10 +264,117 @@ describe("parseAtifDocument", () => {
       sourceSessionId: "example-run:b",
       spawnToolUseId: "spawn-b",
       spawnDepth: 2,
+      // Ingest checks this identity's tombstone, so it is the direct parent.
+      rootSourceSessionId: "example-run:a",
     });
     expect((b?.rawMeta as { parentSessionId?: string } | undefined)?.parentSessionId).toBe(
       "example-run:a",
     );
+  });
+
+  test("keeps documents that share a run's session_id apart by file name", () => {
+    const doc = (message: string): Json =>
+      trajectory([{ step_id: 1, source: "user", message }], { session_id: "run" });
+    const id = (path: string, message: string): string | undefined =>
+      parse(doc(message), path).sessions[0]?.parsed.session.sourceSessionId;
+    // ATIF lets a trajectory and its continuation files share a session_id.
+    expect(id("/tmp/example/agent/trajectory.json", "first")).toBe("run");
+    expect(id("/tmp/example/agent/trajectory.cont-1.json", "second")).toBe("run/trajectory.cont-1");
+    expect(id("/tmp/example/run.atif.json", "copy")).toBe("run");
+    // A trajectory_id names one document, so it needs no file name.
+    expect(
+      parse({ ...(doc("x") as object), trajectory_id: "doc-1" }, "/tmp/example/a.json").sessions[0]
+        ?.parsed.session.sourceSessionId,
+    ).toBe("doc-1");
+  });
+
+  test("gives embedded subagents whose ids normalize alike distinct identities", () => {
+    const child = (id: string): Json => ({
+      schema_version: "ATIF-v1.7",
+      trajectory_id: id,
+      agent: { name: "example-agent", version: "1.0.0" },
+      steps: [{ step_id: 1, source: "user", message: id }],
+    });
+    const document = parse(
+      trajectory([], {
+        trajectory_id: "root",
+        subagent_trajectories: [child("x"), child("root:x")],
+      }),
+    );
+    expect(document.sessions.map((s) => s.parsed.session.sourceSessionId)).toEqual([
+      "root",
+      "root:x",
+      "root:x#2",
+    ]);
+  });
+
+  test("links a ref by trajectory_path when its trajectory_id names nothing embedded", () => {
+    const step = (ref: Json): Json => ({
+      step_id: 1,
+      source: "agent",
+      message: "",
+      tool_calls: [{ tool_call_id: "spawn", function_name: "Agent", arguments: {} }],
+      observation: { results: [{ source_call_id: "spawn", subagent_trajectory_ref: [ref] }] },
+    });
+    const refs = (document: ParsedAtifDocument): Json | undefined =>
+      (root(document).rawMeta as { subagentFileRefs?: Json }).subagentFileRefs;
+    expect(
+      refs(parse(trajectory([step({ trajectory_id: "missing", trajectory_path: "child.json" })]))),
+    ).toEqual([{ path: "/tmp/example/child.json", spawnToolUseId: "spawn" }]);
+    const embedded = trajectory([step({ trajectory_id: "kid", trajectory_path: "child.json" })], {
+      subagent_trajectories: [
+        {
+          schema_version: "ATIF-v1.7",
+          trajectory_id: "kid",
+          agent: { name: "example-agent", version: "1.0.0" },
+          steps: [],
+        },
+      ],
+    });
+    expect(refs(parse(embedded))).toBeUndefined();
+  });
+
+  test("takes a Decant export's own session totals over per-step sums", () => {
+    // Codex stamps usage on a turn's last request, so steps undercount.
+    const steps = [
+      {
+        step_id: 1,
+        source: "agent",
+        message: "done",
+        metrics: { prompt_tokens: 100, completion_tokens: 20, cached_tokens: 0 },
+      },
+    ];
+    const final = {
+      total_prompt_tokens: 1000,
+      total_completion_tokens: 200,
+      total_cached_tokens: 400,
+      total_steps: 1,
+    };
+    const decant = { exporter: "decant" };
+    const totals = (extra: Json, finalExtra: Json = {}) =>
+      root(parse(trajectory(steps, { extra, final_metrics: { ...final, extra: finalExtra } })))
+        .totals;
+    expect(totals(decant, { total_cache_write_tokens: 100 })).toMatchObject({
+      input: 500,
+      output: 200,
+      cacheRead: 400,
+      cacheCreation: 100,
+    });
+    // Rolled-up totals count subagents; the session's own share stands in.
+    expect(
+      totals(decant, {
+        includes_subagents: true,
+        session_metrics: {
+          total_prompt_tokens: 600,
+          total_completion_tokens: 50,
+          total_cached_tokens: 0,
+          total_cache_write_tokens: 0,
+        },
+      }),
+    ).toMatchObject({ input: 600, output: 50 });
+    // Without that share, or from another producer, the steps are summed.
+    expect(totals(decant, { includes_subagents: true })).toMatchObject({ input: 100 });
+    expect(totals({ exporter: "other" })).toMatchObject({ input: 100 });
   });
 
   test("gives duplicate embedded trajectory ids distinct keys", () => {

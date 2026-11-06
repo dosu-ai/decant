@@ -337,7 +337,7 @@
   },
   {
     "tool": "atif",
-    "source_session_id": "synthetic-trial-1-summarization-1-summary",
+    "source_session_id": "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
     "seq": 0,
     "ordinal": 0,
     "type": "text",
@@ -349,7 +349,7 @@
   },
   {
     "tool": "atif",
-    "source_session_id": "synthetic-trial-1-summarization-1-summary",
+    "source_session_id": "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
     "seq": 1,
     "ordinal": 0,
     "type": "text",

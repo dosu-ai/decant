@@ -575,6 +575,16 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
       cost_source: summary.cost_source,
       ...(detail.subagents.length > 0 ? { includes_subagents: true } : {}),
     };
+    if (detail.subagents.length > 0 && summary.usage_available) {
+      // The totals above include the subagents, so a reader that files each
+      // embedded trajectory as its own session needs this one's share.
+      finalMetrics.extra.session_metrics = {
+        total_prompt_tokens: ownUsage.input + ownUsage.cacheRead + ownUsage.cacheCreation,
+        total_completion_tokens: ownUsage.output,
+        total_cached_tokens: ownUsage.cacheRead,
+        total_cache_write_tokens: ownUsage.cacheCreation,
+      };
+    }
     if (summary.reasoning_source != null && summary.reasoning_source !== "none") {
       finalMetrics.extra.total_reasoning_tokens = summary.total_reasoning_tokens;
       finalMetrics.extra.reasoning_source = summary.reasoning_source;

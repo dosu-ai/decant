@@ -251,7 +251,9 @@ step's `metrics`. ATIF counts cache reads and writes inside `prompt_tokens`, so
 Decant subtracts `cached_tokens` and the cache writes in `metrics.extra` to get
 input, and reads reasoning from `metrics.extra.reasoning_tokens`. Session
 totals are the sum of the steps, not `final_metrics`, which can also count the
-trajectory's subagents. Steps marked `is_copied_context` repeat another
+trajectory's subagents. Decant's own exports are the exception: their
+`final_metrics`, or the `session_metrics` share when subagents are rolled in,
+are the session's totals. Steps marked `is_copied_context` repeat another
 trajectory's turns and count nothing. See
 [ATIF imports](data-lifecycle.md#atif-imports).
 

@@ -114,7 +114,7 @@ describe("golden harness", () => {
     // ones: one embedded in its document, one in a file of its own.
     expect(sessions.filter((s) => !listed.has(key(s))).map(key)).toEqual([
       `atif${keySeparator}synthetic-embedded:helper`,
-      `atif${keySeparator}synthetic-trial-1-summarization-1-summary`,
+      `atif${keySeparator}synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary`,
     ]);
   });
 });

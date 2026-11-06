@@ -112,7 +112,7 @@
   },
   {
     "tool": "atif",
-    "source_session_id": "synthetic-trial-1-summarization-1-summary",
+    "source_session_id": "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
     "project_path": null,
     "project_name": null,
     "title": "Summarize the work so far.",

@@ -166,7 +166,8 @@ Session summaries also carry `usage_available`. It is false for a session from
 a source that may record no token usage, when none of the session's messages
 carries any. Those sources are Cursor CLI, which stores none, Copilot Chat in
 VS Code, whose builds from before April 2026 wrote none, and ATIF
-trajectories, where every metric is optional. Such a session reports `estimated_cost_usd` and token
+trajectories, where every metric is optional. An ATIF session with run totals
+or a recorded cost but no per-step token counts still has usage. Such a session reports `estimated_cost_usd` and token
 totals of 0. Show them as unavailable, not free. Stats totals,
 `/api/stats/by-dimension` rows, and `/api/projects` rows carry
 `usage_sessions`, the number of top-level sessions in that scope or row with

@@ -1691,7 +1691,8 @@ function inferAtifSubagent(
     isSubagent: true,
     rootKey: parent ?? fileRef?.parent ?? null,
     spawnToolUseId: row.spawn_tool_use_id ?? fileRef?.spawnToolUseId ?? null,
-    agentId: row.agent_id ?? row.source_session_id,
+    // A file's identity can carry its name; the run ID reads better.
+    agentId: row.agent_id ?? asString(get(meta, "session_id")) ?? row.source_session_id,
     agentType: row.agent_type ?? asString(get(get(meta, "agent"), "name")),
     spawnDepth: row.spawn_depth,
   };

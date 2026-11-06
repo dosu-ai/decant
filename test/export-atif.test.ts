@@ -487,8 +487,26 @@ describe("exportAtif", () => {
       ]);
       // Root totals include the embedded subagent; the subagent's are its own.
       expect(doc.final_metrics.total_prompt_tokens).toBe(150);
-      expect(doc.final_metrics.extra).toMatchObject({ includes_subagents: true });
+      expect(doc.final_metrics.extra).toMatchObject({
+        includes_subagents: true,
+        // The root session's own share, for a reader that splits subagents out.
+        session_metrics: {
+          total_prompt_tokens: 100,
+          total_completion_tokens: 10,
+          total_cached_tokens: 0,
+          total_cache_write_tokens: 0,
+        },
+      });
       expect(doc.subagent_trajectories?.[0]?.final_metrics.total_prompt_tokens).toBe(50);
+      expect(doc.subagent_trajectories?.[0]?.final_metrics.extra).not.toHaveProperty(
+        "session_metrics",
+      );
+
+      // Importing the export gives each session back its own totals.
+      const imported = parseAtifDocument("fallback", JSON.stringify(doc)).sessions.map(
+        ({ parsed }) => parsed.session.totals.input,
+      );
+      expect(imported).toEqual([100, 50]);
     } finally {
       db.close();
     }

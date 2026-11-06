@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { linkageIssues } from "../diagnostics.ts";
 import { asBoolean, asString, get, isObject, type JsonObject } from "../json.ts";
 import {
@@ -138,31 +138,43 @@ export function parseAtifDocument(
   }
 
   const nodes = flatten(value);
-  const rootId =
-    nonEmpty(asString(value.trajectory_id)) ?? nonEmpty(asString(value.session_id)) ?? fallbackId;
+  const rootId = documentId(value, fallbackId, options.sourcePath);
   const sourceIds = new Map<string | null, string>([[null, rootId]]);
+  const usedIds = new Set([rootId]);
   for (const node of nodes) {
     if (node.key != null) {
       // Decant's own exports already prefix a subagent's id with the root's.
-      sourceIds.set(
-        node.key,
-        node.key === rootId || node.key.startsWith(`${rootId}:`)
-          ? node.key
-          : `${rootId}:${node.key}`,
-      );
+      // Two keys can still land on one id ("x" and "root:x" under "root"), so
+      // a repeat gets a suffix, as a repeated trajectory_id does.
+      const base = node.key.startsWith(`${rootId}:`) ? node.key : `${rootId}:${node.key}`;
+      let id = base;
+      for (let suffix = 2; usedIds.has(id); suffix += 1) {
+        id = `${base}#${suffix}`;
+      }
+      usedIds.add(id);
+      sourceIds.set(node.key, id);
     }
   }
   linkEmbedded(nodes);
-
-  const sessions = nodes.map((node) => ({
-    key: node.key,
-    parsed: parseTrajectory(node, {
-      sourceSessionId: sourceIds.get(node.key) ?? rootId,
-      rootSourceSessionId: rootId,
-      parentSourceSessionId: node.key == null ? null : (sourceIds.get(node.parentKey) ?? rootId),
-      options,
+  const embeddedIds = new Set(
+    nodes.flatMap((node) => {
+      const id = node.key == null ? null : asString(node.trajectory.trajectory_id);
+      return id == null ? [] : [id];
     }),
-  }));
+  );
+
+  const sessions = nodes.map((node) => {
+    const parentId = node.key == null ? null : (sourceIds.get(node.parentKey) ?? rootId);
+    return {
+      key: node.key,
+      parsed: parseTrajectory(node, {
+        sourceSessionId: sourceIds.get(node.key) ?? rootId,
+        parentSourceSessionId: parentId,
+        embeddedIds,
+        options,
+      }),
+    };
+  });
   // An embedded subagent ran inside its root's run, so where it records no
   // directory of its own it worked where the root did.
   const root = sessions[0]?.parsed.session;
@@ -262,9 +274,31 @@ function linkEmbedded(nodes: Node[]): void {
 
 interface TrajectoryIdentity {
   sourceSessionId: string;
-  rootSourceSessionId: string;
+  /** The trajectory whose call spawned this one, or that embeds it. */
   parentSourceSessionId: string | null;
+  /** Every `trajectory_id` embedded in the document, to tell an embedded ref
+   * from one that names another file. */
+  embeddedIds: ReadonlySet<string>;
   options: AtifParseOptions;
+}
+
+/** A document's archive identity. `trajectory_id` names one document. A
+ * `session_id` names a run, which ATIF lets several documents share (a
+ * trajectory and its continuation files), so the file name joins it unless it
+ * is Harbor's plain `trajectory.json` or repeats the run ID. */
+function documentId(root: JsonObject, fallbackId: string, sourcePath: string | undefined): string {
+  const trajectoryId = nonEmpty(asString(root.trajectory_id));
+  if (trajectoryId != null) {
+    return trajectoryId;
+  }
+  const sessionId = nonEmpty(asString(root.session_id));
+  if (sessionId == null) {
+    return fallbackId;
+  }
+  const stem = sourcePath == null ? null : basename(sourcePath).replace(/(?:\.atif)?\.json$/i, "");
+  return stem == null || stem === "" || stem === "trajectory" || stem === sessionId
+    ? sessionId
+    : `${sessionId}/${stem}`;
 }
 
 function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSession {
@@ -397,7 +431,10 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
         const text = contentText(result.content as Json | undefined);
         for (const ref of subagentRefs(result)) {
           const path = asString(get(ref, "trajectory_path"));
-          if (path != null && path !== "" && asString(get(ref, "trajectory_id")) == null) {
+          const id = asString(get(ref, "trajectory_id"));
+          // A ref may carry both fields; the path counts when the id names no
+          // trajectory embedded in this document.
+          if (path != null && path !== "" && (id == null || !identity.embeddedIds.has(id))) {
             fileRefs.push({
               path: resolveRef(path, identity.options.sourcePath),
               spawnToolUseId: callId,
@@ -443,11 +480,11 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
     startedAt,
     endedAt,
     rawMeta: rawMeta(trajectory, node, identity, fileRefs, copied),
-    totals: sawUsage ? totals : (finalMetricsUsage(trajectory) ?? totals),
+    totals: sessionTotals(trajectory, sawUsage ? totals : null),
     reasoningSource: sawReasoning ? "reported" : "none",
     messages,
   };
-  if (!sawUsage && session.totals.reasoning > 0) {
+  if (session.totals.reasoning > 0) {
     session.reasoningSource = "reported";
   }
   if (session.projectPath == null && session.cwd != null) {
@@ -455,7 +492,9 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
   }
   if (node.key != null) {
     session.isSubagent = true;
-    session.rootSourceSessionId = identity.rootSourceSessionId;
+    // Ingest checks this identity's tombstone, so a deleted subagent keeps
+    // any descendant added to the document later deleted too.
+    session.rootSourceSessionId = identity.parentSourceSessionId;
     session.spawnToolUseId = node.spawnToolUseId;
     session.agentId = node.key;
     session.agentType = nonEmpty(asString(extra.agent_type)) ?? nonEmpty(asString(agent.name));
@@ -525,6 +564,58 @@ export function usageFromMetrics(metrics: unknown): TokenUsage | null {
     cacheCreation1h: 0,
     reasoning: Math.min(reasoning ?? 0, output),
   };
+}
+
+/** Decant's own totals when the document is its export, else the step sums,
+ * else `final_metrics` for a document that records usage only per run. The
+ * export carries reasoning only when the source reported it, so steps that
+ * name reasoning fill that in. */
+function sessionTotals(trajectory: JsonObject, stepSums: TokenUsage | null): TokenUsage {
+  const decant = decantSessionUsage(trajectory);
+  if (decant != null) {
+    if (decant.reasoning === 0 && stepSums != null) {
+      decant.reasoning = Math.min(stepSums.reasoning, decant.output);
+    }
+    return decant;
+  }
+  return stepSums ?? finalMetricsUsage(trajectory) ?? emptyUsage();
+}
+
+/** The session's own totals from Decant's export, which per-step metrics can
+ * undercount: Codex stamps usage on a turn's last request only. The export's
+ * `final_metrics` are those totals unless the trajectory embeds subagents,
+ * whose totals they then include; the export also writes the session's own
+ * share in `final_metrics.extra.session_metrics`. Null for another producer,
+ * or an older Decant export that rolled subagents in without that share. */
+function decantSessionUsage(trajectory: JsonObject): TokenUsage | null {
+  if (get(trajectory.extra as Json | undefined, "exporter") !== "decant") {
+    return null;
+  }
+  const final = trajectory.final_metrics;
+  if (!isObject(final)) {
+    return null;
+  }
+  const extra = isObject(final.extra) ? final.extra : {};
+  const own = isObject(extra.session_metrics)
+    ? extra.session_metrics
+    : extra.includes_subagents === true
+      ? null
+      : final;
+  if (own == null) {
+    return null;
+  }
+  const writes =
+    own === final ? firstCount(extra, FINAL_CACHE_WRITE_KEYS) : count(own.total_cache_write_tokens);
+  return usageFromMetrics({
+    prompt_tokens: own.total_prompt_tokens,
+    completion_tokens: own.total_completion_tokens,
+    cached_tokens: own.total_cached_tokens,
+    extra: {
+      cache_write_tokens: writes,
+      reasoning_tokens:
+        extra.reasoning_source === "reported" ? count(extra.total_reasoning_tokens) : null,
+    },
+  });
 }
 
 /** Session totals when no step carries metrics, the case for a producer that

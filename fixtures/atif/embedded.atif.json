@@ -104,7 +104,15 @@
     "total_cost_usd": 0.1,
     "total_steps": 4,
     "extra": {
-      "total_cache_write_tokens": 2300
+      "total_cache_write_tokens": 2300,
+      "cost_source": "decant",
+      "includes_subagents": true,
+      "session_metrics": {
+        "total_prompt_tokens": 7000,
+        "total_completion_tokens": 350,
+        "total_cached_tokens": 5000,
+        "total_cache_write_tokens": 1500
+      }
     }
   },
   "extra": {

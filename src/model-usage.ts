@@ -98,7 +98,10 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
        FROM message m
       WHERE session_id = ?1
         AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-             OR cache_read_tokens IS NOT NULL OR cache_creation_tokens IS NOT NULL)
+             OR cache_read_tokens IS NOT NULL OR cache_creation_tokens IS NOT NULL
+             -- An ATIF step can record a cost without token counts.
+             OR (?2 = 'atif' AND json_valid(${MESSAGE_METADATA_SQL})
+                 AND json_extract(${MESSAGE_METADATA_SQL}, '$.metrics.cost_usd') IS NOT NULL))
       ORDER BY seq`,
     [sessionId, session.tool],
   );

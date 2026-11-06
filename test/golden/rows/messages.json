@@ -289,7 +289,7 @@
   },
   {
     "tool": "atif",
-    "source_session_id": "synthetic-trial-1-summarization-1-summary",
+    "source_session_id": "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
     "seq": 0,
     "source_uuid": null,
     "parent_source_uuid": null,
@@ -305,7 +305,7 @@
   },
   {
     "tool": "atif",
-    "source_session_id": "synthetic-trial-1-summarization-1-summary",
+    "source_session_id": "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
     "seq": 1,
     "source_uuid": null,
     "parent_source_uuid": null,

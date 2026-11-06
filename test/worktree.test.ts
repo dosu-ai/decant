@@ -106,6 +106,29 @@ describe("worktree pure classifiers", () => {
     expect(externalContainer("/Users/dev/src/worktrees/decant")).toBeNull();
   });
 
+  test("external container detects the ~/.t3/worktrees layout", () => {
+    expect(externalContainer("/Users/dev/.t3/worktrees/decant/t3-0cacd467")).toEqual({
+      tool: "t3",
+      leaf: "decant-t3-0cacd467",
+    });
+    expect(externalContainer("/Users/dev/.t3/worktrees/decant")).toBeNull();
+    // A removed worktree no longer resolves through git, so the name decides.
+    const known: KnownRoot[] = [
+      { path: "/Users/dev/src/decant", basename: "decant", sessions: 3, lastSeen: "2026-06-01" },
+    ];
+    expect(classifyExternal("t3", "decant-t3-0cacd467", "/x", known)).toMatchObject({
+      source: "namematch",
+      rootPath: "/Users/dev/src/decant",
+      worktreeLabel: "t3-0cacd467",
+      worktreeTool: "t3",
+    });
+    expect(classifyExternal("t3", "decant-t3-0cacd467", "/x", [])).toMatchObject({
+      source: "synthetic",
+      rootPath: "decant",
+      worktreeLabel: "t3-0cacd467",
+    });
+  });
+
   test("external container detects Codex worktree layouts", () => {
     expect(externalContainer("/Users/dev/.codex-worktrees/decant-token-ui")).toEqual({
       tool: "codex",

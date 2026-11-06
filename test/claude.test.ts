@@ -307,6 +307,22 @@ describe("parseClaudeSession", () => {
     expect(parsed.issues).toEqual([]);
   });
 
+  test("request-shape and ownership records are skipped without changing usage", () => {
+    const content = [
+      '{"type":"user","message":{"role":"user","content":"hi"}}',
+      '{"type":"api-request","id":"r1","sessionId":"s","cacheControl":{"type":"ephemeral"},"requestDigest":"d","shapeHash":"h","querySource":"repl","params":{},"keep":true,"tail":[],"version":1,"timestamp":"2026-11-05T10:00:00.000Z"}',
+      '{"type":"api-request-shape","sessionId":"s","shape":{},"shapeHash":"h","version":1,"timestamp":"2026-11-05T10:00:00.000Z"}',
+      '{"type":"api-request-blob","sessionId":"s","hash":"b","message":{}}',
+      '{"type":"tools-used","sessionId":"s","tools":["Read","Grep"]}',
+      '{"type":"session-owner","sessionId":"s","accountUuid":"a","organizationUuid":"o"}',
+      '{"type":"assistant","message":{"id":"m1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":5}}}',
+    ].join("\n");
+    const parsed = parseClaudeSession("s", content);
+    expect(parsed.session.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.totals).toMatchObject({ input: 10, output: 5 });
+  });
+
   test("ignored journal metadata cannot supply titles or alter conversation sequencing", () => {
     const ignoredRecordTypes = [
       "agent-name",

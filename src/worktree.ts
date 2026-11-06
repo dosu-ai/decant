@@ -91,9 +91,12 @@ export function externalContainer(path: string): ExternalContainer | null {
               ? "conductor"
               : segment === "worktrees" && index > 0 && parts[index - 1] === ".warp"
                 ? "warp"
-                : segment === "worktrees" && index > 0 && parts[index - 1] === ".codex"
-                  ? "codex"
-                  : null;
+                : // T3 Code keeps worktrees at ~/.t3/worktrees/<repo>/<t3-id>.
+                  segment === "worktrees" && index > 0 && parts[index - 1] === ".t3"
+                  ? "t3"
+                  : segment === "worktrees" && index > 0 && parts[index - 1] === ".codex"
+                    ? "codex"
+                    : null;
     if (tool == null) {
       continue;
     }
@@ -176,7 +179,12 @@ function compareNullableString(left: string | null, right: string | null): numbe
 function stripCodename(tool: string, leaf: string): string {
   if (tool === "t3") {
     const index = leaf.indexOf("-t3code-");
-    return index === -1 ? leaf : leaf.slice(0, index);
+    if (index !== -1) {
+      return leaf.slice(0, index);
+    }
+    // ~/.t3/worktrees/<repo>/t3-<hex> arrives as `<repo>-t3-<hex>`.
+    const generated = /^(.+)-t3-[0-9a-f]{6,}$/.exec(leaf);
+    return generated?.[1] ?? leaf;
   }
   if (tool === "warp") {
     const tokens = leaf.split("-");

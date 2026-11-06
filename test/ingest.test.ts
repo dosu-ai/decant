@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import {
   copyFileSync,
   cpSync,
@@ -40,7 +40,7 @@ import { block } from "../src/sources/shared.ts";
 import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { buildCursorChat } from "./cursor-fixture.ts";
-import { decodeGoldenRows, ROW_QUERIES } from "./golden-rows.ts";
+import { decodeGoldenRows, GOLDEN_NOW, ROW_QUERIES } from "./golden-rows.ts";
 import {
   buildOpenCodeDb,
   buildOpenCodeFixtureDb,
@@ -738,6 +738,8 @@ describe("upsertSession", () => {
 });
 
 describe("sync", () => {
+  afterEach(() => setSystemTime());
+
   test("tombstones a subagent first discovered after its deleted parent", () => {
     const dir = freshCase();
     const config: IngestConfig = {
@@ -2447,6 +2449,9 @@ describe("sync", () => {
   });
 
   test("fixture sync matches frozen natural-key golden rows", async () => {
+    // Every sync regenerates recommendation signals, which read a 30-day
+    // window ending now. afterEach restores the real clock.
+    setSystemTime(GOLDEN_NOW);
     const dir = freshCase();
     const config = stageFixtures(dir);
     const db = openFreshDb(dir);

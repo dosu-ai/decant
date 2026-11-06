@@ -4200,12 +4200,25 @@ describe("sync planner statistics", () => {
                 n: number;
               }
             ).n;
-      const seen: { firstStatRows?: number; lastStatRows?: number; lastPlan?: string } = {};
+      const seen: {
+        firstStatRows?: number;
+        beforeRefreshStatRows?: number;
+        afterRefreshStatRows?: number;
+        lastStatRows?: number;
+        lastPlan?: string;
+      } = {};
       // Progress fires after each file and before the end-of-sync optimize,
       // so the last callback shows what the loop itself left behind.
       const report = sync(db, config, undefined, (progress) => {
         if (progress.scanned === 1) {
           seen.firstStatRows = blockStatRows();
+        }
+        // The first refresh runs once 25 sessions are in, before file 26.
+        if (progress.scanned === 25) {
+          seen.beforeRefreshStatRows = blockStatRows();
+        }
+        if (progress.scanned === 26) {
+          seen.afterRefreshStatRows = blockStatRows();
         }
         if (progress.scanned === total) {
           seen.lastStatRows = blockStatRows();
@@ -4217,6 +4230,8 @@ describe("sync planner statistics", () => {
 
       expect(report).toMatchObject({ scanned: total, ingested: total, failed: 0 });
       expect(seen.firstStatRows).toBe(0);
+      expect(seen.beforeRefreshStatRows).toBe(0);
+      expect(seen.afterRefreshStatRows).toBeGreaterThan(0);
       expect(seen.lastStatRows).toBeGreaterThan(0);
       expect(seen.lastPlan).toContain("idx_block_message");
       expect(seen.lastPlan).not.toContain("idx_block_type");

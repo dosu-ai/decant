@@ -278,6 +278,9 @@ export function SessionDetailView({
       });
     return () => {
       cancelled = true;
+      // Leaving the view, or reloading it, makes every request this session
+      // version started stale, including transcript chunks still to come.
+      sessionVersionRef.current += 1;
     };
   }, [detailRetryKey, id]);
 

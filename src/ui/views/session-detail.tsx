@@ -46,6 +46,7 @@ import {
 } from "../transcript-navigation.ts";
 import {
   appendTranscriptPage,
+  fetchTranscriptRange,
   prependTranscriptPage,
   previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
@@ -470,8 +471,13 @@ export function SessionDetailView({
           );
           setLoadingMore(true);
           setLoadMoreError(null);
-          return getJson<SessionDetailData>(
-            `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
+          return fetchTranscriptRange(
+            (offset, limit) =>
+              getJson<SessionDetailData>(
+                `/api/sessions/${id}?message_limit=${limit}&message_offset=${offset}`,
+              ),
+            request.offset,
+            request.limit,
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {

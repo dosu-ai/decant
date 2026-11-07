@@ -1,3 +1,5 @@
+import { SESSION_MESSAGE_PAGE_MAX } from "../api-limits.ts";
+
 export interface SequencedTranscriptMessage {
   seq: number;
 }
@@ -148,4 +150,39 @@ export function clampTranscriptWindowOffset(
   }
   const lastPageOffset = Math.max(0, Math.trunc(messageCount) - Math.max(1, Math.trunc(pageSize)));
   return Math.min(Math.max(0, Math.trunc(offset)), lastPageOffset);
+}
+
+export interface TranscriptPage<M> {
+  messages: M[];
+  has_more_messages?: boolean;
+}
+
+/**
+ * Fetch `limit` messages from `offset` in requests no larger than the server's
+ * per-request cap, and join them into one page. A prefix that reaches a deep
+ * message in a long session can exceed that cap. Stops early at the end of the
+ * transcript. The result carries the last request's metadata, with every
+ * fetched message.
+ */
+export async function fetchTranscriptRange<M, P extends TranscriptPage<M>>(
+  fetchPage: (offset: number, limit: number) => Promise<P>,
+  offset: number,
+  limit: number,
+  maxPerRequest: number = SESSION_MESSAGE_PAGE_MAX,
+): Promise<P> {
+  const chunk = Math.max(1, Math.trunc(maxPerRequest));
+  const end = offset + Math.max(1, Math.trunc(limit));
+  const messages: M[] = [];
+  let position = offset;
+  let page: P;
+  do {
+    const size = Math.min(chunk, end - position);
+    page = await fetchPage(position, size);
+    messages.push(...page.messages);
+    position += size;
+    if (page.messages.length < size || page.has_more_messages === false) {
+      break;
+    }
+  } while (position < end);
+  return { ...page, messages };
 }

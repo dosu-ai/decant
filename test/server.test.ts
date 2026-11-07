@@ -12,6 +12,11 @@ import {
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  SEARCH_INDEX_PAGE_MAX,
+  SESSION_MESSAGE_PAGE_DEFAULT,
+  SESSION_MESSAGE_PAGE_MAX,
+} from "../src/api-limits.ts";
 import type { Config } from "../src/config.ts";
 import { openDb, SchemaTooNewError, SchemaTooOldError } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
@@ -231,6 +236,108 @@ describe("server routes", () => {
 
     expect((await route(config, "/api/sessions?limit=10000")).body).toBeArrayOfSize(100);
     expect((await route(config, "/api/sessions?limit=10000&offset=100")).body).toBeArrayOfSize(10);
+  });
+
+  test("pages the search index and caps each page", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    db.exec(`
+      WITH RECURSIVE numbered(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM numbered WHERE value < ${SEARCH_INDEX_PAGE_MAX + 5}
+      )
+      INSERT INTO session(tool, source_session_id, title, started_at, is_subagent, model)
+      SELECT 'codex', 'index-page-' || value, 'Session ' || value,
+             printf('2026-07-%02dT12:00:00Z', 1 + value % 28), 0, 'gpt-5'
+      FROM numbered;
+    `);
+    db.close();
+
+    const whole = (await route(config, "/api/sessions/search-index")).body as { id: number }[];
+    expect(whole).toHaveLength(SEARCH_INDEX_PAGE_MAX);
+    const rest = (await route(config, `/api/sessions/search-index?offset=${SEARCH_INDEX_PAGE_MAX}`))
+      .body as { id: number }[];
+    expect(rest).toHaveLength(5);
+    expect((await route(config, "/api/sessions/search-index?limit=1000000")).body).toBeArrayOfSize(
+      SEARCH_INDEX_PAGE_MAX,
+    );
+
+    // Small pages abut in the same newest-first order as one large page.
+    const first = (await route(config, "/api/sessions/search-index?limit=3")).body as {
+      id: number;
+    }[];
+    const second = (await route(config, "/api/sessions/search-index?limit=3&offset=3")).body as {
+      id: number;
+    }[];
+    expect([...first, ...second].map((row) => row.id)).toEqual(
+      whole.slice(0, 6).map((row) => row.id),
+    );
+  });
+
+  test("holds a huge offset to the largest safe integer instead of failing", async () => {
+    const config = freshConfig();
+    seed(config);
+    const huge = "99999999999999999999";
+    for (const path of [
+      `/api/sessions?offset=${huge}`,
+      `/api/sessions/search-index?offset=${huge}`,
+      `/api/sessions/1?message_offset=${huge}`,
+    ]) {
+      const response = await route(config, path);
+      expect({ path, status: response.status }).toEqual({ path, status: 200 });
+    }
+    expect((await route(config, `/api/sessions?offset=${huge}`)).body).toEqual([]);
+  });
+
+  test("returns one transcript page when no message limit is given and caps larger ones", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    const messageCount = SESSION_MESSAGE_PAGE_MAX + 105;
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, title, started_at, message_count)
+      VALUES (1, 'codex', 'long-transcript', 'Long', '2026-07-29T12:00:00Z', ${messageCount});
+      WITH RECURSIVE numbered(value) AS (
+        SELECT 0
+        UNION ALL
+        SELECT value + 1 FROM numbered WHERE value < ${messageCount - 1}
+      )
+      INSERT INTO message(session_id, seq, role, raw)
+      SELECT 1, value, CASE value % 2 WHEN 0 THEN 'user' ELSE 'assistant' END, '{}'
+      FROM numbered;
+    `);
+    db.close();
+    const page = (body: unknown) =>
+      body as {
+        messages: { seq: number }[];
+        message_offset: number;
+        message_limit: number;
+        has_more_messages: boolean;
+      };
+
+    for (const path of ["/api/sessions/1", "/api/sessions/1?message_limit=0"]) {
+      const result = page((await route(config, path)).body);
+      expect(result.messages).toHaveLength(SESSION_MESSAGE_PAGE_DEFAULT);
+      expect(result).toMatchObject({
+        message_offset: 0,
+        message_limit: SESSION_MESSAGE_PAGE_DEFAULT,
+        has_more_messages: true,
+      });
+    }
+    const capped = page((await route(config, "/api/sessions/1?message_limit=1000000")).body);
+    expect(capped.messages).toHaveLength(SESSION_MESSAGE_PAGE_MAX);
+    expect(capped.message_limit).toBe(SESSION_MESSAGE_PAGE_MAX);
+    expect(capped.messages.at(-1)?.seq).toBe(SESSION_MESSAGE_PAGE_MAX - 1);
+    const tail = page(
+      (
+        await route(
+          config,
+          `/api/sessions/1?message_limit=${SESSION_MESSAGE_PAGE_MAX}&message_offset=${SESSION_MESSAGE_PAGE_MAX}`,
+        )
+      ).body,
+    );
+    expect(tail.messages).toHaveLength(105);
+    expect(tail.has_more_messages).toBe(false);
   });
 
   test("tool-call summary matches the usage tables and ignores row-only filters", async () => {

@@ -395,7 +395,14 @@ paths:
       tags: [Sessions]
       operationId: getSessionSearchIndex
       summary: Read lightweight metadata for client-side fuzzy search
-      description: Returns every visible non-archived top-level session without message data.
+      description: >-
+        Returns visible non-archived top-level sessions without message data,
+        newest first, as a bare array. Pages hold up to 5000 rows, the default
+        and the maximum. Advance offset by the number of rows received; a final
+        short or empty page marks the end.
+      parameters:
+        - $ref: "#/components/parameters/SearchIndexLimit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
           description: Stable newest-first search index
@@ -1265,11 +1272,24 @@ components:
     MessageLimit:
       name: message_limit
       in: query
-      description: Number of messages to return; zero or omission loads the complete transcript.
+      description: >-
+        Number of messages to return. Zero or omission returns a page of 200;
+        larger values are capped at 2000. Follow has_more_messages to read the
+        rest of the transcript.
       schema:
         type: integer
         minimum: 0
-        default: 0
+        default: 200
+        maximum: 2000
+    SearchIndexLimit:
+      name: limit
+      in: query
+      description: Rows to return. Values above 5000 are capped at 5000.
+      schema:
+        type: integer
+        minimum: 1
+        default: 5000
+        maximum: 5000
     MessageOffset:
       name: message_offset
       in: query
@@ -2203,7 +2223,8 @@ components:
       additionalProperties: true
     SessionDetail:
       type: object
-      required: [summary, messages, subagents, totals, message_limit]
+      required:
+        [summary, messages, subagents, totals, message_offset, message_limit, has_more_messages]
       properties:
         summary:
           $ref: "#/components/schemas/SessionSummary"
@@ -2221,8 +2242,9 @@ components:
           type: integer
           minimum: 0
         message_limit:
-          type: [integer, "null"]
+          type: integer
           minimum: 1
+          maximum: 2000
         has_more_messages:
           type: boolean
       additionalProperties: true

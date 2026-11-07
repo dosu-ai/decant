@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   appendTranscriptPage,
   clampTranscriptWindowOffset,
+  fetchTranscriptRange,
   prependTranscriptPage,
   previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
@@ -189,5 +190,50 @@ describe("previousTranscriptPageRequest", () => {
   test("refuses to build a request from non-finite input", () => {
     expect(previousTranscriptPageRequest(Number.NaN, 160)).toBeNull();
     expect(previousTranscriptPageRequest(160, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+describe("fetchTranscriptRange", () => {
+  const transcript = Array.from({ length: 25 }, (_, seq) => ({ seq }));
+  function server(requests: { offset: number; limit: number }[]) {
+    return async (offset: number, limit: number) => {
+      requests.push({ offset, limit });
+      const messages = transcript.slice(offset, offset + limit);
+      return {
+        messages,
+        message_offset: offset,
+        message_limit: limit,
+        has_more_messages: offset + messages.length < transcript.length,
+      };
+    };
+  }
+
+  test("splits a long prefix into requests no larger than the server cap", async () => {
+    const requests: { offset: number; limit: number }[] = [];
+    const page = await fetchTranscriptRange(server(requests), 0, 22, 10);
+    expect(requests).toEqual([
+      { offset: 0, limit: 10 },
+      { offset: 10, limit: 10 },
+      { offset: 20, limit: 2 },
+    ]);
+    expect(page.messages.map((message) => message.seq)).toEqual(
+      Array.from({ length: 22 }, (_, seq) => seq),
+    );
+    expect(page.has_more_messages).toBe(true);
+  });
+
+  test("makes one request when the range fits", async () => {
+    const requests: { offset: number; limit: number }[] = [];
+    const page = await fetchTranscriptRange(server(requests), 5, 4, 10);
+    expect(requests).toEqual([{ offset: 5, limit: 4 }]);
+    expect(page.messages.map((message) => message.seq)).toEqual([5, 6, 7, 8]);
+  });
+
+  test("stops at the end of the transcript", async () => {
+    const requests: { offset: number; limit: number }[] = [];
+    const page = await fetchTranscriptRange(server(requests), 0, 100, 10);
+    expect(requests).toHaveLength(3);
+    expect(page.messages).toHaveLength(25);
+    expect(page.has_more_messages).toBe(false);
   });
 });

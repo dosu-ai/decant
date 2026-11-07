@@ -5,7 +5,9 @@ export function integerParam(url: URL, name: string, fallback: number, allowZero
   if (raw == null) {
     return fallback;
   }
-  const parsed = Number.parseInt(raw, 10);
+  // SQLite rejects a LIMIT or OFFSET beyond a 64-bit integer, so a huge value
+  // is held to the largest safe integer instead of failing the request.
+  const parsed = Math.min(Number.parseInt(raw, 10), Number.MAX_SAFE_INTEGER);
   return Number.isFinite(parsed) && (parsed > 0 || (allowZero && parsed === 0)) ? parsed : fallback;
 }
 

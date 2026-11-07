@@ -1,5 +1,10 @@
 import { isAbsolute } from "node:path";
-import { SESSION_LIST_MAX_LIMIT } from "../api-limits.ts";
+import {
+  SEARCH_INDEX_PAGE_MAX,
+  SESSION_LIST_MAX_LIMIT,
+  SESSION_MESSAGE_PAGE_DEFAULT,
+  SESSION_MESSAGE_PAGE_MAX,
+} from "../api-limits.ts";
 import type { Config } from "../config.ts";
 import type { dateFilterFromSearch } from "../date-filter.ts";
 import { parseFileOperation } from "../distill.ts";
@@ -214,7 +219,14 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
     },
   },
   "/api/sessions/search-index": {
-    GET: (ctx) => read(ctx, "sessionSearchIndex", {}),
+    GET: (ctx) =>
+      read(ctx, "sessionSearchIndex", {
+        limit: Math.min(
+          integerParam(ctx.url, "limit", SEARCH_INDEX_PAGE_MAX),
+          SEARCH_INDEX_PAGE_MAX,
+        ),
+        offset: integerParam(ctx.url, "offset", 0, true),
+      }),
   },
   "/api/projects": {
     GET: (ctx) => read(ctx, "projects", {}),
@@ -242,9 +254,14 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/sessions/{id}": {
     validateId: SESSION_ID_METHODS,
     GET: sessionScoped("session", ({ url }) => {
+      // Zero or omitted used to mean the whole transcript, which made one
+      // response as large as the longest session. Now it means one page.
       const messageLimit = integerParam(url, "message_limit", 0, true);
       return {
-        messageLimit: messageLimit > 0 ? messageLimit : null,
+        messageLimit: Math.min(
+          messageLimit > 0 ? messageLimit : SESSION_MESSAGE_PAGE_DEFAULT,
+          SESSION_MESSAGE_PAGE_MAX,
+        ),
         messageOffset: integerParam(url, "message_offset", 0, true),
       };
     }),

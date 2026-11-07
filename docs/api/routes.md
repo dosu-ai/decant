@@ -194,6 +194,13 @@ maximum of 100. Increment `offset` by the number of rows received; a final short
 or empty page marks the end. When the result count is an exact multiple of the
 page size, one empty request is required to confirm the end.
 
+`GET /api/sessions/{id}` returns one page of the transcript. `message_limit`
+defaults to 200 when omitted or zero and has an effective maximum of 2000;
+`message_offset` starts at 0. Every response carries `message_offset`,
+`message_limit`, and `has_more_messages`, so a client reads a long transcript
+by advancing `message_offset` until `has_more_messages` is false. The summary,
+subagents, and totals describe the whole session on every page.
+
 `GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
 aggregate rows. Their `limit` has an effective maximum of 1000.
 
@@ -208,8 +215,11 @@ Request bodies larger than 1 MiB get a `413` with an empty body before they
 reach a route handler.
 No documented request comes close to that size.
 
-`GET /api/sessions/search-index` returns lightweight metadata for every visible,
-non-archived top-level session. A session is visible when it is not user-archived,
+`GET /api/sessions/search-index` returns lightweight metadata for visible,
+non-archived top-level sessions, newest first, as a bare array. Its `limit`
+defaults to 5000, which is also its effective maximum. Page it like
+`GET /api/sessions`: increment `offset` by the rows received, and a final short
+or empty page marks the end. A session is visible when it is not user-archived,
 not deleted, and not an empty conversation (Claude Code sessions that contain only
 local slash-command output or Codex threads that were created but never received
 a prompt). The search index is the command palette's local fuzzy-search haystack

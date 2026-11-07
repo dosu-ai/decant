@@ -132,6 +132,12 @@ and updates with the tool that owns the running binary:
 | Docker | Prints `docker pull ghcr.io/dosu-ai/decant:latest` |
 | Source checkout | Prints `git pull && bun install` |
 
+A running background service (`decant service install`) notices the replaced
+binary within a minute and restarts on the new version, whichever row above
+replaced it. The formula has no `brew services` block. Use
+`decant service install`, which registers the stable `opt` path, rather than
+adding one, or two copies would compete for the same port.
+
 The shell installer download honors `DECANT_BASE_URL` and applies the same
 mirror restrictions as the installer, but refuses any redirect that is not
 HTTPS. The binary's directory must be writable. If you ran the installer

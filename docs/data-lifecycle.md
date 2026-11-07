@@ -535,6 +535,36 @@ from the real default source directories:
 decant --db /tmp/decant-review.db --no-sync serve --no-open
 ```
 
+### Running in the background
+
+By default the archive only stays current while `decant serve` runs in a
+terminal. Turn on **Run in the background** in Settings, or run
+`decant service install`, and the OS starts `decant serve --no-open` at login
+and restarts it if it fails. On macOS this is a LaunchAgent at
+`~/Library/LaunchAgents/dev.dosu.decant.plist` with its log in
+`~/Library/Logs/decant/serve.log`. On Linux it is a systemd user unit at
+`~/.config/systemd/user/decant.service`, logging to the journal
+(`journalctl --user -u decant`). Run `decant service status` to see its state
+and `decant service uninstall` to remove it.
+
+The service is the same single process that owns the archive when you run
+`decant serve` yourself. It serves the archive and port you chose when you
+turned it on, on loopback only, with the default source directories. It does
+not carry over `--host`, `--trusted-peer`, `--no-sync`, or source-directory
+flags.
+
+Turning it on from Settings hands off: the server you are using registers the
+service, then stops, and the service takes over the same address. The page
+reloads once the service answers. While another `decant serve` holds the port,
+the service waits for it instead of exiting, and a bare `decant` that finds the
+service already serving its port opens the browser there.
+
+The service checks its binary once a minute. After `decant update`, a Homebrew
+upgrade, or an npm update replaces it, the service exits and the OS starts the
+new version. Homebrew installs register the stable
+`$(brew --prefix)/opt/decant/bin/decant` path, so upgrades keep working. Source
+checkouts, `npx`, and the container cannot register a service.
+
 ## Visible, archived, and deleted
 
 Session state is keyed by stable provider identity rather than the transient

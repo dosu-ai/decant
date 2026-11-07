@@ -150,6 +150,16 @@ recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
 `POST /api/launch/ide` requires an absolute `dir` that matches a project path or
 root path in the archive. Both answer `400 invalid_request` otherwise.
 
+`POST /api/background` accepts exactly `{ "enabled": boolean }` and only from
+a loopback peer, because registering a login item persists on the machine. The
+service it registers always serves the answering server's archive and port on
+loopback. When `handoff` is true, the answering server stops about a quarter
+second after responding so the service can bind its port. Poll
+`GET /api/background` until `current` is true to know the service has taken
+over. When `stopping` is true, the answering server is the service and stops
+after responding. `409 background_unsupported` means this machine cannot run
+the service, and `500 background_failed` carries the launchd or systemd error.
+
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.
 

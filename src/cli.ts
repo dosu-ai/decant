@@ -7,6 +7,7 @@ import { registerDoctorCommand } from "./cli/commands/doctor.ts";
 import { registerExportCommand } from "./cli/commands/export.ts";
 import { registerProjectCommands } from "./cli/commands/project.ts";
 import { registerRecommendationsCommands } from "./cli/commands/recommendations.ts";
+import { registerServiceCommands } from "./cli/commands/service.ts";
 import { registerSessionCommands } from "./cli/commands/session.ts";
 import { registerStatsCommands } from "./cli/commands/stats.ts";
 import { registerSyncCommands } from "./cli/commands/sync.ts";
@@ -91,6 +92,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   registerExportCommand(ctx);
   registerUpdateCommand(ctx);
   registerDoctorCommand(ctx);
+  registerServiceCommands(ctx);
 
   let noticeCommand: string | null = null;
   program.hook("preAction", (_root, actionCommand) => {

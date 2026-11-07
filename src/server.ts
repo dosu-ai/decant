@@ -25,6 +25,7 @@ import {
   syncStatus,
   workerSyncRunner,
 } from "./server/sync.ts";
+import type { ServiceOptions } from "./service.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
@@ -65,6 +66,11 @@ export interface ServeOptions {
   watch?: ServeWatchOptions;
   /** Structured operational logger supplied by the CLI entry point. */
   logger?: StructuredLogger;
+  /** Called when the background service is taking over this server's port.
+   * Without it, the server never hands off and keeps running. */
+  onShutdownRequested?: () => void;
+  /** Test seam: how the background service routes reach launchd or systemd. */
+  service?: ServiceOptions;
   /** Test seam: override how the economics cache computes vectors, e.g. to
    * simulate a rebuild that is still in flight when the server is stopped. */
   economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
@@ -138,6 +144,9 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           remoteAddress: bunServer.requestIP(request)?.address ?? null,
           trustedPeers,
           logger: requestLogger,
+          boundPort: bunServer.port,
+          service: options.service,
+          requestShutdown: options.onShutdownRequested,
         });
         if (requestLogger != null) {
           logHttpRequest(requestLogger, request, response, performance.now() - startedAt);

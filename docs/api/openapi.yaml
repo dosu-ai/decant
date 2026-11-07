@@ -213,6 +213,74 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /api/background:
+    get:
+      tags: [Settings]
+      operationId: getBackgroundService
+      summary: Report whether Decant runs as a background service
+      description: >-
+        Reads the launchd LaunchAgent on macOS or the systemd user unit on
+        Linux that starts `decant serve` at login. `supported` is false on
+        other platforms, inside the official container, for source checkouts,
+        and when no systemd user session is reachable.
+      responses:
+        "200":
+          description: Background service status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundStatus"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags: [Settings]
+      operationId: setBackgroundService
+      summary: Turn the background service on or off
+      description: >-
+        Only a loopback peer may call this, even when trusted peers can reach
+        the API. Turning it on registers `decant serve` for this archive and
+        this server's port, bound to loopback, and starts it. When the service
+        will serve this server's port, `handoff` is true and this server stops
+        shortly after answering so the service can bind the port. Turning it
+        off removes the registration and stops the service; when the answering
+        server is the service itself, `stopping` is true and it stops shortly
+        after answering.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackgroundRequest"
+      responses:
+        "200":
+          description: Background service status after the change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: The background service is not supported on this machine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          description: launchd or systemd refused the change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /api/launch/agent:
     post:
       tags: [Launch]
@@ -1433,6 +1501,8 @@ components:
       type: string
       enum:
         - archive_locked
+        - background_failed
+        - background_unsupported
         - cross_origin_write
         - forbidden_host
         - forbidden_remote
@@ -1552,6 +1622,61 @@ components:
           description: Directory read recursively for ATIF trajectory files. Null when the server's configuration names none.
         version:
           type: string
+      additionalProperties: false
+    BackgroundRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+      additionalProperties: false
+    BackgroundStatus:
+      type: object
+      required:
+        - supported
+        - manager
+        - reason
+        - installed
+        - running
+        - unitPath
+        - command
+        - url
+        - current
+        - handoff
+        - stopping
+      properties:
+        supported:
+          type: boolean
+        manager:
+          type: [string, "null"]
+          enum: [launchd, systemd, null]
+        reason:
+          type: [string, "null"]
+          description: Why the service cannot be used here, when `supported` is false.
+        installed:
+          type: boolean
+          description: The LaunchAgent or unit file exists, so Decant starts at login.
+        running:
+          type: boolean
+        unitPath:
+          type: [string, "null"]
+        command:
+          type: [array, "null"]
+          items:
+            type: string
+          description: The command the installed unit runs.
+        url:
+          type: [string, "null"]
+          description: Where the installed service serves the UI.
+        current:
+          type: boolean
+          description: True when the answering server is the background service.
+        handoff:
+          type: boolean
+          description: This server is stopping so the background service can take its port.
+        stopping:
+          type: boolean
+          description: The answering server is the service and stops shortly after this response.
       additionalProperties: false
     UpdateStatus:
       type: object

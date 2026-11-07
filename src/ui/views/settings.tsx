@@ -1,10 +1,21 @@
 import { useEffect, useId, useState } from "react";
-import { getJson } from "../api.ts";
+import { type ApiRetryPolicy, getJson } from "../api.ts";
 import dosuDecantUrl from "../assets/dosu-decant.png";
+import {
+  type BackgroundPhase,
+  backgroundNote,
+  waitForBackgroundService,
+} from "../background-service.ts";
 import { dosuLink } from "../dosu-links.ts";
 import { errorMessage, versionLabel } from "../format.ts";
 import { Icon } from "../icons.tsx";
-import type { ConfigView, SettingsInfo, UpdateStatus, UserSettings } from "../types.ts";
+import type {
+  BackgroundStatus,
+  ConfigView,
+  SettingsInfo,
+  UpdateStatus,
+  UserSettings,
+} from "../types.ts";
 
 export function SettingsView({
   config,
@@ -99,6 +110,7 @@ export function SettingsView({
             onChange={(updateCheck) => save({ updateCheck })}
             status={updateNote(update, settings?.updateCheck ?? false)}
           />
+          <BackgroundSetting />
         </div>
       </section>
 
@@ -139,6 +151,81 @@ export function SettingsView({
         </div>
       </section>
     </div>
+  );
+}
+
+// Polling during a handoff expects failed requests; the default retry policy
+// would stretch each poll across its backoff.
+const NO_RETRY: ApiRetryPolicy = { delaysMs: [], wait: async () => undefined };
+
+function BackgroundSetting() {
+  const [status, setStatus] = useState<BackgroundStatus | null>(null);
+  const [phase, setPhase] = useState<BackgroundPhase>("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getJson<BackgroundStatus>("/api/background")
+      .then((next) => {
+        if (live) setStatus(next);
+      })
+      .catch((err: unknown) => {
+        if (live) setError(errorMessage(err));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const toggle = (enabled: boolean) => {
+    setPhase("saving");
+    setError(null);
+    void getJson<BackgroundStatus>("/api/background", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    })
+      .then(async (next) => {
+        setStatus(next);
+        if (next.stopping) {
+          setPhase("stopped");
+          return;
+        }
+        if (!next.handoff) {
+          setPhase("idle");
+          return;
+        }
+        setPhase("handoff");
+        const ready = await waitForBackgroundService(() =>
+          getJson<BackgroundStatus>("/api/background", undefined, fetch, NO_RETRY),
+        );
+        if (ready) {
+          window.location.reload();
+          return;
+        }
+        setPhase("stopped");
+        setError(
+          "The background service did not answer within 30 seconds. Run decant service status to see why.",
+        );
+      })
+      .catch((err: unknown) => {
+        setPhase("idle");
+        setError(errorMessage(err));
+      });
+  };
+
+  const busy = phase !== "idle";
+  return (
+    <>
+      <SettingSwitch
+        checked={phase === "handoff" || (status?.installed ?? false)}
+        disabled={busy || status == null || !status.supported}
+        help="Start Decant when you log in and keep syncing sessions with no terminal open. The UI stays at this address."
+        label="Run in the background"
+        onChange={toggle}
+        status={backgroundNote(status, phase)}
+      />
+      {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
+    </>
   );
 }
 

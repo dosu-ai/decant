@@ -148,6 +148,11 @@ returns a copy, so a caller that sorts or edits its result cannot change the
 cached value. Every request runs on the server's one connection in turn, so a
 cache hit also keeps a repeat Analytics load from holding up other requests.
 
+Search filters and ranks every full-text match before keeping a page, so it
+reaches each match's session through `idx_block_id_session` instead of the
+block row, which holds transcript text. Messages and snippets are read for the
+page's rows only.
+
 The worker files are also standalone-binary entrypoints and must remain in the
 compile entrypoint list in `scripts/distribution.ts`.
 

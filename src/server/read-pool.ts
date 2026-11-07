@@ -258,7 +258,19 @@ export class ReadPool {
           args: job.args,
         });
       } catch (error) {
+        // A worker that cannot take a message would fail every later read
+        // too, so retire it now; the next read for this slot starts a fresh
+        // one rather than waiting for an error or close event that may not come.
+        const worker = slot.worker;
         slot.running = null;
+        slot.worker = null;
+        if (worker != null) {
+          try {
+            worker.terminate();
+          } catch {
+            // Already gone.
+          }
+        }
         this.#settle(job, error instanceof Error ? error : new Error(String(error)));
       }
     }

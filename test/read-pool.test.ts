@@ -410,6 +410,37 @@ describe("read pool scheduling", () => {
     }
   });
 
+  test("a worker that cannot take a read is replaced before the next one", async () => {
+    const workers: FakeWorker[] = [];
+    const spawn = (): ReadWorkerLike => {
+      const worker = new FakeWorker();
+      if (workers.length === 0) {
+        // The first worker accepts init but fails every run message.
+        const post = worker.postMessage.bind(worker);
+        worker.postMessage = (message: unknown) => {
+          if ((message as { type?: string }).type === "run") {
+            throw new Error("DataCloneError");
+          }
+          post(message);
+        };
+      }
+      workers.push(worker);
+      return worker;
+    };
+    const pool = new ReadPool({ dbPath: "unused.db", size: 1, spawn });
+    try {
+      await expect(pool.run("projects", {})).rejects.toThrow("DataCloneError");
+      expect(workers[0]?.terminated).toBe(true);
+      const retry = pool.run("projects", {});
+      await tick();
+      expect(workers).toHaveLength(2);
+      workers[1]?.answer(workers[1].runs()[0]?.id ?? 0, []);
+      expect(await retry).toEqual({ type: "json", body: "[]" });
+    } finally {
+      await pool.close();
+    }
+  });
+
   test("a full queue refuses new reads with a retryable 503", async () => {
     const config = seededConfig();
     const db = openDb(config.dbPath);

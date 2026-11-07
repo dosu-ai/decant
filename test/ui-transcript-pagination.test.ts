@@ -229,6 +229,25 @@ describe("fetchTranscriptRange", () => {
     expect(page.messages.map((message) => message.seq)).toEqual([5, 6, 7, 8]);
   });
 
+  test("stops requesting once the reader has moved on", async () => {
+    const requests: { offset: number; limit: number }[] = [];
+    let current = true;
+    const fetchPage = server(requests);
+    const page = await fetchTranscriptRange(
+      async (offset, limit) => {
+        const result = await fetchPage(offset, limit);
+        current = false;
+        return result;
+      },
+      0,
+      22,
+      10,
+      () => current,
+    );
+    expect(requests).toEqual([{ offset: 0, limit: 10 }]);
+    expect(page.messages).toHaveLength(10);
+  });
+
   test("stops at the end of the transcript", async () => {
     const requests: { offset: number; limit: number }[] = [];
     const page = await fetchTranscriptRange(server(requests), 0, 100, 10);

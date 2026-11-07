@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
+import { SESSION_MESSAGE_PAGE_MAX } from "../../api-limits.ts";
 import { getJson } from "../api.ts";
 import { ApiFailureState } from "../api-failure.tsx";
 import { Badge, ModelBadge, ReasoningBadge, ToolBadge } from "../badges.tsx";
@@ -478,6 +479,10 @@ export function SessionDetailView({
               ),
             request.offset,
             request.limit,
+            SESSION_MESSAGE_PAGE_MAX,
+            // A reader who leaves this session mid-load stops the remaining
+            // chunks; the result below is discarded as stale anyway.
+            () => sessionVersionRef.current === sessionVersion,
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {

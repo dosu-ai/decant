@@ -462,6 +462,10 @@ function normalizeLimit(limit: number | undefined, size: number): number {
  * boundary. Archiving or deleting a session refreshes the app, which reloads
  * the index, so the gap lasts until then. It needs more than one page of
  * sessions, so archives under SEARCH_INDEX_PAGE_MAX never see it.
+ *
+ * A server from before paging ignores `limit` and `offset` and returns every
+ * row each time. A page longer than requested, or one that adds no new row,
+ * ends the read, so such a server can't keep the loop requesting forever.
  */
 export async function fetchSessionSearchIndex(
   fetchPage: (offset: number, limit: number) => Promise<SessionSearchIndexRow[]>,
@@ -472,13 +476,15 @@ export async function fetchSessionSearchIndex(
   const seen = new Set<number>();
   for (let offset = 0; ; offset += size) {
     const page = await fetchPage(offset, size);
+    let added = 0;
     for (const row of page) {
       if (!seen.has(row.id)) {
         seen.add(row.id);
         rows.push(row);
+        added += 1;
       }
     }
-    if (page.length < size) {
+    if (page.length !== size || added === 0) {
       return rows;
     }
   }

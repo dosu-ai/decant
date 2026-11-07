@@ -1257,6 +1257,55 @@ describe("query reads", () => {
   });
 });
 
+describe("search query plans", () => {
+  // Capture each statement searchPage prepares, then EXPLAIN it with the same
+  // parameters. The search tests above prove the results; these prove the
+  // statements read only what a page needs, which is what kept a common term
+  // from taking seconds on a cold archive.
+  function searchPlans(filter: Parameters<typeof searchPage>[2] = {}): string[] {
+    const db = seeded();
+    const statements: string[] = [];
+    const query = db.query.bind(db);
+    (db as unknown as { query: (sql: string) => unknown }).query = (sql: string) => {
+      statements.push(sql);
+      return query(sql);
+    };
+    searchPage(db, "assistant", filter);
+    const plans = statements
+      .filter((sql) => sql.includes("block_fts MATCH"))
+      .map((sql) => {
+        const params = (sql.match(/\?/g) ?? []).map((_, index) =>
+          index === 0 ? '"assistant"' : 30,
+        );
+        return (query(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[])
+          .map((row) => row.detail)
+          .join("\n");
+      });
+    db.close();
+    return plans;
+  }
+
+  test("filter matches through the block-to-session index, not block rows", () => {
+    const plans = searchPlans();
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) {
+      expect(plan).toContain("COVERING INDEX idx_block_id_session");
+    }
+  });
+
+  test("read messages and snippets for the page's rows only", () => {
+    for (const filter of [{}, { project: "/x" }, { tool: "claude_code", from: "2026-01-01" }]) {
+      const page = searchPlans(filter).find((plan) => plan.includes("CO-ROUTINE page")) ?? "";
+      const outer = page.slice(page.indexOf("SCAN page"));
+      expect(outer.startsWith("SCAN page")).toBe(true);
+      // The outer FTS step must be a rowid lookup for one page row, not
+      // another walk over every match.
+      expect(outer).toMatch(/SCAN block_fts VIRTUAL TABLE INDEX \d+:=/);
+      expect(outer).not.toContain("AUTOMATIC");
+    }
+  });
+});
+
 describe("cost source", () => {
   test("labels sessions by where their cost came from", () => {
     const db = seeded();

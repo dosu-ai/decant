@@ -127,7 +127,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 27;
+const BASELINE_INDEX_COUNT = 28;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -414,6 +414,46 @@ describe("openDb", () => {
         .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_message_parent'")
         .get(),
     ).not.toBeNull();
+    closeDb(db);
+  });
+
+  test("adds the search session index when upgrading a v28 archive", () => {
+    const path = freshPath();
+    const fresh = openDb(path);
+    const expected = buildSchemaManifest(fresh);
+    fresh.exec("DROP INDEX idx_block_id_session");
+    fresh.exec("DELETE FROM schema_migrations WHERE version > 28");
+    closeDb(fresh);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    expect(
+      migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+        version: number;
+      },
+    ).toEqual({ version: LATEST_SCHEMA_VERSION });
+    closeDb(migrated);
+  });
+
+  test("filters search matches by session without reading block rows", () => {
+    // The block row carries transcript text, so reading one per match is what
+    // made a common search term slow on a cold archive.
+    const db = openDb(freshPath());
+    const plan = (
+      db
+        .query(
+          `EXPLAIN QUERY PLAN
+           SELECT block_fts.rowid
+           FROM block_fts
+           JOIN block b INDEXED BY idx_block_id_session ON b.id = block_fts.rowid
+           JOIN session s ON s.id = b.session_id
+           WHERE block_fts MATCH 'term' AND s.is_subagent = 0`,
+        )
+        .all() as { detail: string }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(plan).toContain("COVERING INDEX idx_block_id_session");
     closeDb(db);
   });
 

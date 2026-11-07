@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 28;
+export const LATEST_SCHEMA_VERSION = 29;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -831,6 +831,15 @@ function migrate(db: Database, current: number): void {
       db.exec("UPDATE session SET peak_context_tokens = NULL WHERE compaction_count > 0");
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (28, datetime('now'))",
+      ).run();
+    }
+    if (current < 29) {
+      // Search filters and ranks every full-text match before it keeps a page.
+      // Reaching each match's session through the block row reads a page of
+      // transcript text per match; this index answers it from a few MB.
+      db.exec("CREATE INDEX IF NOT EXISTS idx_block_id_session ON block(id, session_id)");
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (29, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

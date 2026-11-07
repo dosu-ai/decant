@@ -329,27 +329,40 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
     clauses.push(date.sql);
     params.push(...date.params);
   }
-  const joins = `
+  // Every match is filtered and ranked before a page is kept, so this part
+  // must not touch the block row itself: it holds transcript text, and on a
+  // cold archive reading one per match made a common term take seconds.
+  // idx_block_id_session answers block -> session from the index alone, and
+  // the project join is added only when a project filter needs it.
+  const matches = `
     FROM block_fts
-    JOIN block b ON b.id = block_fts.rowid
-    JOIN message m ON m.id = b.message_id
+    JOIN block b INDEXED BY idx_block_id_session ON b.id = block_fts.rowid
     JOIN session s ON s.id = b.session_id
-    LEFT JOIN project p ON p.id = s.project_id`;
-  const where = `WHERE ${clauses.join(" AND ")}`;
+    ${filter.project != null ? "LEFT JOIN project p ON p.id = s.project_id" : ""}
+    WHERE ${clauses.join(" AND ")}`;
   let total: number | null = null;
   let totalIsCapped = false;
   if (filter.includeTotal !== false) {
     const cappedCount = (
-      db
-        .query(`SELECT COUNT(*) AS count FROM (SELECT 1 ${joins} ${where} LIMIT 1001)`)
-        .get(...params) as { count: number }
+      db.query(`SELECT COUNT(*) AS count FROM (SELECT 1 ${matches} LIMIT 1001)`).get(...params) as {
+        count: number;
+      }
     ).count;
     totalIsCapped = cappedCount > 1000;
     total = Math.min(cappedCount, 1000);
   }
+  // Only the page's rows read messages, transcript text, and snippets. CROSS
+  // JOIN pins the join order: left to choose, the planner drives this from the
+  // MATCH and reads every match's block and message again.
   const rows = db
     .query(
-      `SELECT b.session_id, s.title AS session_title, s.tool, b.id AS block_id,
+      `WITH page AS (
+         SELECT block_fts.rowid AS id, bm25(block_fts, 4.0, 2.0, 1.0) AS score
+         ${matches}
+         ORDER BY score, b.id
+         LIMIT ? OFFSET ?
+       )
+       SELECT b.session_id, s.title AS session_title, s.tool, b.id AS block_id,
               m.seq AS message_seq, m.timestamp, p.path AS project,
               m.role, b.type AS block_type,
               snippet(block_fts, 0, char(${SEARCH_MATCH_START_CODE_POINT}),
@@ -358,12 +371,15 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
                       char(${SEARCH_MATCH_END_CODE_POINT}), '…', 12) AS tool_name_snippet,
               snippet(block_fts, 2, char(${SEARCH_MATCH_START_CODE_POINT}),
                       char(${SEARCH_MATCH_END_CODE_POINT}), '…', 12) AS tool_input_snippet
-       ${joins}
-       ${where}
-       ORDER BY bm25(block_fts, 4.0, 2.0, 1.0), b.id
-       LIMIT ? OFFSET ?`,
+       FROM page
+       CROSS JOIN block_fts ON block_fts.rowid = page.id AND block_fts MATCH ?
+       CROSS JOIN block b ON b.id = page.id
+       CROSS JOIN message m ON m.id = b.message_id
+       CROSS JOIN session s ON s.id = b.session_id
+       LEFT JOIN project p ON p.id = s.project_id
+       ORDER BY page.score, page.id`,
     )
-    .all(...params, limit, offset) as SearchHitRow[];
+    .all(...params, limit, offset, ftsQuery) as SearchHitRow[];
   return {
     results: rows.map((row) => ({
       session_id: row.session_id,

@@ -1,5 +1,5 @@
--- decant:schema_version=28
--- Effective decant schema (migrations 1..28 applied), frozen as the current
+-- decant:schema_version=29
+-- Effective decant schema (migrations 1..29 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
@@ -10,6 +10,8 @@
 -- v27 keeps query metadata beside compressed source records and indexes tool usage.
 -- v28 changes no schema. It clears stored context peaks for sessions with
 -- compactions so the next sync recomputes them under the current rules.
+-- v29 indexes block ids with their session so search can filter matches
+-- without reading transcript rows.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -254,6 +256,7 @@ CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
 CREATE INDEX idx_toolcall_usage ON tool_call(session_id, tool_name, tool_kind, mcp_server, is_error, duration_ms, timestamp);
 CREATE INDEX idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use';
+CREATE INDEX idx_block_id_session ON block(id, session_id);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id',

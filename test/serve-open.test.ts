@@ -56,12 +56,19 @@ async function waitFor(
   }
 }
 
-function stop(child: ChildProcess): Promise<number | null> {
+/** Resolves to 0 on a clean exit. Anything else becomes a description with
+ * the signal and the server's stderr, so a failing assertion says why. */
+function stop(cli: CliProcess): Promise<number | string> {
+  const { child } = cli;
+  const status = (code: number | null, signal: string | null, when: string): number | string =>
+    code === 0
+      ? 0
+      : `exit code ${code}, signal ${signal} (${when}); stderr tail:\n${cli.stderr().slice(-2000)}`;
   if (child.exitCode != null || child.signalCode != null) {
-    return Promise.resolve(child.exitCode);
+    return Promise.resolve(status(child.exitCode, child.signalCode, "exited before SIGTERM"));
   }
   return new Promise((resolve) => {
-    child.once("exit", (code) => resolve(code));
+    child.once("exit", (code, signal) => resolve(status(code, signal, "after SIGTERM")));
     child.kill("SIGTERM");
   });
 }
@@ -110,7 +117,7 @@ describe("serve banner and auto-open", () => {
       expect(cli.stderr()).toContain("Open the link in your browser.");
       expect(cli.stderr()).not.toContain("Opening your browser");
     } finally {
-      expect(await stop(cli.child)).toBe(0);
+      expect(await stop(cli)).toBe(0);
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
@@ -128,7 +135,7 @@ describe("serve banner and auto-open", () => {
       // the file can appear first.
       await waitFor(() => cli.stderr().includes("Opening your browser"), "opening banner");
     } finally {
-      expect(await stop(cli.child)).toBe(0);
+      expect(await stop(cli)).toBe(0);
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
@@ -144,7 +151,7 @@ describe("serve banner and auto-open", () => {
       await waitFor(() => URL_LINE.test(cli.stderr()), "url banner");
       expect(cli.stderr()).toContain(`    http://127.0.0.1:${port}`);
     } finally {
-      expect(await stop(cli.child)).toBe(0);
+      expect(await stop(cli)).toBe(0);
       // If the opener were going to fire, it would have done so before startup
       // finished and the server shut down cleanly.
       expect(existsSync(spy.log)).toBe(false);
@@ -167,7 +174,7 @@ describe("serve banner and auto-open", () => {
       }, "health endpoint");
       expect(cli.stderr()).not.toContain("http://");
     } finally {
-      expect(await stop(cli.child)).toBe(0);
+      expect(await stop(cli)).toBe(0);
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
@@ -207,7 +214,7 @@ describe("serve banner and auto-open", () => {
       );
       expect(cli.stderr()).not.toContain("Usage:");
     } finally {
-      await stop(cli.child);
+      await stop(cli);
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);

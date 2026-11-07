@@ -102,8 +102,10 @@ changing `Host` or `Origin` never makes an untrusted peer trusted.
 
 JSON errors use the stable envelope `{ "error": string, "code": string, ... }`.
 Expected recovery cases retain specific codes, including `archive_locked`,
-`schema_drift`, `schema_too_new`, `schema_too_old`, `session_not_found`, and
-validation failures. Unexpected failures return generic `internal_error` prose;
+`server_busy`, `schema_drift`, `schema_too_new`, `schema_too_old`,
+`session_not_found`, and validation failures. `server_busy` is a retryable
+`503`: `decant serve` runs heavy reads on two workers and queues at most 256
+more, and refuses a read beyond that rather than letting the backlog grow. Unexpected failures return generic `internal_error` prose;
 the structured stderr log retains the diagnostic.
 
 `DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and

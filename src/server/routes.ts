@@ -1,7 +1,6 @@
 import { isAbsolute } from "node:path";
 import { SESSION_LIST_MAX_LIMIT } from "../api-limits.ts";
 import type { Config } from "../config.ts";
-import { contextWindowForSession } from "../context-window.ts";
 import type { dateFilterFromSearch } from "../date-filter.ts";
 import { parseFileOperation } from "../distill.ts";
 import {
@@ -12,17 +11,7 @@ import {
   openIde,
 } from "../launcher.ts";
 import { openApiDocument } from "../openapi.ts";
-import {
-  getSession,
-  getSessionOutline,
-  getSessionSummary,
-  listProjects,
-  listSessions,
-  listToolCalls,
-  searchPage,
-  sessionIngestIssues,
-  sessionSearchIndex,
-} from "../query.ts";
+import { getSessionSummary } from "../query.ts";
 import {
   list as listRecommendations,
   markImplemented,
@@ -52,25 +41,20 @@ import {
   type SessionSource,
 } from "../source-filter.ts";
 import {
-  activity as activityStats,
-  byDimension,
   DIMENSIONS,
   dateBounds,
-  fileHotspots,
-  mcpUsage,
-  modelSparklines,
   parseDimension,
   parseFileGroup,
+  type StatsFilter,
   todayTotals,
-  toolUsage,
-  totals,
 } from "../stats.ts";
-import { tokenEconomics, tokenEconomicsForSession } from "../token-economics.ts";
 import { checkForUpdate } from "../update.ts";
 import { DECANT_VERSION } from "../version.ts";
 import { type Db, type RequestContext, withDb } from "./context.ts";
 import { errorResponse, isJsonObject, json } from "./http.ts";
 import { integerParam, isNonNegativeInteger, isValidSessionId, usageLimit } from "./params.ts";
+import { readOutputResponse, runRead } from "./read.ts";
+import type { ReadOpArgs, ReadOpName } from "./read-ops.ts";
 import { eventStream, publishServerEvent } from "./sse.ts";
 import { syncNow, syncStatus } from "./sync.ts";
 
@@ -114,13 +98,31 @@ interface RouteSpec {
 
 const SESSION_ID_METHODS = ["GET", "POST"] as const;
 
+/** Answer from a read operation (see read-ops.ts), which runs on the server's
+ * read pool when there is one. A null result means the session is missing. */
+async function read<N extends ReadOpName>(
+  { config, context, request }: RouteContext,
+  name: N,
+  args: ReadOpArgs<N>,
+): Promise<Response> {
+  // The request's signal aborts when the client disconnects, so a read still
+  // waiting for a worker is dropped instead of computed for nobody.
+  const output = await runRead(config, context, name, args, request.signal);
+  return output == null ? withDb(config, context, sessionNotFound) : readOutputResponse(output);
+}
+
+type SessionReadOpName = {
+  [N in ReadOpName]: ReadOpArgs<N> extends { id: number } ? N : never;
+}[ReadOpName];
+
 const sessionScoped =
-  (compute: (db: Db, id: number, ctx: RouteContext) => unknown): RouteHandler =>
+  (
+    name: SessionReadOpName,
+    args: (ctx: RouteContext) => Record<string, unknown> = () => ({}),
+  ): RouteHandler =>
   (ctx) =>
-    withDb(ctx.config, ctx.context, (db) => {
-      const result = compute(db, Number(ctx.params.id), ctx);
-      return result == null ? sessionNotFound(db) : json(result);
-    });
+    // biome-ignore lint/suspicious/noExplicitAny: each caller pairs a session operation with that operation's own extra arguments.
+    read(ctx, name, { ...args(ctx), id: Number(ctx.params.id) } as any);
 
 // Analytics routes share this guard so an unknown source value is rejected
 // before any archive read.
@@ -134,6 +136,17 @@ const sourceScoped =
     }
     return handle(ctx, source);
   };
+
+function statsFilter({ url, dateFilter }: RouteContext, source: SessionSource | null): StatsFilter {
+  return {
+    ...dateFilter,
+    includeArchived: url.searchParams.get("include_archived") === "true",
+    project: url.searchParams.get("project"),
+    repo: url.searchParams.get("repo"),
+    source,
+    tool: url.searchParams.get("tool"),
+  };
+}
 
 export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/health": { GET: () => json({ ok: true }) },
@@ -184,29 +197,27 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
     },
   },
   "/api/sessions": {
-    GET: ({ config, context, url, dateFilter }) =>
-      withDb(config, context, (db) =>
-        json(
-          listSessions(db, {
-            tool: url.searchParams.get("tool"),
-            model: url.searchParams.get("model"),
-            project: url.searchParams.get("project"),
-            repo: url.searchParams.get("repo"),
-            includeSubagents: url.searchParams.get("include_subagents") === "true",
-            includeNestedSubagents: url.searchParams.get("with_subagents") === "true",
-            includeArchived: url.searchParams.get("include_archived") === "true",
-            limit: Math.min(integerParam(url, "limit", 50), SESSION_LIST_MAX_LIMIT),
-            offset: integerParam(url, "offset", 0, true),
-            ...dateFilter,
-          }),
-        ),
-      ),
+    GET: (ctx) => {
+      const { url, dateFilter } = ctx;
+      return read(ctx, "sessions", {
+        tool: url.searchParams.get("tool"),
+        model: url.searchParams.get("model"),
+        project: url.searchParams.get("project"),
+        repo: url.searchParams.get("repo"),
+        includeSubagents: url.searchParams.get("include_subagents") === "true",
+        includeNestedSubagents: url.searchParams.get("with_subagents") === "true",
+        includeArchived: url.searchParams.get("include_archived") === "true",
+        limit: Math.min(integerParam(url, "limit", 50), SESSION_LIST_MAX_LIMIT),
+        offset: integerParam(url, "offset", 0, true),
+        ...dateFilter,
+      });
+    },
   },
   "/api/sessions/search-index": {
-    GET: ({ config, context }) => withDb(config, context, (db) => json(sessionSearchIndex(db))),
+    GET: (ctx) => read(ctx, "sessionSearchIndex", {}),
   },
   "/api/projects": {
-    GET: ({ config, context }) => withDb(config, context, (db) => json(listProjects(db))),
+    GET: (ctx) => read(ctx, "projects", {}),
   },
   "/api/sessions/{id}/state": {
     validateId: SESSION_ID_METHODS,
@@ -214,50 +225,37 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   },
   "/api/sessions/{id}/token-economics": {
     validateId: SESSION_ID_METHODS,
-    GET: sessionScoped(tokenEconomicsForSession),
+    GET: sessionScoped("sessionTokenEconomics"),
   },
   "/api/sessions/{id}/context-window": {
     validateId: SESSION_ID_METHODS,
-    GET: sessionScoped(contextWindowForSession),
+    GET: sessionScoped("sessionContextWindow"),
   },
   "/api/sessions/{id}/outline": {
     validateId: SESSION_ID_METHODS,
-    GET: sessionScoped(getSessionOutline),
+    GET: sessionScoped("sessionOutline"),
   },
   "/api/sessions/{id}/issues": {
     validateId: SESSION_ID_METHODS,
-    GET: sessionScoped(sessionIngestIssues),
+    GET: sessionScoped("sessionIssues"),
   },
   "/api/sessions/{id}": {
     validateId: SESSION_ID_METHODS,
-    GET: sessionScoped((db, id, { url }) => {
+    GET: sessionScoped("session", ({ url }) => {
       const messageLimit = integerParam(url, "message_limit", 0, true);
-      return getSession(db, id, {
+      return {
         messageLimit: messageLimit > 0 ? messageLimit : null,
         messageOffset: integerParam(url, "message_offset", 0, true),
-      });
+      };
     }),
   },
   "/api/search": { POST: { body: "object", handle: searchRoute } },
   "/api/stats/summary": {
-    GET: sourceScoped(({ config, context, url, dateFilter }, source) =>
-      withDb(config, context, (db) =>
-        json(
-          totals(db, {
-            ...dateFilter,
-            includeArchived: url.searchParams.get("include_archived") === "true",
-            project: url.searchParams.get("project"),
-            repo: url.searchParams.get("repo"),
-            source,
-            tool: url.searchParams.get("tool"),
-          }),
-        ),
-      ),
-    ),
+    GET: sourceScoped((ctx, source) => read(ctx, "statsSummary", statsFilter(ctx, source))),
   },
   "/api/stats/by-dimension": {
-    GET: sourceScoped(({ config, context, url, dateFilter }, source) => {
-      const dimension = parseDimension(url.searchParams.get("dim") ?? "");
+    GET: sourceScoped((ctx, source) => {
+      const dimension = parseDimension(ctx.url.searchParams.get("dim") ?? "");
       if (dimension == null) {
         return errorResponse(
           "unknown_dimension",
@@ -266,38 +264,23 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
           400,
         );
       }
-      return withDb(config, context, (db) =>
-        json(
-          byDimension(db, dimension, {
-            ...dateFilter,
-            includeArchived: url.searchParams.get("include_archived") === "true",
-            project: url.searchParams.get("project"),
-            repo: url.searchParams.get("repo"),
-            source,
-            tool: url.searchParams.get("tool"),
-          }),
-        ),
-      );
+      return read(ctx, "statsByDimension", { dimension, filter: statsFilter(ctx, source) });
     }),
   },
   "/api/analytics/activity": {
-    GET: sourceScoped(({ config, context, dateFilter }, source) =>
-      withDb(config, context, (db) => json(activityStats(db, { ...dateFilter, source }))),
-    ),
+    GET: sourceScoped((ctx, source) => read(ctx, "activity", { ...ctx.dateFilter, source })),
   },
   "/api/analytics/model-sparklines": {
-    GET: sourceScoped(({ config, context, dateFilter }, source) =>
-      withDb(config, context, (db) => json(modelSparklines(db, { ...dateFilter, source }))),
-    ),
+    GET: sourceScoped((ctx, source) => read(ctx, "modelSparklines", { ...ctx.dateFilter, source })),
   },
   "/api/analytics/token-economics": {
-    GET: sourceScoped(async ({ config, context, dateFilter }, source) => {
+    GET: sourceScoped(async (ctx, source) => {
       // The in-memory cache holds archive-wide vectors only; a source-scoped
       // request reads persisted vectors so one source never answers for another.
-      if (context.economics != null && source == null) {
-        return json(await context.economics.get(dateFilter));
+      if (ctx.context.economics != null && source == null) {
+        return json(await ctx.context.economics.get(ctx.dateFilter));
       }
-      return withDb(config, context, (db) => json(tokenEconomics(db, { ...dateFilter, source })));
+      return read(ctx, "tokenEconomics", { ...ctx.dateFilter, source });
     }),
   },
   "/api/analytics/now": {
@@ -312,31 +295,13 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
       ),
   },
   "/api/reports/analytics.html": {
-    GET: sourceScoped(async ({ config, context, dateFilter }, source) => {
-      const { assembleAnalyticsReport, renderAnalyticsReport } = await import("../report/index.ts");
-      return withDb(config, context, (db) =>
-        reportHtmlResponse(
-          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: { ...dateFilter, source } })),
-          "decant-analytics-report.html",
-        ),
-      );
-    }),
+    GET: sourceScoped((ctx, source) =>
+      read(ctx, "analyticsReport", { filter: { ...ctx.dateFilter, source } }),
+    ),
   },
   "/api/reports/session/{id}.html": {
     validateId: ["GET"],
-    GET: async ({ config, context, params }) => {
-      const { assembleSessionReport, renderSessionReport } = await import("../report/index.ts");
-      return withDb(config, context, (db) => {
-        const report = assembleSessionReport(db, Number(params.id));
-        if (report == null) {
-          return sessionNotFound(db);
-        }
-        return reportHtmlResponse(
-          renderSessionReport(report),
-          `decant-session-${report.summary.id}-${reportFilenamePart(report.summary.title)}.html`,
-        );
-      });
-    },
+    GET: sessionScoped("sessionReport"),
   },
   "/api/date-bounds": {
     GET: ({ config, context }) => withDb(config, context, (db) => json(dateBounds(db))),
@@ -351,21 +316,15 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/files": { GET: filesRoute },
   "/api/tools/calls": { GET: toolCallsRoute },
   "/api/tools/usage": {
-    GET: ({ config, context, url, dateFilter }) =>
-      withDb(config, context, (db) =>
-        json(
-          toolUsage(
-            db,
-            url.searchParams.get("errors_only") === "true",
-            usageLimit(url, 50),
-            dateFilter,
-          ),
-        ),
-      ),
+    GET: (ctx) =>
+      read(ctx, "toolUsage", {
+        errorsOnly: ctx.url.searchParams.get("errors_only") === "true",
+        limit: usageLimit(ctx.url, 50),
+        filter: ctx.dateFilter,
+      }),
   },
   "/api/tools/mcp-usage": {
-    GET: ({ config, context, url, dateFilter }) =>
-      withDb(config, context, (db) => json(mcpUsage(db, usageLimit(url, 50), dateFilter))),
+    GET: (ctx) => read(ctx, "mcpUsage", { limit: usageLimit(ctx.url, 50), filter: ctx.dateFilter }),
   },
   "/api/recommendations": {
     GET: ({ config, context, url }) => {
@@ -499,7 +458,7 @@ function sessionStateRoute({ config, context, params }: RouteContext, rawBody: u
   });
 }
 
-function searchRoute({ config, context }: RouteContext, body: Record<string, unknown>): Response {
+function searchRoute(ctx: RouteContext, body: Record<string, unknown>): RouteResult {
   if (typeof body.query !== "string" || body.query.trim() === "") {
     return errorResponse("query_required", "query is required", {}, 400);
   }
@@ -537,35 +496,34 @@ function searchRoute({ config, context }: RouteContext, body: Record<string, unk
   const to = body.to as string | null | undefined;
   const limit = body.limit as number | undefined;
   const offset = body.offset as number | undefined;
-  return withDb(config, context, (db) => {
-    return json(
-      searchPage(db, query, {
-        tool,
-        project,
-        includeSubagents: includeSubagents === true,
-        includeTotal: includeTotal !== false,
-        from,
-        to,
-        limit,
-        offset,
-      }),
-    );
+  return read(ctx, "search", {
+    query,
+    filter: {
+      tool,
+      project,
+      includeSubagents: includeSubagents === true,
+      includeTotal: includeTotal !== false,
+      from,
+      to,
+      limit,
+      offset,
+    },
   });
 }
 
-function filesRoute({ config, context, url, dateFilter }: RouteContext): Response {
+function filesRoute(ctx: RouteContext): RouteResult {
+  const { url, dateFilter } = ctx;
   const group = parseFileGroup(url.searchParams.get("group") ?? "path");
   const opParam = url.searchParams.get("op");
   const op = opParam == null || opParam === "" ? null : (parseFileOperation(opParam) ?? false);
   if (group == null || op === false) {
     return errorResponse("invalid_files_query", "invalid files query", {}, 400);
   }
-  return withDb(config, context, (db) =>
-    json(fileHotspots(db, group, op, usageLimit(url, 25), dateFilter)),
-  );
+  return read(ctx, "files", { group, op, limit: usageLimit(url, 25), filter: dateFilter });
 }
 
-function toolCallsRoute({ config, context, url, dateFilter }: RouteContext): Response {
+function toolCallsRoute(ctx: RouteContext): RouteResult {
+  const { url, dateFilter } = ctx;
   const sessionValue = url.searchParams.get("session");
   if (sessionValue != null && !isValidSessionId(sessionValue)) {
     return errorResponse("invalid_request", "session must be a positive integer", {}, 400);
@@ -578,21 +536,17 @@ function toolCallsRoute({ config, context, url, dateFilter }: RouteContext): Res
   if (errorsOnlyValue != null && errorsOnlyValue !== "true" && errorsOnlyValue !== "false") {
     return errorResponse("invalid_request", "errors_only must be true or false", {}, 400);
   }
-  return withDb(config, context, (db) =>
-    json(
-      listToolCalls(db, {
-        tool: url.searchParams.get("tool"),
-        server: url.searchParams.get("server"),
-        errorsOnly: errorsOnlyValue === "true",
-        sessionId: sessionValue == null ? null : Number(sessionValue),
-        project: url.searchParams.get("project"),
-        ...dateFilter,
-        minMs: minMsValue == null ? null : Number(minMsValue),
-        limit: integerParam(url, "limit", 50),
-        offset: integerParam(url, "offset", 0, true),
-      }),
-    ),
-  );
+  return read(ctx, "toolCalls", {
+    tool: url.searchParams.get("tool"),
+    server: url.searchParams.get("server"),
+    errorsOnly: errorsOnlyValue === "true",
+    sessionId: sessionValue == null ? null : Number(sessionValue),
+    project: url.searchParams.get("project"),
+    ...dateFilter,
+    minMs: minMsValue == null ? null : Number(minMsValue),
+    limit: integerParam(url, "limit", 50),
+    offset: integerParam(url, "offset", 0, true),
+  });
 }
 
 function markRecommendationRoute(
@@ -643,28 +597,6 @@ function isKnownProjectDir(config: Config, context: RequestContext, dir: string)
     return json(null);
   });
   return known;
-}
-
-function reportHtmlResponse(value: string, filename: string): Response {
-  return new Response(value, {
-    headers: {
-      "content-disposition": `attachment; filename="${filename}"`,
-      "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'none'",
-      "content-type": "text/html; charset=utf-8",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
-
-function reportFilenamePart(value: string | null): string {
-  const normalized = (value ?? "report")
-    .normalize("NFKD")
-    .replaceAll(/[^a-zA-Z0-9]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "")
-    .toLowerCase()
-    .slice(0, 64);
-  return normalized === "" ? "report" : normalized;
 }
 
 function sessionNotFound(db: Db): Response {

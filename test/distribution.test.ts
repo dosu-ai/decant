@@ -100,6 +100,7 @@ describe("distribution helpers", () => {
       "src/cli.ts",
       "src/sync-worker.ts",
       "src/stats-worker.ts",
+      "src/read-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);
@@ -115,6 +116,7 @@ describe("distribution helpers", () => {
       "src/cli.ts",
       "src/sync-worker.ts",
       "src/stats-worker.ts",
+      "src/read-worker.ts",
       "--outfile",
       "/tmp/decant",
     ]);

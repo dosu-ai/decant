@@ -15,6 +15,7 @@ import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { type Db, ensureDerivedMetadata } from "./server/context.ts";
 import { errorResponse, responseForError, serviceStartingResponse } from "./server/http.ts";
 import { resolveTrustedPeers } from "./server/peers.ts";
+import { ReadPool, type ReadPoolOptions } from "./server/read-pool.ts";
 import { handleRequest } from "./server/router.ts";
 import { publishServerEvent } from "./server/sse.ts";
 import {
@@ -70,6 +71,8 @@ export interface ServeOptions {
   /** Test seam: override the physical sync worker while retaining the server's
    * serialization and progress-coalescing behavior. */
   syncRunner?: SyncWorkerRunner;
+  /** Test seam: size the read pool or substitute its workers. */
+  readPool?: Pick<ReadPoolOptions, "size" | "spawn" | "closeTimeoutMs">;
 }
 
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
@@ -78,6 +81,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const trustedPeers = resolveTrustedPeers(options.trustedPeers);
   let db: Db | null = null;
   let economics: EconomicsCache | null = null;
+  let readPool: ReadPool | null = null;
   let watchHandle: WatchHandle | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
     // The worker ends each ingesting sync with PRAGMA optimize on its own
@@ -86,6 +90,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     onCompleted: (report) => {
       if (db != null && report.ingested > 0) {
         reloadPlannerStatistics(db);
+        readPool?.reloadStatistics();
       }
     },
   });
@@ -113,6 +118,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       const requestLogger = options.logger?.with({ "request.id": crypto.randomUUID() });
       const activeDb = db;
       const activeEconomics = economics;
+      const activeReadPool = readPool;
       if (activeDb == null || activeEconomics == null) {
         return serviceStartingResponse();
       }
@@ -127,6 +133,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           economics: activeEconomics,
           runSync: syncCoordinator.run,
           syncCoordinator,
+          readPool: activeReadPool ?? undefined,
           boundHostname: hostname,
           remoteAddress: bunServer.requestIP(request)?.address ?? null,
           trustedPeers,
@@ -169,6 +176,8 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
         }),
     });
     economics.prewarm();
+    readPool = new ReadPool({ dbPath: options.config.dbPath, ...options.readPool });
+    readPool.prewarm();
     if (options.watch != null) {
       const onEvent = options.watch.onEvent;
       watchHandle = startWatch({
@@ -192,6 +201,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       watchHandle?.stop() ?? Promise.resolve(),
       syncCoordinator.close(),
       economics?.settled() ?? Promise.resolve(),
+      readPool?.close() ?? Promise.resolve(),
     ])
       .then(async () => {
         if (db != null) {
@@ -211,7 +221,10 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
     economics?.dispose();
     try {
+      // Closing the read pool first fails reads still in flight, so Bun's own
+      // stop() is not left waiting on handlers that await a worker.
       await Promise.allSettled([
+        readPool?.close() ?? Promise.resolve(),
         watchHandle?.stop() ?? Promise.resolve(),
         syncCoordinator.close(),
         economics?.settled() ?? Promise.resolve(),
@@ -227,6 +240,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           }
           db = null;
           economics = null;
+          readPool = null;
         }
       }
     }

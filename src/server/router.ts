@@ -4,6 +4,7 @@ import { exceptionAttributes } from "../logging.ts";
 import type { RequestContext } from "./context.ts";
 import { errorResponse, notFoundResponse, readJsonBody, responseForError } from "./http.ts";
 import { isValidSessionId } from "./params.ts";
+import { ReadCancelledError } from "./read-pool.ts";
 import { COMPILED_ROUTES, type RouteContext, type RouteResult } from "./routes.ts";
 import { validateLocalRequest } from "./security.ts";
 
@@ -58,6 +59,12 @@ export async function handleRequest(
   try {
     return await dispatch({ request, url, config, context, dateFilter });
   } catch (error) {
+    if (error instanceof ReadCancelledError) {
+      // The client disconnected before its read ran. Nobody receives this
+      // response, so it is not a server error; 499 is the conventional
+      // "client closed request" status in access logs.
+      return new Response(null, { status: 499 });
+    }
     const response = responseForError(error);
     if (response.status >= 500) {
       context.logger?.error("HTTP request failed.", {

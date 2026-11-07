@@ -1,4 +1,5 @@
 import { SchemaDriftError, SchemaTooNewError, SchemaTooOldError } from "../db.ts";
+import { ReadPoolBusyError } from "./read-pool.ts";
 
 export type ApiErrorCode =
   | "archive_locked"
@@ -18,6 +19,7 @@ export type ApiErrorCode =
   | "schema_drift"
   | "schema_too_new"
   | "schema_too_old"
+  | "server_busy"
   | "service_starting"
   | "session_not_found"
   | "unknown_dimension"
@@ -77,6 +79,14 @@ function classifyError(error: unknown): ApiError {
   }
   if (error instanceof SchemaTooNewError || error instanceof SchemaTooOldError) {
     return { code: error.code, message: error.message, status: 409 };
+  }
+  if (error instanceof ReadPoolBusyError) {
+    return {
+      code: "server_busy",
+      message: error.message,
+      extras: { retryable: true },
+      status: 503,
+    };
   }
   const normalized = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (isArchiveLockedError(error, normalized)) {

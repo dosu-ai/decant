@@ -140,7 +140,14 @@ export function buildTargetArgs(
   // Bun does not infer Worker entrypoints for standalone executables. Each
   // worker must be listed explicitly so its module is embedded alongside the
   // CLI entrypoint instead of being resolved from the runtime filesystem.
-  args.push("src/cli.ts", "src/sync-worker.ts", "src/stats-worker.ts", "--outfile", outPath);
+  args.push(
+    "src/cli.ts",
+    "src/sync-worker.ts",
+    "src/stats-worker.ts",
+    "src/read-worker.ts",
+    "--outfile",
+    outPath,
+  );
   return args;
 }
 

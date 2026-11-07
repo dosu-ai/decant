@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   createSessionSearchIndex,
+  fetchSessionSearchIndex,
   SESSION_FUZZY_RANK_LIMIT,
   type SessionSearchIndexRow,
 } from "../src/ui/fuzzy.ts";
@@ -444,5 +445,76 @@ describe("session fuzzy search", () => {
       },
     });
     expect(performance.now() - startedAt).toBeLessThan(250);
+  });
+});
+
+describe("fetchSessionSearchIndex", () => {
+  const row = (id: number): SessionSearchIndexRow => ({
+    id,
+    title: `Session ${id}`,
+    project: null,
+    tool: "codex",
+    model: null,
+    started_at: null,
+  });
+
+  test("reads pages until a short one", async () => {
+    const all = Array.from({ length: 7 }, (_, index) => row(index + 1));
+    const requests: [number, number][] = [];
+    const rows = await fetchSessionSearchIndex(async (offset, limit) => {
+      requests.push([offset, limit]);
+      return all.slice(offset, offset + limit);
+    }, 3);
+    expect(requests).toEqual([
+      [0, 3],
+      [3, 3],
+      [6, 3],
+    ]);
+    expect(rows.map((entry) => entry.id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test("asks once more after an exactly full last page", async () => {
+    const all = Array.from({ length: 6 }, (_, index) => row(index + 1));
+    let calls = 0;
+    const rows = await fetchSessionSearchIndex(async (offset, limit) => {
+      calls += 1;
+      return all.slice(offset, offset + limit);
+    }, 3);
+    expect(calls).toBe(3);
+    expect(rows).toHaveLength(6);
+  });
+
+  test("stops against a server that ignores paging and returns every row", async () => {
+    // A tab left open across a downgrade talks to a server from before paging.
+    const all = Array.from({ length: 8 }, (_, index) => row(index + 1));
+    let calls = 0;
+    const rows = await fetchSessionSearchIndex(async () => {
+      calls += 1;
+      return all;
+    }, 3);
+    expect(calls).toBe(1);
+    expect(rows).toHaveLength(8);
+  });
+
+  test("stops when a full page adds nothing new", async () => {
+    const page = [row(1), row(2), row(3)];
+    let calls = 0;
+    const rows = await fetchSessionSearchIndex(async () => {
+      calls += 1;
+      return page;
+    }, 3);
+    expect(calls).toBe(2);
+    expect(rows.map((entry) => entry.id)).toEqual([1, 2, 3]);
+  });
+
+  test("drops a row a sync pushed onto the next page", async () => {
+    // A new session lands between the two requests, so the second page
+    // starts with the row the first page already ended on.
+    const pages = [
+      [row(9), row(8), row(7)],
+      [row(7), row(6)],
+    ];
+    const rows = await fetchSessionSearchIndex(async () => pages.shift() ?? [], 3);
+    expect(rows.map((entry) => entry.id)).toEqual([9, 8, 7, 6]);
   });
 });

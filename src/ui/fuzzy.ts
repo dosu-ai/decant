@@ -1,4 +1,5 @@
 import uFuzzy from "@leeoniya/ufuzzy";
+import { SEARCH_INDEX_PAGE_MAX } from "../api-limits.ts";
 
 export interface SessionSearchIndexRow {
   id: number;
@@ -451,4 +452,40 @@ function normalizeLimit(limit: number | undefined, size: number): number {
     return 0;
   }
   return Math.min(size, Math.floor(limit));
+}
+
+/**
+ * Read the whole search index one page at a time. The server caps each page,
+ * so a final short page marks the end. A session added between two requests
+ * pushes rows down, so rows already seen are dropped rather than shown twice.
+ * One hidden between requests pulls rows up and skips the row at the page
+ * boundary. Archiving or deleting a session refreshes the app, which reloads
+ * the index, so the gap lasts until then. It needs more than one page of
+ * sessions, so archives under SEARCH_INDEX_PAGE_MAX never see it.
+ *
+ * A server from before paging ignores `limit` and `offset` and returns every
+ * row each time. A page longer than requested, or one that adds no new row,
+ * ends the read, so such a server can't keep the loop requesting forever.
+ */
+export async function fetchSessionSearchIndex(
+  fetchPage: (offset: number, limit: number) => Promise<SessionSearchIndexRow[]>,
+  pageSize: number = SEARCH_INDEX_PAGE_MAX,
+): Promise<SessionSearchIndexRow[]> {
+  const size = Math.max(1, Math.trunc(pageSize));
+  const rows: SessionSearchIndexRow[] = [];
+  const seen = new Set<number>();
+  for (let offset = 0; ; offset += size) {
+    const page = await fetchPage(offset, size);
+    let added = 0;
+    for (const row of page) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        rows.push(row);
+        added += 1;
+      }
+    }
+    if (page.length !== size || added === 0) {
+      return rows;
+    }
+  }
 }

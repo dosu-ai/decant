@@ -220,10 +220,16 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
 }
 
 /**
- * Return the complete client-side fuzzy-search haystack without loading
- * messages, tool calls, title fallbacks, or session rollups.
+ * Return a page of the client-side fuzzy-search haystack without loading
+ * messages, tool calls, title fallbacks, or session rollups. Without a page,
+ * every row comes back.
  */
-export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
+export function sessionSearchIndex(
+  db: Database,
+  page: { limit?: number | null; offset?: number | null } = {},
+): SessionSearchIndexRow[] {
+  const limit = page.limit != null && page.limit > 0 ? Math.trunc(page.limit) : -1;
+  const offset = normalizeOffset(page.offset);
   return db
     .query(
       `SELECT s.id, s.title, p.path AS project, s.tool, s.model, s.started_at
@@ -232,9 +238,10 @@ export function sessionSearchIndex(db: Database): SessionSearchIndexRow[] {
        WHERE ${visibleSessionPredicate("s")}
          AND s.is_subagent = 0
          AND ${sessionUserStatePredicateForDatabase(db, "s")}
-       ORDER BY s.started_at DESC, s.id DESC`,
+       ORDER BY s.started_at DESC, s.id DESC
+       LIMIT ? OFFSET ?`,
     )
-    .all() as SessionSearchIndexRow[];
+    .all(limit, offset) as SessionSearchIndexRow[];
 }
 
 export interface SearchHit {

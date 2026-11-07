@@ -128,10 +128,11 @@ curl --fail --silent --show-error --get \
 
 ## Read one session without over-fetching
 
-Session detail supports message pagination. Pass `message_limit=0` only when
-you intentionally want the complete transcript; otherwise request the slice
-needed by the client. Separate endpoints expose token economics, context-window
-history, outline, and ingest issues:
+Session detail returns the transcript one page at a time: 200 messages when
+`message_limit` is omitted or zero, and at most 2000 per request. To read a
+whole transcript, advance `message_offset` until `has_more_messages` is false.
+Separate endpoints expose token economics, context-window history, outline, and
+ingest issues:
 
 ```sh
 SESSION_ID=123

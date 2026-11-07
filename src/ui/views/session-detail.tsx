@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
+import { SESSION_MESSAGE_PAGE_MAX } from "../../api-limits.ts";
 import { getJson } from "../api.ts";
 import { ApiFailureState } from "../api-failure.tsx";
 import { Badge, ModelBadge, ReasoningBadge, ToolBadge } from "../badges.tsx";
@@ -46,6 +47,7 @@ import {
 } from "../transcript-navigation.ts";
 import {
   appendTranscriptPage,
+  fetchTranscriptRange,
   prependTranscriptPage,
   previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
@@ -276,6 +278,9 @@ export function SessionDetailView({
       });
     return () => {
       cancelled = true;
+      // Leaving the view, or reloading it, makes every request this session
+      // version started stale, including transcript chunks still to come.
+      sessionVersionRef.current += 1;
     };
   }, [detailRetryKey, id]);
 
@@ -470,8 +475,17 @@ export function SessionDetailView({
           );
           setLoadingMore(true);
           setLoadMoreError(null);
-          return getJson<SessionDetailData>(
-            `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
+          return fetchTranscriptRange(
+            (offset, limit) =>
+              getJson<SessionDetailData>(
+                `/api/sessions/${id}?message_limit=${limit}&message_offset=${offset}`,
+              ),
+            request.offset,
+            request.limit,
+            SESSION_MESSAGE_PAGE_MAX,
+            // A reader who leaves this session mid-load stops the remaining
+            // chunks; the result below is discarded as stale anyway.
+            () => sessionVersionRef.current === sessionVersion,
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {

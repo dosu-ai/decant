@@ -22,6 +22,7 @@ import { fullDateTime } from "./date-time.ts";
 import { useDialogFocusTrap } from "./focus.ts";
 import {
   createSessionSearchIndex,
+  fetchSessionSearchIndex,
   type SessionHighlightRange,
   type SessionHighlights,
   type SessionSearchIndex,
@@ -71,9 +72,12 @@ export function CommandPalette({
     const controller = new AbortController();
     setLoading(true);
     setIndexError(null);
-    void getJson<SessionSearchIndexRow[]>("/api/sessions/search-index", {
-      signal: controller.signal,
-    })
+    void fetchSessionSearchIndex((offset, limit) =>
+      getJson<SessionSearchIndexRow[]>(
+        `/api/sessions/search-index?limit=${limit}&offset=${offset}`,
+        { signal: controller.signal },
+      ),
+    )
       .then((nextRows) => {
         if (controller.signal.aborted) {
           return;

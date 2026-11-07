@@ -163,7 +163,7 @@ describe("read operations on a worker", () => {
   // One call per operation, with arguments that reach real rows in the fixture.
   const calls: { [N in ReadOpName]: ReadOpArgs<N> } = {
     sessions: { limit: 50 },
-    sessionSearchIndex: {},
+    sessionSearchIndex: { limit: 5000, offset: 0 },
     projects: {},
     session: { id: 1, messageLimit: null, messageOffset: 0 },
     sessionTokenEconomics: { id: 1 },

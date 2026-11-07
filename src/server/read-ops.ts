@@ -66,7 +66,9 @@ const json = <A>(run: (db: Database, args: A) => unknown): JsonReadOp<A> => ({ k
 
 export const READ_OPS = {
   sessions: json((db, args: ListFilter) => listSessions(db, args)),
-  sessionSearchIndex: json((db, _args: Record<string, never>) => sessionSearchIndex(db)),
+  sessionSearchIndex: json((db, args: { limit: number; offset: number }) =>
+    sessionSearchIndex(db, args),
+  ),
   projects: json((db, _args: Record<string, never>) => listProjects(db)),
   session: json((db, args: { id: number; messageLimit: number | null; messageOffset: number }) =>
     getSession(db, args.id, {

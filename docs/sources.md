@@ -33,6 +33,17 @@ archive:
 decant --db /tmp/decant.db sync --path ./session.jsonl --path ./sessions
 ```
 
+## Claude Code
+
+Claude Code 2.1 and later writes each subagent to
+`<session id>/subagents/agent-<agent id>.jsonl` beside its parent session.
+Versions 2.0.28 through 2.0.77 wrote it to `agent-<agent id>.jsonl` in the
+project directory. Decant files both as subagent sessions under their parent.
+
+Claude Code 2.0.27 and earlier wrote subagent messages into the parent
+session's own file. Decant does not split those messages into a subagent
+session, so the parent session's tokens and cost include the subagent's usage.
+
 ## OpenCode
 
 Decant supports OpenCode 1.2 and later, reading both its 1.x and its 2.x

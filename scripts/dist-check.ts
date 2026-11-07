@@ -210,6 +210,7 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
     }
 
     await assertCompiledEconomics(port);
+    await assertCompiledReadWorker(port);
   } finally {
     if (startupTimeout != null) {
       clearTimeout(startupTimeout);
@@ -281,6 +282,35 @@ async function assertCompiledEconomics(port: number): Promise<void> {
     await Bun.sleep(50);
   }
   throw new Error(`compiled token economics stayed empty: ${JSON.stringify(latest)}`);
+}
+
+// Session lists and search run on read-worker threads. Bun embeds a worker in
+// a standalone binary only when it is listed as an entrypoint, so a missing
+// entry would fail here and not in source-mode tests.
+async function assertCompiledReadWorker(port: number): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${port}/api/sessions?limit=5`);
+  if (!response.ok) {
+    throw new Error(
+      `compiled binary returned ${response.status} for /api/sessions: ${await response.text()}`,
+    );
+  }
+  const sessions = (await response.json()) as { id?: unknown }[];
+  if (!Array.isArray(sessions) || sessions.length !== 1) {
+    throw new Error(`compiled session list was not the one synced: ${JSON.stringify(sessions)}`);
+  }
+  // Reports import the renderer lazily inside the worker, so check that this
+  // path also resolves inside the standalone module graph.
+  const report = await fetch(
+    `http://127.0.0.1:${port}/api/reports/session/${sessions[0]?.id}.html`,
+  );
+  const html = await report.text();
+  if (
+    !report.ok ||
+    !report.headers.get("content-type")?.startsWith("text/html") ||
+    !html.includes("<html")
+  ) {
+    throw new Error(`compiled session report failed with ${report.status}: ${html.slice(0, 200)}`);
+  }
 }
 
 async function readServePort(proc: Bun.Subprocess<"ignore", "ignore", "pipe">): Promise<number> {

@@ -131,7 +131,8 @@ second server fail with a truthful port-in-use message instead of first
 becoming another database owner.
 
 The server keeps request handling responsive by running source syncs in
-`src/sync-worker.ts` and economics-vector scans in `src/stats-worker.ts`.
+`src/sync-worker.ts`, economics-vector scans in `src/stats-worker.ts`, and the
+heavy archive reads in a pool of `src/read-worker.ts` threads.
 Economics vectors are cached in memory. `PRAGMA data_version` detects writes by
 other connections; the server serves the previous model while rebuilding and
 then emits `archive_updated` so clients can refresh.
@@ -145,8 +146,22 @@ grouping, hour and weekday activity (keyed by the server's UTC offset too, since
 a daylight-saving change moves local-time buckets without a write), model
 sparklines, MCP usage, file hotspots, date bounds, and the source list. Each
 returns a copy, so a caller that sorts or edits its result cannot change the
-cached value. Every request runs on the server's one connection in turn, so a
-cache hit also keeps a repeat Analytics load from holding up other requests.
+cached value. The cache belongs to a connection, so each read worker keeps its
+own.
+
+`src/server/read-ops.ts` names every read heavy enough to delay other
+requests: session lists and transcripts, search, the search index, projects,
+the Analytics and Tools aggregates, and reports. `src/server/read-pool.ts`
+runs them on two long-lived workers, each with its own read-only connection,
+so a slow aggregate no longer queues fast requests behind it on the server's
+connection. That connection still serves the cheap routes and every write.
+The same read prefers the same worker, keeping that worker's cache warm, and
+moves to the other only when its own is busy and the other is idle. A worker
+serializes its JSON before replying, so the request thread receives one
+string. Without a pool, as in tests that call `handleRequest` directly, the
+same operations run inline. A read-only connection cannot reload planner
+statistics with `ANALYZE sqlite_schema`, so after a sync that ingested
+sessions each worker reopens its connection once no read is using it.
 
 Search filters and ranks every full-text match before keeping a page, so it
 reaches each match's session through `idx_block_id_session` instead of the

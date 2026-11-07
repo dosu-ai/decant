@@ -5,6 +5,7 @@ import { ARCHIVE_DIR_MODE, closeDb, openDb } from "../db.ts";
 import { refreshDerivedMetadata } from "../derived.ts";
 import type { EconomicsCache } from "../economics-cache.ts";
 import type { StructuredLogger } from "../logging.ts";
+import type { ReadPool } from "./read-pool.ts";
 import type { SyncCoordinator, SyncWorkerRunner } from "./sync.ts";
 
 export type Db = ReturnType<typeof openDb>;
@@ -12,6 +13,10 @@ export type Db = ReturnType<typeof openDb>;
 export interface RequestContext {
   db?: Db;
   economics?: EconomicsCache;
+  /** Worker threads with their own read-only connections. When present, the
+   * heavy archive reads run there so they never queue behind each other on
+   * `db`, which stays free for fast routes and writes. */
+  readPool?: ReadPool;
   runSync?: SyncWorkerRunner;
   syncCoordinator?: SyncCoordinator;
   launchPlatform?: NodeJS.Platform;
@@ -23,11 +28,11 @@ export interface RequestContext {
 
 const metadataHydrated = new WeakSet<Db>();
 
-export function withDb(
+export function withDb<T = Response>(
   config: Config,
   context: RequestContext,
-  callback: (db: Db) => Response,
-): Response {
+  callback: (db: Db) => T,
+): T {
   if (context.db != null) {
     ensureDerivedMetadata(context.db);
     return callback(context.db);

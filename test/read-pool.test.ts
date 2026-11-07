@@ -15,7 +15,13 @@ import {
   type ReadOpArgs,
   type ReadOpName,
 } from "../src/server/read-ops.ts";
-import { ReadPool, ReadPoolClosedError, type ReadWorkerLike } from "../src/server/read-pool.ts";
+import {
+  ReadCancelledError,
+  ReadPool,
+  ReadPoolBusyError,
+  ReadPoolClosedError,
+  type ReadWorkerLike,
+} from "../src/server/read-pool.ts";
 import { handleRequest, serve } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
@@ -300,6 +306,147 @@ describe("read pool scheduling", () => {
     }
   });
 
+  test("each worker runs one read at a time and queued reads run in order", async () => {
+    const { spawn, workers } = fakeSpawner();
+    const pool = new ReadPool({ dbPath: "unused.db", size: 1, spawn });
+    try {
+      const first = pool.run("projects", {});
+      const second = pool.run("statsSummary", {});
+      const third = pool.run("activity", {});
+      await tick();
+      const worker = workers[0];
+      expect(worker?.runs().map((run) => run.name)).toEqual(["projects"]);
+      worker?.answer(worker.runs()[0]?.id ?? 0, []);
+      await first;
+      expect(worker?.runs().map((run) => run.name)).toEqual(["projects", "statsSummary"]);
+      worker?.answer(worker.runs()[1]?.id ?? 0, {});
+      await second;
+      expect(worker?.runs().map((run) => run.name)).toEqual([
+        "projects",
+        "statsSummary",
+        "activity",
+      ]);
+      worker?.answer(worker.runs()[2]?.id ?? 0, {});
+      await third;
+    } finally {
+      await pool.close();
+    }
+  });
+
+  test("a queued read goes to whichever worker frees up first", async () => {
+    const { spawn, workers } = fakeSpawner();
+    const pool = new ReadPool({ dbPath: "unused.db", size: 2, spawn });
+    try {
+      pool.prewarm();
+      const reads = [
+        pool.run("statsSummary", { from: "2026-01-01" }),
+        pool.run("statsSummary", { from: "2026-02-01" }),
+        pool.run("statsSummary", { from: "2026-03-01" }),
+      ];
+      await tick();
+      const busy = workers.map((worker) => worker.runs().length);
+      expect(busy).toEqual([1, 1]);
+      // Whichever worker answers first takes the waiting read, even if the
+      // read hashes to the other one.
+      const fast = workers[1];
+      fast?.answer(fast.runs()[0]?.id ?? 0, {});
+      await tick();
+      expect(fast?.runs()).toHaveLength(2);
+      for (const worker of workers) {
+        for (const run of worker.runs()) {
+          worker.answer(run.id, {});
+        }
+      }
+      await Promise.all(reads);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  test("a read cancelled while it waits never reaches a worker", async () => {
+    const { spawn, workers } = fakeSpawner();
+    const pool = new ReadPool({ dbPath: "unused.db", size: 1, spawn });
+    try {
+      const running = pool.run("projects", {});
+      const abort = new AbortController();
+      const waiting = pool.run("statsSummary", {}, { signal: abort.signal }).catch((e) => e);
+      await tick();
+      abort.abort();
+      expect(await waiting).toBeInstanceOf(ReadCancelledError);
+      const worker = workers[0];
+      worker?.answer(worker.runs()[0]?.id ?? 0, []);
+      await running;
+      await tick();
+      expect(worker?.runs().map((run) => run.name)).toEqual(["projects"]);
+      // An already-aborted signal is refused up front.
+      await expect(pool.run("activity", {}, { signal: abort.signal })).rejects.toBeInstanceOf(
+        ReadCancelledError,
+      );
+    } finally {
+      await pool.close();
+    }
+  });
+
+  test("a read cancelled while running frees its caller and the worker moves on", async () => {
+    const { spawn, workers } = fakeSpawner();
+    const pool = new ReadPool({ dbPath: "unused.db", size: 1, spawn });
+    try {
+      const abort = new AbortController();
+      const running = pool.run("projects", {}, { signal: abort.signal }).catch((e) => e);
+      const next = pool.run("statsSummary", {});
+      await tick();
+      abort.abort();
+      expect(await running).toBeInstanceOf(ReadCancelledError);
+      const worker = workers[0];
+      // The worker is still busy until its answer lands, which is then dropped.
+      expect(worker?.runs().map((run) => run.name)).toEqual(["projects"]);
+      worker?.answer(worker.runs()[0]?.id ?? 0, ["late"]);
+      await tick();
+      expect(worker?.runs().map((run) => run.name)).toEqual(["projects", "statsSummary"]);
+      worker?.answer(worker.runs()[1]?.id ?? 0, { sessions: 1 });
+      expect(await next).toEqual({ type: "json", body: '{"sessions":1}' });
+    } finally {
+      await pool.close();
+    }
+  });
+
+  test("a full queue refuses new reads with a retryable 503", async () => {
+    const config = seededConfig();
+    const db = openDb(config.dbPath);
+    const { spawn, workers } = fakeSpawner();
+    const readPool = new ReadPool({ dbPath: config.dbPath, size: 1, queueLimit: 1, spawn });
+    try {
+      const running = readPool.run("projects", {});
+      const queued = readPool.run("activity", {});
+      await expect(readPool.run("modelSparklines", {})).rejects.toBeInstanceOf(ReadPoolBusyError);
+      const response = await handleRequest(request("/api/stats/summary"), config, {
+        db,
+        readPool,
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "server_busy", retryable: true });
+      const worker = workers[0];
+      worker?.answer(worker.runs()[0]?.id ?? 0, []);
+      await running;
+      worker?.answer(worker.runs()[1]?.id ?? 0, {});
+      await queued;
+    } finally {
+      await readPool.close();
+      closeDb(db);
+    }
+  });
+
+  test("close rejects queued reads as well as running ones", async () => {
+    const { spawn } = fakeSpawner();
+    const pool = new ReadPool({ dbPath: "unused.db", size: 1, spawn });
+    const running = pool.run("projects", {}).catch((e) => e);
+    const queued = pool.run("activity", {}).catch((e) => e);
+    await tick();
+    await pool.close();
+    expect(await running).toBeInstanceOf(ReadPoolClosedError);
+    expect(await queued).toBeInstanceOf(ReadPoolClosedError);
+  });
+
   test("a busy archive in the worker still maps to a retryable 503", async () => {
     const config = seededConfig();
     const db = openDb(config.dbPath);
@@ -506,6 +653,35 @@ describe("serve() with the read pool", () => {
     await server.stop(true);
     expect(performance.now() - started).toBeLessThan(2_000);
     await pending;
+  });
+
+  test("a client that disconnects while its read waits leaves the queue", async () => {
+    const config = seededConfig();
+    const { spawn, workers } = fakeSpawner();
+    const server = serve({ config, port: 0, readPool: { spawn, size: 1 } });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const held = fetch(`${base}/api/tools/usage`);
+      for (let attempt = 0; attempt < 100 && (workers[0]?.runs().length ?? 0) === 0; attempt++) {
+        await Bun.sleep(5);
+      }
+      const abort = new AbortController();
+      const abandoned = fetch(`${base}/api/stats/summary`, { signal: abort.signal }).catch(
+        (error: unknown) => error,
+      );
+      await Bun.sleep(50);
+      abort.abort();
+      await abandoned;
+      await Bun.sleep(50);
+      const worker = workers[0];
+      worker?.answer(worker.runs()[0]?.id ?? 0, []);
+      expect((await held).status).toBe(200);
+      await Bun.sleep(20);
+      // The abandoned summary never ran.
+      expect(worker?.runs().map((run) => run.name)).toEqual(["toolUsage"]);
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("a sync that ingested sessions has the workers reload planner statistics", async () => {

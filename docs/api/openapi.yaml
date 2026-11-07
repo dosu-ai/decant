@@ -1399,7 +1399,10 @@ components:
           schema:
             $ref: "#/components/schemas/ApiError"
     ServiceUnavailable:
-      description: Service is starting or the SQLite archive is temporarily busy
+      description: >-
+        Service is starting, the SQLite archive is temporarily busy, or every
+        read worker is busy and the read queue is full (`server_busy`). All
+        three carry `retryable: true`.
       content:
         application/json:
           schema:
@@ -1426,6 +1429,7 @@ components:
         - schema_drift
         - schema_too_new
         - schema_too_old
+        - server_busy
         - service_starting
         - session_not_found
         - unknown_dimension

@@ -155,10 +155,14 @@ the Analytics and Tools aggregates, and reports. `src/server/read-pool.ts`
 runs them on two long-lived workers, each with its own read-only connection,
 so a slow aggregate no longer queues fast requests behind it on the server's
 connection. That connection still serves the cheap routes and every write.
-The same read prefers the same worker, keeping that worker's cache warm, and
-moves to the other only when its own is busy and the other is idle. A worker
-serializes its JSON before replying, so the request thread receives one
-string. Without a pool, as in tests that call `handleRequest` directly, the
+Each worker runs one read at a time, and the rest wait in a FIFO queue of at
+most 256. A read goes to the worker its operation and arguments hash to when
+that worker is free, keeping that worker's cache warm, and otherwise to
+whichever worker frees up first. A read whose client disconnects while it
+waits leaves the queue without running, so a dashboard filter change does not
+leave stale reads ahead of the new ones. A full queue answers `503
+server_busy`, which the UI retries. A worker serializes its JSON before
+replying, so the request thread receives one string. Without a pool, as in tests that call `handleRequest` directly, the
 same operations run inline. A read-only connection cannot reload planner
 statistics with `ANALYZE sqlite_schema`, so after a sync that ingested
 sessions each worker reopens its connection once no read is using it.

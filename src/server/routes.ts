@@ -101,11 +101,13 @@ const SESSION_ID_METHODS = ["GET", "POST"] as const;
 /** Answer from a read operation (see read-ops.ts), which runs on the server's
  * read pool when there is one. A null result means the session is missing. */
 async function read<N extends ReadOpName>(
-  { config, context }: RouteContext,
+  { config, context, request }: RouteContext,
   name: N,
   args: ReadOpArgs<N>,
 ): Promise<Response> {
-  const output = await runRead(config, context, name, args);
+  // The request's signal aborts when the client disconnects, so a read still
+  // waiting for a worker is dropped instead of computed for nobody.
+  const output = await runRead(config, context, name, args, request.signal);
   return output == null ? withDb(config, context, sessionNotFound) : readOutputResponse(output);
 }
 

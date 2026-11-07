@@ -16,13 +16,14 @@ export async function runRead<N extends ReadOpName>(
   context: RequestContext,
   name: N,
   args: ReadOpArgs<N>,
+  signal?: AbortSignal,
 ): Promise<ReadOpOutput | null> {
   if (context.readPool != null && context.db != null) {
     // Derived metadata is written through the server's connection; the
     // workers' read-only connections only ever read it.
     ensureDerivedMetadata(context.db);
     try {
-      return await context.readPool.run(name, args);
+      return await context.readPool.run(name, args, { signal });
     } catch (error) {
       // While the server stops, the pool closes before the listener does.
       // Requests that arrive or are in flight in that window still get an

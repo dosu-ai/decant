@@ -22,6 +22,8 @@ export interface ReadPoolOptions {
   /** Longest wait for a worker to close its connection and exit before it is
    * terminated. */
   closeTimeoutMs?: number;
+  /** Most reads that may wait for a worker; see DEFAULT_READ_QUEUE_LIMIT. */
+  queueLimit?: number;
 }
 
 interface SerializedError {
@@ -35,22 +37,51 @@ type WorkerReply =
   | { type: "result"; id: number; ok: true; output: ReadOpOutput | null }
   | { type: "result"; id: number; ok: false; error: SerializedError };
 
-interface Pending {
+interface Job {
+  id: number;
+  name: ReadOpName;
+  args: unknown;
+  /** Index of the worker whose read cache most likely holds this result. */
+  preferred: number;
   resolve: (output: ReadOpOutput | null) => void;
   reject: (error: Error) => void;
+  /** Detaches the caller's abort listener; set while the job is unsettled. */
+  release: (() => void) | null;
 }
 
 interface Slot {
   worker: ReadWorkerLike | null;
-  pending: Map<number, Pending>;
+  /** The one read this worker is running. A worker gets its next read only
+   * after this one answers, so waiting reads stay in the pool's queue, where
+   * they can be cancelled and handed to whichever worker frees up first. */
+  running: Job | null;
   /** Settles when the slot's worker thread exits. */
   exited: PromiseWithResolvers<void> | null;
 }
+
+/** Reads waiting for a free worker; at this many, new reads are refused. */
+export const DEFAULT_READ_QUEUE_LIMIT = 256;
 
 export class ReadPoolClosedError extends Error {
   constructor() {
     super("read pool is closed");
     this.name = "ReadPoolClosedError";
+  }
+}
+
+/** Every worker is busy and the queue is full. Retryable. */
+export class ReadPoolBusyError extends Error {
+  constructor() {
+    super("Decant is busy with other reads. Please try again.");
+    this.name = "ReadPoolBusyError";
+  }
+}
+
+/** The caller gave up on the read, for example because the client went away. */
+export class ReadCancelledError extends Error {
+  constructor() {
+    super("read cancelled");
+    this.name = "ReadCancelledError";
   }
 }
 
@@ -60,13 +91,17 @@ export class ReadPoolClosedError extends Error {
  * the server's connection and the sync worker's writes, so a slow aggregate
  * no longer delays a fast request queued behind it on one connection.
  *
- * Requests for the same operation and arguments prefer the same worker, which
- * keeps each worker's read cache (src/read-cache.ts) useful. A request spills
- * to another worker only when its preferred one is busy and another is idle.
+ * Each worker runs one read at a time; the rest wait in a bounded FIFO queue.
+ * A read goes to the worker its operation and arguments hash to when that
+ * worker is free, which keeps each worker's read cache (src/read-cache.ts)
+ * useful, and otherwise to any free worker. A read whose caller aborts while
+ * it waits leaves the queue without running.
  */
 export class ReadPool {
   readonly #options: ReadPoolOptions;
   readonly #slots: Slot[];
+  readonly #queue: Job[] = [];
+  readonly #queueLimit: number;
   #nextId = 0;
   #closing = false;
   #closed: Promise<void> | null = null;
@@ -76,26 +111,55 @@ export class ReadPool {
     const size = Math.max(1, Math.trunc(options.size ?? DEFAULT_READ_POOL_SIZE));
     this.#slots = Array.from({ length: size }, () => ({
       worker: null,
-      pending: new Map(),
+      running: null,
       exited: null,
     }));
+    this.#queueLimit = Math.max(0, Math.trunc(options.queueLimit ?? DEFAULT_READ_QUEUE_LIMIT));
   }
 
-  run<N extends ReadOpName>(name: N, args: ReadOpArgs<N>): Promise<ReadOpOutput | null> {
+  run<N extends ReadOpName>(
+    name: N,
+    args: ReadOpArgs<N>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ReadOpOutput | null> {
     if (this.#closing) {
       return Promise.reject(new ReadPoolClosedError());
     }
-    const slot = this.#pick(`${name}\u0000${JSON.stringify(args)}`);
-    const worker = this.#ensureWorker(slot);
-    const id = ++this.#nextId;
-    const { promise, resolve, reject } = Promise.withResolvers<ReadOpOutput | null>();
-    slot.pending.set(id, { resolve, reject });
-    try {
-      worker.postMessage({ type: "run", id, name, args });
-    } catch (error) {
-      slot.pending.delete(id);
-      reject(error instanceof Error ? error : new Error(String(error)));
+    const { signal } = options;
+    if (signal?.aborted === true) {
+      return Promise.reject(new ReadCancelledError());
     }
+    if (this.#queue.length >= this.#queueLimit && this.#freeSlot() == null) {
+      return Promise.reject(new ReadPoolBusyError());
+    }
+    const { promise, resolve, reject } = Promise.withResolvers<ReadOpOutput | null>();
+    const key = `${name}\u0000${JSON.stringify(args)}`;
+    const job: Job = {
+      id: ++this.#nextId,
+      name,
+      args,
+      preferred: Number(BigInt(Bun.hash(key)) % BigInt(this.#slots.length)),
+      resolve,
+      reject,
+      release: null,
+    };
+    if (signal != null) {
+      const onAbort = (): void => {
+        // A queued read never reaches a worker. A running one cannot be
+        // interrupted mid-statement, so its answer is dropped when it lands.
+        const queued = this.#queue.indexOf(job);
+        if (queued !== -1) {
+          this.#queue.splice(queued, 1);
+        }
+        this.#settle(job, new ReadCancelledError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      job.release = () => signal.removeEventListener("abort", onAbort);
+    } else {
+      job.release = () => {};
+    }
+    this.#queue.push(job);
+    this.#dispatch();
     return promise;
   }
 
@@ -117,9 +181,9 @@ export class ReadPool {
     }
   }
 
-  /** Rejects work still in flight, then has each worker close its connection
-   * and exit on its own, terminating any that has not exited within the
-   * timeout. Every call returns the same promise. */
+  /** Rejects queued and running reads, then has each worker close its
+   * connection and exit on its own, terminating any that has not exited within
+   * the timeout. Every call returns the same promise. */
   close(): Promise<void> {
     this.#closed ??= this.#closeWorkers();
     return this.#closed;
@@ -127,10 +191,16 @@ export class ReadPool {
 
   async #closeWorkers(): Promise<void> {
     this.#closing = true;
+    for (const job of this.#queue.splice(0)) {
+      this.#settle(job, new ReadPoolClosedError());
+    }
     const timeoutMs = Math.max(0, this.#options.closeTimeoutMs ?? 5_000);
     await Promise.all(
       this.#slots.map(async (slot) => {
-        this.#rejectPending(slot, new ReadPoolClosedError());
+        if (slot.running != null) {
+          this.#settle(slot.running, new ReadPoolClosedError());
+          slot.running = null;
+        }
         const worker = slot.worker;
         if (worker == null) {
           return;
@@ -162,23 +232,36 @@ export class ReadPool {
     );
   }
 
-  #pick(key: string): Slot {
-    const preferred = this.#slots[Number(BigInt(Bun.hash(key)) % BigInt(this.#slots.length))];
-    if (preferred == null) {
-      throw new Error("read pool has no slots");
+  #freeSlot(preferred?: number): Slot | null {
+    const slot = preferred == null ? undefined : this.#slots[preferred];
+    if (slot != null && slot.running == null) {
+      return slot;
     }
-    if (preferred.pending.size === 0) {
-      return preferred;
-    }
-    let best = preferred;
-    for (const slot of this.#slots) {
-      if (slot.pending.size < best.pending.size) {
-        best = slot;
+    return this.#slots.find((candidate) => candidate.running == null) ?? null;
+  }
+
+  /** Hand queued reads, oldest first, to free workers. */
+  #dispatch(): void {
+    while (!this.#closing && this.#queue.length > 0) {
+      const job = this.#queue[0];
+      const slot = job == null ? null : this.#freeSlot(job.preferred);
+      if (job == null || slot == null) {
+        return;
+      }
+      this.#queue.shift();
+      slot.running = job;
+      try {
+        this.#ensureWorker(slot).postMessage({
+          type: "run",
+          id: job.id,
+          name: job.name,
+          args: job.args,
+        });
+      } catch (error) {
+        slot.running = null;
+        this.#settle(job, error instanceof Error ? error : new Error(String(error)));
       }
     }
-    // Leaving the preferred worker costs a cache miss, so do it only for an
-    // idle worker, not to shave one request off a queue.
-    return best.pending.size === 0 ? best : preferred;
   }
 
   #ensureWorker(slot: Slot): ReadWorkerLike {
@@ -204,37 +287,46 @@ export class ReadPool {
   }
 
   #onReply(slot: Slot, reply: WorkerReply): void {
-    const pending = slot.pending.get(reply.id);
-    if (pending == null) {
+    const job = slot.running;
+    if (job == null || job.id !== reply.id) {
       return;
     }
-    slot.pending.delete(reply.id);
-    if (reply.ok) {
-      pending.resolve(reply.output);
-    } else {
-      pending.reject(reviveError(reply.error));
-    }
+    slot.running = null;
+    this.#settle(job, reply.ok ? reply.output : reviveError(reply.error));
+    this.#dispatch();
   }
 
-  /** Drop a failed worker; the next request for this slot starts a fresh one. */
+  /** Drop a failed worker. Its running read fails; queued reads move on to a
+   * fresh worker. */
   #retire(slot: Slot, worker: ReadWorkerLike, error: Error): void {
     if (slot.worker !== worker) {
       return;
     }
     slot.worker = null;
-    this.#rejectPending(slot, error);
+    const job = slot.running;
+    slot.running = null;
+    if (job != null) {
+      this.#settle(job, error);
+    }
     try {
       worker.terminate();
     } catch {
       // Already gone.
     }
+    this.#dispatch();
   }
 
-  #rejectPending(slot: Slot, error: Error): void {
-    const pending = [...slot.pending.values()];
-    slot.pending.clear();
-    for (const entry of pending) {
-      entry.reject(error);
+  /** Resolve or reject a read once; later outcomes for it are ignored. */
+  #settle(job: Job, outcome: ReadOpOutput | null | Error): void {
+    if (job.release == null) {
+      return;
+    }
+    job.release();
+    job.release = null;
+    if (outcome instanceof Error) {
+      job.reject(outcome);
+    } else {
+      job.resolve(outcome);
     }
   }
 }

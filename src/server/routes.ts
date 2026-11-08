@@ -30,6 +30,15 @@ import {
   compileRoutePath,
   type RouteMatcher,
 } from "../route-paths.ts";
+import { DEFAULT_SERVE_PORT } from "../serve-defaults.ts";
+import {
+  installService,
+  isServiceProcess,
+  removeService,
+  ServiceUnavailableError,
+  serviceStatus,
+  stopService,
+} from "../service.ts";
 import { type SessionUserStateUpdate, setSessionUserState } from "../session-user-state.ts";
 import {
   agentOptions,
@@ -58,6 +67,7 @@ import { DECANT_VERSION } from "../version.ts";
 import { type Db, type RequestContext, withDb } from "./context.ts";
 import { errorResponse, isJsonObject, json } from "./http.ts";
 import { integerParam, isNonNegativeInteger, isValidSessionId, usageLimit } from "./params.ts";
+import { isLoopbackPeer } from "./peers.ts";
 import { readOutputResponse, runRead } from "./read.ts";
 import type { ReadOpArgs, ReadOpName } from "./read-ops.ts";
 import { eventStream, publishServerEvent } from "./sse.ts";
@@ -181,6 +191,11 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
     },
   },
   "/api/update": { GET: async () => json(await checkForUpdate()) },
+  "/api/background": {
+    GET: async ({ context }) =>
+      json({ ...(await serviceStatus(context.service)), handoff: false, stopping: false }),
+    POST: { body: "object", handle: backgroundRoute },
+  },
   "/api/launch/agent": {
     POST: { body: "object", rejectExtras: { ok: false }, handle: launchAgentRoute },
   },
@@ -366,6 +381,60 @@ export const COMPILED_ROUTES: CompiledRoute[] = API_ROUTE_PATHS.map((path) => ({
 
 function syncStatusResponse(): Response {
   return json({ ...syncStatus, timestamp: new Date().toISOString() });
+}
+
+// Long enough for the response to reach the browser before this process
+// releases its port or is stopped by the service manager.
+const BACKGROUND_HANDOFF_DELAY_MS = 250;
+
+async function backgroundRoute(
+  { config, context }: RouteContext,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const { enabled } = body;
+  if (typeof enabled !== "boolean" || Object.keys(body).length !== 1) {
+    return errorResponse("invalid_request", "send exactly { enabled: boolean }", {}, 400);
+  }
+  // Registering a login item is persistence on this machine, so only a
+  // browser on this machine may do it, even when trusted peers can reach the API.
+  if (context.remoteAddress != null && !isLoopbackPeer(context.remoteAddress)) {
+    return errorResponse("forbidden_remote", "forbidden remote", {}, 403);
+  }
+  const options = context.service;
+  const current = isServiceProcess(options?.env);
+  if (!enabled) {
+    await removeService(options);
+    if (current) {
+      // Stopping the service stops this process, so answer first.
+      setTimeout(() => void stopService(options), BACKGROUND_HANDOFF_DELAY_MS);
+    } else {
+      await stopService(options);
+    }
+    const status = await serviceStatus(options);
+    return json({ ...status, handoff: false, stopping: current });
+  }
+  const port = context.boundPort ?? DEFAULT_SERVE_PORT;
+  try {
+    const status = await installService({ dbPath: config.dbPath, port }, options);
+    // The service binds this server's port, so this server steps aside. The
+    // service retries the bind until the port is free.
+    const handoff =
+      !current && context.requestShutdown != null && status.url === `http://127.0.0.1:${port}`;
+    if (handoff) {
+      setTimeout(() => context.requestShutdown?.(), BACKGROUND_HANDOFF_DELAY_MS);
+    }
+    return json({ ...status, handoff, stopping: false });
+  } catch (error) {
+    if (error instanceof ServiceUnavailableError) {
+      return errorResponse("background_unsupported", error.message, {}, 409);
+    }
+    return errorResponse(
+      "background_failed",
+      error instanceof Error ? error.message : String(error),
+      {},
+      500,
+    );
+  }
 }
 
 async function launchAgentRoute(

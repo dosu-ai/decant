@@ -2,8 +2,10 @@
 
 Decant is one local Bun and TypeScript application. The CLI process discovers
 coding-agent logs, normalizes and enriches them, owns the SQLite archive, and
-optionally serves the React UI and local API. There is no daemon, hosted
-service, bearer token, or second application process.
+optionally serves the React UI and local API. There is no hosted service, bearer
+token, or second application process. The optional background service is
+launchd or systemd running that same `decant serve` at login, not a separate
+daemon.
 
 ## Data flow
 

@@ -58,10 +58,29 @@ describe("local API OpenAPI contract", () => {
     process.env.DECANT_CONFIG_DIR = join(root, "config");
     const config = fixtureConfig(root);
     seed(config);
+    let launchdLoaded = false;
     const server = serve({
       config,
       hostname: "127.0.0.1",
       port: 0,
+      // A temp home and a fake launchctl keep these cases off the real
+      // machine's login items.
+      service: {
+        platform: "darwin",
+        env: {},
+        homeDir: join(root, "home"),
+        uid: 501,
+        install: { channel: "installer", binaryPath: "/opt/test/decant" },
+        execPath: "/opt/test/decant",
+        run: async (argv) => {
+          // Like launchd: the job is known only between bootstrap and bootout.
+          if (argv[1] === "bootstrap") launchdLoaded = true;
+          if (argv[1] === "bootout") launchdLoaded = false;
+          return argv[1] === "print" && !launchdLoaded
+            ? { code: 113, stdout: "", stderr: "Could not find service" }
+            : { code: 0, stdout: "", stderr: "" };
+        },
+      },
       syncRunner: async () => ({
         repriced: 1,
         scanned: 0,
@@ -109,6 +128,27 @@ describe("local API OpenAPI contract", () => {
         { path: "/api/settings", method: "get", url: "/api/settings" },
         { path: "/api/settings", method: "post", url: "/api/settings", body: {} },
         { path: "/api/update", method: "get", url: "/api/update" },
+        { path: "/api/background", method: "get", url: "/api/background" },
+        {
+          path: "/api/background",
+          method: "post",
+          url: "/api/background",
+          body: {},
+          status: 400,
+          requestValid: false,
+        },
+        {
+          path: "/api/background",
+          method: "post",
+          url: "/api/background",
+          body: { enabled: true },
+        },
+        {
+          path: "/api/background",
+          method: "post",
+          url: "/api/background",
+          body: { enabled: false },
+        },
         {
           path: "/api/launch/agent",
           method: "post",

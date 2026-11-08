@@ -9,6 +9,7 @@ export const API_ROUTE_PATHS = [
   "/api/config",
   "/api/settings",
   "/api/update",
+  "/api/background",
   "/api/launch/agent",
   "/api/launch/ide",
   "/api/sync-status",

@@ -279,6 +279,20 @@ export type UpdateStatus = {
   error: string | null;
 };
 
+export type BackgroundStatus = {
+  supported: boolean;
+  manager: "launchd" | "systemd" | null;
+  reason: string | null;
+  installed: boolean;
+  running: boolean;
+  unitPath: string | null;
+  command: string[] | null;
+  url: string | null;
+  current: boolean;
+  handoff: boolean;
+  stopping: boolean;
+};
+
 export type SettingsInfo = {
   settings: UserSettings;
   path: string;

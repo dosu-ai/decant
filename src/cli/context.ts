@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "../config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "../db.ts";
 import { sync as ingestSync } from "../ingest.ts";
+import type { ServiceOptions } from "../service.ts";
 import type { FetchLike, InstallInfo, UpdateStatus } from "../update.ts";
 import type { OutputFormat } from "./parse.ts";
 
@@ -21,6 +22,8 @@ export interface CliRunOptions {
   writeStderr?: (value: string) => void;
   /** Test seams for `decant update` and the update notice. */
   update?: UpdateDeps;
+  /** Test seam: how `decant service` and `serve` reach launchd or systemd. */
+  service?: ServiceOptions;
 }
 
 export interface UpdateDeps {
@@ -71,6 +74,7 @@ export interface CliContext {
   env: Record<string, string | undefined> | undefined;
   homeDir: string | null | undefined;
   updateDeps: UpdateDeps;
+  serviceOptions: ServiceOptions;
   globals(): GlobalOptions;
   isJson(): boolean;
   shouldSync(): boolean;
@@ -113,6 +117,7 @@ export function createContext(
     env: options.env,
     homeDir: options.homeDir,
     updateDeps: options.update ?? {},
+    serviceOptions: { env: options.env, homeDir: options.homeDir, ...options.service },
     globals,
     isJson: () => isJsonOutput(globals()),
     shouldSync: () => shouldSyncOnRead(globals(), options.env),

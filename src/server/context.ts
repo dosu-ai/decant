@@ -5,6 +5,7 @@ import { ARCHIVE_DIR_MODE, closeDb, openDb } from "../db.ts";
 import { refreshDerivedMetadata } from "../derived.ts";
 import type { EconomicsCache } from "../economics-cache.ts";
 import type { StructuredLogger } from "../logging.ts";
+import type { ServiceOptions } from "../service.ts";
 import type { ReadPool } from "./read-pool.ts";
 import type { SyncCoordinator, SyncWorkerRunner } from "./sync.ts";
 
@@ -24,6 +25,12 @@ export interface RequestContext {
   remoteAddress?: string | null;
   trustedPeers?: string[];
   logger?: StructuredLogger;
+  /** The port this server is listening on, which the background service reuses. */
+  boundPort?: number;
+  /** Test seam: how the background service routes reach launchd or systemd. */
+  service?: ServiceOptions;
+  /** Stop this server so the background service can take over its port. */
+  requestShutdown?: () => void;
 }
 
 const metadataHydrated = new WeakSet<Db>();

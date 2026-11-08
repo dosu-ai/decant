@@ -5,6 +5,14 @@ import { sync as ingestSync } from "../../ingest.ts";
 import { getDecantLogger, logWatchEvent } from "../../logging.ts";
 import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "../../serve-defaults.ts";
 import {
+  binaryFingerprint,
+  isServiceProcess,
+  SERVICE_RESTART_EXIT_CODE,
+  serviceBinary,
+  serviceStatus,
+  watchBinary,
+} from "../../service.ts";
+import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
   startWatch,
@@ -189,16 +197,23 @@ export function registerSyncCommands(ctx: CliContext): void {
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
           });
-          const stop = waitForProcessSignal();
-          const handle = startWatch({
-            config,
-            intervalMs: commandOptions.intervalMs,
-            debounceMs: commandOptions.debounceMs,
-            enableWatch: commandOptions.fsWatch !== false,
-            onEvent: emitWatchEvent,
-          });
-          await stop;
-          await handle.stop();
+          const signal = waitForProcessSignal();
+          try {
+            const handle = startWatch({
+              config,
+              intervalMs: commandOptions.intervalMs,
+              debounceMs: commandOptions.debounceMs,
+              enableWatch: commandOptions.fsWatch !== false,
+              onEvent: emitWatchEvent,
+            });
+            try {
+              await signal.promise;
+            } finally {
+              await handle.stop();
+            }
+          } finally {
+            signal.cancel();
+          }
         }),
     );
 
@@ -274,12 +289,23 @@ export function registerSyncCommands(ctx: CliContext): void {
           // Loaded here so other commands skip the server's chart and report
           // dependencies at startup.
           const { parsePeerList, serve: serveApp } = await import("../../server.ts");
-          let server: ReturnType<typeof serveApp>;
-          try {
-            server = serveApp({
+          const environment = ctx.env ?? process.env;
+          const supervised = isServiceProcess(environment);
+          const host = commandOptions.host ?? DEFAULT_SERVE_HOST;
+          const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
+          // Taken before waiting for the port, so an upgrade that lands during
+          // that wait still restarts the service once it is serving.
+          const binaryPath = supervised ? serviceBinary(ctx.serviceOptions).path : null;
+          const binaryAtStart = binaryPath == null ? null : binaryFingerprint(binaryPath);
+          let requestShutdown: () => void = () => undefined;
+          const shutdownRequested = new Promise<void>((resolve) => {
+            requestShutdown = resolve;
+          });
+          const start = (): ReturnType<typeof serveApp> =>
+            serveApp({
               config,
-              hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
-              port: commandOptions.port ?? DEFAULT_SERVE_PORT,
+              hostname: host,
+              port: wanted,
               // Omitted rather than [] so resolveTrustedPeers() can still fall
               // through to DECANT_TRUSTED_PEERS and the gateway default.
               trustedPeers:
@@ -295,11 +321,36 @@ export function registerSyncCommands(ctx: CliContext): void {
                     onEvent: emitWatchEvent,
                   }
                 : undefined,
+              onShutdownRequested: () => requestShutdown(),
+              service: ctx.serviceOptions,
             });
+          let server: ReturnType<typeof serveApp>;
+          try {
+            server = supervised
+              ? await bindWhenFree(start, () =>
+                  serverLogger.warning("Port in use; waiting for it to be released.", {
+                    "event.name": "decant.service.port_busy",
+                    "server.port": wanted,
+                  }),
+                )
+              : start();
           } catch (error) {
             if (isPortInUse(error)) {
-              const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
-              const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, wanted);
+              const url = displayUrl(host, wanted);
+              const background = await serviceStatus(ctx.serviceOptions).catch(() => null);
+              if (background?.running === true && background.url === `http://127.0.0.1:${wanted}`) {
+                // The background service already serves this port, so running
+                // `decant` just takes the user there.
+                const decision = openDecision(commandOptions.open !== false, environment);
+                io.writeErr(
+                  `Decant is already running in the background at ${url}\n` +
+                    "Stop it with: decant service uninstall\n",
+                );
+                if (decision.open && decision.command != null) {
+                  openBrowser(url, decision.command);
+                }
+                return 0;
+              }
               io.writeErr(
                 `error: port ${wanted} is already in use — is Decant already running at ${url}?\n` +
                   "Pick another port with: decant serve --port <n>\n",
@@ -311,25 +362,16 @@ export function registerSyncCommands(ctx: CliContext): void {
           if (!ctx.globals().quiet) {
             serverLogger.info("Server started.", {
               "event.name": "decant.server.started",
-              "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+              "server.address": host,
               "server.port": server.port,
               "watch.enabled": syncEnabled,
+              "service.supervised": supervised,
             });
           }
-          const boundPort = server.port ?? commandOptions.port ?? DEFAULT_SERVE_PORT;
-          const url = displayUrl(commandOptions.host ?? DEFAULT_SERVE_HOST, boundPort);
-          const environment = ctx.env ?? process.env;
-          const decision = decideOpen({
-            enabled: commandOptions.open !== false,
-            env: {
-              BROWSER: environment.BROWSER,
-              DECANT_NO_OPEN: environment.DECANT_NO_OPEN,
-              CI: environment.CI,
-            },
-            isTTY: process.stdout.isTTY === true,
-            platform: process.platform,
-          });
-          if (!ctx.globals().quiet) {
+          const boundPort = server.port ?? wanted;
+          const url = displayUrl(host, boundPort);
+          const decision = openDecision(commandOptions.open !== false, environment);
+          if (!ctx.globals().quiet && !supervised) {
             io.writeErr(serveBanner(url, decision.open));
           }
           void ctx.pendingUpdateNotice?.then(
@@ -344,25 +386,111 @@ export function registerSyncCommands(ctx: CliContext): void {
           if (decision.open && decision.command != null) {
             openBrowser(url, decision.command);
           }
+          let exitCode = 0;
+          const stopBinaryWatch =
+            binaryPath == null
+              ? null
+              : watchBinary(
+                  binaryPath,
+                  () => {
+                    // A failing exit is what makes launchd and systemd start the
+                    // new binary; a clean exit would leave the service stopped.
+                    exitCode = SERVICE_RESTART_EXIT_CODE;
+                    serverLogger.info("Decant was updated; restarting the background service.", {
+                      "event.name": "decant.service.binary_changed",
+                    });
+                    requestShutdown();
+                  },
+                  {
+                    intervalMs: BINARY_CHECK_MS,
+                    settleMs: BINARY_SETTLE_MS,
+                    initial: binaryAtStart,
+                  },
+                );
+          const signal = waitForProcessSignal();
           try {
-            await waitForProcessSignal();
+            await Promise.race([signal.promise, shutdownRequested]);
           } finally {
+            signal.cancel();
+            stopBinaryWatch?.();
+            // A sync worker stuck in a blocking file read never lets stop()
+            // finish, and launchd or systemd restart the service only once
+            // the process exits. SQLite's WAL keeps the archive consistent
+            // through a hard exit, as it does through the manager's SIGKILL.
+            const forceExit = supervised
+              ? setTimeout(() => {
+                  serverLogger.warning("Shutdown is stuck; exiting so the service can restart.", {
+                    "event.name": "decant.service.stop_timeout",
+                  });
+                  process.exit(exitCode);
+                }, SERVICE_STOP_GRACE_MS)
+              : null;
+            forceExit?.unref?.();
             // Force-close: a graceful stop() never resolves while a browser
             // tab's /api/events SSE connection is open (Bun waits for active
             // connections to end on their own), which would hang shutdown
             // indefinitely on Ctrl-C. This is a local dev server being
             // intentionally torn down, so dropping open connections is fine.
             await server.stop(true);
+            if (forceExit != null) {
+              clearTimeout(forceExit);
+            }
             if (!ctx.globals().quiet) {
               serverLogger.info("Server stopped.", {
                 "event.name": "decant.server.stopped",
-                "server.address": commandOptions.host ?? DEFAULT_SERVE_HOST,
+                "server.address": host,
                 "server.port": server.port,
               });
             }
           }
+          return exitCode;
         }),
     );
+}
+
+const BINARY_CHECK_MS = 60_000;
+const BINARY_SETTLE_MS = 2_000;
+// Under launchd's default 20-second ExitTimeOut, after which it sends SIGKILL.
+const SERVICE_STOP_GRACE_MS = 10_000;
+const BIND_RETRY_FAST_MS = 250;
+const BIND_RETRY_SLOW_MS = 2_000;
+const BIND_FAST_WINDOW_MS = 30_000;
+
+// The background service waits for its port instead of exiting: during a
+// handoff the terminal copy releases it within a second, and while someone runs
+// `decant serve` in a terminal, exiting would only make the OS restart the
+// service every few seconds.
+async function bindWhenFree<T>(start: () => T, onFirstWait: () => void): Promise<T> {
+  const startedAt = Date.now();
+  let warned = false;
+  for (;;) {
+    try {
+      return start();
+    } catch (error) {
+      if (!isPortInUse(error)) {
+        throw error;
+      }
+      if (!warned) {
+        warned = true;
+        onFirstWait();
+      }
+      const fast = Date.now() - startedAt < BIND_FAST_WINDOW_MS;
+      await Bun.sleep(fast ? BIND_RETRY_FAST_MS : BIND_RETRY_SLOW_MS);
+    }
+  }
+}
+
+function openDecision(enabled: boolean, environment: Record<string, string | undefined>) {
+  return decideOpen({
+    enabled,
+    env: {
+      BROWSER: environment.BROWSER,
+      DECANT_NO_OPEN: environment.DECANT_NO_OPEN,
+      CI: environment.CI,
+    },
+    isTTY: process.stdout.isTTY === true,
+    platform: process.platform,
+  });
 }
 
 function serveBanner(url: string, opening: boolean): string {
@@ -389,9 +517,10 @@ function isPortInUse(error: unknown): boolean {
   return code === "EADDRINUSE" || (message?.includes("in use") ?? false);
 }
 
-function waitForProcessSignal(): Promise<void> {
-  return new Promise((resolve) => {
-    const done = (): void => {
+function waitForProcessSignal(): { promise: Promise<void>; cancel: () => void } {
+  let done: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    done = (): void => {
       process.off("SIGINT", done);
       process.off("SIGTERM", done);
       resolve();
@@ -399,4 +528,5 @@ function waitForProcessSignal(): Promise<void> {
     process.once("SIGINT", done);
     process.once("SIGTERM", done);
   });
+  return { promise, cancel: () => done() };
 }

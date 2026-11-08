@@ -553,6 +553,12 @@ turned it on, on loopback only, with the default source directories. It does
 not carry over `--host`, `--trusted-peer`, `--no-sync`, or source-directory
 flags.
 
+A relative `--db` or `DECANT_DB` is stored as an absolute path, because the OS
+starts the service in its own working directory. Running
+`decant service install` again with a different archive or port replaces the
+registration, whether or not the service is running. On macOS this waits for
+the old process to exit, up to 30 seconds, before registering the new command.
+
 Turning it on from Settings hands off: the server you are using registers the
 service, then stops, and the service takes over the same address. The page
 reloads once the service answers. While another `decant serve` holds the port,
@@ -560,8 +566,10 @@ the service waits for it instead of exiting, and a bare `decant` that finds the
 service already serving its port opens the browser there.
 
 The service checks its binary once a minute. After `decant update`, a Homebrew
-upgrade, or an npm update replaces it, the service exits and the OS starts the
-new version. Homebrew installs register the stable
+upgrade, or an npm update replaces it, the service waits until the new file
+stops changing, then exits and the OS starts the new version. If a sync is
+stuck and the service has not stopped 10 seconds after it began, it exits
+anyway so the OS can restart it. Homebrew installs register the stable
 `$(brew --prefix)/opt/decant/bin/decant` path, so upgrades keep working. Source
 checkouts, `npx`, and the container cannot register a service.
 

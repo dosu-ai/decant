@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Config } from "../src/config.ts";
 import type { RequestContext } from "../src/server/context.ts";
 import { handleRequest } from "../src/server.ts";
@@ -49,6 +49,7 @@ function post(
   body: unknown,
   context: RequestContext,
   headers: Record<string, string> = {},
+  serverConfig: Config = config,
 ): Promise<Response> {
   return handleRequest(
     new Request("http://127.0.0.1:3000/api/background", {
@@ -56,7 +57,7 @@ function post(
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     }),
-    config,
+    serverConfig,
     context,
   );
 }
@@ -83,6 +84,21 @@ describe("/api/background", () => {
     expect(shutdowns).toBe(0);
     await settle();
     expect(shutdowns).toBe(1);
+  });
+
+  test("hands off a server started with a relative --db to the same archive", async () => {
+    const { options } = fakeService();
+    const response = await post(
+      { enabled: true },
+      { service: options, boundPort: 3000, requestShutdown: () => undefined },
+      {},
+      { dbPath: "relative-archive.db" } as Config,
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { command: string[]; handoff: boolean };
+    expect(body.handoff).toBe(true);
+    expect(body.command[2]).toBe(resolve("relative-archive.db"));
+    await settle();
   });
 
   test("does not hand off when nothing can stop this server", async () => {

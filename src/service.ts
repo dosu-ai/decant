@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { detectInstall, type InstallInfo } from "./update.ts";
 
@@ -72,6 +72,8 @@ export interface ServiceOptions {
   install?: InstallInfo;
   /** Test seam: the running binary's path. */
   execPath?: string;
+  /** Test seam: how long to wait for launchd to finish unloading the job. */
+  unloadTimeoutMs?: number;
 }
 
 export class ServiceUnavailableError extends Error {}
@@ -302,26 +304,42 @@ export async function installService(
   if (binary == null) {
     throw new ServiceUnavailableError(before.reason ?? "Decant could not find its own binary.");
   }
-  const full: ServiceSpec = { ...spec, binary };
+  // The service starts in launchd's or systemd's working directory, not the
+  // caller's, so a relative --db would open a different file or none at all.
+  const full: ServiceSpec = { ...spec, dbPath: resolve(spec.dbPath), binary };
   const path = unitPath(manager, options);
   const body = manager === "launchd" ? launchdPlist(full, options) : systemdUnit(full);
-  const unchanged = readText(path) === body;
-  if (unchanged && before.running) {
+  const run = options.run ?? runCommand;
+  const target = launchdTarget(options);
+  let loaded = false;
+  let loadedArgs: string[] | null = null;
+  if (manager === "launchd") {
+    const printed = await run(["launchctl", "print", target]);
+    loaded = printed.code === 0;
+    loadedArgs = loaded ? parseLaunchdArguments(printed.stdout) : null;
+  }
+  // launchd keeps the arguments it read at bootstrap, and kickstart reuses
+  // them, so a loaded job can be stale even when the file on disk matches.
+  const changed =
+    readText(path) !== body || (loadedArgs != null && !sameArgs(loadedArgs, serviceArgs(full)));
+  if (!changed && before.running) {
     return before;
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, { mode: 0o644 });
-  const run = options.run ?? runCommand;
-  // Reloading a running service means stopping it first. When the caller is
-  // that service, stopping would kill it mid-request, so the new unit file
-  // applies at its next start instead.
-  const reload = before.running && !unchanged && !isServiceProcess(env);
+  // Reloading means stopping the job first. When the caller is the running
+  // service, that would kill it mid-request, so the new unit file applies the
+  // next time the manager loads it instead.
+  const reload = changed && !isServiceProcess(env);
   if (manager === "launchd") {
     mkdirSync(dirname(serviceLogPath(options)), { recursive: true });
-    const target = launchdTarget(options);
-    let loaded = (await run(["launchctl", "print", target])).code === 0;
     if (reload && loaded) {
-      await run(["launchctl", "bootout", target]);
+      if (!(await bootoutAndWait(run, target, options))) {
+        throw new Error(
+          `launchd was still stopping ${LAUNCHD_LABEL} after ${Math.round(unloadTimeout(options) / 1000)}s. ` +
+            "Run the command again once it exits.",
+        );
+      }
       loaded = false;
     }
     // A label the user once disabled stays disabled across bootstrap.
@@ -330,13 +348,15 @@ export async function installService(
       // RunAtLoad starts the job as soon as it is bootstrapped.
       await check(run, ["launchctl", "bootstrap", launchdDomain(options), path]);
     } else if (!before.running) {
-      // Loaded but stopped, such as after a crash loop.
+      // Loaded with the current arguments but stopped, such as after a crash loop.
       await check(run, ["launchctl", "kickstart", target]);
     }
   } else {
     await check(run, ["systemctl", "--user", "daemon-reload"]);
     await check(run, ["systemctl", "--user", "enable", SYSTEMD_UNIT]);
-    await check(run, ["systemctl", "--user", reload ? "restart" : "start", SYSTEMD_UNIT]);
+    // After daemon-reload, start runs the new unit; only a running one needs a restart.
+    const restart = reload && before.running;
+    await check(run, ["systemctl", "--user", restart ? "restart" : "start", SYSTEMD_UNIT]);
   }
   return serviceStatus(options);
 }
@@ -364,8 +384,9 @@ export async function stopService(options: ServiceOptions = {}): Promise<void> {
   if (manager == null) return;
   const run = options.run ?? runCommand;
   if (manager === "launchd") {
-    // bootout fails when the job is not loaded, which is the state we want.
-    await run(["launchctl", "bootout", launchdTarget(options)]);
+    // A job still exiting at the deadline is gone soon after, since launchd
+    // kills it at its ExitTimeOut; the caller's status read reports it meanwhile.
+    await bootoutAndWait(run, launchdTarget(options), options);
   } else {
     await run(["systemctl", "--user", "stop", "--no-block", SYSTEMD_UNIT]);
   }
@@ -412,10 +433,111 @@ export function binaryChanged(
   previous: BinaryFingerprint,
   next: BinaryFingerprint | null,
 ): boolean {
-  // TODO(you): return true when `next` shows a different binary than `previous`.
-  void previous;
-  void next;
-  return false;
+  // A missing file is the middle of an upgrade, not a new binary. The next
+  // check sees whatever lands there.
+  if (next == null) return false;
+  return (
+    next.path !== previous.path ||
+    next.ino !== previous.ino ||
+    next.size !== previous.size ||
+    next.mtimeMs !== previous.mtimeMs
+  );
+}
+
+export interface BinaryWatchOptions {
+  intervalMs: number;
+  /** How long a changed file must stay the same before it counts as replaced. */
+  settleMs: number;
+  /** The fingerprint the process started from, when taken before watching began. */
+  initial?: BinaryFingerprint | null;
+}
+
+/**
+ * Call `onChange` once the binary at `path` has been replaced and has stopped
+ * changing, so a restart never runs a file an upgrade is still writing.
+ * Returns a function that stops watching, or null if the binary is unreadable.
+ */
+export function watchBinary(
+  path: string,
+  onChange: () => void,
+  options: BinaryWatchOptions,
+): (() => void) | null {
+  const initial = options.initial ?? binaryFingerprint(path);
+  if (initial == null) return null;
+  let candidate: BinaryFingerprint | null = null;
+  let settling = false;
+  let fired = false;
+  const check = (): void => {
+    if (fired) return;
+    const next = binaryFingerprint(path);
+    if (!binaryChanged(initial, next)) {
+      candidate = null;
+      return;
+    }
+    if (candidate != null && next != null && !binaryChanged(candidate, next)) {
+      fired = true;
+      onChange();
+      return;
+    }
+    candidate = next;
+    settling = true;
+    const settle = setTimeout(() => {
+      settling = false;
+      check();
+    }, options.settleMs);
+    settle.unref?.();
+  };
+  const timer = setInterval(() => {
+    if (!settling) check();
+  }, options.intervalMs);
+  timer.unref?.();
+  return () => {
+    fired = true;
+    clearInterval(timer);
+  };
+}
+
+/** The ProgramArguments launchd loaded, from `launchctl print`, or null if absent. */
+export function parseLaunchdArguments(printed: string): string[] | null {
+  const block = /^\s*arguments = \{\n([\s\S]*?)\n\s*\}\s*$/m.exec(printed);
+  if (block == null) return null;
+  return (block[1] ?? "").split("\n").map((line) => line.trim());
+}
+
+function sameArgs(loaded: string[], wanted: string[]): boolean {
+  // launchctl print indents each argument, so compare without edge whitespace.
+  return (
+    loaded.length === wanted.length && loaded.every((arg, index) => arg === wanted[index]?.trim())
+  );
+}
+
+const UNLOAD_POLL_MS = 100;
+// launchd sends SIGKILL after the job's ExitTimeOut, 20 seconds by default.
+const UNLOAD_TIMEOUT_MS = 30_000;
+
+function unloadTimeout(options: ServiceOptions): number {
+  return options.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS;
+}
+
+/**
+ * Unload the job and wait until launchd forgets it, returning false if it is
+ * still registered at the deadline. bootout returns while the old process is
+ * still shutting down, and launchd answers a bootstrap of the same label with
+ * "5: Input/output error" until that process exits.
+ */
+async function bootoutAndWait(
+  run: RunCommand,
+  target: string,
+  options: ServiceOptions,
+): Promise<boolean> {
+  // bootout fails when the job is not loaded, which is the state we want.
+  await run(["launchctl", "bootout", target]);
+  const deadline = Date.now() + unloadTimeout(options);
+  for (;;) {
+    if ((await run(["launchctl", "print", target])).code !== 0) return true;
+    if (Date.now() >= deadline) return false;
+    await Bun.sleep(UNLOAD_POLL_MS);
+  }
 }
 
 function readUnitCommand(manager: ServiceManager, path: string): string[] | null {

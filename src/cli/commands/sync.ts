@@ -5,12 +5,12 @@ import { sync as ingestSync } from "../../ingest.ts";
 import { getDecantLogger, logWatchEvent } from "../../logging.ts";
 import { DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT } from "../../serve-defaults.ts";
 import {
-  binaryChanged,
   binaryFingerprint,
   isServiceProcess,
   SERVICE_RESTART_EXIT_CODE,
   serviceBinary,
   serviceStatus,
+  watchBinary,
 } from "../../service.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
@@ -197,16 +197,23 @@ export function registerSyncCommands(ctx: CliContext): void {
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
           });
-          const stop = waitForProcessSignal();
-          const handle = startWatch({
-            config,
-            intervalMs: commandOptions.intervalMs,
-            debounceMs: commandOptions.debounceMs,
-            enableWatch: commandOptions.fsWatch !== false,
-            onEvent: emitWatchEvent,
-          });
-          await stop;
-          await handle.stop();
+          const signal = waitForProcessSignal();
+          try {
+            const handle = startWatch({
+              config,
+              intervalMs: commandOptions.intervalMs,
+              debounceMs: commandOptions.debounceMs,
+              enableWatch: commandOptions.fsWatch !== false,
+              onEvent: emitWatchEvent,
+            });
+            try {
+              await signal.promise;
+            } finally {
+              await handle.stop();
+            }
+          } finally {
+            signal.cancel();
+          }
         }),
     );
 
@@ -286,6 +293,10 @@ export function registerSyncCommands(ctx: CliContext): void {
           const supervised = isServiceProcess(environment);
           const host = commandOptions.host ?? DEFAULT_SERVE_HOST;
           const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
+          // Taken before waiting for the port, so an upgrade that lands during
+          // that wait still restarts the service once it is serving.
+          const binaryPath = supervised ? serviceBinary(ctx.serviceOptions).path : null;
+          const binaryAtStart = binaryPath == null ? null : binaryFingerprint(binaryPath);
           let requestShutdown: () => void = () => undefined;
           const shutdownRequested = new Promise<void>((resolve) => {
             requestShutdown = resolve;
@@ -376,31 +387,54 @@ export function registerSyncCommands(ctx: CliContext): void {
             openBrowser(url, decision.command);
           }
           let exitCode = 0;
-          const binaryWatch = supervised
-            ? watchBinary(ctx, () => {
-                // A failing exit is what makes launchd and systemd start the
-                // new binary; a clean exit would leave the service stopped.
-                exitCode = SERVICE_RESTART_EXIT_CODE;
-                serverLogger.info("Decant was updated; restarting the background service.", {
-                  "event.name": "decant.service.binary_changed",
-                });
-                requestShutdown();
-              })
-            : null;
+          const stopBinaryWatch =
+            binaryPath == null
+              ? null
+              : watchBinary(
+                  binaryPath,
+                  () => {
+                    // A failing exit is what makes launchd and systemd start the
+                    // new binary; a clean exit would leave the service stopped.
+                    exitCode = SERVICE_RESTART_EXIT_CODE;
+                    serverLogger.info("Decant was updated; restarting the background service.", {
+                      "event.name": "decant.service.binary_changed",
+                    });
+                    requestShutdown();
+                  },
+                  {
+                    intervalMs: BINARY_CHECK_MS,
+                    settleMs: BINARY_SETTLE_MS,
+                    initial: binaryAtStart,
+                  },
+                );
           const signal = waitForProcessSignal();
           try {
             await Promise.race([signal.promise, shutdownRequested]);
           } finally {
             signal.cancel();
-            if (binaryWatch != null) {
-              clearInterval(binaryWatch);
-            }
+            stopBinaryWatch?.();
+            // A sync worker stuck in a blocking file read never lets stop()
+            // finish, and launchd or systemd restart the service only once
+            // the process exits. SQLite's WAL keeps the archive consistent
+            // through a hard exit, as it does through the manager's SIGKILL.
+            const forceExit = supervised
+              ? setTimeout(() => {
+                  serverLogger.warning("Shutdown is stuck; exiting so the service can restart.", {
+                    "event.name": "decant.service.stop_timeout",
+                  });
+                  process.exit(exitCode);
+                }, SERVICE_STOP_GRACE_MS)
+              : null;
+            forceExit?.unref?.();
             // Force-close: a graceful stop() never resolves while a browser
             // tab's /api/events SSE connection is open (Bun waits for active
             // connections to end on their own), which would hang shutdown
             // indefinitely on Ctrl-C. This is a local dev server being
             // intentionally torn down, so dropping open connections is fine.
             await server.stop(true);
+            if (forceExit != null) {
+              clearTimeout(forceExit);
+            }
             if (!ctx.globals().quiet) {
               serverLogger.info("Server stopped.", {
                 "event.name": "decant.server.stopped",
@@ -415,6 +449,9 @@ export function registerSyncCommands(ctx: CliContext): void {
 }
 
 const BINARY_CHECK_MS = 60_000;
+const BINARY_SETTLE_MS = 2_000;
+// Under launchd's default 20-second ExitTimeOut, after which it sends SIGKILL.
+const SERVICE_STOP_GRACE_MS = 10_000;
 const BIND_RETRY_FAST_MS = 250;
 const BIND_RETRY_SLOW_MS = 2_000;
 const BIND_FAST_WINDOW_MS = 30_000;
@@ -441,21 +478,6 @@ async function bindWhenFree<T>(start: () => T, onFirstWait: () => void): Promise
       await Bun.sleep(fast ? BIND_RETRY_FAST_MS : BIND_RETRY_SLOW_MS);
     }
   }
-}
-
-function watchBinary(ctx: CliContext, onChange: () => void): ReturnType<typeof setInterval> | null {
-  const binary = serviceBinary(ctx.serviceOptions).path;
-  const initial = binary == null ? null : binaryFingerprint(binary);
-  if (binary == null || initial == null) {
-    return null;
-  }
-  const timer = setInterval(() => {
-    if (binaryChanged(initial, binaryFingerprint(binary))) {
-      onChange();
-    }
-  }, BINARY_CHECK_MS);
-  timer.unref?.();
-  return timer;
 }
 
 function openDecision(enabled: boolean, environment: Record<string, string | undefined>) {

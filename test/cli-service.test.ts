@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runCli } from "../src/cli.ts";
 import type { CommandResult, ServiceOptions } from "../src/service.ts";
 
@@ -64,6 +64,26 @@ describe("decant service", () => {
     const uninstall = await runCli(["service", "uninstall"], options);
     expect(uninstall.code).toBe(0);
     expect(uninstall.stdout).toContain("no longer runs in the background");
+  });
+
+  test("stores a relative --db as the absolute archive it names", async () => {
+    const options = cliOptions({});
+    const install = await runCli(
+      ["--json", "--db", "relative-archive.db", "service", "install", "--port", "4101"],
+      options,
+    );
+    expect(install.code).toBe(0);
+    // launchd starts the service elsewhere, so the unit must name this archive.
+    expect(JSON.parse(install.stdout).command).toEqual([
+      "/opt/test/decant",
+      "--db",
+      resolve("relative-archive.db"),
+      "serve",
+      "--no-open",
+      "--port",
+      "4101",
+    ]);
+    await runCli(["service", "uninstall"], options);
   });
 
   test("explains why a source checkout cannot install it", async () => {

@@ -133,7 +133,7 @@ and updates with the tool that owns the running binary:
 | Source checkout | Prints `git pull && bun install` |
 
 A running background service (`decant service install`) notices the replaced
-binary within a minute and restarts on the new version, whichever row above
+binary within about a minute and restarts on the new version, whichever row above
 replaced it. The formula has no `brew services` block. Use
 `decant service install`, which registers the stable `opt` path, rather than
 adding one, or two copies would compete for the same port.

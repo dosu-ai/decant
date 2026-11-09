@@ -1,7 +1,8 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-Claude Haiku 5.5 rates, the Claude Sonnet 5.5 cache-read rate, and fast-mode
+Claude Fable 5.2 and Mythos 5.2 rates, including their fast-mode rates, were
+verified on November 9, 2026. Claude Haiku 5.5 rates, the Claude Sonnet 5.5 cache-read rate, and fast-mode
 rates were verified on October 7, 2026, and all other Anthropic rates on
 September 28, 2026, against the Anthropic pricing and model deprecation pages
 below. GPT-6.1 Terra rates were verified on October 26, 2026, GPT-6.1 Sol
@@ -17,6 +18,7 @@ which Decant uses only to decide which models to price, never as the source of
 a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 
 - [Anthropic model and prompt-cache pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+- [Claude Fable 5.2 model details](https://platform.claude.com/docs/en/models/fable-5-2/overview)
 - [Claude Opus 5.5 model details](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 - [Claude Sonnet 5.5 model details](https://www.anthropic.com/claude-sonnet-5-5)
 - [Claude Haiku 5.5 model details](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
@@ -57,6 +59,7 @@ provider does not publish a first-party API token price for that model slug.
 
 | Provider models | Input | Cached input | Cache write | Output |
 | --- | ---: | ---: | ---: | ---: |
+| Claude Fable 5.2, Mythos 5.2 | $8.00 | $0.20 | $10.00 / $16.00 | $40.00 |
 | Claude Fable 5.1, Mythos 5.1 | $10.00 | $0.25 | $12.50 / $20.00 | $50.00 |
 | Claude Fable 5, Mythos 5 | $10.00 | $1.00 | $12.50 / $20.00 | $50.00 |
 | Claude Opus 5.5 | $4.00 | $0.20 | $5.00 / $8.00 | $20.00 |
@@ -215,7 +218,9 @@ output, and cache-read rate than Opus 5. Claude Haiku 5.5 launched on October
 7, 2026 with prompt-length pricing: the rates above apply to prompts up to
 100,000 tokens, and every rate is five times higher for longer prompts. Claude Fable 5.1 and Mythos 5.1 keep
 Fable 5's input, cache-write, and output rates but reduce cache reads from
-$1.00 to $0.25. OpenAI describes the
+$1.00 to $0.25. Claude Fable 5.2 and Mythos 5.2 launched on November 9, 2026
+at rates 20% below Fable 5.1, with the same 0.025x cache-read multiplier.
+OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
 Google priced Gemini 4 Argon at $2.00 input, $0.10 cached, and $10.00 output
 through November 30, 2026. The rate above applies from December 1, 2026, and
@@ -252,8 +257,9 @@ request-level modifiers where the source records what they need:
 
 - **Fast mode.** A Claude request whose usage reports `speed: "fast"` is billed
   at twice the standard rate for every token category, cache reads and writes
-  included, on Claude Opus 5.5 ($8.00 input / $40.00 output), Opus 5, and Opus
-  4.8 ($10.00 / $50.00). Opus 4.6 bills fast requests at standard rates.
+  included, on Claude Fable 5.2 and Mythos 5.2 ($16.00 input / $80.00 output),
+  Opus 5.5 ($8.00 / $40.00), Opus 5, and Opus 4.8 ($10.00 / $50.00). Opus 4.6
+  bills fast requests at standard rates.
 - **Claude Haiku 5.5 long prompts.** A request whose prompt (uncached input
   plus cache reads and cache writes) exceeds 100,000 tokens is billed at five
   times every rate above.

@@ -173,6 +173,7 @@ function buildDefaultPricing(): Map<string, Price> {
   // comes from usage.cache_creation.ephemeral_{5m,1h}_input_tokens. Rates and
   // exclusions were checked against the official sources in docs/pricing.md.
   return new Map<string, Price>([
+    ["claude-fable-5-2", claudePrice(8.0, 40.0, 0.025)],
     ["claude-fable-5-1", claudePrice(10.0, 50.0, 0.025)],
     ["claude-fable", claudePrice(10.0, 50.0)],
     ["claude-opus-5-5", claudePrice(4.0, 20.0, 0.05)],
@@ -281,6 +282,9 @@ function canonicalModel(raw: string): string | null {
       return null;
     }
     if (model.includes("fable") || model.includes("mythos")) {
+      if (/(?:fable|mythos)-5(?:-|\.)2(?:$|-|\[|@)/.test(model)) {
+        return "claude-fable-5-2";
+      }
       if (/(?:fable|mythos)-5(?:-|\.)1(?:$|-|\[|@)/.test(model)) {
         return "claude-fable-5-1";
       }
@@ -509,11 +513,12 @@ export type PriceTier = (typeof PRICE_TIERS)[number];
 // plus cache reads and writes) exceeds 100,000 tokens.
 const HAIKU_5_5_LONG_PROMPT_TOKENS = 100_000;
 const HAIKU_5_5_LONG_PROMPT_MULTIPLIER = 5;
-// Fast mode doubles every token category, cache included, on the Opus models
-// that offer it. Opus 4.6 accepts the flag but bills standard rates, so it is
-// left out rather than matched by the shared claude-opus tier.
+// Fast mode doubles every token category, cache included, on the models that
+// offer it: Fable and Mythos 5.2, Opus 5.5, Opus 5, and Opus 4.8. Opus 4.6
+// accepts the flag but bills standard rates, so it is left out rather than
+// matched by the shared claude-opus tier.
 const FAST_MODE_MULTIPLIER = 2;
-const FAST_MODE_MODEL = /opus-(?:5(?:[-.]5)?|4[-.]8)(?:$|-|\[|@)/;
+const FAST_MODE_MODEL = /(?:opus-(?:5(?:[-.]5)?|4[-.]8)|(?:fable|mythos)-5[-.]2)(?:$|-|\[|@)/;
 
 export function isPriceTier(value: string): value is PriceTier {
   return (PRICE_TIERS as readonly string[]).includes(value);

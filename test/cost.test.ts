@@ -287,6 +287,13 @@ describe("estimateCost", () => {
       cacheCreation: 36,
     });
     expect(estimateCost("claude-opus-5", usage1m(), pricing, "fast")).toBeCloseTo(60, 6);
+    // Fast mode: Fable 5.2 at $16/$80, cache multipliers on top.
+    expect(estimateCostParts("claude-fable-5-2", usage, pricing, "fast")).toEqual({
+      input: 16,
+      output: 80,
+      cacheRead: 0.8,
+      cacheCreation: 72,
+    });
     // Haiku 5.5 long prompts: every rate is 5x.
     const long = estimateCostParts("claude-haiku-5-5", usage, pricing, "long_prompt");
     expect(long.input).toBeCloseTo(0.5, 9);
@@ -306,13 +313,23 @@ describe("estimateCost", () => {
       "claude-opus-5-20260601",
       "claude-opus-4-8",
       "claude-opus-4.8",
+      "claude-fable-5-2",
+      "claude-fable-5.2[1m]",
+      "claude-mythos-5-2",
     ]) {
       expect(requestPriceTier(model, small, "fast")).toBe("fast");
       expect(requestPriceTier(model, small, "standard")).toBe("standard");
       expect(requestPriceTier(model, small, null)).toBe("standard");
     }
     // Opus 4.6 accepts the flag at standard rates; 4.7 and other tiers have no fast mode.
-    for (const model of ["claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-5-5", "gpt-6-sol"]) {
+    for (const model of [
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-fable-5-1",
+      "claude-fable-5-20",
+      "claude-sonnet-5-5",
+      "gpt-6-sol",
+    ]) {
       expect(requestPriceTier(model, small, "fast")).toBe("standard");
     }
     // The threshold counts uncached input plus cache reads and writes.
@@ -508,6 +525,29 @@ describe("estimateCost", () => {
     expect(estimateCost("claude-fable-5", cacheRead, pricing)).toBeCloseTo(1.0, 6);
     expect(estimateCost("claude-mythos-5", cacheRead, pricing)).toBeCloseTo(1.0, 6);
     expect(estimateCost("claude-fable-5-10", cacheRead, pricing)).toBeCloseTo(1.0, 6);
+  });
+
+  test("fable 5.2 and mythos 5.2 use their published rates", () => {
+    const pricing = defaultPricing();
+    expect(pricing.get("claude-fable-5-2")).toEqual({
+      inputPerMtok: 8,
+      outputPerMtok: 40,
+      cacheReadPerMtok: 0.2,
+      cacheWritePerMtok: 10,
+      cacheWrite1hPerMtok: 16,
+    });
+    for (const model of [
+      "claude-fable-5-2",
+      "claude-fable-5.2",
+      "claude-fable-5-2[1m]",
+      "anthropic.claude-fable-5-2-v1:0",
+      "claude-mythos-5-2",
+      "claude-mythos-5.2",
+    ]) {
+      expect(estimateCost(model, usage1m(), pricing)).toBeCloseTo(48.0, 6);
+    }
+    // 5.20 is not 5.2, so it falls back to the Fable 5 rate.
+    expect(estimateCost("claude-fable-5-20", usage1m(), pricing)).toBeCloseTo(60.0, 6);
   });
 
   test("fable input+output costs add up", () => {

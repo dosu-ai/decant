@@ -30,6 +30,11 @@ x-access-control:
     A write that sends Origin must use a loopback origin whose host and port
     equal the request's Host header, with default ports normalised; a
     mismatch returns 403 cross_origin_write.
+  event_stream_origin: |
+    GET /api/events returns 403 cross_origin_read when the browser marks the
+    request as coming from another page: Sec-Fetch-Site other than
+    same-origin or none, or an Origin that is not the request's own loopback
+    authority. Requests without either header, such as curl, are admitted.
   non_loopback_writes: |
     A trusted non-loopback peer must also send a matching loopback Origin or an
     acceptable Sec-Fetch-Site value; writes with neither header are rejected.
@@ -76,7 +81,10 @@ paths:
         Server-Sent Events. Each frame uses its event name in the `event:`
         field and a JSON object matching the corresponding schema in `data:`.
         The connection begins with `hello`; `ping` is normally emitted every
-        five seconds.
+        five seconds. At most 32 streams are open at once; another answers
+        `503 server_busy`. When a client stops reading and more than 1 MiB of
+        events waits for it, the server discards them and ends the stream, so
+        the client reconnects and refetches what it missed.
       x-sse-events:
         hello:
           $ref: "#/components/schemas/HelloEvent"
@@ -1488,9 +1496,10 @@ components:
             $ref: "#/components/schemas/ApiError"
     ServiceUnavailable:
       description: >-
-        Service is starting, the SQLite archive is temporarily busy, or every
-        read worker is busy and the read queue is full (`server_busy`). All
-        three carry `retryable: true`.
+        Service is starting, the SQLite archive is temporarily busy, every
+        read worker is busy and the read queue is full (`server_busy`), or
+        the maximum of 32 event streams is already open (`server_busy`). All
+        carry `retryable: true`.
       content:
         application/json:
           schema:
@@ -1503,6 +1512,7 @@ components:
         - archive_locked
         - background_failed
         - background_unsupported
+        - cross_origin_read
         - cross_origin_write
         - forbidden_host
         - forbidden_remote

@@ -7,6 +7,7 @@ import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
+import { eventClientCount, eventStream, MAX_EVENT_CLIENTS } from "../src/server/sse.ts";
 import { serve, serviceStartingResponse } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
@@ -325,6 +326,21 @@ describe("local API OpenAPI contract", () => {
           status: 503,
           expectedCode: "service_starting",
           response: serviceStartingResponse,
+        },
+        {
+          path: "/api/events",
+          method: "get",
+          url: "/api/events",
+          status: 503,
+          expectedCode: "server_busy",
+          response: async () => {
+            const open = Array.from({ length: MAX_EVENT_CLIENTS - eventClientCount() }, () =>
+              eventStream(),
+            );
+            const refused = eventStream();
+            await Promise.all(open.map((response) => response.body?.cancel()));
+            return refused;
+          },
         },
         {
           path: "/api/health",

@@ -76,6 +76,12 @@ the local guard can read or mutate the whole archive.
   hosts here, and a missing port means the scheme's default. The bound port is
   not consulted, so a published port such as `-p 8080:3000` works when the
   browser's `Host` and `Origin` agree.
+- `GET /api/events` is refused with `403 cross_origin_read` when the browser
+  marks the request as coming from another page (`Sec-Fetch-Site` other than
+  `same-origin` or `none`, or an `Origin` that fails the check above). Pages on
+  other sites cannot read the stream anyway, but each open stream counts toward
+  the client cap, so this keeps them from holding slots. `curl` and other
+  clients that send neither header are admitted.
 - Every UI page response sends `Content-Security-Policy: frame-ancestors
   'none'` and `X-Frame-Options: DENY`, so browsers refuse to show the UI inside
   another site's frame. A click inside such a frame would reach the API as a
@@ -111,7 +117,9 @@ Expected recovery cases retain specific codes, including `archive_locked`,
 `server_busy`, `schema_drift`, `schema_too_new`, `schema_too_old`,
 `session_not_found`, and validation failures. `server_busy` is a retryable
 `503`: `decant serve` runs heavy reads on two workers and queues at most 256
-more, and refuses a read beyond that rather than letting the backlog grow. Unexpected failures return generic `internal_error` prose;
+more, and refuses a read beyond that rather than letting the backlog grow.
+`GET /api/events` answers the same way when 32 event streams are already
+open. Unexpected failures return generic `internal_error` prose;
 the structured stderr log retains the diagnostic.
 
 `DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and
@@ -260,3 +268,10 @@ and intentionally omits transcript content.
 
 Each `data` field is JSON and includes a matching `type`. The OpenAPI operation's
 `x-sse-events` extension defines the payload schema for each name.
+
+The server holds at most 32 event streams. Another request gets
+`503 server_busy` with `retryable: true`. Events wait for a client that is
+reading slowly and arrive in order. When more than 1 MiB is waiting, the server
+discards it and ends the stream rather than dropping single events, because
+`sync` and `error` are terminal. `EventSource` reconnects after the stream
+ends, and the UI then reloads or offers the update it may have missed.

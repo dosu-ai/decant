@@ -5,6 +5,7 @@ export type ApiErrorCode =
   | "archive_locked"
   | "background_failed"
   | "background_unsupported"
+  | "cross_origin_read"
   | "cross_origin_write"
   | "forbidden_host"
   | "forbidden_remote"
@@ -123,7 +124,10 @@ function isArchiveLockedError(error: unknown, normalizedMessage: string): boolea
 export function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 

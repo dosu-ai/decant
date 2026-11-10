@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { UI_DOCUMENT_HEADERS } from "../src/server/ui.ts";
 import {
   buildTarget,
   nativeTarget,
@@ -229,6 +230,15 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
   if (!page.ok) {
     throw new Error(`compiled binary returned ${page.status} for /`);
   }
+  // A compiled binary serves prebuilt files, a different path from source runs,
+  // so only this check proves the shipped UI refuses to be framed.
+  for (const [name, value] of Object.entries(UI_DOCUMENT_HEADERS)) {
+    if (page.headers.get(name) !== value) {
+      throw new Error(
+        `compiled binary sent ${name}: ${String(page.headers.get(name))} for /, expected ${value}`,
+      );
+    }
+  }
   const html = await page.text();
   const scriptSrc = /<script[^>]*\ssrc="([^"]+\.js)"/.exec(html)?.[1];
   if (scriptSrc == null) {
@@ -238,6 +248,9 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
   const bundle = await fetch(bundleUrl);
   if (!bundle.ok) {
     throw new Error(`compiled binary returned ${bundle.status} for ${scriptSrc}`);
+  }
+  if (bundle.headers.get("x-content-type-options") !== "nosniff") {
+    throw new Error(`compiled binary served ${scriptSrc} without x-content-type-options: nosniff`);
   }
   const code = await bundle.text();
   // Well under the minified size and well over an empty or stub response, so

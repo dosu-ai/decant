@@ -244,6 +244,33 @@ compaction boundaries become
 and the summary that follows is a `user` step marked
 `extra.is_compact_summary`.
 
+### Mirroring to a folder
+
+`decant export --mirror <dir>` keeps a folder of ATIF documents for other
+tools to read, one per session, including subagents and excluding archived
+sessions. Each document lives at `<tool>/<source session id>.atif.json`, with
+the ID percent-encoded where a file name cannot hold it. The path depends only
+on the session, so it stays the same when the archive is rebuilt.
+
+Every document stands alone. A subagent is its own file rather than embedded,
+and the spawning call's `subagent_trajectory_ref` names it with a
+`trajectory_path` relative to the parent's file. Each document's
+`final_metrics` therefore cover that session alone, so summing every file
+counts nothing twice. ATIF has no field naming a trajectory's parent, so a
+subagent's `extra` carries `parent_session_id` and `parent_trajectory_path`.
+
+The working directory (`extra.cwd`) is left out, since the folder may be
+shared and `extra.repository` names the project without a local path. Tool
+calls and results keep the paths the agent wrote.
+
+Running the command again rewrites only the documents whose content changed,
+replacing each file in one step so a reader never sees a partial document.
+Unchanged files keep their modification times. Decant never deletes files from
+the folder, so a session deleted or archived in Decant keeps its last
+document there. A folder Decant creates is owner-only (`0700`), and one that
+already exists keeps its mode. Decant's own ATIF import reads the folder back
+with subagents linked.
+
 ## ATIF imports
 
 Decant also reads ATIF documents as a source, with the tool ID `atif`. A

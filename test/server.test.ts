@@ -164,7 +164,38 @@ describe("server routes", () => {
         expect(body).toContain('<div id="root"></div>');
         expect(body).toContain('rel="icon"');
         expect(body).toContain('name="description"');
+        // A framed UI turns a hostile page's clicks into same-origin API writes.
+        expect(response.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
+        expect(response.headers.get("x-frame-options")).toBe("DENY");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
       }
+
+      const shell = await (await fetch(`${base}/sessions/123`)).text();
+      const assetPaths = [...shell.matchAll(/(?:src|href)="(\/[^"]+)"/g)].map((match) => match[1]);
+      expect(assetPaths.some((path) => path?.endsWith(".js"))).toBe(true);
+      expect(assetPaths.some((path) => path?.endsWith(".css"))).toBe(true);
+      for (const path of assetPaths) {
+        const asset = await fetch(`${base}${path}`);
+        expect(asset.status).toBe(200);
+        expect(asset.headers.get("x-content-type-options")).toBe("nosniff");
+        expect((await asset.arrayBuffer()).byteLength).toBeGreaterThan(0);
+      }
+
+      const forged = await fetch(`${base}/api/health`, { headers: { host: "evil.example" } });
+      expect(forged.status).toBe(403);
+      expect(forged.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await forged.json()).toMatchObject({ code: "forbidden_host" });
+
+      const health = await fetch(`${base}/api/health`);
+      expect(health.status).toBe(200);
+      expect(health.headers.get("x-content-type-options")).toBe("nosniff");
+
+      // Read routes answer through readOutputResponse, not json().
+      const summary = await fetch(`${base}/api/stats/summary`);
+      expect(summary.status).toBe(200);
+      expect(summary.headers.get("content-type")).toBe("application/json; charset=utf-8");
+      expect(summary.headers.get("x-content-type-options")).toBe("nosniff");
 
       const favicon = await fetch(`${base}/favicon.ico`);
       expect(favicon.status).toBe(200);

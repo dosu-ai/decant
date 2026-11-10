@@ -2,28 +2,14 @@ import { errorResponse } from "./http.ts";
 
 type ServerEvent = { type: string };
 
-/**
- * Most open event streams at once. Each Decant tab holds one, and a browser
- * opens at most six HTTP/1.1 connections per origin, so 32 leaves room for
- * several browsers and trusted peers while capping memory at 32 backlogs.
- */
+/** One stream per tab; browsers allow six connections per origin. */
 export const MAX_EVENT_CLIENTS = 32;
 
-/**
- * Bytes handed to the response stream before Decant holds events back. A
- * stream that is closed keeps this much until the client reads or leaves,
- * because only an errored stream discards its queue and Bun leaves an errored
- * response open without ending it.
- */
+/** Kept small because a closed stream holds its queue until the client reads. */
 const EVENT_STREAM_HIGH_WATER_BYTES = 64 * 1024;
 
-/**
- * Most bytes held back for a client that is not reading. Events are small
- * notifications and progress snapshots, so a healthy client stays far below
- * this. Past it the stream ends instead of coalescing, because `sync` and
- * `error` are terminal events the UI cannot miss. The browser's EventSource
- * reconnects, and the UI refetches what it may have missed.
- */
+/** Past this the stream ends rather than coalescing, so `sync` and `error` are
+ * never dropped; EventSource reconnects and the UI refetches. */
 export const MAX_EVENT_BACKLOG_BYTES = 1024 * 1024;
 
 const eventClients = new Set<EventClient>();
@@ -84,10 +70,7 @@ export function eventStream(heartbeatMs = 5_000): Response {
           pending = [];
           pendingBytes = 0;
         };
-        // Events wait in `pending` while the stream is full, and pull() moves
-        // them over as the client reads, so a slow reader still gets them in
-        // order and a stalled one is cut off before the backlog grows past
-        // MAX_EVENT_BACKLOG_BYTES.
+        // Slow readers drain `pending` in order through pull().
         const send = (event: ServerEvent): void => {
           const chunk = encoder.encode(formatSse(event));
           pending.push(chunk);

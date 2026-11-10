@@ -32,11 +32,8 @@ export function validateLocalRequest(
 
 const EVENT_STREAM_PATH = "/api/events";
 
-// The event stream has a client cap, and a page on any site can open it with a
-// no-cors fetch: it cannot read the frames, but it holds a slot. Decant's own
-// EventSource is same-origin, so only reject what a browser marks as coming
-// from another page. "same-site" is excluded, unlike writes, because another
-// localhost port is same-site and a no-cors GET sends no Origin to compare.
+// Other sites can't read the stream but could hold capped slots. Unlike writes,
+// "same-site" is refused: other localhost ports count as same-site.
 function isOwnPageRead(request: Request, url: URL): boolean {
   const origin = request.headers.get("origin");
   if (origin != null && !isSameAuthorityLoopbackOrigin(origin, request, url)) {

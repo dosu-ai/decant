@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { linkageIssues } from "../diagnostics.ts";
-import { asBoolean, asString, get, isObject, type JsonObject } from "../json.ts";
+import { asBoolean, asString, assertJsonDepth, get, isObject, type JsonObject } from "../json.ts";
 import {
   emptyUsage,
   type Issue,
@@ -149,6 +149,14 @@ export function parseAtifDocument(
   }
 
   const nodes = flatten(value);
+  for (const node of nodes) {
+    const { subagent_trajectories: _embedded, ...retained } = node.trajectory;
+    try {
+      assertJsonDepth(retained);
+    } catch {
+      return unreadable(fallbackId, options, "JSON nesting exceeds the depth limit");
+    }
+  }
   const rootId = documentId(value, fallbackId, options.sourcePath);
   const sourceIds = new Map<string | null, string>([[null, rootId]]);
   const usedIds = new Set([rootId]);
@@ -166,6 +174,14 @@ export function parseAtifDocument(
       sourceIds.set(node.key, id);
     }
   }
+  const depthLimited = new Set(
+    nodes.filter(
+      (node) =>
+        node.depth === MAX_ATIF_EMBEDDED_DEPTH &&
+        Array.isArray(node.trajectory.subagent_trajectories) &&
+        node.trajectory.subagent_trajectories.length > 0,
+    ),
+  );
   linkEmbedded(nodes);
   const embeddedIds = new Set(
     nodes.flatMap((node) => {
@@ -186,8 +202,19 @@ export function parseAtifDocument(
       }),
     };
   });
-  // An embedded subagent ran inside its root's run, so where it records no
-  // directory of its own it worked where the root did.
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (node == null) continue;
+    if (depthLimited.has(node)) {
+      sessions[index]?.parsed.issues.push({
+        code: "unparsed_line",
+        lineNo: null,
+        error: "embedded trajectories exceed the depth limit",
+        rawLine: null,
+      });
+    }
+  }
+  // An embedded subagent with no directory worked where its root did.
   const root = sessions[0]?.parsed.session;
   for (const { parsed } of sessions.slice(1)) {
     parsed.session.cwd ??= root?.cwd ?? null;
@@ -213,8 +240,10 @@ function unreadable(
   };
 }
 
-/** The root and every embedded trajectory, nested ones included, with
- * duplicate `trajectory_id`s made unique so each gets its own virtual path. */
+// Real runs have only a few agent generations; 128 still bounds stack use.
+export const MAX_ATIF_EMBEDDED_DEPTH = 128;
+
+/** The root and bounded descendants, with unique virtual path keys. */
 function flatten(root: JsonObject): Node[] {
   const nodes: Node[] = [
     { trajectory: root, key: null, depth: 0, parentKey: null, spawnToolUseId: null },
@@ -225,6 +254,7 @@ function flatten(root: JsonObject): Node[] {
     if (!Array.isArray(embedded)) {
       return;
     }
+    if (parent.depth >= MAX_ATIF_EMBEDDED_DEPTH) return;
     embedded.forEach((child, index) => {
       if (!isObject(child)) {
         return;

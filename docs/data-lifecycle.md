@@ -342,7 +342,7 @@ that duplicate retained messages or contain only stream metadata.
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
-| Lines a parser could not read, kept verbatim so they can be diagnosed | `ingest_issue.raw_line` |
+| Malformed records within byte and depth limits, retained locally | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
 indexed. `block.tool_result` and `message.raw` are stored but not searchable,
@@ -554,7 +554,10 @@ not carry over `--host`, `--trusted-peer`, `--no-sync`, or source-directory
 flags.
 
 A relative `--db` or `DECANT_DB` is stored as an absolute path, because the OS
-starts the service in its own working directory. Running
+starts the service in its own working directory. Decant refuses to register a
+service when the archive path or its own executable path contains a control
+character such as a newline or carriage return, because no quoting keeps one
+inside a systemd unit or plist. Running
 `decant service install` again with a different archive or port replaces the
 registration, whether or not the service is running. On macOS this waits for
 the old process to exit, up to 30 seconds, before registering the new command.
@@ -699,3 +702,13 @@ reply.
 See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.
+
+Parser diagnostics retain locations and fixed error messages. Ordinary malformed
+records retain their raw text in the local archive's `ingest_issue.raw_line`,
+under the same file protection as transcripts. CLI output and logs show only
+the error message. Records rejected by byte or depth limits retain no raw text.
+Unknown type names remain readable when they match
+`^[A-Za-z][A-Za-z0-9_.:-]{0,63}$`; other names use `(unprintable type)` with a
+short hash to keep counts distinct.
+Oversized files are skipped without changing archived copies or source metadata.
+They count as failed in sync reports and are retried on every sync.

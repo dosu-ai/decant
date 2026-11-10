@@ -33,8 +33,8 @@ sessions. For a persistent `decant` command, see [Installation](#installation).
 
 - One SQLite archive for every supported agent, with full-text search across
   prompts, responses, tool names, and tool inputs.
-- Full transcripts for every session, with diagnostics for records Decant could
-  not parse.
+- Session transcripts, with diagnostics for records Decant could not parse
+  or skipped under its [input limits](docs/sources.md#input-limits).
 - Token, [estimated cost](docs/pricing.md), context-window, and agent-time
   analytics by agent, model, project, repository (including worktrees), outcome,
   and day.
@@ -192,7 +192,7 @@ Linux. See [Running in the background](docs/data-lifecycle.md#running-in-the-bac
 | --- | --- |
 | Analytics | Token, cost, context, and agent-time rollups across sessions |
 | Insights | Recommendations drawn from your history, and the ones you have implemented |
-| Sessions | Every session, with its full transcript |
+| Sessions | Sessions and their retained transcript messages |
 | Search | Full-text matches in prompts, responses, tool names, and tool inputs |
 | Projects | Sessions and cost for each project |
 | Files | The files agents read, edit, and write most |

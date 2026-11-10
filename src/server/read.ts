@@ -64,7 +64,10 @@ export function readOutputResponse(output: ReadOpOutput): Response {
     return reportHtmlResponse(output.body, output.filename);
   }
   return new Response(output.body, {
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 

@@ -1,5 +1,39 @@
-import { asString, canonicalJson, get } from "../json.ts";
+import { createHash } from "node:crypto";
+import { asString, assertJsonDepth, canonicalJson, get, JsonDepthError } from "../json.ts";
 import type { BlockType, Issue, Json, NormalizedBlock } from "../model.ts";
+
+// Tool outputs can be large, but a single record should not consume the heap.
+export const MAX_RECORD_BYTES = 16 * 1024 * 1024;
+export const RECORD_LIMIT_MESSAGE = "record exceeds the byte limit";
+
+export function parseSourceJson(text: string): Json {
+  if (Buffer.byteLength(text, "utf8") > MAX_RECORD_BYTES) throw new RecordLimitError();
+  const value = JSON.parse(text) as Json;
+  assertJsonDepth(value);
+  return value;
+}
+
+export class RecordLimitError extends Error {
+  constructor() {
+    super(RECORD_LIMIT_MESSAGE);
+  }
+}
+
+export function jsonProblem(error: unknown): string {
+  return error instanceof JsonDepthError || error instanceof RecordLimitError
+    ? error.message
+    : "record is not valid JSON";
+}
+
+export function diagnosticRawLine(error: unknown, text: string): string | null {
+  return error instanceof JsonDepthError || error instanceof RecordLimitError ? null : text;
+}
+
+export function printableType(typ: string): string {
+  return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(typ)
+    ? typ
+    : `(unprintable type) sha256:${createHash("sha256").update(typ).digest("hex").slice(0, 12)}`;
+}
 
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
@@ -10,22 +44,23 @@ export function parseJsonLine(line: string, lineNo: number, issues: Issue[]): Js
     return undefined;
   }
   try {
-    return JSON.parse(line) as Json;
+    return parseSourceJson(line);
   } catch (error) {
     issues.push({
       code: "unparsed_line",
       lineNo,
-      error: error instanceof Error ? error.message : String(error),
-      rawLine: line,
+      error: jsonProblem(error),
+      rawLine: diagnosticRawLine(error, line),
     });
     return undefined;
   }
 }
 
 export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: number): void {
-  const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: lineNo };
+  const label = printableType(typ);
+  const seen = unknownTypes.get(label) ?? { count: 0, firstLine: lineNo };
   seen.count += 1;
-  unknownTypes.set(typ, seen);
+  unknownTypes.set(label, seen);
 }
 
 /** `handling` completes the message, e.g. `ignored` or `kept as role "other"`. */

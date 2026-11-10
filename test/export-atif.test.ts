@@ -211,6 +211,87 @@ function exportOk(db: Database, id: number): AtifTrajectory {
   return out.trajectory;
 }
 
+/** A parent that delegates through `toolu_task` and the subagent it spawned. */
+function seedDelegation(db: Database): { parentId: number; childId: number } {
+  const parentId = upsertSession(
+    db,
+    parseClaudeSession(
+      "parent",
+      records(
+        {
+          type: "user",
+          uuid: "u1",
+          timestamp: "2026-05-04T10:00:00.000Z",
+          message: { role: "user", content: "Delegate this." },
+        },
+        {
+          type: "assistant",
+          uuid: "a1",
+          parentUuid: "u1",
+          requestId: "req-p1",
+          timestamp: "2026-05-04T10:00:01.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            usage: claudeUsage(100, 10, 0, 0),
+            content: [
+              { type: "tool_use", id: "toolu_task", name: "Task", input: { prompt: "look" } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          uuid: "u2",
+          parentUuid: "a1",
+          timestamp: "2026-05-04T10:00:30.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu_task", content: "done" }],
+          },
+        },
+      ),
+    ),
+    "/synthetic/parent.jsonl",
+    1,
+    2,
+  );
+  const childId = upsertSession(
+    db,
+    parseClaudeSession(
+      "child",
+      records(
+        {
+          type: "user",
+          uuid: "cu1",
+          timestamp: "2026-05-04T10:00:02.000Z",
+          message: { role: "user", content: "look" },
+        },
+        {
+          type: "assistant",
+          uuid: "ca1",
+          parentUuid: "cu1",
+          requestId: "req-c1",
+          timestamp: "2026-05-04T10:00:20.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            usage: claudeUsage(50, 5, 0, 0),
+            content: [{ type: "text", text: "found it" }],
+          },
+        },
+      ),
+    ),
+    "/synthetic/child.jsonl",
+    1,
+    2,
+  );
+  db.query(
+    `UPDATE session SET is_subagent = 1, parent_session_id = ?1,
+     spawn_tool_use_id = 'toolu_task', agent_id = 'a1' WHERE id = ?2`,
+  ).run(parentId, childId);
+  return { parentId, childId };
+}
+
 describe("exportAtif", () => {
   test("maps a Claude session to steps with attached observations and inclusive metrics", () => {
     const db = freshDb();
@@ -394,82 +475,7 @@ describe("exportAtif", () => {
   test("embeds subagents in the root, links them from the spawning call, and rolls up totals", () => {
     const db = freshDb();
     try {
-      const parentId = upsertSession(
-        db,
-        parseClaudeSession(
-          "parent",
-          records(
-            {
-              type: "user",
-              uuid: "u1",
-              timestamp: "2026-05-04T10:00:00.000Z",
-              message: { role: "user", content: "Delegate this." },
-            },
-            {
-              type: "assistant",
-              uuid: "a1",
-              parentUuid: "u1",
-              requestId: "req-p1",
-              timestamp: "2026-05-04T10:00:01.000Z",
-              message: {
-                role: "assistant",
-                model: "claude-sonnet-4-6",
-                usage: claudeUsage(100, 10, 0, 0),
-                content: [
-                  { type: "tool_use", id: "toolu_task", name: "Task", input: { prompt: "look" } },
-                ],
-              },
-            },
-            {
-              type: "user",
-              uuid: "u2",
-              parentUuid: "a1",
-              timestamp: "2026-05-04T10:00:30.000Z",
-              message: {
-                role: "user",
-                content: [{ type: "tool_result", tool_use_id: "toolu_task", content: "done" }],
-              },
-            },
-          ),
-        ),
-        "/synthetic/parent.jsonl",
-        1,
-        2,
-      );
-      const childId = upsertSession(
-        db,
-        parseClaudeSession(
-          "child",
-          records(
-            {
-              type: "user",
-              uuid: "cu1",
-              timestamp: "2026-05-04T10:00:02.000Z",
-              message: { role: "user", content: "look" },
-            },
-            {
-              type: "assistant",
-              uuid: "ca1",
-              parentUuid: "cu1",
-              requestId: "req-c1",
-              timestamp: "2026-05-04T10:00:20.000Z",
-              message: {
-                role: "assistant",
-                model: "claude-sonnet-4-6",
-                usage: claudeUsage(50, 5, 0, 0),
-                content: [{ type: "text", text: "found it" }],
-              },
-            },
-          ),
-        ),
-        "/synthetic/child.jsonl",
-        1,
-        2,
-      );
-      db.query(
-        `UPDATE session SET is_subagent = 1, parent_session_id = ?1,
-         spawn_tool_use_id = 'toolu_task', agent_id = 'a1' WHERE id = ?2`,
-      ).run(parentId, childId);
+      const { parentId } = seedDelegation(db);
 
       const out = exportAtif(db, parentId);
       if (!out.ok) throw new Error(out.reason);
@@ -507,6 +513,60 @@ describe("exportAtif", () => {
         ({ parsed }) => parsed.session.totals.input,
       );
       expect(imported).toEqual([100, 50]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("points at subagents exported on their own instead of embedding them", () => {
+    const db = freshDb();
+    try {
+      const { parentId, childId } = seedDelegation(db);
+      const targets: unknown[] = [];
+      const out = exportAtif(db, parentId, {
+        subagentPath: (subagent) => {
+          targets.push(subagent);
+          return `${subagent.id}.atif.json`;
+        },
+      });
+      if (!out.ok) throw new Error(out.reason);
+      const doc = out.trajectory;
+      validateTrajectory(doc, "root");
+      assertLettaReads(doc);
+      expect(doc.subagent_trajectories).toBeUndefined();
+      expect(out.report).toMatchObject({
+        subagents_embedded: 0,
+        subagents_referenced: 1,
+        subagents_unlinked: 0,
+      });
+      expect(targets).toEqual([
+        { id: childId, tool: "claude_code", source_session_id: "child", trajectory_id: "child:a1" },
+      ]);
+      expect(doc.steps[1]?.observation?.results).toEqual([
+        {
+          source_call_id: "toolu_task",
+          content: "done",
+          subagent_trajectory_ref: [
+            {
+              trajectory_id: "child:a1",
+              session_id: "child",
+              trajectory_path: `${childId}.atif.json`,
+            },
+          ],
+        },
+      ]);
+      // The totals are the parent's alone: the subagent's travel in its own document.
+      expect(doc.final_metrics.total_prompt_tokens).toBe(100);
+      expect(doc.final_metrics.extra).not.toHaveProperty("includes_subagents");
+      expect(doc.final_metrics.extra).not.toHaveProperty("session_metrics");
+
+      // The subagent's own export carries the id the parent points at.
+      const child = exportAtif(db, childId, { subagentPath: () => "unused" });
+      if (!child.ok) throw new Error(child.reason);
+      validateTrajectory(child.trajectory, "root");
+      expect(child.trajectory.trajectory_id).toBe("child:a1");
+      expect(child.trajectory.session_id).toBe("child");
+      expect(child.trajectory.final_metrics.total_prompt_tokens).toBe(50);
     } finally {
       db.close();
     }
@@ -716,6 +776,15 @@ describe("exportAtif", () => {
       expect(out.report).toMatchObject({ subagents_embedded: 1, subagents_unlinked: 1 });
       expect(out.trajectory.trajectory_id).toBe("root");
       expect(out.trajectory.final_metrics.total_prompt_tokens).toBe(14_500 + 40);
+
+      // Exported on its own, the root has no document to point at for the
+      // empty child, and the grandchild is that child's to reference.
+      const alone = exportAtif(db, rootId, { subagentPath: () => "unused" });
+      if (!alone.ok) throw new Error(alone.reason);
+      validateTrajectory(alone.trajectory, "root");
+      expect(alone.report).toMatchObject({ subagents_referenced: 0, subagents_unlinked: 0 });
+      expect(JSON.stringify(alone.trajectory)).not.toContain("subagent_trajectory_ref");
+      expect(alone.trajectory.final_metrics.total_prompt_tokens).toBe(14_500);
     } finally {
       db.close();
     }

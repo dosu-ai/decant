@@ -78,6 +78,13 @@ export interface ServiceOptions {
 
 export class ServiceUnavailableError extends Error {}
 
+/**
+ * A path the unit file would need cannot be written into it safely. It extends
+ * ServiceUnavailableError so callers report it the same way: nothing was
+ * written, and the user has to pick a different path.
+ */
+export class UnsafeServicePathError extends ServiceUnavailableError {}
+
 export function isServiceProcess(env: Record<string, string | undefined> = process.env): boolean {
   return env[SERVICE_ENV] === "1";
 }
@@ -152,6 +159,8 @@ export function serviceArgs(spec: ServiceSpec): string[] {
 
 export function launchdPlist(spec: ServiceSpec, options: ServiceOptions = {}): string {
   const log = serviceLogPath(options);
+  assertUnitSafe(spec, "launchd");
+  assertNoControlCharacters("log path", log, "launchd");
   const args = serviceArgs(spec)
     .map((arg) => `\t\t<string>${xmlEscape(arg)}</string>`)
     .join("\n");
@@ -191,6 +200,7 @@ ${args}
 }
 
 export function systemdUnit(spec: ServiceSpec): string {
+  assertUnitSafe(spec, "systemd");
   const exec = serviceArgs(spec).map(systemdQuote).join(" ");
   return `[Unit]
 Description=Decant local UI and session sync
@@ -593,6 +603,26 @@ function safeRealpath(path: string): string {
     return realpathSync(path);
   } catch {
     return path;
+  }
+}
+
+function assertUnitSafe(spec: ServiceSpec, manager: ServiceManager): void {
+  assertNoControlCharacters("Decant executable path", spec.binary, manager);
+  assertNoControlCharacters("archive path", spec.dbPath, manager);
+}
+
+// No escaping makes these safe. In a systemd unit a newline ends ExecStart and
+// starts a new directive, even inside quotes. In a plist, XML 1.0 forbids most
+// C0 characters outright and parsers fold CR and CRLF into LF, so the path
+// launchd ran would differ from the one the user chose.
+function assertNoControlCharacters(label: string, value: string, manager: ServiceManager): void {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      throw new UnsafeServicePathError(
+        `The ${label} ${JSON.stringify(value)} contains a control character, which a ${manager} unit file cannot hold. Use a path without one.`,
+      );
+    }
   }
 }
 

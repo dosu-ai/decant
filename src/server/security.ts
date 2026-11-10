@@ -24,7 +24,23 @@ export function validateLocalRequest(
   if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request, url, boundToLoopback)) {
     return errorResponse("cross_origin_write", "cross-origin writes are forbidden", {}, 403);
   }
+  if (url.pathname === EVENT_STREAM_PATH && !isOwnPageRead(request, url)) {
+    return errorResponse("cross_origin_read", "cross-origin event streams are forbidden", {}, 403);
+  }
   return null;
+}
+
+const EVENT_STREAM_PATH = "/api/events";
+
+// Other sites can't read the stream but could hold capped slots. Unlike writes,
+// "same-site" is refused: other localhost ports count as same-site.
+function isOwnPageRead(request: Request, url: URL): boolean {
+  const origin = request.headers.get("origin");
+  if (origin != null && !isSameAuthorityLoopbackOrigin(origin, request, url)) {
+    return false;
+  }
+  const site = request.headers.get("sec-fetch-site")?.toLowerCase();
+  return site == null || site === "same-origin" || site === "none";
 }
 
 function isProtectedPath(pathname: string): boolean {

@@ -1,5 +1,5 @@
--- decant:schema_version=29
--- Effective decant schema (migrations 1..29 applied), frozen as the current
+-- decant:schema_version=30
+-- Effective decant schema (migrations 1..30 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
@@ -11,7 +11,8 @@
 -- v28 changes no schema. It clears stored context peaks for sessions with
 -- compactions so the next sync recomputes them under the current rules.
 -- v29 indexes block ids with their session so search can filter matches
--- without reading transcript rows.
+-- without reading transcript rows. v30 records each project's repository
+-- remote, a name for it that does not depend on a local path.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -27,7 +28,8 @@ CREATE TABLE project (
   root_path TEXT,
   worktree_label TEXT,
   worktree_tool TEXT,
-  root_source TEXT
+  root_source TEXT,
+  repo_remote TEXT
 );
 CREATE TABLE session (
   id INTEGER PRIMARY KEY,

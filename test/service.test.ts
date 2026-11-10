@@ -32,6 +32,7 @@ import {
   serviceStatus,
   stopService,
   systemdUnit,
+  UnsafeServicePathError,
   uninstallService,
   unitPath,
   urlFromCommand,
@@ -190,6 +191,40 @@ describe("unit files", () => {
     expect(systemdUnit(tricky)).toContain("100%% $$HOME");
   });
 
+  test("paths with spaces, quotes, backslashes, % and $ render unchanged", () => {
+    const quoted = {
+      binary: "/Apps/My Tools/decant",
+      dbPath: '/data/"q" 100% $HOME\\d.db',
+      port: 4123,
+    };
+    expect(systemdUnit(quoted)).toContain(
+      'ExecStart="/Apps/My Tools/decant" "--db" "/data/\\"q\\" 100%% $$HOME\\\\d.db" "serve" "--no-open" "--port" "4123"\n',
+    );
+    expect(launchdPlist(quoted)).toContain(
+      "\t\t<string>/Apps/My Tools/decant</string>\n\t\t<string>--db</string>\n\t\t<string>/data/&quot;q&quot; 100% $HOME\\d.db</string>\n",
+    );
+  });
+
+  test("control characters in either path are refused in both formats", () => {
+    // A newline would end ExecStart and start a directive of the path's choosing.
+    const injected = "/data/a.db\nExecStartPre=/bin/touch /tmp/pwned";
+    for (const bad of [
+      injected,
+      "/data/a\r.db",
+      "/data/a\t.db",
+      "/data/a\u0001.db",
+      "/data/a\u007f.db",
+    ]) {
+      for (const field of ["dbPath", "binary"] as const) {
+        const unsafe = { ...spec, [field]: bad };
+        expect(() => systemdUnit(unsafe)).toThrow(UnsafeServicePathError);
+        expect(() => launchdPlist(unsafe)).toThrow(UnsafeServicePathError);
+      }
+    }
+    expect(() => systemdUnit({ ...spec, dbPath: injected })).toThrow("control character");
+    expect(() => launchdPlist(spec, { homeDir: "/Users/a\nb" })).toThrow(UnsafeServicePathError);
+  });
+
   test("the URL comes from the unit's --port", () => {
     expect(urlFromCommand(serviceArgs(tricky))).toBe("http://127.0.0.1:4123");
     expect(urlFromCommand(null)).toBeNull();
@@ -310,6 +345,19 @@ describe("launchd install and uninstall", () => {
     ).rejects.toThrow("Input/output error");
   });
 
+  test("a path with a newline is refused before anything is written or loaded", async () => {
+    const home = freshHome();
+    const fake = fakeManager();
+    const install = installService(
+      { dbPath: "/data/a.db\nRunAtLoad=false", port: 3000 },
+      darwinOptions(home, fake.run),
+    );
+    await expect(install).rejects.toBeInstanceOf(UnsafeServicePathError);
+    await expect(install).rejects.toBeInstanceOf(ServiceUnavailableError);
+    expect(existsSync(unitPath("launchd", { homeDir: home }))).toBe(false);
+    expect(fake.calls.every((call) => call.startsWith("launchctl print"))).toBe(true);
+  });
+
   test("an unsupported install throws ServiceUnavailableError", async () => {
     const fake = fakeManager();
     await expect(
@@ -341,6 +389,32 @@ describe("launchd install and uninstall", () => {
 });
 
 describe("systemd install and uninstall", () => {
+  test("a path with a newline or carriage return is refused before the unit is written", async () => {
+    for (const [dbPath, binary] of [
+      ["/data/a.db\nExecStartPre=/bin/touch /tmp/pwned", spec.binary],
+      ["/data/a.db\rExecStartPre=/bin/touch /tmp/pwned", spec.binary],
+      [spec.dbPath, "/opt/test/decant\nExecStartPre=/bin/touch /tmp/pwned"],
+      [spec.dbPath, "/opt/test/decant\r"],
+    ] as const) {
+      const home = freshHome();
+      const fake = fakeManager();
+      const options = {
+        platform: "linux" as const,
+        env: {},
+        homeDir: home,
+        run: fake.run,
+        install: { channel: "installer" as const, binaryPath: binary },
+        execPath: binary,
+      };
+      await expect(installService({ dbPath, port: 3000 }, options)).rejects.toBeInstanceOf(
+        UnsafeServicePathError,
+      );
+      expect(existsSync(unitPath("systemd", options))).toBe(false);
+      expect(fake.calls).not.toContain("systemctl --user daemon-reload");
+      expect(fake.calls).not.toContain("systemctl --user start decant.service");
+    }
+  });
+
   test("installs, enables, and starts the user unit", async () => {
     const home = freshHome();
     const fake = fakeManager();

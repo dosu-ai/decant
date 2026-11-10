@@ -191,7 +191,7 @@ describe("parseAtifDocument", () => {
     expect(document.sessions[0]?.parsed.issues).toEqual([
       expect.objectContaining({
         code: "unknown_record_type",
-        error: expect.stringMatching(/"content part \(value [0-9a-f]{8}\)"/),
+        error: expect.stringMatching(/sha256:[0-9a-f]{12}/),
       }),
     ]);
   });
@@ -442,9 +442,8 @@ describe("parseAtifDocument", () => {
     const session = root(document);
     expect(session.messages[0]).toMatchObject({ role: "other" });
     expect(document.sessions[0]?.parsed.issues.map((i) => i.error)).toEqual([
-      // A version in the spec's own format is named; it cannot carry content.
-      expect.stringContaining('"schema_version ATIF-v2.0"'),
-      expect.stringMatching(/"step source \(value [0-9a-f]{8}\)"/),
+      expect.stringMatching(/sha256:[0-9a-f]{12}/),
+      expect.stringMatching(/sha256:[0-9a-f]{12}/),
     ]);
   });
 
@@ -479,7 +478,7 @@ describe("parseAtifDocument", () => {
       expect(errors).toHaveLength(3);
       for (const error of errors) {
         expect(error).not.toContain(secret);
-        expect(error).toMatch(/\(value [0-9a-f]{8}\)/);
+        expect(error).toMatch(/sha256:[0-9a-f]{12}/);
       }
     }
   });

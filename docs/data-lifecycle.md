@@ -199,7 +199,9 @@ format Harbor and Terminal-Bench use, declared as `ATIF-v1.7`. `--all --out
 <dir>` writes `<id>.atif.json` files. Agent names follow Harbor's:
 `claude-code`, `codex`, `gemini-cli`, `opencode`, `cursor-cli`, and
 `copilot-cli`. Harbor has no VS Code agent, so Copilot Chat sessions use
-`vscode-copilot-chat`, the trajectory export's label.
+`vscode-copilot-chat`, the trajectory export's label. The root's `extra`
+carries the session's `cwd` and `git_branch`, and `repository` when the
+project's [repository identity](#repository-identity) is known.
 
 User text becomes `user` steps, and system messages and Codex injected context
 become `system` steps. Each run of consecutive assistant messages becomes one
@@ -342,7 +344,8 @@ that duplicate retained messages or contain only stream metadata.
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
-| Lines a parser could not read, kept verbatim so they can be diagnosed | `ingest_issue.raw_line` |
+| The remote of each project's repository, as a host and path with any credentials removed | `project.repo_remote` |
+| Malformed records within byte and depth limits, retained locally | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
 indexed. `block.tool_result` and `message.raw` are stored but not searchable,
@@ -502,6 +505,31 @@ Decant cannot modify your Claude Code or Codex logs from inside the container.
 Removing the archive never removes the source logs. Those stay where Claude Code
 and Codex wrote them.
 
+## Repository identity
+
+A local path names a repository differently on every machine and in every
+worktree, so Decant also records the repository's remote as
+`project.repo_remote`: `github.com/acme/widget` for both
+`git@github.com:acme/widget.git` and `https://github.com/acme/widget`. Any sync
+that ingests a session reads it from the Git config on disk, for existing
+projects as well as new ones. Decant does not run `git` and does not contact
+the remote.
+
+The lookup starts at the project's directory and walks up to the working tree
+that holds it, following a linked worktree to the repository it belongs to. It
+uses `origin`, or the only remote when there is no `origin`. The scheme, user,
+password or token, port, query, and a trailing `.git` are dropped before the
+value is stored. A local path or `file:` remote is not recorded.
+
+A project whose directory is gone, such as a removed worktree, takes the remote
+of the repository root it resolved to. When neither can be read, the stored
+value stays as it was, so a project keeps its identity after its checkout is
+deleted. A project stays unset when its directory was removed before Decant
+first read it and it has no root on disk, when its repository has no remote,
+and when Decant cannot see the directory at all, as in a container that mounts
+only the source logs. Projects that hold only imported ATIF trajectories are
+skipped, because their path is a job directory, not the place the agent ran.
+
 ## Automatic and explicit sync
 
 Read commands normally sync first. `decant serve` performs a startup sync and
@@ -554,7 +582,10 @@ not carry over `--host`, `--trusted-peer`, `--no-sync`, or source-directory
 flags.
 
 A relative `--db` or `DECANT_DB` is stored as an absolute path, because the OS
-starts the service in its own working directory. Running
+starts the service in its own working directory. Decant refuses to register a
+service when the archive path or its own executable path contains a control
+character such as a newline or carriage return, because no quoting keeps one
+inside a systemd unit or plist. Running
 `decant service install` again with a different archive or port replaces the
 registration, whether or not the service is running. On macOS this waits for
 the old process to exit, up to 30 seconds, before registering the new command.
@@ -699,3 +730,13 @@ reply.
 See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.
+
+Parser diagnostics retain locations and fixed error messages. Ordinary malformed
+records retain their raw text in the local archive's `ingest_issue.raw_line`,
+under the same file protection as transcripts. CLI output and logs show only
+the error message. Records rejected by byte or depth limits retain no raw text.
+Unknown type names remain readable when they match
+`^[A-Za-z][A-Za-z0-9_.:-]{0,63}$`; other names use `(unprintable type)` with a
+short hash to keep counts distinct.
+Oversized files are skipped without changing archived copies or source metadata.
+They count as failed in sync reports and are retried on every sync.

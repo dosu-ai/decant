@@ -19,6 +19,7 @@ import { materializeContextWindow, materializeMissingContextWindows } from "./co
 import { defaultPricing } from "./cost.ts";
 import { refreshPlannerStatistics, withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
+import { FILE_LIMIT_MESSAGE, readSourceFile } from "./ingest-limits.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
 import {
@@ -45,6 +46,7 @@ import {
 } from "./model-usage.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
+import { resolveProjectRemotes } from "./repo-remote.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseAtifDocument } from "./sources/atif.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
@@ -126,7 +128,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 20;
+export const INGEST_PIPELINE_REVISION = 21;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -489,7 +491,17 @@ export function sync(
           // fstat before read: a write landing mid-window records a smaller size
           // than the content read, so the next sync re-ingests instead of
           // silently skipping the tail.
-          content = readFileSync(fd, "utf8");
+          const limited = readSourceFile(fd);
+          if (limited === null) {
+            report.failed += 1;
+            logger.warning("Source file could not be read.", {
+              "event.name": "decant.ingest.source_read_failed",
+              "file.path": file.path,
+              "error.message": FILE_LIMIT_MESSAGE,
+            });
+            continue;
+          }
+          content = limited;
         } catch (error) {
           report.failed += 1;
           logger.warning("Source file could not be read.", {
@@ -586,6 +598,8 @@ function refreshDerivedState(
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
+    // After the roots: a project whose directory is gone borrows its root's.
+    resolveProjectRemotes(db);
   }
   const uncheckedRecommendationImpactLabels =
     db
@@ -939,7 +953,16 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     ) {
       return { kind: "skipped" };
     }
-    content = readFileSync(fd, "utf8");
+    const limited = readSourceFile(fd);
+    if (limited === null) {
+      logger.warning("Source file could not be read.", {
+        "event.name": "decant.ingest.source_read_failed",
+        "file.path": file.path,
+        "error.message": FILE_LIMIT_MESSAGE,
+      });
+      return { kind: "failed" };
+    }
+    content = limited;
   } catch (error) {
     logger.warning("Source file could not be read.", {
       "event.name": "decant.ingest.source_read_failed",

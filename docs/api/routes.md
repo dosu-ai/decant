@@ -105,7 +105,9 @@ Expected recovery cases retain specific codes, including `archive_locked`,
 `server_busy`, `schema_drift`, `schema_too_new`, `schema_too_old`,
 `session_not_found`, and validation failures. `server_busy` is a retryable
 `503`: `decant serve` runs heavy reads on two workers and queues at most 256
-more, and refuses a read beyond that rather than letting the backlog grow. Unexpected failures return generic `internal_error` prose;
+more, and refuses a read beyond that rather than letting the backlog grow.
+`GET /api/events` answers the same way when 32 event streams are already
+open. Unexpected failures return generic `internal_error` prose;
 the structured stderr log retains the diagnostic.
 
 `DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and
@@ -252,3 +254,10 @@ and intentionally omits transcript content.
 
 Each `data` field is JSON and includes a matching `type`. The OpenAPI operation's
 `x-sse-events` extension defines the payload schema for each name.
+
+The server holds at most 32 event streams. Another request gets
+`503 server_busy` with `retryable: true`. Events wait for a client that is
+reading slowly and arrive in order. When more than 1 MiB is waiting, the server
+discards it and ends the stream rather than dropping single events, because
+`sync` and `error` are terminal. `EventSource` reconnects after the stream
+ends, and the UI then reloads or offers the update it may have missed.

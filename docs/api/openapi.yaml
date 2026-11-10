@@ -76,7 +76,10 @@ paths:
         Server-Sent Events. Each frame uses its event name in the `event:`
         field and a JSON object matching the corresponding schema in `data:`.
         The connection begins with `hello`; `ping` is normally emitted every
-        five seconds.
+        five seconds. At most 32 streams are open at once; another answers
+        `503 server_busy`. When a client stops reading and more than 1 MiB of
+        events waits for it, the server discards them and ends the stream, so
+        the client reconnects and refetches what it missed.
       x-sse-events:
         hello:
           $ref: "#/components/schemas/HelloEvent"
@@ -1488,9 +1491,10 @@ components:
             $ref: "#/components/schemas/ApiError"
     ServiceUnavailable:
       description: >-
-        Service is starting, the SQLite archive is temporarily busy, or every
-        read worker is busy and the read queue is full (`server_busy`). All
-        three carry `retryable: true`.
+        Service is starting, the SQLite archive is temporarily busy, every
+        read worker is busy and the read queue is full (`server_busy`), or
+        the maximum of 32 event streams is already open (`server_busy`). All
+        carry `retryable: true`.
       content:
         application/json:
           schema:

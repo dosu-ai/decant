@@ -344,11 +344,34 @@ describe("report charts", () => {
     expect(html).toContain("priced at current API list prices");
     expect(html).toContain("not an invoice");
     expect(html).toContain("<h2>How sessions ended</h2>");
+    expect(html).toContain('<td class="number">50.0%</td>');
+    expect(html).toContain("abandoned and failed sessions included");
     expect(html).toContain("<h2>Repositories</h2>");
     expect(html).not.toContain("<h2>Projects</h2>");
     expect(html).toContain("Per completed session");
     expect(html).toContain("Cache reads");
     expect(html).toContain("Sessions per UTC day");
+  });
+
+  test("labels each outcome share with its own one-decimal rounding", () => {
+    const outcome = (key: string, sessions: number) => ({
+      ...firstDay,
+      key,
+      sessions,
+      usage_sessions: sessions,
+    });
+    const html = renderAnalyticsReport({
+      ...analytics,
+      byOutcome: [
+        outcome("completed", 1462),
+        outcome("abandoned", 1465),
+        outcome("failed", 7),
+        outcome("(unclassified)", 19),
+      ],
+    });
+    for (const label of ["49.5%", "49.6%", "0.2%", "0.6%"]) {
+      expect(html).toContain(`<td class="number">${label}</td>`);
+    }
   });
 
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {

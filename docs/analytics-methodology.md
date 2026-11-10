@@ -535,6 +535,15 @@ The API returns `cost_share` unrounded. The UI's whole-number cost and time
 percentages use largest-remainder rounding, so each column adds up to exactly
 100% instead of drifting to 99% or 101%.
 
+The "How sessions ended" share column is the exception. It rounds each row to
+one decimal on its own, so 1,462 of 2,953 sessions reads 49.5% rather than
+being pushed down to 49% to make room for another row. Ties round up. Each
+label is within 0.05 points of the exact share, so the column can miss 100.0%
+by up to 0.05 points per row: 1, 1, 1, and 13 sessions read 6.3%, 6.3%, 6.3%,
+and 81.3%, which total 100.2%. A nonzero share below 0.05% reads `<0.1%`, and a
+share at or above 99.95% that is not the whole reads `>99.9%`. A range with no
+top-level sessions shows `-`.
+
 ### Search counting
 
 This defines the search count behind the "discovery is expensive"

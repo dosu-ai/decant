@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { type AtifMirrorReport, atifMirrorPath, mirrorAtif } from "../src/atif-mirror.ts";
 import { runCli } from "../src/cli.ts";
 import { closeDb, openDb } from "../src/db.ts";
@@ -121,7 +122,7 @@ function read(path: string): AtifTrajectory {
 function files(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name).slice(dir.length + 1))
+    .map((entry) => relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/"))
     .sort();
 }
 
@@ -342,6 +343,21 @@ describe("mirrorAtif", () => {
       expect(mirror(db, out)).toMatchObject({ written: 1 });
       expect(readFileSync(victim, "utf8")).toBe("keep me");
       expect(read(join(out, "claude_code/first.atif.json")).session_id).toBe("first");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("keeps the mode of a document it rewrites", () => {
+    const { db, out } = fresh();
+    try {
+      add(db, "first");
+      mirror(db, out);
+      const document = join(out, "claude_code/first.atif.json");
+      chmodSync(document, 0o640);
+      add(db, "first", "The parser now keeps every line, including the last one.");
+      expect(mirror(db, out)).toMatchObject({ written: 1 });
+      expect(statSync(document).mode & 0o777).toBe(0o640);
     } finally {
       closeDb(db);
     }

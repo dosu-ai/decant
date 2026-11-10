@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  fchmodSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -114,16 +115,40 @@ function currentContent(path: string): string | null {
 function writeAtomically(path: string, content: string): void {
   const temporary = join(path, "..", `.${randomUUID()}.tmp`);
   const fd = openSync(temporary, "wx", DOCUMENT_FILE_MODE);
+  let failure: unknown = null;
   try {
-    try {
-      writeSync(fd, content);
-    } finally {
-      closeSync(fd);
+    // A document someone opened up to others keeps its mode when rewritten.
+    const mode = existingFileMode(path);
+    if (mode != null) {
+      fchmodSync(fd, mode);
     }
-    renameSync(temporary, path);
+    writeSync(fd, content);
   } catch (error) {
+    failure = error;
+  }
+  try {
+    closeSync(fd);
+    if (failure == null) {
+      renameSync(temporary, path);
+      return;
+    }
+  } catch (error) {
+    failure ??= error;
+  }
+  try {
     rmSync(temporary, { force: true });
-    throw error;
+  } catch {
+    // The write's own error is the one worth reporting.
+  }
+  throw failure;
+}
+
+function existingFileMode(path: string): number | null {
+  try {
+    const stat = lstatSync(path);
+    return stat.isFile() ? stat.mode & 0o777 : null;
+  } catch {
+    return null;
   }
 }
 

@@ -275,9 +275,10 @@ calls and results keep the paths the agent wrote.
 Running the command again rewrites only the documents whose content changed.
 Each write goes to a new owner-only (`0600`) temporary file that is renamed
 over the document, so a reader never sees a partial document, and the
-temporary file is removed if the rename fails. A document that is a symbolic
-link is replaced, not followed, and a tool folder that is a link stops the
-mirror with an error. Unchanged files keep their modification times. Decant
+temporary file is removed if the rename fails. A rewritten document keeps the
+mode it had, so one you made readable to others stays that way. A document
+that is a symbolic link is replaced, not followed, and a tool folder that is a
+link stops the mirror with an error. Unchanged files keep their modification times. Decant
 never deletes files from the folder, so a session deleted or archived in
 Decant keeps its last document there. A folder Decant creates is owner-only
 (`0700`), and one that already exists keeps its mode. Decant's own ATIF import

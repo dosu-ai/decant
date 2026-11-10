@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { alignToSeries, buildDaySeries, type DaySeries } from "../../day-series.ts";
+import { sharePercentLabel } from "../../share-percent.ts";
 import {
   cacheDetail,
   cacheHitRate,
@@ -279,7 +280,7 @@ export function AnalyticsView({
           value={
             usageUnavailable ? "Unavailable" : perCompleted == null ? "-" : money(perCompleted)
           }
-          valueTitle="All estimated cost in range, abandoned and failed sessions included, divided by the sessions that completed."
+          valueTitle={PER_COMPLETED_TITLE}
         />
         <StatCard
           detail={delta(summary?.input_tokens ?? 0, previousSummary?.input_tokens)}
@@ -635,6 +636,9 @@ function FailedState() {
   );
 }
 
+const PER_COMPLETED_TITLE =
+  "All estimated cost in range, abandoned and failed sessions included, divided by the sessions that completed.";
+
 export function OutcomesPanel({
   loading = false,
   perCompleted,
@@ -645,7 +649,6 @@ export function OutcomesPanel({
   rows: DimensionRow[];
 }) {
   const ordered = orderedOutcomes(rows);
-  const sessionPercents = roundedPercents(ordered.map((row) => row.sessions));
   const totalSessions = ordered.reduce((sum, row) => sum + row.sessions, 0);
   return (
     <section className="panel outcomes-panel" {...updatingProps(loading && rows.length > 0)}>
@@ -659,9 +662,9 @@ export function OutcomesPanel({
         </div>
         {perCompleted != null ? (
           <div className="activity-summary">
-            <span>
+            <span title={PER_COMPLETED_TITLE}>
               <strong>{money(perCompleted)}</strong>
-              per completed session
+              of all spend per completed session
             </span>
           </div>
         ) : null}
@@ -690,7 +693,7 @@ export function OutcomesPanel({
               </tr>
             </thead>
             <tbody>
-              {ordered.map((row, index) => (
+              {ordered.map((row) => (
                 <tr key={row.key}>
                   <td title={outcomeDescription(row.key)}>{outcomeLabel(row.key)}</td>
                   <td className="numeric">{formatInt(row.sessions)}</td>
@@ -700,7 +703,7 @@ export function OutcomesPanel({
                         fraction={totalSessions > 0 ? row.sessions / totalSessions : 0}
                         tone={outcomeTone(row.key)}
                       />
-                      <small>{sessionPercents[index] ?? 0}%</small>
+                      <small>{sharePercentLabel(row.sessions, totalSessions)}</small>
                     </span>
                   </td>
                   <td className="numeric">

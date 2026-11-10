@@ -344,6 +344,8 @@ describe("report charts", () => {
     expect(html).toContain("priced at current API list prices");
     expect(html).toContain("not an invoice");
     expect(html).toContain("<h2>How sessions ended</h2>");
+    expect(html).toContain('<td class="number">50.0%</td>');
+    expect(html).toContain("abandoned and failed sessions included");
     expect(html).toContain("<h2>Repositories</h2>");
     expect(html).not.toContain("<h2>Projects</h2>");
     expect(html).toContain("Per completed session");

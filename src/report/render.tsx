@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildDaySeries } from "../day-series.ts";
 import { mcpServerLabel, mcpServerLabels } from "../mcp-names.ts";
+import { sharePercentLabel } from "../share-percent.ts";
 import { sessionSourceLabel } from "../source-filter.ts";
 import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
 import { DECANT_VERSION } from "../version.ts";
@@ -624,9 +625,7 @@ function OutcomeTable({ rows }: { rows: AnalyticsReportData["byOutcome"] }) {
             <tr key={row.key}>
               <td>{OUTCOME_LABELS[row.key] ?? row.key}</td>
               <td className="number">{formatInteger(row.sessions)}</td>
-              <td className="number">
-                {total > 0 ? `${Math.round((row.sessions / total) * 100)}%` : "-"}
-              </td>
+              <td className="number">{total > 0 ? sharePercentLabel(row.sessions, total) : "-"}</td>
               <td className="number">
                 {reportCost(row.estimated_cost_usd, row.sessions, row.usage_sessions, "-")}
               </td>
@@ -636,7 +635,8 @@ function OutcomeTable({ rows }: { rows: AnalyticsReportData["byOutcome"] }) {
       </table>
       <p className="empty">
         Outcome labels describe how each transcript ended, not whether the work shipped. Cost
-        includes each session's subagents.
+        includes each session's subagents. Per completed session divides all estimated cost,
+        abandoned and failed sessions included, by the completed sessions.
       </p>
     </>
   );

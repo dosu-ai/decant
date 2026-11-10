@@ -353,6 +353,27 @@ describe("report charts", () => {
     expect(html).toContain("Sessions per UTC day");
   });
 
+  test("labels each outcome share with its own one-decimal rounding", () => {
+    const outcome = (key: string, sessions: number) => ({
+      ...firstDay,
+      key,
+      sessions,
+      usage_sessions: sessions,
+    });
+    const html = renderAnalyticsReport({
+      ...analytics,
+      byOutcome: [
+        outcome("completed", 1462),
+        outcome("abandoned", 1465),
+        outcome("failed", 7),
+        outcome("(unclassified)", 19),
+      ],
+    });
+    for (const label of ["49.5%", "49.6%", "0.2%", "0.6%"]) {
+      expect(html).toContain(`<td class="number">${label}</td>`);
+    }
+  });
+
   test("ECharts SSR escapes dynamic labels before reports embed its SVG", () => {
     const svg = renderSessionsByDayChart(
       seriesWithKey("</text><script>globalThis.pwned = true</script><text>"),

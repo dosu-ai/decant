@@ -23,13 +23,28 @@ describe("share percent labels", () => {
     expect(sharePercentLabel(5, 10_000)).toBe("0.1%");
   });
 
+  test("rounds exact ties up despite floating-point error", () => {
+    // 0.15.toFixed(1) is "0.1" and 28.75.toFixed(1) is "28.7".
+    expect(sharePercentLabel(3, 2000)).toBe("0.2%");
+    expect(sharePercentLabel(23, 80)).toBe("28.8%");
+    expect(sharePercentLabel(1, 16)).toBe("6.3%");
+    expect(sharePercentLabel(1999, 2000)).toBe(">99.9%");
+    expect(sharePercentLabel(1, 2000)).toBe("0.1%");
+  });
+
   test("keeps exact and empty shares plain", () => {
     expect(sharePercentLabel(4, 4)).toBe("100.0%");
     expect(sharePercentLabel(1, 2)).toBe("50.0%");
     expect(sharePercentLabel(0, 4)).toBe("0.0%");
-    expect(sharePercentLabel(0, 0)).toBe("0.0%");
     expect(sharePercentLabel(-1, 4)).toBe("0.0%");
-    expect(sharePercentLabel(1, Number.NaN)).toBe("0.0%");
+    expect(sharePercentLabel(Number.NaN, 4)).toBe("0.0%");
+    expect(sharePercentLabel(Number.POSITIVE_INFINITY, 4)).toBe("0.0%");
+  });
+
+  test("shows a dash when there is no total to share", () => {
+    expect(sharePercentLabel(0, 0)).toBe("-");
+    expect(sharePercentLabel(1, Number.NaN)).toBe("-");
+    expect(sharePercentLabel(1, Number.POSITIVE_INFINITY)).toBe("-");
   });
 });
 
@@ -58,6 +73,13 @@ describe("outcomes panel", () => {
     expect(html).toContain("<small>49.6%</small>");
     expect(html).toContain("<small>0.2%</small>");
     expect(html).toContain("<small>0.6%</small>");
+  });
+
+  test("shows a dash when the range has only subagent runs", () => {
+    const empty = renderToStaticMarkup(
+      <OutcomesPanel perCompleted={null} rows={[outcome("completed", 0, 1)]} />,
+    );
+    expect(empty).toContain("<small>-</small>");
   });
 
   test("says the per-completed figure divides all spend", () => {

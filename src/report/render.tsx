@@ -625,7 +625,7 @@ function OutcomeTable({ rows }: { rows: AnalyticsReportData["byOutcome"] }) {
             <tr key={row.key}>
               <td>{OUTCOME_LABELS[row.key] ?? row.key}</td>
               <td className="number">{formatInteger(row.sessions)}</td>
-              <td className="number">{total > 0 ? sharePercentLabel(row.sessions, total) : "-"}</td>
+              <td className="number">{sharePercentLabel(row.sessions, total)}</td>
               <td className="number">
                 {reportCost(row.estimated_cost_usd, row.sessions, row.usage_sessions, "-")}
               </td>

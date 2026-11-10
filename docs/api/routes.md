@@ -158,7 +158,9 @@ second after responding so the service can bind its port. Poll
 `GET /api/background` until `current` is true to know the service has taken
 over. When `stopping` is true, the answering server is the service and stops
 after responding. `409 background_unsupported` means this machine cannot run
-the service, and `500 background_failed` carries the launchd or systemd error.
+the service, or the archive or executable path contains a control character
+the unit file cannot hold. `500 background_failed` carries the launchd or
+systemd error.
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.

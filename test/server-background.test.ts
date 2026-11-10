@@ -148,6 +148,32 @@ describe("/api/background", () => {
     }
   });
 
+  test("reports an archive or executable path with a control character as a conflict", async () => {
+    const { options, calls } = fakeService();
+    const unsafeDb = { dbPath: join(workDir, "a.db\nExecStartPre=/bin/false") } as Config;
+    const db = await post({ enabled: true }, { service: options }, {}, unsafeDb);
+    expect(db.status).toBe(409);
+    expect(await db.json()).toMatchObject({
+      code: "background_unsupported",
+      error: expect.stringContaining("control character"),
+    });
+
+    const binary = "/opt/test/decant\nExecStartPre=/bin/false";
+    const exec = await post(
+      { enabled: true },
+      {
+        service: {
+          ...options,
+          install: { channel: "installer", binaryPath: binary },
+          execPath: binary,
+        },
+      },
+    );
+    expect(exec.status).toBe(409);
+    expect(await exec.json()).toMatchObject({ code: "background_unsupported" });
+    expect(calls.some((call) => call.includes("bootstrap"))).toBe(false);
+  });
+
   test("reports unsupported installs as a conflict", async () => {
     const { options } = fakeService();
     const response = await post(

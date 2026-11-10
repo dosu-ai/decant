@@ -150,6 +150,16 @@ describe("resolveRepoRemote", () => {
     expect(resolveRepoRemote("relative/path")).toBeNull();
   });
 
+  test.skipIf(process.platform === "win32")(
+    "does not wait on a named pipe planted where a Git file belongs",
+    () => {
+      const dir = join(tempDir(), "piped");
+      mkdirSync(dir, { recursive: true });
+      expect(Bun.spawnSync(["mkfifo", join(dir, ".git")]).exitCode).toBe(0);
+      expect(resolveRepoRemote(dir)).toBeNull();
+    },
+  );
+
   test("does not read an oversized config", () => {
     const root = repo(
       join(tempDir(), "big"),

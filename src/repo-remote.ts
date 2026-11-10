@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { withImmediateTransaction } from "./db.ts";
 
@@ -98,15 +98,38 @@ export function remoteUrlFromGitConfig(config: string): string | null {
   return urls.size === 1 ? ([...urls.values()][0] ?? null) : null;
 }
 
+/** The file's text, or null when it is not a regular file, cannot be read, or
+ * is over the cap. Everything is decided on the open descriptor, so the file
+ * cannot be swapped between a check and the read, and the read itself is
+ * bounded, so a file that grows afterward is still refused. */
 function readSmallFile(path: string): string | null {
+  let fd: number;
   try {
-    const stat = statSync(path);
-    if (!stat.isFile() || stat.size > MAX_GIT_FILE_BYTES) {
-      return null;
-    }
-    return readFileSync(path, "utf8");
+    // Non-blocking, so a FIFO planted at the path cannot hold the open.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   } catch {
     return null;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      return null;
+    }
+    const buffer = Buffer.allocUnsafe(MAX_GIT_FILE_BYTES + 1);
+    let length = 0;
+    for (;;) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) {
+        return buffer.toString("utf8", 0, length);
+      }
+      length += read;
+      if (length > MAX_GIT_FILE_BYTES) {
+        return null;
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
   }
 }
 

@@ -213,6 +213,7 @@ decant tool stats              # tool usage
 decant mcp stats               # MCP server usage
 decant export 1 > session.md   # export a session
 decant export 1 --as atif      # also md, json, and trajectory
+decant export --mirror ~/atif  # keep a folder of ATIF documents, one per session
 decant distill script          # workflow script from command history
 decant db info                 # what the archive holds and where
 decant session rm 1 --yes      # delete a session and its descendants

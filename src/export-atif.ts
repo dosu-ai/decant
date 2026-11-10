@@ -693,7 +693,8 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
 }
 
 /** Harbor's name for a native source. A session imported from ATIF keeps the
- * name its producer wrote, so a round trip does not relabel it. */
+ * name its producer wrote, so a round trip does not relabel it. Without one it
+ * is `atif`: readers such as SessionDB take a name as the harness. */
 function agentName(tool: string, rawMeta: string | null): string {
   if (tool === "atif") {
     let meta: Json | undefined;
@@ -702,7 +703,8 @@ function agentName(tool: string, rawMeta: string | null): string {
     } catch {
       meta = undefined;
     }
-    return asString(get(get(meta, "agent"), "name")) ?? "unknown";
+    const name = asString(get(get(meta, "agent"), "name"))?.trim();
+    return name == null || name === "" ? tool : name;
   }
   return ATIF_AGENT_NAMES[tool as keyof typeof ATIF_AGENT_NAMES] ?? tool;
 }

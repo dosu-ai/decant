@@ -978,4 +978,38 @@ describe("exportAtif", () => {
       db.close();
     }
   });
+
+  test("names an imported trajectory without an agent name atif", () => {
+    const db = freshDb();
+    try {
+      const id = upsertSession(
+        db,
+        parseClaudeSession("sample", fixture("fixtures", "claude", "sample.jsonl")),
+        "/synthetic/sample.jsonl",
+        1,
+        2,
+      );
+      for (const name of [undefined, "", "  "]) {
+        const doc = exportOk(db, id);
+        const agent: Record<string, unknown> = { ...doc.agent, name };
+        const parsed = parseAtifDocument(
+          "fallback",
+          JSON.stringify({ ...doc, session_id: `nameless-${name?.length}`, agent }),
+        ).sessions[0]?.parsed;
+        if (parsed == null) {
+          throw new Error("expected an imported root session");
+        }
+        const importedId = upsertSession(
+          db,
+          parsed,
+          `/synthetic/nameless-${name?.length}.json`,
+          1,
+          2,
+        );
+        expect(exportOk(db, importedId).agent.name).toBe("atif");
+      }
+    } finally {
+      db.close();
+    }
+  });
 });

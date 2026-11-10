@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { mirrorAtif } from "../../atif-mirror.ts";
 import { exportTrajectory, toMarkdown } from "../../export.ts";
 import { exportAtif } from "../../export-atif.ts";
 import { getSession, listSessions } from "../../query.ts";
@@ -21,6 +22,7 @@ export function registerExportCommand(ctx: CliContext): void {
     // so a same-named local option on export would be shadowed by the root's.
     .option("--as <format>", "md | json | trajectory | atif (default: md, or json with --json)")
     .option("--out <dir>", "output directory")
+    .option("--mirror <dir>", "keep a folder of standalone ATIF documents, one per session")
     .action(
       (
         id: number | undefined,
@@ -29,9 +31,41 @@ export function registerExportCommand(ctx: CliContext): void {
           includeSubagents?: boolean;
           as?: string;
           out?: string;
+          mirror?: string;
         },
       ) =>
         ctx.run(() => {
+          if (commandOptions.mirror != null) {
+            const mirror = commandOptions.mirror;
+            if (commandOptions.as != null && commandOptions.as !== "atif") {
+              io.writeErr("error: --mirror writes ATIF only\n");
+              return 2;
+            }
+            if (id != null || commandOptions.all === true || commandOptions.out != null) {
+              io.writeErr("error: --mirror takes every session and its own folder\n");
+              return 2;
+            }
+            return ctx.withArchive(
+              (archive) => {
+                const result = mirrorAtif(archive.db, { out: mirror });
+                if (!result.ok) {
+                  io.writeErr(`error: refusing to write through the link at ${result.path}\n`);
+                  return 1;
+                }
+                const report = result.report;
+                ctx.output(report, () =>
+                  [
+                    `mirrored ATIF to ${report.out}`,
+                    `  written: ${report.written}`,
+                    `  unchanged: ${report.unchanged}`,
+                    ...(report.skipped > 0 ? [`  no steps to export: ${report.skipped}`] : []),
+                  ].join("\n"),
+                );
+                return 0;
+              },
+              { sync: true },
+            );
+          }
           const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
           if (
             format !== "md" &&

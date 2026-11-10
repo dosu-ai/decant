@@ -41,7 +41,7 @@ index plus local user state such as recommendations and session tombstones.
 | Ingest | `src/ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, normalization writes, derived facets, and ingest issues. |
 | Economics | `src/cost.ts`, `src/model-usage.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, per-model usage splits, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
-| Reads | `src/query.ts`, `src/stats.ts`, `src/source-filter.ts`, `src/recommendations.ts`, `src/distill.ts`, `src/export.ts`, `src/export-atif.ts` | Session retrieval, aggregates, the Analytics source scope, recommendations, deterministic artifacts, and Markdown, JSON, trajectory, and ATIF exports. |
+| Reads | `src/query.ts`, `src/stats.ts`, `src/source-filter.ts`, `src/recommendations.ts`, `src/distill.ts`, `src/export.ts`, `src/export-atif.ts`, `src/atif-mirror.ts` | Session retrieval, aggregates, the Analytics source scope, recommendations, deterministic artifacts, Markdown, JSON, trajectory, and ATIF exports, and the ATIF folder mirror. |
 | Serve | `src/server.ts`, `src/server/`, `src/route-paths.ts`, `src/watch.ts`, `src/*-worker.ts` | HTTP routing, trusted peers, sync coordination, SSE, and background worker execution. |
 | Presentation | `src/ui/`, `src/report/` | The local React application and self-contained HTML reports. |
 

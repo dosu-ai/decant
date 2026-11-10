@@ -23,16 +23,24 @@ RUN case "${TARGETPLATFORM}" in \
     bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin --version "${DECANT_VERSION}"; \
     cp "/tmp/decant-bin/${DECANT_TARGET}/decant" /usr/local/bin/decant
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
+# Preserve the old Debian system account IDs so existing volumes stay writable.
+RUN mkdir -p /tmp/runtime/etc /tmp/runtime/var/lib/decant \
+      /tmp/runtime/sources/claude /tmp/runtime/sources/codex \
+      /tmp/runtime/sources/gemini /tmp/runtime/sources/cursor \
+      /tmp/runtime/sources/copilot /tmp/runtime/sources/vscode /tmp/runtime/sources/atif \
+    && printf 'root:x:0:0:root:/root:/sbin/nologin\ndecant:x:999:999::/var/lib/decant:/sbin/nologin\n' > /tmp/runtime/etc/passwd \
+    && printf 'root:x:0:\ndecant:x:999:\n' > /tmp/runtime/etc/group
 
-RUN groupadd --system decant \
-    && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \
-    && mkdir -p /var/lib/decant /sources/claude /sources/codex /sources/gemini /sources/cursor /sources/copilot /sources/vscode \
-    && chown -R decant:decant /var/lib/decant /sources
+FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS runtime
 
+COPY --from=build /tmp/runtime/etc/passwd /etc/passwd
+COPY --from=build /tmp/runtime/etc/group /etc/group
+COPY --from=build --chown=999:999 /tmp/runtime/var/lib/decant /var/lib/decant
+COPY --from=build --chown=999:999 /tmp/runtime/sources /sources
 COPY --from=build /usr/local/bin/decant /usr/local/bin/decant
 
-USER decant
+USER 999:999
+ENV HOME=/var/lib/decant
 WORKDIR /var/lib/decant
 
 ENV DECANT_DB=/var/lib/decant/decant.db

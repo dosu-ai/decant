@@ -91,7 +91,7 @@ function writeStub(path: string, contents: string): void {
 /**
  * A stub bin dir with a fake `curl` (serves fixture files by URL basename and
  * logs every requested URL to CURL_LOG) and a fake `gh`. The fake `gh` logs its
- * arguments to GH_LOG; `gh auth status` succeeds only when FAKE_GH_AUTH=ok and
+ * arguments to GH_LOG; `gh auth token` succeeds only when FAKE_GH_AUTH=ok and
  * `gh attestation verify` only when FAKE_GH_VERIFY=ok, so by default it acts
  * like a logged-out gh.
  */
@@ -150,8 +150,13 @@ if [ -n "\${GH_LOG:-}" ]; then
   printf '%s\\n' "$*" >> "$GH_LOG"
 fi
 case "$1" in
-  auth) [ "\${FAKE_GH_AUTH:-}" = ok ] ;;
+  auth) [ "$2" = token ] && [ "\${FAKE_GH_AUTH:-}" = ok ] && echo gho_fake ;;
   attestation)
+    if [ "\${FAKE_GH_OLD:-}" = 1 ]; then
+      echo 'unknown command "attestation" for "gh"' >&2
+      exit 1
+    fi
+    [ "$2" = --help ] && exit 0
     if [ "\${FAKE_GH_VERIFY:-}" = ok ]; then
       echo "fake gh: verification succeeded"
     else
@@ -536,8 +541,9 @@ describe("install.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("attestation verified");
       expect(existsSync(installedBinary)).toBe(true);
-      expect(ghCalls[0]).toBe("auth status --hostname github.com");
-      expect(ghCalls[1]).toMatch(
+      expect(ghCalls[0]).toBe("auth token --hostname github.com");
+      expect(ghCalls[1]).toBe("attestation --help");
+      expect(ghCalls[2]).toMatch(
         new RegExp(
           `^attestation verify .*/${tarballName.replaceAll(".", "\\.")} -R dosu-ai/decant$`,
         ),
@@ -577,7 +583,18 @@ describe("install.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("skipped the attestation check");
       expect(existsSync(installedBinary)).toBe(true);
-      expect(ghCalls).toEqual(["auth status --hostname github.com"]);
+      expect(ghCalls).toEqual(["auth token --hostname github.com"]);
+    });
+
+    test("a logged-in gh without the attestation command aborts with an upgrade hint", () => {
+      const { result, installedBinary, ghCalls, leftovers } = installWithGh({ FAKE_GH_OLD: "1" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "decant install: error: gh is logged in but too old to verify attestations; upgrade gh to 2.49 or newer",
+      );
+      expect(existsSync(installedBinary)).toBe(false);
+      expect(leftovers).toEqual([]);
+      expect(ghCalls).toEqual(["auth token --hostname github.com", "attestation --help"]);
     });
   });
 

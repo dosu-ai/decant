@@ -13,6 +13,7 @@ import {
   releaseBranchesFromLsRemote,
   releaseBranchRefspecs,
   releaseChannel,
+  runRefMismatchMessage,
   stableVersionsFromLsRemote,
 } from "../scripts/release/meta.ts";
 
@@ -194,13 +195,19 @@ describe("meta CLI", () => {
     return dir;
   }
 
-  function runMeta(work: string, raw: string, sha: string) {
+  function runMeta(work: string, raw: string, sha: string, ref?: string) {
     const output = join(work, "..", "github-output");
     writeFileSync(output, "");
     const result = spawnSync("bun", [script], {
       cwd: work,
       encoding: "utf8",
-      env: { ...process.env, RAW: raw, GITHUB_SHA: sha, GITHUB_OUTPUT: output },
+      env: {
+        ...process.env,
+        RAW: raw,
+        GITHUB_SHA: sha,
+        GITHUB_OUTPUT: output,
+        GITHUB_REF: ref ?? `refs/tags/${raw.startsWith("v") ? raw : `v${raw}`}`,
+      },
     });
     return { ...result, outputs: existsSync(output) ? readFileSync(output, "utf8") : "" };
   }
@@ -258,6 +265,16 @@ describe("meta CLI", () => {
     const onRelease = runMeta(shallowCheckout(origin, backport), "v0.3.1", backport);
     expect(onRelease.status).toBe(0);
     expect(onRelease.outputs).toBe("version=0.3.1\nis_prerelease=false\nis_latest=false\n");
+  });
+
+  test("refuses a run on a branch ref even when the tag points at its commit", () => {
+    const { work, head } = fixture();
+    const result = runMeta(work, "v0.4.0", head, "refs/heads/main");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `::error::${runRefMismatchMessage("v0.4.0", "refs/heads/main")}`,
+    );
+    expect(result.outputs).toBe("");
   });
 
   test("refuses a tag whose commit is on no release branch", () => {

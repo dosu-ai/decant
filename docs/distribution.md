@@ -50,10 +50,12 @@ Optional environment variables:
   API or Sigstore, such as one behind a restrictive proxy. The checksum still
   runs.
 
-When the GitHub CLI is installed and logged in to github.com
-(`gh auth status --hostname github.com` succeeds), the installer also runs
-`gh attestation verify` on the tarball against `dosu-ai/decant` and refuses to
-install if that fails. A mirror serves the same bytes, so its tarballs verify
+When the GitHub CLI is installed and has a github.com credential
+(`gh auth token --hostname github.com` succeeds, which needs no network), the
+installer also runs `gh attestation verify` on the tarball against
+`dosu-ai/decant` and refuses to install if that fails, including when the
+credential has expired or `gh` is older than 2.49 and has no `attestation`
+command. A mirror serves the same bytes, so its tarballs verify
 the same way. Without `gh`, or with `gh` logged out, the installer prints that
 it skipped the check and relies on the checksum alone.
 
@@ -227,6 +229,12 @@ tests in `test/release-*.test.ts`. Outside Actions, a script prints the outputs
 it would record, so steps can be rerun locally, for example
 `VERSION=1.2.3 bun run scripts/release/render-homebrew-formula.ts` after
 placing a `SHA256SUMS` in `dist/release/`.
+
+To run the workflow by hand, for example after fixing a runner problem, run it
+on the tag, not on a branch: `gh workflow run release.yml --ref v1.2.3 -f
+version=1.2.3`. The metadata job refuses any other ref, because the `release`
+environment only admits `v*` tags and a branch run would stall at the first
+publishing job.
 
 Re-running a failed release is safe: already-published npm versions are
 skipped and an existing GitHub Release only has its assets refreshed. A rerun

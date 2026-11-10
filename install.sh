@@ -201,7 +201,13 @@ info "checksum verified"
 # A mirror serves the same bytes, so its tarballs verify against this repo too.
 if [ "${DECANT_SKIP_ATTESTATION:-}" = "1" ]; then
   warn "skipping the attestation check because DECANT_SKIP_ATTESTATION=1"
-elif need_cmd gh && gh auth status --hostname github.com >/dev/null 2>&1; then
+# `gh auth token` reads the stored credential without a network call, unlike
+# `gh auth status`, which also fails for an expired second account or an
+# unreachable API. Either of those must not quietly drop the check.
+elif need_cmd gh && gh auth token --hostname github.com >/dev/null 2>&1; then
+  if ! gh attestation --help >/dev/null 2>&1; then
+    err "gh is logged in but too old to verify attestations; upgrade gh to 2.49 or newer and run the installer again"
+  fi
   if gh_output=$(gh attestation verify "$tarball_path" -R "$repo" 2>&1); then
     info "attestation verified"
   else

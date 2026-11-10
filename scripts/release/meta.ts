@@ -109,6 +109,14 @@ export function releaseBranchRefspecs(branches: readonly string[]): string[] {
   return branches.map((branch) => `+refs/heads/${branch}:${remoteBranchRef(branch)}`);
 }
 
+/** The release environment only admits tag refs, so a run on a branch would
+ * build everything and then stall at the first publishing job. */
+export function runRefMismatchMessage(tag: string, ref: string): string | null {
+  return ref === `refs/tags/${tag}`
+    ? null
+    : `this run's ref is ${ref || "(unset)"}, not refs/tags/${tag}. Push the tag, or dispatch on it: gh workflow run release.yml --ref ${tag} -f version=${tag.slice(1)}`;
+}
+
 export function offReleaseBranchMessage(tag: string, commit: string): string {
   return `tag ${tag} points at ${commit}, which is not on main or a release/* branch on origin. Tag a commit that is merged to main, or cut a backport from a release/* branch`;
 }
@@ -127,6 +135,10 @@ export function channelFromEnv(env: Env = process.env): ReleaseChannel {
 function main(): void {
   const { version, tag } = parseReleaseVersion(process.env.RAW ?? "");
   const runSha = commitSha("GITHUB_SHA", requireEnv("GITHUB_SHA"));
+  const refMismatch = runRefMismatchMessage(tag, process.env.GITHUB_REF ?? "");
+  if (refMismatch != null) {
+    fail(refMismatch);
+  }
 
   const fetched = run("git", [
     "fetch",

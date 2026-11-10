@@ -199,7 +199,9 @@ format Harbor and Terminal-Bench use, declared as `ATIF-v1.7`. `--all --out
 <dir>` writes `<id>.atif.json` files. Agent names follow Harbor's:
 `claude-code`, `codex`, `gemini-cli`, `opencode`, `cursor-cli`, and
 `copilot-cli`. Harbor has no VS Code agent, so Copilot Chat sessions use
-`vscode-copilot-chat`, the trajectory export's label.
+`vscode-copilot-chat`, the trajectory export's label. The root's `extra`
+carries the session's `cwd` and `git_branch`, and `repository` when the
+project's [repository identity](#repository-identity) is known.
 
 User text becomes `user` steps, and system messages and Codex injected context
 become `system` steps. Each run of consecutive assistant messages becomes one
@@ -342,6 +344,7 @@ that duplicate retained messages or contain only stream metadata.
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
+| The remote of each project's repository, as a host and path with any credentials removed | `project.repo_remote` |
 | Malformed records within byte and depth limits, retained locally | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
@@ -501,6 +504,31 @@ Decant cannot modify your Claude Code or Codex logs from inside the container.
 
 Removing the archive never removes the source logs. Those stay where Claude Code
 and Codex wrote them.
+
+## Repository identity
+
+A local path names a repository differently on every machine and in every
+worktree, so Decant also records the repository's remote as
+`project.repo_remote`: `github.com/acme/widget` for both
+`git@github.com:acme/widget.git` and `https://github.com/acme/widget`. Any sync
+that ingests a session reads it from the Git config on disk, for existing
+projects as well as new ones. Decant does not run `git` and does not contact
+the remote.
+
+The lookup starts at the project's directory and walks up to the working tree
+that holds it, following a linked worktree to the repository it belongs to. It
+uses `origin`, or the only remote when there is no `origin`. The scheme, user,
+password or token, port, query, and a trailing `.git` are dropped before the
+value is stored. A local path or `file:` remote is not recorded.
+
+A project whose directory is gone, such as a removed worktree, takes the remote
+of the repository root it resolved to. When neither can be read, the stored
+value stays as it was, so a project keeps its identity after its checkout is
+deleted. A project stays unset when its directory was removed before Decant
+first read it and it has no root on disk, when its repository has no remote,
+and when Decant cannot see the directory at all, as in a container that mounts
+only the source logs. Projects that hold only imported ATIF trajectories are
+skipped, because their path is a job directory, not the place the agent ran.
 
 ## Automatic and explicit sync
 

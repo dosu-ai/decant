@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 29;
+export const LATEST_SCHEMA_VERSION = 30;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -840,6 +840,17 @@ function migrate(db: Database, current: number): void {
       db.exec("CREATE INDEX IF NOT EXISTS idx_block_id_session ON block(id, session_id)");
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (29, datetime('now'))",
+      ).run();
+    }
+    if (current < 30) {
+      // A repository's remote names it the same way on every machine and in
+      // every worktree, which a local path cannot. Sync fills it in from the
+      // Git config on disk, so existing projects start out unset.
+      if (!hasColumn(db, "project", "repo_remote")) {
+        db.exec("ALTER TABLE project ADD COLUMN repo_remote TEXT");
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (30, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

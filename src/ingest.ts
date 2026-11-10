@@ -46,6 +46,7 @@ import {
 } from "./model-usage.ts";
 import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
+import { resolveProjectRemotes } from "./repo-remote.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseAtifDocument } from "./sources/atif.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
@@ -597,6 +598,8 @@ function refreshDerivedState(
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
+    // After the roots: a project whose directory is gone borrows its root's.
+    resolveProjectRemotes(db);
   }
   const uncheckedRecommendationImpactLabels =
     db

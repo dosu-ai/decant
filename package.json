@@ -22,7 +22,7 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.4",
+    "@biomejs/biome": "^2.6.5",
     "@letta-ai/trajectory": "^0.4.3",
     "@types/bun": "^1.4.4",
     "@types/react": "^19.3.0",
@@ -34,18 +34,18 @@
   "dependencies": {
     "@leeoniya/ufuzzy": "^1.0.19",
     "@logtape/logtape": "^2.4.2",
-    "@shikijs/langs": "^4.5.0",
-    "@shikijs/themes": "^4.5.0",
+    "@shikijs/langs": "^4.6.0",
+    "@shikijs/themes": "^4.6.0",
     "acorn": "^8.19.0",
     "acorn-walk": "^8.3.5",
     "commander": "^15.0.0",
     "diff": "^9.0.0",
     "echarts": "^6.1.0",
-    "lucide-react": "^1.66.0",
+    "lucide-react": "^1.69.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "shiki": "^4.5.0"
+    "shiki": "^4.6.0"
   }
 }

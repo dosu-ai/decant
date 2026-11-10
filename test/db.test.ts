@@ -403,6 +403,31 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
+  test("adds the repository remote column when upgrading a v29 archive", () => {
+    const path = freshPath();
+    const fresh = openDb(path);
+    const expected = buildSchemaManifest(fresh);
+    fresh.exec(`
+      INSERT INTO project(id, path, name) VALUES (1, '/synthetic/app', 'app');
+      ALTER TABLE project DROP COLUMN repo_remote;
+      DELETE FROM schema_migrations WHERE version > 29;
+    `);
+    closeDb(fresh);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    // Sync fills the remote in; the migration leaves existing projects unset.
+    expect(migrated.query("SELECT path, repo_remote FROM project").all()).toEqual([
+      { path: "/synthetic/app", repo_remote: null },
+    ]);
+    expect(
+      migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+        version: number;
+      },
+    ).toEqual({ version: LATEST_SCHEMA_VERSION });
+    closeDb(migrated);
+  });
+
   test("keeps the message parent index that backs the foreign key", () => {
     // parent_id is never written, but every deleted message still checks for
     // children referencing it. Without this index that check scans the whole

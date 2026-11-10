@@ -26,6 +26,26 @@ export interface AtifToolCall {
 export interface AtifSubagentRef {
   trajectory_id: string;
   session_id?: string;
+  trajectory_path?: string;
+}
+
+/** A subagent session that is exported as a document of its own. */
+export interface AtifSubagentTarget {
+  /** The subagent's archive session id. */
+  id: number;
+  tool: string;
+  source_session_id: string;
+  /** The `trajectory_id` its own export carries. */
+  trajectory_id: string;
+}
+
+export interface AtifExportOptions {
+  /** Where each subagent's own document will live: a file path, a URL, or a
+   * key in another store. When set, subagents are left out of this document
+   * and each spawning call points at that location through ATIF's file-ref
+   * form (`trajectory_path`). `final_metrics` then cover this session alone,
+   * so a reader that stores every session separately counts nothing twice. */
+  subagentPath?: (subagent: AtifSubagentTarget) => string;
 }
 
 export interface AtifObservationResult {
@@ -83,6 +103,7 @@ export interface AtifReport {
   tool_call_ids_synthesized: number;
   tool_call_ids_renamed: number;
   subagents_embedded: number;
+  subagents_referenced: number;
   subagents_unlinked: number;
 }
 
@@ -94,6 +115,7 @@ interface SessionRow {
   raw_meta: string | null;
   cwd: string | null;
   git_branch: string | null;
+  repo_remote: string | null;
   cli_version: string | null;
   total_input_tokens: number;
   total_output_tokens: number;
@@ -202,6 +224,25 @@ interface BuildState {
   report: AtifReport;
   usedTrajectoryIds: Set<string>;
   embedded: AtifTrajectory[];
+  subagentPath: AtifExportOptions["subagentPath"];
+}
+
+function newBuildState(subagentPath?: AtifExportOptions["subagentPath"]): BuildState {
+  return {
+    report: {
+      dropped_blocks: {},
+      orphan_tool_results_dropped: 0,
+      duplicate_tool_results_dropped: 0,
+      tool_call_ids_synthesized: 0,
+      tool_call_ids_renamed: 0,
+      subagents_embedded: 0,
+      subagents_referenced: 0,
+      subagents_unlinked: 0,
+    },
+    usedTrajectoryIds: new Set(),
+    embedded: [],
+    subagentPath,
+  };
 }
 
 interface BuiltTrajectory {
@@ -218,24 +259,16 @@ interface CallSite {
   at: string | undefined;
 }
 
-export function exportAtif(db: Database, sessionId: number): AtifExport {
+export function exportAtif(
+  db: Database,
+  sessionId: number,
+  options: AtifExportOptions = {},
+): AtifExport {
   const detail = getSession(db, sessionId);
   if (detail == null) {
     return { ok: false, reason: "not_found" };
   }
-  const state: BuildState = {
-    report: {
-      dropped_blocks: {},
-      orphan_tool_results_dropped: 0,
-      duplicate_tool_results_dropped: 0,
-      tool_call_ids_synthesized: 0,
-      tool_call_ids_renamed: 0,
-      subagents_embedded: 0,
-      subagents_unlinked: 0,
-    },
-    usedTrajectoryIds: new Set(),
-    embedded: [],
-  };
+  const state = newBuildState(options.subagentPath);
   const built = buildTrajectory(db, detail, state);
   if (built.trajectory == null) {
     return { ok: false, reason: "no_steps" };
@@ -268,7 +301,8 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
   const row = db
     .query(
       `SELECT raw_meta, cwd, git_branch, cli_version, total_input_tokens, total_output_tokens,
-              total_cache_read_tokens, total_cache_creation_tokens, total_cache_creation_1h_tokens
+              total_cache_read_tokens, total_cache_creation_tokens, total_cache_creation_1h_tokens,
+              (SELECT repo_remote FROM project WHERE id = session.project_id) AS repo_remote
        FROM session WHERE id = ?1`,
     )
     .get(id) as SessionRow | null;
@@ -535,9 +569,36 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     usageAvailable: summary.usage_available,
   };
 
+  const embeds = state.subagentPath == null;
   for (const child of detail.subagents) {
     const childDetail = getSession(db, child.summary.id);
     if (childDetail == null) {
+      continue;
+    }
+    if (state.subagentPath != null) {
+      // Build the child exactly as its own export would, without its
+      // descendants: that decides whether there is a document to point at and
+      // which `trajectory_id` it carries. Its report belongs to that export.
+      childDetail.subagents = [];
+      const own = buildTrajectory(db, childDetail, newBuildState()).trajectory;
+      if (own == null) {
+        continue;
+      }
+      const ref: AtifSubagentRef = {
+        trajectory_id: own.trajectory_id,
+        session_id: own.session_id,
+        trajectory_path: state.subagentPath({
+          id: child.summary.id,
+          tool: child.summary.tool,
+          source_session_id: child.summary.source_session_id,
+          trajectory_id: own.trajectory_id,
+        }),
+      };
+      if (linkSubagent(child, ref, callsByOriginal, resultFor)) {
+        report.subagents_referenced += 1;
+      } else {
+        report.subagents_unlinked += 1;
+      }
       continue;
     }
     // Keep the root read's subagent tree: it carries the depth limit and the
@@ -552,7 +613,11 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     }
     state.embedded.push(builtChild.trajectory);
     report.subagents_embedded += 1;
-    if (!linkSubagent(child, builtChild.trajectory, callsByOriginal, resultFor)) {
+    const ref: AtifSubagentRef = {
+      trajectory_id: builtChild.trajectory.trajectory_id,
+      session_id: builtChild.trajectory.session_id,
+    };
+    if (!linkSubagent(child, ref, callsByOriginal, resultFor)) {
       report.subagents_unlinked += 1;
     }
   }
@@ -573,9 +638,9 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
       // Decant prices with its own rate table at export time, unless the
       // source recorded a cost for a model Decant cannot price.
       cost_source: summary.cost_source,
-      ...(detail.subagents.length > 0 ? { includes_subagents: true } : {}),
+      ...(embeds && detail.subagents.length > 0 ? { includes_subagents: true } : {}),
     };
-    if (detail.subagents.length > 0 && summary.usage_available) {
+    if (embeds && detail.subagents.length > 0 && summary.usage_available) {
       // The totals above include the subagents, so a reader that files each
       // embedded trajectory as its own session needs this one's share.
       finalMetrics.extra.session_metrics = {
@@ -600,6 +665,8 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     ["title", summary.title],
     ["cwd", row?.cwd ?? null],
     ["git_branch", row?.git_branch ?? null],
+    // Unlike `cwd`, this names the repository the same way on every machine.
+    ["repository", row?.repo_remote ?? null],
     ["reasoning_effort", summary.reasoning_effort],
     ["agent_type", summary.agent_type],
   ];
@@ -688,11 +755,11 @@ function spawningCall(child: SubagentDetail, calls: CallSite[] | undefined): Cal
   return match;
 }
 
-/** Point the spawning call's observation at the embedded subagent. Returns
+/** Point the spawning call's observation at the subagent's trajectory. Returns
  * false when no call in the parent can be identified as the spawner. */
 function linkSubagent(
   child: SubagentDetail,
-  embedded: AtifTrajectory,
+  ref: AtifSubagentRef,
   callsByOriginal: Map<string, CallSite[]>,
   resultFor: (step: AtifStep, callId: string) => AtifObservationResult | undefined,
 ): boolean {
@@ -701,10 +768,6 @@ function linkSubagent(
   if (call == null) {
     return false;
   }
-  const ref: AtifSubagentRef = {
-    trajectory_id: embedded.trajectory_id,
-    session_id: embedded.session_id,
-  };
   const existing = resultFor(call.step, call.id);
   if (existing != null) {
     existing.subagent_trajectory_ref = [...(existing.subagent_trajectory_ref ?? []), ref];

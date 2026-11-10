@@ -73,20 +73,12 @@ export function releaseChannel(version: string, stableTags: readonly string[]): 
 
 const RELEASE_BRANCH = /^release\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
-/**
- * Releases come from `main`. A backport such as v0.2.5 after v0.3.0 cannot,
- * because main already holds the newer code, so `release/*` branches are the
- * other accepted source.
- */
+/** `main`, plus `release/*` for backports that can't come from main. */
 export function isReleaseBranch(name: string): boolean {
   return name === "main" || RELEASE_BRANCH.test(name);
 }
 
-/**
- * Release branches named by `git ls-remote --heads` output. ls-remote patterns
- * match ref suffixes (`main` also matches `refs/heads/x/main`), so this keeps
- * only exact `refs/heads/<release branch>` names.
- */
+/** Exact names only: ls-remote's `main` pattern also matches `refs/heads/x/main`. */
 export function releaseBranchesFromLsRemote(output: string): string[] {
   const branches = new Set<string>();
   for (const line of output.split("\n")) {
@@ -109,8 +101,7 @@ export function releaseBranchRefspecs(branches: readonly string[]): string[] {
   return branches.map((branch) => `+refs/heads/${branch}:${remoteBranchRef(branch)}`);
 }
 
-/** The release environment only admits tag refs, so a run on a branch would
- * build everything and then stall at the first publishing job. */
+/** The release environment admits only tag refs. */
 export function runRefMismatchMessage(tag: string, ref: string): string | null {
   return ref === `refs/tags/${tag}`
     ? null
@@ -158,10 +149,7 @@ function main(): void {
     );
   }
 
-  // A tag push runs the release.yml stored at the tagged commit, so an
-  // unmerged commit could publish with a workflow nobody reviewed. This catches
-  // a mistagged commit. The tag ruleset and the release environment are what
-  // stop someone who edits this check away on their own commit.
+  // Catches a mistagged commit; the tag ruleset and environment stop deliberate ones.
   const branches = releaseBranchesFromLsRemote(
     capture("git", ["ls-remote", "--heads", "origin", "main", "release/*"]),
   );

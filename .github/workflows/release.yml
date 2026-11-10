@@ -147,9 +147,7 @@ jobs:
           cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
           jq -c . "$BUNDLE_PATH" > "dist/release/decant-${VERSION}.intoto.jsonl"
 
-      # The binaries bundle the production packages pinned in bun.lock, and
-      # syft leaves dev-only packages out by default. The Bun runtime inside
-      # each binary is not a lockfile package, so the SBOM does not list it.
+      # Lists bun.lock production packages; the embedded Bun runtime isn't one.
       - name: Generate the CycloneDX SBOM from bun.lock
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         env:
@@ -263,11 +261,8 @@ jobs:
             echo "::warning::determinism canary: rebuild diverged from the release build's pre-signing hashes (non-blocking)"
           fi
 
-  # The four publishing jobs declare the release environment. Each one waits
-  # for its own approval: npm and docker become ready together, github-release
-  # after the npx smoke, and tap-update after the Homebrew smoke. npm's trusted
-  # publisher can be bound to this environment name, and HOMEBREW_TOKEN is an
-  # environment secret, so those two jobs cannot sit behind a shared gate job.
+  # Each publishing job declares the environment itself, so npm trusted
+  # publishing can be bound to it; a shared gate job wouldn't allow that.
   npm:
     name: Publish npm packages
     needs: [meta, build, smoke-darwin]
@@ -462,10 +457,7 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      # syft reads the GHCR login above from the Docker config. For the
-      # multi-platform index it scans the linux/amd64 image, and both platforms
-      # come from the same Dockerfile and Debian base. The compiled decant
-      # binary hides its npm packages from syft; the release SBOM lists those.
+      # Scans the amd64 image's OS packages; the release SBOM covers npm ones.
       - name: Generate the image SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:

@@ -25,11 +25,7 @@ export function provenanceFileName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.intoto.jsonl`;
 }
 
-/**
- * CycloneDX SBOM of the production packages in bun.lock. SHA256SUMS does not
- * list it because the build writes it after packaging; its integrity comes
- * from the SBOM attestation on the tarballs instead.
- */
+/** Not in SHA256SUMS (written after packaging); its attestation covers it. */
 export function sbomFileName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.cdx.json`;
 }

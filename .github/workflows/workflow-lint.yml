@@ -44,8 +44,7 @@ jobs:
       - name: shellcheck install.sh
         run: shellcheck -s sh install.sh
 
-      # Annotations rather than SARIF: zizmor exits 0 in SARIF mode, which
-      # would stop this required check from failing on findings.
+      # Annotations, not SARIF: zizmor exits 0 in SARIF mode.
       - name: zizmor
         uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
@@ -58,9 +57,7 @@ jobs:
           advanced-security: false
           annotations: true
 
-  # Code scanning keeps zizmor findings visible on main. It runs on pushes only
-  # because a fork's pull request token cannot write security events, and the
-  # lint job above already gates pull requests.
+  # Push-only: fork PR tokens can't write security events.
   zizmor-code-scanning:
     name: zizmor code scanning
     if: github.event_name == 'push'

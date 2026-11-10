@@ -194,16 +194,11 @@ info "checksum verified"
 
 # --- 4. attestation ------------------------------------------------------------
 
-# A matching checksum only proves the tarball matches the SHA256SUMS served
-# next to it. The attestation proves this repository's release workflow built
-# it, so once gh can check that, a failure stops the install. gh being absent
-# or logged out is common on fresh machines and keeps the checksum-only path.
-# A mirror serves the same bytes, so its tarballs verify against this repo too.
+# The checksum proves the download matches SHA256SUMS; the attestation proves
+# this repo's release workflow built it.
 if [ "${DECANT_SKIP_ATTESTATION:-}" = "1" ]; then
   warn "skipping the attestation check because DECANT_SKIP_ATTESTATION=1"
-# `gh auth token` reads the stored credential without a network call, unlike
-# `gh auth status`, which also fails for an expired second account or an
-# unreachable API. Either of those must not quietly drop the check.
+# `gh auth token` needs no network; `gh auth status` fails on unrelated accounts.
 elif need_cmd gh && gh auth token --hostname github.com >/dev/null 2>&1; then
   if ! gh attestation --help >/dev/null 2>&1; then
     err "gh is logged in but too old to verify attestations; upgrade gh to 2.49 or newer and run the installer again"

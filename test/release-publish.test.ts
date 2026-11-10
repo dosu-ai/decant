@@ -13,6 +13,8 @@ import {
   ghReleaseArgs,
   provenanceFileName,
   type ReleasePlan,
+  requiredReleaseFiles,
+  sbomFileName,
 } from "../scripts/release/publish-github-release.ts";
 import {
   type NpmDistTag,
@@ -189,12 +191,14 @@ describe("GitHub Release publishing", () => {
     tarballs: ["decant-darwin-arm64.tar.gz", "decant-linux-x64.tar.gz"],
     bundle: attestationBundleName("v1.2.3"),
     provenance: provenanceFileName("v1.2.3"),
+    sbom: sbomFileName("v1.2.3"),
   };
   const assets = [
     "./decant-darwin-arm64.tar.gz",
     "./decant-linux-x64.tar.gz",
     "decant-1.2.3.sigstore.json",
     "decant-1.2.3.intoto.jsonl",
+    "decant-1.2.3.cdx.json",
     "SHA256SUMS",
     "install.sh",
   ];
@@ -221,6 +225,7 @@ describe("GitHub Release publishing", () => {
       tag: "v1.2.3-beta.1",
       bundle: attestationBundleName("v1.2.3-beta.1"),
       provenance: provenanceFileName("v1.2.3-beta.1"),
+      sbom: sbomFileName("v1.2.3-beta.1"),
     };
     expect(ghReleaseArgs(beta, false, PRERELEASE).slice(2, 9)).toEqual([
       "--verify-tag",
@@ -233,6 +238,15 @@ describe("GitHub Release publishing", () => {
     ]);
     expect(beta.bundle).toBe("decant-1.2.3-beta.1.sigstore.json");
     expect(beta.provenance).toBe("decant-1.2.3-beta.1.intoto.jsonl");
+    expect(beta.sbom).toBe("decant-1.2.3-beta.1.cdx.json");
+  });
+
+  test("requires the provenance copies and the SBOM before publishing", () => {
+    expect(requiredReleaseFiles("v1.2.3")).toEqual([
+      "decant-1.2.3.sigstore.json",
+      "decant-1.2.3.intoto.jsonl",
+      "decant-1.2.3.cdx.json",
+    ]);
   });
 
   test("refreshes assets on an existing release instead of recreating it", () => {

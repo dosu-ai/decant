@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (must match an existing v* tag that peels to the run's commit)"
+        description: "Version to release. Run the workflow on its v* tag (gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z)"
         required: true
         type: string
 
@@ -147,6 +147,27 @@ jobs:
           cp "$BUNDLE_PATH" "dist/release/decant-${VERSION}.sigstore.json"
           jq -c . "$BUNDLE_PATH" > "dist/release/decant-${VERSION}.intoto.jsonl"
 
+      # Lists bun.lock production packages; the embedded Bun runtime isn't one.
+      - name: Generate the CycloneDX SBOM from bun.lock
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: decant
+          SYFT_SOURCE_VERSION: ${{ needs.meta.outputs.version }}
+        with:
+          file: bun.lock
+          format: cyclonedx-json
+          output-file: dist/release/decant-${{ needs.meta.outputs.version }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the SBOM (tarballs and raw binaries)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/release/decant-*.tar.gz
+            dist/bin/*/decant
+          sbom-path: dist/release/decant-${{ needs.meta.outputs.version }}.cdx.json
+
       - name: Upload pre-signing hashes
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -240,9 +261,14 @@ jobs:
             echo "::warning::determinism canary: rebuild diverged from the release build's pre-signing hashes (non-blocking)"
           fi
 
+  # Each publishing job declares the environment itself, so npm trusted
+  # publishing can be bound to it; a shared gate job wouldn't allow that.
   npm:
     name: Publish npm packages
     needs: [meta, build, smoke-darwin]
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/@dosu/decant/v/${{ needs.meta.outputs.version }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -330,6 +356,9 @@ jobs:
   github-release:
     name: GitHub Release
     needs: [meta, build, npm, npm-smoke]
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.meta.outputs.version }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -365,6 +394,9 @@ jobs:
   docker:
     name: Publish Docker image
     needs: [meta, build, smoke-darwin]
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/pkgs/container/decant
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -423,6 +455,24 @@ jobs:
         with:
           subject-name: ghcr.io/dosu-ai/decant
           subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # Scans the amd64 image's OS packages; the release SBOM covers npm ones.
+      - name: Generate the image SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ghcr.io/dosu-ai/decant@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/decant-image.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the image SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/dosu-ai/decant
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/decant-image.cdx.json
           push-to-registry: true
 
       - name: Check the image is anonymously pullable
@@ -526,6 +576,9 @@ jobs:
     name: Update Homebrew tap
     needs: [meta, github-release, homebrew-formula, homebrew-smoke]
     if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    environment:
+      name: release
+      url: ${{ github.server_url }}/dosu-ai/homebrew-dosu/blob/main/Formula/decant.rb
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

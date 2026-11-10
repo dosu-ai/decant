@@ -1,5 +1,16 @@
 #!/usr/bin/env bun
-import { capture, chomp, type Env, fail, requireEnv, run, runMain, setOutput } from "./actions.ts";
+import {
+  capture,
+  chomp,
+  type Env,
+  fail,
+  requireEnv,
+  run,
+  runChecked,
+  runMain,
+  runQuiet,
+  setOutput,
+} from "./actions.ts";
 import { commitSha, oneOf, releaseVersion } from "./validate.ts";
 
 export interface ReleaseMeta {
@@ -60,6 +71,47 @@ export function releaseChannel(version: string, stableTags: readonly string[]): 
   return { isPrerelease: false, isLatest: !higher };
 }
 
+const RELEASE_BRANCH = /^release\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** `main`, plus `release/*` for backports that can't come from main. */
+export function isReleaseBranch(name: string): boolean {
+  return name === "main" || RELEASE_BRANCH.test(name);
+}
+
+/** Exact names only: ls-remote's `main` pattern also matches `refs/heads/x/main`. */
+export function releaseBranchesFromLsRemote(output: string): string[] {
+  const branches = new Set<string>();
+  for (const line of output.split("\n")) {
+    const ref = line.split("\t")[1]?.trim();
+    if (ref?.startsWith("refs/heads/")) {
+      const name = ref.slice("refs/heads/".length);
+      if (isReleaseBranch(name)) {
+        branches.add(name);
+      }
+    }
+  }
+  return [...branches].sort();
+}
+
+export function remoteBranchRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
+}
+
+export function releaseBranchRefspecs(branches: readonly string[]): string[] {
+  return branches.map((branch) => `+refs/heads/${branch}:${remoteBranchRef(branch)}`);
+}
+
+/** The release environment admits only tag refs. */
+export function runRefMismatchMessage(tag: string, ref: string): string | null {
+  return ref === `refs/tags/${tag}`
+    ? null
+    : `this run's ref is ${ref || "(unset)"}, not refs/tags/${tag}. Push the tag, or dispatch on it: gh workflow run release.yml --ref ${tag} -f version=${tag.slice(1)}`;
+}
+
+export function offReleaseBranchMessage(tag: string, commit: string): string {
+  return `tag ${tag} points at ${commit}, which is not on main or a release/* branch on origin. Tag a commit that is merged to main, or cut a backport from a release/* branch`;
+}
+
 /** Reads the channel the meta job passed into a downstream job's environment. */
 export function channelFromEnv(env: Env = process.env): ReleaseChannel {
   const flag = (name: string): boolean =>
@@ -74,6 +126,10 @@ export function channelFromEnv(env: Env = process.env): ReleaseChannel {
 function main(): void {
   const { version, tag } = parseReleaseVersion(process.env.RAW ?? "");
   const runSha = commitSha("GITHUB_SHA", requireEnv("GITHUB_SHA"));
+  const refMismatch = runRefMismatchMessage(tag, process.env.GITHUB_REF ?? "");
+  if (refMismatch != null) {
+    fail(refMismatch);
+  }
 
   const fetched = run("git", [
     "fetch",
@@ -91,6 +147,28 @@ function main(): void {
     fail(
       `tag ${tag} points at ${tagCommit} but this run builds ${runSha} — dispatch with the tag as the run ref`,
     );
+  }
+
+  // Catches a mistagged commit; the tag ruleset and environment stop deliberate ones.
+  const branches = releaseBranchesFromLsRemote(
+    capture("git", ["ls-remote", "--heads", "origin", "main", "release/*"]),
+  );
+  if (branches.length > 0) {
+    runChecked("git", [
+      "fetch",
+      "--no-tags",
+      "--force",
+      "--",
+      "origin",
+      ...releaseBranchRefspecs(branches),
+    ]);
+  }
+  const containing = branches.filter(
+    (branch) =>
+      runQuiet("git", ["merge-base", "--is-ancestor", tagCommit, remoteBranchRef(branch)]) === 0,
+  );
+  if (containing.length === 0) {
+    fail(offReleaseBranchMessage(tag, tagCommit));
   }
 
   const stableTags = version.includes("-")

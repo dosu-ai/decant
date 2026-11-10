@@ -10,6 +10,7 @@ export interface ReleasePlan {
   tarballs: readonly string[];
   bundle: string;
   provenance: string;
+  sbom: string;
 }
 
 export function attestationBundleName(tag: string): string {
@@ -24,11 +25,22 @@ export function provenanceFileName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.intoto.jsonl`;
 }
 
+/** Not in SHA256SUMS (written after packaging); its attestation covers it. */
+export function sbomFileName(tag: string): string {
+  return `decant-${tag.replace(/^v/, "")}.cdx.json`;
+}
+
+/** Files the build job must have staged next to the tarballs. */
+export function requiredReleaseFiles(tag: string): string[] {
+  return [attestationBundleName(tag), provenanceFileName(tag), sbomFileName(tag)];
+}
+
 export function releaseAssets(plan: ReleasePlan): string[] {
   return [
     ...plan.tarballs.map((name) => `./${name}`),
     plan.bundle,
     plan.provenance,
+    plan.sbom,
     "SHA256SUMS",
     "install.sh",
   ];
@@ -69,12 +81,10 @@ function main(): void {
   const releaseDir = safePath("RELEASE_DIR", requireEnv("RELEASE_DIR"));
   const tag = releaseTag("TAG", requireEnv("TAG"));
   const channel = channelFromEnv();
-  const bundle = attestationBundleName(tag);
-  const provenance = provenanceFileName(tag);
-  for (const name of [bundle, provenance]) {
+  for (const name of requiredReleaseFiles(tag)) {
     const path = join(releaseDir, name);
     if (!existsSync(path) || !statSync(path).isFile()) {
-      fail(`attestation bundle ${name} missing from the release-tarballs artifact`);
+      fail(`${name} missing from the release-tarballs artifact`);
     }
   }
   const tarballs = readdirSync(releaseDir)
@@ -84,7 +94,13 @@ function main(): void {
   if (tarballs.length === 0) {
     fail(`no release tarballs found in ${releaseDir}`);
   }
-  const plan: ReleasePlan = { tag, tarballs, bundle, provenance };
+  const plan: ReleasePlan = {
+    tag,
+    tarballs,
+    bundle: attestationBundleName(tag),
+    provenance: provenanceFileName(tag),
+    sbom: sbomFileName(tag),
+  };
 
   const exists = runQuiet("gh", ["release", "view", "--", tag], { cwd: releaseDir }) === 0;
   if (exists) {

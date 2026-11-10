@@ -63,9 +63,12 @@ release VERSION:
     set -euo pipefail
     [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty"; exit 1; }
     branch="$(git rev-parse --abbrev-ref HEAD)"
-    [ "$branch" = "main" ] || { echo "release from main, not $branch"; exit 1; }
-    git fetch origin main
-    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not up to date with origin/main"; exit 1; }
+    case "$branch" in
+      main | release/*) ;;
+      *) echo "release from main or a release/* branch, not $branch"; exit 1 ;;
+    esac
+    git fetch origin "$branch"
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ] || { echo "$branch is not up to date with origin/$branch"; exit 1; }
     git tag -s "v{{VERSION}}" -m "v{{VERSION}}"
     git push origin "v{{VERSION}}"
 

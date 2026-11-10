@@ -45,9 +45,19 @@ Optional environment variables:
   headers. A redirect to anything other than HTTPS or a relative path, which
   keeps the same scheme and host, makes the installer discard the file and
   exit before it verifies or installs anything.
+- `DECANT_SKIP_ATTESTATION=1`: skip the provenance check described below,
+  for a machine where `gh` is logged in but cannot reach GitHub's attestation
+  API or Sigstore, such as one behind a restrictive proxy. The checksum still
+  runs.
 
-When the GitHub CLI is available, the installer also performs a best-effort
-provenance check.
+When the GitHub CLI is installed and has a github.com credential
+(`gh auth token --hostname github.com` succeeds, which needs no network), the
+installer also runs `gh attestation verify` on the tarball against
+`dosu-ai/decant` and refuses to install if that fails, including when the
+credential has expired or `gh` is older than 2.49 and has no `attestation`
+command. A mirror serves the same bytes, so its tarballs verify
+the same way. Without `gh`, or with `gh` logged out, the installer prints that
+it skipped the check and relies on the checksum alone.
 
 ## Homebrew
 
@@ -191,13 +201,32 @@ check. [Permissions](data-lifecycle.md#permissions) describes the cache file.
 ## Cut a release
 
 Releases are cut by pushing a signed `vMAJOR.MINOR.PATCH` tag from `main`
-(`just release 1.2.3`). A suffix such as `-beta.1` makes it a prerelease.
+(`just release 1.2.3`). A suffix such as `-beta.1` makes it a prerelease. A
+backport is cut the same way from a `release/*` branch, such as `release/1.1`
+branched from `v1.1.3` with the fix cherry-picked onto it. Push the branch
+before running `just release` on it. A tag runs the `release.yml` stored at the
+tagged commit, so also cherry-pick any release workflow changes made on `main`
+since the branch point. Without them, the publishing jobs may lack the
+`release` environment that npm and the Homebrew token require.
 
-The tag triggers `.github/workflows/release.yml`, which verifies the tag points
-at the run's commit and then publishes:
+The tag triggers `.github/workflows/release.yml`. Before it builds anything, it
+checks that the tag points at the run's commit and that the commit is on
+`main` or a `release/*` branch on GitHub, so a tag on an unmerged commit fails
+there. It then builds, signs, attests, and smoke-tests the binaries without
+asking anyone.
 
-- a GitHub Release with the tarballs, `SHA256SUMS`, the Sigstore bundle, and
-  `install.sh`
+The jobs that publish (`npm`, `docker`, `github-release`, and `tap-update`)
+run in the `release` deployment environment, so each one waits for a
+maintainer to approve it under **Review deployments** on the run page. `npm`
+and `docker` wait at the same time and can be approved together.
+`github-release` waits again after the post-publish npm smoke passes, and
+`tap-update` waits after the Homebrew smoke passes, so a stable latest release
+asks three times and a prerelease or backport asks twice. npm trusted
+publishing and the `HOMEBREW_TOKEN` secret are scoped to that environment.
+Those jobs then publish:
+
+- a GitHub Release with the tarballs, `SHA256SUMS`, the Sigstore bundle, the
+  CycloneDX SBOM, and `install.sh`
 - the npm launcher and platform packages, with provenance
 - `ghcr.io/dosu-ai/decant:<version>`
 - an updated formula in the `dosu-ai/homebrew-dosu` tap, for a stable latest
@@ -220,13 +249,20 @@ it would record, so steps can be rerun locally, for example
 `VERSION=1.2.3 bun run scripts/release/render-homebrew-formula.ts` after
 placing a `SHA256SUMS` in `dist/release/`.
 
+To run the workflow by hand, for example after fixing a runner problem, run it
+on the tag, not on a branch: `gh workflow run release.yml --ref v1.2.3 -f
+version=1.2.3`. The metadata job refuses any other ref, because the `release`
+environment only admits `v*` tags and a branch run would stall at the first
+publishing job.
+
 Re-running a failed release is safe: already-published npm versions are
-skipped and an existing GitHub Release only has its assets refreshed.
+skipped and an existing GitHub Release only has its assets refreshed. A rerun
+of a publishing job asks for approval again.
 
 ## Verify a release
 
-GitHub Releases include four platform tarballs, `SHA256SUMS`, and the SLSA
-build provenance for all of them. The provenance ships twice:
+GitHub Releases include four platform tarballs, `SHA256SUMS`, the SLSA build
+provenance for all of them, and an SBOM. The provenance ships twice:
 `decant-<version>.sigstore.json` is the Sigstore bundle, and
 `decant-<version>.intoto.jsonl` holds the same bundle as JSON Lines, the name
 OpenSSF Scorecard looks for. Releases published before the `.intoto.jsonl`
@@ -251,8 +287,27 @@ gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
   --bundle "decant-${TAG#v}.sigstore.json"
 ```
 
+Each release also ships `decant-<version>.cdx.json`, a CycloneDX SBOM of the
+production packages pinned in `bun.lock`, which the binaries bundle. It leaves
+out development-only packages and the Bun runtime compiled into each binary.
+`SHA256SUMS` does not list the SBOM. The release workflow attests it against
+every tarball and raw binary instead, so verify it with the SBOM predicate
+type. Releases published before the SBOM was added have no such attestation.
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
+  --predicate-type https://cyclonedx.org/bom
+```
+
 To check npm provenance, install into a scratch project and run
-`npm audit signatures`. GHCR images also carry GitHub attestations.
+`npm audit signatures`. GHCR images carry build provenance and an SBOM
+attestation of the image, which lists the Debian packages in the base image:
+
+```sh
+gh attestation verify "oci://ghcr.io/dosu-ai/decant:${TAG#v}" -R dosu-ai/decant
+gh attestation verify "oci://ghcr.io/dosu-ai/decant:${TAG#v}" -R dosu-ai/decant \
+  --predicate-type https://cyclonedx.org/bom
+```
 
 If macOS Gatekeeper blocks a tarball downloaded manually through a browser,
 clear the quarantine attribute from that binary:

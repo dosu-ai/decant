@@ -554,7 +554,10 @@ not carry over `--host`, `--trusted-peer`, `--no-sync`, or source-directory
 flags.
 
 A relative `--db` or `DECANT_DB` is stored as an absolute path, because the OS
-starts the service in its own working directory. Running
+starts the service in its own working directory. Decant refuses to register a
+service when the archive path or its own executable path contains a control
+character such as a newline or carriage return, because no quoting keeps one
+inside a systemd unit or plist. Running
 `decant service install` again with a different archive or port replaces the
 registration, whether or not the service is running. On macOS this waits for
 the old process to exit, up to 30 seconds, before registering the new command.

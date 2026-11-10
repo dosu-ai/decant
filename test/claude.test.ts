@@ -241,7 +241,7 @@ describe("parseClaudeSession", () => {
     const parsed = parseClaudeSession("s1", lines);
     const unknown = parsed.issues.filter((issue) => issue.code === "unknown_record_type");
     expect(unknown).toHaveLength(1);
-    expect(unknown[0]?.error).toContain('"wormhole"');
+    expect(unknown[0]?.error).toContain("sha256:e868c4707417");
     expect(unknown[0]?.error).toContain("2 line");
     expect(unknown[0]?.rawLine).toBeNull();
     // the records themselves still land as role-"other" messages — behavior unchanged

@@ -669,11 +669,11 @@ describe("parseOpenCodeSession", () => {
     );
     expect(parsed.session.messages).toHaveLength(1);
     expect(parsed.issues).toMatchObject([
-      { code: "unparsed_line", lineNo: 4, rawLine: "{not json" },
-      { code: "unparsed_line", lineNo: 5, rawLine: '"a string"' },
+      { code: "unparsed_line", lineNo: 4, rawLine: null },
+      { code: "unparsed_line", lineNo: 5, rawLine: null },
       { code: "unknown_record_type", lineNo: 2, rawLine: null },
     ]);
-    expect(parsed.issues[2]?.error).toContain('"future-thing" on 2 line(s)');
+    expect(parsed.issues[2]?.error).toContain("sha256:1988a964a928 on 2 line(s)");
   });
 
   test("links a child session to its parent and keeps switch records in metadata", () => {

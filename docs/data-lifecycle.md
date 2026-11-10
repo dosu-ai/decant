@@ -342,7 +342,7 @@ that duplicate retained messages or contain only stream metadata.
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
-| Lines a parser could not read, kept verbatim so they can be diagnosed | `ingest_issue.raw_line` |
+| Raw diagnostic lines retained by older releases; new diagnostics leave this NULL | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
 indexed. `block.tool_result` and `message.raw` are stored but not searchable,
@@ -699,3 +699,10 @@ reply.
 See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.
+
+Parser diagnostics retain locations and fixed error messages, but no raw
+transcript lines. Unknown record types use a short SHA-256 label so even an
+identifier-shaped secret cannot appear verbatim. The archive's nullable
+`raw_line` column remains for schema compatibility. The pipeline revision
+forces existing sources to re-ingest once and replace older diagnostics.
+Sources that no longer exist cannot have their old diagnostics regenerated.

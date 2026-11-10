@@ -1,7 +1,7 @@
 import { constants, Database } from "bun:sqlite";
 import { readFileSync, statSync } from "node:fs";
 import { linkageIssues } from "../diagnostics.ts";
-import { canonicalJson, isObject, type JsonObject } from "../json.ts";
+import { assertJsonDepth, canonicalJson, isObject, type JsonObject } from "../json.ts";
 import {
   emptyUsage,
   type Json,
@@ -11,7 +11,16 @@ import {
   type Role,
 } from "../model.ts";
 import { isoFromMillis } from "./opencode.ts";
-import { block, countUnknown, type UnknownTypes, unknownTypeIssues } from "./shared.ts";
+import {
+  block,
+  countUnknown,
+  jsonProblem,
+  MAX_RECORD_BYTES,
+  parseSourceJson,
+  RECORD_LIMIT_MESSAGE,
+  type UnknownTypes,
+  unknownTypeIssues,
+} from "./shared.ts";
 
 type CursorStoreMeta = JsonObject;
 type CursorFileMeta = JsonObject;
@@ -28,8 +37,8 @@ export interface CursorSource {
  * parser reports it as a diagnostic without losing the rest of the chat. */
 export class CursorBlobProblem {
   constructor(
-    readonly kind: "missing" | "text" | "invalid_json",
-    /** The blob's text, for the parser to read and for the local raw_line. */
+    readonly kind: "missing" | "text" | "invalid_json" | "limit",
+    /** Text awaiting parsing, or a fixed problem message. Never copied to raw_line. */
     readonly text: string | null = null,
   ) {}
 }
@@ -122,10 +131,16 @@ function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): Curs
   }
 
   const messageIds = protobufFieldOneHashes(root);
-  const statement = db.query("SELECT data FROM blobs WHERE id = ?1");
+  const statement =
+    db.query(`SELECT CASE WHEN length(CAST(data AS BLOB)) <= ${MAX_RECORD_BYTES} THEN data ELSE NULL END AS data,
+    length(CAST(data AS BLOB)) > ${MAX_RECORD_BYTES} AS oversized FROM blobs WHERE id = ?1`);
   const records: CursorRecord[] = [];
   for (const id of messageIds) {
-    const row = statement.get(id) as { data?: unknown } | null;
+    const row = statement.get(id) as { data?: unknown; oversized: number } | null;
+    if (row?.oversized) {
+      records.push(new CursorBlobProblem("limit", RECORD_LIMIT_MESSAGE));
+      continue;
+    }
     if (typeof row?.data === "string") {
       records.push(new CursorBlobProblem("text", row.data));
       continue;
@@ -137,11 +152,11 @@ function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): Curs
     }
     const text = new TextDecoder().decode(data);
     try {
-      records.push(JSON.parse(text) as Json);
-    } catch {
+      records.push(parseSourceJson(text) as Json);
+    } catch (error) {
       // Keep the malformed blob in place so the pure parser reports an
       // unparsed_line diagnostic while preserving the rest of the chat.
-      records.push(new CursorBlobProblem("invalid_json", text));
+      records.push(new CursorBlobProblem("limit", jsonProblem(error)));
     }
   }
   return { fileMeta, storeMeta, records };
@@ -172,7 +187,7 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
         code: "unparsed_line",
         lineNo,
         error: "Cursor message blob is not a JSON object",
-        rawLine: canonicalJson(record),
+        rawLine: null,
       });
       continue;
     }
@@ -188,7 +203,7 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
         code: "unparsed_line",
         lineNo,
         error: "Cursor message content is not an array; message kept without content",
-        rawLine: canonicalJson(record),
+        rawLine: null,
       });
     }
     for (const item of content) {
@@ -280,7 +295,24 @@ function readRecord(
   lineNo: number,
   issues: ParsedSession["issues"],
 ): Json | undefined {
-  if (!(stored instanceof CursorBlobProblem)) return stored;
+  if (!(stored instanceof CursorBlobProblem)) {
+    try {
+      assertJsonDepth(stored);
+      return stored;
+    } catch (error) {
+      issues.push({ code: "unparsed_line", lineNo, error: jsonProblem(error), rawLine: null });
+      return undefined;
+    }
+  }
+  if (stored.kind === "limit") {
+    issues.push({
+      code: "unparsed_line",
+      lineNo,
+      error: stored.text ?? "record is not valid JSON",
+      rawLine: null,
+    });
+    return undefined;
+  }
   if (stored.kind === "missing") {
     issues.push({
       code: "unparsed_line",
@@ -299,13 +331,13 @@ function readRecord(
     });
   }
   try {
-    return JSON.parse(stored.text ?? "") as Json;
-  } catch {
+    return parseSourceJson(stored.text ?? "") as Json;
+  } catch (error) {
     issues.push({
       code: "unparsed_line",
       lineNo,
-      error: "Cursor message blob is not valid JSON",
-      rawLine: stored.text,
+      error: jsonProblem(error),
+      rawLine: null,
     });
     return undefined;
   }
@@ -465,7 +497,7 @@ function readCursorFileMeta(storePath: string): CursorFileMeta | null {
   }
   let value: Json;
   try {
-    value = JSON.parse(text) as Json;
+    value = parseSourceJson(text) as Json;
   } catch {
     // A JSON syntax error quotes the text around it, so it is not rethrown.
     throw new CursorSourceError("Cursor meta.json is not valid JSON");
@@ -476,7 +508,7 @@ function readCursorFileMeta(storePath: string): CursorFileMeta | null {
 
 function parseHexJson(value: string, label: string): Json {
   try {
-    return JSON.parse(Buffer.from(value, "hex").toString("utf8")) as Json;
+    return parseSourceJson(Buffer.from(value, "hex").toString("utf8")) as Json;
   } catch {
     throw new CursorSourceError(`${label} is not valid JSON`);
   }

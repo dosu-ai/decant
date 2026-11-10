@@ -423,17 +423,15 @@ describe("parseOpenCodeLegacySession", () => {
       "unparsed_line",
     ]);
     for (const issue of issues) {
-      if (issue.rawLine != null) {
-        expect(["not json", "nope"]).toContain(issue.rawLine);
-      }
+      expect(issue.rawLine).toBeNull();
       expect(issue.error).not.toContain("orphan");
     }
-    expect(issues.find((i) => i.rawLine === "not json")?.lineNo).toBe(1);
-    expect(issues.find((i) => i.rawLine === "nope")?.lineNo).toBe(2);
+    expect(issues.find((i) => i.code === "unparsed_line" && i.lineNo === 1)?.lineNo).toBe(1);
+    expect(issues.find((i) => i.code === "unparsed_line" && i.lineNo === 2)?.lineNo).toBe(2);
     expect(issues.find((i) => i.error === "part references a missing message")?.lineNo).toBeNull();
     const unknown = issues.filter((i) => i.code === "unknown_record_type").map((i) => i.error);
-    expect(unknown.some((e) => e.includes('"part:hologram"'))).toBe(true);
-    expect(unknown.some((e) => e.includes('"role:narrator"'))).toBe(true);
+    expect(unknown.some((e) => e.includes("sha256:c06d37062e7c"))).toBe(true);
+    expect(unknown.some((e) => e.includes("sha256:5c24f6cd6b02"))).toBe(true);
     // The readable user message survives with no blocks.
     expect(session.messages.map((m) => [m.role, m.blocks.length])).toEqual([["user", 0]]);
     expect(session.reasoningSource).toBe("none");

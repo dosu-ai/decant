@@ -260,7 +260,7 @@ describe("parseVscodeCopilotSession", () => {
       ["unknown_record_type", 3],
       ["unknown_record_type", null],
     ]);
-    expect(issues[3]?.error).toContain('response part "futurePart"');
+    expect(issues[3]?.error).toContain("sha256:b67d84a13984");
   });
 
   test("reports invalid array truncation without throwing or losing later updates", () => {
@@ -566,4 +566,15 @@ describe("VS Code Copilot discovery and ingest", () => {
       closeDb(db);
     }
   });
+});
+
+test("unknown response part diagnostics never copy even identifier-shaped secrets", () => {
+  const secret = "SYNTHETIC_SECRET_TOKEN";
+  const { issues } = parseVscodeCopilotSession(
+    "privacy",
+    logWith({ response: [{ kind: secret }] }),
+  );
+  expect(issues).toHaveLength(1);
+  expect(issues[0]?.error).toMatch(/unknown record type sha256:[0-9a-f]{12}/);
+  expect(JSON.stringify(issues)).not.toContain(secret);
 });

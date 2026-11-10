@@ -19,6 +19,7 @@ import { materializeContextWindow, materializeMissingContextWindows } from "./co
 import { defaultPricing } from "./cost.ts";
 import { refreshPlannerStatistics, withImmediateTransaction } from "./db.ts";
 import { facets, fileRefs } from "./enrich.ts";
+import { FILE_LIMIT_MESSAGE, readSourceFile } from "./ingest-limits.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
 import {
@@ -126,7 +127,7 @@ export interface IngestConfig {
  * parser or ingest enrichment change must be applied to already-seen source
  * files. The next sync re-ingests each stale source transactionally once.
  */
-export const INGEST_PIPELINE_REVISION = 20;
+export const INGEST_PIPELINE_REVISION = 21;
 
 export interface SyncReport {
   /** Present when stored cost estimates changed without requiring re-ingest. */
@@ -470,6 +471,7 @@ export function sync(
         }
         let stats: Stats;
         let content: string;
+        let overBudget = false;
         try {
           stats = fstatSync(fd);
           const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
@@ -489,7 +491,9 @@ export function sync(
           // fstat before read: a write landing mid-window records a smaller size
           // than the content read, so the next sync re-ingests instead of
           // silently skipping the tail.
-          content = readFileSync(fd, "utf8");
+          const limited = readSourceFile(fd);
+          overBudget = limited === null;
+          content = limited ?? "";
         } catch (error) {
           report.failed += 1;
           logger.warning("Source file could not be read.", {
@@ -531,6 +535,13 @@ export function sync(
         } else {
           parsed = parseCodexSession(stem, content, titles);
         }
+        if (overBudget)
+          parsed.issues.push({
+            code: "unparsed_line",
+            lineNo: null,
+            error: FILE_LIMIT_MESSAGE,
+            rawLine: null,
+          });
         parsed.session.isArchived = file.archived;
 
         const prepared: Prepared = {
@@ -916,6 +927,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   }
   let stats: Stats;
   let content: string;
+  let overBudget = false;
   let changeKey: string;
   try {
     stats = fstatSync(fd);
@@ -939,7 +951,9 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     ) {
       return { kind: "skipped" };
     }
-    content = readFileSync(fd, "utf8");
+    const limited = readSourceFile(fd);
+    overBudget = limited === null;
+    content = limited ?? "";
   } catch (error) {
     logger.warning("Source file could not be read.", {
       "event.name": "decant.ingest.source_read_failed",
@@ -960,6 +974,12 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     sourcePath: file.path,
     projectPath: harborJobDir(file.path),
   });
+  const first = document.sessions[0];
+  if (overBudget && first != null) {
+    first.parsed.issues = [
+      { code: "unparsed_line", lineNo: null, error: FILE_LIMIT_MESSAGE, rawLine: null },
+    ];
+  }
   const mtime = mtimeSecs(stats);
   const issues: Issue[] = [];
   const subagentPaths = new Set<string>();

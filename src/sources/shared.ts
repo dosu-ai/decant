@@ -1,5 +1,29 @@
-import { asString, canonicalJson, get } from "../json.ts";
+import { createHash } from "node:crypto";
+import { asString, assertJsonDepth, canonicalJson, get, JsonDepthError } from "../json.ts";
 import type { BlockType, Issue, Json, NormalizedBlock } from "../model.ts";
+
+// Tool outputs can be large, but a single record should not consume the heap.
+export const MAX_RECORD_BYTES = 16 * 1024 * 1024;
+export const RECORD_LIMIT_MESSAGE = "record exceeds the byte limit";
+
+export function parseSourceJson(text: string): Json {
+  if (Buffer.byteLength(text, "utf8") > MAX_RECORD_BYTES) throw new RecordLimitError();
+  const value = JSON.parse(text) as Json;
+  assertJsonDepth(value);
+  return value;
+}
+
+export class RecordLimitError extends Error {
+  constructor() {
+    super(RECORD_LIMIT_MESSAGE);
+  }
+}
+
+export function jsonProblem(error: unknown): string {
+  return error instanceof JsonDepthError || error instanceof RecordLimitError
+    ? error.message
+    : "record is not valid JSON";
+}
 
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
@@ -10,22 +34,23 @@ export function parseJsonLine(line: string, lineNo: number, issues: Issue[]): Js
     return undefined;
   }
   try {
-    return JSON.parse(line) as Json;
+    return parseSourceJson(line);
   } catch (error) {
     issues.push({
       code: "unparsed_line",
       lineNo,
-      error: error instanceof Error ? error.message : String(error),
-      rawLine: line,
+      error: jsonProblem(error),
+      rawLine: null,
     });
     return undefined;
   }
 }
 
 export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: number): void {
-  const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: lineNo };
+  const label = createHash("sha256").update(typ).digest("hex").slice(0, 12);
+  const seen = unknownTypes.get(label) ?? { count: 0, firstLine: lineNo };
   seen.count += 1;
-  unknownTypes.set(typ, seen);
+  unknownTypes.set(label, seen);
 }
 
 /** `handling` completes the message, e.g. `ignored` or `kept as role "other"`. */
@@ -35,7 +60,7 @@ export function unknownTypeIssues(unknownTypes: UnknownTypes, handling: string):
     issues.push({
       code: "unknown_record_type",
       lineNo: seen.firstLine,
-      error: `unknown record type "${typ}" on ${seen.count} line(s); ${handling}`,
+      error: `unknown record type sha256:${typ} on ${seen.count} line(s); ${handling}`,
       rawLine: null,
     });
   }

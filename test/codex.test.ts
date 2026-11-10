@@ -367,7 +367,7 @@ describe("parseCodexSession", () => {
     expect(parsed.issues[0]?.code).toBe("unparsed_line");
     expect(parsed.issues[0]?.lineNo).toBe(2);
     expect(parsed.issues[1]?.code).toBe("unknown_record_type");
-    expect(parsed.issues[1]?.error).toContain('"unknown-top"');
+    expect(parsed.issues[1]?.error).toContain("sha256:4b958c9077a6");
     const session = parsed.session;
     expect(session.sourceSessionId).toBe("sx");
     expect(session.cwd).toBe("/tmp/proj");
@@ -394,7 +394,7 @@ describe("parseCodexSession", () => {
     const parsed = parseCodexSession("c1", lines, new Map());
     const unknown = parsed.issues.filter((issue) => issue.code === "unknown_record_type");
     expect(unknown).toHaveLength(1);
-    expect(unknown[0]?.error).toContain('"wormhole"');
+    expect(unknown[0]?.error).toContain("sha256:e868c4707417");
   });
 
   test("tool outputs sent as content arrays keep the text the model read", () => {

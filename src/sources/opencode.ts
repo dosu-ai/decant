@@ -29,6 +29,8 @@ import {
   block,
   contentText,
   countUnknown,
+  jsonProblem,
+  parseSourceJson,
   type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
@@ -416,13 +418,13 @@ export function parseOpenCodeSession(
 function parseMessageData(message: OpenCodeMessageRow, issues: Issue[]): JsonObject | null {
   let value: Json;
   try {
-    value = JSON.parse(message.data) as Json;
+    value = parseSourceJson(message.data) as Json;
   } catch (error) {
     issues.push({
       code: "unparsed_line",
       lineNo: message.seq,
-      error: error instanceof Error ? error.message : String(error),
-      rawLine: message.data,
+      error: jsonProblem(error),
+      rawLine: null,
     });
     return null;
   }
@@ -431,7 +433,7 @@ function parseMessageData(message: OpenCodeMessageRow, issues: Issue[]): JsonObj
       code: "unparsed_line",
       lineNo: message.seq,
       error: "message data is not a JSON object",
-      rawLine: message.data,
+      rawLine: null,
     });
     return null;
   }
@@ -652,7 +654,7 @@ export function parseModelJson(value: string | null): Json | undefined {
     return undefined;
   }
   try {
-    return JSON.parse(value) as Json;
+    return parseSourceJson(value) as Json;
   } catch {
     return undefined;
   }

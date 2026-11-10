@@ -195,3 +195,21 @@ Decant prices models it has a rate for and keeps a recorded `cost_usd` for
 models it cannot price. A trajectory with neither step metrics nor
 `final_metrics` shows tokens and cost as unavailable. See
 [ATIF imports](data-lifecycle.md#atif-imports) for the full mapping.
+
+## Input limits
+
+Decant reads at most 256 MiB from a transcript file, including a file that
+grows during the read. Larger files produce a fixed diagnostic instead of
+transcript rows. Split them into smaller source files before importing them.
+JSONL and OpenCode records and Cursor message blobs have a 16 MiB limit. JSON containers
+may nest up to 512 levels. Decant skips records beyond these limits and keeps
+reading the remaining records. Whole-document sources cannot skip individual
+records when their JSON exceeds the depth limit.
+
+ATIF embedded trajectories may nest up to 128 generations. Decant retains the
+root and allowed descendants, skips deeper descendants, and reports a fixed
+diagnostic on their parent. These caps allow far more nesting than the source
+formats' ordinary message, block, and tool argument structures require.
+
+OpenCode records use the same JSON limits after loading. OpenCode session
+materialization and the aggregate size of a Cursor chat are not yet bounded.

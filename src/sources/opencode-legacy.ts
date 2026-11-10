@@ -1,3 +1,4 @@
+import { jsonProblem, parseSourceJson } from "./shared.ts";
 // OpenCode 1.x storage: `session`, `message`, and `part` tables. OpenCodeStore
 // reads these rows read-only; they hold JSON text exactly as OpenCode wrote it,
 // so a malformed `data` value reaches the parser below unchanged and becomes a
@@ -456,13 +457,13 @@ function parseObject(
 ): JsonObject | null {
   let value: Json;
   try {
-    value = JSON.parse(text) as Json;
+    value = parseSourceJson(text) as Json;
   } catch (error) {
     issues.push({
       code: "unparsed_line",
       lineNo,
-      error: error instanceof Error ? error.message : String(error),
-      rawLine: text,
+      error: jsonProblem(error),
+      rawLine: null,
     });
     return null;
   }
@@ -471,7 +472,7 @@ function parseObject(
       code: "unparsed_line",
       lineNo,
       error: `${kind} data is not a JSON object`,
-      rawLine: text,
+      rawLine: null,
     });
     return null;
   }

@@ -1,10 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import {
+  closeSync,
   copyFileSync,
   cpSync,
+  ftruncateSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -30,6 +33,7 @@ import {
   sync,
   upsertSession,
 } from "../src/ingest.ts";
+import { MAX_SOURCE_FILE_BYTES } from "../src/ingest-limits.ts";
 import { configureLogging } from "../src/logging.ts";
 import type { Json } from "../src/model.ts";
 import { getSession, listSessions } from "../src/query.ts";
@@ -4745,4 +4749,28 @@ describe("sync planner statistics", () => {
       closeDb(db);
     }
   });
+});
+
+test("an oversized source persists a fixed diagnostic while other sources ingest", () => {
+  const dir = freshCase();
+  const config = stageFixtures(dir);
+  const path = join(config.claudeDir, "oversized.jsonl");
+  const fd = openSync(path, "w");
+  try {
+    ftruncateSync(fd, MAX_SOURCE_FILE_BYTES + 1);
+  } finally {
+    closeSync(fd);
+  }
+  const db = openFreshDb(dir);
+  try {
+    const report = sync(db, config);
+    expect(report.failed).toBe(0);
+    expect(report.ingested).toBeGreaterThan(1);
+    expect(
+      db.query("SELECT error, raw_line FROM ingest_issue WHERE source_path = ?1").all(path),
+    ).toEqual([{ error: "source file exceeds the byte limit", raw_line: null }]);
+    expect(sync(db, config).ingested).toBe(0);
+  } finally {
+    closeDb(db);
+  }
 });

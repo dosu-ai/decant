@@ -82,6 +82,12 @@ the local guard can read or mutate the whole archive.
   other sites cannot read the stream anyway, but each open stream counts toward
   the client cap, so this keeps them from holding slots. `curl` and other
   clients that send neither header are admitted.
+- Every UI page response sends `Content-Security-Policy: frame-ancestors
+  'none'` and `X-Frame-Options: DENY`, so browsers refuse to show the UI inside
+  another site's frame. A click inside such a frame would reach the API as a
+  same-origin request that the `Origin` check cannot reject. UI pages also send
+  `Referrer-Policy: no-referrer`, and UI pages, bundled assets, and JSON
+  responses send `X-Content-Type-Options: nosniff`.
 - The `Host` check is not authentication: a non-browser client can send
   `Host: localhost`. The `Origin` and `Sec-Fetch-Site` checks on writes are
   browser-drive protections, not credentials.
@@ -166,7 +172,9 @@ second after responding so the service can bind its port. Poll
 `GET /api/background` until `current` is true to know the service has taken
 over. When `stopping` is true, the answering server is the service and stops
 after responding. `409 background_unsupported` means this machine cannot run
-the service, and `500 background_failed` carries the launchd or systemd error.
+the service, or the archive or executable path contains a control character
+the unit file cannot hold. `500 background_failed` carries the launchd or
+systemd error.
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.

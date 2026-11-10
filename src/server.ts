@@ -25,6 +25,7 @@ import {
   syncStatus,
   workerSyncRunner,
 } from "./server/sync.ts";
+import { createUiFiles } from "./server/ui.ts";
 import type { ServiceOptions } from "./service.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
@@ -44,6 +45,10 @@ export {
 } from "./server/sync.ts";
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+const ICON_HEADERS = {
+  "cache-control": "public, max-age=86400",
+  "x-content-type-options": "nosniff",
+} as const;
 
 export interface ServeWatchOptions {
   intervalMs?: number;
@@ -101,6 +106,20 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     },
   });
 
+  const ui = createUiFiles(uiBundle);
+  const serveUiDocument = async (): Promise<Response> => {
+    try {
+      return await ui.document();
+    } catch (error) {
+      options.logger?.error("Could not build the UI.", {
+        "event.name": "http.server.ui.exception",
+        ...exceptionAttributes(error),
+      });
+      return responseForError(error);
+    }
+  };
+  const uiDocumentRoute = { GET: serveUiDocument, HEAD: serveUiDocument };
+
   // Bind before touching the archive or starting background work. A second
   // `decant serve` should fail with the truthful port-in-use error, not leave a
   // DB-owning watcher behind and later surface a misleading SQLite lock.
@@ -110,16 +129,24 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
     routes: {
       "/favicon.ico": new Response(Bun.file(faviconPath), {
-        headers: { "cache-control": "public, max-age=86400", "content-type": "image/x-icon" },
+        headers: { ...ICON_HEADERS, "content-type": "image/x-icon" },
       }),
       "/apple-touch-icon.png": new Response(Bun.file(appleTouchIconPath), {
-        headers: { "cache-control": "public, max-age=86400", "content-type": "image/png" },
+        headers: { ...ICON_HEADERS, "content-type": "image/png" },
       }),
       ...Object.fromEntries(
-        UI_ROUTE_PATHS.map((path) => [path.replace("{id}", ":id"), uiBundle] as const),
+        UI_ROUTE_PATHS.map((path) => [path.replace("{id}", ":id"), uiDocumentRoute] as const),
       ),
     },
     fetch: async (request, bunServer) => {
+      // Bundled asset paths are only known once the UI is built, so they cannot
+      // be declared in `routes`. They are static files and need no archive.
+      if (request.method === "GET" || request.method === "HEAD") {
+        const asset = ui.asset(URL.parse(request.url)?.pathname ?? "");
+        if (asset != null) {
+          return asset;
+        }
+      }
       const startedAt = performance.now();
       const requestLogger = options.logger?.with({ "request.id": crypto.randomUUID() });
       const activeDb = db;

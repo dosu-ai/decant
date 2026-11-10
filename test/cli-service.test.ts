@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runCli } from "../src/cli.ts";
@@ -84,6 +84,28 @@ describe("decant service", () => {
       "4101",
     ]);
     await runCli(["service", "uninstall"], options);
+  });
+
+  test("refuses an archive or executable path with a control character", async () => {
+    const plist = join(workDir, "home", "Library", "LaunchAgents", "dev.dosu.decant.plist");
+    const db = await runCli(
+      ["--db", join(workDir, "a.db\nRunAtLoad"), "service", "install", "--port", "4102"],
+      cliOptions({}),
+    );
+    expect(db.code).toBe(1);
+    expect(db.stderr).toContain("archive path");
+    expect(db.stderr).toContain("control character");
+    expect(db.stdout).toBe("");
+    expect(existsSync(plist)).toBe(false);
+
+    const binary = "/opt/test/decant\r";
+    const exec = await runCli(
+      ["service", "install", "--port", "4102"],
+      cliOptions({ install: { channel: "installer", binaryPath: binary }, execPath: binary }),
+    );
+    expect(exec.code).toBe(1);
+    expect(exec.stderr).toContain("executable path");
+    expect(existsSync(plist)).toBe(false);
   });
 
   test("explains why a source checkout cannot install it", async () => {

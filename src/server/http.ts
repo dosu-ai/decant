@@ -124,7 +124,10 @@ function isArchiveLockedError(error: unknown, normalizedMessage: string): boolea
 export function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 

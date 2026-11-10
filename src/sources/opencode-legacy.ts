@@ -1,4 +1,4 @@
-import { jsonProblem, parseSourceJson } from "./shared.ts";
+import { diagnosticRawLine, jsonProblem, parseSourceJson } from "./shared.ts";
 // OpenCode 1.x storage: `session`, `message`, and `part` tables. OpenCodeStore
 // reads these rows read-only; they hold JSON text exactly as OpenCode wrote it,
 // so a malformed `data` value reaches the parser below unchanged and becomes a
@@ -463,7 +463,7 @@ function parseObject(
       code: "unparsed_line",
       lineNo,
       error: jsonProblem(error),
-      rawLine: null,
+      rawLine: diagnosticRawLine(error, text),
     });
     return null;
   }
@@ -472,7 +472,7 @@ function parseObject(
       code: "unparsed_line",
       lineNo,
       error: `${kind} data is not a JSON object`,
-      rawLine: null,
+      rawLine: text,
     });
     return null;
   }

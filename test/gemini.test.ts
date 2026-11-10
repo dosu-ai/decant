@@ -95,7 +95,7 @@ describe("parseGeminiSession", () => {
     expect(parsed.issues[1]).toMatchObject({
       code: "unknown_record_type",
       lineNo: 4,
-      error: "unknown record type sha256:e2b71fab76b1 on 2 line(s); ignored",
+      error: 'unknown record type "future_record" on 2 line(s); ignored',
     });
   });
 

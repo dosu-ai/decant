@@ -260,7 +260,7 @@ describe("parseVscodeCopilotSession", () => {
       ["unknown_record_type", 3],
       ["unknown_record_type", null],
     ]);
-    expect(issues[3]?.error).toContain("sha256:b67d84a13984");
+    expect(issues[3]?.error).toContain("futurePart");
   });
 
   test("reports invalid array truncation without throwing or losing later updates", () => {
@@ -568,13 +568,13 @@ describe("VS Code Copilot discovery and ingest", () => {
   });
 });
 
-test("unknown response part diagnostics never copy even identifier-shaped secrets", () => {
+test("unknown response part diagnostics hide non-identifier labels", () => {
   const secret = "SYNTHETIC_SECRET_TOKEN";
   const { issues } = parseVscodeCopilotSession(
     "privacy",
-    logWith({ response: [{ kind: secret }] }),
+    logWith({ response: [{ kind: secret + " invalid" }] }),
   );
   expect(issues).toHaveLength(1);
-  expect(issues[0]?.error).toMatch(/unknown record type sha256:[0-9a-f]{12}/);
+  expect(issues[0]?.error).toContain("(unprintable type)");
   expect(JSON.stringify(issues)).not.toContain(secret);
 });

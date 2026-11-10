@@ -25,6 +25,16 @@ export function jsonProblem(error: unknown): string {
     : "record is not valid JSON";
 }
 
+export function diagnosticRawLine(error: unknown, text: string): string | null {
+  return error instanceof JsonDepthError || error instanceof RecordLimitError ? null : text;
+}
+
+export function printableType(typ: string): string {
+  return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(typ)
+    ? typ
+    : `(unprintable type) sha256:${createHash("sha256").update(typ).digest("hex").slice(0, 12)}`;
+}
+
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
 /** Returns undefined for blank lines and records an `unparsed_line` issue for
@@ -40,14 +50,14 @@ export function parseJsonLine(line: string, lineNo: number, issues: Issue[]): Js
       code: "unparsed_line",
       lineNo,
       error: jsonProblem(error),
-      rawLine: null,
+      rawLine: diagnosticRawLine(error, line),
     });
     return undefined;
   }
 }
 
 export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: number): void {
-  const label = createHash("sha256").update(typ).digest("hex").slice(0, 12);
+  const label = printableType(typ);
   const seen = unknownTypes.get(label) ?? { count: 0, firstLine: lineNo };
   seen.count += 1;
   unknownTypes.set(label, seen);
@@ -60,7 +70,7 @@ export function unknownTypeIssues(unknownTypes: UnknownTypes, handling: string):
     issues.push({
       code: "unknown_record_type",
       lineNo: seen.firstLine,
-      error: `unknown record type sha256:${typ} on ${seen.count} line(s); ${handling}`,
+      error: `unknown record type "${typ}" on ${seen.count} line(s); ${handling}`,
       rawLine: null,
     });
   }

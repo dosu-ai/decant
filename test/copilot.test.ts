@@ -467,7 +467,7 @@ describe("parseCopilotSession", () => {
       ["unparsed_line", 2],
       ["unknown_record_type", 7],
     ]);
-    expect(issues[1]?.error).toContain("sha256:ec64489868e1 on 2 line(s)");
+    expect(issues[1]?.error).toContain('"session.future_feature" on 2 line(s)');
     expect(session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     // No usage snapshot yet: only the response's output is known.
     expect(session.totals).toEqual({ ...emptyUsage(), output: 3 });

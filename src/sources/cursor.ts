@@ -14,6 +14,7 @@ import { isoFromMillis } from "./opencode.ts";
 import {
   block,
   countUnknown,
+  diagnosticRawLine,
   jsonProblem,
   MAX_RECORD_BYTES,
   parseSourceJson,
@@ -38,7 +39,7 @@ export interface CursorSource {
 export class CursorBlobProblem {
   constructor(
     readonly kind: "missing" | "text" | "invalid_json" | "limit",
-    /** Text awaiting parsing, or a fixed problem message. Never copied to raw_line. */
+    /** Text awaiting parsing, or a fixed limit message. */
     readonly text: string | null = null,
   ) {}
 }
@@ -156,7 +157,11 @@ function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): Curs
     } catch (error) {
       // Keep the malformed blob in place so the pure parser reports an
       // unparsed_line diagnostic while preserving the rest of the chat.
-      records.push(new CursorBlobProblem("limit", jsonProblem(error)));
+      records.push(
+        diagnosticRawLine(error, text) === null
+          ? new CursorBlobProblem("limit", jsonProblem(error))
+          : new CursorBlobProblem("invalid_json", text),
+      );
     }
   }
   return { fileMeta, storeMeta, records };
@@ -187,7 +192,7 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
         code: "unparsed_line",
         lineNo,
         error: "Cursor message blob is not a JSON object",
-        rawLine: null,
+        rawLine: canonicalJson(record),
       });
       continue;
     }
@@ -203,7 +208,7 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
         code: "unparsed_line",
         lineNo,
         error: "Cursor message content is not an array; message kept without content",
-        rawLine: null,
+        rawLine: canonicalJson(record),
       });
     }
     for (const item of content) {
@@ -337,7 +342,7 @@ function readRecord(
       code: "unparsed_line",
       lineNo,
       error: jsonProblem(error),
-      rawLine: null,
+      rawLine: diagnosticRawLine(error, stored.text ?? ""),
     });
     return undefined;
   }

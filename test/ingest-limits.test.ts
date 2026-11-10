@@ -7,7 +7,7 @@ import { canonicalJson, MAX_JSON_DEPTH } from "../src/json.ts";
 import { MAX_ATIF_EMBEDDED_DEPTH, parseAtifDocument } from "../src/sources/atif.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCursorSession, readCursorSource } from "../src/sources/cursor.ts";
-import { MAX_RECORD_BYTES } from "../src/sources/shared.ts";
+import { MAX_RECORD_BYTES, printableType } from "../src/sources/shared.ts";
 import { writeCursorStore } from "./cursor-fixture.ts";
 
 const secret = "SYNTHETIC_SECRET_TOKEN";
@@ -18,7 +18,7 @@ test("deep, oversized and malformed records leave later records readable without
     "[".repeat(30000) + '"' + secret + '"' + "]".repeat(30000),
     JSON.stringify({ type: "user", text: secret + "x".repeat(MAX_RECORD_BYTES) }),
     "{" + secret,
-    JSON.stringify({ type: secret }),
+    JSON.stringify({ type: secret + " invalid" }),
     valid,
   ].join("\n");
   const parsed = parseClaudeSession("limits", content);
@@ -27,10 +27,11 @@ test("deep, oversized and malformed records leave later records readable without
     "JSON nesting exceeds the depth limit",
     "record exceeds the byte limit",
     "record is not valid JSON",
-    expect.stringMatching(/unknown record type sha256:[0-9a-f]{12}/),
+    expect.stringContaining("(unprintable type)"),
   ]);
-  expect(JSON.stringify(parsed.issues)).not.toContain(secret);
-  expect(parsed.issues.every((i) => i.rawLine === null)).toBe(true);
+  expect(JSON.stringify(parsed.issues.map((i) => i.error))).not.toContain(secret);
+  expect(parsed.issues.slice(0, 2).every((i) => i.rawLine === null)).toBe(true);
+  expect(parsed.issues[2]?.rawLine).toBe("{" + secret);
 });
 
 test("canonical serialization rejects pathological nesting with a fixed error", () => {
@@ -82,5 +83,14 @@ test("Cursor skips an oversized blob before decoding and keeps its next message"
     expect(JSON.stringify(parsed.issues)).not.toContain(secret);
   } finally {
     rmSync(dir, { recursive: true });
+  }
+});
+
+test("unknown identifiers stay readable and other labels hide their content", () => {
+  for (const label of ["future-type", "api.request:v2", "A" + "x".repeat(63)]) {
+    expect(printableType(label)).toBe(label);
+  }
+  for (const label of ["", "_prefix", "a".repeat(65), "private words", "line\nbreak"]) {
+    expect(printableType(label)).toMatch(/^\(unprintable type\) sha256:[0-9a-f]{12}$/);
   }
 });

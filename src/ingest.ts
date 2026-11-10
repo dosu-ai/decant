@@ -471,7 +471,6 @@ export function sync(
         }
         let stats: Stats;
         let content: string;
-        let overBudget = false;
         try {
           stats = fstatSync(fd);
           const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
@@ -492,8 +491,16 @@ export function sync(
           // than the content read, so the next sync re-ingests instead of
           // silently skipping the tail.
           const limited = readSourceFile(fd);
-          overBudget = limited === null;
-          content = limited ?? "";
+          if (limited === null) {
+            report.failed += 1;
+            logger.warning("Source file could not be read.", {
+              "event.name": "decant.ingest.source_read_failed",
+              "file.path": file.path,
+              "error.message": FILE_LIMIT_MESSAGE,
+            });
+            continue;
+          }
+          content = limited;
         } catch (error) {
           report.failed += 1;
           logger.warning("Source file could not be read.", {
@@ -535,13 +542,6 @@ export function sync(
         } else {
           parsed = parseCodexSession(stem, content, titles);
         }
-        if (overBudget)
-          parsed.issues.push({
-            code: "unparsed_line",
-            lineNo: null,
-            error: FILE_LIMIT_MESSAGE,
-            rawLine: null,
-          });
         parsed.session.isArchived = file.archived;
 
         const prepared: Prepared = {
@@ -927,7 +927,6 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   }
   let stats: Stats;
   let content: string;
-  let overBudget = false;
   let changeKey: string;
   try {
     stats = fstatSync(fd);
@@ -952,8 +951,15 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
       return { kind: "skipped" };
     }
     const limited = readSourceFile(fd);
-    overBudget = limited === null;
-    content = limited ?? "";
+    if (limited === null) {
+      logger.warning("Source file could not be read.", {
+        "event.name": "decant.ingest.source_read_failed",
+        "file.path": file.path,
+        "error.message": FILE_LIMIT_MESSAGE,
+      });
+      return { kind: "failed" };
+    }
+    content = limited;
   } catch (error) {
     logger.warning("Source file could not be read.", {
       "event.name": "decant.ingest.source_read_failed",
@@ -974,12 +980,6 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     sourcePath: file.path,
     projectPath: harborJobDir(file.path),
   });
-  const first = document.sessions[0];
-  if (overBudget && first != null) {
-    first.parsed.issues = [
-      { code: "unparsed_line", lineNo: null, error: FILE_LIMIT_MESSAGE, rawLine: null },
-    ];
-  }
   const mtime = mtimeSecs(stats);
   const issues: Issue[] = [];
   const subagentPaths = new Set<string>();

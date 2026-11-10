@@ -199,8 +199,10 @@ models it cannot price. A trajectory with neither step metrics nor
 ## Input limits
 
 Decant reads at most 256 MiB from a transcript file, including a file that
-grows during the read. Larger files produce a fixed diagnostic instead of
-transcript rows. Split them into smaller source files before importing them.
+grows during the read. Larger files are skipped and counted as failed in the
+sync report. Existing archived copies and source metadata are kept unchanged, so each sync retries
+the file. New oversized files create no session. A content-free warning names
+the source path. Split them into smaller source files before importing them.
 JSONL and OpenCode records and Cursor message blobs have a 16 MiB limit. JSON containers
 may nest up to 512 levels. Decant skips records beyond these limits and keeps
 reading the remaining records. Whole-document sources cannot skip individual

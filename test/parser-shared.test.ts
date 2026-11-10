@@ -53,11 +53,11 @@ describe("parseJsonLine", () => {
     expect(issues).toEqual([]);
   });
 
-  test("records an unparsed_line issue with the 1-based line without raw text", () => {
+  test("records an unparsed_line issue with the 1-based line and raw text", () => {
     const issues: Issue[] = [];
     expect(parseJsonLine("{oops", 7, issues)).toBeUndefined();
     expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ code: "unparsed_line", lineNo: 7, rawLine: null });
+    expect(issues[0]).toMatchObject({ code: "unparsed_line", lineNo: 7, rawLine: "{oops" });
     expect(issues[0]?.error).not.toBe("");
   });
 });
@@ -72,13 +72,13 @@ describe("unknown record types", () => {
       {
         code: "unknown_record_type",
         lineNo: 4,
-        error: "unknown record type sha256:f44e64e75f39 on 2 line(s); ignored",
+        error: 'unknown record type "beta" on 2 line(s); ignored',
         rawLine: null,
       },
       {
         code: "unknown_record_type",
         lineNo: 2,
-        error: "unknown record type sha256:8ed3f6ad685b on 1 line(s); ignored",
+        error: 'unknown record type "alpha" on 1 line(s); ignored',
         rawLine: null,
       },
     ]);

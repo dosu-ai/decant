@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { linkageIssues } from "../diagnostics.ts";
 import { asString, assertJsonDepth, get, isObject, type JsonObject } from "../json.ts";
 import {
@@ -21,6 +20,7 @@ import {
   jsonProblem,
   parseJsonLine,
   parseSourceJson,
+  printableType,
   type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
@@ -334,7 +334,7 @@ export function parseVscodeCopilotSession(
         }
         default:
           if (!IGNORED_PART_KINDS.has(kind)) {
-            countPart(unknownParts, `response part "${kind}"`);
+            countPart(unknownParts, kind);
           }
           consumed.push(part);
       }
@@ -554,12 +554,12 @@ function replayLog(
 }
 
 function countPart(unknownParts: Map<string, number>, kind: string): void {
-  const label = `sha256:${createHash("sha256").update(kind).digest("hex").slice(0, 12)}`;
+  const label = printableType(kind);
   unknownParts.set(label, (unknownParts.get(label) ?? 0) + 1);
 }
 
-function notApplied(issues: Issue[], lineNo: number, _line: string, error: string): void {
-  issues.push({ code: "unparsed_line", lineNo, error, rawLine: null });
+function notApplied(issues: Issue[], lineNo: number, line: string, error: string): void {
+  issues.push({ code: "unparsed_line", lineNo, error, rawLine: line });
 }
 
 type Container = JsonObject | Json[];

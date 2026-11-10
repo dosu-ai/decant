@@ -1880,6 +1880,7 @@ components:
             type: integer
             minimum: 0
         failed:
+          description: Sources that could not be read, including oversized files. Archived copies are preserved.
           type: integer
           minimum: 0
         cancelled:
@@ -1899,6 +1900,7 @@ components:
           type: integer
           minimum: 0
         failed:
+          description: Sources that could not be read, including oversized files. Archived copies are preserved.
           type: integer
           minimum: 0
         total:

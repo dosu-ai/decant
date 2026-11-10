@@ -137,7 +137,7 @@ for (const { name, tool, parse } of parsers) {
           expect(unparsed.map((issue) => issue.lineNo)).toEqual(expected);
           for (const issue of unparsed) {
             expect(issue.error).not.toBe("");
-            expect(issue.rawLine).toBeNull();
+            expect(issue.rawLine).toBe(lines[(issue.lineNo ?? 1) - 1]?.line ?? null);
             expect(issue.error).toBe("record is not valid JSON");
           }
         }),

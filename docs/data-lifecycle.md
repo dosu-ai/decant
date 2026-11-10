@@ -342,7 +342,7 @@ that duplicate retained messages or contain only stream metadata.
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
-| Raw diagnostic lines retained by older releases; new diagnostics leave this NULL | `ingest_issue.raw_line` |
+| Malformed records within byte and depth limits, retained locally | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
 indexed. `block.tool_result` and `message.raw` are stored but not searchable,
@@ -700,9 +700,12 @@ See the Response and archive semantics section of docs/api/routes.md for the
 wire behavior and [How Decant analytics work](analytics-methodology.md) for the
 effect on analytical denominators.
 
-Parser diagnostics retain locations and fixed error messages, but no raw
-transcript lines. Unknown record types use a short SHA-256 label so even an
-identifier-shaped secret cannot appear verbatim. The archive's nullable
-`raw_line` column remains for schema compatibility. The pipeline revision
-forces existing sources to re-ingest once and replace older diagnostics.
-Sources that no longer exist cannot have their old diagnostics regenerated.
+Parser diagnostics retain locations and fixed error messages. Ordinary malformed
+records retain their raw text in the local archive's `ingest_issue.raw_line`,
+under the same file protection as transcripts. CLI output and logs show only
+the error message. Records rejected by byte or depth limits retain no raw text.
+Unknown type names remain readable when they match
+`^[A-Za-z][A-Za-z0-9_.:-]{0,63}$`; other names use `(unprintable type)` with a
+short hash to keep counts distinct.
+Oversized files are skipped without changing archived copies or source metadata.
+They count as failed in sync reports and are retried on every sync.

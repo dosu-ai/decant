@@ -29,6 +29,7 @@ import {
   block,
   contentText,
   countUnknown,
+  diagnosticRawLine,
   jsonProblem,
   parseSourceJson,
   type UnknownTypes,
@@ -424,7 +425,7 @@ function parseMessageData(message: OpenCodeMessageRow, issues: Issue[]): JsonObj
       code: "unparsed_line",
       lineNo: message.seq,
       error: jsonProblem(error),
-      rawLine: null,
+      rawLine: diagnosticRawLine(error, message.data),
     });
     return null;
   }
@@ -433,7 +434,7 @@ function parseMessageData(message: OpenCodeMessageRow, issues: Issue[]): JsonObj
       code: "unparsed_line",
       lineNo: message.seq,
       error: "message data is not a JSON object",
-      rawLine: null,
+      rawLine: message.data,
     });
     return null;
   }

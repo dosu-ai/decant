@@ -326,7 +326,8 @@ Harbor's names for a source Decant reads natively (`claude-code`, `codex`,
 `gemini-cli`, `opencode`, `cursor-cli`, `copilot-cli`, or
 `vscode-copilot-chat`), file and subagent attribution use that source's rules.
 Other agents use Claude Code's file tool names, then the Codex shell and patch
-rules. Exporting an imported session as ATIF keeps its original agent name.
+rules. Exporting an imported session as ATIF keeps its original agent name, or
+writes `atif` when the document had none.
 
 ## What the archive stores
 

@@ -7,7 +7,9 @@
 #
 # Downloads the prebuilt decant release tarball for this platform, verifies
 # its SHA256 checksum against the release's SHA256SUMS file, and installs the
-# decant binary. No sudo. No macOS quarantine/Gatekeeper handling: curl/wget
+# decant binary. When the GitHub CLI is installed and logged in to github.com,
+# it also verifies the tarball's build provenance attestation and refuses to
+# install on failure. No sudo. No macOS quarantine/Gatekeeper handling: curl/wget
 # and tar never set com.apple.quarantine, so there is nothing to work around.
 #
 # Environment variables:
@@ -22,6 +24,9 @@
 #                           it at a mirror that lays assets out the same way.
 #                           It must be https://, file://, or http:// to
 #                           localhost, 127.0.0.1, or [::1]
+#   DECANT_SKIP_ATTESTATION set to "1" to skip the attestation check even when
+#                           gh is logged in, for machines that cannot reach
+#                           GitHub's attestation API. The checksum still runs.
 
 set -eu
 
@@ -187,15 +192,24 @@ fi
 [ "$expected_hash" = "$actual_hash" ] || err "checksum mismatch for $tarball_name: expected $expected_hash, got $actual_hash"
 info "checksum verified"
 
-# --- 4. best-effort attestation ------------------------------------------------
+# --- 4. attestation ------------------------------------------------------------
 
-if need_cmd gh; then
+# A matching checksum only proves the tarball matches the SHA256SUMS served
+# next to it. The attestation proves this repository's release workflow built
+# it, so once gh can check that, a failure stops the install. gh being absent
+# or logged out is common on fresh machines and keeps the checksum-only path.
+# A mirror serves the same bytes, so its tarballs verify against this repo too.
+if [ "${DECANT_SKIP_ATTESTATION:-}" = "1" ]; then
+  warn "skipping the attestation check because DECANT_SKIP_ATTESTATION=1"
+elif need_cmd gh && gh auth status --hostname github.com >/dev/null 2>&1; then
   if gh_output=$(gh attestation verify "$tarball_path" -R "$repo" 2>&1); then
     info "attestation verified"
   else
-    warn "attestation verification did not succeed for $tarball_name; continuing without it"
     printf '%s\n' "$gh_output" >&2
+    err "attestation verification failed for $tarball_name, so it was not installed. See https://github.com/${repo}/blob/main/docs/distribution.md#shell-installer"
   fi
+else
+  info "skipped the attestation check: gh is not installed or not logged in to github.com"
 fi
 
 # --- extract only the decant binary -------------------------------------------

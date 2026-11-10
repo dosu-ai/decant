@@ -7,7 +7,11 @@ import { ReleaseFailure } from "../scripts/release/actions.ts";
 import {
   channelFromEnv,
   compareStableVersions,
+  isReleaseBranch,
+  offReleaseBranchMessage,
   parseReleaseVersion,
+  releaseBranchesFromLsRemote,
+  releaseBranchRefspecs,
   releaseChannel,
   stableVersionsFromLsRemote,
 } from "../scripts/release/meta.ts";
@@ -131,13 +135,23 @@ describe("meta CLI", () => {
     return result.stdout.trim();
   }
 
-  function fixture(): { work: string; head: string; first: string } {
+  interface Fixture {
+    origin: string;
+    work: string;
+    head: string;
+    first: string;
+    backport: string;
+    unmerged: string;
+  }
+
+  function fixture(): Fixture {
     const root = mkdtempSync(join(tmpdir(), "decant-release-meta-"));
     dirs.push(root);
     const origin = join(root, "origin.git");
     const work = join(root, "work");
     git(root, "init", "--bare", "-q", origin);
     git(root, "init", "-q", work);
+    git(work, "remote", "add", "origin", origin);
     git(work, "commit", "-q", "--allow-empty", "-m", "one");
     const first = git(work, "rev-parse", "HEAD");
     git(work, "tag", "-a", "v0.3.0", "-m", "v0.3.0");
@@ -146,12 +160,38 @@ describe("meta CLI", () => {
     git(work, "tag", "v0.2.1");
     git(work, "tag", "-a", "v0.4.0", "-m", "v0.4.0");
     git(work, "tag", "-a", "v0.5.0-beta.1", "-m", "v0.5.0-beta.1");
-    git(work, "remote", "add", "origin", origin);
+    git(work, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+    git(work, "switch", "-q", "-c", "release/0.3", first);
+    git(work, "commit", "-q", "--allow-empty", "-m", "backport");
+    const backport = git(work, "rev-parse", "HEAD");
+    git(work, "tag", "-a", "v0.3.1", "-m", "v0.3.1");
+    git(work, "push", "-q", "origin", "release/0.3");
+
+    // A pushed branch that is neither main nor release/* must not count.
+    git(work, "switch", "-q", "-c", "feature/release/x", first);
+    git(work, "commit", "-q", "--allow-empty", "-m", "unmerged");
+    const unmerged = git(work, "rev-parse", "HEAD");
+    git(work, "tag", "-a", "v0.5.0-rc.1", "-m", "v0.5.0-rc.1");
+    git(work, "push", "-q", "origin", "feature/release/x");
+
     git(work, "push", "-q", "origin", "--tags");
-    for (const tag of ["v0.2.1", "v0.3.0", "v0.4.0", "v0.5.0-beta.1"]) {
+    for (const tag of ["v0.2.1", "v0.3.0", "v0.3.1", "v0.4.0", "v0.5.0-beta.1", "v0.5.0-rc.1"]) {
       git(work, "tag", "-d", tag);
     }
-    return { work, head, first };
+    return { origin, work, head, first, backport, unmerged };
+  }
+
+  /** What actions/checkout leaves behind: a depth-1 fetch of the run's commit. */
+  function shallowCheckout(origin: string, sha: string): string {
+    const root = mkdtempSync(join(tmpdir(), "decant-release-meta-checkout-"));
+    dirs.push(root);
+    const dir = join(root, "checkout");
+    git(root, "init", "-q", dir);
+    git(dir, "remote", "add", "origin", `file://${origin}`);
+    git(dir, "fetch", "-q", "--no-tags", "--depth", "1", "origin", sha);
+    git(dir, "checkout", "-q", "--detach", "FETCH_HEAD");
+    return dir;
   }
 
   function runMeta(work: string, raw: string, sha: string) {
@@ -206,5 +246,69 @@ describe("meta CLI", () => {
       `::error::tag v0.3.0 points at ${first} but this run builds ${head} — dispatch with the tag as the run ref`,
     );
     expect(moved.outputs).toBe("");
+  });
+
+  test("accepts tags on main or a release/* branch from a shallow checkout", () => {
+    const { origin, head, backport } = fixture();
+
+    const onMain = runMeta(shallowCheckout(origin, head), "v0.4.0", head);
+    expect(onMain.status).toBe(0);
+    expect(onMain.outputs).toBe("version=0.4.0\nis_prerelease=false\nis_latest=true\n");
+
+    const onRelease = runMeta(shallowCheckout(origin, backport), "v0.3.1", backport);
+    expect(onRelease.status).toBe(0);
+    expect(onRelease.outputs).toBe("version=0.3.1\nis_prerelease=false\nis_latest=false\n");
+  });
+
+  test("refuses a tag whose commit is on no release branch", () => {
+    const { origin, unmerged } = fixture();
+
+    const result = runMeta(shallowCheckout(origin, unmerged), "v0.5.0-rc.1", unmerged);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`::error::${offReleaseBranchMessage("v0.5.0-rc.1", unmerged)}`);
+    expect(result.outputs).toBe("");
+  });
+});
+
+describe("release branches", () => {
+  test("main and release/* are release branches, nothing else is", () => {
+    for (const name of ["main", "release/0.3", "release/1.x", "release/v1/hotfix"]) {
+      expect(isReleaseBranch(name)).toBe(true);
+    }
+    for (const name of [
+      "",
+      "master",
+      "mainline",
+      "x/main",
+      "release",
+      "release/",
+      "releases/0.3",
+      "feature/release/0.3",
+      "release/a b",
+      "release/a:b",
+    ]) {
+      expect(isReleaseBranch(name)).toBe(false);
+    }
+  });
+
+  test("keeps only exact refs/heads names from ls-remote output", () => {
+    const output = [
+      "aaa\trefs/heads/main",
+      "bbb\trefs/heads/x/main",
+      "ccc\trefs/heads/release/0.3",
+      "ddd\trefs/heads/feature/release/0.3",
+      "eee\trefs/tags/main",
+      "fff\trefs/heads/release/0.2",
+      "",
+    ].join("\n");
+    expect(releaseBranchesFromLsRemote(output)).toEqual(["main", "release/0.2", "release/0.3"]);
+    expect(releaseBranchesFromLsRemote("")).toEqual([]);
+  });
+
+  test("fetches each branch into its remote-tracking ref", () => {
+    expect(releaseBranchRefspecs(["main", "release/0.3"])).toEqual([
+      "+refs/heads/main:refs/remotes/origin/main",
+      "+refs/heads/release/0.3:refs/remotes/origin/release/0.3",
+    ]);
   });
 });

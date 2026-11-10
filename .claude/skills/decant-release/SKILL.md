@@ -15,7 +15,8 @@ not cover a new tag.
 
 ## Preflight
 
-1. On `main`, clean tree, up to date with `origin/main`.
+1. On `main` (or a pushed `release/*` branch for a backport), clean tree, up to
+   date with its `origin` branch.
 2. `just check` passes locally (needs network for the npm pack smoke).
 3. CI is green on the exact commit you will tag.
 4. Pick the version: semver without a leading `v`. Prerelease suffixes such as
@@ -30,11 +31,14 @@ first. Signing is required; do not bypass it.
 
 ## What the tag triggers
 
-`.github/workflows/release.yml` builds the platform binaries (codesigned when
+`.github/workflows/release.yml` refuses a tag whose commit is not on `main` or
+a `release/*` branch. It builds the platform binaries (codesigned when
 signing secrets are configured), attests them, publishes GitHub Release assets
 with `SHA256SUMS`, publishes the npm launcher and platform packages with
 provenance, pushes the GHCR image, and updates the formula in
-`dosu-ai/homebrew-dosu`.
+`dosu-ai/homebrew-dosu`. Each publishing job waits for approval in the
+`release` environment. Approving those deployments is the user's call, the
+same as pushing the tag.
 
 ## Afterwards
 

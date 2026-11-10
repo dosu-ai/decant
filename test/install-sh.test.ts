@@ -18,9 +18,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // End-to-end coverage for install.sh that never touches the network: a fake
-// `curl` (and a fake `gh`, so the best-effort attestation step can't reach out
-// even if the real `gh` happens to be installed and earlier on PATH) serve
-// pre-built fixture files from a temp dir based on the requested URL.
+// `curl` serves pre-built fixture files from a temp dir based on the requested
+// URL, and a fake `gh` stands in for the attestation check so it can't reach
+// out even if the real `gh` happens to be installed and earlier on PATH.
 
 const installShPath = join(import.meta.dir, "..", "install.sh");
 
@@ -90,9 +90,10 @@ function writeStub(path: string, contents: string): void {
 
 /**
  * A stub bin dir with a fake `curl` (serves fixture files by URL basename and
- * logs every requested URL to CURL_LOG) and a fake `gh` that always reports
- * attestation as unavailable, exercising install.sh's warn-don't-fail path
- * deterministically and offline.
+ * logs every requested URL to CURL_LOG) and a fake `gh`. The fake `gh` logs its
+ * arguments to GH_LOG; `gh auth status` succeeds only when FAKE_GH_AUTH=ok and
+ * `gh attestation verify` only when FAKE_GH_VERIFY=ok, so by default it acts
+ * like a logged-out gh.
  */
 function buildStubBinDir(dir: string): { binDir: string; curlLog: string } {
   const binDir = join(dir, "stub-bin");
@@ -139,15 +140,28 @@ cp "$src" "$out"
 `,
   );
 
-  writeStub(
-    join(binDir, "gh"),
-    `#!/bin/sh
-exit 1
-`,
-  );
+  writeStub(join(binDir, "gh"), FAKE_GH);
 
   return { binDir, curlLog };
 }
+
+const FAKE_GH = `#!/bin/sh
+if [ -n "\${GH_LOG:-}" ]; then
+  printf '%s\\n' "$*" >> "$GH_LOG"
+fi
+case "$1" in
+  auth) [ "\${FAKE_GH_AUTH:-}" = ok ] ;;
+  attestation)
+    if [ "\${FAKE_GH_VERIFY:-}" = ok ]; then
+      echo "fake gh: verification succeeded"
+    else
+      echo "fake gh: no matching attestation found" >&2
+      exit 1
+    fi
+    ;;
+  *) exit 1 ;;
+esac
+`;
 
 /** A stub bin dir with just a fake `uname`, for exercising the platform-detect abort paths. */
 function buildFakeUnameDir(dir: string, unameS: string, unameM: string): string {
@@ -271,7 +285,12 @@ function runInstall(
     encoding: "utf8",
     // SHELL is pinned so rc-file detection is hermetic regardless of the
     // developer's login shell; individual tests can still override it.
-    env: { ...process.env, SHELL: "/bin/bash", ...envOverrides },
+    env: {
+      ...process.env,
+      SHELL: "/bin/bash",
+      DECANT_SKIP_ATTESTATION: undefined,
+      ...envOverrides,
+    },
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -339,8 +358,10 @@ describe("install.sh", () => {
     expect(existsSync(join(home, ".bash_profile"))).toBe(false);
     expect(existsSync(join(home, ".profile"))).toBe(false);
 
-    // best-effort attestation used the stub `gh` (which always fails) and warned, not failed
-    expect(result.stderr).toContain("attestation verification did not succeed");
+    // the stub `gh` is logged out, so the attestation check was skipped, not failed
+    expect(result.stdout).toContain(
+      "skipped the attestation check: gh is not installed or not logged in to github.com",
+    );
 
     // exact URLs requested, matching the pinned-version download shape
     const requestedUrls = readFileSync(curlLog, "utf8").trim().split("\n");
@@ -486,6 +507,80 @@ describe("install.sh", () => {
     expect([...tempAfter].filter((name) => !tempBefore.has(name))).toEqual([]);
   });
 
+  describe("attestation check with a logged-in gh", () => {
+    function installWithGh(env: Record<string, string>) {
+      const dir = caseDir();
+      const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-attested"\n');
+      const { binDir, curlLog } = buildStubBinDir(dir);
+      const installDir = join(dir, "install-target");
+      const ghLog = join(dir, "gh.log");
+      const tempBefore = decantTempEntries();
+      const result = runInstall(["1.2.3"], {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        HOME: freshHome(dir),
+        DECANT_INSTALL_DIR: installDir,
+        DECANT_NO_MODIFY_PATH: "1",
+        FIXTURE_DIR: fixture.fixtureDir,
+        CURL_LOG: curlLog,
+        GH_LOG: ghLog,
+        FAKE_GH_AUTH: "ok",
+        ...env,
+      });
+      const ghCalls = existsSync(ghLog) ? readFileSync(ghLog, "utf8").trim().split("\n") : [];
+      const leftovers = [...decantTempEntries()].filter((name) => !tempBefore.has(name));
+      return { result, installedBinary: join(installDir, "decant"), ghCalls, leftovers };
+    }
+
+    test("installs after gh verifies the tarball against this repository", () => {
+      const { result, installedBinary, ghCalls } = installWithGh({ FAKE_GH_VERIFY: "ok" });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("attestation verified");
+      expect(existsSync(installedBinary)).toBe(true);
+      expect(ghCalls[0]).toBe("auth status --hostname github.com");
+      expect(ghCalls[1]).toMatch(
+        new RegExp(
+          `^attestation verify .*/${tarballName.replaceAll(".", "\\.")} -R dosu-ai/decant$`,
+        ),
+      );
+    });
+
+    test("aborts and installs nothing when gh cannot verify the tarball", () => {
+      const { result, installedBinary, leftovers } = installWithGh({ FAKE_GH_VERIFY: "fail" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("fake gh: no matching attestation found");
+      expect(result.stderr).toContain(
+        `decant install: error: attestation verification failed for ${tarballName}, so it was not installed.`,
+      );
+      expect(result.stderr).toContain("docs/distribution.md#shell-installer");
+      expect(existsSync(installedBinary)).toBe(false);
+      expect(leftovers).toEqual([]);
+    });
+
+    test("DECANT_SKIP_ATTESTATION=1 skips gh entirely and warns", () => {
+      const { result, installedBinary, ghCalls } = installWithGh({
+        FAKE_GH_VERIFY: "fail",
+        DECANT_SKIP_ATTESTATION: "1",
+      });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain(
+        "skipping the attestation check because DECANT_SKIP_ATTESTATION=1",
+      );
+      expect(existsSync(installedBinary)).toBe(true);
+      expect(ghCalls).toEqual([]);
+    });
+
+    test("a logged-out gh never runs the verification", () => {
+      const { result, installedBinary, ghCalls } = installWithGh({
+        FAKE_GH_AUTH: "fail",
+        FAKE_GH_VERIFY: "fail",
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("skipped the attestation check");
+      expect(existsSync(installedBinary)).toBe(true);
+      expect(ghCalls).toEqual(["auth status --hostname github.com"]);
+    });
+  });
+
   test("aborts with a clear message when SHA256SUMS has no matching entry", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
@@ -553,7 +648,7 @@ describe("install.sh", () => {
     // Only `gh` is stubbed (attestation must stay offline); curl is the real one.
     const ghDir = join(dir, "gh-bin");
     mkdirSync(ghDir, { recursive: true });
-    writeStub(join(ghDir, "gh"), "#!/bin/sh\nexit 1\n");
+    writeStub(join(ghDir, "gh"), FAKE_GH);
 
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
@@ -594,6 +689,8 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     const installedBinary = join(installDir, "decant");
     expect(readFileSync(installedBinary, "utf8")).toBe(fixture.binaryContents);
+    // no gh on this PATH at all
+    expect(result.stdout).toContain("skipped the attestation check");
     const requestedUrls = readFileSync(farm.wgetLog, "utf8").trim().split("\n");
     expect(requestedUrls).toEqual([
       `https://github.com/dosu-ai/decant/releases/download/v1.2.3/${tarballName}`,

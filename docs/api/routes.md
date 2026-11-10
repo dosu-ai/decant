@@ -76,6 +76,12 @@ the local guard can read or mutate the whole archive.
   hosts here, and a missing port means the scheme's default. The bound port is
   not consulted, so a published port such as `-p 8080:3000` works when the
   browser's `Host` and `Origin` agree.
+- Every UI page response sends `Content-Security-Policy: frame-ancestors
+  'none'` and `X-Frame-Options: DENY`, so browsers refuse to show the UI inside
+  another site's frame. A click inside such a frame would reach the API as a
+  same-origin request that the `Origin` check cannot reject. UI pages also send
+  `Referrer-Policy: no-referrer`, and UI pages, bundled assets, and JSON
+  responses send `X-Content-Type-Options: nosniff`.
 - The `Host` check is not authentication: a non-browser client can send
   `Host: localhost`. The `Origin` and `Sec-Fetch-Site` checks on writes are
   browser-drive protections, not credentials.

@@ -45,6 +45,8 @@ In scope:
 
 - Parser handling of malformed or adversarial session files.
 - The local web UI exposing the archive beyond the local machine.
+- Another website driving the local web UI, for example by framing it or by
+  sending cross-origin writes to its API.
 - Unsafe filesystem access through settings or launcher paths.
 - Accidental inclusion of secrets, transcripts, or archive data in the repo.
 

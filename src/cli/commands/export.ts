@@ -45,18 +45,26 @@ export function registerExportCommand(ctx: CliContext): void {
               io.writeErr("error: --mirror takes every session and its own folder\n");
               return 2;
             }
-            return ctx.withArchive((archive) => {
-              const report = mirrorAtif(archive.db, { out: mirror });
-              ctx.output(report, () =>
-                [
-                  `mirrored ATIF to ${report.out}`,
-                  `  written: ${report.written}`,
-                  `  unchanged: ${report.unchanged}`,
-                  ...(report.skipped > 0 ? [`  no steps to export: ${report.skipped}`] : []),
-                ].join("\n"),
-              );
-              return 0;
-            });
+            return ctx.withArchive(
+              (archive) => {
+                const result = mirrorAtif(archive.db, { out: mirror });
+                if (!result.ok) {
+                  io.writeErr(`error: refusing to write through the link at ${result.path}\n`);
+                  return 1;
+                }
+                const report = result.report;
+                ctx.output(report, () =>
+                  [
+                    `mirrored ATIF to ${report.out}`,
+                    `  written: ${report.written}`,
+                    `  unchanged: ${report.unchanged}`,
+                    ...(report.skipped > 0 ? [`  no steps to export: ${report.skipped}`] : []),
+                  ].join("\n"),
+                );
+                return 0;
+              },
+              { sync: true },
+            );
           }
           const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
           if (

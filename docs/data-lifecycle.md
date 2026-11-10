@@ -247,29 +247,41 @@ and the summary that follows is a `user` step marked
 ### Mirroring to a folder
 
 `decant export --mirror <dir>` keeps a folder of ATIF documents for other
-tools to read, one per session, including subagents and excluding archived
-sessions. Each document lives at `<tool>/<source session id>.atif.json`, with
-the ID percent-encoded where a file name cannot hold it. The path depends only
-on the session, so it stays the same when the archive is rebuilt.
+tools to read, one per session. It syncs first, like other exports. It writes
+every session you have not archived, plus every subagent of one, since the
+parent's document points at it. Each document lives at
+`<tool>/<name>.atif.json`, where the name is the source session ID when that
+ID is lowercase letters, digits, `.`, `_`, and `-`, at most 100 characters,
+and not a name Windows reserves. Any other ID gets a readable prefix, `~`, and
+a digest of the exact ID, so two IDs that differ only in case still get
+different files. The path depends only on the session, so it stays the same
+when the archive is rebuilt.
 
 Every document stands alone. A subagent is its own file rather than embedded,
 and the spawning call's `subagent_trajectory_ref` names it with a
 `trajectory_path` relative to the parent's file. Each document's
 `final_metrics` therefore cover that session alone, so summing every file
-counts nothing twice. ATIF has no field naming a trajectory's parent, so a
+counts nothing twice. `trajectory_id` is prefixed with the tool, as in
+`claude_code:<id>`, in documents and references alike, so sessions from two
+tools never share one. ATIF has no field naming a trajectory's parent, so a
 subagent's `extra` carries `parent_session_id` and `parent_trajectory_path`.
+When the parent has nothing to export, they name the nearest ancestor that
+has a file.
 
 The working directory (`extra.cwd`) is left out, since the folder may be
 shared and `extra.repository` names the project without a local path. Tool
 calls and results keep the paths the agent wrote.
 
-Running the command again rewrites only the documents whose content changed,
-replacing each file in one step so a reader never sees a partial document.
-Unchanged files keep their modification times. Decant never deletes files from
-the folder, so a session deleted or archived in Decant keeps its last
-document there. A folder Decant creates is owner-only (`0700`), and one that
-already exists keeps its mode. Decant's own ATIF import reads the folder back
-with subagents linked.
+Running the command again rewrites only the documents whose content changed.
+Each write goes to a new owner-only (`0600`) temporary file that is renamed
+over the document, so a reader never sees a partial document, and the
+temporary file is removed if the rename fails. A document that is a symbolic
+link is replaced, not followed, and a tool folder that is a link stops the
+mirror with an error. Unchanged files keep their modification times. Decant
+never deletes files from the folder, so a session deleted or archived in
+Decant keeps its last document there. A folder Decant creates is owner-only
+(`0700`), and one that already exists keeps its mode. Decant's own ATIF import
+reads the folder back with subagents linked, under the tool-prefixed IDs.
 
 ## ATIF imports
 

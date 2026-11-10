@@ -265,7 +265,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          description: The background service is not supported on this machine
+          description: The background service is not supported on this machine, or the archive or executable path contains a control character
           content:
             application/json:
               schema:

@@ -9,7 +9,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  writeSync,
+  writeFileSync,
 } from "node:fs";
 import { join, posix } from "node:path";
 import { ARCHIVE_DIR_MODE } from "./db.ts";
@@ -122,7 +122,7 @@ function writeAtomically(path: string, content: string): void {
     if (mode != null) {
       fchmodSync(fd, mode);
     }
-    writeSync(fd, content);
+    writeFileSync(fd, content);
   } catch (error) {
     failure = error;
   }

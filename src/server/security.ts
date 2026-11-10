@@ -24,7 +24,26 @@ export function validateLocalRequest(
   if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request, url, boundToLoopback)) {
     return errorResponse("cross_origin_write", "cross-origin writes are forbidden", {}, 403);
   }
+  if (url.pathname === EVENT_STREAM_PATH && !isOwnPageRead(request, url)) {
+    return errorResponse("cross_origin_read", "cross-origin event streams are forbidden", {}, 403);
+  }
   return null;
+}
+
+const EVENT_STREAM_PATH = "/api/events";
+
+// The event stream has a client cap, and a page on any site can open it with a
+// no-cors fetch: it cannot read the frames, but it holds a slot. Decant's own
+// EventSource is same-origin, so only reject what a browser marks as coming
+// from another page. "same-site" is excluded, unlike writes, because another
+// localhost port is same-site and a no-cors GET sends no Origin to compare.
+function isOwnPageRead(request: Request, url: URL): boolean {
+  const origin = request.headers.get("origin");
+  if (origin != null && !isSameAuthorityLoopbackOrigin(origin, request, url)) {
+    return false;
+  }
+  const site = request.headers.get("sec-fetch-site")?.toLowerCase();
+  return site == null || site === "same-origin" || site === "none";
 }
 
 function isProtectedPath(pathname: string): boolean {

@@ -481,6 +481,51 @@ describe("server routes", () => {
     expect(frame).toContain('"total":0');
   });
 
+  test("events route refuses streams another page opens", async () => {
+    const config = freshConfig();
+    const refused: Record<string, string>[] = [
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site" },
+      { origin: "https://evil.example" },
+      { origin: "http://127.0.0.1:5173", "sec-fetch-site": "same-origin" },
+    ];
+    for (const headers of refused) {
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/events", { headers }),
+        config,
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "cross-origin event streams are forbidden",
+        code: "cross_origin_read",
+      });
+    }
+
+    const admitted: Record<string, string>[] = [
+      {},
+      { "sec-fetch-site": "same-origin" },
+      { "sec-fetch-site": "none" },
+      { origin: "http://127.0.0.1:3000", "sec-fetch-site": "same-origin" },
+    ];
+    for (const headers of admitted) {
+      const response = await handleRequest(
+        new Request("http://127.0.0.1:3000/api/events", { headers }),
+        config,
+      );
+      expect(response.status).toBe(200);
+      await response.body?.cancel();
+    }
+
+    // Other GET routes keep their existing behavior: only the stream holds a slot.
+    const crossSiteRead = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/health", {
+        headers: { "sec-fetch-site": "cross-site" },
+      }),
+      config,
+    );
+    expect(crossSiteRead.status).toBe(200);
+  });
+
   test("repricing-only sync refreshes cached economics and notifies clients", async () => {
     const config = freshConfig();
     const db = openDb(config.dbPath);

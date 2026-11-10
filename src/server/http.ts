@@ -5,6 +5,7 @@ export type ApiErrorCode =
   | "archive_locked"
   | "background_failed"
   | "background_unsupported"
+  | "cross_origin_read"
   | "cross_origin_write"
   | "forbidden_host"
   | "forbidden_remote"

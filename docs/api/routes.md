@@ -76,6 +76,12 @@ the local guard can read or mutate the whole archive.
   hosts here, and a missing port means the scheme's default. The bound port is
   not consulted, so a published port such as `-p 8080:3000` works when the
   browser's `Host` and `Origin` agree.
+- `GET /api/events` is refused with `403 cross_origin_read` when the browser
+  marks the request as coming from another page (`Sec-Fetch-Site` other than
+  `same-origin` or `none`, or an `Origin` that fails the check above). Pages on
+  other sites cannot read the stream anyway, but each open stream counts toward
+  the client cap, so this keeps them from holding slots. `curl` and other
+  clients that send neither header are admitted.
 - The `Host` check is not authentication: a non-browser client can send
   `Host: localhost`. The `Origin` and `Sec-Fetch-Site` checks on writes are
   browser-drive protections, not credentials.

@@ -30,6 +30,11 @@ x-access-control:
     A write that sends Origin must use a loopback origin whose host and port
     equal the request's Host header, with default ports normalised; a
     mismatch returns 403 cross_origin_write.
+  event_stream_origin: |
+    GET /api/events returns 403 cross_origin_read when the browser marks the
+    request as coming from another page: Sec-Fetch-Site other than
+    same-origin or none, or an Origin that is not the request's own loopback
+    authority. Requests without either header, such as curl, are admitted.
   non_loopback_writes: |
     A trusted non-loopback peer must also send a matching loopback Origin or an
     acceptable Sec-Fetch-Site value; writes with neither header are rejected.
@@ -1507,6 +1512,7 @@ components:
         - archive_locked
         - background_failed
         - background_unsupported
+        - cross_origin_read
         - cross_origin_write
         - forbidden_host
         - forbidden_remote

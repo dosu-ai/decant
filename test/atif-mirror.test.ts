@@ -358,6 +358,12 @@ describe("mirrorAtif", () => {
       add(db, "first", "The parser now keeps every line, including the last one.");
       expect(mirror(db, out)).toMatchObject({ written: 1 });
       expect(statSync(document).mode & 0o777).toBe(0o640);
+
+      // Write and execute access for others is not carried over.
+      chmodSync(document, 0o777);
+      add(db, "first", "The parser keeps every line again.");
+      expect(mirror(db, out)).toMatchObject({ written: 1 });
+      expect(statSync(document).mode & 0o777).toBe(0o644);
     } finally {
       closeDb(db);
     }

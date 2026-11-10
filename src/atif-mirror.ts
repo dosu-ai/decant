@@ -143,10 +143,11 @@ function writeAtomically(path: string, content: string): void {
   throw failure;
 }
 
+/** Read access others were given survives; write and execute never do. */
 function existingFileMode(path: string): number | null {
   try {
     const stat = lstatSync(path);
-    return stat.isFile() ? stat.mode & 0o777 : null;
+    return stat.isFile() ? (stat.mode & 0o644) | DOCUMENT_FILE_MODE : null;
   } catch {
     return null;
   }

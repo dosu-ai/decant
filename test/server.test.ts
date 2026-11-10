@@ -191,6 +191,12 @@ describe("server routes", () => {
       expect(health.status).toBe(200);
       expect(health.headers.get("x-content-type-options")).toBe("nosniff");
 
+      // Read routes answer through readOutputResponse, not json().
+      const summary = await fetch(`${base}/api/stats/summary`);
+      expect(summary.status).toBe(200);
+      expect(summary.headers.get("content-type")).toBe("application/json; charset=utf-8");
+      expect(summary.headers.get("x-content-type-options")).toBe("nosniff");
+
       const favicon = await fetch(`${base}/favicon.ico`);
       expect(favicon.status).toBe(200);
       expect(favicon.headers.get("content-type")).toBe("image/x-icon");

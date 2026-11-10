@@ -1,5 +1,5 @@
 import { linkageIssues } from "../diagnostics.ts";
-import { asString, get, isObject, type JsonObject } from "../json.ts";
+import { asString, assertJsonDepth, get, isObject, type JsonObject } from "../json.ts";
 import {
   emptyUsage,
   type Issue,
@@ -17,7 +17,10 @@ import { preview } from "../tools.ts";
 import {
   block,
   countUnknown,
+  jsonProblem,
   parseJsonLine,
+  parseSourceJson,
+  printableType,
   type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
@@ -157,7 +160,13 @@ export function parseVscodeCopilotSession(
   // Parts are read after the log is replayed, so they have no line number.
   const unknownParts = new Map<string, number>();
   const { state, storage } = loadSession(content, issues, unknownTypes);
-  const root: JsonObject = state ?? {};
+  let root: JsonObject = state ?? {};
+  try {
+    assertJsonDepth(root);
+  } catch (error) {
+    issues.push({ code: "unparsed_line", lineNo: null, error: jsonProblem(error), rawLine: null });
+    root = {};
+  }
   const requests = Array.isArray(root.requests) ? root.requests : [];
 
   const messages: NormalizedMessage[] = [];
@@ -325,7 +334,7 @@ export function parseVscodeCopilotSession(
         }
         default:
           if (!IGNORED_PART_KINDS.has(kind)) {
-            countPart(unknownParts, `response part "${kind}"`);
+            countPart(unknownParts, kind);
           }
           consumed.push(part);
       }
@@ -438,7 +447,7 @@ function loadSession(
   } else if (!isLogEntry(filled[0] ?? "")) {
     // VS Code writes a flat file on one line; a reformatted copy spans many.
     try {
-      const whole = JSON.parse(content) as Json;
+      const whole = parseSourceJson(content) as Json;
       if (isObject(whole)) {
         return { state: whole, storage: "json" };
       }
@@ -451,7 +460,7 @@ function loadSession(
 
 function isLogEntry(line: string): boolean {
   try {
-    const entry = JSON.parse(line) as Json;
+    const entry = parseSourceJson(line) as Json;
     return isObject(entry) && typeof entry.kind === "number";
   } catch {
     return false;
@@ -545,7 +554,8 @@ function replayLog(
 }
 
 function countPart(unknownParts: Map<string, number>, kind: string): void {
-  unknownParts.set(kind, (unknownParts.get(kind) ?? 0) + 1);
+  const label = printableType(kind);
+  unknownParts.set(label, (unknownParts.get(label) ?? 0) + 1);
 }
 
 function notApplied(issues: Issue[], lineNo: number, line: string, error: string): void {
@@ -751,7 +761,7 @@ function lookup<T>(map: Map<string, T>, id: string | null): T | undefined {
 
 function parseArguments(value: string): Json {
   try {
-    return JSON.parse(value) as Json;
+    return parseSourceJson(value) as Json;
   } catch {
     return value;
   }

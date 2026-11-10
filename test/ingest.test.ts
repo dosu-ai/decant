@@ -1,10 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import {
+  closeSync,
   copyFileSync,
   cpSync,
+  ftruncateSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -30,6 +33,7 @@ import {
   sync,
   upsertSession,
 } from "../src/ingest.ts";
+import { MAX_SOURCE_FILE_BYTES } from "../src/ingest-limits.ts";
 import { configureLogging } from "../src/logging.ts";
 import type { Json } from "../src/model.ts";
 import { getSession, listSessions } from "../src/query.ts";
@@ -4746,3 +4750,56 @@ describe("sync planner statistics", () => {
     }
   });
 });
+
+for (const tool of ["claude", "atif"] as const) {
+  test(`${tool} oversized sources keep archived rows and new files create no session`, () => {
+    const dir = freshCase();
+    const config = stageFixtures(dir);
+    const root = tool === "claude" ? config.claudeDir : join(dir, "sources", "atif");
+    const path = join(root, tool === "claude" ? "growing.jsonl" : "growing.atif.json");
+    const content =
+      tool === "claude"
+        ? JSON.stringify({ type: "user", message: { role: "user", content: "preserved" } })
+        : JSON.stringify({
+            trajectory_id: "growing",
+            steps: [{ step_id: 1, source: "user", message: "preserved" }],
+          });
+    writeFileSync(path, content);
+    const db = openFreshDb(dir);
+    try {
+      sync(db, config);
+      db.run("UPDATE ingest_source SET ingest_revision = 20 WHERE path = ?1", [path]);
+      const before = db.query("SELECT * FROM ingest_source WHERE path = ?1").get(path);
+      const sessions = db.query("SELECT * FROM session").all();
+      const messages = db.query("SELECT * FROM message").all();
+      expect(messages.some((m) => JSON.stringify(m).includes("preserved"))).toBe(true);
+      const fd = openSync(path, "r+");
+      try {
+        ftruncateSync(fd, MAX_SOURCE_FILE_BYTES + 1);
+      } finally {
+        closeSync(fd);
+      }
+      const newPath = join(root, tool === "claude" ? "oversized.jsonl" : "oversized.atif.json");
+      const newFd = openSync(newPath, "w");
+      try {
+        ftruncateSync(newFd, MAX_SOURCE_FILE_BYTES + 1);
+      } finally {
+        closeSync(newFd);
+      }
+      for (let i = 0; i < 2; i++) {
+        const report = sync(db, config);
+        expect(report.failed).toBe(2);
+        expect(report.ingested).toBe(0);
+        expect(db.query("SELECT * FROM ingest_source WHERE path = ?1").get(path)).toEqual(before);
+        expect(db.query("SELECT * FROM ingest_source WHERE path = ?1").get(newPath)).toBeNull();
+        expect(db.query("SELECT * FROM session").all()).toEqual(sessions);
+        expect(db.query("SELECT * FROM message").all()).toEqual(messages);
+        expect(db.query("SELECT * FROM ingest_issue WHERE source_path = ?1").all(newPath)).toEqual(
+          [],
+        );
+      }
+    } finally {
+      closeDb(db);
+    }
+  });
+}

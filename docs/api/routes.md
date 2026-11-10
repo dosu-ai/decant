@@ -110,6 +110,9 @@ If the client connects to a non-loopback address directly, it must also send a
 loopback `Host` header. Admission still depends on the actual source address;
 changing `Host` or `Origin` never makes an untrusted peer trusted.
 
+The sync report counts oversized source files in `failed`. These files leave
+archived rows and source metadata unchanged and are retried on every sync.
+
 ## Response and archive semantics
 
 JSON errors use the stable envelope `{ "error": string, "code": string, ... }`.

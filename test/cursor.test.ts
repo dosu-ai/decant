@@ -516,7 +516,7 @@ describe("Cursor source", () => {
         lineNo: 1,
         error: "Cursor message content is not an array; message kept without content",
       },
-      { code: "unparsed_line", lineNo: 5, error: "Cursor message blob is not valid JSON" },
+      { code: "unparsed_line", lineNo: 5, error: "record is not valid JSON" },
       {
         code: "unknown_record_type",
         lineNo: 2,
@@ -525,9 +525,14 @@ describe("Cursor source", () => {
       {
         code: "unknown_record_type",
         lineNo: 3,
-        error: 'unknown Cursor message role "<unrecognized>" on 1 message(s); kept as role "other"',
+        error:
+          'unknown Cursor message role "(unprintable type) sha256:3b10a61264dc" on 1 message(s); kept as role "other"',
       },
     ]);
+    expect(parsed.issues[0]?.rawLine).toBe(
+      '{"content":{"text":"private words"},"id":"a","role":"user"}',
+    );
+    expect(parsed.issues[1]?.rawLine).toBe("{not json");
     expect(parsed.session.messages.map((message) => message.role)).toEqual([
       "user",
       "other",
@@ -554,7 +559,7 @@ describe("Cursor source", () => {
       "unknown_record_type",
     ]);
     expect(parsed.issues.map((issue) => issue.error)).toContain(
-      'unknown record type "<non-object>" on 1 line(s); ignored',
+      'unknown record type "future-block" on 1 line(s); ignored',
     );
   });
 

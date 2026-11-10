@@ -7,17 +7,46 @@
 import type { Json } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 
-/** Serialize a JSON value with keys sorted by code point at every depth. */
+// Real tool payloads are shallow. This leaves ample room while keeping recursive
+// consumers below the runtime stack limit, including JSON.stringify callers.
+export const MAX_JSON_DEPTH = 512;
+
+export class JsonDepthError extends Error {
+  constructor() {
+    super("JSON nesting exceeds the depth limit");
+  }
+}
+
+export function assertJsonDepth(value: unknown): void {
+  const pending: { value: unknown; depth: number }[] = [{ value, depth: 0 }];
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (item == null) break;
+    if (item.value === null || typeof item.value !== "object") continue;
+    if (item.depth >= MAX_JSON_DEPTH) throw new JsonDepthError();
+    for (const child of Object.values(item.value)) {
+      if (child !== null && typeof child === "object")
+        pending.push({ value: child, depth: item.depth + 1 });
+    }
+  }
+}
+
+/** Serialize JSON with sorted keys, rejecting containers beyond MAX_JSON_DEPTH. */
 export function canonicalJson(value: Json): string {
+  assertJsonDepth(value);
+  return serialize(value);
+}
+
+function serialize(value: Json): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
+    return `[${value.map(serialize).join(",")}]`;
   }
   const parts = Object.keys(value)
     .sort(compareCodePoints)
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] as Json)}`);
+    .map((key) => `${JSON.stringify(key)}:${serialize(value[key] as Json)}`);
   return `{${parts.join(",")}}`;
 }
 

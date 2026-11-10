@@ -138,6 +138,17 @@ describe("resolveRepoRemote", () => {
     expect(resolveRepoRemote(leaf)).toBe("github.com/acme/widget");
   });
 
+  test("resolves a relative gitdir pointer against the .git file, not the working directory", () => {
+    const base = tempDir();
+    repo(join(base, "widget"), origin("https://github.com/acme/widget.git"));
+    const leaf = join(base, "sub");
+    mkdirSync(leaf, { recursive: true });
+    // Submodules and `git worktree add --relative-paths` write the pointer this way.
+    writeFileSync(join(leaf, ".git"), "gitdir: ../widget/.git\n");
+    expect(process.cwd()).not.toBe(leaf);
+    expect(resolveRepoRemote(leaf)).toBe("github.com/acme/widget");
+  });
+
   test("answers nothing for a directory that is gone, even inside a repository", () => {
     const root = repo(join(tempDir(), "home"), origin("git@github.com:acme/dotfiles.git"));
     expect(resolveRepoRemote(join(root, "worktrees", "removed"))).toBeNull();

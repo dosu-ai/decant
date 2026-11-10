@@ -67,4 +67,7 @@ The local UI binds to <http://127.0.0.1:3000> by default. Run
 Documentation, alternative install methods, source, and issue tracking are at
 <https://github.com/dosu-ai/decant>.
 
+The Docker runtime is distroless and has no shell. It keeps UID/GID `999:999`
+so existing named volumes stay writable. See [Docker setup and debugging](https://github.com/dosu-ai/decant/blob/main/docs/distribution.md#docker).
+
 Apache-2.0

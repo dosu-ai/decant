@@ -84,8 +84,27 @@ instead. The image reads one VS Code `User` directory, so mount VS Code
 Insiders' directory there if that is the build you use. `/sources/atif` holds
 ATIF trajectories. Mount a Harbor `jobs` directory there to read its runs.
 
-The image runs as a non-root user and stores the archive in
-`/var/lib/decant`. Keep the host port bound to `127.0.0.1`; Decant's local API
+The runtime uses [`gcr.io/distroless/cc-debian12`](https://github.com/GoogleContainerTools/distroless)
+and has no shell or package manager. It includes glibc, the C++ runtime, and CA
+certificates for optional HTTPS update checks. The image runs as `decant` with
+UID/GID `999:999`, unchanged from the Debian runtime, so existing named volumes
+stay writable. `HOME` and the archive directory are `/var/lib/decant`.
+All source directories, including `/sources/atif`, exist and belong to `decant`.
+
+Run the binary directly to inspect the image:
+
+```sh
+docker run --rm --entrypoint /usr/local/bin/decant ghcr.io/dosu-ai/decant:latest --version
+docker logs <container>
+```
+
+`docker exec <container> sh` cannot work without a shell. For shell debugging,
+build a temporary image with the runtime base changed to the distroless
+`cc-debian12:debug` variant and its matching digest, then use
+`docker run --rm -it --entrypoint /busybox/sh <debug-image>`. Decant does not
+publish a debug tag.
+
+Keep the host port bound to `127.0.0.1`; Decant's local API
 has no credentials.
 
 The image trusts a verified container bridge gateway so host traffic forwarded

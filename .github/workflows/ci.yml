@@ -82,10 +82,44 @@ jobs:
       - name: Smoke CLI
         run: docker run --rm decant:ci --help
 
+      - name: Smoke distroless identity and CLI
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect decant:ci --format '{{.Config.User}}')" = '999:999'
+          docker run --rm --entrypoint /usr/local/bin/decant decant:ci --version
+          container="$(docker create decant:ci)"
+          docker cp "$container:/etc/passwd" /tmp/decant-passwd
+          docker cp "$container:/etc/group" /tmp/decant-group
+          docker export "$container" -o /tmp/decant-rootfs.tar
+          python3 - <<'PYTHON'
+          import tarfile
+          with tarfile.open('/tmp/decant-rootfs.tar') as archive:
+              entries = {entry.name.removeprefix('./'): entry for entry in archive}
+              for source in ('claude', 'codex', 'gemini', 'cursor', 'copilot', 'vscode', 'atif'):
+                  directory = entries[f'sources/{source}']
+                  assert directory.isdir() and (directory.uid, directory.gid) == (999, 999), source
+              assert 'bin/sh' not in entries and 'usr/bin/apt' not in entries
+          PYTHON
+          docker rm -v "$container"
+          grep -Fx 'decant:x:999:999::/var/lib/decant:/sbin/nologin' /tmp/decant-passwd
+          grep -Fx 'decant:x:999:' /tmp/decant-group
+
+      - name: Prepare a volume with the previous runtime's ownership
+        run: |
+          set -euo pipefail
+          docker volume create decant-data
+          docker run --rm -v decant-data:/data \
+            debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 \
+            sh -ec 'groupadd --system decant
+              useradd --system --gid decant --home-dir /var/lib/decant --create-home decant
+              test "$(id -u decant):$(id -g decant)" = "999:999"
+              chown decant:decant /data
+              chmod 700 /data'
+
       - name: Smoke /api/* through the bridge (DECANT_TRUST_DEFAULT_GATEWAY)
         run: |
           set -euo pipefail
-          docker run -d --name decant-smoke -p 127.0.0.1:3000:3000 decant:ci
+          docker run -d --name decant-smoke -v decant-data:/var/lib/decant -p 127.0.0.1:3000:3000 decant:ci
           http_status=""
           for _ in $(seq 1 30); do
             http_status="$(curl -sS -o /tmp/decant-health-body.json -w '%{http_code}' http://127.0.0.1:3000/api/health || true)"
@@ -111,7 +145,10 @@ jobs:
           fi
           cat /tmp/decant-health-body.json
           echo
+          docker cp decant-smoke:/var/lib/decant/decant.db /tmp/decant-smoke.db
+          test "$(head -c 15 /tmp/decant-smoke.db)" = 'SQLite format 3'
           docker rm -f decant-smoke
+          docker volume rm decant-data
 
       - name: Validate multi-arch Docker build
         run: docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly .

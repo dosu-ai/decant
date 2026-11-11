@@ -71,7 +71,7 @@ export function fromErrorLine(text: string, exitCode: number): CliError {
     return usageError("usage_error", message);
   }
   return new CliError(
-    /^no session with id \d+$/.test(message) ? "session_not_found" : "command_failed",
+    /^no session with id -?\d+$/.test(message) ? "session_not_found" : "command_failed",
     message,
     exitCode,
   );

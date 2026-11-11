@@ -407,6 +407,8 @@ describe("error helpers", () => {
       message: "no session with id 12",
       exitCode: 1,
     });
+    // A session id parses as any integer, so a negative one can be reported missing.
+    expect(fromErrorLine("error: no session with id -1\n", 1).code).toBe("session_not_found");
     expect(fromErrorLine("error: --all requires --out <dir>\n", 2)).toMatchObject({
       code: "usage_error",
       exitCode: 2,

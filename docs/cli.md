@@ -9,6 +9,10 @@ stdout carries the result. With `--json` or `--format json` it is one JSON
 document. Otherwise it is rows of text or Markdown. stderr carries errors,
 notes, and progress.
 
+Two commands print something else under `--json`. `watch --json` writes one
+JSON object per line, one for each event, until it stops. `completion` always
+writes a shell script.
+
 A command that fails writes nothing to stdout, with two exceptions.
 `session rm --json` and `recommendations mark --json` report a failed operation
 as their JSON result on stdout, with an `error` string, and exit 1.
@@ -20,7 +24,7 @@ as their JSON result on stdout, with an `error` string, and exit 1.
 | 0 | Success. An empty result, such as `[]` from `ls --json`, is a success. |
 | 1 | The command failed. The session does not exist, the archive is missing or unreadable, or something went wrong at runtime. |
 | 2 | Usage error. The command, a flag, or a value is wrong, an argument is missing, or the operation needs a flag such as `--yes` or `--force` before it runs. Fix the command line and run it again. |
-| 3 | `decant sync` finished but dropped source lines it could not parse. The sync report says how many under `issues_by_code.unparsed_line`. Everything else was indexed. |
+| 3 | `decant sync` finished but dropped source lines it could not parse. The sync report says how many under `issues_by_code.unparsed_line`. Its `failed` count holds the files that could not be read at all. |
 | 75 | `decant serve`, running as the background service, saw its own binary change and exited so the OS restarts it on the new version. |
 
 ## Errors

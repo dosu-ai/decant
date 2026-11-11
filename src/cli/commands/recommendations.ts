@@ -54,10 +54,11 @@ export function registerRecommendationsCommands(ctx: CliContext): void {
                 ? { ok: true, key, status: "implemented" }
                 : { ok: false, key, error: "recommendation not found" },
             );
+          } else if (!ok) {
+            // --quiet drops notes, not the reason a command failed.
+            io.writeErr(`recommendation not found: ${key}\n`);
           } else if (!ctx.globals().quiet) {
-            io[ok ? "writeOut" : "writeErr"](
-              ok ? `Marked ${key} as implemented.\n` : `recommendation not found: ${key}\n`,
-            );
+            io.writeOut(`Marked ${key} as implemented.\n`);
           }
           return ok ? 0 : 1;
         }),

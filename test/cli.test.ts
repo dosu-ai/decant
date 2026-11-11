@@ -279,6 +279,20 @@ describe("runCli", () => {
     expect((JSON.parse(implemented.stdout) as { key: string }[]).map((rec) => rec.key)).toContain(
       "catalog:agents-md",
     );
+
+    // --quiet drops the confirmation, not the reason a mark failed.
+    const missing = await runCli([
+      ...base.filter((arg) => arg !== "--json"),
+      "--quiet",
+      "recommendations",
+      "mark",
+      "catalog:no-such-row",
+    ]);
+    expect(missing).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: "recommendation not found: catalog:no-such-row\n",
+    });
   });
 
   test("export --as trajectory writes a validating JSON array", async () => {

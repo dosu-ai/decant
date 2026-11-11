@@ -25,7 +25,9 @@ Exit codes:
   3  sync finished but dropped source lines it could not parse
 
 Errors go to stderr and stdout stays empty. With --json, the last line of
-stderr is {"error":{"code":"...","message":"..."}}.
+stderr is {"error":{"code":"...","message":"..."}}. Two commands differ:
+session rm --json and recommendations mark --json report a failed operation
+as a JSON result on stdout, with an "error" string, and exit 1.
 Read commands sync the source logs first. Pass --no-sync to skip that.
 Reference: ${DOCS_URL}
 

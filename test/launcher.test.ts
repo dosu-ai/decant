@@ -195,7 +195,12 @@ describe("launcher", () => {
         platform: "linux",
         dir: project,
       });
-      expect(result).toMatchObject({ ok: false, dir: project, command: "codex 'make it so'" });
+      // Pasted elsewhere, the command still starts in the project.
+      expect(result).toMatchObject({
+        ok: false,
+        dir: project,
+        command: `cd '${project.replaceAll("'", "'\\''")}' && codex 'make it so'`,
+      });
     });
 
     test("Warp opens in the project directory", async () => {

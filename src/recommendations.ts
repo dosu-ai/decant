@@ -504,16 +504,19 @@ function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: 
   const capped = new Set(
     eligible.map((candidate) => candidate.rec.key).filter((key) => !shown.has(key)),
   );
-  const untouched = queryRows<{ key: string }>(
+  // A row that activity once resolved and that fails again under a cap goes
+  // too. Marks made by a person or an agent stay.
+  const untouched = queryRows<{ key: string; status: string }>(
     db,
-    `SELECT key FROM recommendation
-      WHERE kind = 'signal' AND status = 'open'
-        AND status_source IS NULL AND note IS NULL`,
+    `SELECT key, status FROM recommendation
+      WHERE kind = 'signal' AND note IS NULL
+        AND ((status = 'open' AND status_source IS NULL)
+          OR (status = 'implemented' AND status_source = 'activity'))`,
   );
   const remove = db.prepare("DELETE FROM recommendation WHERE key = ?1");
   try {
-    for (const { key } of untouched) {
-      if (capped.has(key) || isPreProjectKey(key)) {
+    for (const { key, status } of untouched) {
+      if (capped.has(key) || (status === "open" && isPreProjectKey(key))) {
         remove.run(key);
       }
     }

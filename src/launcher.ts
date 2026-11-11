@@ -57,9 +57,14 @@ export function isSafeRecommendationKey(key: string): boolean {
   return RECOMMENDATION_KEY_PATTERN.test(key);
 }
 
-export function command(agent: string, prompt: string): string | null {
+/** The command to paste into a terminal. `dir` is a row's project directory. */
+export function command(agent: string, prompt: string, dir?: string | null): string | null {
   const got = agents[agent as AgentKey];
-  return got == null ? null : `${got.bin} ${shellQuote(prompt)}`;
+  if (got == null) {
+    return null;
+  }
+  const start = dir == null ? "" : `cd ${shellQuote(dir)} && `;
+  return `${start}${got.bin} ${shellQuote(prompt)}`;
 }
 
 export async function launchAgent(
@@ -76,13 +81,15 @@ export async function launchAgent(
   if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
     return { ok: false, error: "Invalid recommendation key." };
   }
-  const { dir, missing } = await resolveLaunchDir(options);
+  const { dir, missing, ofRow } = await resolveLaunchDir(options);
   const fullPrompt = withMarkInstruction(withMissingDirNote(prompt, missing, dir), key);
+  // A pasted command runs wherever the terminal is, so it carries the project.
+  const copyable = command(agent, fullPrompt, ofRow ? dir : null);
   if (!canLaunch(options.platform)) {
     return {
       ok: false,
       error: "Opening a terminal is only supported on macOS right now.",
-      command: command(agent, fullPrompt) ?? undefined,
+      command: copyable ?? undefined,
       dir,
     };
   }
@@ -109,7 +116,7 @@ export async function launchAgent(
   if (!result.ok) {
     rmSync(promptDir, { recursive: true, force: true });
     if (result.command != null) {
-      return { ...result, command: command(agent, fullPrompt) ?? result.command, dir };
+      return { ...result, command: copyable ?? result.command, dir };
     }
   }
   return { ...result, dir };
@@ -119,18 +126,20 @@ export async function launchAgent(
 // `missing` is a project directory that was asked for and not found.
 async function resolveLaunchDir(
   options: LaunchOptions,
-): Promise<{ dir: string; missing: string | null }> {
+): Promise<{ dir: string; missing: string | null; ofRow: boolean }> {
   const override = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR;
   if (override != null) {
-    return { dir: override, missing: null };
+    return { dir: override, missing: null, ofRow: false };
   }
   const wanted = options.dir;
   if (wanted == null || wanted === "") {
-    return { dir: homelikeDir(), missing: null };
+    return { dir: homelikeDir(), missing: null, ofRow: false };
   }
   const found =
     isAbsolute(wanted) && (await (options.isDirectory?.(wanted) ?? isDirectoryWithin(wanted)));
-  return found ? { dir: wanted, missing: null } : { dir: homelikeDir(), missing: wanted };
+  return found
+    ? { dir: wanted, missing: null, ofRow: true }
+    : { dir: homelikeDir(), missing: wanted, ofRow: false };
 }
 
 async function isDirectoryWithin(path: string): Promise<boolean> {

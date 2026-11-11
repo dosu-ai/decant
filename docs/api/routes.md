@@ -178,7 +178,7 @@ When the key belongs to a project row, the agent starts in that row's
 made at launch and never while listing. Otherwise the agent starts in the home
 directory and the prompt says the project directory was not found.
 `DECANT_SKILLS_DIR` overrides both. The response reports the directory as
-`dir`, and a `dir` in the request body is ignored.
+`dir`. The request has no field that sets it.
 `POST /api/launch/ide` requires an absolute `dir` that matches a project path or
 root path in the archive. Both answer `400 invalid_request` otherwise.
 

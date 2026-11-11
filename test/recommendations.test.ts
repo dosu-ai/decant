@@ -526,6 +526,30 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("a row activity resolved is removed when it fails again under the cap", () => {
+    const db = base();
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    seedTool(db, "fetch-0", "builtin", null, 50, 10);
+    regenerate(db);
+    const lowest = `signal:error:fetch-0${BUILTIN_ERROR_ID}`;
+    db.query("DELETE FROM tool_call WHERE tool_name = 'fetch-0'").run();
+    regenerate(db);
+    expect(list(db, "implemented").find((row) => row.key === lowest)).toMatchObject({
+      status_source: "activity",
+    });
+
+    // It fails again, but four worse tools hold the rows above the tail.
+    seedTool(db, "fetch-0", "builtin", null, 50, 10);
+    for (const index of [1, 2, 3, 9]) {
+      seedTool(db, `fetch-${index}`, "builtin", null, 50, index + 10);
+    }
+    regenerate(db);
+    const keys = list(db, "all").map((row) => row.key);
+    expect(keys).not.toContain(lowest);
+    expect(keys).toContain("signal:error-tail");
+    db.close();
+  });
+
   test("exact ties use stable keys for ranking and limited file selections", () => {
     const db = base();
     seedTool(db, "fetch", "builtin", null, 25, 5);

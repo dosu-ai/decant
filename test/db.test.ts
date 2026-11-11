@@ -1872,4 +1872,87 @@ describe("planner statistics helpers", () => {
     closeDb(db);
     expect(() => reloadPlannerStatistics(db)).toThrow();
   });
+
+  // FTS5 removes merged segments with this range on block_fts_data. SQLite
+  // refuses to prepare a write on a shadow table, so a read stands in for it.
+  const FTS_SEGMENT_RANGE_PLAN = `EXPLAIN QUERY PLAN
+    SELECT id FROM block_fts_data WHERE id >= 1 AND id <= 2`;
+  const ROWID_RANGE_SEARCH =
+    "SEARCH block_fts_data USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)";
+
+  function ftsSegmentRangePlan(db: Database): string {
+    return (db.query(FTS_SEGMENT_RANGE_PLAN).all() as { detail: string }[])
+      .map((row) => row.detail)
+      .join("\n");
+  }
+
+  function recordedFtsDataRows(db: Database): number | null {
+    const row = db
+      .query("SELECT stat FROM sqlite_stat1 WHERE tbl = 'block_fts_data' AND idx IS NULL")
+      .get() as { stat: string } | null;
+    return row == null ? null : Number(row.stat);
+  }
+
+  function writeFtsDataRowCount(path: string, rows: number): void {
+    const writer = new Database(path, { strict: true });
+    try {
+      writer.exec("ANALYZE;");
+      writer.exec("DELETE FROM sqlite_stat1 WHERE tbl = 'block_fts_data';");
+      writer.exec(
+        `INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES ('block_fts_data', NULL, '${rows}');`,
+      );
+    } finally {
+      writer.close();
+    }
+  }
+
+  test("optimizing an empty archive keeps FTS5 segment deletes a rowid search", () => {
+    const path = freshPath();
+    const db = openDb(path);
+    try {
+      expect(ftsSegmentRangePlan(db)).toBe(ROWID_RANGE_SEARCH);
+      optimizeLongLivedConnection(db);
+      // An empty index holds two bookkeeping rows, and analyzing it as-is
+      // records a size at which SQLite scans instead.
+      expect(ftsSegmentRangePlan(db)).toBe(ROWID_RANGE_SEARCH);
+      // The sync worker opens its own connection after serve has optimized.
+      const worker = openDb(path);
+      try {
+        expect(ftsSegmentRangePlan(worker)).toBe(ROWID_RANGE_SEARCH);
+      } finally {
+        closeDb(worker);
+      }
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("repairs a near-empty FTS5 row count that an earlier analysis recorded", () => {
+    const path = freshPath();
+    openDb(path).close();
+    writeFtsDataRowCount(path, 2);
+    const db = openDb(path);
+    try {
+      expect(ftsSegmentRangePlan(db)).toBe("SCAN block_fts_data");
+      refreshPlannerStatistics(db);
+      expect(ftsSegmentRangePlan(db)).toBe(ROWID_RANGE_SEARCH);
+      expect(recordedFtsDataRows(db)).toBeGreaterThanOrEqual(1_000);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("keeps an FTS5 row count that is large enough to plan a search", () => {
+    const path = freshPath();
+    openDb(path).close();
+    writeFtsDataRowCount(path, 250_000);
+    const db = openDb(path);
+    try {
+      refreshPlannerStatistics(db);
+      expect(recordedFtsDataRows(db)).toBe(250_000);
+      expect(ftsSegmentRangePlan(db)).toBe(ROWID_RANGE_SEARCH);
+    } finally {
+      closeDb(db);
+    }
+  });
 });

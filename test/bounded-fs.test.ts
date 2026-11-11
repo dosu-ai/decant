@@ -14,6 +14,8 @@ import { BoundedFs, createProbeLedger } from "../src/bounded-fs.ts";
 import { makeFifo, releaseFifo } from "./stalled-directory.ts";
 
 const DEADLINE_MS = 300;
+// Never waited out, so a slow machine cannot turn a readable path into a timeout.
+const READABLE_DEADLINE_MS = 5000;
 const tempRoots: string[] = [];
 const fifos: string[] = [];
 
@@ -74,7 +76,7 @@ function open(gate: SharedArrayBuffer): void {
 describe("BoundedFs on readable paths", () => {
   test("answers as node:fs does", () => {
     const dir = tempDir();
-    const fs = bounded();
+    const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
     mkdirSync(join(dir, "real"));
     symlinkSync(join(dir, "real"), join(dir, "link"));
     // A BOM, bytes that are not UTF-8, and more than the first reply buffer.
@@ -100,7 +102,7 @@ describe("BoundedFs on readable paths", () => {
 
   test("reads a small regular file and refuses anything else", () => {
     const dir = tempDir();
-    const fs = bounded();
+    const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
     writeFileSync(join(dir, "small"), "gitdir: /repo/.git/worktrees/x\n");
     writeFileSync(join(dir, "large"), "x".repeat(65));
     fifo(join(dir, "pipe"));
@@ -116,7 +118,7 @@ describe("BoundedFs on readable paths", () => {
   });
 
   test("refuses a path too long for the kernel", () => {
-    const fs = bounded();
+    const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
     expect(fs.readText(`/${"a".repeat(5000)}`)).toBeNull();
     expect(fs.unanswered).toBe(0);
   });

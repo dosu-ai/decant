@@ -34,8 +34,12 @@ curl --fail --silent --show-error "$BASE/api/date-bounds"
 ```
 
 `sync-status` reports whether a sync is in progress, its last terminal report,
-and its last error. For a reproducible snapshot, wait for `in_progress` to be
-false or start the server with `--no-sync` before collecting endpoints.
+and its last error. While a sync runs, `progress` holds its latest counts
+(`scanned` of `total` sources) and `reason` says what started it.
+`archive_synced` is false while a new archive is still being filled by its
+first sync, so totals read before it turns true are partial. For a reproducible
+snapshot, wait for `in_progress` to be false or start the server with
+`--no-sync` before collecting endpoints.
 
 ## Query a complete date window
 

@@ -1,8 +1,15 @@
 import type { Config } from "../config.ts";
 import type { EconomicsCache } from "../economics-cache.ts";
 import type { sync as ingestSync, SyncProgress, SyncReport } from "../ingest.ts";
-import type { SyncRunnerFailure, SyncRunnerResult, SyncStatusStore, WatchEvent } from "../watch.ts";
+import type {
+  SyncReason,
+  SyncRunnerFailure,
+  SyncRunnerResult,
+  SyncStatusStore,
+  WatchEvent,
+} from "../watch.ts";
 import { workerError, workerUrl } from "../worker-runtime.ts";
+import type { Db } from "./context.ts";
 import { json } from "./http.ts";
 import { publishServerEvent } from "./sse.ts";
 
@@ -44,6 +51,45 @@ export const syncStatus = {
   ingested_count: null as number | null,
 };
 
+/** What the running sync last reported, for a client that missed its events. */
+const syncActivity = {
+  reason: null as SyncReason | null,
+  progress: null as SyncProgress | null,
+  // True unless the archive was opened empty and no sync has completed since.
+  archiveSynced: true,
+};
+
+/** Reads whether the archive already holds synced data. Call before any sync. */
+export function noteArchiveOpened(db: Db): void {
+  const row = db
+    .query<{ synced: number }, []>(
+      "SELECT EXISTS(SELECT 1 FROM ingest_source) OR EXISTS(SELECT 1 FROM session) AS synced",
+    )
+    .get();
+  syncActivity.archiveSynced = row?.synced === 1;
+  syncActivity.reason = null;
+  syncActivity.progress = null;
+}
+
+function endSyncActivity(report?: SyncReport): void {
+  syncActivity.reason = null;
+  syncActivity.progress = null;
+  if (report != null && !report.cancelled) {
+    syncActivity.archiveSynced = true;
+  }
+}
+
+/** The body of the sync status routes. */
+export function syncStatusBody() {
+  return {
+    ...syncStatus,
+    reason: syncStatus.in_progress ? syncActivity.reason : null,
+    progress: syncStatus.in_progress ? syncActivity.progress : null,
+    archive_synced: syncActivity.archiveSynced,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 export async function syncNow(
   config: Config,
   economics?: EconomicsCache,
@@ -51,6 +97,8 @@ export async function syncNow(
   runWithOwnership?: SyncCoordinator["runWithOwnership"],
 ): Promise<Response> {
   const progress = (update: SyncProgress): void => {
+    syncActivity.reason = "manual";
+    syncActivity.progress = update;
     publishServerEvent({
       type: "sync_progress",
       reason: "manual",
@@ -76,6 +124,7 @@ export async function syncNow(
       `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
       `issues ${report.issues}, failed ${report.failed}`;
     syncStatus.ingested_count = report.ingested;
+    endSyncActivity(report);
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0 || (report.repriced ?? 0) > 0) {
       economics?.invalidate();
@@ -92,6 +141,7 @@ export async function syncNow(
       syncStatus.in_progress = false;
       syncStatus.last_sync_at = new Date().toISOString();
       syncStatus.last_error = error instanceof Error ? error.message : String(error);
+      endSyncActivity();
       publishServerEvent({
         type: "error",
         reason: "manual",
@@ -305,6 +355,8 @@ export async function workerSyncRunner(
   }),
 ): Promise<SyncRunnerResult | SyncRunnerFailure> {
   status.start();
+  // No watcher event arrives until discovery ends; a status read must not say idle.
+  syncStatus.in_progress = true;
   const handle = runSync(config, cancel, onProgress);
   try {
     const report = await handle.promise;
@@ -313,6 +365,11 @@ export async function workerSyncRunner(
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     return { error, emitTerminal: handle.owned };
+  } finally {
+    // A joined run emits no terminal event, and the run it joined is over.
+    if (!handle.owned) {
+      syncStatus.in_progress = false;
+    }
   }
 }
 
@@ -323,6 +380,12 @@ export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): v
     syncStatus.last_report = event.status.last_report;
     syncStatus.last_error = event.status.last_error;
     syncStatus.ingested_count = event.status.ingested_count;
+  }
+  if (event.type === "sync_progress") {
+    syncActivity.reason = event.reason;
+    syncActivity.progress = event.progress;
+  } else if (!syncStatus.in_progress) {
+    endSyncActivity(event.type === "sync" ? event.report : undefined);
   }
   publishServerEvent(event);
   if (event.type === "sync" && (event.report.ingested > 0 || (event.report.repriced ?? 0) > 0)) {

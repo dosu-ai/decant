@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readUiSource } from "./ui-source.ts";
+import { readUiFile, readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
 const main = readUiSource();
@@ -35,7 +35,8 @@ test("background archive activity waits for an explicit update", () => {
   // foreground sync rather than read as a dropped connection.
   expect(main).toContain("const failure = parseSyncFailure(event);");
   // Reconnecting drops a stream-only sync indicator whose terminal event was
-  // lost, but never one owned by this tab's own pending POST /api/sync.
+  // lost, when the status route cannot say whether the sync still runs, but
+  // never one owned by this tab's own pending POST /api/sync.
   expect(main).toMatch(
     /if \(!manualSyncPendingRef\.current\) \{\s*progressThrottle\.cancel\(\);\s*setLocalSyncing\(false\);/,
   );
@@ -70,4 +71,52 @@ test("the unfiltered Sessions list loads background activity itself, throttled",
     /if \(liveSessions && archiveUpdateAvailable\) \{\s*liveSessionsThrottleRef\.current\?\.push\(null\);/,
   );
   expect(main).toContain("onTextFilterChange?.(textFilterActive);");
+});
+
+test("sync state is restored from the status route on load and reconnect", () => {
+  const shell = readUiFile("main.tsx");
+  // EventSource does not replay events, so a reload or a dropped stream asks
+  // the server instead of waiting for the next progress event.
+  expect(shell).toContain("status = await getSyncStatus();");
+  expect(shell).toContain("const restored = restoreSync(status, {");
+  // The first read is issued before the slice loads, which would otherwise
+  // hold every connection the browser allows this origin.
+  expect(shell.indexOf("void readSyncStatus();")).toBeLessThan(
+    shell.indexOf("loadSlicesIndependently<DataSlice, DashboardData>("),
+  );
+  // A reconnect asks the server before dropping the indicator.
+  expect(shell).toMatch(
+    /void readSyncStatus\(\)\.then\(\(read\) => \{\s*if \(read\) \{\s*return;\s*\}\s*if \(!manualSyncPendingRef\.current\) \{/,
+  );
+  // The stream opening is the other moment a terminal event can have been missed.
+  expect(shell).toMatch(/if \(!dropped\) \{\s*void readSyncStatus\(\);\s*\}/);
+  // A lost terminal event loads the sync's results as the event would have.
+  expect(shell).toMatch(
+    /if \(restored\.ended\) \{[^}]*setArchiveUpdateAvailable\(false\);\s*requestRefresh\(\);/,
+  );
+});
+
+test("sync progress is visible without a second live announcement", () => {
+  const shell = readUiFile("main.tsx");
+  expect(shell).toContain("<SyncProgressLine complete={syncComplete} progress={syncProgress} />");
+  expect(shell).toContain("<SyncProgressNotice");
+  expect(shell.match(/aria-live=/g)).toHaveLength(1);
+  expect(shell).toContain("? syncAnnouncement(syncProgress)");
+  expect(readUiFile("sync-progress.tsx")).not.toContain("aria-live");
+  // The bar's fill animates only for readers who have not asked for less motion.
+  const block = styles.slice(styles.indexOf(" * Sync progress and first-sync states"));
+  expect(block).toMatch(
+    /@media \(prefers-reduced-motion: no-preference\) \{[^@]*animation: sync-indeterminate/,
+  );
+  expect(block.slice(0, block.indexOf("@media (prefers-reduced-motion"))).not.toContain(
+    "animation:",
+  );
+});
+
+test("the sidebar never states partial or unloaded totals as facts", () => {
+  const shell = readUiFile("main.tsx");
+  expect(shell).not.toContain("metrics?.sessions ?? 0");
+  expect(shell).not.toContain("metrics?.estimated_cost_usd ?? 0");
+  expect(shell).toContain("Totals after the first sync");
+  expect(shell).toContain("const firstSync = localSyncing && !archiveSynced;");
 });

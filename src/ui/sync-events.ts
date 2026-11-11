@@ -1,3 +1,4 @@
+import { formatInt } from "./format.ts";
 import {
   pathOnly,
   sessionIncludesArchived,
@@ -5,6 +6,7 @@ import {
   sessionProjectFilter,
   sessionRepoFilter,
 } from "./navigation.ts";
+import type { SyncProgress, SyncStatus } from "./types.ts";
 
 /**
  * Whether the UI should show a sync's progress and load its results without
@@ -147,4 +149,83 @@ export function parseSyncFailure(event: Event): SyncFailure | null {
   } catch {
     return { error: "sync failed" };
   }
+}
+
+export interface RestoredSync {
+  /** Whether the UI shows a sync as running. */
+  syncing: boolean;
+  /** The running sync's latest counts, or null to keep what is on screen. */
+  progress: SyncProgress | null;
+  archiveSynced: boolean;
+  /** A sync this tab was showing ended while it was not listening. */
+  ended: boolean;
+  /** The error that ended sync failed with, if it failed. */
+  failure: string | null;
+}
+
+/**
+ * What the shell shows after reading `/api/sync-status` on load or reconnect,
+ * since EventSource does not replay events. A sync with no reason yet has not
+ * reported progress, and shows only while it fills a new archive.
+ */
+export function restoreSync(
+  status: SyncStatus,
+  shown: { syncing: boolean; manualPending: boolean },
+): RestoredSync {
+  const running =
+    status.in_progress &&
+    (status.reason == null ? !status.archive_synced : isForegroundSync(status.reason));
+  const ended = shown.syncing && !shown.manualPending && !running;
+  return {
+    syncing: running || shown.manualPending,
+    progress: running ? status.progress : null,
+    archiveSynced: status.archive_synced,
+    ended,
+    failure: ended && !status.in_progress ? status.last_error : null,
+  };
+}
+
+/** How far through its sources a sync is, or null before it has counted them. */
+export function syncFraction(progress: SyncProgress | null): number | null {
+  if (progress == null || progress.total <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, progress.scanned / progress.total));
+}
+
+export function syncProgressLabel(progress: SyncProgress | null): string {
+  if (progress == null || progress.total <= 0) {
+    return "Syncing session logs";
+  }
+  const files = progress.total === 1 ? "file" : "files";
+  return `Syncing ${formatInt(progress.scanned)} of ${formatInt(progress.total)} ${files}`;
+}
+
+export function syncCompleteLabel(progress: SyncProgress | null): string {
+  if (progress == null || progress.ingested <= 0) {
+    return "Sync complete";
+  }
+  const files = progress.ingested === 1 ? "file" : "files";
+  return `Sync complete, ${formatInt(progress.ingested)} ${files} ingested`;
+}
+
+/**
+ * The live region's text, in ten-percent steps so a screen reader does not
+ * read a long sync out file by file. It stops at 90% because work remains
+ * after the last file, and "Sync complete" follows.
+ */
+export function syncAnnouncement(progress: SyncProgress | null): string {
+  const fraction = syncFraction(progress);
+  const step = fraction == null ? 0 : Math.min(90, Math.floor(fraction * 10) * 10);
+  return step === 0 ? "Syncing session logs" : `Syncing session logs, ${step}% done`;
+}
+
+/**
+ * How long a sync runs before its notice takes room on the page. A startup
+ * sync of a current archive ends first, so launches do not shift the layout.
+ */
+export const SYNC_NOTICE_DELAY_MS = 700;
+
+export function syncNoticeDelay(sync: { firstSync: boolean; requested: boolean }): number {
+  return sync.firstSync || sync.requested ? 0 : SYNC_NOTICE_DELAY_MS;
 }

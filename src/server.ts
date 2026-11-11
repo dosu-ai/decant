@@ -21,6 +21,7 @@ import { publishServerEvent } from "./server/sse.ts";
 import {
   applyWatchEvent,
   createSyncCoordinator,
+  noteArchiveOpened,
   type SyncWorkerRunner,
   syncStatus,
   workerSyncRunner,
@@ -200,6 +201,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     db = openDb(options.config.dbPath);
     optimizeLongLivedConnection(db);
     ensureDerivedMetadata(db);
+    noteArchiveOpened(db);
     economics = new EconomicsCache({
       dbPath: options.config.dbPath,
       db,

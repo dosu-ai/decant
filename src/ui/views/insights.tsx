@@ -260,12 +260,15 @@ export function promotionText(row: Recommendation): string {
 }
 
 export function InsightsView({
+  firstSync = false,
   loading,
   loadFailed,
   rows,
   settingsInfo,
   onMarked,
 }: {
+  /** The first sync is still running; signals are generated when it ends. */
+  firstSync?: boolean;
   loading: boolean;
   loadFailed: boolean;
   rows: Recommendation[];
@@ -390,8 +393,12 @@ export function InsightsView({
         {!loading && !loadFailed && signals.length === 0 ? (
           <EmptyState
             icon="lightbulb"
-            message="More session history will surface patterns."
-            title="No signals yet"
+            message={
+              firstSync
+                ? "Decant looks for patterns once the first sync has read your session logs."
+                : "More session history will surface patterns."
+            }
+            title={firstSync ? "Signals appear when the first sync finishes" : "No signals yet"}
           />
         ) : null}
 

@@ -83,7 +83,32 @@ const REPO_ROW_LIMIT = 12;
 const NO_PROJECT_KEY = "(none)";
 
 /** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
-export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boolean }) {
+export function FirstRunPanel({
+  firstSync = false,
+  onSync,
+  syncing,
+}: {
+  /** The first sync is running, so the archive is filling, not empty. */
+  firstSync?: boolean;
+  onSync: () => void;
+  syncing: boolean;
+}) {
+  if (firstSync) {
+    return (
+      <section className="panel first-run">
+        <div className="panel-body">
+          <span className="first-run-icon">
+            <Icon name="beaker" />
+          </span>
+          <h2>First sync in progress</h2>
+          <p>
+            Decant is reading your session logs for the first time. Analytics appear here when the
+            sync finishes. Nothing leaves this machine.
+          </p>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="panel first-run">
       <div className="panel-body">
@@ -117,6 +142,7 @@ export function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing
 export function AnalyticsView({
   data,
   dateRange,
+  firstSync = false,
   onDateRangeChange,
   onSourceChange,
   onSync,
@@ -126,6 +152,8 @@ export function AnalyticsView({
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
+  /** A sync is filling an archive that has never completed one. */
+  firstSync?: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onSourceChange: (source: DashboardSource) => void;
   onSync: () => void;
@@ -173,7 +201,9 @@ export function AnalyticsView({
   );
   const totalModelCost = modelRows.reduce((sum, row) => sum + row.estimated_cost_usd, 0);
 
-  const status = (slice: DataSlice) => sliceStatus(slice);
+  // What loaded during the first sync is partial, so it reads as still loading.
+  const status = (slice: DataSlice): SliceStatus =>
+    firstSync && sliceStatus(slice) === "ready" ? "loading" : sliceStatus(slice);
   const summary = data.summary;
   const summaryStatus = status("summary");
   const summaryLoading = summary == null && summaryStatus === "loading";
@@ -208,7 +238,7 @@ export function AnalyticsView({
   if (data.dateBounds != null && data.dateBounds.min == null && data.dateBounds.max == null) {
     return (
       <div className="view-stack">
-        <FirstRunPanel onSync={onSync} syncing={syncing} />
+        <FirstRunPanel firstSync={firstSync} onSync={onSync} syncing={syncing} />
       </div>
     );
   }
@@ -235,6 +265,13 @@ export function AnalyticsView({
           />
         </div>
       </header>
+
+      {firstSync ? (
+        <p className="sync-partial-note">
+          These numbers are still loading in. The first sync is running, so totals and breakdowns
+          cover only the sessions indexed so far.
+        </p>
+      ) : null}
 
       <div className="stat-grid analytics-stat-grid">
         <StatCard

@@ -592,8 +592,9 @@ remembers at most 8 such folders at a time. With all 8 in use it skips these
 lookups for every directory until one of them answers.
 
 A skipped directory is handled like one that cannot be read. Its sessions and
-their content are ingested as usual, without project MCP server names, a
-worktree link, or a remote. A remote that was already recorded stays. An
+their content are ingested as usual. Config files under the skipped folder
+contribute no MCP server names, and no new worktree link or remote is found
+there. A worktree link or remote that was already recorded stays. An
 OpenCode session ingested this way carries an `unreachable_project_directory`
 diagnostic, which `decant sync --json` counts in `issues_by_code` and the
 session's issue list shows. `decant sync` and `decant watch` also log a

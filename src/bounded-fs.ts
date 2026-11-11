@@ -10,7 +10,8 @@ import { getDecantLogger } from "./logging.ts";
 const logger = getDecantLogger("ingest");
 
 export interface ProbeFs {
-  /** The file's text, or null when it is missing or unreadable. */
+  /** The file's text, or null when it is missing, unreadable, or over
+   * `MAX_TEXT_BYTES`. */
   readText(path: string): string | null;
   /** A regular file's text, or null when it is anything else, unreadable, or
    * over `maxBytes`. Decided on the open descriptor, and the read is bounded. */
@@ -37,6 +38,10 @@ export const DEFAULT_PROBE_DEADLINE_MS = 2000;
 
 const HELPER_START_MS = 5000;
 
+/** Largest file `readText` returns. A read past the deadline keeps running on
+ * the helper, so it must not grow with the file. */
+export const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+
 // Ledger layout: a version counter, then a state and a byte length per slot,
 // then each slot's UTF-8 path.
 const SLOTS = 8;
@@ -58,11 +63,32 @@ const HELPER_SOURCE = `
 const fs = require("node:fs");
 const READ = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 const EMPTY = Buffer.alloc(0);
+const TEXT_MAX = ${MAX_TEXT_BYTES};
 let state, reply, stall;
+
+// A blocking open, so a pipe with a writer reads like a file. Over the
+// ceiling the content is dropped and the path reads as unreadable.
+function readText(path) {
+  const fd = fs.openSync(path, fs.constants.O_RDONLY);
+  try {
+    const chunks = [];
+    let length = 0;
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(65536);
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) return Buffer.concat(chunks, length);
+      length += read;
+      if (length > TEXT_MAX) return null;
+      chunks.push(chunk.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function run(op, path, maxBytes) {
   if (op === "realPath") return Buffer.from(fs.realpathSync.native(path));
-  if (op === "readText") return fs.readFileSync(path);
+  if (op === "readText") return readText(path);
   if (op === "isDirectory") return fs.statSync(path).isDirectory() ? EMPTY : null;
   // Non-blocking, so a FIFO planted at the path cannot hold the open.
   const fd = fs.openSync(path, READ);

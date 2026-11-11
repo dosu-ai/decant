@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BoundedFs, createProbeLedger } from "../src/bounded-fs.ts";
+import { BoundedFs, createProbeLedger, MAX_TEXT_BYTES } from "../src/bounded-fs.ts";
 import { makeFifo, releaseFifo } from "./stalled-directory.ts";
 
 const DEADLINE_MS = 300;
@@ -98,6 +98,15 @@ describe("BoundedFs on readable paths", () => {
     expect(fs.isDirectory(join(dir, "real", "config.json"))).toBe(false);
     expect(fs.isDirectory(join(dir, "gone"))).toBe(false);
     expect(fs.unanswered).toBe(0);
+  });
+
+  test("refuses text over the ceiling, so a late read cannot grow with the file", () => {
+    const dir = tempDir();
+    const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
+    writeFileSync(join(dir, "full.json"), Buffer.alloc(MAX_TEXT_BYTES, "x"));
+    writeFileSync(join(dir, "over.json"), Buffer.alloc(MAX_TEXT_BYTES + 1, "x"));
+    expect(fs.readText(join(dir, "full.json"))?.length).toBe(MAX_TEXT_BYTES);
+    expect(fs.readText(join(dir, "over.json"))).toBeNull();
   });
 
   test("reads a small regular file and refuses anything else", () => {

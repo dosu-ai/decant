@@ -19,7 +19,7 @@ import {
   type WatchEvent,
 } from "../../watch.ts";
 import type { CliContext } from "../context.ts";
-import { collectOption, parseInteger } from "../parse.ts";
+import { collectOption, parseInteger, parsePort } from "../parse.ts";
 import { renderUpdateNotice } from "../update-notice.ts";
 
 export function registerSyncCommands(ctx: CliContext): void {
@@ -86,6 +86,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
       },
       {
+        create: true,
         overrides: {
           claudeDir: commandOptions.claudeDir,
           codexDir: commandOptions.codexDir,
@@ -223,7 +224,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "serve the web UI and keep the index current (the default when run with no arguments)",
     )
     .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
-    .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
+    .option("--port <n>", "port to bind", parsePort, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")

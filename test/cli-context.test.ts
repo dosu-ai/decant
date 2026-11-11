@@ -1,15 +1,21 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import { type Archive, type CliRunOptions, createContext, type Io } from "../src/cli/context.ts";
+import { CliError } from "../src/cli/errors.ts";
+import { closeDb, openDb } from "../src/db.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-context-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 let caseCounter = 0;
-function harness(argv: string[], options: CliRunOptions = {}) {
+function harness(
+  argv: string[],
+  options: CliRunOptions = {},
+  archive: "exists" | "missing" = "exists",
+) {
   caseCounter += 1;
   const dir = join(workDir, `case-${caseCounter}`);
   const claudeDir = join(dir, "claude");
@@ -34,12 +40,20 @@ function harness(argv: string[], options: CliRunOptions = {}) {
     },
   };
   let code = 0;
-  const program = new Command().option("--db <path>").option("--json").option("--no-sync");
-  program.parse(["--db", join(dir, "archive.db"), ...argv], { from: "user" });
+  const program = new Command()
+    .option("--db <path>")
+    .option("--json")
+    .option("-q, --quiet")
+    .option("--no-sync");
+  const dbPath = join(dir, "archive.db");
+  if (archive === "exists") {
+    closeDb(openDb(dbPath));
+  }
+  program.parse(["--db", dbPath, ...argv], { from: "user" });
   const ctx = createContext(program, io, { homeDir: dir, env: {}, ...options }, (value) => {
     code = value;
   });
-  return { ctx, io, code: () => code, overrides: { claudeDir, codexDir, geminiDir } };
+  return { ctx, io, code: () => code, dbPath, overrides: { claudeDir, codexDir, geminiDir } };
 }
 
 function sessionCount(archive: Archive): number {
@@ -83,7 +97,188 @@ describe("withArchive", () => {
   });
 });
 
+describe("withArchive and a missing archive", () => {
+  function thrownBy(action: () => unknown): unknown {
+    try {
+      action();
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  }
+
+  test("refuses a --db path that has no file, and creates nothing", () => {
+    const { ctx, dbPath } = harness([], {}, "missing");
+    const error = thrownBy(() => ctx.withArchive(sessionCount, { sync: true }));
+    expect(error).toBeInstanceOf(CliError);
+    expect(error).toMatchObject({
+      code: "archive_not_found",
+      exitCode: 1,
+      details: { path: dbPath },
+    });
+    expect((error as CliError).message).toContain(`no Decant archive at ${dbPath} (from --db)`);
+    expect(existsSync(dbPath)).toBe(false);
+  });
+
+  test("refuses a DECANT_DB path the same way and names the variable", () => {
+    const dir = mkdtempSync(join(workDir, "env-db-"));
+    const dbPath = join(dir, "nested", "archive.db");
+    const io: Io = { stdout: "", stderr: "", writeOut() {}, writeErr() {} };
+    const program = new Command().option("--db <path>").option("--json").option("--no-sync");
+    program.parse([], { from: "user" });
+    const ctx = createContext(
+      program,
+      io,
+      { homeDir: dir, env: { DECANT_DB: dbPath, DECANT_NO_SYNC: "1" } },
+      () => {},
+    );
+    const error = thrownBy(() => ctx.withArchive(sessionCount, { sync: true }));
+    expect(error).toMatchObject({ code: "archive_not_found" });
+    expect((error as CliError).message).toContain(`${dbPath} (from DECANT_DB)`);
+    expect(existsSync(join(dir, "nested"))).toBe(false);
+  });
+
+  test("creates the archive for a command that asks to", () => {
+    const { ctx, dbPath } = harness([], {}, "missing");
+    expect(ctx.withArchive(sessionCount, { create: true })).toBe(0);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+
+  test("creates the default archive on first run", () => {
+    const dir = mkdtempSync(join(workDir, "default-db-"));
+    const io: Io = { stdout: "", stderr: "", writeOut() {}, writeErr() {} };
+    const program = new Command().option("--db <path>").option("--json").option("--no-sync");
+    program.parse(["--no-sync"], { from: "user" });
+    const ctx = createContext(program, io, { homeDir: dir, env: {} }, () => {});
+    expect(ctx.withArchive(sessionCount, { sync: true })).toBe(0);
+    expect(existsSync(join(dir, ".decant", "decant.db"))).toBe(true);
+  });
+
+  test("names the path when the file is not an archive", () => {
+    const { ctx, dbPath } = harness([], {}, "missing");
+    writeFileSync(dbPath, "not a database, just synthetic text\n".repeat(200));
+    const error = thrownBy(() => ctx.withArchive(sessionCount));
+    expect(error).toMatchObject({ code: "archive_unreadable", details: { path: dbPath } });
+    expect((error as CliError).message).toContain(dbPath);
+  });
+});
+
+describe("the notice for a sync a read command starts", () => {
+  const NOTICE =
+    /^note: syncing session logs before this command, \d+ of 1 files checked so far\. Pass --no-sync to skip the sync\.\n$/;
+
+  test("prints once on stderr when the sync outlasts the wait", () => {
+    const { ctx, io, overrides } = harness([], { syncNoticeAfterMs: 0 });
+    expect(ctx.withArchive(sessionCount, { sync: true, overrides })).toBe(1);
+    expect(io.stderr).toMatch(NOTICE);
+    expect(io.stdout).toBe("");
+  });
+
+  test("still prints under --json, where an agent would otherwise see a hang", () => {
+    const { ctx, io, overrides } = harness(["--json"], { syncNoticeAfterMs: 0 });
+    ctx.withArchive(sessionCount, { sync: true, overrides });
+    expect(io.stderr).toMatch(NOTICE);
+    expect(io.stdout).toBe("");
+  });
+
+  test("stays silent for a fast sync, under --quiet, and when nothing syncs", () => {
+    const fast = harness([], { syncNoticeAfterMs: 60_000 });
+    expect(fast.ctx.withArchive(sessionCount, { sync: true, overrides: fast.overrides })).toBe(1);
+    expect(fast.io.stderr).toBe("");
+
+    const quiet = harness(["--quiet"], { syncNoticeAfterMs: 0 });
+    expect(quiet.ctx.withArchive(sessionCount, { sync: true, overrides: quiet.overrides })).toBe(1);
+    expect(quiet.io.stderr).toBe("");
+
+    const noSync = harness(["--no-sync"], { syncNoticeAfterMs: 0 });
+    noSync.ctx.withArchive(sessionCount, { sync: true, overrides: noSync.overrides });
+    expect(noSync.io.stderr).toBe("");
+
+    const explicit = harness([], { syncNoticeAfterMs: 0 });
+    explicit.ctx.withArchive(sessionCount, { overrides: explicit.overrides });
+    expect(explicit.io.stderr).toBe("");
+  });
+});
+
 describe("run", () => {
+  test("reports a thrown CliError with its own exit code", async () => {
+    const { ctx, io, code } = harness([]);
+    await ctx.run(() => {
+      throw new CliError("invalid_argument", "bad value", 2, { option: "--x", value: "y" });
+    });
+    expect(io.stderr).toBe("error: bad value\n");
+    expect(code()).toBe(2);
+  });
+
+  test("under --json, a thrown error is one JSON line on stderr", async () => {
+    const { ctx, io, code } = harness(["--json"]);
+    await ctx.run(() => {
+      throw new CliError("invalid_argument", "bad value", 2, { option: "--x", value: "y" });
+    });
+    expect(io.stdout).toBe("");
+    expect(JSON.parse(io.stderr)).toEqual({
+      error: { code: "invalid_argument", message: "bad value", option: "--x", value: "y" },
+    });
+    expect(io.stderr.endsWith("}\n")).toBe(true);
+    expect(code()).toBe(2);
+
+    const plain = harness(["--json"]);
+    await plain.ctx.run(() => {
+      throw new Error("nope");
+    });
+    expect(JSON.parse(plain.io.stderr)).toEqual({
+      error: { code: "command_failed", message: "nope" },
+    });
+    expect(plain.code()).toBe(1);
+  });
+
+  test("under --json, an error line a command wrote becomes the same shape", async () => {
+    const missing = harness(["--json"]);
+    await missing.ctx.run(() => {
+      missing.ctx.io.writeErr("error: no session with id 7\n");
+      return 1;
+    });
+    expect(missing.io.stdout).toBe("");
+    expect(JSON.parse(missing.io.stderr)).toEqual({
+      error: { code: "session_not_found", message: "no session with id 7" },
+    });
+
+    const usage = harness(["--json"]);
+    await usage.ctx.run(() => {
+      usage.ctx.io.writeErr("error: --all requires --out <dir>\n");
+      return 2;
+    });
+    expect(JSON.parse(usage.io.stderr)).toEqual({
+      error: { code: "usage_error", message: "--all requires --out <dir>" },
+    });
+    expect(usage.code()).toBe(2);
+
+    const other = harness(["--json"]);
+    await other.ctx.run(() => {
+      other.ctx.io.writeErr("error: session 3 has no exportable steps\n");
+      return 1;
+    });
+    expect(JSON.parse(other.io.stderr)).toEqual({
+      error: { code: "command_failed", message: "session 3 has no exportable steps" },
+    });
+  });
+
+  test("leaves notes and human-mode error lines as the command wrote them", async () => {
+    const note = harness(["--json"]);
+    await note.ctx.run(() => {
+      note.ctx.io.writeErr("wrote out/3.md\n");
+    });
+    expect(note.io.stderr).toBe("wrote out/3.md\n");
+    expect(note.code()).toBe(0);
+
+    const human = harness([]);
+    await human.ctx.run(() => {
+      human.ctx.io.writeErr("error: no session with id 7\n");
+      return 1;
+    });
+    expect(human.io.stderr).toBe("error: no session with id 7\n");
+  });
+
   test("stores the returned exit code", async () => {
     const { ctx, code } = harness([]);
     await ctx.run(() => 3);

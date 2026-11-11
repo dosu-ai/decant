@@ -49,6 +49,13 @@ Core modules return data or structured failures. Human-readable output and exit
 codes belong in `src/cli.ts` and `src/cli/`; HTTP status and error-envelope
 policy belong in `src/server/`.
 
+Every CLI failure leaves through one function, `fail` on the command context in
+`src/cli/context.ts`, which prints either an `error:` line or the `--json` error
+object described in [CLI output, errors, and exit codes](cli.md). A command
+reports a failure by throwing a `CliError` from `src/cli/errors.ts`, or by
+writing an `error:` line and returning an exit code. Flag and argument values
+are checked in `src/cli/parse.ts` before a command's action runs.
+
 ## Parsing and ingest
 
 Each source file produces one normalized session. OpenCode keeps every

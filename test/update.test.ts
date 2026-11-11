@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { UpdateDeps } from "../src/cli/context.ts";
 import { shouldShowUpdateNotice } from "../src/cli/update-notice.ts";
 import { runCli } from "../src/cli.ts";
+import { closeDb, openDb } from "../src/db.ts";
 import { saveSettings } from "../src/settings.ts";
 import {
   assertNpmPlatformPackage,
@@ -845,6 +846,7 @@ describe("decant update", () => {
 
   test("the passive notice prints after a command only when the user opted in", async () => {
     const dbPath = join(workDir, "notice.db");
+    closeDb(openDb(dbPath));
     const calls: string[] = [];
     const ls = (env: Record<string, string>, flags: string[] = []) =>
       runCli(["--db", dbPath, "--no-sync", ...flags, "ls"], {

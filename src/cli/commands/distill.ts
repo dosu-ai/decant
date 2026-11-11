@@ -8,10 +8,15 @@ import {
   renderScript,
   renderSkill,
   replayOps,
+  type ScriptFormat,
+  type SkillKind,
   timeline,
 } from "../../distill.ts";
 import type { CliContext, GlobalOptions, Io } from "../context.ts";
-import { parseInteger, parseNumber } from "../parse.ts";
+import { parseFraction, parseInteger, parseWith } from "../parse.ts";
+
+const SCRIPT_FORMATS = ["sh", "just", "make"];
+const SKILL_KINDS = ["skill", "agents", "command"];
 
 interface ArtifactOptions {
   out?: string;
@@ -30,8 +35,8 @@ export function registerDistillCommands(ctx: CliContext): void {
     .option("--project <project>", "limit to a project name or path")
     .option("--work-type <type>", "limit to a work type")
     .option("--from-session <id>", "distill one session faithfully", parseInteger)
-    .option("--as <format>", "sh | just | make", "sh")
-    .option("--min-frequency <n>", "frequency floor from 0.0 to 1.0", parseNumber)
+    .option("--as <format>", "sh | just | make", parseWith(parseScriptFormat, SCRIPT_FORMATS), "sh")
+    .option("--min-frequency <n>", "frequency floor from 0.0 to 1.0", parseFraction)
     .option("-o, --out <path>", "write to a file instead of stdout")
     .option("--force", "overwrite the output file")
     .action(
@@ -40,25 +45,12 @@ export function registerDistillCommands(ctx: CliContext): void {
           project?: string;
           workType?: string;
           fromSession?: number;
-          as?: string;
+          as?: ScriptFormat;
           minFrequency?: number;
         } & ArtifactOptions,
       ) =>
-        ctx.run(() => {
-          const format = parseScriptFormat(commandOptions.as ?? "sh");
-          if (format == null) {
-            io.writeErr(
-              `error: unknown --as ${JSON.stringify(commandOptions.as)} ` +
-                "(expected: sh | just | make)\n",
-            );
-            return 2;
-          }
-          const minFrequency = commandOptions.minFrequency ?? 0.25;
-          if (!Number.isFinite(minFrequency) || minFrequency < 0 || minFrequency > 1) {
-            io.writeErr("error: --min-frequency must be a number between 0.0 and 1.0\n");
-            return 2;
-          }
-          return ctx.withArchive(
+        ctx.run(() =>
+          ctx.withArchive(
             (archive) => {
               const d = timeline(archive.db, {
                 project: commandOptions.project,
@@ -71,8 +63,8 @@ export function registerDistillCommands(ctx: CliContext): void {
               }
               const artifact = renderScript(d, {
                 ...defaultScriptOpts(),
-                format,
-                minFrequency,
+                format: commandOptions.as ?? "sh",
+                minFrequency: commandOptions.minFrequency ?? 0.25,
                 exemplar: commandOptions.fromSession != null,
               });
               if (ctx.isJson()) {
@@ -90,8 +82,8 @@ export function registerDistillCommands(ctx: CliContext): void {
               return emitArtifact(io, ctx.globals(), artifact, commandOptions);
             },
             { sync: true },
-          );
-        }),
+          ),
+        ),
     );
   distill
     .command("replay")
@@ -128,7 +120,12 @@ export function registerDistillCommands(ctx: CliContext): void {
     .description("generate a SKILL.md, AGENTS.md section, or slash command")
     .option("--project <project>", "limit to a project name or path")
     .option("--work-type <type>", "limit to a work type")
-    .option("--kind <kind>", "skill | agents | command", "skill")
+    .option(
+      "--kind <kind>",
+      "skill | agents | command",
+      parseWith(parseSkillKind, SKILL_KINDS),
+      "skill",
+    )
     .option("-o, --out <path>", "write to a file instead of stdout")
     .option("--force", "overwrite the output file")
     .action(
@@ -136,19 +133,11 @@ export function registerDistillCommands(ctx: CliContext): void {
         commandOptions: {
           project?: string;
           workType?: string;
-          kind?: string;
+          kind?: SkillKind;
         } & ArtifactOptions,
       ) =>
-        ctx.run(() => {
-          const kind = parseSkillKind(commandOptions.kind ?? "skill");
-          if (kind == null) {
-            io.writeErr(
-              `error: unknown --kind ${JSON.stringify(commandOptions.kind)} ` +
-                "(expected: skill | agents | command)\n",
-            );
-            return 2;
-          }
-          return ctx.withArchive(
+        ctx.run(() =>
+          ctx.withArchive(
             (archive) => {
               const scope = {
                 project: commandOptions.project,
@@ -162,7 +151,7 @@ export function registerDistillCommands(ctx: CliContext): void {
                 return 1;
               }
               const project = commandOptions.project ?? "your project";
-              const artifact = renderSkill(d, hot, kind, project);
+              const artifact = renderSkill(d, hot, commandOptions.kind ?? "skill", project);
               if (ctx.isJson()) {
                 ctx.writeJson({
                   project,
@@ -176,8 +165,8 @@ export function registerDistillCommands(ctx: CliContext): void {
               return emitArtifact(io, ctx.globals(), artifact, commandOptions);
             },
             { sync: true },
-          );
-        }),
+          ),
+        ),
     );
 }
 

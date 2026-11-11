@@ -12,7 +12,8 @@ import type { IconName, Recommendation, SettingsInfo } from "../types.ts";
 
 export type RecommendationAction = "launch" | "copy" | "mark";
 
-export type PendingAction = { key: string; action: RecommendationAction } | null;
+/** The action in flight on each row, by row key. */
+export type PendingActions = Readonly<Record<string, RecommendationAction>>;
 
 export type RecommendationHandlers = {
   /** Display name of the agent "Run" opens, when launching is available. */
@@ -22,7 +23,7 @@ export type RecommendationHandlers = {
   copiedKey: string | null;
   onComplete: (row: Recommendation) => void;
   onCopy: (row: Recommendation) => void;
-  pending: PendingAction;
+  pending: PendingActions;
 };
 
 export function RecommendationHero({
@@ -177,7 +178,7 @@ export function RecommendationActions({
   row,
 }: RecommendationHandlers & { row: Recommendation }) {
   const action = recommendationAction(row, canLaunch);
-  const busy = pending?.key === row.key ? pending.action : null;
+  const busy = pending[row.key] ?? null;
   const copied = copiedKey === row.key;
   const copyLabel =
     busy === "copy" ? ACTION_COPY.copy.pendingLabel : copied ? "Copied" : ACTION_COPY.copy.label;
@@ -410,7 +411,7 @@ export function InsightsView({
   settingsInfo: SettingsInfo | null;
   onMarked: () => void;
 }) {
-  const [pending, setPending] = useState<PendingAction>(null);
+  const [pending, setPending] = useState<PendingActions>({});
   const [error, setError] = useState<unknown>(null);
   const [failedAction, setFailedAction] = useState<Recommendation | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<{
@@ -439,13 +440,18 @@ export function InsightsView({
     setError(null);
     setFailedAction(null);
     setCopyFeedback(null);
-    setPending({ key: row.key, action });
+    setPending((current) => ({ ...current, [row.key]: action }));
   };
-  // An action that finishes late must not clear a newer one on another row.
+  // Each row keeps its own entry, so an action on one row cannot enable
+  // another row's buttons while that row's request is still running.
   const finishAction = (row: Recommendation, action: RecommendationAction) => {
-    setPending((current) =>
-      current?.key === row.key && current.action === action ? null : current,
-    );
+    setPending((current) => {
+      if (current[row.key] !== action) {
+        return current;
+      }
+      const { [row.key]: _finished, ...rest } = current;
+      return rest;
+    });
   };
   const copyPrompt = (row: Recommendation) => {
     startAction(row, "copy");

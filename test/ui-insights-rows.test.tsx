@@ -93,7 +93,7 @@ const handlers: RecommendationHandlers = {
   copiedKey: null,
   onComplete: () => {},
   onCopy: () => {},
-  pending: null,
+  pending: {},
 };
 
 const settingsInfo: SettingsInfo = {
@@ -281,13 +281,15 @@ describe("Insights row actions", () => {
 
   test("reports progress and a finished copy on the button that was pressed", () => {
     const key = signal().key;
-    expect(actions(signal(), { pending: { key, action: "launch" } })).toContain("Opening");
-    expect(actions(signal(), { pending: { key, action: "copy" } })).toContain("Copying");
+    expect(actions(signal(), { pending: { [key]: "launch" } })).toContain("Opening");
+    expect(actions(signal(), { pending: { [key]: "copy" } })).toContain("Copying");
     expect(actions(signal(), { copiedKey: key })).toContain("Copied");
-    expect(actions(signal(), { pending: { key, action: "copy" } })).toContain('disabled=""');
-    expect(actions(signal(), { pending: { key: "other", action: "copy" } })).not.toContain(
-      'disabled=""',
-    );
+    expect(actions(signal(), { pending: { [key]: "copy" } })).toContain('disabled=""');
+    expect(actions(signal(), { pending: { other: "copy" } })).not.toContain('disabled=""');
+    // A second row's action leaves this row's launch in flight.
+    const both = actions(signal(), { pending: { [key]: "launch", other: "copy" } });
+    expect(both).toContain("Opening");
+    expect(both).toContain('disabled=""');
   });
 
   test("gives row actions a 44px target on touch layouts", () => {

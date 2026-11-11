@@ -204,8 +204,11 @@ Linux. See [Running in the background](docs/data-lifecycle.md#running-in-the-bac
 decant                         # start the local web UI
 decant sync                    # index new and changed sessions
 decant ls                      # list sessions
+decant ls --repo . --since 2026-11-01  # this repository and its worktrees
+decant ls --json --fields id,title     # only the fields you name
 decant show 1                  # render a transcript
 decant search "auth bug"       # full-text search
+decant project ls --limit 20   # projects with session counts and cost
 decant stats --by model        # usage and cost rollups
 decant economics               # token, cost, and time breakdowns
 decant files --group ext       # file hotspots
@@ -228,6 +231,28 @@ Run `decant --help` or `decant <command> --help` for every command and flag.
 Read commands support `--json`. Global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`. `--db` or `DECANT_DB` sets the
 archive path.
+
+`decant ls` and `decant search` take the same scope flags:
+
+- `--project <path>` matches one project directory. Decant resolves `.`, a
+  relative path, `~`, a trailing slash, and a symlink before it compares.
+- `--repo <value>` matches a repository, its worktrees, and any other checkout
+  with the same `origin` remote. The value is a directory inside the repository
+  (`--repo .` works from a worktree or a subdirectory), a remote such as
+  `github.com/acme/widget`, or the name of the repository's directory.
+- `--since` and `--until` take `YYYY-MM-DD` days in UTC. Both days are
+  included, and each session counts on the day it started.
+- `--limit` and `--offset` page through the rows.
+
+A path or repository the archive has never recorded exits with code 1 and an
+error on stderr, so an empty list always means the scope is known and holds no
+matching session.
+
+`decant ls --json` prints every field of each session. `--fields` keeps only
+the fields you name, in the order you name them, on both `decant ls` and
+`decant project ls`. Without `--json` they print as tab-separated columns. An
+unknown field is a usage error that lists the valid names. `decant project ls`
+prints every project unless `--limit` and `--offset` say otherwise.
 
 ### Local API
 

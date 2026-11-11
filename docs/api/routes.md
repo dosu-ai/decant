@@ -49,6 +49,12 @@ matches sessions whose project is that root or one of its worktrees, where
 `dim=outcome` groups every run under the outcome label of its top-level
 session: `completed`, `abandoned`, `failed`, or `(unclassified)`.
 
+The API's `repo` takes one stored root and compares it as written. The CLI's
+`--repo` on `decant ls` and `decant search` first resolves a directory, a
+remote, or a repository name to stored roots, and includes every checkout that
+shares the `origin` remote. `decant project ls --fields path,root_path` prints
+each project beside its root.
+
 ## Access control
 
 The API has no authentication. Any request that reaches the listener and passes

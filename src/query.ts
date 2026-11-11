@@ -83,8 +83,9 @@ export interface ListFilter {
   tool?: string | null;
   model?: string | null;
   project?: string | null;
-  /** A repository root: matches sessions in the root and in its worktrees. */
-  repo?: string | null;
+  /** A repository root: matches sessions in the root and in its worktrees.
+   * Several roots match the checkouts of one repository together. */
+  repo?: string | readonly string[] | null;
   includeSubagents?: boolean;
   includeNestedSubagents?: boolean;
   includeArchived?: boolean;
@@ -189,8 +190,9 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
     params.push(filter.project);
   }
   if (filter.repo != null) {
-    clauses.push("COALESCE(p.root_path, p.path, '') = ?");
-    params.push(filter.repo);
+    const repo = repoPredicate(filter.repo);
+    clauses.push(repo.sql);
+    params.push(...repo.params);
   }
   if (filter.includeSubagents !== true) {
     clauses.push("s.is_subagent = 0");
@@ -258,21 +260,36 @@ export interface SearchHit {
   href: string;
 }
 
-export function search(db: Database, query: string, limitValue = 30): SearchHit[] {
+export function search(
+  db: Database,
+  query: string,
+  limitValue = 30,
+  scope: Pick<SearchFilter, "tool" | "project" | "repo" | "from" | "to" | "offset"> = {},
+): SearchHit[] {
   const limit = normalizeLimit(limitValue, 30, 1000);
+  const start = normalizeOffset(scope.offset);
   const results: SearchHit[] = [];
   let total: number | null = null;
+  let totalIsCapped = false;
   while (results.length < limit) {
     const pageLimit = Math.min(100, limit - results.length);
     const page = searchPage(db, query, {
+      ...scope,
       includeSubagents: true,
       includeTotal: total == null,
       limit: pageLimit,
-      offset: results.length,
+      offset: start + results.length,
     });
-    total ??= page.total;
+    if (total == null) {
+      total = page.total;
+      // A capped total is a floor, so it cannot end a read that starts past it.
+      totalIsCapped = page.total_is_capped;
+    }
     results.push(...page.results);
-    if (page.results.length < pageLimit || (total != null && results.length >= total)) {
+    if (
+      page.results.length < pageLimit ||
+      (total != null && !totalIsCapped && start + results.length >= total)
+    ) {
       break;
     }
   }
@@ -285,6 +302,8 @@ export function search(db: Database, query: string, limitValue = 30): SearchHit[
 export interface SearchFilter {
   tool?: string | null;
   project?: string | null;
+  /** Repository roots, matched the way `ListFilter.repo` matches them. */
+  repo?: string | readonly string[] | null;
   includeSubagents?: boolean;
   includeTotal?: boolean;
   limit?: number | null;
@@ -331,6 +350,11 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
     clauses.push("COALESCE(p.path, '') = ?");
     params.push(filter.project);
   }
+  if (filter.repo != null) {
+    const repo = repoPredicate(filter.repo);
+    clauses.push(repo.sql);
+    params.push(...repo.params);
+  }
   const date = sessionDatePredicate("s", filter);
   if (date.sql !== "") {
     clauses.push(date.sql);
@@ -340,12 +364,12 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
   // must not touch the block row itself: it holds transcript text, and on a
   // cold archive reading one per match made a common term take seconds.
   // idx_block_id_session answers block -> session from the index alone, and
-  // the project join is added only when a project filter needs it.
+  // the project join is added only when a project or repo filter needs it.
   const matches = `
     FROM block_fts
     JOIN block b INDEXED BY idx_block_id_session ON b.id = block_fts.rowid
     JOIN session s ON s.id = b.session_id
-    ${filter.project != null ? "LEFT JOIN project p ON p.id = s.project_id" : ""}
+    ${filter.project != null || filter.repo != null ? "LEFT JOIN project p ON p.id = s.project_id" : ""}
     WHERE ${clauses.join(" AND ")}`;
   let total: number | null = null;
   let totalIsCapped = false;
@@ -1469,6 +1493,17 @@ function withNestedSubagents(
   };
 
   return sessions.map((session) => attach(session, 0, new Set()));
+}
+
+function repoPredicate(repo: string | readonly string[]): { sql: string; params: string[] } {
+  const key = "COALESCE(p.root_path, p.path, '')";
+  if (typeof repo === "string") {
+    return { sql: `${key} = ?`, params: [repo] };
+  }
+  // An empty list matches nothing, where an absent filter matches everything.
+  return repo.length === 0
+    ? { sql: "0", params: [] }
+    : { sql: `${key} IN (${repo.map(() => "?").join(", ")})`, params: [...repo] };
 }
 
 function normalizeLimit(

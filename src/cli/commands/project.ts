@@ -1,5 +1,12 @@
 import { listProjects, type ProjectSummary } from "../../query.ts";
 import type { CliContext } from "../context.ts";
+import {
+  fieldsParser,
+  outputRows,
+  PROJECT_FIELDS,
+  parseLimit,
+  parseOffset,
+} from "../list-options.ts";
 
 export function registerProjectCommands(ctx: CliContext): void {
   const { program } = ctx;
@@ -8,12 +15,26 @@ export function registerProjectCommands(ctx: CliContext): void {
   project
     .command("ls")
     .description("list projects with session counts and cost")
-    .action(() =>
+    .option("--limit <n>", "max rows (default: all)", parseLimit)
+    .option("--offset <n>", "skip this many rows", parseOffset, 0)
+    .option(
+      "--fields <list>",
+      "print only these comma-separated fields (the keys of a --json row)",
+      fieldsParser(PROJECT_FIELDS),
+    )
+    .action((commandOptions: { limit?: number; offset?: number; fields?: string[] }) =>
       ctx.run(() =>
         ctx.withArchive(
           (archive) => {
-            const rows = listProjects(archive.db);
-            ctx.output(rows, () =>
+            const offset = commandOptions.offset ?? 0;
+            const limit = commandOptions.limit;
+            // The query aggregates every project either way, so paging the
+            // result costs nothing more than paging the statement would.
+            const rows = listProjects(archive.db).slice(
+              offset,
+              limit == null ? undefined : offset + limit,
+            );
+            outputRows(ctx, rows, commandOptions.fields, () =>
               rows
                 .map(
                   (row) =>

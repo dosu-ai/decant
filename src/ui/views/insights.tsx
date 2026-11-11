@@ -441,6 +441,12 @@ export function InsightsView({
     setCopyFeedback(null);
     setPending({ key: row.key, action });
   };
+  // An action that finishes late must not clear a newer one on another row.
+  const finishAction = (row: Recommendation, action: RecommendationAction) => {
+    setPending((current) =>
+      current?.key === row.key && current.action === action ? null : current,
+    );
+  };
   const copyPrompt = (row: Recommendation) => {
     startAction(row, "copy");
     void copyTextToClipboard(handoffPrompt(row))
@@ -459,7 +465,7 @@ export function InsightsView({
             "Could not copy the setup prompt. Open the full prompt in the row and copy it from there.",
         });
       })
-      .finally(() => setPending(null));
+      .finally(() => finishAction(row, "copy"));
   };
   const completeRecommendation = (row: Recommendation) => {
     const action = recommendationAction(row, canLaunch && settingsInfo != null);
@@ -478,7 +484,7 @@ export function InsightsView({
           setError(err);
           setFailedAction(row);
         })
-        .finally(() => setPending(null));
+        .finally(() => finishAction(row, "launch"));
       return;
     }
     if (action === "copy") {
@@ -495,7 +501,7 @@ export function InsightsView({
         setError(err);
         setFailedAction(row);
       })
-      .finally(() => setPending(null));
+      .finally(() => finishAction(row, "mark"));
   };
   const handlers = {
     agentLabel,

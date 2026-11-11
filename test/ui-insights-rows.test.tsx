@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
+import { formatInt } from "../src/ui/format.ts";
 import type { Recommendation, SettingsInfo } from "../src/ui/types.ts";
 import {
   handoffPrompt,
@@ -332,7 +333,8 @@ describe("Insights page sections", () => {
       signal({ key: `signal:synthetic:${index}`, score: index }),
     );
     const html = render([...rows, catalogRow()]);
-    expect(html).toContain("1,200 active");
+    // The separator follows the process locale, so ask the formatter for it.
+    expect(html).toContain(`${formatInt(1200)} active`);
     expect(html).toContain("1 idea<");
   });
 });

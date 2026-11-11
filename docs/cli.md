@@ -71,6 +71,7 @@ before it is still reported as JSON.
 | `archive_not_found` | 1 | `--db` or `DECANT_DB` names a path with no archive. See below. |
 | `archive_unreadable` | 1 | Decant could not open the archive at that path. The message gives the reason, such as a directory, a file that is not a database, or a lock. |
 | `session_not_found` | 1 | No session has that id. `decant ls` lists the ids. |
+| `no_data` | 1 | `distill` found no commands or sessions in the scope it was given. Widen `--project` or `--work-type`. |
 | `schema_too_new` | 1 | A newer Decant wrote the archive. Update Decant. |
 | `schema_too_old` | 1 | The archive predates the oldest schema this version can migrate. See [Data lifecycle](data-lifecycle.md). |
 | `schema_drift` | 1 | The archive's schema does not match what this version expects. |

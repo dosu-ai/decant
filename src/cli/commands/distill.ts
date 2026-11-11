@@ -13,6 +13,7 @@ import {
   timeline,
 } from "../../distill.ts";
 import type { CliContext, GlobalOptions, Io } from "../context.ts";
+import { CliError } from "../errors.ts";
 import { parseFraction, parseInteger, parseWith } from "../parse.ts";
 
 const SCRIPT_FORMATS = ["sh", "just", "make"];
@@ -58,8 +59,10 @@ export function registerDistillCommands(ctx: CliContext): void {
                 fromSession: commandOptions.fromSession,
               });
               if (d.ops.length === 0) {
-                io.writeErr(`no commands found for ${d.scope_label} - try a different scope\n`);
-                return 1;
+                throw new CliError(
+                  "no_data",
+                  `no commands found for ${d.scope_label} - try a different scope`,
+                );
               }
               const artifact = renderScript(d, {
                 ...defaultScriptOpts(),
@@ -147,8 +150,10 @@ export function registerDistillCommands(ctx: CliContext): void {
               const d = timeline(archive.db, scope);
               const hot = hotContext(archive.db, scope, 15);
               if (d.ops.length === 0 && hot.length === 0) {
-                io.writeErr(`no data found for ${d.scope_label} - try a different scope\n`);
-                return 1;
+                throw new CliError(
+                  "no_data",
+                  `no data found for ${d.scope_label} - try a different scope`,
+                );
               }
               const project = commandOptions.project ?? "your project";
               const artifact = renderSkill(d, hot, commandOptions.kind ?? "skill", project);

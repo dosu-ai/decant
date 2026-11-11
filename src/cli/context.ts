@@ -7,7 +7,15 @@ import { shellQuote } from "../distill.ts";
 import { sync as ingestSync } from "../ingest.ts";
 import type { ServiceOptions } from "../service.ts";
 import type { FetchLike, InstallInfo, UpdateStatus } from "../update.ts";
-import { CliError, formatCliError, fromErrorLine, isErrorLine, toCliError } from "./errors.ts";
+import {
+  CliError,
+  EXIT_FAILURE,
+  EXIT_USAGE,
+  formatCliError,
+  fromErrorLine,
+  isErrorLine,
+  toCliError,
+} from "./errors.ts";
 import type { OutputFormat } from "./parse.ts";
 
 /** How long a sync started by a read command runs before it says so. */
@@ -129,6 +137,8 @@ export function createContext(
   // Most commands report a failure by writing an "error:" line and returning
   // a code. Under --json those lines wait here until the code is known.
   let heldErrorLines: string[] | null = null;
+  let wroteResult = false;
+  let reportedFailure = false;
   const io: Io = {
     get stdout() {
       return sink.stdout;
@@ -136,7 +146,10 @@ export function createContext(
     get stderr() {
       return sink.stderr;
     },
-    writeOut: (value) => sink.writeOut(value),
+    writeOut: (value) => {
+      wroteResult = true;
+      sink.writeOut(value);
+    },
     writeErr: (value) => {
       if (heldErrorLines != null && isErrorLine(value)) {
         heldErrorLines.push(value);
@@ -205,11 +218,14 @@ export function createContext(
     pendingUpdateNotice: null,
     fail: (error, json = ctx.isJson()) => {
       const failure = toCliError(error);
+      reportedFailure = true;
       sink.writeErr(formatCliError(failure, json));
       return failure.exitCode;
     },
     run: async (action) => {
       heldErrorLines = ctx.isJson() ? [] : null;
+      wroteResult = false;
+      reportedFailure = false;
       let code: number;
       try {
         code = (await action()) ?? 0;
@@ -224,6 +240,18 @@ export function createContext(
         } else {
           ctx.fail(fromErrorLine(held.join(""), code));
         }
+      }
+      // A --json caller is owed an object even when a command fails without
+      // a result or an error line. Codes above 2 are reports, not failures.
+      const silent = !reportedFailure && !wroteResult;
+      if (ctx.isJson() && silent && (code === EXIT_FAILURE || code === EXIT_USAGE)) {
+        ctx.fail(
+          new CliError(
+            code === EXIT_USAGE ? "usage_error" : "command_failed",
+            `the command exited with code ${code}`,
+            code,
+          ),
+        );
       }
       setCode(code);
     },

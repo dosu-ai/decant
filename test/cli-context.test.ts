@@ -263,6 +263,36 @@ describe("run", () => {
     });
   });
 
+  test("under --json, a failure with no result and no message still gets an object", async () => {
+    const silent = harness(["--json"]);
+    await silent.ctx.run(() => {
+      silent.ctx.io.writeErr("nothing matched\n");
+      return 1;
+    });
+    expect(silent.io.stderr.split("\n")).toEqual([
+      "nothing matched",
+      '{"error":{"code":"command_failed","message":"the command exited with code 1"}}',
+      "",
+    ]);
+
+    // A command that already printed a JSON result reports through it.
+    const result = harness(["--json"]);
+    await result.ctx.run(() => {
+      result.ctx.writeJson({ deleted: false, error: "session not found" });
+      return 1;
+    });
+    expect(result.io.stderr).toBe("");
+
+    // Exit 3 and above are reports, such as sync's count of dropped lines.
+    const report = harness(["--json"]);
+    await report.ctx.run(() => 3);
+    expect(report.io.stderr).toBe("");
+
+    const human = harness([]);
+    await human.ctx.run(() => 1);
+    expect(human.io.stderr).toBe("");
+  });
+
   test("leaves notes and human-mode error lines as the command wrote them", async () => {
     const note = harness(["--json"]);
     await note.ctx.run(() => {

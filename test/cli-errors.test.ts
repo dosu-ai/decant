@@ -299,6 +299,8 @@ describe("errors under --json", () => {
     { argv: ["export", "999"], exit: 1, code: "session_not_found" },
     { argv: ["export", "999", "--as", "atif"], exit: 1, code: "session_not_found" },
     { argv: ["distill", "replay", "999"], exit: 1, code: "session_not_found" },
+    { argv: ["distill", "script", "--project", "no-such-project"], exit: 1, code: "no_data" },
+    { argv: ["distill", "skill", "--project", "no-such-project"], exit: 1, code: "no_data" },
     { argv: ["session", "rm", "999"], exit: 1, code: "session not found", stdout: "result" },
     {
       argv: ["recommendations", "mark", "no-such-key"],
@@ -469,6 +471,7 @@ describe("docs/cli.md", () => {
       "archive_not_found",
       "archive_unreadable",
       "session_not_found",
+      "no_data",
       "schema_too_new",
       "schema_too_old",
       "schema_drift",

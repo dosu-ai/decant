@@ -69,13 +69,15 @@ export class ReaderStatistics {
     if (ingested === this.#checkedAt || ingested < this.#nextReloadAt) {
       return;
     }
-    this.#checkedAt = ingested;
     const stored = this.#options.stored();
     if (stored === this.#loaded) {
+      this.#checkedAt = ingested;
       return;
     }
-    // A reload that throws leaves both unset, so the next update tries again.
+    // A reload that throws records nothing, so the next update tries again
+    // even when the sync has ingested no more sessions.
     this.#options.reload();
+    this.#checkedAt = ingested;
     this.#loaded = stored;
     this.#nextReloadAt = Math.max(ingested * 2, ingested + MIN_RELOAD_GAP);
   }

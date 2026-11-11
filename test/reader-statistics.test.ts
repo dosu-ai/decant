@@ -151,8 +151,10 @@ describe("reader statistics", () => {
     });
     stored = "first refresh";
     expect(() => statistics.onProgress(progress(26))).toThrow("worker unavailable");
+    // The sync can go on skipping files, so the count may not move.
+    expect(() => statistics.onProgress(progress(26))).toThrow("worker unavailable");
     fail = false;
-    statistics.onProgress(progress(27));
+    statistics.onProgress(progress(26));
     expect(reloads).toBe(1);
   });
 

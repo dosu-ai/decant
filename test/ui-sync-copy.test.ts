@@ -24,9 +24,8 @@ test("sync stays visually icon-led while retaining a hidden live announcement", 
 
 test("background archive activity waits for an explicit update", () => {
   expect(main).toContain("const [archiveUpdateAvailable, setArchiveUpdateAvailable]");
-  expect(main.match(/if \(!isForegroundSync\(payload\.reason\)\) \{\s*return;\s*\}/g)).toHaveLength(
-    2,
-  );
+  // The progress handler and the terminal handler share one rule for what shows.
+  expect(main.match(/showsSync\(payload\.reason, archiveSyncedRef\.current\)/g)).toHaveLength(2);
   expect(main).toMatch(
     /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
   );

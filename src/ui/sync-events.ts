@@ -20,6 +20,14 @@ export function isForegroundSync(reason: string | undefined): boolean {
   return reason === "manual" || reason === "startup";
 }
 
+/**
+ * Whether the shell shows a sync as running. Until an archive has completed a
+ * sync, whichever sync is filling it is the first one, whatever started it.
+ */
+export function showsSync(reason: string | undefined, archiveSynced: boolean): boolean {
+  return !archiveSynced || isForegroundSync(reason);
+}
+
 export interface ArchiveUpdatePlan {
   refresh: boolean;
   /** Whether to light Update so the user can load the change when ready. */
@@ -173,8 +181,7 @@ export function restoreSync(
   shown: { syncing: boolean; manualPending: boolean },
 ): RestoredSync {
   const running =
-    status.in_progress &&
-    (status.reason == null ? !status.archive_synced : isForegroundSync(status.reason));
+    status.in_progress && showsSync(status.reason ?? undefined, status.archive_synced);
   const ended = shown.syncing && !shown.manualPending && !running;
   return {
     syncing: running || shown.manualPending,

@@ -8,6 +8,7 @@ import {
   restoreSync,
   SYNC_NOTICE_DELAY_MS,
   sessionsAutoRefresh,
+  showsSync,
   syncAnnouncement,
   syncCompleteLabel,
   syncFraction,
@@ -184,6 +185,21 @@ describe("sync state restored from the status route", () => {
         ended: false,
       });
     }
+  });
+
+  test("any sync filling an archive that has never completed one is shown", () => {
+    for (const reason of ["watch", "sweep"]) {
+      expect(showsSync(reason, false)).toBe(true);
+      expect(showsSync(reason, true)).toBe(false);
+      expect(
+        restoreSync(
+          status({ in_progress: true, reason, progress, archive_synced: false }),
+          idleTab,
+        ),
+      ).toMatchObject({ syncing: true, progress, archiveSynced: false, ended: false });
+    }
+    expect(showsSync("startup", true)).toBe(true);
+    expect(showsSync(undefined, true)).toBe(false);
   });
 
   test("a sync that has not said what started it shows only while it fills a new archive", () => {

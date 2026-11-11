@@ -58,6 +58,7 @@ import {
   planArchiveUpdate,
   restoreSync,
   sessionsAutoRefresh,
+  showsSync,
   syncAnnouncement,
   syncCompleteLabel,
   syncNoticeDelay,
@@ -129,8 +130,10 @@ function App() {
   const liveDroppedRef = useRef(false);
   const manualSyncPendingRef = useRef(false);
   const syncStatusReadRef = useRef(0);
-  // Counts syncs seen ending, so a status answer overtaken by one is read again.
+  // Counts syncs seen starting or ending, so a status answer overtaken by one
+  // is read again.
   const syncEndedRef = useRef(0);
+  const archiveSyncedRef = useRef(true);
   const awaitingStatsRef = useRef(false);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
@@ -184,6 +187,10 @@ function App() {
     // rather than a stale closure over localSyncing.
     localSyncingRef.current = localSyncing;
   }, [localSyncing]);
+
+  useEffect(() => {
+    archiveSyncedRef.current = archiveSynced;
+  }, [archiveSynced]);
 
   // EventSource does not replay events, so the server's status restores what a
   // reload or a dropped stream missed. Resolves false when it could not be read.
@@ -440,10 +447,14 @@ function App() {
           progress?: SyncProgress;
           reason?: string;
         };
-        if (!isForegroundSync(payload.reason)) {
+        if (!showsSync(payload.reason, archiveSyncedRef.current)) {
           return;
         }
         if (payload.progress != null) {
+          if (!localSyncingRef.current) {
+            // A status answer from before this sync started would hide it.
+            syncEndedRef.current += 1;
+          }
           progressThrottle.push(payload.progress);
           setLocalSyncing(true);
         }
@@ -461,9 +472,14 @@ function App() {
         // payload cannot cause an unexpected page refresh.
       }
       // Any completed sync ends the archive's first-sync state, foreground or not.
+      const shown = showsSync(payload.reason, archiveSyncedRef.current);
       syncEndedRef.current += 1;
       setArchiveSynced(true);
-      if (!isForegroundSync(payload.reason)) {
+      if (!shown) {
+        return;
+      }
+      // This tab's own pending sync keeps the indicator when another one ends.
+      if (!isForegroundSync(payload.reason) && manualSyncPendingRef.current) {
         return;
       }
       progressThrottle.flush();
@@ -521,7 +537,10 @@ function App() {
       if (failure != null) {
         markConnected();
         syncEndedRef.current += 1;
-        if (isForegroundSync(failure.reason)) {
+        if (
+          showsSync(failure.reason, archiveSyncedRef.current) &&
+          (isForegroundSync(failure.reason) || !manualSyncPendingRef.current)
+        ) {
           progressThrottle.cancel();
           setLocalSyncing(false);
           setSyncProgress(null);

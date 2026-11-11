@@ -123,7 +123,7 @@ describe("launcher", () => {
     test("a row's project directory is where the agent starts", async () => {
       const { result, shellCommand, prompt } = await launch({ dir: project });
       expect(result).toEqual({ ok: true, dir: project });
-      expect(shellCommand).toStartWith(`cd '${project.replace("'", "'\\''")}' && claude `);
+      expect(shellCommand).toStartWith(`cd '${project.replaceAll("'", "'\\''")}' && claude `);
       expect(prompt).toBe(
         "tidy the parser\n\nWhen you have completed and verified this, run: decant recommendations mark catalog:skills",
       );

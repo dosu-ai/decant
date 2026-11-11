@@ -201,13 +201,10 @@ export function outputRows<T extends object>(
   );
 }
 
-function textCell(value: unknown): string {
+export function textCell(value: unknown): string {
   if (value == null) {
     return "";
   }
-  if (Array.isArray(value)) {
-    return value.join(",");
-  }
-  // One row per line and one cell per tab, whatever a title holds.
-  return String(value).replace(/[\t\r\n]+/g, " ");
+  // One row per line and one cell per tab, whatever a title or a list holds.
+  return (Array.isArray(value) ? value.join(",") : String(value)).replace(/[\t\r\n]+/g, " ");
 }

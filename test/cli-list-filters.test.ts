@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PROJECT_FIELDS, SESSION_FIELDS } from "../src/cli/list-options.ts";
+import { PROJECT_FIELDS, SESSION_FIELDS, textCell } from "../src/cli/list-options.ts";
 import { runCli } from "../src/cli.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { resolveProjectPath, resolveRepoRoots } from "../src/project-scope.ts";
@@ -378,6 +378,12 @@ describe("ls --fields", () => {
     expect(result.stdout).toBe("10\t2026-03-04T12:00:00.000Z\torphan worktree\t\n");
   });
 
+  test("a tab or a newline inside a list value stays in its cell", () => {
+    expect(textCell(["high", "low\tx", "a\nb"])).toBe("high,low x,a b");
+    expect(textCell("one\r\ntwo")).toBe("one two");
+    expect(textCell(null)).toBe("");
+  });
+
   test("an unknown field is a usage error that lists the valid ones", async () => {
     const result = await run("--json", "ls", "--fields", "id,cost,nope");
     expect(result.code).toBe(2);
@@ -518,5 +524,54 @@ describe("completion", () => {
     for (const flag of ["--project", "--repo", "--since", "--until", "--offset", "--fields"]) {
       expect(bash.stdout).toContain(flag);
     }
+  });
+});
+
+describe("repository resolution from stored rows alone", () => {
+  type ProjectRow = [
+    path: string,
+    worktree: 0 | 1,
+    root: string,
+    source: string,
+    remote: string | null,
+  ];
+
+  function resolveIn(name: string, rows: ProjectRow[], value: string) {
+    const db = openDb(join(base, `${name}.db`));
+    try {
+      const insert = db.query(
+        `INSERT INTO project(path, name, is_worktree, root_path, root_source, repo_remote)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      );
+      for (const [path, worktree, root, source, remote] of rows) {
+        insert.run(path, path, worktree, root, source, remote);
+      }
+      return resolveRepoRoots(db, value, { cwd: base });
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("a bare name matches a root stored with backslashes", () => {
+    const root = "C:\\work\\sprocket";
+    expect(resolveIn("backslashes", [[root, 0, root, "self", null]], "sprocket")).toEqual({
+      kind: "matched",
+      roots: [root],
+    });
+  });
+
+  test("a root with no row of its own takes its identity from a Git-resolved worktree", () => {
+    const cog = "/synthetic/cog";
+    const rows: ProjectRow[] = [
+      ["/synthetic/trees/cog-a", 1, cog, "git", "example.test/acme/cog"],
+      ["/synthetic/cog-clone", 0, "/synthetic/cog-clone", "self", "example.test/acme/cog"],
+      // Grouped under the root by name only, so its remote says nothing about the root.
+      ["/synthetic/trees/cog-b", 1, cog, "namematch", "example.test/other/cog"],
+      ["/synthetic/other-cog", 0, "/synthetic/other-cog", "self", "example.test/other/cog"],
+    ];
+    expect(resolveIn("git-worktree", rows, cog)).toEqual({
+      kind: "matched",
+      roots: [cog, "/synthetic/cog-clone"],
+    });
   });
 });

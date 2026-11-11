@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { normalizeRemoteUrl, resolveRepoRemote } from "./repo-remote.ts";
-import { basename, resolveGitRoot } from "./worktree.ts";
+import { resolveGitRoot } from "./worktree.ts";
 
 // Maps a typed project or repository to the keys the archive stores. Only the
 // typed directory is read from disk: stored paths come from logs.
@@ -83,7 +83,7 @@ export function resolveRepoRoots(db: Database, value: string, env: ScopeEnv): Re
         .all() as { root: string }[]
     )
       .map((row) => row.root)
-      .filter((root) => basename(root) === value);
+      .filter((root) => lastSegment(root) === value);
     const groups = named.map((root) => repoGroup(db, [root], []));
     const first = groups[0];
     if (first != null) {
@@ -155,14 +155,32 @@ function remotesOf(db: Database, path: string): string[] {
   ).map((row) => row.remote);
 }
 
-/** `roots` plus every root that has one of the remote identities. A root's
- * worktrees are not asked: one grouped by name could be another repository. */
+// A root from a log written on Windows keeps its backslashes.
+function lastSegment(path: string): string {
+  return (
+    path
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .at(-1) ?? path
+  );
+}
+
+/** `roots` plus every root that has one of the remote identities. Of a root's
+ * worktrees only those Git resolved are asked: one grouped by name could be
+ * another repository. */
 function repoGroup(db: Database, roots: string[], remotes: string[]): string[] {
   const group = new Set(roots);
   const identities = new Set(remotes);
+  const ofGitWorktrees = db.query(
+    `SELECT repo_remote AS remote FROM project
+      WHERE root_path = ?1 AND root_source = 'git' AND repo_remote IS NOT NULL`,
+  );
   for (const root of roots) {
     for (const remote of remotesOf(db, root)) {
       identities.add(remote);
+    }
+    for (const row of ofGitWorktrees.all(root) as { remote: string }[]) {
+      identities.add(row.remote);
     }
   }
   const byRemote = db.query(

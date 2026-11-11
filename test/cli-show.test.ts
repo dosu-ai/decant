@@ -147,6 +147,33 @@ describe("show --outline", () => {
     expect(result.stdout.length).toBeLessThan(full.stdout.length / 5);
   });
 
+  test("a prompt preview does not end on half of an emoji", async () => {
+    const dir = join(workDir, "preview-emoji");
+    mkdirSync(dir, { recursive: true });
+    const dbPath = join(dir, "archive.db");
+    // The 80-character cut lands between the two halves of the emoji.
+    const prompt = `${"a".repeat(79)}\u{1F600} and more`;
+    const db = openDb(dbPath);
+    let id: number;
+    try {
+      id = upsertSession(
+        db,
+        parseClaudeSession(SOURCE_ID, line("user", 0, prompt)),
+        "/work/demo/emoji.jsonl",
+        1,
+        2,
+        "hash-emoji",
+      );
+    } finally {
+      closeDb(db);
+    }
+    const result = await runCli(["--db", dbPath, "--no-sync", "show", String(id), "--outline"]);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout.split("\n")).toContain(
+      `0\tuser\t${prompt.length}\ttext ${prompt.length}\t${"a".repeat(79)}...`,
+    );
+  });
+
   test("--json carries the API outline items and the totals", async () => {
     const { dbPath, id, base } = seed();
     const result = await runCli([...base, "--json", "show", String(id), "--outline"]);

@@ -244,7 +244,7 @@ decant show 1 --limit 20 --max-chars 2000  # cut long text and tool output
 
 | Flag | What it does |
 | --- | --- |
-| `--outline` | Prints one row per message with its index, role, size in characters, block kinds, and tool names. User prompts carry a short preview. No message content is printed. |
+| `--outline` | Prints one row per message with its index, role, size in characters, block kinds, and tool names. Message bodies are left out, except that each user prompt row ends with the first 80 characters of the prompt. With `--json`, the `outline` array holds the first text block of each prompt in full. |
 | `--limit <n>` | Shows at most `n` messages. |
 | `--offset <n>` | Skips the first `n` messages. The outline's `index` column is the offset of each message. |
 | `--max-chars <n>` | Cuts each text, tool input, and tool output to `n` characters. |

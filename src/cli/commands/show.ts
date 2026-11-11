@@ -332,5 +332,5 @@ function promptPreview(prompt: string | undefined): string[] {
   }
   // A row is one line of tab-separated columns, so the preview cannot hold either.
   const flat = prompt.replaceAll(/\s+/g, " ").trim();
-  return [flat.length > PROMPT_PREVIEW_CHARS ? `${flat.slice(0, PROMPT_PREVIEW_CHARS)}...` : flat];
+  return [flat.length > PROMPT_PREVIEW_CHARS ? `${cut(flat, PROMPT_PREVIEW_CHARS)}...` : flat];
 }

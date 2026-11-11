@@ -13,8 +13,10 @@ describe("Insights information hierarchy", () => {
     expect(main).toContain("Decant finds recurring patterns in your local sessions");
     expect(main).toContain("Detected in your session logs");
     expect(main).toContain("Patterns worth acting on");
-    expect(main).toContain("Reusable improvements");
-    expect(main).toContain("Set up for future runs");
+    expect(main).toContain("Not from your session logs");
+    expect(main).toContain("Setup ideas");
+    expect(main).toContain("General suggestions that apply to any project.");
+    expect(main).not.toContain("Set up for future runs");
   });
 
   test("keeps the Dosu suggestion explicitly optional", () => {

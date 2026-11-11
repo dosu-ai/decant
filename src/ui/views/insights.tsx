@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { getJson } from "../api.ts";
 import { ApiFailureState } from "../api-failure.tsx";
 import dosuOfficialUrl from "../assets/dosu-official.svg";
@@ -10,147 +10,214 @@ import { field, formatInt, isPresent, shortDate } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import type { IconName, Recommendation, SettingsInfo } from "../types.ts";
 
-export function RecommendationHero({
-  canLaunch,
-  onComplete,
-  pending,
-  row,
-}: {
+export type RecommendationAction = "launch" | "copy" | "mark";
+
+export type PendingAction = { key: string; action: RecommendationAction } | null;
+
+export type RecommendationHandlers = {
+  /** Display name of the agent "Run" opens, when launching is available. */
+  agentLabel: string | null;
   canLaunch: boolean;
+  /** Key of the row whose prompt was just copied, so its button can say so. */
+  copiedKey: string | null;
   onComplete: (row: Recommendation) => void;
-  pending: string | null;
-  row: Recommendation;
-}) {
+  onCopy: (row: Recommendation) => void;
+  pending: PendingAction;
+};
+
+export function RecommendationHero({
+  row,
+  ...handlers
+}: RecommendationHandlers & { row: Recommendation }) {
+  const facts = recommendationFacts(row);
   return (
     <article className={`signal-hero tone-${toneName(row.tone)}`}>
       <span className={`signal-icon tone-${toneName(row.tone)}`}>
         <Icon name={recommendationIcon(row)} />
       </span>
       <div>
-        <span className={`signal-kicker tone-${toneName(row.tone)}`}>Top signal</span>
+        <span className="signal-kicker">Top signal</span>
         <div className="signal-hero-title">
           <h3>{row.title}</h3>
-          {row.impact_label != null ? <strong>{row.impact_label}</strong> : null}
+          {isPresent(row.impact_label) ? <strong>{row.impact_label}</strong> : null}
         </div>
-        {row.detail != null ? <p>{row.detail}</p> : null}
-        {row.suggestion != null ? (
-          <div className="suggestion-block">
-            <span>Suggested</span>
-            <p>{row.suggestion}</p>
-          </div>
-        ) : null}
-        <PromotionPanel row={row} />
-        <RecommendationActions
-          canLaunch={canLaunch}
-          onComplete={onComplete}
-          pending={pending}
-          row={row}
-        />
+        {facts.summary != null ? <p className="signal-hero-detail">{facts.summary}</p> : null}
+        <RecommendationDetail facts={facts} row={row} {...handlers} />
       </div>
     </article>
   );
 }
 
 export function RecommendationRow({
-  canLaunch,
-  onComplete,
-  pending,
   row,
-}: {
-  canLaunch: boolean;
-  onComplete: (row: Recommendation) => void;
-  pending: string | null;
-  row: Recommendation;
-}) {
+  ...handlers
+}: RecommendationHandlers & { row: Recommendation }) {
   const [expanded, setExpanded] = useState(false);
-  const rationale = row.detail ?? row.suggestion ?? "Open for the evidence and next step.";
+  const detailId = useId();
+  const facts = recommendationFacts(row);
   return (
     <article className={`signal-row${expanded ? " is-expanded" : ""}`}>
-      <div className="signal-row-summary">
+      <button
+        aria-controls={expanded ? detailId : undefined}
+        aria-expanded={expanded}
+        className="signal-row-summary"
+        onClick={() => setExpanded((value) => !value)}
+        type="button"
+      >
         <span className={`signal-icon tone-${toneName(row.tone)}`}>
           <Icon name={recommendationIcon(row)} />
         </span>
-        <button
-          aria-expanded={expanded}
-          className="signal-row-title"
-          onClick={() => setExpanded((value) => !value)}
-          type="button"
-        >
-          {row.title}
-        </button>
-        <span className="signal-row-rationale">{rationale}</span>
-        <strong className="signal-row-impact">{row.impact_label ?? toneName(row.tone)}</strong>
-        <button
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${row.title}`}
-          className="signal-row-expand"
-          onClick={() => setExpanded((value) => !value)}
-          type="button"
-        >
+        <span className="signal-row-text">
+          <span className="signal-row-title">{row.title}</span>
+          {facts.summary != null ? (
+            <span className="signal-row-rationale">{facts.summary}</span>
+          ) : null}
+        </span>
+        {isPresent(row.impact_label) ? (
+          <strong className="signal-row-impact">{row.impact_label}</strong>
+        ) : null}
+        <span aria-hidden="true" className="signal-row-expand">
           <span>{expanded ? "Close" : "View"}</span>
           <Icon name={expanded ? "chevronUp" : "chevronDown"} />
-        </button>
-      </div>
+        </span>
+      </button>
       {expanded ? (
-        <div className="signal-row-detail">
-          {row.detail != null ? <p>{row.detail}</p> : null}
-          {row.suggestion != null ? (
-            <div className="suggestion-block">
-              <span>Suggested</span>
-              <p>{row.suggestion}</p>
-            </div>
-          ) : null}
-          {row.evidence != null ? (
-            <p className="signal-row-evidence">
-              <strong>Evidence</strong>
-              {row.evidence}
-            </p>
-          ) : null}
-          <PromotionPanel row={row} />
-          <RecommendationActions
-            canLaunch={canLaunch}
-            onComplete={onComplete}
-            pending={pending}
-            row={row}
-          />
+        <div className="signal-row-detail" id={detailId}>
+          <RecommendationDetail facts={facts} row={row} {...handlers} />
         </div>
       ) : null}
     </article>
   );
 }
 
+/** What a row adds below its title and summary line. */
+export function RecommendationDetail({
+  facts,
+  row,
+  ...handlers
+}: RecommendationHandlers & { facts: RecommendationFacts; row: Recommendation }) {
+  return (
+    <div className="signal-detail">
+      {facts.suggestion != null ? (
+        <div className="signal-fact">
+          <span className="signal-label">Suggested</span>
+          <p className="signal-fact-text">{facts.suggestion}</p>
+        </div>
+      ) : null}
+      {facts.evidence != null ? (
+        <div className="signal-fact">
+          <span className="signal-label">Evidence</span>
+          <p className="signal-fact-text">{facts.evidence}</p>
+        </div>
+      ) : null}
+      <PromotionPanel row={row} />
+      <PromptPreview agentLabel={handlers.agentLabel} canLaunch={handlers.canLaunch} row={row} />
+      <RecommendationActions row={row} {...handlers} />
+    </div>
+  );
+}
+
+export type RecommendationFacts = {
+  summary: string | null;
+  suggestion: string | null;
+  evidence: string | null;
+};
+
+/**
+ * The API repeats one sentence as detail and evidence, and some details only
+ * restate the impact label, so each text is kept the first time it appears.
+ */
+export function recommendationFacts(row: Recommendation): RecommendationFacts {
+  const seen = new Set<string>();
+  const sameText = (value: string) =>
+    value
+      .trim()
+      .replace(/[.!]+$/, "")
+      .toLowerCase();
+  if (isPresent(row.impact_label)) {
+    seen.add(sameText(row.impact_label));
+  }
+  const once = (value: string | null): string | null => {
+    if (!isPresent(value) || seen.has(sameText(value))) {
+      return null;
+    }
+    seen.add(sameText(value));
+    return value.trim();
+  };
+  const summary = once(row.detail) ?? once(row.suggestion);
+  return { summary, suggestion: once(row.suggestion), evidence: once(row.evidence) };
+}
+
+export function recommendationAction(
+  row: Recommendation,
+  canLaunch: boolean,
+): RecommendationAction | null {
+  if (isPresent(row.prompt)) {
+    return canLaunch ? "launch" : "copy";
+  }
+  return row.action != null || row.suggestion != null ? "mark" : null;
+}
+
+const ACTION_COPY: Record<
+  RecommendationAction,
+  { icon: IconName; label: string; pendingLabel: string }
+> = {
+  launch: { icon: "bolt", label: "Run", pendingLabel: "Opening" },
+  copy: { icon: "copy", label: "Copy setup prompt", pendingLabel: "Copying" },
+  mark: { icon: "check", label: "Mark as done", pendingLabel: "Saving" },
+};
+
 export function RecommendationActions({
+  agentLabel,
   canLaunch,
-  compact = false,
+  copiedKey,
   onComplete,
+  onCopy,
   pending,
   row,
-}: {
-  canLaunch: boolean;
-  compact?: boolean;
-  onComplete: (row: Recommendation) => void;
-  pending: string | null;
-  row: Recommendation;
-}) {
+}: RecommendationHandlers & { row: Recommendation }) {
+  const action = recommendationAction(row, canLaunch);
+  const busy = pending?.key === row.key ? pending.action : null;
+  const copied = copiedKey === row.key;
+  const copyLabel =
+    busy === "copy" ? ACTION_COPY.copy.pendingLabel : copied ? "Copied" : ACTION_COPY.copy.label;
   return (
     <div className="recommendation-actions">
-      {row.prompt != null || row.action != null || row.suggestion != null ? (
+      {action === "launch" ? (
         <button
-          className="secondary-button"
-          disabled={pending === row.key}
+          className="primary-button"
+          disabled={busy != null}
           onClick={() => onComplete(row)}
           type="button"
         >
-          <Icon name={canLaunch ? "bolt" : isPresent(row.prompt) ? "copy" : "check"} />
-          {pending === row.key
-            ? !canLaunch && isPresent(row.prompt)
-              ? "Copying"
-              : "Saving"
-            : compact
-              ? "Run"
-              : canLaunch
-                ? "Run"
-                : "Copy setup prompt"}
+          <Icon name={ACTION_COPY.launch.icon} />
+          {busy === "launch"
+            ? ACTION_COPY.launch.pendingLabel
+            : agentLabel != null
+              ? `Run in ${agentLabel}`
+              : ACTION_COPY.launch.label}
+        </button>
+      ) : null}
+      {action === "launch" || action === "copy" ? (
+        <button
+          className="secondary-button"
+          disabled={busy != null}
+          onClick={() => (action === "copy" ? onComplete(row) : onCopy(row))}
+          type="button"
+        >
+          <Icon name={copied && busy == null ? "check" : ACTION_COPY.copy.icon} />
+          {copyLabel}
+        </button>
+      ) : null}
+      {action === "mark" ? (
+        <button
+          className="secondary-button"
+          disabled={busy != null}
+          onClick={() => onComplete(row)}
+          type="button"
+        >
+          <Icon name={ACTION_COPY.mark.icon} />
+          {busy === "mark" ? ACTION_COPY.mark.pendingLabel : ACTION_COPY.mark.label}
         </button>
       ) : null}
       {row.url != null ? (
@@ -165,6 +232,18 @@ export function RecommendationActions({
   );
 }
 
+// Plain wording for the API's memory layer names. Unknown layers show as sent.
+const MEMORY_LAYER_COPY: Record<string, string> = {
+  hot: "Loaded in every session",
+  procedural: "Loaded when a task calls for it",
+  cold: "Looked up when it is needed",
+  governance: "Kept as a team rule or an automated check",
+};
+
+export function memoryLayerCopy(layer: string): string {
+  return MEMORY_LAYER_COPY[layer.trim().toLowerCase()] ?? layer;
+}
+
 export function PromotionPanel({
   compact = false,
   row,
@@ -177,33 +256,92 @@ export function PromotionPanel({
   }
   return (
     <div className={`promotion-panel${compact ? " is-compact" : ""}`}>
-      <span>Memory card</span>
+      <span className="signal-label">Plan</span>
+      {compact ? null : (
+        <p className="signal-note">
+          Where to record this so future agent sessions use it, and how to tell that it worked.
+          {isPresent(row.prompt) ? " The prompt below includes this plan." : ""}
+        </p>
+      )}
       <dl>
-        {row.memory_layer != null ? (
-          <div>
-            <dt>Layer</dt>
-            <dd>{row.memory_layer}</dd>
-          </div>
-        ) : null}
-        {row.promotion_target != null ? (
-          <div>
-            <dt>Promote to</dt>
+        {isPresent(row.promotion_target) ? (
+          <div className="promotion-row">
+            <dt>Record it in</dt>
             <dd>{row.promotion_target}</dd>
           </div>
         ) : null}
-        {!compact && row.trigger != null ? (
-          <div>
-            <dt>Trigger</dt>
+        {isPresent(row.memory_layer) ? (
+          <div className="promotion-row">
+            <dt>How agents get it</dt>
+            <dd>{memoryLayerCopy(row.memory_layer)}</dd>
+          </div>
+        ) : null}
+        {!compact && isPresent(row.trigger) ? (
+          <div className="promotion-row">
+            <dt>When it applies</dt>
             <dd>{row.trigger}</dd>
           </div>
         ) : null}
-        {!compact && row.success_metric != null ? (
-          <div>
-            <dt>Done when</dt>
+        {!compact && isPresent(row.success_metric) ? (
+          <div className="promotion-row">
+            <dt>It worked when</dt>
             <dd>{row.success_metric}</dd>
           </div>
         ) : null}
       </dl>
+    </div>
+  );
+}
+
+const LONG_PROMPT_LINES = 4;
+const LONG_PROMPT_CHARS = 320;
+
+export function isLongPrompt(prompt: string): boolean {
+  return prompt.length > LONG_PROMPT_CHARS || prompt.split("\n").length > LONG_PROMPT_LINES;
+}
+
+/** The text "Run" or "Copy setup prompt" hands to an agent, readable first. */
+export function PromptPreview({
+  agentLabel,
+  canLaunch,
+  row,
+}: {
+  agentLabel: string | null;
+  canLaunch: boolean;
+  row: Recommendation;
+}) {
+  if (!isPresent(row.prompt)) {
+    return null;
+  }
+  const prompt = handoffPrompt(row);
+  const lines = prompt.split("\n").length;
+  return (
+    <div className="signal-prompt-block">
+      <span className="signal-label">Prompt</span>
+      <p className="signal-note">
+        {canLaunch
+          ? `Run opens ${agentLabel ?? "your coding agent"} in a terminal and sends it this prompt. Read it before you run it.`
+          : "Copy setup prompt puts this text on your clipboard. Paste it into your coding agent."}
+      </p>
+      <details className="signal-prompt" open={!isLongPrompt(prompt)}>
+        <summary className="signal-prompt-toggle">
+          <span className="signal-prompt-chevron">
+            <Icon name="chevronRight" />
+          </span>
+          <span>Full prompt</span>
+          <span className="signal-prompt-count">
+            {formatInt(lines)} {lines === 1 ? "line" : "lines"}
+          </span>
+        </summary>
+        <pre className="signal-prompt-text">{prompt}</pre>
+        {canLaunch ? (
+          <p className="signal-note">
+            Run adds one last line that asks the agent to mark this insight done when it has
+            verified the work:
+            <code className="signal-prompt-command">decant recommendations mark {row.key}</code>
+          </p>
+        ) : null}
+      </details>
     </div>
   );
 }
@@ -272,11 +410,12 @@ export function InsightsView({
   settingsInfo: SettingsInfo | null;
   onMarked: () => void;
 }) {
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingAction>(null);
   const [error, setError] = useState<unknown>(null);
   const [failedAction, setFailedAction] = useState<Recommendation | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<{
     kind: "success" | "error";
+    key: string;
     message: string;
   } | null>(null);
   const openRows = rows.filter((row) => row.status === "open");
@@ -294,12 +433,38 @@ export function InsightsView({
   const [hero, ...rest] = signals;
   const catalogGroups = groupByCategory(openRows.filter((row) => row.kind === "catalog"));
   const canLaunch = settingsInfo?.can_launch === true;
-  const completeRecommendation = (row: Recommendation) => {
+  const agentLabel =
+    settingsInfo?.options.agents.find(([key]) => key === settingsInfo.settings.agent)?.[1] ?? null;
+  const startAction = (row: Recommendation, action: RecommendationAction) => {
     setError(null);
     setFailedAction(null);
     setCopyFeedback(null);
-    if (isPresent(row.prompt) && canLaunch && settingsInfo != null) {
-      setPending(row.key);
+    setPending({ key: row.key, action });
+  };
+  const copyPrompt = (row: Recommendation) => {
+    startAction(row, "copy");
+    void copyTextToClipboard(handoffPrompt(row))
+      .then(() => {
+        setCopyFeedback({
+          kind: "success",
+          key: row.key,
+          message: `Copied the setup prompt for “${row.title}”.`,
+        });
+      })
+      .catch(() => {
+        setCopyFeedback({
+          kind: "error",
+          key: row.key,
+          message:
+            "Could not copy the setup prompt. Open the full prompt in the row and copy it from there.",
+        });
+      })
+      .finally(() => setPending(null));
+  };
+  const completeRecommendation = (row: Recommendation) => {
+    const action = recommendationAction(row, canLaunch && settingsInfo != null);
+    if (action === "launch" && settingsInfo != null) {
+      startAction(row, "launch");
       void getJson<{ ok: boolean }>("/api/launch/agent", {
         method: "POST",
         body: JSON.stringify({
@@ -316,25 +481,11 @@ export function InsightsView({
         .finally(() => setPending(null));
       return;
     }
-    if (isPresent(row.prompt)) {
-      setPending(row.key);
-      void copyTextToClipboard(handoffPrompt(row))
-        .then(() => {
-          setCopyFeedback({
-            kind: "success",
-            message: `Copied the setup prompt for “${row.title}”.`,
-          });
-        })
-        .catch(() => {
-          setCopyFeedback({
-            kind: "error",
-            message: "Could not copy the setup prompt. Select the insight text and try again.",
-          });
-        })
-        .finally(() => setPending(null));
+    if (action === "copy") {
+      copyPrompt(row);
       return;
     }
-    setPending(row.key);
+    startAction(row, "mark");
     void getJson<{ ok: boolean }>("/api/recommendations/mark", {
       method: "POST",
       body: JSON.stringify({ key: row.key, source: "ui" }),
@@ -345,6 +496,14 @@ export function InsightsView({
         setFailedAction(row);
       })
       .finally(() => setPending(null));
+  };
+  const handlers = {
+    agentLabel,
+    canLaunch,
+    copiedKey: copyFeedback?.kind === "success" ? copyFeedback.key : null,
+    onComplete: completeRecommendation,
+    onCopy: copyPrompt,
+    pending,
   };
 
   return (
@@ -395,53 +554,39 @@ export function InsightsView({
           />
         ) : null}
 
-        {hero != null ? (
-          <RecommendationHero
-            pending={pending}
-            row={hero}
-            onComplete={completeRecommendation}
-            canLaunch={canLaunch}
-          />
-        ) : null}
+        {hero != null ? <RecommendationHero row={hero} {...handlers} /> : null}
 
         {rest.length > 0 ? (
           <div className="signal-list">
             {rest.map((row) => (
-              <RecommendationRow
-                key={row.key}
-                pending={pending}
-                row={row}
-                onComplete={completeRecommendation}
-                canLaunch={canLaunch}
-              />
+              <RecommendationRow key={row.key} row={row} {...handlers} />
             ))}
           </div>
         ) : null}
       </section>
 
-      <section className="view-stack insights-section">
+      <section className="view-stack insights-section insights-catalog">
         <div className="section-title-row insights-section-heading">
           <div>
-            <span className="section-eyebrow">Reusable improvements</span>
-            <h2>Set up for future runs</h2>
-            <p>Project practices your coding agents can use in every session.</p>
+            <span className="section-eyebrow">Not from your session logs</span>
+            <h2>Setup ideas</h2>
+            <p>
+              General suggestions that apply to any project. Decant did not derive them from your
+              archive.
+            </p>
           </div>
         </div>
         {catalogGroups.map(([category, items]) => (
           <div className="catalog-group" key={category}>
             <div className="catalog-group-heading">
               <h3>{category}</h3>
-              <span>{formatInt(items.length)}</span>
+              <span>
+                {formatInt(items.length)} {items.length === 1 ? "idea" : "ideas"}
+              </span>
             </div>
             <div className="signal-list">
               {items.map((row) => (
-                <RecommendationRow
-                  key={row.key}
-                  pending={pending}
-                  row={row}
-                  onComplete={completeRecommendation}
-                  canLaunch={canLaunch}
-                />
+                <RecommendationRow key={row.key} row={row} {...handlers} />
               ))}
             </div>
           </div>
@@ -493,15 +638,16 @@ export function DosuInsightsRow() {
         <span className="signal-icon dosu-row-mark">
           <img alt="" src={dosuOfficialUrl} />
         </span>
-        <div className="dosu-row-title">
+        <div className="signal-row-text">
           <span className="dosu-card-kicker">Optional · Dosu</span>
-          <strong>Make these patterns available to every coding agent</strong>
+          <strong className="signal-row-title">
+            Make these patterns available to every coding agent
+          </strong>
+          <span className="signal-row-rationale">
+            Dosu turns repeated fixes and project conventions into durable context your agents can
+            retrieve when they need it.
+          </span>
         </div>
-        <span className="signal-row-rationale">
-          Dosu turns repeated fixes and project conventions into durable context your agents can
-          retrieve when they need it.
-        </span>
-        <strong className="signal-row-impact">Optional</strong>
         <a
           aria-label="See how Dosu works with your agents (opens in a new tab)"
           className="signal-row-expand dosu-row-action"

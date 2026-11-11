@@ -4445,6 +4445,10 @@ mark {
   padding: 6px 9px;
 }
 
+.insights-section-heading .section-count {
+  color: var(--muted);
+}
+
 .dosu-callout {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -4529,27 +4533,34 @@ mark {
 
 .signal-hero > div {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
+/* --faint is under 4.5:1 on these surfaces, so small labels use --muted. */
 .signal-kicker,
-.promotion-panel > span,
+.signal-label,
 .catalog-group h3 {
-  color: var(--faint);
+  color: var(--muted);
   font: var(--text-mono-xs-medium);
   letter-spacing: var(--text-mono-xs-medium-letter-spacing);
   text-transform: uppercase;
 }
 
 .signal-hero h3 {
+  min-width: 0;
+  flex: 1 1 14rem;
   margin-top: 4px;
   font-size: 20px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .signal-hero-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: 4px 16px;
 }
 
 .signal-hero-title strong {
@@ -4559,7 +4570,7 @@ mark {
   font-variant-numeric: tabular-nums;
 }
 
-.signal-hero p,
+.signal-hero-detail,
 .catalog-card p {
   margin: 6px 0 0;
   color: var(--muted);
@@ -4567,17 +4578,38 @@ mark {
   line-height: 1.45;
 }
 
-.suggestion-block {
-  margin-top: 12px;
-  border-left: 2px solid var(--line);
-  padding-left: 12px;
+.signal-hero-detail {
+  max-width: 76ch;
+  overflow-wrap: anywhere;
 }
 
-.suggestion-block span {
-  color: var(--faint);
-  font: var(--text-mono-xs-medium);
-  letter-spacing: var(--text-mono-xs-medium-letter-spacing);
-  text-transform: uppercase;
+.signal-detail {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.signal-hero .signal-detail {
+  margin-top: 16px;
+}
+
+.signal-note,
+.signal-fact-text {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.signal-fact {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-fact-text {
+  color: var(--fg);
 }
 
 .signal-list {
@@ -4622,63 +4654,100 @@ mark {
 
 .signal-row-summary {
   display: grid;
-  grid-template-columns: 32px minmax(10rem, 0.9fr) minmax(12rem, 1.6fr) minmax(7rem, auto) 70px;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  grid-template-areas: "icon text impact expand";
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
+  width: 100%;
   min-height: 58px;
-  padding: 9px 12px;
+  padding: 12px;
+  text-align: left;
 }
 
-.signal-row .signal-icon {
+button.signal-row-summary {
+  cursor: pointer;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  transition: background-color var(--duration-hover) var(--ease-out);
+}
+
+@media (hover: hover) {
+  button.signal-row-summary:hover {
+    background: color-mix(in oklab, var(--elevated) 55%, transparent);
+  }
+}
+
+button.signal-row-summary:focus-visible {
+  outline-offset: -2px;
+}
+
+.signal-row-summary > .signal-icon {
+  grid-area: icon;
   width: 32px;
   height: 32px;
 }
 
-.signal-row-title {
-  overflow: hidden;
-  border: 0;
-  background: transparent;
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: var(--font-weight-strong);
-  padding: 0;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.signal-row-text {
+  display: grid;
+  grid-area: text;
+  gap: 2px;
+  min-width: 0;
 }
 
-.signal-row-title:hover {
-  color: var(--accent-text);
+.signal-row-title {
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: var(--font-weight-strong);
+  line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .signal-row-rationale {
-  min-width: 0;
-  overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  font-weight: var(--font-weight-regular);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* A closed row previews its detail. Opening the row shows all of it. */
+.signal-row:not(.is-expanded) > button .signal-row-rationale {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .signal-row-impact {
+  grid-area: impact;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
+  line-height: 20px;
   text-align: right;
-  text-transform: none;
   white-space: nowrap;
 }
 
 .signal-row-expand {
   display: inline-flex;
+  grid-area: expand;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  border: 0;
-  background: transparent;
   color: var(--muted);
   font-size: 12px;
-  padding: 6px 0;
+  line-height: 20px;
+}
+
+.signal-row.is-expanded .signal-row-expand {
+  color: var(--fg);
+}
+
+button.signal-row-summary:hover .signal-row-expand {
+  color: var(--fg);
 }
 
 .signal-row-expand svg {
@@ -4692,31 +4761,11 @@ mark {
   padding: 16px 18px 18px 56px;
 }
 
-.signal-row-detail > p {
-  max-width: 76ch;
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.signal-row-detail > .signal-row-evidence {
-  display: grid;
-  gap: 3px;
-  margin-top: 12px;
-}
-
-.signal-row-evidence strong {
-  color: var(--faint);
-  font: var(--text-mono-xs-medium);
-  letter-spacing: var(--text-mono-xs-medium-letter-spacing);
-  text-transform: uppercase;
-}
-
 .promotion-panel {
-  margin-top: 16px;
+  display: grid;
+  gap: 6px;
   border-top: 1px solid var(--line);
-  padding-top: 12px;
+  padding-top: 14px;
 }
 
 .promotion-panel.is-compact {
@@ -4725,24 +4774,105 @@ mark {
 
 .promotion-panel dl {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 18px;
-  margin: 8px 0 0;
+  gap: 6px;
+  margin: 4px 0 0;
 }
 
-.promotion-panel.is-compact dl {
+.promotion-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+.promotion-panel.is-compact .promotion-row {
   grid-template-columns: 1fr;
 }
 
+.promotion-panel dt,
+.promotion-panel dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .promotion-panel dt {
-  color: var(--faint);
-  font-size: 12px;
-  font-weight: var(--font-weight-strong);
+  color: var(--muted);
 }
 
 .promotion-panel dd {
-  margin: 2px 0 0;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.signal-prompt-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.signal-prompt {
+  min-width: 0;
+}
+
+/* The row's own divider already separates the first block from the summary. */
+.signal-detail > :first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.signal-prompt-toggle {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  padding-right: 6px;
+}
+
+.signal-prompt-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.signal-prompt-chevron {
   color: var(--muted);
+  font-size: 14px;
+  transition: transform var(--duration-hover) var(--ease-out);
+}
+
+.signal-prompt[open] .signal-prompt-chevron {
+  transform: rotate(90deg);
+}
+
+.signal-prompt-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-regular);
+}
+
+.signal-prompt-text {
+  max-height: none;
+  margin: 6px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  color: var(--fg);
+  line-height: 1.55;
+  padding: 12px 14px;
+}
+
+.signal-prompt-command {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -4750,8 +4880,11 @@ mark {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-top: 16px;
+  gap: 8px 12px;
+}
+
+.recommendation-actions :is(.primary-button, .secondary-button) {
+  min-height: 32px;
 }
 
 .overflow-menu {
@@ -4868,9 +5001,19 @@ mark {
 }
 
 .catalog-group-heading > span {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Setup ideas are not measured, so they sit apart and off the card surface. */
+.insights-catalog {
+  border-top: 1px solid var(--line);
+  padding-top: 28px;
+}
+
+.insights-catalog .catalog-group .signal-list {
+  background: transparent;
 }
 
 .insights-history-heading {
@@ -4901,19 +5044,9 @@ mark {
   border-bottom: 0;
 }
 
-.dosu-row-title {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.dosu-row-title strong {
-  display: block;
-  overflow: hidden;
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: var(--font-weight-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dosu-insights-row .signal-row-summary {
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-areas: "icon text expand";
 }
 
 .dosu-row-mark img {
@@ -4923,17 +5056,19 @@ mark {
 
 .dosu-card-kicker {
   display: block;
-  margin-bottom: 3px;
-  color: var(--faint);
+  color: var(--muted);
   font: var(--text-mono-xs-medium);
   letter-spacing: var(--text-mono-xs-medium-letter-spacing);
   text-transform: uppercase;
 }
 
 .dosu-row-action {
+  min-height: 30px;
   justify-self: end;
+  border-radius: var(--radius-sm);
   color: var(--fg);
   font-weight: var(--font-weight-strong);
+  padding: 0 4px;
   text-decoration: none;
 }
 
@@ -4962,6 +5097,32 @@ mark {
 .catalog-card .recommendation-actions {
   margin-top: 16px;
   padding-top: 16px;
+}
+
+/* The list does not clip, so end rows carry its corner for hover and focus. */
+.signal-row:first-child > .signal-row-summary {
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+}
+
+.signal-row:last-child:not(.is-expanded) > .signal-row-summary,
+.signal-row:last-child > .signal-row-detail {
+  border-bottom-right-radius: var(--radius-xl);
+  border-bottom-left-radius: var(--radius-xl);
+}
+
+/* A finger needs 44px. Pointer rows keep the denser controls used elsewhere. */
+@media (pointer: coarse), (max-width: 767px) {
+  .recommendation-actions :is(.primary-button, .secondary-button),
+  .signal-prompt-toggle,
+  .dosu-row-action {
+    min-height: 44px;
+  }
+
+  .recommendation-actions .overflow-menu > summary {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 /* ===========================================================================
@@ -6288,14 +6449,6 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .signal-row-summary {
-    grid-template-columns: 32px minmax(0, 1fr) minmax(7rem, auto) 64px;
-  }
-
-  .signal-row-rationale {
-    display: none;
-  }
-
   .implemented-list {
     grid-template-columns: 1fr;
   }
@@ -6422,21 +6575,51 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .signal-hero,
-  .signal-row {
-    align-items: flex-start;
-  }
-
   .signal-hero {
+    flex-direction: column;
+    gap: 12px;
     padding: 16px;
   }
 
-  .dosu-insights-row .signal-row-summary {
-    grid-template-columns: 32px minmax(0, 1fr) 72px;
+  .signal-row-summary {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon text expand"
+      "icon impact expand";
+    align-items: start;
   }
 
-  .dosu-insights-row .signal-row-impact {
+  .signal-row-impact {
+    justify-self: start;
+  }
+
+  button.signal-row-summary .signal-row-expand > span {
     display: none;
+  }
+
+  .signal-row-expand svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .signal-row-detail {
+    padding: 14px 12px 16px;
+  }
+
+  .promotion-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dosu-insights-row .signal-row-summary {
+    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-areas:
+      "icon text"
+      "icon expand";
+  }
+
+  .dosu-row-action {
+    justify-self: start;
+    padding: 0;
   }
 
   .overflow-menu-popover {

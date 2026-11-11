@@ -1,13 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
-import {
-  ARCHIVE_DIR_MODE,
-  closeDb,
-  openDb,
-  optimizeLongLivedConnection,
-  reloadPlannerStatistics,
-} from "./db.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb, optimizeLongLivedConnection } from "./db.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { UI_ROUTE_PATHS } from "./route-paths.ts";
@@ -109,7 +103,9 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     // reread them, so on a first run it would plan every request without any.
     onCompleted: (report) => {
       if (db != null && report.ingested > 0) {
-        reloadPlannerStatistics(db);
+        // The reread takes no write lock, so a writer that is still busy cannot
+        // make it skip while the statistics are marked as loaded.
+        rereadPlannerStatistics(db);
         readPool?.reloadStatistics();
         readerStatistics?.markLoaded();
       }

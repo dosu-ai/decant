@@ -136,6 +136,26 @@ describe("reader statistics", () => {
     };
   }
 
+  test("a reload that throws is tried again at the next update", () => {
+    let stored = "";
+    let fail = true;
+    let reloads = 0;
+    const statistics = new ReaderStatistics({
+      stored: () => stored,
+      reload: () => {
+        if (fail) {
+          throw new Error("worker unavailable");
+        }
+        reloads += 1;
+      },
+    });
+    stored = "first refresh";
+    expect(() => statistics.onProgress(progress(26))).toThrow("worker unavailable");
+    fail = false;
+    statistics.onProgress(progress(27));
+    expect(reloads).toBe(1);
+  });
+
   test("reloads once the sync has stored statistics the readers lack", () => {
     const { statistics, reloads, store } = tracker();
     statistics.onProgress(progress(0));

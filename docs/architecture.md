@@ -122,8 +122,8 @@ free. Sync also runs `PRAGMA optimize` once more after the ingest loop.
 A connection reads statistics only when it loads the schema, so it does not
 see rows another connection writes. The serve connection runs
 `PRAGMA optimize=0x10002` when it opens, and after each worker sync that
-ingested sessions it runs `ANALYZE sqlite_schema` to load the statistics that
-the worker wrote. Both steps skip a read-only archive or a write lock held past
+ingested sessions it rereads its schema to load the statistics that the worker
+wrote. The optimize step skips a read-only archive or a write lock held past
 the busy timeout, because statistics only affect query speed.
 
 A first sync can run for minutes while the dashboard polls, so serve's

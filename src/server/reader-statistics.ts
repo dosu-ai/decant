@@ -74,9 +74,10 @@ export class ReaderStatistics {
     if (stored === this.#loaded) {
       return;
     }
+    // A reload that throws leaves both unset, so the next update tries again.
+    this.#options.reload();
     this.#loaded = stored;
     this.#nextReloadAt = Math.max(ingested * 2, ingested + MIN_RELOAD_GAP);
-    this.#options.reload();
   }
 
   /** Call after every reader has loaded the stored statistics some other way. */

@@ -126,6 +126,17 @@ ingested sessions it runs `ANALYZE sqlite_schema` to load the statistics that
 the worker wrote. Both steps skip a read-only archive or a write lock held past
 the busy timeout, because statistics only affect query speed.
 
+A first sync can run for minutes while the dashboard polls, so serve's
+connections also load statistics during a sync. On each progress update that
+reports more ingested sessions, serve compares the archive's `sqlite_stat1`
+rows with the ones its connections loaded. When they differ, the serve
+connection rereads its schema with `PRAGMA writable_schema = RESET`, which
+needs no write lock while the worker is writing, and each read worker reopens
+its connection. The next reload waits until the sync has ingested twice as many
+sessions, so a sync of any size reopens the read connections only a few times.
+A sync into an archive whose statistics are current reloads nothing until it
+ends.
+
 FTS5 runs its own SQL against its shadow tables, so these statistics steer
 full-text maintenance too. An analysis of an empty or near-empty index records
 a row count for `block_fts_data` at which SQLite scans the table to delete a
@@ -174,7 +185,8 @@ server_busy`, which the UI retries. A worker serializes its JSON before
 replying, so the request thread receives one string. Without a pool, as in tests that call `handleRequest` directly, the
 same operations run inline. A read-only connection cannot reload planner
 statistics with `ANALYZE sqlite_schema`, so after a sync that ingested
-sessions each worker reopens its connection once no read is using it.
+sessions, and when a running sync stores new statistics, each worker reopens
+its connection once no read is using it.
 
 Search filters and ranks every full-text match before keeping a page, so it
 reaches each match's session through `idx_block_id_session` instead of the

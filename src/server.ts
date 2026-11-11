@@ -16,6 +16,11 @@ import { type Db, ensureDerivedMetadata } from "./server/context.ts";
 import { errorResponse, responseForError, serviceStartingResponse } from "./server/http.ts";
 import { resolveTrustedPeers } from "./server/peers.ts";
 import { ReadPool, type ReadPoolOptions } from "./server/read-pool.ts";
+import {
+  ReaderStatistics,
+  rereadPlannerStatistics,
+  storedPlannerStatistics,
+} from "./server/reader-statistics.ts";
 import { handleRequest } from "./server/router.ts";
 import { publishServerEvent } from "./server/sse.ts";
 import {
@@ -94,7 +99,11 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let economics: EconomicsCache | null = null;
   let readPool: ReadPool | null = null;
   let watchHandle: WatchHandle | null = null;
+  let readerStatistics: ReaderStatistics | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
+    // The worker also analyzes the archive every few sessions. A first sync
+    // can run for minutes, so the readers load those statistics while it runs.
+    onProgress: (progress) => readerStatistics?.onProgress(progress),
     // The worker ends each ingesting sync with PRAGMA optimize on its own
     // connection. This connection keeps the statistics it loaded until told to
     // reread them, so on a first run it would plan every request without any.
@@ -102,6 +111,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       if (db != null && report.ingested > 0) {
         reloadPlannerStatistics(db);
         readPool?.reloadStatistics();
+        readerStatistics?.markLoaded();
       }
     },
   });
@@ -199,6 +209,14 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = openDb(options.config.dbPath);
     optimizeLongLivedConnection(db);
+    const archive = db;
+    readerStatistics = new ReaderStatistics({
+      stored: () => storedPlannerStatistics(archive),
+      reload: () => {
+        rereadPlannerStatistics(archive);
+        readPool?.reloadStatistics();
+      },
+    });
     ensureDerivedMetadata(db);
     economics = new EconomicsCache({
       dbPath: options.config.dbPath,
@@ -277,6 +295,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           db = null;
           economics = null;
           readPool = null;
+          readerStatistics = null;
         }
       }
     }

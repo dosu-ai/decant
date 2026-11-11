@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -242,6 +243,20 @@ describe("runCli", () => {
 
     const db = openDb(dbPath);
     db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
+    // A stored row about one project: its key ends in a digest of the root.
+    const projectRoot = (
+      db.query("SELECT COALESCE(root_path, path) AS root FROM project LIMIT 1").get() as {
+        root: string;
+      }
+    ).root;
+    const projectKey = `signal:churn:src/a.ts.p${createHash("sha256")
+      .update(projectRoot, "utf16le")
+      .digest("hex")
+      .slice(0, 16)}`;
+    db.query(
+      `INSERT INTO recommendation(key, kind, title, score, status)
+       VALUES (?1, 'signal', 'reworked', 1, 'open')`,
+    ).run(projectKey);
     db.close();
     const rereadRecommendations = await runCli([
       ...base,
@@ -251,11 +266,19 @@ describe("runCli", () => {
       "all",
     ]);
     expect(rereadRecommendations.code).toBe(0);
-    expect(
-      (JSON.parse(rereadRecommendations.stdout) as { key: string; score: number }[]).find(
-        (rec) => rec.key === "catalog:agents-md",
-      )?.score,
-    ).toBe(12345);
+    const reread = JSON.parse(rereadRecommendations.stdout) as Record<string, unknown>[];
+    expect(reread.find((rec) => rec.key === "catalog:agents-md")).toMatchObject({
+      score: 12345,
+      project_path: null,
+      project_root: null,
+      project_label: null,
+      project_remote: null,
+    });
+    expect(reread.find((rec) => rec.key === projectKey)).toMatchObject({
+      project_path: projectRoot,
+      project_root: projectRoot,
+      project_label: "proj",
+    });
 
     const marked = await runCli([
       ...base,

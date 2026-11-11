@@ -893,6 +893,23 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("ingest-health signal ignores an unreachable project directory", () => {
+    const db = freshDb();
+    for (let i = 0; i < 20; i += 1) {
+      db.query(
+        `INSERT INTO session (tool, source_session_id, source_path, started_at)
+         VALUES ('opencode', ?1, ?2, datetime('now','-1 day'))`,
+      ).run(`s${i}`, `/src/opencode.db#s${i}`);
+      // The transcript format did not change; the directory did not answer.
+      db.query(
+        `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+         VALUES (?1, NULL, 'directory did not answer', NULL, 'unreachable_project_directory', datetime('now'))`,
+      ).run(`/src/opencode.db#s${i}`);
+    }
+    expect(signals(db).filter((rec) => rec.key === "signal:ingest-health")).toEqual([]);
+    db.close();
+  });
+
   test("regenerate is idempotent and preserves implemented state", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);

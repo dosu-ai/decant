@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BoundedFs, createProbeLedger } from "../src/bounded-fs.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { exportAtif } from "../src/export-atif.ts";
 import { sync } from "../src/ingest.ts";
@@ -252,6 +253,31 @@ describe("resolveProjectRemotes", () => {
     } finally {
       closeDb(db);
     }
+  });
+
+  test("keeps a recorded identity when the project directory never answers", () => {
+    const dir = tempDir();
+    const live = repo(join(dir, "live"), origin("git@github.com:acme/live.git"));
+    const stalled = repo(join(dir, "Documents", "app"), origin("git@github.com:acme/app.git"));
+    const gate = new SharedArrayBuffer(4);
+    const fs = new BoundedFs({
+      deadlineMs: 300,
+      ledger: createProbeLedger(),
+      stall: { prefix: join(dir, "Documents"), gate },
+    });
+    const db = tempDb();
+    addProject(db, 1, live, live);
+    addProject(db, 2, stalled, stalled);
+    db.query("UPDATE project SET repo_remote = 'github.com/acme/kept' WHERE id = 2").run();
+
+    expect(resolveRepoRemote(stalled, fs)).toBeNull();
+    resolveProjectRemotes(db, fs);
+    expect(remotes(db)).toEqual({ 1: "github.com/acme/live", 2: "github.com/acme/kept" });
+    closeDb(db);
+
+    // Once the folder answers, the same lookup reads the repository.
+    Atomics.store(new Int32Array(gate), 0, 1);
+    Atomics.notify(new Int32Array(gate), 0);
   });
 
   test("leaves a project of imported ATIF trajectories alone", () => {

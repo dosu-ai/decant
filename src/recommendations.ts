@@ -976,6 +976,7 @@ function abandonedRate(db: Database, visibleSession: string, since: string): Rec
 
 function ingestHealth(db: Database, visibleSession: string, since: string): Recommendation[] {
   // A session is affected when its own transcript or a subagent's has issues.
+  // An unreachable directory says nothing about the transcript format.
   const counts = queryOne<{ affected: number }>(
     db,
     `${SESSION_ROOT_CTE}
@@ -984,7 +985,8 @@ function ingestHealth(db: Database, visibleSession: string, since: string): Reco
        JOIN ingest_issue ii ON ii.source_path = run.source_path
        LEFT JOIN session_root r ON r.id = run.id
        JOIN session s ON s.id = COALESCE(r.root_id, run.id)
-      WHERE ${WINDOW} AND ${topLevelSession(visibleSession)} AND ii.code != 'unparsed_line'`,
+      WHERE ${WINDOW} AND ${topLevelSession(visibleSession)}
+        AND ii.code NOT IN ('unparsed_line', 'unreachable_project_directory')`,
     [since],
   );
   const inWindow = queryOne<{ n: number }>(

@@ -14,6 +14,7 @@ import {
   resolveGitRoot,
   resolveWorktreeRoots,
 } from "../src/worktree.ts";
+import { makeFifo, runProbeChild } from "./stalled-directory.ts";
 
 const tempRoots: string[] = [];
 
@@ -364,6 +365,14 @@ describe("git worktree pointer resolution", () => {
 });
 
 describe("resolveWorktreeRoots", () => {
+  test("does not block on a .git that never answers", () => {
+    const dir = tempDir("decant-worktree-fifo-");
+    makeFifo(join(dir, ".git"));
+    const child = runProbeChild("git-root", [dir]) as { result: { root: unknown } } | null;
+    expect(child).not.toBeNull();
+    expect(child?.result.root).toBeNull();
+  }, 40_000);
+
   test("links intree and external worktrees to roots", () => {
     const db = tempDb();
     db.exec(`

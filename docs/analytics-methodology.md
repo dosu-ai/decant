@@ -677,6 +677,13 @@ type or imperfect tool linkage, are informational format-drift sensors. Both
 are preserved, but informational notices should not be described as data loss
 without inspecting the session's issue details.
 
+`unreachable_project_directory` is informational as well, but it describes this
+machine and not the transcript format: the session's project directory did not
+answer in time, so its OpenCode project configs were not read and MCP servers
+configured only there are not recognized. It does not count toward the ingest
+health recommendation. See
+[Project directories that do not answer](data-lifecycle.md#project-directories-that-do-not-answer).
+
 For the machine-readable field definitions, see the
 [OpenAPI contract](api/openapi.yaml). For practical queries, see
 [Local API recipes](api/recipes.md).

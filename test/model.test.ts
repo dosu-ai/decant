@@ -47,6 +47,7 @@ describe("model wire strings", () => {
       "orphan_tool_result",
       "duplicate_tool_use_id",
       "duplicate_tool_result",
+      "unreachable_project_directory",
     ]);
   });
 

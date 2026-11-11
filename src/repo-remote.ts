@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { boundedFs, type ProbeFs } from "./bounded-fs.ts";
 import { withImmediateTransaction } from "./db.ts";
 
 // A project's repository identity, read from the Git config on disk. Decant
@@ -98,57 +98,18 @@ export function remoteUrlFromGitConfig(config: string): string | null {
   return urls.size === 1 ? ([...urls.values()][0] ?? null) : null;
 }
 
-/** The file's text, or null when it is not a regular file, cannot be read, or
- * is over the cap. Everything is decided on the open descriptor, so the file
- * cannot be swapped between a check and the read, and the read itself is
- * bounded, so a file that grows afterward is still refused. */
-function readSmallFile(path: string): string | null {
-  let fd: number;
-  try {
-    // Non-blocking, so a FIFO planted at the path cannot hold the open.
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  } catch {
-    return null;
-  }
-  try {
-    if (!fstatSync(fd).isFile()) {
-      return null;
-    }
-    const buffer = Buffer.allocUnsafe(MAX_GIT_FILE_BYTES + 1);
-    let length = 0;
-    for (;;) {
-      const read = readSync(fd, buffer, length, buffer.length - length, null);
-      if (read === 0) {
-        return buffer.toString("utf8", 0, length);
-      }
-      length += read;
-      if (length > MAX_GIT_FILE_BYTES) {
-        return null;
-      }
-    }
-  } catch {
-    return null;
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
+/** Git's files in a project directory, read under a deadline. */
+type GitFs = Pick<ProbeFs, "readSmallFile" | "isDirectory">;
 
 /** The Git directory `dir` itself owns, if it is the top of a working tree. A
  * worktree or submodule has a `.git` file that points at it. */
-function gitDirOf(dir: string): string | null {
+function gitDirOf(dir: string, fs: GitFs): string | null {
   const dotgit = join(dir, ".git");
-  if (isDirectory(dotgit)) {
+  if (fs.isDirectory(dotgit)) {
     return dotgit;
   }
-  const target = readSmallFile(dotgit)
+  const target = fs
+    .readSmallFile(dotgit, MAX_GIT_FILE_BYTES)
     ?.split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.startsWith("gitdir:"))
@@ -158,22 +119,23 @@ function gitDirOf(dir: string): string | null {
 }
 
 /** The repository identity of the working tree that holds `dir`, or null when
- * `dir` is gone, is not inside a working tree, or its repository has no usable
- * remote. A directory that no longer exists is never looked up through its
- * parents: they would answer for some other repository. */
-export function resolveRepoRemote(dir: string): string | null {
-  if (!isAbsolute(dir) || !isDirectory(dir)) {
+ * `dir` is gone or does not answer in time, is not inside a working tree, or
+ * its repository has no usable remote. A directory that no longer exists is
+ * never looked up through its parents: they would answer for some other
+ * repository. */
+export function resolveRepoRemote(dir: string, fs: GitFs = boundedFs): string | null {
+  if (!isAbsolute(dir) || !fs.isDirectory(dir)) {
     return null;
   }
   let current = dir;
   for (;;) {
-    const gitDir = gitDirOf(current);
+    const gitDir = gitDirOf(current, fs);
     if (gitDir != null) {
       // A linked worktree keeps the shared config in the directory its
       // `commondir` file names.
-      const common = readSmallFile(join(gitDir, "commondir"))?.trim();
+      const common = fs.readSmallFile(join(gitDir, "commondir"), MAX_GIT_FILE_BYTES)?.trim();
       const configDir = common == null || common === "" ? gitDir : resolve(gitDir, common);
-      const config = readSmallFile(join(configDir, "config"));
+      const config = fs.readSmallFile(join(configDir, "config"), MAX_GIT_FILE_BYTES);
       const url = config == null ? null : remoteUrlFromGitConfig(config);
       return url == null ? null : normalizeRemoteUrl(url);
     }
@@ -198,7 +160,7 @@ interface ProjectRemoteRow {
  * alone, so an identity outlives the checkout it was read from. Projects that
  * hold only imported ATIF trajectories are skipped: their path is a job
  * directory, and the repository around it did not produce the sessions. */
-export function resolveProjectRemotes(db: Database): void {
+export function resolveProjectRemotes(db: Database, fs: GitFs = boundedFs): void {
   const statement = db.prepare(
     `SELECT p.id, p.path, p.root_path AS rootPath, p.repo_remote AS repoRemote
        FROM project p
@@ -214,7 +176,7 @@ export function resolveProjectRemotes(db: Database): void {
   const resolved = new Map<string, string | null>();
   const lookup = (dir: string): string | null => {
     if (!resolved.has(dir)) {
-      resolved.set(dir, resolveRepoRemote(dir));
+      resolved.set(dir, resolveRepoRemote(dir, fs));
     }
     return resolved.get(dir) ?? null;
   };

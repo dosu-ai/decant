@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { boundedFs, type ProbeFs } from "./bounded-fs.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { compareCodePoints } from "./order.ts";
 
@@ -212,16 +212,17 @@ function stripCodename(tool: string, leaf: string): string {
   return leaf;
 }
 
-export function resolveGitRoot(dir: string): Resolution | null {
+export function resolveGitRoot(
+  dir: string,
+  fs: Pick<ProbeFs, "readText"> = boundedFs,
+): Resolution | null {
   const dotgit = `${dir}/.git`;
   // Read unconditionally instead of stat-then-read: a regular repo's `.git`
-  // directory throws EISDIR and an absent one ENOENT, both meaning "not a
-  // worktree leaf", with no window for the path to change between check and
-  // use.
-  let raw: string;
-  try {
-    raw = readFileSync(dotgit, "utf8");
-  } catch {
+  // directory fails with EISDIR and an absent one with ENOENT, both meaning
+  // "not a worktree leaf", with no window for the path to change between
+  // check and use. A directory that does not answer in time reads the same.
+  const raw = fs.readText(dotgit);
+  if (raw == null) {
     return null;
   }
   const target = raw
@@ -267,7 +268,10 @@ export function inferTool(path: string): string {
   return "git";
 }
 
-export function resolveWorktreeRoots(db: Database): void {
+export function resolveWorktreeRoots(
+  db: Database,
+  fs: Pick<ProbeFs, "readText"> = boundedFs,
+): void {
   const projectStatement = db.prepare(
     `SELECT p.id, p.path, p.is_worktree AS isWorktree, p.root_path AS rootPath,
               p.root_source AS source, p.worktree_label AS worktreeLabel,
@@ -300,7 +304,7 @@ export function resolveWorktreeRoots(db: Database): void {
       noteRoot(project.rootPath ?? project.path, project.sessions, project.lastSeen);
       continue;
     }
-    const git = resolveGitRoot(project.path);
+    const git = resolveGitRoot(project.path, fs);
     if (git != null) {
       noteRoot(git.rootPath, project.sessions, project.lastSeen);
       writes.push({ id: project.id, resolution: git });

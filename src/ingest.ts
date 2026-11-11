@@ -652,6 +652,10 @@ type SessionSyncOutcome =
  * the catalog re-derives it once instead of skipping it on an unchanged key. */
 const WITHOUT_CATALOG = "|no-catalog";
 
+/** Appended to the change key of a session whose project directory did not
+ * answer in time, so it is re-derived once the directory can be read. */
+const WITHOUT_PROJECT_CONFIG = "|no-project-config";
+
 /** A session's change key: its database fingerprint plus, when any MCP server
  * applies to it, a digest of those server names. MCP names decide how its
  * tool calls are classified, so a config edit that changes the set for its
@@ -802,8 +806,11 @@ function syncOpenCodeSession(
     [file.path],
   );
   const current = prior != null && prior.ingest_revision === INGEST_PIPELINE_REVISION;
-  const mcpServerNames = mcpServers.forDirectory(ref.directory);
-  const changeKey = openCodeChangeKey(ref.fingerprint, mcpServerNames);
+  const lookup = mcpServers.lookup(ref.directory);
+  const mcpServerNames = lookup.names;
+  const changeKey = `${openCodeChangeKey(ref.fingerprint, mcpServerNames)}${
+    lookup.unreachable ? WITHOUT_PROJECT_CONFIG : ""
+  }`;
   if (current && prior.hash === changeKey) {
     return { kind: "skipped" };
   }
@@ -836,6 +843,15 @@ function syncOpenCodeSession(
     loaded.format === "v1"
       ? parseOpenCodeLegacySession(loaded.session, loaded.messages, loaded.parts, context)
       : parseOpenCodeSession(loaded.session, loaded.messages, context, loaded.legacy);
+  if (lookup.unreachable) {
+    parsed.issues.push({
+      code: "unreachable_project_directory",
+      lineNo: null,
+      error:
+        "The project directory did not answer in time, so its OpenCode config files were not read. MCP servers configured only there are not recognized.",
+      rawLine: null,
+    });
+  }
   const prepared: Prepared = {
     file,
     lineCount: loaded.messages.length,

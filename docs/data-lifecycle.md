@@ -572,6 +572,37 @@ and when Decant cannot see the directory at all, as in a container that mounts
 only the source logs. Projects that hold only imported ATIF trajectories are
 skipped, because their path is a job directory, not the place the agent ran.
 
+## Project directories that do not answer
+
+Three lookups read files in directories that session logs name: OpenCode's
+project configs, the `.git` file that links a worktree to its repository, and
+the Git config that names the remote. A logged directory can be in a place
+where a read never returns. On macOS that is a protected folder such as
+Documents, Desktop, or Downloads while its permission prompt is unanswered,
+which a background service may never get answered. A network mount that has
+gone away behaves the same way.
+
+Decant makes these reads on a helper thread and waits up to 2 seconds for each
+one. When a read runs out of time, Decant looks for the highest folder on that
+path that also does not answer, and skips that folder and everything under it
+without waiting again. A sync waits about 4 seconds for each such folder, once
+per process, so `decant serve` and `decant watch` pay it once and later syncs
+do not. Each `decant sync` run is its own process and waits again. Decant
+remembers at most 8 such folders at a time. With all 8 in use it skips these
+lookups for every directory until one of them answers.
+
+A skipped directory is handled like one that cannot be read. Its sessions and
+their content are ingested as usual, without project MCP server names, a
+worktree link, or a remote. A remote that was already recorded stays. An
+OpenCode session ingested this way carries an `unreachable_project_directory`
+diagnostic, which `decant sync --json` counts in `issues_by_code` and the
+session's issue list shows. `decant sync` and `decant watch` also log a
+`decant.ingest.directory_unreachable` warning that names the folder.
+
+The skip ends when the stalled read returns, for example after you allow access
+in System Settings or the mount comes back. The next sync reads the directory
+again and re-derives the affected OpenCode sessions once.
+
 ## Automatic and explicit sync
 
 Read commands normally sync first. `decant serve` performs a startup sync and

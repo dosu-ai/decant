@@ -71,15 +71,20 @@ let state, reply, stall;
 function readText(path) {
   const fd = fs.openSync(path, fs.constants.O_RDONLY);
   try {
-    const chunks = [];
+    // One buffer that doubles, so memory follows the bytes read however
+    // small each read is.
+    let buffer = Buffer.allocUnsafe(65536);
     let length = 0;
     for (;;) {
-      const chunk = Buffer.allocUnsafe(65536);
-      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
-      if (read === 0) return Buffer.concat(chunks, length);
+      if (length === buffer.length) {
+        const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, TEXT_MAX + 1));
+        buffer.copy(grown, 0, 0, length);
+        buffer = grown;
+      }
+      const read = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) return buffer.subarray(0, length);
       length += read;
       if (length > TEXT_MAX) return null;
-      chunks.push(chunk.subarray(0, read));
     }
   } finally {
     fs.closeSync(fd);

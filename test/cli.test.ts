@@ -291,7 +291,7 @@ describe("runCli", () => {
     expect(missing).toMatchObject({
       code: 1,
       stdout: "",
-      stderr: "recommendation not found: catalog:no-such-row\n",
+      stderr: "error: recommendation not found: catalog:no-such-row\n",
     });
   });
 

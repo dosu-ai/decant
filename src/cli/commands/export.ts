@@ -5,7 +5,7 @@ import { exportTrajectory, toMarkdown } from "../../export.ts";
 import { exportAtif } from "../../export-atif.ts";
 import { getSession, listSessions } from "../../query.ts";
 import type { CliContext } from "../context.ts";
-import { optionalInteger } from "../parse.ts";
+import { resolveSessionRef } from "../session-ref.ts";
 
 export function registerExportCommand(ctx: CliContext): void {
   const { io } = ctx;
@@ -13,7 +13,7 @@ export function registerExportCommand(ctx: CliContext): void {
   ctx.program
     .command("export")
     .description("export a session to Markdown, JSON, a trajectory-v1 record file, or ATIF")
-    .argument("[id]", "session id", optionalInteger)
+    .argument("[id]", "session id, or the id the source tool gave the session")
     .option("--all", "export every session")
     .option("--include-subagents", "with --all, also export subagent sessions")
     // Named --as, not --format, to match `distill script --as` rather than
@@ -25,7 +25,7 @@ export function registerExportCommand(ctx: CliContext): void {
     .option("--mirror <dir>", "keep a folder of standalone ATIF documents, one per session")
     .action(
       (
-        id: number | undefined,
+        ref: string | undefined,
         commandOptions: {
           all?: boolean;
           includeSubagents?: boolean;
@@ -41,7 +41,7 @@ export function registerExportCommand(ctx: CliContext): void {
               io.writeErr("error: --mirror writes ATIF only\n");
               return 2;
             }
-            if (id != null || commandOptions.all === true || commandOptions.out != null) {
+            if (ref != null || commandOptions.all === true || commandOptions.out != null) {
               io.writeErr("error: --mirror takes every session and its own folder\n");
               return 2;
             }
@@ -176,10 +176,16 @@ export function registerExportCommand(ctx: CliContext): void {
                 return 0;
               }
 
-              if (id == null) {
+              if (ref == null) {
                 io.writeErr("error: provide a session id, or --all --out <dir>\n");
                 return 2;
               }
+              const resolved = resolveSessionRef(archive.db, ref);
+              if (!resolved.ok) {
+                io.writeErr(`error: ${resolved.message}\n`);
+                return resolved.code;
+              }
+              const id = resolved.id;
               const rendered = render(id);
               if ("error" in rendered) {
                 io.writeErr(`error: ${rendered.error}\n`);

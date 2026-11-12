@@ -6,12 +6,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { BoundedFs, createProbeLedger } from "../src/bounded-fs.ts";
 import {
   type OpenCodeConfigFs,
   OpenCodeMcpServerNames,
@@ -29,9 +31,15 @@ import {
   buildOpenCodeV1FixtureDb,
   opencodeFixtureSql,
 } from "./opencode-fixture.ts";
+import { makeFifo, runProbeChild } from "./stalled-directory.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-store-test-"));
-afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+const ownTempDirs: string[] = [];
+afterAll(() => {
+  for (const dir of [workDir, ...ownTempDirs]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 let counter = 0;
 function freshPath(name = "opencode.db"): string {
@@ -887,4 +895,53 @@ describe("OpenCode config lookup", () => {
     expect(names.forDirectory("/home/dev/.config/opencode")).toEqual(["dosu"]);
     expect(fs.reads).toEqual([global, "/home/dev/.config/opencode/opencode.jsonc"]);
   });
+
+  /** Outside `workDir`, whose own config files would join the walk. */
+  function ownTempDir(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "decant-opencode-stalled-")));
+    ownTempDirs.push(dir);
+    return dir;
+  }
+
+  test("skips project configs in a folder that never answers, and says so", () => {
+    const root = ownTempDir();
+    const stalled = join(root, "Documents");
+    mkdirSync(join(stalled, "one"), { recursive: true });
+    mkdirSync(join(stalled, "two"), { recursive: true });
+    mkdirSync(join(root, "code"), { recursive: true });
+    writeFileSync(join(root, "opencode.json"), JSON.stringify(servers("above")));
+    writeFileSync(join(stalled, "one", "opencode.json"), JSON.stringify(servers("hidden")));
+    writeFileSync(join(root, "code", "opencode.json"), JSON.stringify(servers("github")));
+    const gate = new SharedArrayBuffer(4);
+    const fs = new BoundedFs({
+      deadlineMs: 300,
+      ledger: createProbeLedger(),
+      stall: { prefix: stalled, gate },
+    });
+    const names = new OpenCodeMcpServerNames({}, fs);
+
+    // Configs above the stalled folder still apply.
+    expect(names.lookup(join(stalled, "one"))).toEqual({ names: ["above"], unreachable: true });
+    // A second directory in the same folder costs no further wait.
+    const started = performance.now();
+    expect(names.lookup(join(stalled, "two"))).toEqual({ names: ["above"], unreachable: true });
+    expect(performance.now() - started).toBeLessThan(150);
+    // A readable directory reads exactly as it does without a deadline.
+    expect(names.lookup(join(root, "code"))).toEqual({
+      names: ["above", "github"],
+      unreachable: false,
+    });
+
+    // Let the two stalled helper threads end.
+    Atomics.store(new Int32Array(gate), 0, 1);
+    Atomics.notify(new Int32Array(gate), 0);
+  });
+
+  test("does not block on a config file that never answers", () => {
+    const dir = ownTempDir();
+    makeFifo(join(dir, "opencode.json"));
+    writeFileSync(join(dir, "opencode.jsonc"), JSON.stringify(servers("exa")));
+    const child = runProbeChild("mcp-names", [dir]) as { result: unknown } | null;
+    expect(child?.result).toEqual({ names: ["exa"], unreachable: true });
+  }, 40_000);
 });

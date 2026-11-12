@@ -7,8 +7,9 @@
 // writes or checkpoints, and the OpenCode CLI is never started.
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { boundedFs } from "../bounded-fs.ts";
 import { asInteger, asString, get, isObject } from "../json.ts";
 import type { Json } from "../model.ts";
 import { compareCodePoints } from "../order.ts";
@@ -532,25 +533,20 @@ export interface OpenCodeConfigFs {
   /** The absolute path with symlinks resolved, or just made absolute when it
    * does not exist (OpenCode's `FSUtil.resolve`). */
   realPath(path: string): string;
+  /** Calls so far that got no answer because their location stalls. */
+  readonly unanswered?: number;
 }
 
-export const nodeOpenCodeConfigFs: OpenCodeConfigFs = {
-  readText(path) {
-    try {
-      return readFileSync(path, "utf8");
-    } catch {
-      return null;
-    }
-  },
-  realPath(path) {
-    const absolute = resolve(path);
-    try {
-      return realpathSync.native(absolute);
-    } catch {
-      return absolute;
-    }
-  },
-};
+// A session's directory comes from its log, so every call has a deadline.
+export const nodeOpenCodeConfigFs: OpenCodeConfigFs = boundedFs;
+
+/** The MCP server names for one session directory. */
+export interface OpenCodeMcpLookup {
+  names: readonly string[];
+  /** True when a location on the way stalled, so project configs there were
+   * not read and `names` may be short. */
+  unreachable: boolean;
+}
 
 /** MCP server names from one OpenCode config file (`opencode.json` or the
  * JSONC `opencode.jsonc`): `mcp.servers.<name>` plus the legacy `mcp.<name>`
@@ -635,8 +631,8 @@ export class OpenCodeMcpServerNames {
   readonly #global: readonly string[];
   readonly #globalDir: string | null;
   readonly #globalFiles: ReadonlySet<string>;
-  readonly #byAncestor = new Map<string, readonly string[]>();
-  readonly #byDirectory = new Map<string, readonly string[]>();
+  readonly #byAncestor = new Map<string, OpenCodeMcpLookup>();
+  readonly #byDirectory = new Map<string, OpenCodeMcpLookup>();
 
   constructor(sources: OpenCodeConfigSources = {}, fs: OpenCodeConfigFs = nodeOpenCodeConfigFs) {
     this.#fs = fs;
@@ -651,28 +647,37 @@ export class OpenCodeMcpServerNames {
   }
 
   forDirectory(directory: string | null): readonly string[] {
-    // A relative directory would resolve against Decant's own cwd.
-    if (directory == null || !isAbsolute(directory)) {
-      return this.#global;
-    }
-    let names = this.#byDirectory.get(directory);
-    if (names == null) {
-      names = this.#walk(directory);
-      this.#byDirectory.set(directory, names);
-    }
-    return names;
+    return this.lookup(directory).names;
   }
 
-  #walk(directory: string): readonly string[] {
+  lookup(directory: string | null): OpenCodeMcpLookup {
+    // A relative directory would resolve against Decant's own cwd.
+    if (directory == null || !isAbsolute(directory)) {
+      return { names: this.#global, unreachable: false };
+    }
+    let found = this.#byDirectory.get(directory);
+    if (found == null) {
+      found = this.#walk(directory);
+      this.#byDirectory.set(directory, found);
+    }
+    return found;
+  }
+
+  #walk(directory: string): OpenCodeMcpLookup {
+    const before = this.#fs.unanswered ?? 0;
+    const real = this.#fs.realPath(directory);
+    let unreachable = (this.#fs.unanswered ?? 0) !== before;
     // OpenCode reads no project configs for a session run from inside its
     // global config directory.
-    if (this.#globalDir != null && this.#fs.realPath(directory) === this.#globalDir) {
-      return this.#global;
+    if (this.#globalDir != null && real === this.#globalDir) {
+      return { names: this.#global, unreachable };
     }
     const lists: (readonly string[])[] = [this.#global];
     let current = resolve(directory);
     while (true) {
-      lists.push(this.#ancestor(current));
+      const ancestor = this.#ancestor(current);
+      lists.push(ancestor.names);
+      unreachable ||= ancestor.unreachable;
       const parent = dirname(current);
       if (parent === current) {
         break;
@@ -680,13 +685,14 @@ export class OpenCodeMcpServerNames {
       current = parent;
     }
     const names = mergeNames(lists);
-    return names.length === this.#global.length ? this.#global : names;
+    return { names: names.length === this.#global.length ? this.#global : names, unreachable };
   }
 
-  #ancestor(directory: string): readonly string[] {
-    let names = this.#byAncestor.get(directory);
-    if (names == null) {
+  #ancestor(directory: string): OpenCodeMcpLookup {
+    let found = this.#byAncestor.get(directory);
+    if (found == null) {
       const fs = this.#fs;
+      const before = fs.unanswered ?? 0;
       const real = fs.realPath(directory);
       const paths = OPENCODE_CONFIG_NAMES.map((name) => join(real, name)).filter(
         (path) => !this.#globalFiles.has(fs.realPath(path)),
@@ -695,10 +701,11 @@ export class OpenCodeMcpServerNames {
       if (projectDir !== this.#globalDir) {
         paths.push(...OPENCODE_CONFIG_NAMES.map((name) => join(projectDir, name)));
       }
-      names = readAll(paths, fs);
-      this.#byAncestor.set(directory, names);
+      const names = readAll(paths, fs);
+      found = { names, unreachable: (fs.unanswered ?? 0) !== before };
+      this.#byAncestor.set(directory, found);
     }
-    return names;
+    return found;
   }
 }
 

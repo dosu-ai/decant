@@ -207,13 +207,15 @@ export interface NormalizedSession {
 
 /** Wire strings stored in ingest_issue.code — never reworded (same contract
  * as the const tuples above). `unparsed_line` is the only data-loss code;
- * the rest are informational sensors. */
+ * the rest are informational sensors. `unreachable_project_directory` reports
+ * this machine's filesystem, not the transcript format. */
 export const INGEST_ISSUE_CODES = [
   "unparsed_line",
   "unknown_record_type",
   "orphan_tool_result",
   "duplicate_tool_use_id",
   "duplicate_tool_result",
+  "unreachable_project_directory",
 ] as const;
 export type IngestIssueCode = (typeof INGEST_ISSUE_CODES)[number];
 

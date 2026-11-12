@@ -88,6 +88,15 @@ sync re-derives that session. Sessions whose names did not change are skipped
 as usual. Run `sync`, `watch`, and `serve` with the same `OPENCODE_CONFIG` and
 `DECANT_OPENCODE_CONFIG` values, or each switch re-derives those sessions.
 
+A session's directory comes from its log, so it can be in a place that does not
+answer, such as a folder macOS protects while its permission prompt is
+unanswered, or a network mount that has gone away. Decant waits up to 2 seconds
+for such a place and then skips it. The session is still ingested with the
+names from the global configs and from the directories above the skipped one,
+and it carries an `unreachable_project_directory` diagnostic. The next sync
+after the directory answers again re-derives the session. See
+[Project directories that do not answer](data-lifecycle.md#project-directories-that-do-not-answer).
+
 ### Context windows
 
 Decant takes context windows from the models.dev catalog that OpenCode caches.

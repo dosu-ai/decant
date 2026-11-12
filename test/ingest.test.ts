@@ -29,6 +29,7 @@ import {
   materializeMissingReasoningEfforts,
   resolveSubagentParents,
   type SourceFile,
+  type SyncReport,
   seedModelPricing,
   sync,
   upsertSession,
@@ -53,6 +54,7 @@ import {
   opencodeFixtureSql,
 } from "./opencode-fixture.ts";
 import { syntheticOpenCodeSession } from "./opencode-session.ts";
+import { makeFifo, runProbeChild } from "./stalled-directory.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
@@ -3003,6 +3005,60 @@ describe("OpenCode ingest", () => {
     expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
     closeDb(db);
   });
+
+  test("finishes when a session's project directory never answers, and records why", () => {
+    const { dir, opencodeDir } = opencodeCase();
+    const project = join(dir, "project");
+    const empty = join(dir, "empty");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(empty, { recursive: true });
+    const opencodeDb = join(opencodeDir, "opencode.db");
+    buildOpenCodeFixtureDb(opencodeDb, ["mcp.sql"]);
+    const source = new Database(opencodeDb);
+    source.query("UPDATE session_v2 SET directory = ?1").run(project);
+    source.close();
+    // Neither file ever answers a plain read.
+    makeFifo(join(project, "opencode.json"));
+    makeFifo(join(project, ".git"));
+    const archive = join(dir, "archive.db");
+
+    interface Outcome {
+      result: {
+        first: SyncReport;
+        second: SyncReport;
+        issues: { code: string }[];
+        hashes: { hash: string }[];
+        projects: { root_source: string; repo_remote: string | null }[];
+        mcpCalls: { n: number };
+      };
+    }
+    const blocked = runProbeChild("sync", [archive, opencodeDir, empty]) as Outcome | null;
+    expect(blocked).not.toBeNull();
+    expect(blocked?.result.first).toMatchObject({
+      ingested: 1,
+      failed: 0,
+      issuesByCode: { unreachable_project_directory: 1 },
+    });
+    // Unchanged and still unreachable: skipped, not derived again.
+    expect(blocked?.result.second).toMatchObject({ ingested: 0, skipped: 1 });
+    expect(blocked?.result.issues).toEqual([{ code: "unreachable_project_directory" }]);
+    expect(blocked?.result.hashes[0]?.hash).toEndWith("|no-project-config");
+    expect(blocked?.result.projects).toEqual([{ root_source: "self", repo_remote: null }]);
+
+    // Once the directory reads, the session is derived again with its config.
+    rmSync(join(project, "opencode.json"));
+    rmSync(join(project, ".git"));
+    writeFileSync(
+      join(project, "opencode.json"),
+      JSON.stringify({ mcp: { servers: { dosu: { type: "remote" }, exa: { type: "remote" } } } }),
+    );
+    const readable = runProbeChild("sync", [archive, opencodeDir, empty]) as Outcome | null;
+    expect(readable?.result.first).toMatchObject({ ingested: 1, issues: 0 });
+    expect(readable?.result.issues).toEqual([]);
+    expect(readable?.result.hashes[0]?.hash).not.toContain("|no-project-config");
+    // The project's servers are recognized now.
+    expect(readable?.result.mcpCalls.n).toBeGreaterThan(blocked?.result.mcpCalls.n ?? 0);
+  }, 90_000);
 
   test("names MCP tools from the configured servers at ingest", () => {
     const { dir, opencodeDir, config } = opencodeCase();

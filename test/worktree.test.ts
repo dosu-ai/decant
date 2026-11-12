@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
@@ -14,6 +14,7 @@ import {
   resolveGitRoot,
   resolveWorktreeRoots,
 } from "../src/worktree.ts";
+import { makeFifo, runProbeChild } from "./stalled-directory.ts";
 
 const tempRoots: string[] = [];
 
@@ -322,6 +323,22 @@ describe("git worktree pointer resolution", () => {
     expect(resolveGitRoot(missing)).toBeNull();
   });
 
+  test("git pointer behind a symlink and `..` is read where the kernel resolves it", () => {
+    const root = tempDir("decant-symlink-git-");
+    mkdirSync(join(root, "actual", "sub"), { recursive: true });
+    symlinkSync(join(root, "actual", "sub"), join(root, "alias"));
+    writeFileSync(
+      join(root, "actual", ".git"),
+      "gitdir: /Users/dev/acme/app/.git/worktrees/actual\n",
+    );
+    // `alias/..` is `actual` on disk, while its lexical parent has no `.git`.
+    expect(resolveGitRoot(`${root}/alias/..`)).toMatchObject({
+      rootPath: "/Users/dev/acme/app",
+      worktreeLabel: "actual",
+      source: "git",
+    });
+  });
+
   test("git pointer in external container infers container tool", () => {
     const root = tempDir("decant-warp-git-");
     const wt = join(root, ".warp-worktrees", "dosu-feature-api");
@@ -364,6 +381,14 @@ describe("git worktree pointer resolution", () => {
 });
 
 describe("resolveWorktreeRoots", () => {
+  test("does not block on a .git that never answers", () => {
+    const dir = tempDir("decant-worktree-fifo-");
+    makeFifo(join(dir, ".git"));
+    const child = runProbeChild("git-root", [dir]) as { result: { root: unknown } } | null;
+    expect(child).not.toBeNull();
+    expect(child?.result.root).toBeNull();
+  }, 40_000);
+
   test("links intree and external worktrees to roots", () => {
     const db = tempDb();
     db.exec(`

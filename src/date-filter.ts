@@ -57,13 +57,25 @@ export function utcDayRangePredicate(
   const day = `COALESCE(strftime('%Y-%m-%d', ${utcReadable(column)}), substr(${column}, 1, 10))`;
   const clauses: string[] = [];
   const params: string[] = [];
+  // Past year 9999 (or before year 0) toISOString writes a signed six-digit
+  // year, which sorts before every stored timestamp, so that bound is dropped.
+  const before = from == null ? null : shiftDay(from, -1);
+  const after = to == null ? null : shiftDay(to, 1);
   if (from != null) {
-    clauses.push(`${column} >= ?`, `${day} >= ?`);
-    params.push(shiftDay(from, -1), from);
+    if (before != null && FOUR_DIGIT_DAY.test(before)) {
+      clauses.push(`${column} >= ?`);
+      params.push(before);
+    }
+    clauses.push(`${day} >= ?`);
+    params.push(from);
   }
   if (to != null) {
-    clauses.push(`${column} < ?`, `${day} <= ?`);
-    params.push(`${shiftDay(to, 1)}${DAY_END}`, to);
+    if (after != null && FOUR_DIGIT_DAY.test(after)) {
+      clauses.push(`${column} < ?`);
+      params.push(`${after}${DAY_END}`);
+    }
+    clauses.push(`${day} <= ?`);
+    params.push(to);
   }
   return { sql: clauses.join(" AND "), params };
 }
@@ -84,6 +96,8 @@ function utcReadable(column: string): string {
     THEN substr(${column}, 1, length(${column}) - 2) || ':' || substr(${column}, -2)
     ELSE ${column} END`;
 }
+
+const FOUR_DIGIT_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function shiftDay(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00.000Z`) + days * 86_400_000)

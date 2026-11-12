@@ -698,6 +698,14 @@ describe("--since and --until across a UTC offset", () => {
     );
   });
 
+  test("the first and last representable days keep every session", async () => {
+    // The day after 9999-12-31 is written +010000-01-01, which sorts before
+    // every stored timestamp, so a widened bound built from it matched nothing.
+    const all = [...MARCH_1, ...MARCH_2].sort();
+    expect(await named("title", "ls", "--until", "9999-12-31")).toEqual(all);
+    expect(await named("title", "ls", "--since", "0000-01-01")).toEqual(all);
+  });
+
   test("search reads the same days", async () => {
     expect(await named("session_title", "search", "clock", "--since", "2026-03-02")).toEqual(
       MARCH_2,

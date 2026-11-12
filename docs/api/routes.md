@@ -177,8 +177,23 @@ asks the npm registry for the latest `@dosu/decant` version only when the
 cached answer in `update-check.json` is at least a day old. A failed check is
 also cached, so an offline machine retries once an hour.
 
+`GET /api/recommendations` rows carry `project_path`, `project_root`,
+`project_label`, and `project_remote`. They are set on rows about one project
+(re-read files, reworked files, and searches per session) and null on rows
+about the whole setup (tool and MCP error rates, usage, model spend, the
+abandoned rate, ingest health) and on catalog rows. `project_root` is the
+value the `repo` filter takes. The archive stores no project on a
+recommendation: the key of a project row ends in a digest of its repository
+root, and the fields are resolved from the `project` table on each read.
+
 `POST /api/launch/agent` accepts a `key` only when it uses the characters
 recommendation keys are built from (`A-Z a-z 0-9 . _ : / -`, at most 256).
+When the key belongs to a project row, the agent starts in that row's
+`project_path` if it exists and is a directory. That is one filesystem check,
+made at launch and never while listing. Otherwise the agent starts in the home
+directory and the prompt says the project directory was not found.
+`DECANT_SKILLS_DIR` overrides both. The response reports the directory as
+`dir`. The request has no field that sets it.
 `POST /api/launch/ide` requires an absolute `dir` that matches a project path or
 root path in the archive. Both answer `400 invalid_request` otherwise.
 

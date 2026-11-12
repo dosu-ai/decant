@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
 
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
@@ -21,6 +21,8 @@ export interface LaunchResult {
   ok: boolean;
   error?: string;
   command?: string;
+  /** The directory the agent starts in. */
+  dir?: string;
 }
 
 type Run = (bin: string, args: string[]) => LaunchResult | Promise<LaunchResult>;
@@ -30,6 +32,10 @@ export interface LaunchOptions {
   env?: Record<string, string | undefined>;
   run?: Run;
   tempName?: () => string;
+  /** The project directory of the row being run, when it is about one project. */
+  dir?: string | null;
+  /** Test seam for the one existence check on `dir`. */
+  isDirectory?: (path: string) => boolean | Promise<boolean>;
   /** Test seam for Warp's observable config-consumption check. */
   warpConsumed?: (configDir: string) => boolean | Promise<boolean>;
 }
@@ -40,6 +46,8 @@ const RECOMMENDATION_KEY_PATTERN = /^[A-Za-z0-9._:/-]{1,256}$/;
 
 const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
 const WARP_CONSUME_TIMEOUT_MS = 1_500;
+// A stat on a protected folder can wait on a permission prompt.
+const LAUNCH_DIR_CHECK_TIMEOUT_MS = 1_500;
 
 export function canLaunch(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
@@ -49,9 +57,14 @@ export function isSafeRecommendationKey(key: string): boolean {
   return RECOMMENDATION_KEY_PATTERN.test(key);
 }
 
-export function command(agent: string, prompt: string): string | null {
+/** The command to paste into a terminal. `dir` is a row's project directory. */
+export function command(agent: string, prompt: string, dir?: string | null): string | null {
   const got = agents[agent as AgentKey];
-  return got == null ? null : `${got.bin} ${shellQuote(prompt)}`;
+  if (got == null) {
+    return null;
+  }
+  const start = dir == null ? "" : `cd ${shellQuote(dir)} && `;
+  return `${start}${got.bin} ${shellQuote(prompt)}`;
 }
 
 export async function launchAgent(
@@ -68,12 +81,17 @@ export async function launchAgent(
   if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
     return { ok: false, error: "Invalid recommendation key." };
   }
-  const fullPrompt = withMarkInstruction(prompt, key);
+  const { dir, missing } = await resolveLaunchDir(options);
+  const fullPrompt = withMarkInstruction(withMissingDirNote(prompt, missing, dir), key);
+  // A pasted command runs wherever the terminal is, so it carries the
+  // directory the launch would have used, whichever source chose it.
+  const copyable = command(agent, fullPrompt, dir);
   if (!canLaunch(options.platform)) {
     return {
       ok: false,
       error: "Opening a terminal is only supported on macOS right now.",
-      command: command(agent, fullPrompt) ?? undefined,
+      command: copyable ?? undefined,
+      dir,
     };
   }
   await sweepStaleLaunchDirs();
@@ -85,7 +103,6 @@ export async function launchAgent(
   const promptDir = mkdtempSync(join(tmpdir(), "decant-launch-"));
   const promptFile = join(promptDir, options.tempName?.() ?? "prompt.txt");
   writeFileSync(promptFile, fullPrompt, { mode: 0o600 });
-  const dir = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir();
   const launchCommand =
     `cd ${shellQuote(dir)} && ${got.bin} "$(cat ${shellQuote(promptFile)}; ` +
     `rm -rf ${shellQuote(promptDir)})"`;
@@ -95,14 +112,56 @@ export async function launchAgent(
     options.run ?? runCommand,
     options.env,
     options.warpConsumed,
+    dir,
   );
   if (!result.ok) {
     rmSync(promptDir, { recursive: true, force: true });
-    if (result.command != null) {
-      return { ...result, command: command(agent, fullPrompt) ?? result.command };
-    }
+    // Every failure offers the prepared command, which carries the directory
+    // and the mark instruction a bare agent command would lose.
+    return { ...result, command: copyable ?? result.command, dir };
   }
-  return result;
+  return { ...result, dir };
+}
+
+// DECANT_SKILLS_DIR wins, then the row's project directory, then home.
+// `missing` is a project directory that was asked for and not found.
+async function resolveLaunchDir(
+  options: LaunchOptions,
+): Promise<{ dir: string; missing: string | null }> {
+  const override = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR;
+  if (override != null) {
+    return { dir: override, missing: null };
+  }
+  const wanted = options.dir;
+  if (wanted == null || wanted === "") {
+    return { dir: homelikeDir(), missing: null };
+  }
+  const found =
+    isAbsolute(wanted) && (await (options.isDirectory?.(wanted) ?? isDirectoryWithin(wanted)));
+  return found ? { dir: wanted, missing: null } : { dir: homelikeDir(), missing: wanted };
+}
+
+async function isDirectoryWithin(path: string): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<boolean>((done) => {
+    timer = setTimeout(() => done(false), LAUNCH_DIR_CHECK_TIMEOUT_MS);
+  });
+  const check = stat(path).then(
+    (info) => info.isDirectory(),
+    () => false,
+  );
+  try {
+    return await Promise.race([check, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The prompt names the project, so say so when the session starts elsewhere.
+function withMissingDirNote(prompt: string, missing: string | null, dir: string): string {
+  return missing == null
+    ? prompt
+    : `${prompt}\n\nDecant could not find that project directory on this machine, so this session started in ${dir} instead. Locate the repository before changing anything.`;
 }
 
 export async function openIde(
@@ -125,6 +184,7 @@ async function launchIn(
   run: Run,
   env: Record<string, string | undefined> | undefined,
   warpConsumed: LaunchOptions["warpConsumed"],
+  dir: string,
 ): Promise<LaunchResult> {
   switch (terminal) {
     case "iterm":
@@ -132,7 +192,7 @@ async function launchIn(
     case "ghostty":
       return await openArgs("Ghostty", ["-e", shell(env), "-lc", cmd], run);
     case "warp": {
-      const launch = createWarpLaunch(cmd, env);
+      const launch = createWarpLaunch(cmd, dir);
       const result = await run("open", [launch.uri]);
       const consumed =
         result.ok &&
@@ -174,20 +234,17 @@ async function launchIn(
   }
 }
 
-export function warpLaunchUri(
-  cmd: string,
-  env: Record<string, string | undefined> | undefined,
-): string {
-  return createWarpLaunch(cmd, env).uri;
+export function warpLaunchUri(cmd: string, dir: string): string {
+  return createWarpLaunch(cmd, dir).uri;
 }
 
 function createWarpLaunch(
   cmd: string,
-  env: Record<string, string | undefined> | undefined,
+  dir: string,
 ): { configDir: string; cwd: string; uri: string } {
   const configDir = mkdtempSync(join(tmpdir(), "decant-warp-"));
   const configPath = join(configDir, "decant.yaml");
-  const cwd = resolve(env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR ?? homelikeDir());
+  const cwd = resolve(dir);
   // Warp accepts a percent-encoded absolute launch-config path. Delete the
   // private config before starting the interactive command: disappearance is
   // the acknowledgement launchIn waits for, and it leaves no prompt-bearing

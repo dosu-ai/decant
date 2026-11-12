@@ -1151,7 +1151,7 @@ function renderView(
           dateBounds={data.dateBounds}
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
-          rows={data.files}
+          reloadKey={actions.reloadKey}
         />
       );
     case "settings":

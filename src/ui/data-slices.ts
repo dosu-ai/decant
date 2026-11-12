@@ -10,7 +10,6 @@ import type {
   DataSlice,
   DateBounds,
   DimensionRow,
-  FileRow,
   McpRow,
   ModelSparklines,
   ProjectSummary,
@@ -32,7 +31,6 @@ export const emptyData: DashboardData = {
   projects: [],
   tools: [],
   mcp: [],
-  files: [],
   recommendations: [],
   config: null,
   settings: null,
@@ -120,14 +118,6 @@ export const SLICE_LOADERS: Record<
       ),
     }),
   },
-  files: {
-    dateScoped: true,
-    load: async (q) => ({
-      files: await getJson<FileRow[]>(
-        withDateQuery(`/api/files?group=path&limit=${TABLE_ROW_LIMIT}`, q),
-      ),
-    }),
-  },
   recommendations: {
     // Recommendations are archive-wide. If they become date-scoped, the
     // recommendations loading key and layout effect must include dateQuery too.
@@ -203,7 +193,6 @@ export const ROUTE_SLICES: Record<string, DataSlice[]> = {
   ],
   insights: ["recommendations", "settings"],
   tools: ["tools", "mcp"],
-  files: ["files"],
   settings: ["config", "settings"],
 };
 

@@ -38,6 +38,9 @@ export interface SyncCoordinatorOptions {
   progressEveryFiles?: number;
   progressEveryMs?: number;
   now?: () => number;
+  /** Runs on the server thread with each progress update the listeners get,
+   * before they do. */
+  onProgress?: (progress: SyncProgress) => void;
   /** Runs on the server thread after a worker sync succeeds, before callers
    * see the report. */
   onCompleted?: (report: SyncReport) => void;
@@ -275,6 +278,11 @@ export function createSyncCoordinator(
       pending = null;
       lastEmitted = progress;
       lastEmittedAt = now();
+      try {
+        options.onProgress?.(progress);
+      } catch {
+        // Mid-sync housekeeping must never fail the sync or its listeners.
+      }
       for (const listener of [...listeners]) {
         try {
           listener(progress);

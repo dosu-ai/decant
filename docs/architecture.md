@@ -133,6 +133,13 @@ ingested sessions it runs `ANALYZE sqlite_schema` to load the statistics that
 the worker wrote. Both steps skip a read-only archive or a write lock held past
 the busy timeout, because statistics only affect query speed.
 
+FTS5 runs its own SQL against its shadow tables, so these statistics steer
+full-text maintenance too. An analysis of an empty or near-empty index records
+a row count for `block_fts_data` at which SQLite scans the table to delete a
+merged segment, and every later merge would read the whole index. After each
+`PRAGMA optimize`, a recorded count under 1,000 rows is replaced with
+1,048,576, the estimate SQLite uses for a table it has never analyzed.
+
 ## Serve, workers, and caches
 
 `decant serve` binds the HTTP listener before opening the archive. This makes a

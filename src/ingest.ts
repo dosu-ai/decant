@@ -621,7 +621,7 @@ function refreshDerivedState(
   ) {
     // Refresh planner statistics after write bursts; without ANALYZE data the
     // query planner picks pathological join orders on multi-GB archives.
-    db.exec("PRAGMA optimize;");
+    refreshPlannerStatistics(db);
   }
 }
 

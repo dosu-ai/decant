@@ -253,9 +253,9 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
     throw new Error(`compiled binary served ${scriptSrc} without x-content-type-options: nosniff`);
   }
   const code = await bundle.text();
-  // Well under the minified size and well over an empty or stub response, so
-  // this only trips on real truncation.
-  if (code.length < 500_000) {
+  // Well under the entry script's size and well over an empty or stub
+  // response, so this only trips on real truncation.
+  if (code.length < 250_000) {
     throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
   }
   // The dev-only key warning and the prod-only minified error text each pin
@@ -270,6 +270,55 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
       `compiled UI bundle at ${scriptSrc} does not parse: ${(error as Error).message}`,
     );
   }
+  await assertCompiledUiChunks(port, scriptSrc, code);
+}
+
+// --splitting moves dynamically imported modules into their own files, which
+// the page requests on first use. A chunk missing from the binary would only
+// show up as a chart or a transcript that never renders, so fetch them all.
+async function assertCompiledUiChunks(
+  port: number,
+  entry: string,
+  entryCode: string,
+): Promise<void> {
+  const seen = new Set([entry]);
+  const queue = importedScripts(entryCode);
+  while (queue.length > 0) {
+    const path = queue.pop();
+    if (path == null || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    const chunk = await fetch(new URL(path, `http://127.0.0.1:${port}`));
+    if (!chunk.ok) {
+      throw new Error(`compiled binary returned ${chunk.status} for ${path}, imported by the UI`);
+    }
+    if (!(chunk.headers.get("content-type") ?? "").includes("javascript")) {
+      throw new Error(
+        `compiled binary served ${path} as ${String(chunk.headers.get("content-type"))}`,
+      );
+    }
+    if (chunk.headers.get("x-content-type-options") !== "nosniff") {
+      throw new Error(`compiled binary served ${path} without x-content-type-options: nosniff`);
+    }
+    const code = await chunk.text();
+    try {
+      new Bun.Transpiler({ loader: "js" }).transformSync(code);
+    } catch (error) {
+      throw new Error(`compiled UI chunk ${path} does not parse: ${(error as Error).message}`);
+    }
+    queue.push(...importedScripts(code));
+  }
+  if (seen.size === 1) {
+    throw new Error(`compiled UI bundle at ${entry} imports no other script: it was not split`);
+  }
+}
+
+/** Root-relative scripts a bundled module imports, statically or on demand. */
+function importedScripts(code: string): string[] {
+  return [...code.matchAll(/(?:from|import\()\s*["'](\/[^"']+\.js)["']/g)].flatMap((match) =>
+    match[1] == null ? [] : [match[1]],
+  );
 }
 
 async function assertCompiledEconomics(port: number): Promise<void> {

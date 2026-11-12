@@ -16,7 +16,6 @@ import {
   rereadPlannerStatistics,
   storedPlannerStatistics,
 } from "../src/server/reader-statistics.ts";
-import { visibleSessionPredicate } from "../src/session-visibility.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-reader-statistics-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -238,14 +237,17 @@ describe("reader statistics during a first sync", () => {
     "utf8",
   );
 
-  // The join inside the visibility predicate every dashboard read applies.
-  // Without statistics SQLite starts it from every text block in the archive.
-  const VISIBILITY_PLAN = `EXPLAIN QUERY PLAN
-    SELECT COUNT(*) FROM session s WHERE ${visibleSessionPredicate("s")}`;
-  function visibilityPlan(db: Database): string {
+  // An unpinned message-to-block join. Without statistics SQLite starts it
+  // from every text block in the archive. Product queries may pin their own
+  // plans, so the probe is written here and left free to follow statistics.
+  const BLOCK_JOIN_PLAN = `EXPLAIN QUERY PLAN
+    SELECT COUNT(*) FROM session s WHERE NOT EXISTS (
+      SELECT 1 FROM message m JOIN block b ON b.message_id = m.id
+      WHERE m.session_id = s.id AND m.role = 'user' AND b.type = 'text')`;
+  function blockJoinPlan(db: Database): string {
     // Finalized rather than cached: bun:sqlite keeps this EXPLAIN active in its
     // statement cache, which pins the connection to the snapshot it first read.
-    const statement = db.prepare(VISIBILITY_PLAN);
+    const statement = db.prepare(BLOCK_JOIN_PLAN);
     try {
       return (statement.all() as { detail: string }[]).map((row) => row.detail).join("\n");
     } finally {
@@ -273,8 +275,8 @@ describe("reader statistics during a first sync", () => {
     const reader = new ReadConnection(dbPath);
     const worker = openDb(dbPath);
     try {
-      expect(visibilityPlan(server)).toContain("idx_block_type");
-      expect(await reader.use(visibilityPlan)).toContain("idx_block_type");
+      expect(blockJoinPlan(server)).toContain("idx_block_type");
+      expect(await reader.use(blockJoinPlan)).toContain("idx_block_type");
 
       const reloads: { scanned: number; server: string }[] = [];
       let readerPlanAtFirstReload = "";
@@ -284,12 +286,12 @@ describe("reader statistics during a first sync", () => {
         reload: () => {
           rereadPlannerStatistics(server);
           reader.reloadStatistics();
-          reloads.push({ scanned, server: visibilityPlan(server) });
+          reloads.push({ scanned, server: blockJoinPlan(server) });
           if (reloads.length === 1) {
             // sync() is synchronous, so this read is the only one that can
             // reach the reader mid-sync: use() runs it before it first awaits.
             void reader.use((db) => {
-              readerPlanAtFirstReload = visibilityPlan(db);
+              readerPlanAtFirstReload = blockJoinPlan(db);
             });
           }
         },

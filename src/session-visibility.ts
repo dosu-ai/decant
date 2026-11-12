@@ -10,6 +10,9 @@
  * first prompt, so a new or duplicated chat that is never used leaves a rollout
  * with no turns. Codex hides those threads itself; so does Decant until the
  * rollout gains a message.
+ *
+ * The block join is pinned: with no planner statistics SQLite starts from
+ * idx_block_type and reads every text block in the archive for each session.
  */
 export function visibleSessionPredicate(alias: string): string {
   return `NOT (
@@ -30,7 +33,8 @@ export function visibleSessionPredicate(alias: string): string {
         AND NOT EXISTS (
           SELECT 1
           FROM message visibility_user
-          JOIN block visibility_block ON visibility_block.message_id = visibility_user.id
+          CROSS JOIN block visibility_block INDEXED BY idx_block_message
+            ON visibility_block.message_id = visibility_user.id
           WHERE visibility_user.session_id = ${alias}.id
             AND visibility_user.role = 'user'
             AND visibility_block.type = 'text'

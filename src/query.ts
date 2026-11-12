@@ -757,6 +757,36 @@ function sessionTreeSummaries(
   return withDosuMcpEvidence(db, titled, true);
 }
 
+export interface SessionRefMatch {
+  id: number;
+  tool: Tool;
+  started_at: string | null;
+}
+
+export interface SessionRefMatches {
+  /** The session whose Decant id is `ref`, when `ref` is an integer. */
+  byId: SessionRefMatch | null;
+  /** Sessions whose source tool calls them `ref`: at most one per tool. */
+  bySourceId: SessionRefMatch[];
+}
+
+/** Look a session up by Decant id and by the id its source tool gave it. */
+export function findSessionsByRef(db: Database, ref: string): SessionRefMatches {
+  const select = "SELECT id, tool, started_at FROM session";
+  const trimmed = ref.trim();
+  // A leading + was accepted when ids went through parseInteger.
+  const id = /^\+?\d+$/.test(trimmed) ? Number(trimmed) : null;
+  return {
+    byId:
+      id != null && Number.isSafeInteger(id)
+        ? (db.query(`${select} WHERE id = ?1`).get(id) as SessionRefMatch | null)
+        : null,
+    bySourceId: db
+      .query(`${select} WHERE source_session_id = ?1 ORDER BY id`)
+      .all(ref) as SessionRefMatch[],
+  };
+}
+
 /** A session's summary without reading its transcript. */
 export function getSessionSummary(db: Database, id: number): SessionSummary | null {
   const summaryRow = sessionSummaryRow(db, id);

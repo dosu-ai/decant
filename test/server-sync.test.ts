@@ -3,6 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
+import { closeDb, openDb } from "../src/db.ts";
+import type { EconomicsCache } from "../src/economics-cache.ts";
+import type { SyncReport } from "../src/ingest.ts";
+import { applyWatchEvent, noteArchiveOpened } from "../src/server/sync.ts";
 import {
   createSyncCoordinator,
   handleRequest,
@@ -360,4 +364,164 @@ describe("server sync coordination", () => {
       });
     },
   );
+});
+
+describe("sync status", () => {
+  const report = {
+    scanned: 4,
+    ingested: 4,
+    skipped: 0,
+    issues: 0,
+    issuesByCode: {},
+    failed: 0,
+    cancelled: false,
+  };
+  const economics = { invalidate() {} } as unknown as EconomicsCache;
+  const idle = {
+    last_sync_at: null,
+    in_progress: false,
+    last_report: null,
+    last_error: null,
+    ingested_count: null,
+    runs: 0,
+  };
+
+  async function readStatus(config: Config): Promise<Record<string, unknown>> {
+    const response = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync-status"),
+      config,
+    );
+    expect(response.status).toBe(200);
+    return (await response.json()) as Record<string, unknown>;
+  }
+
+  test("reports a manual sync's reason and latest progress while it runs", async () => {
+    const config = freshConfig();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const progress = { scanned: 2, ingested: 2, skipped: 0, failed: 0, total: 4 };
+    const runner: SyncWorkerRunner = async (_config, _cancel, onProgress) => {
+      onProgress?.(progress);
+      entered.resolve();
+      await release.promise;
+      return report;
+    };
+    const manual = handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      config,
+      { runSync: runner },
+    );
+    await entered.promise;
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: true,
+      reason: "manual",
+      progress,
+    });
+
+    release.resolve();
+    expect((await manual).status).toBe(200);
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: false,
+      reason: null,
+      progress: null,
+      archive_synced: true,
+    });
+  });
+
+  test("reports a watcher sync from its start, then its reason and progress", async () => {
+    const config = freshConfig();
+    const release = Promise.withResolvers<SyncReport>();
+    const status = new SyncStatusStore();
+    const run = workerSyncRunner(
+      config,
+      status,
+      { aborted: false },
+      () => {},
+      () => ({ promise: release.promise, owned: true }),
+    );
+    // No progress event yet: the server knows a sync runs, not what started it.
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: true,
+      reason: null,
+      progress: null,
+    });
+
+    const progress = { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 4 };
+    applyWatchEvent(
+      { type: "sync_progress", reason: "startup", progress, status: status.snapshot() },
+      economics,
+    );
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: true,
+      reason: "startup",
+      progress,
+    });
+
+    release.resolve(report);
+    await run;
+    applyWatchEvent(
+      { type: "sync", reason: "startup", report, status: status.snapshot() },
+      economics,
+    );
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: false,
+      reason: null,
+      progress: null,
+    });
+  });
+
+  test("a watcher run that joined another sync does not leave the status busy", async () => {
+    const config = freshConfig();
+    await workerSyncRunner(
+      config,
+      new SyncStatusStore(),
+      { aborted: false },
+      () => {},
+      () => ({ promise: Promise.resolve(report), owned: false }),
+    );
+    expect(await readStatus(config)).toMatchObject({ in_progress: false });
+  });
+
+  test("a new archive counts as synced only after a sync completes", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    try {
+      noteArchiveOpened(db);
+      expect(await readStatus(config)).toMatchObject({ archive_synced: false });
+
+      // A failed sync and a cancelled one both leave the archive unfilled.
+      applyWatchEvent(
+        { type: "error", reason: "startup", error: "disk full", status: idle },
+        economics,
+      );
+      applyWatchEvent(
+        { type: "sync", reason: "sweep", report: { ...report, cancelled: true }, status: idle },
+        economics,
+      );
+      expect(await readStatus(config)).toMatchObject({ archive_synced: false });
+
+      applyWatchEvent({ type: "sync", reason: "sweep", report, status: idle }, economics);
+      expect(await readStatus(config)).toMatchObject({ archive_synced: true });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("an archive that already holds sessions opens as synced", async () => {
+    const config = freshConfig();
+    const db = openDb(config.dbPath);
+    try {
+      noteArchiveOpened(db);
+      expect(await readStatus(config)).toMatchObject({ archive_synced: false });
+      db.run("INSERT INTO ingest_source (path, tool) VALUES ('/synthetic/a.jsonl', 'claude_code')");
+      noteArchiveOpened(db);
+      expect(await readStatus(config)).toMatchObject({ archive_synced: true });
+    } finally {
+      closeDb(db);
+    }
+  });
 });

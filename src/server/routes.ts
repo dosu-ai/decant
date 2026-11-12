@@ -71,7 +71,7 @@ import { isLoopbackPeer } from "./peers.ts";
 import { readOutputResponse, runRead } from "./read.ts";
 import type { ReadOpArgs, ReadOpName } from "./read-ops.ts";
 import { eventStream, publishServerEvent } from "./sse.ts";
-import { syncNow, syncStatus } from "./sync.ts";
+import { syncNow, syncStatus, syncStatusBody } from "./sync.ts";
 
 type DateFilter = ReturnType<typeof dateFilterFromSearch>;
 
@@ -380,7 +380,7 @@ export const COMPILED_ROUTES: CompiledRoute[] = API_ROUTE_PATHS.map((path) => ({
 }));
 
 function syncStatusResponse(): Response {
-  return json({ ...syncStatus, timestamp: new Date().toISOString() });
+  return json(syncStatusBody());
 }
 
 // Long enough for the response to reach the browser before this process

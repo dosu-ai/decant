@@ -317,7 +317,6 @@ export type DashboardData = {
   projects: ProjectSummary[];
   tools: ToolRow[];
   mcp: McpRow[];
-  files: FileRow[];
   recommendations: Recommendation[];
   config: ConfigView | null;
   settings: SettingsInfo | null;

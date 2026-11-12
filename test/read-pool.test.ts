@@ -748,6 +748,65 @@ describe("serve() with the read pool", () => {
     }
   });
 
+  test("a running sync has the workers reload planner statistics before it ends", async () => {
+    const config = seededConfig();
+    const { spawn, workers } = fakeSpawner();
+    const analyzed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const server = serve({
+      config,
+      port: 0,
+      readPool: { spawn, size: 2 },
+      syncRunner: async (workerConfig, _cancel, onProgress) => {
+        // Stand in for the sync worker: write a session, then analyze the
+        // archive on its own connection as the worker does mid-sync.
+        const db = openDb(workerConfig.dbPath);
+        upsertSession(
+          db,
+          parseClaudeSession("sess-claude-mid-sync", fixture("claude", "sample.jsonl")),
+          "/x/claude-mid-sync.jsonl",
+          1,
+          2,
+          "claude-mid-sync",
+        );
+        db.exec("ANALYZE");
+        closeDb(db);
+        onProgress?.({ scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 2 });
+        analyzed.resolve();
+        await release.promise;
+        return {
+          scanned: 2,
+          ingested: 1,
+          skipped: 1,
+          issues: 0,
+          issuesByCode: {},
+          failed: 0,
+          cancelled: false,
+        };
+      },
+    });
+    try {
+      const sync = fetch(`http://127.0.0.1:${server.port}/api/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      await analyzed.promise;
+      const reloads = (): number[] =>
+        workers.map(
+          (worker) => worker.sent.filter((message) => message.type === "reload-statistics").length,
+        );
+      // The sync is still running: only its progress can have caused these.
+      expect(reloads()).toEqual([1, 1]);
+      release.resolve();
+      expect((await sync).status).toBe(200);
+      expect(reloads()).toEqual([2, 2]);
+    } finally {
+      release.resolve();
+      await server.stop(true);
+    }
+  });
+
   test("serves analytics through real workers", async () => {
     const config = seededConfig();
     const server = serve({ config, port: 0 });

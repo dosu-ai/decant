@@ -1,13 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
-import {
-  ARCHIVE_DIR_MODE,
-  closeDb,
-  openDb,
-  optimizeLongLivedConnection,
-  reloadPlannerStatistics,
-} from "./db.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb, optimizeLongLivedConnection } from "./db.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import { UI_ROUTE_PATHS } from "./route-paths.ts";
@@ -16,6 +10,11 @@ import { type Db, ensureDerivedMetadata } from "./server/context.ts";
 import { errorResponse, responseForError, serviceStartingResponse } from "./server/http.ts";
 import { resolveTrustedPeers } from "./server/peers.ts";
 import { ReadPool, type ReadPoolOptions } from "./server/read-pool.ts";
+import {
+  ReaderStatistics,
+  rereadPlannerStatistics,
+  storedPlannerStatistics,
+} from "./server/reader-statistics.ts";
 import { handleRequest } from "./server/router.ts";
 import { publishServerEvent } from "./server/sse.ts";
 import {
@@ -94,14 +93,21 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let economics: EconomicsCache | null = null;
   let readPool: ReadPool | null = null;
   let watchHandle: WatchHandle | null = null;
+  let readerStatistics: ReaderStatistics | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
+    // The worker also analyzes the archive every few sessions. A first sync
+    // can run for minutes, so the readers load those statistics while it runs.
+    onProgress: (progress) => readerStatistics?.onProgress(progress),
     // The worker ends each ingesting sync with PRAGMA optimize on its own
     // connection. This connection keeps the statistics it loaded until told to
     // reread them, so on a first run it would plan every request without any.
     onCompleted: (report) => {
       if (db != null && report.ingested > 0) {
-        reloadPlannerStatistics(db);
+        // The reread takes no write lock, so a writer that is still busy cannot
+        // make it skip while the statistics are marked as loaded.
+        rereadPlannerStatistics(db);
         readPool?.reloadStatistics();
+        readerStatistics?.markLoaded();
       }
     },
   });
@@ -199,6 +205,14 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = openDb(options.config.dbPath);
     optimizeLongLivedConnection(db);
+    const archive = db;
+    readerStatistics = new ReaderStatistics({
+      stored: () => storedPlannerStatistics(archive),
+      reload: () => {
+        rereadPlannerStatistics(archive);
+        readPool?.reloadStatistics();
+      },
+    });
     ensureDerivedMetadata(db);
     economics = new EconomicsCache({
       dbPath: options.config.dbPath,
@@ -277,6 +291,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           db = null;
           economics = null;
           readPool = null;
+          readerStatistics = null;
         }
       }
     }

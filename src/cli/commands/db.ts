@@ -70,9 +70,12 @@ export function registerDbCommands(ctx: CliContext): void {
     .description("apply schema migrations explicitly")
     .action(() =>
       ctx.run(() =>
-        ctx.withArchive((archive) => {
-          io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
-        }),
+        ctx.withArchive(
+          (archive) => {
+            io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
+          },
+          { create: true },
+        ),
       ),
     );
   dbCommand

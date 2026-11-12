@@ -575,7 +575,15 @@ skipped, because their path is a job directory, not the place the agent ran.
 ## Automatic and explicit sync
 
 Read commands normally sync first. `decant serve` performs a startup sync and
-then watches the configured source directories.
+then watches the configured source directories. When the sync a read command
+starts runs for more than about a second, Decant prints one line to stderr that
+says so and names `--no-sync`. `--quiet` suppresses it.
+
+A read command creates the default archive on first run, but not an archive at
+a path set with `--db` or `DECANT_DB`. There it fails with `archive_not_found`,
+so a mistyped path is not answered with an empty result. `sync`, `serve`,
+`watch`, and `db migrate` create the archive they are pointed at. See
+[CLI output, errors, and exit codes](cli.md#the-archive-path).
 
 The web UI shows the startup sync's progress and loads its results as soon as
 it finishes, so a first launch fills the dashboard without a manual sync.

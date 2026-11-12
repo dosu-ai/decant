@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import { toMarkdown } from "../../export.ts";
-import { getSession, listSessions } from "../../query.ts";
+import { listSessions } from "../../query.ts";
 import { setSessionUserState } from "../../session-user-state.ts";
 import type { CliContext } from "../context.ts";
 import {
@@ -13,6 +12,7 @@ import {
   SESSION_FIELDS,
 } from "../list-options.ts";
 import { parseInteger } from "../parse.ts";
+import { addShowCommand } from "./show.ts";
 
 export function registerSessionCommands(ctx: CliContext): void {
   const { program, io } = ctx;
@@ -83,26 +83,7 @@ export function registerSessionCommands(ctx: CliContext): void {
       );
   };
 
-  const addShow = (command: Command): void => {
-    command
-      .description("render a full transcript")
-      .argument("<id>", "session id", parseInteger)
-      .action((id: number) =>
-        ctx.run(() =>
-          ctx.withArchive(
-            (archive) => {
-              const detail = getSession(archive.db, id);
-              if (detail == null) {
-                io.writeErr(`error: no session with id ${id}\n`);
-                return 1;
-              }
-              ctx.output(detail, () => toMarkdown(detail));
-            },
-            { sync: true },
-          ),
-        ),
-      );
-  };
+  const addShow = (command: Command): void => addShowCommand(ctx, command);
 
   const addRm = (command: Command): void => {
     command

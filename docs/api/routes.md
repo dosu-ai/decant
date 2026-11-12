@@ -138,6 +138,15 @@ Sync responses include `repriced` when stored session or activity costs changed.
 A repricing-only sync also invalidates server economics caches and emits
 `archive_updated`, even when `ingested` is zero.
 
+`GET /api/sync-status` describes the server's current sync. `in_progress` turns
+true when a sync starts. `reason` and `progress` stay null until the sync has
+discovered its sources and reported its first counts, and they are null again
+once it ends. `archive_synced` is false only while a new archive waits for its
+first completed sync: the server opened it with no sessions or ingested
+sources, and no sync has finished since. A failed or cancelled sync leaves it
+false. Server-Sent Events are not replayed, so a client that connects or
+reconnects during a sync reads this route to restore its state.
+
 `GET /api/date-bounds` covers visible sessions only, with no
 `include_archived` opt-in. `min` and `max` are the UTC calendar days of the
 earliest and latest session start. `latest_started_at` is the latest start

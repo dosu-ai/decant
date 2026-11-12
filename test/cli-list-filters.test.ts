@@ -129,6 +129,11 @@ const WIDGET_TITLES = [
 ];
 
 /** Run the real entry point from `cwd`, the one thing `runCli` cannot set. */
+/** The message of the JSON error object `--json` prints as stderr's last line. */
+function jsonError(stderr: string): { code: string; message: string } {
+  return JSON.parse(stderr.trim().split("\n").at(-1) ?? "{}").error;
+}
+
 function runFrom(cwd: string, ...args: string[]): { code: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync(
     [
@@ -191,8 +196,9 @@ describe("ls --project", () => {
     const result = await run("--json", "ls", "--project", missing);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`no project matches --project ${JSON.stringify(missing)}`);
-    expect(result.stderr).toContain("decant project ls");
+    const error = jsonError(result.stderr);
+    expect(error.message).toContain(`no project matches --project ${JSON.stringify(missing)}`);
+    expect(error.message).toContain("decant project ls");
   });
 
   test("a known project with nothing in the date range is still an empty list", async () => {
@@ -401,7 +407,8 @@ describe("ls --fields", () => {
     const result = await run("--json", "ls", "--fields", "id,cost,nope");
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain('unknown field "cost", "nope"');
+    expect(jsonError(result.stderr)).toMatchObject({ code: "invalid_argument" });
+    expect(jsonError(result.stderr).message).toContain('unknown field "cost", "nope"');
     for (const field of SESSION_FIELDS) {
       expect(result.stderr).toContain(field);
     }
@@ -454,11 +461,12 @@ describe("project ls", () => {
   test("an unknown field and a zero limit are usage errors", async () => {
     const field = await run("--json", "project", "ls", "--fields", "path,title");
     expect(field.code).toBe(2);
-    expect(field.stderr).toContain('unknown field "title"');
+    expect(jsonError(field.stderr).message).toContain('unknown field "title"');
     expect(field.stderr).toContain("worktree_count");
     const limit = await run("project", "ls", "--limit", "0");
     expect(limit.code).toBe(2);
-    expect(limit.stderr).toContain("expected an integer of 1 or more");
+    // The shared --limit check from parse.ts answers for every command.
+    expect(limit.stderr).toContain("expected a positive integer");
   });
 });
 

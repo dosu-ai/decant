@@ -5,7 +5,10 @@ import { exportTrajectory, toMarkdown } from "../../export.ts";
 import { exportAtif } from "../../export-atif.ts";
 import { getSession, listSessions } from "../../query.ts";
 import type { CliContext } from "../context.ts";
-import { optionalInteger } from "../parse.ts";
+import { parseChoice } from "../parse.ts";
+import { resolveSessionRef } from "../session-ref.ts";
+
+const EXPORT_FORMATS = ["md", "json", "trajectory", "atif"] as const;
 
 export function registerExportCommand(ctx: CliContext): void {
   const { io } = ctx;
@@ -13,23 +16,27 @@ export function registerExportCommand(ctx: CliContext): void {
   ctx.program
     .command("export")
     .description("export a session to Markdown, JSON, a trajectory-v1 record file, or ATIF")
-    .argument("[id]", "session id", optionalInteger)
+    .argument("[id]", "session id, or the id the source tool gave the session")
     .option("--all", "export every session")
     .option("--include-subagents", "with --all, also export subagent sessions")
     // Named --as, not --format, to match `distill script --as` rather than
     // collide with the global --format table|json|md: Commander resolves a
     // global option's flag anywhere in argv (before or after a subcommand),
     // so a same-named local option on export would be shadowed by the root's.
-    .option("--as <format>", "md | json | trajectory | atif (default: md, or json with --json)")
+    .option(
+      "--as <format>",
+      "md | json | trajectory | atif (default: md, or json with --json)",
+      parseChoice(EXPORT_FORMATS),
+    )
     .option("--out <dir>", "output directory")
     .option("--mirror <dir>", "keep a folder of standalone ATIF documents, one per session")
     .action(
       (
-        id: number | undefined,
+        ref: string | undefined,
         commandOptions: {
           all?: boolean;
           includeSubagents?: boolean;
-          as?: string;
+          as?: (typeof EXPORT_FORMATS)[number];
           out?: string;
           mirror?: string;
         },
@@ -41,7 +48,7 @@ export function registerExportCommand(ctx: CliContext): void {
               io.writeErr("error: --mirror writes ATIF only\n");
               return 2;
             }
-            if (id != null || commandOptions.all === true || commandOptions.out != null) {
+            if (ref != null || commandOptions.all === true || commandOptions.out != null) {
               io.writeErr("error: --mirror takes every session and its own folder\n");
               return 2;
             }
@@ -66,16 +73,17 @@ export function registerExportCommand(ctx: CliContext): void {
               { sync: true },
             );
           }
-          const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
-          if (
-            format !== "md" &&
-            format !== "json" &&
-            format !== "trajectory" &&
-            format !== "atif"
-          ) {
-            io.writeErr(`error: unknown export format: ${format}\n`);
+          // Checked before the archive is opened, so a wrong command line exits 2
+          // whether or not the archive exists.
+          if (commandOptions.all === true && commandOptions.out == null) {
+            io.writeErr("error: --all requires --out <dir>\n");
             return 2;
           }
+          if (commandOptions.all !== true && ref == null) {
+            io.writeErr("error: provide a session id, or --all --out <dir>\n");
+            return 2;
+          }
+          const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
           return ctx.withArchive(
             (archive) => {
               const ext =
@@ -176,10 +184,16 @@ export function registerExportCommand(ctx: CliContext): void {
                 return 0;
               }
 
-              if (id == null) {
+              if (ref == null) {
                 io.writeErr("error: provide a session id, or --all --out <dir>\n");
                 return 2;
               }
+              const resolved = resolveSessionRef(archive.db, ref);
+              if (!resolved.ok) {
+                io.writeErr(`error: ${resolved.message}\n`);
+                return resolved.code;
+              }
+              const id = resolved.id;
               const rendered = render(id);
               if ("error" in rendered) {
                 io.writeErr(`error: ${rendered.error}\n`);

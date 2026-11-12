@@ -1939,13 +1939,47 @@ components:
           type: string
       additionalProperties: false
     SyncStatusResponse:
-      allOf:
-        - $ref: "#/components/schemas/SyncStatus"
-        - type: object
-          required: [timestamp]
-          properties:
-            timestamp:
-              type: string
+      type: object
+      required:
+        - last_sync_at
+        - in_progress
+        - last_report
+        - last_error
+        - ingested_count
+        - reason
+        - progress
+        - archive_synced
+        - timestamp
+      properties:
+        last_sync_at:
+          type: [string, "null"]
+        in_progress:
+          type: boolean
+        last_report:
+          type: [string, "null"]
+        last_error:
+          type: [string, "null"]
+        ingested_count:
+          type: [integer, "null"]
+          minimum: 0
+        reason:
+          description: What started the running sync. Null when idle and until the sync reports its first progress.
+          oneOf:
+            - $ref: "#/components/schemas/SyncReason"
+            - type: "null"
+        progress:
+          description: The latest progress of the running sync. Null when idle and until source discovery finishes.
+          oneOf:
+            - $ref: "#/components/schemas/SyncProgress"
+            - type: "null"
+        archive_synced:
+          description: >-
+            False while the archive is still being filled for the first time. The server
+            opened it with no sessions or ingested sources, and no sync has completed since.
+          type: boolean
+        timestamp:
+          type: string
+      additionalProperties: false
     SyncReason:
       type: string
       enum: [startup, watch, sweep, manual]

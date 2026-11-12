@@ -1,12 +1,14 @@
 import type { Command } from "commander";
 import { parseFileOperation } from "../../distill.ts";
+import type { Operation } from "../../enrich.ts";
 import { search } from "../../query.ts";
 import {
   byDimension,
   DIMENSIONS,
+  type Dimension,
+  type FileGroup,
   fileHotspots,
   mcpUsage,
-  parseDimension,
   parseFileGroup,
   toolUsage,
   totals,
@@ -14,7 +16,7 @@ import {
 import { tokenEconomics } from "../../token-economics.ts";
 import type { CliContext } from "../context.ts";
 import { parseDay, parseOffset, resolveListScope, type ScopeOptions } from "../list-options.ts";
-import { parseInteger } from "../parse.ts";
+import { parseChoice, parseInteger, parseWith } from "../parse.ts";
 
 export function registerStatsCommands(ctx: CliContext): void {
   const { program, io } = ctx;
@@ -70,21 +72,13 @@ export function registerStatsCommands(ctx: CliContext): void {
   program
     .command("stats")
     .description("usage and cost rollups")
-    .option("--by <dimension>", DIMENSIONS.join(" | "))
-    .action((commandOptions: { by?: string }) =>
+    .option("--by <dimension>", DIMENSIONS.join(" | "), parseChoice(DIMENSIONS))
+    .action((commandOptions: { by?: Dimension }) =>
       ctx.run(() =>
         ctx.withArchive(
           (archive) => {
             if (commandOptions.by != null) {
-              const dimension = parseDimension(commandOptions.by);
-              if (dimension == null) {
-                io.writeErr(
-                  `error: unknown --by value ${JSON.stringify(commandOptions.by)} ` +
-                    `(expected: ${DIMENSIONS.join(" | ")})\n`,
-                );
-                return 2;
-              }
-              const rows = byDimension(archive.db, dimension);
+              const rows = byDimension(archive.db, commandOptions.by);
               ctx.output(rows, () => rows.map((row) => `${row.key}\t${row.sessions}`).join("\n"));
             } else {
               const row = totals(archive.db);
@@ -143,35 +137,28 @@ export function registerStatsCommands(ctx: CliContext): void {
   program
     .command("files")
     .description("file hotspots")
-    .option("--group <group>", "path | ext", "path")
-    .option("--op <op>", "read | edit | write | delete")
+    .option("--group <group>", "path | ext", parseWith(parseFileGroup, ["path", "ext"]), "path")
+    .option(
+      "--op <op>",
+      "read | edit | write | delete",
+      parseWith(parseFileOperation, ["read", "edit", "write", "delete"]),
+    )
     .option("--limit <n>", "max rows", parseInteger, 25)
-    .action((commandOptions: { group: string; op?: string; limit?: number }) =>
-      ctx.run(() => {
-        const group = parseFileGroup(commandOptions.group);
-        if (group == null) {
-          io.writeErr(
-            `error: unknown --group value ${JSON.stringify(commandOptions.group)} ` +
-              "(expected: path | ext)\n",
-          );
-          return 2;
-        }
-        const op = commandOptions.op == null ? null : parseFileOperation(commandOptions.op);
-        if (commandOptions.op != null && op == null) {
-          io.writeErr(
-            `error: unknown --op value ${JSON.stringify(commandOptions.op)} ` +
-              "(expected: read | edit | write | delete)\n",
-          );
-          return 2;
-        }
-        return ctx.withArchive(
+    .action((commandOptions: { group: FileGroup; op?: Operation; limit?: number }) =>
+      ctx.run(() =>
+        ctx.withArchive(
           (archive) => {
-            const rows = fileHotspots(archive.db, group, op, commandOptions.limit ?? 25);
+            const rows = fileHotspots(
+              archive.db,
+              commandOptions.group,
+              commandOptions.op ?? null,
+              commandOptions.limit ?? 25,
+            );
             ctx.output(rows, () => rows.map((row) => `${row.key}\t${row.sessions}`).join("\n"));
           },
           { sync: true },
-        );
-      }),
+        ),
+      ),
     );
 
   const addToolStats = (command: Command): void => {

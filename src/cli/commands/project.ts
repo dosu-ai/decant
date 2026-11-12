@@ -1,12 +1,7 @@
 import { listProjects, type ProjectSummary } from "../../query.ts";
 import type { CliContext } from "../context.ts";
-import {
-  fieldsParser,
-  outputRows,
-  PROJECT_FIELDS,
-  parseLimit,
-  parseOffset,
-} from "../list-options.ts";
+import { fieldsParser, outputRows, PROJECT_FIELDS, parseOffset } from "../list-options.ts";
+import { parsePositiveInteger } from "../parse.ts";
 
 export function registerProjectCommands(ctx: CliContext): void {
   const { program } = ctx;
@@ -15,7 +10,7 @@ export function registerProjectCommands(ctx: CliContext): void {
   project
     .command("ls")
     .description("list projects with session counts and cost")
-    .option("--limit <n>", "max rows (default: all)", parseLimit)
+    .option("--limit <n>", "max rows (default: all)", parsePositiveInteger)
     .option("--offset <n>", "skip this many rows", parseOffset, 0)
     .option(
       "--fields <list>",

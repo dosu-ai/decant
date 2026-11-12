@@ -92,14 +92,6 @@ export function parseDay(value: string): string {
   return day;
 }
 
-export function parseLimit(value: string): number {
-  const limit = parseInteger(value);
-  if (limit < 1) {
-    throw new InvalidArgumentError("expected an integer of 1 or more");
-  }
-  return limit;
-}
-
 export function parseOffset(value: string): number {
   const offset = parseInteger(value);
   if (offset < 0) {

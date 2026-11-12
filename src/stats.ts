@@ -78,6 +78,8 @@ const TOTALS_COLUMNS = `s.id, s.is_subagent,
 
 export function totals(db: Database, filter?: StatsFilter | null): Totals {
   const visible = statsScope(db, "s", filter);
+  // CROSS JOIN keeps the session scope outermost. With no planner statistics
+  // SQLite scans the child table and reruns the scope's subqueries per row.
   const sql = `WITH filtered_session AS (
          SELECT ${TOTALS_COLUMNS} FROM session s ${whereClause(visible)}
        )
@@ -85,8 +87,10 @@ export function totals(db: Database, filter?: StatsFilter | null): Totals {
          (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
          (SELECT COUNT(*) FROM filtered_session
           WHERE is_subagent = 0 AND usage_available = 1) AS usage_sessions,
-         (SELECT COUNT(*) FROM message m JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
-         (SELECT COUNT(*) FROM tool_call t JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
+         (SELECT COUNT(*) FROM filtered_session s2
+          CROSS JOIN message m ON m.session_id = s2.id) AS messages,
+         (SELECT COUNT(*) FROM filtered_session s3
+          CROSS JOIN tool_call t ON t.session_id = s3.id) AS tool_calls,
          (SELECT COALESCE(SUM(total_input_tokens), 0) FROM filtered_session) AS input_tokens,
          (SELECT COALESCE(SUM(total_output_tokens), 0) FROM filtered_session) AS output_tokens,
          (SELECT COALESCE(SUM(total_cache_read_tokens), 0) FROM filtered_session) AS cache_read_tokens,

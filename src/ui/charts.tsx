@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { isolatedPoints } from "../day-series.ts";
+import type * as ChartRuntime from "./chart-runtime.ts";
 import type { AnalyticsChartOption, ECharts as EChartsInstance } from "./chart-runtime.ts";
 import {
   type AnalyticsChartMetric,
@@ -15,6 +16,41 @@ export const HOUR_LABELS = Array.from({ length: 24 }, (_, hour) => hourLabel(hou
 export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export const NO_VALUES: number[] = [];
+
+/**
+ * The chart runtime is its own file in a release build. Resolves to null when
+ * it cannot be fetched, as when Decant was updated or stopped under an open tab.
+ */
+export async function loadChartRuntime(
+  load: () => Promise<typeof ChartRuntime> = () => import("./chart-runtime.ts"),
+): Promise<typeof ChartRuntime | null> {
+  try {
+    return await load();
+  } catch {
+    return null;
+  }
+}
+
+export function ChartUnavailable() {
+  return (
+    <div className="error-state" role="status">
+      <span aria-hidden="true">!</span>
+      <div>
+        <h3>This chart could not load</h3>
+        <p>Decant may have been updated or stopped since this page opened.</p>
+        <div className="state-actions">
+          <button
+            className="secondary-button"
+            onClick={() => window.location.reload()}
+            type="button"
+          >
+            Reload Decant
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export const AnalyticsChart = memo(function AnalyticsChart({
   description,
@@ -41,6 +77,7 @@ export const AnalyticsChart = memo(function AnalyticsChart({
   );
   const chartStateRef = useRef<AnalyticsChartState>(chartState);
   chartStateRef.current = chartState;
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     const element = chartRef.current;
@@ -50,8 +87,12 @@ export const AnalyticsChart = memo(function AnalyticsChart({
     let cancelled = false;
     let disposeChart: (() => void) | null = null;
     void (async () => {
-      const echarts = await import("./chart-runtime.ts");
+      const echarts = await loadChartRuntime();
       if (cancelled) {
+        return;
+      }
+      if (echarts == null) {
+        setUnavailable(true);
         return;
       }
       const chart = echarts.init(element, null, { renderer: "canvas" });
@@ -103,6 +144,9 @@ export const AnalyticsChart = memo(function AnalyticsChart({
     chart.resize();
   }, [chartState.key]);
 
+  if (unavailable) {
+    return <ChartUnavailable />;
+  }
   return <div aria-label={description} className="analytics-chart" ref={chartRef} role="img" />;
 });
 

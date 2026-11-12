@@ -305,7 +305,7 @@ describe("Insights row actions", () => {
   });
 
   test("gives row actions a 44px target on touch layouts", () => {
-    const start = styles.indexOf("@media (pointer: coarse), (max-width: 767px)");
+    const start = styles.indexOf("@media (any-pointer: coarse), (max-width: 767px)");
     expect(start).toBeGreaterThanOrEqual(0);
     const touch = styles.slice(start, styles.indexOf("\n}\n", start));
     expect(touch).toContain(".recommendation-actions :is(.primary-button, .secondary-button)");

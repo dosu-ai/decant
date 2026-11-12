@@ -5247,7 +5247,7 @@ button.signal-row-summary:hover .signal-row-expand {
 }
 
 /* A finger needs 44px. Pointer rows keep the denser controls used elsewhere. */
-@media (pointer: coarse), (max-width: 767px) {
+@media (any-pointer: coarse), (max-width: 767px) {
   .recommendation-actions :is(.primary-button, .secondary-button),
   .signal-prompt-toggle,
   .dosu-row-action {

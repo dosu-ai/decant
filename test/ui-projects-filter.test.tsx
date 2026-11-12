@@ -57,6 +57,10 @@ describe("filterProjects", () => {
     expect(ids(filterProjects(all, "worktree"))).toEqual([3]);
     expect(ids(filterProjects(all, "conductor"))).toEqual([3]);
     expect(ids(filterProjects(all, "codex"))).toEqual([2]);
+    // The badge reads "Copilot Chat" for vscode_copilot, so that text matches.
+    const chat = project({ id: 4, path: "/synthetic/ide", session_tools: ["vscode_copilot"] });
+    expect(ids(filterProjects([...all, chat], "copilot chat"))).toEqual([4]);
+    expect(ids(filterProjects([...all, chat], "vscode_copilot"))).toEqual([4]);
   });
 
   test("every word must match, in any order and any column", () => {

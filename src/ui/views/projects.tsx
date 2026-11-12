@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, ToolBadge } from "../badges.tsx";
+import { Badge, ToolBadge, toolLabel } from "../badges.tsx";
 import { CostValue, EmptyState, StatCard } from "../common.tsx";
 import { relativeTime } from "../date-time.ts";
 import { basename, capitalize, formatInt } from "../format.ts";
@@ -184,7 +184,8 @@ export function ProjectsView({
 
 /**
  * Rows that contain every word of the query, in any of the text a row shows:
- * its name, path, root, kind, worktree tool, and the tools with sessions there.
+ * its name, path, root, kind, worktree tool, and the tools with sessions there,
+ * by id and by the name their badge shows.
  */
 export function filterProjects(projects: ProjectSummary[], query: string): ProjectSummary[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -199,6 +200,7 @@ export function filterProjects(projects: ProjectSummary[], query: string): Proje
       project.is_worktree ? "worktree" : "project",
       project.is_worktree ? worktreeToolLabel(project.worktree_tool) : null,
       ...project.session_tools,
+      ...project.session_tools.map(toolLabel),
     ]
       .filter((value): value is string => value != null)
       .join("\n")

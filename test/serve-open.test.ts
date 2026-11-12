@@ -18,12 +18,18 @@ interface CliProcess {
   stderr: () => string;
 }
 
-function startCli(args: string[], scratch: string, env: Record<string, string> = {}): CliProcess {
+function startCli(
+  args: string[],
+  scratch: string,
+  env: Record<string, string> = {},
+  preload: string[] = [],
+): CliProcess {
   const inherited = { ...process.env };
   delete inherited.BROWSER;
   delete inherited.DECANT_NO_OPEN;
   delete inherited.CI;
-  const child = spawn("bun", ["run", join(repoRoot, "src/cli.ts"), ...args], {
+  const preloads = preload.flatMap((file) => ["--preload", file]);
+  const child = spawn("bun", ["run", ...preloads, join(repoRoot, "src/cli.ts"), ...args], {
     env: {
       ...inherited,
       DECANT_DB: join(scratch, "decant.db"),
@@ -136,6 +142,27 @@ describe("serve banner and auto-open", () => {
       await waitFor(() => cli.stderr().includes("Opening your browser"), "opening banner");
     } finally {
       expect(await stop(cli)).toBe(0);
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("a SIGTERM sent the moment the banner prints stops the server cleanly", async () => {
+    // A supervisor or script may signal as soon as it reads the URL. Without a
+    // handler in place by then, the signal kills the process outright.
+    const scratch = scratchDir();
+    const port = await freePort();
+    const spy = spyBrowser(scratch);
+    const cli = startCli(["serve", "--port", String(port)], scratch, { BROWSER: spy.script }, [
+      join(import.meta.dir, "signal-on-banner.ts"),
+    ]);
+    try {
+      const ended = await new Promise<{ code: number | null; signal: string | null }>((resolve) => {
+        cli.child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(ended).toEqual({ code: 0, signal: null });
+      expect(cli.stderr()).toContain(`    http://127.0.0.1:${port}`);
+    } finally {
+      cli.child.kill("SIGKILL");
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);

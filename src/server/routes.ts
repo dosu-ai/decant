@@ -36,6 +36,7 @@ import {
   installService,
   isServiceProcess,
   removeService,
+  ServiceCommandError,
   ServiceUnavailableError,
   serviceStatus,
   stopService,
@@ -429,12 +430,12 @@ async function backgroundRoute(
     if (error instanceof ServiceUnavailableError) {
       return errorResponse("background_unsupported", error.message, {}, 409);
     }
-    return errorResponse(
-      "background_failed",
-      error instanceof Error ? error.message : String(error),
-      {},
-      500,
-    );
+    if (error instanceof ServiceCommandError) {
+      return errorResponse("background_failed", error.message, {}, 500);
+    }
+    // Anything else may carry paths or internals; the router logs it and
+    // answers with a generic internal_error.
+    throw error;
   }
 }
 

@@ -207,7 +207,8 @@ over. When `stopping` is true, the answering server is the service and stops
 after responding. `409 background_unsupported` means this machine cannot run
 the service, or the archive or executable path contains a control character
 the unit file cannot hold. `500 background_failed` carries the launchd or
-systemd error.
+systemd error. Any other failure returns the generic `500 internal_error`,
+and the server logs its details instead of sending them.
 
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.

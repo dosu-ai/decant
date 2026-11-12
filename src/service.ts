@@ -85,6 +85,9 @@ export class ServiceUnavailableError extends Error {}
  */
 export class UnsafeServicePathError extends ServiceUnavailableError {}
 
+/** launchd or systemd refused a step; its message is safe to show the user. */
+export class ServiceCommandError extends Error {}
+
 export function isServiceProcess(env: Record<string, string | undefined> = process.env): boolean {
   return env[SERVICE_ENV] === "1";
 }
@@ -345,7 +348,7 @@ export async function installService(
     mkdirSync(dirname(serviceLogPath(options)), { recursive: true });
     if (reload && loaded) {
       if (!(await bootoutAndWait(run, target, options))) {
-        throw new Error(
+        throw new ServiceCommandError(
           `launchd was still stopping ${LAUNCHD_LABEL} after ${Math.round(unloadTimeout(options) / 1000)}s. ` +
             "Run the command again once it exits.",
         );
@@ -575,7 +578,9 @@ async function check(run: RunCommand, argv: string[], allowed: number[] = []): P
   const result = await run(argv);
   if (result.code !== 0 && !allowed.includes(result.code)) {
     const detail = (result.stderr || result.stdout).trim();
-    throw new Error(`${argv.join(" ")} failed (exit ${result.code})${detail ? `: ${detail}` : ""}`);
+    throw new ServiceCommandError(
+      `${argv.join(" ")} failed (exit ${result.code})${detail ? `: ${detail}` : ""}`,
+    );
   }
 }
 

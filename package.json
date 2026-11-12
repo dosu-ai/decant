@@ -2,7 +2,7 @@
   "name": "@dosu/decant",
   "version": "0.0.0",
   "private": true,
-  "description": "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, built by Dosu.",
+  "description": "See where your coding agents spend tokens, money, and time. A local-first, searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, and GitHub Copilot sessions, with ATIF import and export. Built by Dosu.",
   "license": "Apache-2.0",
   "repository": "https://github.com/dosu-ai/decant",
   "packageManager": "bun@1.4.4",

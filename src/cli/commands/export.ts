@@ -5,7 +5,9 @@ import { exportTrajectory, toMarkdown } from "../../export.ts";
 import { exportAtif } from "../../export-atif.ts";
 import { getSession, listSessions } from "../../query.ts";
 import type { CliContext } from "../context.ts";
-import { optionalInteger } from "../parse.ts";
+import { optionalInteger, parseChoice } from "../parse.ts";
+
+const EXPORT_FORMATS = ["md", "json", "trajectory", "atif"] as const;
 
 export function registerExportCommand(ctx: CliContext): void {
   const { io } = ctx;
@@ -20,7 +22,11 @@ export function registerExportCommand(ctx: CliContext): void {
     // collide with the global --format table|json|md: Commander resolves a
     // global option's flag anywhere in argv (before or after a subcommand),
     // so a same-named local option on export would be shadowed by the root's.
-    .option("--as <format>", "md | json | trajectory | atif (default: md, or json with --json)")
+    .option(
+      "--as <format>",
+      "md | json | trajectory | atif (default: md, or json with --json)",
+      parseChoice(EXPORT_FORMATS),
+    )
     .option("--out <dir>", "output directory")
     .option("--mirror <dir>", "keep a folder of standalone ATIF documents, one per session")
     .action(
@@ -29,7 +35,7 @@ export function registerExportCommand(ctx: CliContext): void {
         commandOptions: {
           all?: boolean;
           includeSubagents?: boolean;
-          as?: string;
+          as?: (typeof EXPORT_FORMATS)[number];
           out?: string;
           mirror?: string;
         },
@@ -66,16 +72,17 @@ export function registerExportCommand(ctx: CliContext): void {
               { sync: true },
             );
           }
-          const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
-          if (
-            format !== "md" &&
-            format !== "json" &&
-            format !== "trajectory" &&
-            format !== "atif"
-          ) {
-            io.writeErr(`error: unknown export format: ${format}\n`);
+          // Checked before the archive is opened, so a wrong command line exits 2
+          // whether or not the archive exists.
+          if (commandOptions.all === true && commandOptions.out == null) {
+            io.writeErr("error: --all requires --out <dir>\n");
             return 2;
           }
+          if (commandOptions.all !== true && id == null) {
+            io.writeErr("error: provide a session id, or --all --out <dir>\n");
+            return 2;
+          }
+          const format = commandOptions.as ?? (ctx.isJson() ? "json" : "md");
           return ctx.withArchive(
             (archive) => {
               const ext =

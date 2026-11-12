@@ -227,7 +227,13 @@ decant doctor                  # redacted environment report for bug reports
 Run `decant --help` or `decant <command> --help` for every command and flag.
 Read commands support `--json`. Global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`. `--db` or `DECANT_DB` sets the
-archive path.
+archive path. A read command does not create an archive at a path you name, so
+a mistyped path is an error.
+
+Commands exit 0 on success, 1 when the command fails, 2 on a usage error, and 3
+when `sync` drops lines it cannot parse. With `--json`, an error is a JSON
+object with a stable `code` on stderr. See
+[CLI output, errors, and exit codes](docs/cli.md).
 
 ### Local API
 
@@ -240,6 +246,7 @@ at <http://127.0.0.1:3000/api/openapi.json>. See
 
 Using Decant:
 
+- [CLI output, errors, and exit codes](docs/cli.md)
 - [Sources and where Decant finds them](docs/sources.md)
 - [How the analytics are calculated](docs/analytics-methodology.md)
 - [Pricing estimates and their sources](docs/pricing.md)

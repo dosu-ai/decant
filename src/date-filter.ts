@@ -42,8 +42,53 @@ export function dayRangePredicate(
   return { sql: clauses.join(" AND "), params };
 }
 
-export function sessionDatePredicate(alias: string, filter?: DateFilter | null): SqlFragment {
-  return dayRangePredicate(`${alias}.started_at`, isoDate(filter?.from), isoDate(filter?.to));
+/**
+ * Bounds on the UTC day of an ISO timestamp column, so a value stored with an
+ * offset counts on its UTC day. A value SQLite cannot read falls back to its
+ * YYYY-MM-DD prefix. Dates must be valid YYYY-MM-DD strings.
+ */
+export function utcDayRangePredicate(
+  column: string,
+  from: string | null | undefined,
+  to: string | null | undefined,
+): SqlFragment {
+  // An offset moves the UTC day at most one day from the prefix, so a prefix
+  // range one day wider can use the column's index before the exact check.
+  const day = `COALESCE(strftime('%Y-%m-%d', ${utcReadable(column)}), substr(${column}, 1, 10))`;
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (from != null) {
+    clauses.push(`${column} >= ?`, `${day} >= ?`);
+    params.push(shiftDay(from, -1), from);
+  }
+  if (to != null) {
+    clauses.push(`${column} < ?`, `${day} <= ?`);
+    params.push(`${shiftDay(to, 1)}${DAY_END}`, to);
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
+/** `utcDays` compares UTC days; without it the stored prefix decides, which
+ * is the documented analytics rule its per-day buckets share. */
+export function sessionDatePredicate(
+  alias: string,
+  filter?: (DateFilter & { utcDays?: boolean }) | null,
+): SqlFragment {
+  const range = filter?.utcDays === true ? utcDayRangePredicate : dayRangePredicate;
+  return range(`${alias}.started_at`, isoDate(filter?.from), isoDate(filter?.to));
+}
+
+// SQLite reads +05:30 but not +0530, which Claude records may carry.
+function utcReadable(column: string): string {
+  return `CASE WHEN ${column} GLOB '*T*[+-][0-9][0-9][0-9][0-9]'
+    THEN substr(${column}, 1, length(${column}) - 2) || ':' || substr(${column}, -2)
+    ELSE ${column} END`;
+}
+
+function shiftDay(day: string, days: number): string {
+  return new Date(Date.parse(`${day}T00:00:00.000Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 export function whereClause(fragment: SqlFragment): string {

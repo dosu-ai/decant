@@ -93,6 +93,9 @@ export interface ListFilter {
   offset?: number;
   from?: string | null;
   to?: string | null;
+  /** Compare `from` and `to` with each session's UTC start day rather than
+   * the stored date prefix, which keeps a source's UTC offset. */
+  utcDays?: boolean;
 }
 
 export interface SessionSearchIndexRow {
@@ -264,7 +267,10 @@ export function search(
   db: Database,
   query: string,
   limitValue = 30,
-  scope: Pick<SearchFilter, "tool" | "project" | "repo" | "from" | "to" | "offset"> = {},
+  scope: Pick<
+    SearchFilter,
+    "tool" | "project" | "repo" | "from" | "to" | "utcDays" | "offset"
+  > = {},
 ): SearchHit[] {
   const limit = normalizeLimit(limitValue, 30, 1000);
   const start = normalizeOffset(scope.offset);
@@ -310,6 +316,8 @@ export interface SearchFilter {
   offset?: number | null;
   from?: string | null;
   to?: string | null;
+  /** As `ListFilter.utcDays`. */
+  utcDays?: boolean;
 }
 
 export interface SearchPage {

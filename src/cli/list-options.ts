@@ -120,6 +120,7 @@ export interface ListScope {
   repo?: string[];
   from?: string;
   to?: string;
+  utcDays: true;
 }
 
 /** The query filter for the scope flags, or the exit code once an error is on
@@ -133,7 +134,8 @@ export function resolveListScope(
     ctx.io.writeErr(`error: ${message}\n`);
     return code;
   };
-  const scope: ListScope = { from: options.since, to: options.until };
+  // The help promises UTC days, and some sources keep their local offset.
+  const scope: ListScope = { from: options.since, to: options.until, utcDays: true };
   if (options.since != null && options.until != null && options.since > options.until) {
     return fail(2, `--since ${options.since} is after --until ${options.until}`);
   }

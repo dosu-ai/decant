@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep, win32 } from "node:path";
 import { normalizeRemoteUrl, resolveRepoRemote } from "./repo-remote.ts";
 import { resolveGitRoot } from "./worktree.ts";
 
@@ -23,6 +23,11 @@ export type RepoMatch =
 /** The absolute forms a typed path can be stored under: resolved against the
  * current directory, then with symlinks resolved when the directory exists. */
 export function pathCandidates(value: string, env: ScopeEnv): string[] {
+  if (isForeignWindowsPath(value)) {
+    // It comes from a log written on another machine, so a lookup here would
+    // read an unrelated local file.
+    return [normalizeWindowsPath(value)];
+  }
   const home = env.homeDir;
   const expanded =
     home != null && home !== "" && (value === "~" || value.startsWith("~/"))
@@ -58,8 +63,16 @@ export function resolveProjectPath(db: Database, value: string, env: ScopeEnv): 
 /** The repository roots `value` names. Checkouts that share a remote identity
  * are one repository, so the answer can hold several roots. */
 export function resolveRepoRoots(db: Database, value: string, env: ScopeEnv): RepoMatch {
+  // A same-named subdirectory here must not hide two repositories that share
+  // the name, so a bare name is tried as a name first.
+  if (isBareName(value)) {
+    const named = matchName(db, value);
+    if (named != null) {
+      return named;
+    }
+  }
   const dirs = pathCandidates(value, env);
-  const tree = workingTree(dirs.at(-1) as string);
+  const tree = isForeignWindowsPath(value) ? null : workingTree(dirs.at(-1) as string);
   // Every key is the typed value or lies in its working tree, so all of them
   // name the same repository.
   const keys = unique([value, ...dirs, ...(tree?.inside ?? []), tree?.mainRoot]);
@@ -75,24 +88,51 @@ export function resolveRepoRoots(db: Database, value: string, env: ScopeEnv): Re
   if (roots.length > 0) {
     return { kind: "matched", roots };
   }
-
-  if (!value.includes("/") && value !== "." && value !== ".." && !value.startsWith("~")) {
-    const named = (
-      db
-        .query("SELECT DISTINCT COALESCE(root_path, path) AS root FROM project ORDER BY root")
-        .all() as { root: string }[]
-    )
-      .map((row) => row.root)
-      .filter((root) => lastSegment(root) === value);
-    const groups = named.map((root) => repoGroup(db, [root], []));
-    const first = groups[0];
-    if (first != null) {
-      // Two checkouts of one repository share a name and a group.
-      const same = groups.every((group) => group.join("\n") === first.join("\n"));
-      return same ? { kind: "matched", roots: first } : { kind: "ambiguous", candidates: named };
-    }
-  }
   return { kind: "none", tried: dirs };
+}
+
+function isBareName(value: string): boolean {
+  return (
+    value !== "." &&
+    value !== ".." &&
+    !value.startsWith("~") &&
+    !/[\\/]/.test(value) &&
+    !/^[A-Za-z]:/.test(value)
+  );
+}
+
+/** The repositories whose root directory is called `name`, or null for none. */
+function matchName(db: Database, name: string): RepoMatch | null {
+  const named = (
+    db
+      .query("SELECT DISTINCT COALESCE(root_path, path) AS root FROM project ORDER BY root")
+      .all() as { root: string }[]
+  )
+    .map((row) => row.root)
+    .filter((root) => lastSegment(root) === name);
+  const groups = named.map((root) => repoGroup(db, [root], []));
+  const first = groups[0];
+  if (first == null) {
+    return null;
+  }
+  // Two checkouts of one repository share a name and a group.
+  const same = groups.every((group) => group.join("\n") === first.join("\n"));
+  return same ? { kind: "matched", roots: first } : { kind: "ambiguous", candidates: named };
+}
+
+// A drive letter or a UNC share. On a Windows host the host path module
+// already reads these, so only other hosts need the win32 rules.
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+function isForeignWindowsPath(value: string): boolean {
+  return sep !== "\\" && WINDOWS_PATH.test(value);
+}
+
+function normalizeWindowsPath(value: string): string {
+  const normal = win32.normalize(value);
+  return normal.length > win32.parse(normal).root.length && normal.endsWith("\\")
+    ? normal.slice(0, -1)
+    : normal;
 }
 
 interface WorkingTree {

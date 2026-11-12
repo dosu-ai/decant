@@ -239,9 +239,12 @@ archive path.
 - `--repo <value>` matches a repository, its worktrees, and any other checkout
   with the same `origin` remote. The value is a directory inside the repository
   (`--repo .` works from a worktree or a subdirectory), a remote such as
-  `github.com/acme/widget`, or the name of the repository's directory.
+  `github.com/acme/widget`, or the name of the repository's directory. A bare
+  name such as `widget` is checked against repository names first, so write
+  `./widget` to mean a folder in the current directory.
 - `--since` and `--until` take `YYYY-MM-DD` days in UTC. Both days are
-  included, and each session counts on the day it started.
+  included, and each session counts on the UTC day it started, including a
+  session whose log records a local time with an offset.
 - `--limit` and `--offset` page through the rows.
 
 A path or repository the archive has never recorded exits with code 1 and an

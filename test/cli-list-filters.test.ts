@@ -267,6 +267,19 @@ describe("ls --repo", () => {
     expect(result.stderr).toContain(otherGadget);
   });
 
+  test("a bare name stays ambiguous when the current directory holds a folder of that name", () => {
+    mkdirSync(join(widget, "gadget"), { recursive: true });
+    const bare = runFrom(widget, "--json", "ls", "--repo", "gadget");
+    expect(bare.code).toBe(2);
+    expect(bare.stdout).toBe("");
+    expect(bare.stderr).toContain("names several repositories");
+    expect(bare.stderr).toContain(otherGadget);
+    // Written as a path, the folder still means the checkout around it.
+    const path = runFrom(widget, "--json", "ls", "--repo", "./gadget", "--fields", "title");
+    expect(path.code).toBe(0);
+    expect(JSON.parse(path.stdout)).toEqual(WIDGET_TITLES.map((title) => ({ title })));
+  });
+
   test("a directory outside every known repository is an error, not an empty list", async () => {
     const result = await run("--json", "ls", "--repo", join(base, "elsewhere"));
     expect(result.code).toBe(1);
@@ -573,5 +586,130 @@ describe("repository resolution from stored rows alone", () => {
       kind: "matched",
       roots: [cog, "/synthetic/cog-clone"],
     });
+  });
+});
+
+describe.skipIf(process.platform === "win32")("Windows paths stored from another machine", () => {
+  const root = "C:\\work\\windows";
+  const share = "\\\\server\\share\\repo";
+
+  function resolveBoth(value: string) {
+    const db = openDb(join(base, "windows.db"));
+    try {
+      const insert = db.query(
+        `INSERT OR IGNORE INTO project(path, name, is_worktree, root_path, root_source)
+         VALUES (?1, ?1, 0, ?1, 'self')`,
+      );
+      insert.run(root);
+      insert.run(share);
+      return {
+        project: resolveProjectPath(db, value, { cwd: base }),
+        repo: resolveRepoRoots(db, value, { cwd: base }),
+      };
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("a trailing backslash or a dot segment still names the stored path", () => {
+    for (const value of [root, `${root}\\`, "C:\\work\\.\\windows", "C:\\work\\tmp\\..\\windows"]) {
+      expect(resolveBoth(value)).toEqual({
+        project: { path: root },
+        repo: { kind: "matched", roots: [root] },
+      });
+    }
+    expect(resolveBoth(`${share}\\`).project).toEqual({ path: share });
+  });
+
+  test("a miss reports the Windows form it looked for", () => {
+    expect(resolveBoth("C:\\work\\other\\").project).toEqual({
+      path: null,
+      tried: ["C:\\work\\other"],
+    });
+  });
+});
+
+describe("--since and --until across a UTC offset", () => {
+  const offsetDb = join(base, "offsets.db");
+  // Each start is shown with its UTC day. The offset forms cross midnight.
+  const STARTS: [title: string, startedAt: string][] = [
+    ["clock west late", "2026-03-01T23:30:00-08:00"], // 2026-03-02
+    ["clock west late no colon", "2026-03-01T23:45:00-0800"], // 2026-03-02
+    ["clock east early", "2026-03-02T02:00:00+09:00"], // 2026-03-01
+    ["clock utc first", "2026-03-01T12:00:00.000Z"], // 2026-03-01
+    ["clock utc second", "2026-03-02T12:00:00.000Z"], // 2026-03-02
+  ];
+  {
+    const db = openDb(offsetDb);
+    try {
+      db.query(
+        "INSERT INTO project(id, path, name, is_worktree) VALUES (1, '/synthetic/tz', 'tz', 0)",
+      ).run();
+      for (const [index, [title, startedAt]] of STARTS.entries()) {
+        const sessionId = Number(
+          db
+            .query(
+              `INSERT INTO session(tool, source_session_id, source_path, project_id, title,
+                                   started_at, message_count)
+               VALUES ('codex', ?1, ?2, 1, ?3, ?4, 1)`,
+            )
+            .run(`tz-${index}`, `/synthetic/tz/${index}.jsonl`, title, startedAt).lastInsertRowid,
+        );
+        const messageId = Number(
+          db
+            .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', '{}')")
+            .run(sessionId).lastInsertRowid,
+        );
+        db.query(
+          `INSERT INTO block (message_id, session_id, ordinal, type, text)
+           VALUES (?1, ?2, 0, 'text', ?3)`,
+        ).run(messageId, sessionId, title);
+      }
+    } finally {
+      closeDb(db);
+    }
+  }
+  const runTz = (...args: string[]) =>
+    runCli(["--db", offsetDb, "--no-sync", "--json", ...args], {
+      env: { DECANT_NO_SYNC: "1" },
+      homeDir: home,
+    });
+  const named = async (key: "title" | "session_title", ...args: string[]) => {
+    const result = await runTz(...args);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    return (JSON.parse(result.stdout) as Record<string, string>[]).map((row) => row[key]).sort();
+  };
+  const MARCH_1 = ["clock east early", "clock utc first"];
+  const MARCH_2 = ["clock utc second", "clock west late", "clock west late no colon"];
+
+  test("ls counts a negative or a positive offset on its UTC day", async () => {
+    expect(await named("title", "ls", "--since", "2026-03-02")).toEqual(MARCH_2);
+    expect(await named("title", "ls", "--until", "2026-03-01")).toEqual(MARCH_1);
+    expect(await named("title", "ls", "--since", "2026-03-01", "--until", "2026-03-01")).toEqual(
+      MARCH_1,
+    );
+  });
+
+  test("search reads the same days", async () => {
+    expect(await named("session_title", "search", "clock", "--since", "2026-03-02")).toEqual(
+      MARCH_2,
+    );
+    expect(await named("session_title", "search", "clock", "--until", "2026-03-01")).toEqual(
+      MARCH_1,
+    );
+  });
+
+  test("callers that do not ask for UTC days keep the stored prefix", () => {
+    const db = openDb(offsetDb);
+    try {
+      const titlesOf = (filter: Parameters<typeof listSessions>[1]) =>
+        listSessions(db, filter)
+          .map((row) => row.title)
+          .sort();
+      expect(titlesOf({ from: "2026-03-02" })).toEqual(["clock east early", "clock utc second"]);
+      expect(titlesOf({ from: "2026-03-02", utcDays: true })).toEqual(MARCH_2);
+    } finally {
+      closeDb(db);
+    }
   });
 });

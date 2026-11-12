@@ -572,7 +572,7 @@ test("unknown response part diagnostics hide non-identifier labels", () => {
   const secret = "SYNTHETIC_SECRET_TOKEN";
   const { issues } = parseVscodeCopilotSession(
     "privacy",
-    logWith({ response: [{ kind: secret + " invalid" }] }),
+    logWith({ response: [{ kind: `${secret} invalid` }] }),
   );
   expect(issues).toHaveLength(1);
   expect(issues[0]?.error).toContain("(unprintable type)");

@@ -14,7 +14,7 @@ permissions: {}
 jobs:
   typescript:
     name: TypeScript (biome, tsc, test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -51,7 +51,7 @@ jobs:
 
   docker:
     name: Docker (multi-arch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

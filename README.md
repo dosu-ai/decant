@@ -191,7 +191,7 @@ Linux. See [Running in the background](docs/data-lifecycle.md#running-in-the-bac
 | Page | What it shows |
 | --- | --- |
 | Analytics | Token, cost, context, and agent-time rollups across sessions |
-| Insights | Recommendations drawn from your history, and the ones you have implemented |
+| Insights | Recommendations drawn from your history, the ones you have implemented, and general setup ideas not derived from your archive |
 | Sessions | Sessions and their retained transcript messages |
 | Search | Full-text matches in prompts, responses, tool names, and tool inputs |
 | Projects | Sessions and cost for each project |

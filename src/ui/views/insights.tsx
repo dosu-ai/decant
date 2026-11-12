@@ -202,7 +202,7 @@ export function RecommendationActions({
       {action === "launch" || action === "copy" ? (
         <button
           className="secondary-button"
-          disabled={busy != null}
+          disabled={busy === "copy"}
           onClick={() => (action === "copy" ? onComplete(row) : onCopy(row))}
           type="button"
         >
@@ -454,7 +454,14 @@ export function InsightsView({
     });
   };
   const copyPrompt = (row: Recommendation) => {
-    startAction(row, "copy");
+    // Copying stays open during a launch, so a launch that never answers still
+    // leaves a way out. It must not replace the launch entry, or Run comes back.
+    const tracked = pending[row.key] == null;
+    if (tracked) {
+      startAction(row, "copy");
+    } else {
+      setCopyFeedback(null);
+    }
     void copyTextToClipboard(handoffPrompt(row))
       .then(() => {
         setCopyFeedback({
@@ -471,7 +478,11 @@ export function InsightsView({
             "Could not copy the setup prompt. Open the full prompt in the row and copy it from there.",
         });
       })
-      .finally(() => finishAction(row, "copy"));
+      .finally(() => {
+        if (tracked) {
+          finishAction(row, "copy");
+        }
+      });
   };
   const completeRecommendation = (row: Recommendation) => {
     const action = recommendationAction(row, canLaunch && settingsInfo != null);

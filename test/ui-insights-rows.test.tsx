@@ -292,6 +292,18 @@ describe("Insights row actions", () => {
     expect(both).toContain('disabled=""');
   });
 
+  test("keeps the prompt copyable while a launch is still running", () => {
+    // A launch request that never answers must not lock the only other way to
+    // hand the prompt to an agent.
+    const key = signal().key;
+    const launching = actions(signal(), { pending: { [key]: "launch" } });
+    const buttons = launching.match(/<button[^>]*>/g) ?? [];
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toContain('disabled=""');
+    expect(buttons[1]).not.toContain('disabled=""');
+    expect(launching).toContain("Copy setup prompt");
+  });
+
   test("gives row actions a 44px target on touch layouts", () => {
     const start = styles.indexOf("@media (pointer: coarse), (max-width: 767px)");
     expect(start).toBeGreaterThanOrEqual(0);

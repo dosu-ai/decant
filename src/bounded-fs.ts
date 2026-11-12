@@ -1,4 +1,4 @@
-import { dirname, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import { getDecantLogger } from "./logging.ts";
 
@@ -42,11 +42,12 @@ const HELPER_START_MS = 5000;
  * the helper, so it must not grow with the file. */
 export const MAX_TEXT_BYTES = 8 * 1024 * 1024;
 
-// Ledger layout: a version counter, then a state and a byte length per slot,
-// then each slot's UTF-8 path.
+// Ledger layout: a version counter, then a state, a byte length, and a count of
+// parked helpers per slot, then each slot's UTF-8 path.
 const SLOTS = 8;
 const PATH_BYTES = 4096;
-const HEADER_INTS = 1 + SLOTS * 2;
+const SLOT_INTS = 3;
+const HEADER_INTS = 1 + SLOTS * SLOT_INTS;
 const FREE = 0;
 const CLAIMED = 1;
 const BLOCKED = 2;
@@ -133,10 +134,13 @@ self.onmessage = ({ data }) => {
   }
   if (data.op === "leave") {
     if (data.ledger != null) {
-      // The stalled call came back, so the location answers again.
+      // Only the last parked helper on the slot frees it, so a call that is
+      // still blocked stays counted against the cap.
       const ledger = new Int32Array(data.ledger);
-      Atomics.store(ledger, data.stateIndex, 0);
-      Atomics.add(ledger, 0, 1);
+      if (Atomics.sub(ledger, data.stateIndex + 2, 1) === 1) {
+        Atomics.store(ledger, data.stateIndex, 0);
+        Atomics.add(ledger, 0, 1);
+      }
     }
     self.onmessage = null;
     return;
@@ -196,7 +200,7 @@ class ProbeHelper {
   }
 
   /** Ends the helper once its stalled call returns. With a ledger slot, it
-   * frees that slot first. */
+   * releases its hold on that slot first. */
   leaveOnReturn(ledger?: SharedArrayBuffer, stateIndex?: number): void {
     if (ledger != null && !isMainThread) {
       // A sync worker that drains would end the helper before it reports.
@@ -245,30 +249,45 @@ function blockedRoots(ledger: SharedArrayBuffer): string[] {
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const roots: string[] = [];
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    if (Atomics.load(ints, 1 + slot * 2) === BLOCKED) {
-      const length = Atomics.load(ints, 2 + slot * 2);
+    if (Atomics.load(ints, 1 + slot * SLOT_INTS) === BLOCKED) {
+      const length = Atomics.load(ints, 2 + slot * SLOT_INTS);
       roots.push(Buffer.from(slotBytes(ledger, slot, length)).toString("utf8"));
     }
   }
   return roots;
 }
 
-/** The index of the slot's state, or -1 when every slot is taken. */
-function claimSlot(ledger: SharedArrayBuffer, root: string): number {
+/** A slot held by `holders` parked helpers until each one returns: a free slot
+ * for `root`, else one that is already taken. Null when neither is found. */
+function holdSlot(
+  ledger: SharedArrayBuffer,
+  root: string,
+  holders: number,
+): { stateIndex: number; claimed: boolean } | null {
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const bytes = Buffer.from(root, "utf8");
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    const stateIndex = 1 + slot * 2;
+    const stateIndex = 1 + slot * SLOT_INTS;
     if (Atomics.compareExchange(ints, stateIndex, FREE, CLAIMED) !== FREE) {
       continue;
     }
     slotBytes(ledger, slot, bytes.length).set(bytes);
     Atomics.store(ints, stateIndex + 1, bytes.length);
+    Atomics.store(ints, stateIndex + 2, holders);
     Atomics.store(ints, stateIndex, BLOCKED);
     Atomics.add(ints, 0, 1);
-    return stateIndex;
+    return { stateIndex, claimed: true };
   }
-  return -1;
+  // Another thread filled the last slot first. Joining a taken slot keeps
+  // these helpers counted, and a full ledger tries nothing new meanwhile.
+  for (let slot = 0; slot < SLOTS; slot += 1) {
+    const stateIndex = 1 + slot * SLOT_INTS;
+    const held = Atomics.load(ints, stateIndex + 2);
+    if (held > 0 && Atomics.compareExchange(ints, stateIndex + 2, held, held + holders) === held) {
+      return { stateIndex, claimed: false };
+    }
+  }
+  return null;
 }
 
 function isUnder(path: string, root: string): boolean {
@@ -320,8 +339,7 @@ export class BoundedFs implements ProbeFs {
   }
 
   realPath(path: string): string {
-    const absolute = resolve(path);
-    return this.#call("realPath", absolute)?.toString("utf8") ?? absolute;
+    return this.#call("realPath", path)?.toString("utf8") ?? resolve(path);
   }
 
   isDirectory(path: string): boolean {
@@ -329,6 +347,8 @@ export class BoundedFs implements ProbeFs {
   }
 
   #call(op: Op, path: string, maxBytes = 0): Buffer | null {
+    // Only the ledger key is normalized. The kernel follows a symlink before
+    // `..`, so `link/..` may name a folder that `resolve` would not.
     const target = resolve(path);
     // The kernel refuses a longer path, and a ledger slot could not hold it.
     if (target.length * 3 > PATH_BYTES && Buffer.byteLength(target) > PATH_BYTES) {
@@ -339,7 +359,8 @@ export class BoundedFs implements ProbeFs {
       this.#unanswered += 1;
       return null;
     }
-    const answer = helper.request(op, target, maxBytes, this.#deadlineMs);
+    const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
+    const answer = helper.request(op, absolute, maxBytes, this.#deadlineMs);
     if (typeof answer !== "symbol") {
       return answer;
     }
@@ -379,7 +400,7 @@ export class BoundedFs implements ProbeFs {
     // The shallowest ancestor that also stalls covers its siblings in one
     // entry, at the cost of one more stalled helper.
     let root = path;
-    let owner = stalled;
+    const parked = [stalled];
     for (const ancestor of ancestors(path)) {
       const helper = this.#helper();
       if (helper == null) {
@@ -387,18 +408,20 @@ export class BoundedFs implements ProbeFs {
       }
       if (typeof helper.request("open", ancestor, 0, this.#deadlineMs) === "symbol") {
         this.#idle = null;
-        stalled.leaveOnReturn();
         root = ancestor;
-        owner = helper;
+        parked.push(helper);
         break;
       }
     }
-    const stateIndex = claimSlot(this.#ledger, root);
-    if (stateIndex === -1) {
-      owner.leaveOnReturn();
+    // The ancestor can answer while the first call stays blocked, so both
+    // helpers hold the slot.
+    const slot = holdSlot(this.#ledger, root, parked.length);
+    for (const helper of parked) {
+      helper.leaveOnReturn(slot == null ? undefined : this.#ledger, slot?.stateIndex);
+    }
+    if (slot?.claimed !== true) {
       return;
     }
-    owner.leaveOnReturn(this.#ledger, stateIndex);
     logger.warning("A project directory did not answer in time and is skipped.", {
       "event.name": "decant.ingest.directory_unreachable",
       "file.path": root,

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
@@ -321,6 +321,22 @@ describe("git worktree pointer resolution", () => {
     expect(resolveGitRoot(missing)).toBeNull();
     writeFileSync(join(missing, ".git"), "gitdir: ../.git/modules/foo\n");
     expect(resolveGitRoot(missing)).toBeNull();
+  });
+
+  test("git pointer behind a symlink and `..` is read where the kernel resolves it", () => {
+    const root = tempDir("decant-symlink-git-");
+    mkdirSync(join(root, "actual", "sub"), { recursive: true });
+    symlinkSync(join(root, "actual", "sub"), join(root, "alias"));
+    writeFileSync(
+      join(root, "actual", ".git"),
+      "gitdir: /Users/dev/acme/app/.git/worktrees/actual\n",
+    );
+    // `alias/..` is `actual` on disk, while its lexical parent has no `.git`.
+    expect(resolveGitRoot(`${root}/alias/..`)).toMatchObject({
+      rootPath: "/Users/dev/acme/app",
+      worktreeLabel: "actual",
+      source: "git",
+    });
   });
 
   test("git pointer in external container infers container tool", () => {

@@ -600,9 +600,9 @@ diagnostic, which `decant sync --json` counts in `issues_by_code` and the
 session's issue list shows. `decant sync` and `decant watch` also log a
 `decant.ingest.directory_unreachable` warning that names the folder.
 
-The skip ends when the stalled read returns, for example after you allow access
-in System Settings or the mount comes back. The next sync reads the directory
-again and re-derives the affected OpenCode sessions once.
+The skip ends when every stalled read in that folder returns, for example after
+you allow access in System Settings or the mount comes back. The next sync reads
+the directory again and re-derives the affected OpenCode sessions once.
 
 ## Automatic and explicit sync
 

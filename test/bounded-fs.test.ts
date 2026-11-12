@@ -109,6 +109,22 @@ describe("BoundedFs on readable paths", () => {
     expect(fs.readText(join(dir, "over.json"))).toBeNull();
   });
 
+  test("follows a symlink before `..`, as the kernel does", () => {
+    const dir = tempDir();
+    const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
+    mkdirSync(join(dir, "actual", "sub"), { recursive: true });
+    symlinkSync(join(dir, "actual", "sub"), join(dir, "alias"));
+    writeFileSync(join(dir, "actual", "marker"), "actual");
+    writeFileSync(join(dir, "marker"), "lexical");
+
+    // Template strings, because join would drop `alias/..` the way resolve does.
+    // Bun's realpath is itself lexical about `..`, so that call only has to match it.
+    expect(fs.realPath(`${dir}/alias/..`)).toBe(realpathSync.native(`${dir}/alias/..`));
+    expect(fs.readText(`${dir}/alias/../marker`)).toBe("actual");
+    expect(fs.readSmallFile(`${dir}/alias/../marker`, 64)).toBe("actual");
+    expect(fs.isDirectory(`${dir}/alias/../sub`)).toBe(true);
+  });
+
   test("reads a small regular file and refuses anything else", () => {
     const dir = tempDir();
     const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
@@ -222,6 +238,31 @@ describe("BoundedFs on a path that never answers", () => {
       await eventually(() => next.readText(join(protectedDir, "two", "opencode.json")) === "{}"),
     ).toBe(true);
     expect(fs.isDirectory(join(protectedDir, "one", "deep"))).toBe(true);
+  });
+
+  test("keeps a blocked call counted after the folder above it answers", async () => {
+    const dir = tempDir();
+    const protectedDir = join(dir, "Documents");
+    mkdirSync(join(protectedDir, "one"), { recursive: true });
+    mkdirSync(join(protectedDir, "two"), { recursive: true });
+    writeFileSync(join(protectedDir, "two", "opencode.json"), "{}");
+    // Past the gate, this read still blocks on the FIFO.
+    const pipe = fifo(join(protectedDir, "one", "opencode.json"));
+    const options = stalled(protectedDir);
+    const fs = bounded(options);
+
+    expect(fs.readText(pipe)).toBeNull();
+    // The folder answers again, and its helper returns, while the read does not.
+    open(options.stall.gate);
+    await Bun.sleep(250);
+
+    // A freed slot would let this read park a third helper the ledger does not count.
+    expect(elapsed(() => expect(fs.readText(pipe)).toBeNull())).toBeLessThan(DEADLINE_MS / 2);
+    const sibling = join(protectedDir, "two", "opencode.json");
+    expect(fs.readText(sibling)).toBeNull();
+
+    releaseFifo(pipe);
+    expect(await eventually(() => fs.readText(sibling) === "{}")).toBe(true);
   });
 
   test("stops trying new paths once the ledger is full", () => {

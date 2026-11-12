@@ -1227,6 +1227,25 @@ describe("session rm", () => {
     expect(refused.stderr).toContain("--yes");
     expect(refused.stdout).toBe("");
 
+    // Under --json the refusal is the result on stdout, still with exit 2.
+    const json = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--quiet",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+    ]);
+    expect(json).toMatchObject({ code: 2, stderr: "" });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      deleted: false,
+      session_id: rootId,
+      descendants: 1,
+      error: "refusing to delete a session tree without --yes",
+    });
+
     // There is no un-delete, so a refused guard has to leave the archive
     // byte-for-byte as it found it.
     expect(sessionCount(dbPath)).toBe(2);

@@ -118,6 +118,18 @@ describe("an explicit archive path that does not exist", () => {
     expect(existsSync(join(workDir, "mirror-out"))).toBe(false);
   });
 
+  test("a wrong export command line is a usage error even without an archive", async () => {
+    const dir = mkdtempSync(join(workDir, "missing-export-"));
+    const missing = join(dir, "typo.db");
+    for (const args of [["export"], ["export", "--all"]]) {
+      const result = await run(["--db", missing, "--json", ...args]);
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(lastErrorLine(result).error.code).toBe("usage_error");
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   test("DECANT_DB counts as explicit and is named in the message", async () => {
     const dir = mkdtempSync(join(workDir, "missing-env-"));
     const missing = join(dir, "typo.db");

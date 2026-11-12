@@ -15,7 +15,9 @@ writes a shell script.
 
 A command that fails writes nothing to stdout, with two exceptions.
 `session rm --json` and `recommendations mark --json` report a failed operation
-as their JSON result on stdout, with an `error` string, and exit 1.
+as their JSON result on stdout, with an `error` string. They exit 1 when the
+session or recommendation does not exist. `session rm` exits 2 when the session
+has descendants and `--yes` was not passed.
 
 ## Exit codes
 

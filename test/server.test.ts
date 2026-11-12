@@ -969,6 +969,79 @@ describe("server routes", () => {
     expect(await known.json()).toMatchObject({ code: "launch_unsupported_platform" });
   });
 
+  test("a launch starts in the project a recommendation is about, never where the client says", async () => {
+    const config = freshConfig();
+    const projectDir = join(workDir, `launch-project-${dbCounter}`);
+    mkdirSync(projectDir);
+    const db = openDb(config.dbPath);
+    db.query("INSERT INTO project(id, path, root_path) VALUES (1, ?1, ?1)").run(projectDir);
+    db.exec("INSERT INTO project(id, path, root_path) VALUES (2, '/work/gone', '/work/gone')");
+    const insertSession = db.prepare(
+      `INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+       VALUES (?1, 'claude_code', 'launch-' || ?1, ?2, datetime('now'))`,
+    );
+    const insertRead = db.prepare(
+      `INSERT INTO file_ref(session_id, path, rel_path, ext, operation)
+       VALUES (?1, 'AGENTS.md', 'AGENTS.md', 'md', 'read')`,
+    );
+    for (let index = 0; index < 18; index += 1) {
+      insertSession.run(index + 1, index < 9 ? 1 : 2);
+      insertRead.run(index + 1);
+    }
+    regenerate(db);
+    db.close();
+
+    const rows = (await route(config, "/api/recommendations")).body as {
+      key: string;
+      project_path: string | null;
+      project_label: string | null;
+    }[];
+    const present = rows.find((row) => row.project_path === projectDir);
+    const gone = rows.find((row) => row.project_path === "/work/gone");
+    expect(present?.key).toStartWith("signal:hot-context:AGENTS.md.p");
+    expect(gone?.project_label).toBe("gone");
+
+    const priorSkillsDir = process.env.DECANT_SKILLS_DIR;
+    delete process.env.DECANT_SKILLS_DIR;
+    const home = process.env.HOME ?? ".";
+    const post = (body: unknown) =>
+      handleRequest(
+        new Request("http://127.0.0.1:3000/api/launch/agent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        config,
+        { launchPlatform: "linux" },
+      );
+    try {
+      const inProject = await post({ agent: "codex", prompt: "go", key: present?.key });
+      expect(await inProject.json()).toMatchObject({
+        code: "launch_unsupported_platform",
+        dir: projectDir,
+      });
+      // The directory is gone, so the launch starts where it always did and
+      // the prompt it would run says so.
+      const fallback = (await (
+        await post({ agent: "codex", prompt: "go", key: gone?.key })
+      ).json()) as { dir: string; command: string };
+      expect(fallback.dir).toBe(home);
+      expect(fallback.command).toContain("could not find that project directory");
+      const setupWide = await post({ agent: "codex", prompt: "go", key: "catalog:agents-md" });
+      expect(await setupWide.json()).toMatchObject({ dir: home });
+      const noKey = await post({ agent: "codex", prompt: "go" });
+      expect(await noKey.json()).toMatchObject({ dir: home });
+
+      // A directory in the request body is not read.
+      const steered = await post({ agent: "codex", prompt: "go", dir: projectDir });
+      expect(await steered.json()).toMatchObject({ dir: home });
+    } finally {
+      if (priorSkillsDir != null) {
+        process.env.DECANT_SKILLS_DIR = priorSkillsDir;
+      }
+    }
+  });
+
   test("lists, gets, and searches sessions", async () => {
     const config = freshConfig();
     seed(config);

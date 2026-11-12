@@ -72,6 +72,44 @@ function seededEnriched(): Database {
   return db;
 }
 
+describe("stats query plans", () => {
+  // Capture the statement totals() prepares, then EXPLAIN it. An archive has
+  // no planner statistics until its first sync has ingested some sessions.
+  function childCountPlan(analyzed: boolean): string {
+    const db = seededEnriched();
+    if (analyzed) {
+      db.exec("ANALYZE");
+    } else {
+      expect(db.query("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").get()).toBeNull();
+    }
+    const statements: string[] = [];
+    const query = db.query.bind(db);
+    (db as unknown as { query: (sql: string) => unknown }).query = (sql: string) => {
+      statements.push(sql);
+      return query(sql);
+    };
+    totals(db);
+    const sql = statements.find((statement) => statement.includes("filtered_session")) ?? "";
+    const plan = (query(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
+      .map((row) => row.detail)
+      .join("\n");
+    db.close();
+    return plan;
+  }
+
+  for (const analyzed of [false, true]) {
+    const archive = analyzed ? "an analyzed archive" : "an archive with no statistics";
+    test(`totals count messages and tool calls per session on ${archive}`, () => {
+      const plan = childCountPlan(analyzed);
+      // Scanning the child table instead reruns the session scope, with its
+      // visibility subqueries, once per message or tool call.
+      expect(plan).toContain("SEARCH m USING COVERING INDEX idx_message_session (session_id=?)");
+      expect(plan).toMatch(/SEARCH t USING COVERING INDEX idx_toolcall_\w+ \(session_id=\?\)/);
+      expect(plan).not.toMatch(/SCAN [mt]\b/);
+    });
+  }
+});
+
 describe("stats rollups", () => {
   test("filters provider and client combinations from recorded session metadata", () => {
     const db = freshDb();

@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ToolBadge } from "../src/ui/badges.tsx";
 import { readUiSource } from "./ui-source.ts";
 
 const main = readUiSource();
 
 describe("Gemini CLI source copy", () => {
   test("labels Gemini sessions instead of falling back to the wire string", () => {
-    expect(main).toMatch(/tool === "gemini"[\s\S]{0,300}tone="gemini"[\s\S]{0,200}Gemini/);
+    const badge = renderToStaticMarkup(createElement(ToolBadge, { tool: "gemini" }));
+    expect(badge).toContain('class="badge tone-gemini"');
+    expect(badge).toEndWith("Gemini</span>");
     expect(main).toContain('{ key: "gemini", label: "Gemini"');
   });
 

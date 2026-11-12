@@ -1,12 +1,14 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { countSearches } from "./buckets.ts";
 import { withImmediateTransaction } from "./db.ts";
-import { mcpServerLabel, mcpServerLabels } from "./mcp-names.ts";
+import { mcpServerLabel, mcpServerLabels, mcpServerOrigin } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
+import { basename } from "./worktree.ts";
 
 export interface Recommendation {
   key: string;
@@ -22,6 +24,12 @@ export interface Recommendation {
   tone: string | null;
   impact_label: string | null;
   score: number;
+  /** Where "Run" starts for a row about one project. Null for setup-wide rows. */
+  project_path: string | null;
+  /** The archive's repository key, as the `repo` filter and dimension use it. */
+  project_root: string | null;
+  project_label: string | null;
+  project_remote: string | null;
 }
 
 export type StatusFilter = "open" | "implemented" | "all";
@@ -57,6 +65,16 @@ interface PromotionCard {
 }
 
 const SKILLS_URL = "https://code.claude.com/docs/en/skills";
+const ERROR_MIN_CALLS = 20;
+const ERROR_MIN_ERRORS = 5;
+const ERROR_MIN_RATE = 0.12;
+// Tool errors would otherwise fill the list, so the rest fold into one row.
+const ERROR_HOTSPOT_MAX = 3;
+const ERROR_TAIL_NAMES = 5;
+// A remote connector cannot be fixed locally, so it ranks below tools that can.
+const CONNECTOR_SCORE_FACTOR = 0.5;
+const PROJECT_SIGNAL_MAX = 2;
+const SIGNAL_MAX = 12;
 const HOT_CONTEXT_MIN_SESSIONS = 8;
 const HOT_CONTEXT_MAX_EDIT_SESSIONS = 2;
 const CHURN_MIN_SESSIONS = 6;
@@ -116,6 +134,19 @@ export function parseStatusFilter(value: string): StatusFilter | null {
   return STATUS_FILTERS.includes(value as StatusFilter) ? (value as StatusFilter) : null;
 }
 
+interface Candidate {
+  rec: Recommendation;
+  /** The key this row had before its identity changed, whose state it inherits. */
+  legacy?: { key: string; detail?: string; server?: string | null };
+}
+
+interface SignalSet {
+  /** The ranked rows the list shows, after every cap. */
+  shown: Recommendation[];
+  /** Every row that met its threshold, including the ones a cap left out. */
+  eligible: Candidate[];
+}
+
 /**
  * `recentTools` is the uncapped recent-window tool ranking when the caller
  * already has it; the signals use its first 500 rows, exactly what the capped
@@ -125,6 +156,10 @@ export function signals(
   db: Database,
   recentTools?: ReturnType<typeof toolUsage>,
 ): Recommendation[] {
+  return signalSet(db, recentTools).shown;
+}
+
+function signalSet(db: Database, recentTools?: ReturnType<typeof toolUsage>): SignalSet {
   const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
   const since = recentWindowStart();
   const recent = { from: since };
@@ -134,19 +169,34 @@ export function signals(
     (left, right) =>
       right.estimated_cost_usd - left.estimated_cost_usd || compareCodePoints(left.key, right.key),
   );
-  const out = [
-    ...errorHotspots(tools),
+  const projects = projectIndex(db);
+  const errors = errorHotspots(tools, recentTools?.slice(500) ?? []);
+  const perProject = [
+    hotContextFiles(db, visibleSession, since, projects),
+    churnFiles(db, visibleSession, since, projects),
+    searchHeavy(db, visibleSession, since, projects),
+  ];
+  const setupWide = [
     ...heavyServers(mcp),
     ...heavyTools(tools),
     ...costConcentration(models),
-    ...hotContextFiles(db, visibleSession, since),
-    ...churnFiles(db, visibleSession, since),
-    ...searchHeavy(db, visibleSession, since),
-    ...abandonedRate(db, visibleSession, since),
+    ...abandonedRate(db, visibleSession, since, projects),
     ...ingestHealth(db, visibleSession, since),
   ];
-  out.sort((left, right) => right.score - left.score || compareCodePoints(left.key, right.key));
-  return out.slice(0, 12);
+  const shown = [
+    ...errors.shown,
+    ...setupWide,
+    ...perProject.flatMap((rows) => rows.slice(0, PROJECT_SIGNAL_MAX).map((row) => row.rec)),
+  ];
+  shown.sort(byRank);
+  return {
+    shown: shown.slice(0, SIGNAL_MAX),
+    eligible: [...errors.eligible, ...setupWide.map((rec) => ({ rec })), ...perProject.flat()],
+  };
+}
+
+function byRank(left: Recommendation, right: Recommendation): number {
+  return right.score - left.score || compareCodePoints(left.key, right.key);
 }
 
 function recentWindowStart(): string {
@@ -177,6 +227,7 @@ export function catalog(): Recommendation[] {
     tone: null,
     impact_label: null,
     score: 0,
+    ...NO_PROJECT,
   });
 
   return [
@@ -188,7 +239,7 @@ export function catalog(): Recommendation[] {
       "One machine-readable contract of build and test commands, conventions, and boundaries that every agent reads first. Start here.",
       "https://agents.md",
       "agents.md standard",
-      "Create a high-quality AGENTS.md at this repo root following the agents.md standard. Include the exact build, test, and lint commands, the conventions, and the boundaries. Keep it concise and command-first.",
+      `${PICK_REPO} Create a high-quality AGENTS.md at its root following the agents.md standard. Include the exact build, test, and lint commands, the conventions, and the boundaries. Keep it concise and command-first.`,
     ),
     cat(
       "claude-md",
@@ -198,7 +249,7 @@ export function catalog(): Recommendation[] {
       "Persistent facts and conventions every session loads automatically so you stop re-explaining the same context.",
       "https://code.claude.com/docs/en/memory",
       "Memory guide",
-      "Create a concise CLAUDE.md capturing this repo's durable facts and conventions (architecture, commands, gotchas), following the Claude Code memory guide.",
+      `${PICK_REPO} Create a concise CLAUDE.md capturing its durable facts and conventions (architecture, commands, gotchas), following the Claude Code memory guide.`,
     ),
     cat(
       "skills",
@@ -208,7 +259,7 @@ export function catalog(): Recommendation[] {
       "Capture a repeated procedure once as a SKILL.md. The agent loads it only when relevant and applies it the same way every time.",
       SKILLS_URL,
       "Skills guide",
-      "Scaffold a reusable Skill (SKILL.md) for a workflow I repeat often in this repo, following the Agent Skills standard and the Claude Code Skills guide.",
+      `${PICK_REPO} Scaffold a reusable Skill (SKILL.md) for a workflow I repeat often there, following the Agent Skills standard and the Claude Code Skills guide.`,
     ),
     cat(
       "slash-commands",
@@ -218,7 +269,7 @@ export function catalog(): Recommendation[] {
       "Turn your most frequent multi-step requests into one-word commands your whole team can run.",
       "https://code.claude.com/docs/en/commands",
       "Commands reference",
-      "Create custom slash commands for the requests I make most often in this repo, following the Claude Code commands reference.",
+      `${PICK_REPO} Create custom slash commands for the requests I make most often there, following the Claude Code commands reference.`,
     ),
     cat(
       "subagents",
@@ -228,7 +279,7 @@ export function catalog(): Recommendation[] {
       "Fan out independent tasks to fresh subagents with isolated context, then review. Higher quality and faster iteration.",
       "https://code.claude.com/docs/en/sub-agents",
       "Subagents guide",
-      "Set up a subagent-driven development workflow for this repo (a fresh subagent per task with a two-stage spec and quality review), following the Claude Code subagents guide.",
+      `${PICK_REPO} Set up a subagent-driven development workflow for it (a fresh subagent per task with a two-stage spec and quality review), following the Claude Code subagents guide.`,
     ),
     cat(
       "mcp",
@@ -238,7 +289,7 @@ export function catalog(): Recommendation[] {
       "Typed, auditable access to GitHub, Linear, databases and more through the Model Context Protocol. No more pasting data into chat.",
       "https://code.claude.com/docs/en/mcp",
       "MCP setup guide",
-      "Recommend MCP servers for the tools and services this project uses, then help me configure them following the Claude Code MCP guide.",
+      `${PICK_REPO} Recommend MCP servers for the tools and services it uses, then help me configure them following the Claude Code MCP guide.`,
     ),
     cat(
       "hooks",
@@ -248,14 +299,14 @@ export function catalog(): Recommendation[] {
       "Run format, lint, and tests automatically on agent events such as before each commit, so the working tree never drifts.",
       "https://code.claude.com/docs/en/hooks-guide",
       "Hooks guide",
-      "Set up Claude Code hooks for this repo to run format, lint, and tests automatically (for example on file edits and pre-commit), following the hooks guide.",
+      `${PICK_REPO} Set up Claude Code hooks for it to run format, lint, and tests automatically (for example on file edits and pre-commit), following the hooks guide.`,
     ),
     cat(
       "trajectory-export",
       "Connect and automate",
       "hero-arrow-up-tray",
       "Feed your sessions to memory tooling",
-      "Export archived sessions as trajectory-v1 records — the token-lean transcript format memory and evaluation pipelines consume. Your archive keeps sessions the CLIs have already pruned.",
+      "Export archived sessions as trajectory-v1 records, the token-lean transcript format memory and evaluation pipelines consume. Your archive keeps sessions the CLIs have already pruned.",
       "https://github.com/letta-ai/trajectory",
       "trajectory format",
       "Using `decant export --all --as trajectory --out <dir>` (add --project or date filters via ls to curate), export the sessions I care about and wire them into my memory/evaluation tooling of choice.",
@@ -271,14 +322,11 @@ export function regenerate(db: Database): void {
   const recentTools = toolUsage(db, false, Number.MAX_SAFE_INTEGER, {
     from: recentWindowStart(),
   });
-  const recs = [...signals(db, recentTools), ...catalog()];
-  // The signals are capped at twelve. Migration attribution must inspect
-  // every eligible hotspot or a same-name sibling just below that cap can make
-  // a legacy name-only identity look uniquely attributable when it is not.
-  const allErrorHotspots = errorHotspots(recentTools);
+  const { shown, eligible } = signalSet(db, recentTools);
+  const recs = [...shown, ...catalog()];
   const now = nowRfc3339();
   withImmediateTransaction(db, () => {
-    type LegacyErrorState = {
+    type LegacyState = {
       detail: string | null;
       status: string;
       status_source: string | null;
@@ -286,27 +334,29 @@ export function regenerate(db: Database): void {
       first_seen_at: string | null;
       implemented_at: string | null;
     };
-    const stableErrorsByLegacy = new Map<string, Recommendation[]>();
-    for (const rec of allErrorHotspots) {
-      const legacyKey = legacyErrorHotspotKey(rec.key);
+    // Migration attribution reads every eligible row, not only the shown
+    // ones: a sibling under a cap still makes a legacy identity ambiguous.
+    const candidatesByLegacy = new Map<string, Candidate[]>();
+    for (const candidate of eligible) {
+      const legacyKey = candidate.legacy?.key;
       if (legacyKey != null) {
-        const stableErrors = stableErrorsByLegacy.get(legacyKey) ?? [];
-        stableErrors.push(rec);
-        stableErrorsByLegacy.set(legacyKey, stableErrors);
+        const legacyCandidates = candidatesByLegacy.get(legacyKey) ?? [];
+        legacyCandidates.push(candidate);
+        candidatesByLegacy.set(legacyKey, legacyCandidates);
       }
     }
     const currentKeys = new Set(recs.map((rec) => rec.key));
-    const legacyErrorStates = new Map<string, LegacyErrorState>();
-    for (const legacyKey of stableErrorsByLegacy.keys()) {
+    const legacyStates = new Map<string, LegacyState>();
+    for (const legacyKey of candidatesByLegacy.keys()) {
       const row = db
         .query(
           `SELECT detail, status, status_source, note, first_seen_at, implemented_at
            FROM recommendation
            WHERE key = ?1`,
         )
-        .get(legacyKey) as LegacyErrorState | null;
+        .get(legacyKey) as LegacyState | null;
       if (row != null) {
-        legacyErrorStates.set(legacyKey, row);
+        legacyStates.set(legacyKey, row);
       }
     }
     const upsert = db.prepare(
@@ -369,7 +419,7 @@ export function regenerate(db: Database): void {
        WHERE key = ?1
          AND (status_source IS NULL OR status_source = 'activity')`,
     );
-    const removeLegacyError = db.prepare("DELETE FROM recommendation WHERE key = ?1");
+    const removeLegacy = db.prepare("DELETE FROM recommendation WHERE key = ?1");
     try {
       for (const rec of recs) {
         upsert.run(
@@ -390,13 +440,13 @@ export function regenerate(db: Database): void {
         );
       }
 
-      for (const [legacyKey, stableErrors] of stableErrorsByLegacy) {
-        const legacy = legacyErrorStates.get(legacyKey);
+      for (const [legacyKey, legacyCandidates] of candidatesByLegacy) {
+        const legacy = legacyStates.get(legacyKey);
         if (legacy == null) {
           continue;
         }
         const durable = legacy.status === "implemented" && legacy.status_source !== "activity";
-        const target = legacyErrorMigrationTarget(legacy.detail, stableErrors);
+        const target = legacyMigrationTarget(legacyKey, legacy.detail, legacyCandidates);
         if (target != null && currentKeys.has(target.key)) {
           preserveLegacyFirstSeen.run(target.key, legacy.first_seen_at);
           if (durable) {
@@ -408,15 +458,16 @@ export function regenerate(db: Database): void {
               legacy.implemented_at,
             );
           }
-          removeLegacyError.run(legacyKey);
+          removeLegacy.run(legacyKey);
         } else if (!durable) {
           // Open and activity-derived aliases carry no operator-owned state.
           // The stable current identities have already been opened/upserted.
-          removeLegacyError.run(legacyKey);
+          removeLegacy.run(legacyKey);
         }
       }
 
-      const signalKeys = recs.filter((rec) => rec.kind === "signal").map((rec) => rec.key);
+      const signalKeys = shown.map((rec) => rec.key);
+      pruneUnresolvedSignals(db, eligible, signalKeys);
       let sql = `UPDATE recommendation
                    SET status = 'implemented', status_source = 'activity',
                        implemented_at = ?1, updated_at = ?1
@@ -438,12 +489,40 @@ export function regenerate(db: Database): void {
         WHERE kind = 'signal' AND impact_label_checked = 0
       `);
     } finally {
-      removeLegacyError.finalize();
+      removeLegacy.finalize();
       preserveDurableLegacyState.finalize();
       preserveLegacyFirstSeen.finalize();
       upsert.finalize();
     }
   });
+}
+
+// A row that still meets its threshold but lost its place to a cap is not
+// resolved, and neither is a row measured before signals were per project.
+function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: string[]): void {
+  const shown = new Set(shownKeys);
+  const capped = new Set(
+    eligible.map((candidate) => candidate.rec.key).filter((key) => !shown.has(key)),
+  );
+  // A row that activity once resolved and that fails again under a cap goes
+  // too. Marks made by a person or an agent stay.
+  const untouched = queryRows<{ key: string; status: string }>(
+    db,
+    `SELECT key, status FROM recommendation
+      WHERE kind = 'signal' AND note IS NULL
+        AND ((status = 'open' AND status_source IS NULL)
+          OR (status = 'implemented' AND status_source = 'activity'))`,
+  );
+  const remove = db.prepare("DELETE FROM recommendation WHERE key = ?1");
+  try {
+    for (const { key, status } of untouched) {
+      if (capped.has(key) || (status === "open" && isPreProjectKey(key))) {
+        remove.run(key);
+      }
+    }
+  } finally {
+    remove.finalize();
+  }
 }
 
 /**
@@ -576,11 +655,13 @@ export function list(db: Database, status: StatusFilter = "open"): StoredRecomme
        ORDER BY (status = 'open') DESC, score DESC, key ASC`,
     )
     .all() as StoredRecommendationDb[];
+  const projects = lazyProjectsByDigest(db);
   return rows.map((row) => {
     const rec: StoredRecommendation = {
       ...row,
       kind: row.kind as "signal" | "catalog",
       impact_label: row.impact_label,
+      ...storedProject(row.key, projects),
       memory_layer: null,
       promotion_target: null,
       trigger: null,
@@ -644,66 +725,303 @@ function serverSuffix(server: string | null): string {
   return server != null && server !== "" ? ` on ${quoted(server)}` : "";
 }
 
-function errorHotspots(tools: ReturnType<typeof toolUsage>): Recommendation[] {
-  const eligible = tools.filter((tool) => tool.calls >= 20 && tool.errors / tool.calls >= 0.12);
-  return eligible.map((tool) => {
-    const rate = tool.errors / tool.calls;
-    const pct = Math.round(rate * 100);
-    const name = quoted(tool.tool_name);
-    const suffix = serverSuffix(tool.mcp_server);
-    const baseKey = `signal:error:${keySegment(tool.tool_name)}`;
-    // A hotspot's identity cannot depend on which same-named siblings happen
-    // to cross the threshold today. Always include the complete stats grouping
-    // so state survives siblings appearing, resolving, or falling out of view.
-    const key = `${baseKey}.h${digest(JSON.stringify([tool.tool_kind, tool.mcp_server]))}`;
+const INTEGER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function fmtInt(value: number): string {
+  return INTEGER.format(value);
+}
+
+function fmtUsd(value: number): string {
+  return USD.format(value);
+}
+
+function count(value: number, noun: string): string {
+  return `${fmtInt(value)} ${value === 1 ? noun : `${noun}s`}`;
+}
+
+// A setup-wide row starts outside any repository, so its prompt asks for
+// user-level configuration and never says "this repo".
+const USER_LEVEL =
+  "This is about my whole coding-agent setup, not one repository. Put the result in user-level configuration, such as a personal Skill or my user-level CLAUDE.md or AGENTS.md, and leave project files alone.";
+// Catalog ideas are per repository, but nothing in the archive says which one.
+const PICK_REPO = "First ask me which repository this is for, then work in that repository.";
+
+interface ProjectRef {
+  /** `COALESCE(root_path, path)`, the key the repo filter and dimension use. */
+  root: string;
+  label: string;
+  path: string | null;
+  remote: string | null;
+}
+
+const NO_PROJECT = {
+  project_path: null,
+  project_root: null,
+  project_label: null,
+  project_remote: null,
+} as const;
+
+function projectFields(
+  project: ProjectRef,
+): Pick<Recommendation, "project_path" | "project_root" | "project_label" | "project_remote"> {
+  return {
+    project_path: project.path,
+    project_root: project.root,
+    project_label: project.label,
+    project_remote: project.remote,
+  };
+}
+
+/** Every repository in the archive, keyed by its root. No filesystem access. */
+function projectIndex(db: Database): Map<string, ProjectRef> {
+  const rows = queryRows<{ path: string; root: string; remote: string | null }>(
+    db,
+    `SELECT path, COALESCE(root_path, path) AS root, repo_remote AS remote
+       FROM project
+      ORDER BY last_seen_at DESC, path ASC`,
+  );
+  const members = new Map<string, typeof rows>();
+  const nameUses = new Map<string, number>();
+  for (const row of rows) {
+    const group = members.get(row.root);
+    if (group == null) {
+      members.set(row.root, [row]);
+      const name = basename(row.root);
+      nameUses.set(name, (nameUses.get(name) ?? 0) + 1);
+    } else {
+      group.push(row);
+    }
+  }
+  const index = new Map<string, ProjectRef>();
+  for (const [root, group] of members) {
+    const name = basename(root);
+    index.set(root, {
+      root,
+      // Two repositories that share a folder name gain their parent folder.
+      label:
+        (nameUses.get(name) ?? 0) > 1 ? root.split("/").filter(Boolean).slice(-2).join("/") : name,
+      // A root known only by name has no directory, so its newest worktree stands in.
+      path: isAbsolute(root) ? root : (group.find((row) => isAbsolute(row.path))?.path ?? null),
+      remote:
+        group.find((row) => row.path === root)?.remote ??
+        group.find((row) => row.remote != null)?.remote ??
+        null,
+    });
+  }
+  return index;
+}
+
+// Project-scoped keys end in a digest of the repository root. The table has no
+// project column, so `list` resolves the project from this suffix.
+const PROJECT_KEY = /^signal:(?:hot-context:|churn:|search-heavy).*\.p([0-9a-f]{16})$/s;
+
+function isPreProjectKey(key: string): boolean {
+  const scoped =
+    key.startsWith("signal:hot-context:") ||
+    key.startsWith("signal:churn:") ||
+    key === "signal:search-heavy";
+  return scoped && !PROJECT_KEY.test(key);
+}
+
+function projectSuffix(project: ProjectRef): string {
+  return `.p${digest(project.root)}`;
+}
+
+function lazyProjectsByDigest(db: Database): () => Map<string, ProjectRef> {
+  let cached: Map<string, ProjectRef> | null = null;
+  return () => {
+    if (cached == null) {
+      cached = new Map();
+      for (const project of projectIndex(db).values()) {
+        cached.set(digest(project.root), project);
+      }
+    }
+    return cached;
+  };
+}
+
+function storedProject(
+  key: string,
+  projects: () => Map<string, ProjectRef>,
+): Pick<Recommendation, "project_path" | "project_root" | "project_label" | "project_remote"> {
+  const found = PROJECT_KEY.exec(key)?.[1];
+  const project = found == null ? null : projects().get(found);
+  return project == null ? NO_PROJECT : projectFields(project);
+}
+
+/** The directory "Run" should start in for this key, or null for a setup-wide row. */
+export function launchDir(db: Database, key: string): string | null {
+  return storedProject(key, lazyProjectsByDigest(db)).project_path;
+}
+
+function projectLead(project: ProjectRef): string {
+  // A path the label sanitizer would alter is left out instead of misquoted.
+  const at =
+    project.path != null && label(project.path) === project.path
+      ? ` at ${quoted(project.path)}`
+      : "";
+  return `Work in the ${quoted(project.label)} repository${at}.`;
+}
+
+function bareToolName(toolName: string, server: string): string {
+  const prefix = `mcp__${server}__`;
+  const bare = toolName.startsWith(prefix) ? toolName.slice(prefix.length) : toolName;
+  return bare === "" ? toolName : bare;
+}
+
+function isErrorHotspot(tool: ReturnType<typeof toolUsage>[number]): boolean {
+  return (
+    tool.calls >= ERROR_MIN_CALLS &&
+    tool.errors >= ERROR_MIN_ERRORS &&
+    tool.errors / tool.calls >= ERROR_MIN_RATE
+  );
+}
+
+/** `unranked` are tools past the ranking the list reads. They never get a row,
+ * but they still count when a legacy key looks for its one owner. */
+function errorHotspots(
+  tools: ReturnType<typeof toolUsage>,
+  unranked: ReturnType<typeof toolUsage> = [],
+): {
+  shown: Recommendation[];
+  eligible: Candidate[];
+} {
+  // Built from every server in view, so two registrations of one server stay
+  // apart the way they do in the Tools & MCP table.
+  const serverLabels = mcpServerLabels(tools.map((tool) => tool.mcp_server));
+  const hotspots = tools
+    .filter(isErrorHotspot)
+    .map((tool) => errorHotspot(tool, serverLabels))
+    .sort((left, right) => byRank(left.rec, right.rec));
+  const beyond = unranked.filter(isErrorHotspot).map((tool) => errorHotspot(tool, serverLabels));
+  // Folding a single tool into a row of its own would save nothing.
+  if (hotspots.length <= ERROR_HOTSPOT_MAX + 1) {
     return {
+      shown: hotspots.map((hotspot) => hotspot.rec),
+      eligible: [...hotspots, ...beyond],
+    };
+  }
+  const tail = errorTail(hotspots.slice(ERROR_HOTSPOT_MAX));
+  return {
+    shown: [...hotspots.slice(0, ERROR_HOTSPOT_MAX).map((hotspot) => hotspot.rec), tail],
+    eligible: [...hotspots, ...beyond, { rec: tail }],
+  };
+}
+
+function errorHotspot(
+  tool: ReturnType<typeof toolUsage>[number],
+  serverLabels: Map<string, string>,
+): Candidate & { summary: string } {
+  const rate = tool.errors / tool.calls;
+  const pct = Math.round(rate * 100);
+  const server = tool.mcp_server != null && tool.mcp_server !== "" ? tool.mcp_server : null;
+  const connector = server != null && mcpServerOrigin(server) === "connector";
+  const name = quoted(tool.tool_name);
+  // Titles read as tool and server. Prompts keep the raw ids an agent can grep.
+  const display =
+    server == null
+      ? name
+      : `${quoted(bareToolName(tool.tool_name, server))} on ${quoted(mcpServerLabel(serverLabels, server))}`;
+  const suffix = serverSuffix(server);
+  const counts = `${fmtInt(tool.errors)} errors in ${fmtInt(tool.calls)} calls over the last 30 days`;
+  const baseKey = `signal:error:${keySegment(tool.tool_name)}`;
+  // A hotspot's identity cannot depend on which same-named siblings happen
+  // to cross the threshold today. Always include the complete stats grouping
+  // so state survives siblings appearing, resolving, or falling out of view.
+  const key = `${baseKey}.h${digest(JSON.stringify([tool.tool_kind, tool.mcp_server]))}`;
+  // No backticks here: a label must not be able to pose as a command.
+  const failing = `The ${name} tool is failing about ${pct}% of the time (${counts})${suffix}.`;
+  return {
+    summary: `${display} at ${pct}% (${fmtInt(tool.errors)} of ${fmtInt(tool.calls)} calls)`,
+    // The name-only key and detail this row had before keys carried the server.
+    legacy: {
+      key: baseKey,
+      detail: `${tool.errors} errors across ${tool.calls} calls${suffix}.`,
+      server: server == null ? null : label(server),
+    },
+    rec: {
       key,
       kind: "signal",
       category: null,
-      title: `${name} fails ${pct}% of the time`,
-      detail: `${tool.errors} errors across ${tool.calls} calls${suffix}.`,
-      suggestion:
-        "Codify the recovery path as a Skill (or fix the call sites) so agents stop repeating this failure.",
-      prompt: `The ${name} tool is failing about ${pct}% of the time (${tool.errors} errors in ${tool.calls} calls)${suffix}. Investigate the common failure mode and codify a reusable Skill (or guardrail) so agents handle it consistently. Follow this repo's AGENTS.md and Skill conventions. ${UNTRUSTED_NOTE}`,
+      title: `${display} fails ${pct}% of the time`,
+      detail: connector
+        ? `${fmtInt(tool.errors)} errors across ${fmtInt(tool.calls)} calls in the last 30 days. It runs on a remote connector, so the server is not yours to fix.`
+        : `${fmtInt(tool.errors)} errors across ${fmtInt(tool.calls)} calls in the last 30 days.`,
+      suggestion: connector
+        ? "You cannot fix a remote connector. Have agents check their input before calling it, or use another tool for the same job, and record that as a user-level Skill or instruction."
+        : "Find the common failure, then record the fix as a user-level Skill or instruction so agents stop repeating it.",
+      prompt: connector
+        ? `${failing} It runs on a remote connector that I cannot change, so do not try to fix the server. Use the decant search command to find sessions that called it and work out which inputs fail. Then write a Skill or guardrail that has agents validate the input first, wrap the call with its recovery steps, or use another tool for the same job. ${USER_LEVEL} ${UNTRUSTED_NOTE}`
+        : `${failing} Use the decant search command to find sessions that called it and work out the common failure. Then record the fix as a reusable Skill or guardrail so agents handle it the same way everywhere. ${USER_LEVEL} ${UNTRUSTED_NOTE}`,
       url: SKILLS_URL,
       link_label: "Skills guide",
       icon: "hero-exclamation-triangle",
       tone: "danger",
       impact_label: `${pct}% error rate`,
-      score: rate * tool.calls,
-    };
-  });
+      score: rate * tool.calls * (connector ? CONNECTOR_SCORE_FACTOR : 1),
+      ...NO_PROJECT,
+    },
+  };
 }
 
-function legacyErrorHotspotKey(key: string): string | null {
-  if (!key.startsWith("signal:error:") || !KEY_DIGEST_SUFFIX.test(key)) {
-    return null;
-  }
-  return key.replace(KEY_DIGEST_SUFFIX, "");
+function errorTail(rest: (Candidate & { summary: string })[]): Recommendation {
+  const named = rest.slice(0, ERROR_TAIL_NAMES).map((hotspot) => hotspot.summary);
+  const more = rest.length - named.length;
+  const tools = more > 0 ? `${named.join(", ")}, and ${fmtInt(more)} more` : named.join(", ");
+  return {
+    key: "signal:error-tail",
+    kind: "signal",
+    category: null,
+    title: `${fmtInt(rest.length)} more tools fail often`,
+    detail: `Ranked below the ${ERROR_HOTSPOT_MAX} rows above by errors in the last 30 days: ${tools}.`,
+    suggestion:
+      "Start with the rows above. A tool listed here gets its own row once it ranks in the top three.",
+    prompt: `Several tools fail often across my coding-agent sessions over the last 30 days: ${tools}. Look for a cause they share, such as permissions, stale paths, or an unreliable network, and fix it once. ${USER_LEVEL} ${UNTRUSTED_NOTE}`,
+    url: null,
+    link_label: null,
+    icon: "hero-exclamation-triangle",
+    tone: "warning",
+    impact_label: `${fmtInt(rest.length)} tools`,
+    // Just under its worst member, so it never outranks a row of its own.
+    score: (rest[0]?.rec.score ?? 0) * 0.99,
+    ...NO_PROJECT,
+  };
 }
 
-function legacyErrorMigrationTarget(
+function legacyMigrationTarget(
+  legacyKey: string,
   legacyDetail: string | null,
-  candidates: Recommendation[],
+  candidates: Candidate[],
 ): Recommendation | null {
+  if (!legacyKey.startsWith("signal:error:")) {
+    // A file or search row from before project scoping names no project, so
+    // it moves only when exactly one project could own it.
+    return candidates.length === 1 ? (candidates[0]?.rec ?? null) : null;
+  }
   if (legacyDetail == null) {
     return null;
   }
-  const exact = candidates.filter((candidate) => candidate.detail === legacyDetail);
+  const exact = candidates.filter((candidate) => candidate.legacy?.detail === legacyDetail);
   if (exact.length === 1) {
-    return exact[0] ?? null;
+    return exact[0]?.rec ?? null;
   }
 
   const legacyIdentity = renderedErrorServerIdentity(legacyDetail);
   if (legacyIdentity == null) {
     return null;
   }
-  const sameServer = candidates.filter((candidate) => {
-    const identity =
-      candidate.detail == null ? null : renderedErrorServerIdentity(candidate.detail);
-    return identity != null && identity.serverLabel === legacyIdentity.serverLabel;
-  });
-  return sameServer.length === 1 ? (sameServer[0] ?? null) : null;
+  const sameServer = candidates.filter(
+    (candidate) =>
+      candidate.legacy?.server !== undefined &&
+      candidate.legacy.server === legacyIdentity.serverLabel,
+  );
+  return sameServer.length === 1 ? (sameServer[0]?.rec ?? null) : null;
 }
 
 function renderedErrorServerIdentity(detail: string): { serverLabel: string | null } | null {
@@ -721,6 +1039,7 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
     // The prompt is pasted into an agent that has to find the server in a
     // config file, so it keeps the raw slug the display name strips.
     const slug = quoted(server.mcp_server);
+    const usage = `${count(server.calls, "call")} across ${count(server.tools, "tool")}`;
     return server.calls >= 50
       ? [
           {
@@ -728,15 +1047,16 @@ function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
             kind: "signal" as const,
             category: null,
             title: `Heavy reliance on the ${name} MCP server`,
-            detail: `${server.calls} calls across ${server.tools} tools.`,
-            suggestion: `Package the common ${name} workflows into a reusable Skill so agents use them consistently.`,
-            prompt: `We rely heavily on the ${slug} MCP server (${server.calls} calls across ${server.tools} tools). Create a reusable Skill that packages our most common ${slug} workflows so agents use them consistently. Follow this repo's Skill conventions. ${UNTRUSTED_NOTE}`,
+            detail: `${usage} in the last 30 days.`,
+            suggestion: `Package the common ${name} workflows into a user-level Skill so agents use them the same way in every project.`,
+            prompt: `I rely heavily on the ${slug} MCP server (${usage} over the last 30 days). Create a reusable Skill that packages my most common ${slug} workflows so agents use them consistently. ${USER_LEVEL} ${UNTRUSTED_NOTE}`,
             url: SKILLS_URL,
             link_label: "Skills guide",
             icon: "hero-cpu-chip",
             tone: "accent",
-            impact_label: `${server.calls} calls`,
+            impact_label: count(server.calls, "call"),
             score: USAGE_SIGNAL_SCORE,
+            ...NO_PROJECT,
           },
         ]
       : [];
@@ -749,6 +1069,7 @@ function heavyTools(tools: ReturnType<typeof toolUsage>): Recommendation[] {
     .slice(0, 2)
     .flatMap((tool) => {
       const name = quoted(tool.tool_name);
+      const calls = count(tool.calls, "call");
       return tool.calls >= 200
         ? [
             {
@@ -756,15 +1077,16 @@ function heavyTools(tools: ReturnType<typeof toolUsage>): Recommendation[] {
               kind: "signal" as const,
               category: null,
               title: `${name} is one of your busiest tools`,
-              detail: `${tool.calls} calls.`,
-              suggestion: `High-frequency tools make good Skill candidates. Capture the patterns agents repeat around ${name}.`,
-              prompt: `We use the ${name} tool very frequently (${tool.calls} calls). Identify the patterns we repeat around ${name} and codify them into a reusable Skill, following this repo's conventions. ${UNTRUSTED_NOTE}`,
+              detail: `${calls} in the last 30 days.`,
+              suggestion: `High-frequency tools make good Skill candidates. Capture the patterns agents repeat around ${name} in a user-level Skill.`,
+              prompt: `My agents use the ${name} tool very often (${calls} over the last 30 days). Identify the patterns they repeat around ${name} and turn them into a reusable Skill. ${USER_LEVEL} ${UNTRUSTED_NOTE}`,
               url: SKILLS_URL,
               link_label: "Skills guide",
               icon: "hero-bolt",
               tone: "info",
-              impact_label: `${tool.calls} calls`,
+              impact_label: calls,
               score: USAGE_SIGNAL_SCORE,
+              ...NO_PROJECT,
             },
           ]
         : [];
@@ -791,87 +1113,123 @@ function costConcentration(models: ReturnType<typeof byDimension>): Recommendati
       detail: `${fmtUsd(top.estimated_cost_usd)} of ${fmtUsd(total)} total.`,
       suggestion:
         "Consider routing routine sub-tasks to a cheaper model (sub-agents, simpler edits) to cut cost.",
-      prompt: `About ${pct}% of our agent spend is on ${model}. Propose and set up a model-routing strategy that uses cheaper models or subagents for routine work, and document it as guidance for this repo. ${UNTRUSTED_NOTE}`,
+      prompt: `About ${pct}% of my coding-agent spend over the last 30 days is on ${model}. Propose a model-routing rule that sends routine work to cheaper models or subagents, and record it where every project picks it up. ${USER_LEVEL} ${UNTRUSTED_NOTE}`,
       url: null,
       link_label: null,
       icon: "hero-currency-dollar",
       tone: "warning",
       impact_label: `${pct}% of spend`,
       score: 5,
+      ...NO_PROJECT,
     },
   ];
 }
 
-function fmtUsd(value: number): string {
-  return `$${value.toFixed(2)}`;
-}
+// Equal relative paths in two repositories are two files, so file signals
+// group by repository as well as by path.
+const REPO_KEY = "COALESCE(p.root_path, p.path)";
+const PROJECT_JOIN = "JOIN project p ON p.id = s.project_id";
 
-function hotContextFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
-  const rows = queryRows<{ key: string; readers: number }>(
+function hotContextFiles(
+  db: Database,
+  visibleSession: string,
+  since: string,
+  projects: Map<string, ProjectRef>,
+): Candidate[] {
+  const rows = queryRows<{ root: string; relPath: string; readers: number }>(
     db,
     `${SESSION_ROOT_CTE}
-     SELECT f.rel_path AS key,
+     SELECT ${REPO_KEY} AS root, f.rel_path AS relPath,
               COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN ${ROOT_ID} END) AS readers,
               COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN ${ROOT_ID} END) AS editors
-       FROM file_ref f JOIN session s ON s.id = f.session_id ${ROOT_JOIN}
+       FROM file_ref f JOIN session s ON s.id = f.session_id ${PROJECT_JOIN} ${ROOT_JOIN}
        WHERE ${WINDOW} AND ${visibleSession} AND f.rel_path IS NOT NULL
-       GROUP BY key
+       GROUP BY root, relPath
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
-       ORDER BY readers DESC, key ASC
-       LIMIT 2`,
+       ORDER BY readers DESC, relPath ASC, root ASC`,
     [since],
   );
-  return rows.map(({ key: relPath, readers }) => {
+  return rows.flatMap(({ root, relPath, readers }) => {
+    const project = projects.get(root);
+    if (project == null) {
+      return [];
+    }
     const path = quoted(relPath);
-    return {
-      key: `signal:hot-context:${keySegment(relPath)}`,
-      kind: "signal",
-      category: null,
-      title: `Agents re-read ${path} in ${readers} sessions this month`,
-      detail: `${readers} distinct sessions read it in the last 30 days, with almost no edits — that's stable context being re-derived with tokens each time.`,
-      suggestion: `Distill what agents need from ${path} into AGENTS.md (or a Skill) so they stop re-reading and re-deriving it. Scaffold a starting point with \`decant distill skill --kind agents\` (scope with --project).`,
-      prompt: `Agents read ${path} in ${readers} separate sessions over the last 30 days while barely editing it. Scaffold a deterministic starting point with \`decant distill skill --kind agents\`, then read ${path}, distill the parts agents actually need (contracts, invariants, gotchas) into AGENTS.md or a focused Skill, and keep the summary maintainable. Follow this repo's conventions. ${UNTRUSTED_NOTE}`,
-      url: SKILLS_URL,
-      link_label: "Skills guide",
-      icon: "hero-book-open",
-      tone: "accent",
-      impact_label: `${readers} sessions`,
-      score: readers,
-    };
+    const name = quoted(project.label);
+    const legacyKey = `signal:hot-context:${keySegment(relPath)}`;
+    const scope =
+      label(project.root) === project.root ? `, passing --project ${quoted(project.root)}` : "";
+    return [
+      {
+        legacy: { key: legacyKey },
+        rec: {
+          key: `${legacyKey}${projectSuffix(project)}`,
+          kind: "signal" as const,
+          category: null,
+          title: `Agents re-read ${path} in ${fmtInt(readers)} ${name} sessions this month`,
+          detail: `${fmtInt(readers)} distinct sessions in ${name} read it in the last 30 days and almost none edited it. That is stable context agents pay tokens to re-derive each time.`,
+          suggestion: `Distill what agents need from ${path} into the AGENTS.md (or a Skill) of ${name} so they stop re-reading it. Scaffold a starting point with \`decant distill skill --kind agents\` (scope with --project).`,
+          prompt: `${projectLead(project)} Agents read ${path} in ${fmtInt(readers)} separate sessions there over the last 30 days while barely editing it. Scaffold a deterministic starting point with \`decant distill skill --kind agents\`${scope}. Then read ${path}, distill the parts agents need (contracts, invariants, gotchas) into AGENTS.md or a focused Skill, and keep the summary maintainable. Follow this repo's conventions. ${UNTRUSTED_NOTE}`,
+          url: SKILLS_URL,
+          link_label: "Skills guide",
+          icon: "hero-book-open",
+          tone: "accent",
+          impact_label: count(readers, "session"),
+          score: readers,
+          ...projectFields(project),
+        },
+      },
+    ];
   });
 }
 
-function churnFiles(db: Database, visibleSession: string, since: string): Recommendation[] {
-  const rows = queryRows<{ key: string; editors: number }>(
+function churnFiles(
+  db: Database,
+  visibleSession: string,
+  since: string,
+  projects: Map<string, ProjectRef>,
+): Candidate[] {
+  const rows = queryRows<{ root: string; relPath: string; editors: number }>(
     db,
     `${SESSION_ROOT_CTE}
-     SELECT f.rel_path AS key, COUNT(DISTINCT ${ROOT_ID}) AS editors
-       FROM file_ref f JOIN session s ON s.id = f.session_id ${ROOT_JOIN}
+     SELECT ${REPO_KEY} AS root, f.rel_path AS relPath, COUNT(DISTINCT ${ROOT_ID}) AS editors
+       FROM file_ref f JOIN session s ON s.id = f.session_id ${PROJECT_JOIN} ${ROOT_JOIN}
        WHERE ${WINDOW} AND ${visibleSession}
          AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
-       GROUP BY key
+       GROUP BY root, relPath
        HAVING editors >= ${CHURN_MIN_SESSIONS}
-       ORDER BY editors DESC, key ASC
-       LIMIT 2`,
+       ORDER BY editors DESC, relPath ASC, root ASC`,
     [since],
   );
-  return rows.map(({ key: relPath, editors }) => {
+  return rows.flatMap(({ root, relPath, editors }) => {
+    const project = projects.get(root);
+    if (project == null) {
+      return [];
+    }
     const path = quoted(relPath);
-    return {
-      key: `signal:churn:${keySegment(relPath)}`,
-      kind: "signal",
-      category: null,
-      title: `${path} keeps getting reworked`,
-      detail: `Edited in ${editors} distinct sessions over the last 30 days.`,
-      suggestion: `A churn hotspot: consider a refactor, better tests, or clearer module docs so changes to ${path} stop requiring agent archaeology.`,
-      prompt: `${path} was edited in ${editors} separate sessions in the last 30 days — a churn hotspot. Review it for unclear boundaries or missing tests, propose a focused refactor or documentation that makes future changes cheaper, and implement it following this repo's conventions. ${UNTRUSTED_NOTE}`,
-      url: null,
-      link_label: null,
-      icon: "hero-fire",
-      tone: "warning",
-      impact_label: `${editors} sessions`,
-      score: editors * 1.5,
-    };
+    const name = quoted(project.label);
+    const legacyKey = `signal:churn:${keySegment(relPath)}`;
+    return [
+      {
+        legacy: { key: legacyKey },
+        rec: {
+          key: `${legacyKey}${projectSuffix(project)}`,
+          kind: "signal" as const,
+          category: null,
+          title: `${path} in ${name} keeps getting reworked`,
+          detail: `Edited in ${fmtInt(editors)} distinct ${name} sessions over the last 30 days.`,
+          suggestion: `Consider a refactor, better tests, or clearer module docs so changes to ${path} stop needing so much rediscovery.`,
+          prompt: `${projectLead(project)} ${path} was edited in ${fmtInt(editors)} separate sessions there in the last 30 days, which makes it a churn hotspot. Review it for unclear boundaries or missing tests, propose a focused refactor or documentation that makes future changes cheaper, and implement it following this repo's conventions. ${UNTRUSTED_NOTE}`,
+          url: null,
+          link_label: null,
+          icon: "hero-fire",
+          tone: "warning",
+          impact_label: count(editors, "session"),
+          score: editors * 1.5,
+          ...projectFields(project),
+        },
+      },
+    ];
   });
 }
 
@@ -882,61 +1240,80 @@ function churnFiles(db: Database, visibleSession: string, since: string): Recomm
 // into TypeScript, so it stays permissive by design.
 const SEARCH_CANDIDATE_TOOLS = ["grep", "glob", "bash", "shell", "exec_command", "local_shell"];
 
-function searchHeavy(db: Database, visibleSession: string, since: string): Recommendation[] {
+function searchHeavy(
+  db: Database,
+  visibleSession: string,
+  since: string,
+  projects: Map<string, ProjectRef>,
+): Candidate[] {
   const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
     (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
   ).join(" OR ");
-  const rows = queryRows<{ session_id: number; tool_name: string; input: string | null }>(
+  const rows = queryRows<{ root: string; tool_name: string; input: string | null }>(
     db,
-    `SELECT tc.session_id AS session_id, tc.tool_name AS tool_name, tc.input AS input
-       FROM tool_call tc JOIN session s ON s.id = tc.session_id
+    `SELECT ${REPO_KEY} AS root, tc.tool_name AS tool_name, tc.input AS input
+       FROM tool_call tc JOIN session s ON s.id = tc.session_id ${PROJECT_JOIN}
       WHERE ${WINDOW} AND ${visibleSession} AND (${namePredicate})`,
     [since],
   );
-  let searches = 0;
-  const searchSessions = new Set<number>();
+  const searchesByRoot = new Map<string, number>();
   for (const row of rows) {
     const found = countSearches(row.tool_name, row.input);
     if (found > 0) {
-      searches += found;
-      searchSessions.add(row.session_id);
+      searchesByRoot.set(row.root, (searchesByRoot.get(row.root) ?? 0) + found);
     }
   }
-  const counts = { searches, sessions: searchSessions.size };
-  const inWindow = queryOne<{ n: number }>(
+  if (searchesByRoot.size === 0) {
+    return [];
+  }
+  const sessionCounts = queryRows<{ root: string; n: number }>(
     db,
-    `SELECT COUNT(*) AS n FROM session s WHERE ${WINDOW} AND ${topLevelSession(visibleSession)}`,
+    `SELECT ${REPO_KEY} AS root, COUNT(*) AS n
+       FROM session s ${PROJECT_JOIN}
+      WHERE ${WINDOW} AND ${topLevelSession(visibleSession)}
+      GROUP BY root
+     HAVING n >= ${SEARCH_HEAVY_MIN_SESSIONS}`,
     [since],
-  ).n;
-  if (inWindow < SEARCH_HEAVY_MIN_SESSIONS || counts.sessions === 0) {
-    return [];
+  );
+  const out: Candidate[] = [];
+  for (const { root, n: inWindow } of sessionCounts) {
+    const project = projects.get(root);
+    const searches = searchesByRoot.get(root) ?? 0;
+    const ratio = searches / inWindow;
+    if (project == null || ratio < SEARCH_HEAVY_RATIO) {
+      continue;
+    }
+    const rounded = ratio.toFixed(0);
+    const name = quoted(project.label);
+    out.push({
+      legacy: { key: "signal:search-heavy" },
+      rec: {
+        key: `signal:search-heavy${projectSuffix(project)}`,
+        kind: "signal",
+        category: null,
+        title: `${name} averages ${rounded} searches per session`,
+        detail: `${fmtInt(searches)} searches across ${count(inWindow, "session")} in ${name} in the last 30 days, counting Grep and Glob calls plus shell searches such as rg, grep, and find. A subagent's searches count toward the session that started it.`,
+        suggestion: `Agents search for structure the repo could state once. Add a code map or module index to the AGENTS.md of ${name} so discovery is a read, not a search loop.`,
+        prompt: `${projectLead(project)} Agents there average ${rounded} code searches per session (${fmtInt(searches)} over the last 30 days, across Grep and Glob calls and shell searches such as rg, grep, and find). Build a concise code map of the key modules, their responsibilities, and where common things live, and add it to AGENTS.md so agents can navigate by reading instead of searching. ${UNTRUSTED_NOTE}`,
+        url: null,
+        link_label: null,
+        icon: "hero-magnifying-glass",
+        tone: "info",
+        impact_label: `${rounded} searches/session`,
+        score: ratio * 2,
+        ...projectFields(project),
+      },
+    });
   }
-  const ratio = counts.searches / inWindow;
-  if (ratio < SEARCH_HEAVY_RATIO) {
-    return [];
-  }
-  const rounded = ratio.toFixed(0);
-  return [
-    {
-      key: "signal:search-heavy",
-      kind: "signal",
-      category: null,
-      title: `${rounded} searches per session — discovery is expensive`,
-      detail: `${counts.searches} searches across ${inWindow} sessions in the last 30 days, counting Grep and Glob calls plus shell searches such as rg, grep, and find. A subagent's searches count toward the session that started it.`,
-      suggestion:
-        "Agents grep for structure the repo could state once: add a code map / module index to AGENTS.md so discovery is a read, not a search loop.",
-      prompt: `Our agents average ${rounded} code searches per session (${counts.searches} over the last 30 days, across Grep and Glob calls and shell searches such as rg, grep, and find). Build a concise code map — key modules, their responsibilities, where common things live — and add it to AGENTS.md so agents can navigate by reading instead of searching.`,
-      url: null,
-      link_label: null,
-      icon: "hero-magnifying-glass",
-      tone: "info",
-      impact_label: `${rounded} searches/session`,
-      score: ratio * 2,
-    },
-  ];
+  return out.sort((left, right) => byRank(left.rec, right.rec));
 }
 
-function abandonedRate(db: Database, visibleSession: string, since: string): Recommendation[] {
+function abandonedRate(
+  db: Database,
+  visibleSession: string,
+  since: string,
+  projects: Map<string, ProjectRef>,
+): Recommendation[] {
   const row = queryOne<{ classified: number; abandoned: number | null }>(
     db,
     `SELECT COUNT(*) AS classified,
@@ -954,22 +1331,40 @@ function abandonedRate(db: Database, visibleSession: string, since: string): Rec
     return [];
   }
   const pct = Math.round(rate * 100);
+  // The rate is archive-wide. Naming where it concentrates gives a place to look.
+  const where = queryRows<{ root: string; n: number }>(
+    db,
+    `SELECT ${REPO_KEY} AS root, COUNT(*) AS n
+       FROM session s ${PROJECT_JOIN}
+      WHERE ${WINDOW} AND ${topLevelSession(visibleSession)} AND s.outcome = 'abandoned'
+      GROUP BY root
+      ORDER BY n DESC, root ASC
+      LIMIT 2`,
+    [since],
+  )
+    .flatMap(({ root, n }) => {
+      const project = projects.get(root);
+      return project == null ? [] : [`${quoted(project.label)} (${fmtInt(n)})`];
+    })
+    .join(" and ");
+  const most = where === "" ? "" : ` Most were in ${where}.`;
   return [
     {
       key: "signal:abandoned-rate",
       kind: "signal",
       category: null,
       title: `${pct}% of recent sessions end abandoned`,
-      detail: `${abandoned} of ${row.classified} classified sessions in the last 30 days ended mid-flight (interrupted, unanswered, or stopped between tool calls).`,
+      detail: `${fmtInt(abandoned)} of ${fmtInt(row.classified)} classified sessions in the last 30 days ended mid-flight (interrupted, unanswered, or stopped between tool calls).${most}`,
       suggestion:
-        "Review where sessions stall: unclear prompts, missing context, or work that should be decomposed. Decant's session list filters by outcome=abandoned.",
-      prompt: `${pct}% of our last 30 days' agent sessions ended abandoned. List recent abandoned sessions (filter outcome=abandoned), find the common stall points, and propose concrete fixes — better AGENTS.md context, decomposed tasks, or skills for the repeated parts.`,
+        "Review where sessions stall: unclear prompts, missing context, or work that should be decomposed. `decant stats --by outcome` shows the outcome mix.",
+      prompt: `${pct}% of my coding-agent sessions in the last 30 days ended abandoned (${fmtInt(abandoned)} of ${fmtInt(row.classified)}).${most} A session counts as abandoned when it stops on an interruption, an unanswered question, or between tool calls. Decant reports the outcome mix with \`decant stats --by outcome\` but cannot list sessions by outcome, so read how recent sessions ended: \`decant ls\` lists them and \`decant show <id>\` prints one. Find the common stall points and propose concrete fixes, such as clearer standing instructions, smaller tasks, or Skills for the repeated parts. ${USER_LEVEL}${most === "" ? "" : ` ${UNTRUSTED_NOTE}`}`,
       url: null,
       link_label: null,
       icon: "hero-hand-raised",
       tone: "danger",
       impact_label: `${pct}% abandoned`,
       score: pct / 3,
+      ...NO_PROJECT,
     },
   ];
 }
@@ -1008,7 +1403,7 @@ function ingestHealth(db: Database, visibleSession: string, since: string): Reco
       kind: "signal",
       category: null,
       title: `${counts.affected} recent sessions ingested with diagnostics`,
-      detail: `${pct}% of the last 30 days' sessions carry ingest diagnostics (unknown record types or tool-linkage anomalies) — a source CLI likely changed its transcript format.`,
+      detail: `${pct}% of the last 30 days' sessions carry ingest diagnostics (unknown record types or tool-linkage anomalies). A source CLI likely changed its transcript format.`,
       suggestion:
         "Update Decant to the latest release; if the diagnostics persist, file an issue with the output of `decant sync --json` (it includes per-code counts, no transcript content).",
       prompt: null,
@@ -1018,6 +1413,7 @@ function ingestHealth(db: Database, visibleSession: string, since: string): Reco
       tone: "warning",
       impact_label: `${pct}% affected`,
       score: counts.affected * 2,
+      ...NO_PROJECT,
     },
   ];
 }
@@ -1045,7 +1441,7 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
   const action =
     rec.suggestion ?? rec.prompt ?? "Review the recommendation and promote the durable lesson.";
 
-  if (rec.key.startsWith("signal:error:")) {
+  if (rec.key.startsWith("signal:error:") || rec.key === "signal:error-tail") {
     return card(
       "Procedural",
       "Skill or regression test",
@@ -1068,7 +1464,7 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
   if (rec.key === "signal:cost-concentration") {
     return card(
       "Hot",
-      "AGENTS.md model-routing rule",
+      "User-level model-routing rule",
       "Before routine work defaults to the most expensive model.",
       evidence,
       action,
@@ -1095,7 +1491,7 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
       "Future edits land with fewer retries and stronger tests.",
     );
   }
-  if (rec.key === "signal:search-heavy") {
+  if (rec.key === "signal:search-heavy" || rec.key.startsWith("signal:search-heavy.")) {
     return card(
       "Hot",
       "AGENTS.md code map",
@@ -1130,14 +1526,14 @@ function promotionCard(rec: StoredRecommendation): PromotionCard {
     "catalog:agents-md": [
       "Hot",
       "AGENTS.md",
-      "Every coding-agent session in this repo.",
+      "Every coding-agent session in that repository.",
       "Agents start with commands, boundaries, and invariants already loaded.",
     ],
     "catalog:claude-md": [
       "Hot",
       "Project memory",
-      "Every Claude Code session for this repo.",
-      "Durable repo facts stop being re-explained in new sessions.",
+      "Every Claude Code session for that repository.",
+      "Durable repository facts stop being re-explained in new sessions.",
     ],
     "catalog:skills": [
       "Procedural",
@@ -1205,6 +1601,10 @@ interface StoredRecommendationDb
   extends Omit<
     StoredRecommendation,
     | "kind"
+    | "project_path"
+    | "project_root"
+    | "project_label"
+    | "project_remote"
     | "memory_layer"
     | "promotion_target"
     | "trigger"

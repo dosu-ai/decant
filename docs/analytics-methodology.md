@@ -83,8 +83,9 @@ nested run linked to a parent session.
 This distinction matters when comparing throughput with cost: a single
 top-level session can coordinate many separately metered runs.
 
-Insights count sessions the same way. The search-heavy, abandoned-rate, and
-ingest-health signals divide by top-level sessions in the window. The
+Insights count sessions the same way. The abandoned-rate and ingest-health
+signals divide by top-level sessions in the window, and the search-heavy
+signal divides by the top-level sessions of one repository. The
 hot-context, churn, search-heavy, and ingest-health signals credit a
 subagent's file reads, edits, searches, and diagnostics to the top-level
 session that started it, so one session that fans out to five subagents counts
@@ -546,8 +547,8 @@ top-level sessions shows `-`.
 
 ### Search counting
 
-This defines the search count behind the "discovery is expensive"
-recommendation signal (`signal:search-heavy`). It is separate from activity
+This defines the search count behind the searches-per-session recommendation
+signal (keys starting `signal:search-heavy`). It is separate from activity
 buckets and does not change how shell commands are bucketed above. A search is
 a `Grep` or `Glob` tool call, or a shell statement whose command is a search
 binary such as `rg`, `grep`, or `find`, or `git grep`. Statements are split the
@@ -668,6 +669,61 @@ October 6. The change is shown as a percentage of the earlier value, or in
 percentage points for the cache hit rate. Open ranges, such as All time, have
 no previous period, and when the previous value is zero the tile shows no
 comparison line.
+
+## Insights signals
+
+Every signal reads the last 30 days of visible sessions. Signals are
+recomputed when a sync ingests or reprices sessions, and when a session is
+archived, deleted, or restored.
+
+A signal is either about one repository or about the whole setup. The three
+repository signals group sessions by repository root, the same key as the
+`repo` filter, so a worktree counts toward its repository and equal relative
+paths in two repositories are two files. Each of those rows names its
+repository and carries it in `project_root`, `project_path`, `project_label`,
+and `project_remote`. Sessions with no project cannot produce them.
+
+| Signal | Scope | Fires when |
+| --- | --- | --- |
+| Tool error rate | Setup | A tool has at least 20 calls, at least 5 errors, and an error rate of at least 12% |
+| Heavy MCP server | Setup | One of the three most-called servers has at least 50 calls |
+| Busy tool | Setup | One of the two most-called non-MCP tools has at least 200 calls |
+| Spend concentration | Setup | One model has at least 40% of estimated cost |
+| Abandoned rate | Setup | At least 10 top-level sessions have an outcome label and more than 25% of them are `abandoned` |
+| Ingest health | Setup | At least 15 top-level sessions, and at least 10% of them carry a diagnostic other than `unparsed_line` |
+| Re-read file | Repository | At least 8 sessions read a file and at most 2 edited, wrote, or deleted it |
+| Reworked file | Repository | At least 6 sessions edited or wrote a file |
+| Searches per session | Repository | A repository has at least 20 top-level sessions and at least 5 searches per session |
+
+Calls, errors, and error rates are the ones the Tools and MCP tables report
+for the same 30 days. The five-error floor keeps a rate measured on a handful
+of failures, such as 3 errors in 20 calls, out of the list.
+
+The list shows at most 12 signals, ranked by score. Tool errors rank by error
+count, and a tool on a claude.ai connector counts half, because the server
+cannot be fixed locally. Its row advises changing how agents call it. At most
+three tool-error rows are shown. When five or more tools qualify, the rest
+fold into one "more tools fail often" row that names the next five. With
+exactly four, each keeps its row. Re-read files, reworked files, and searches
+per session show at most two rows each. Usage signals (heavy server, busy
+tool) score lowest, so they are the first to drop.
+
+The abandoned rate is archive-wide. Its detail names the two repositories
+with the most abandoned sessions. Decant has no per-session outcome filter, so
+the row points at `decant stats --by outcome` for the mix.
+
+An open signal that stops meeting its threshold is marked implemented with
+the source `activity`, and reopens if it qualifies again. A signal that still
+meets its threshold but is left out by one of the caps above is removed
+instead, and returns as an open row when it ranks again. Marks made by a
+person or an agent are kept in both cases.
+
+Keys are stable. The key of a repository signal ends in `.p` and a 16-digit
+digest of the repository root. Rows written before signals were per
+repository had no such suffix. On the next sync a mark on one of those keys
+moves to the new row when exactly one repository qualifies for that path, and
+stays on the old key when more than one does. An old row nobody marked is
+removed.
 
 ## Data quality signals
 

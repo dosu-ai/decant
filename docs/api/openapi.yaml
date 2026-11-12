@@ -294,7 +294,15 @@ paths:
       tags: [Launch]
       operationId: launchAgent
       summary: Open a configured terminal agent with a prompt
-      description: Launching is supported only on macOS; failures include a copyable command when possible.
+      description: >-
+        Launching is supported only on macOS; failures include a copyable
+        command when possible. With the `key` of a recommendation about one
+        project, the agent starts in that project's directory (the row's
+        `project_path`) when it exists and is a directory. Otherwise it
+        starts in the home directory, and the prompt gains a note that the
+        project directory was not found. `DECANT_SKILLS_DIR` overrides both.
+        The directory is read from the archive, never from the request.
+        Success and launch-failure responses report it as `dir`.
       requestBody:
         required: true
         content:
@@ -1833,7 +1841,9 @@ components:
           minLength: 1
         key:
           type: string
-          description: Recommendation key appended to the prompt as a mark instruction.
+          description: >-
+            Recommendation key appended to the prompt as a mark instruction.
+            It also selects the directory the agent starts in.
           pattern: "^[A-Za-z0-9._:/-]{1,256}$"
       additionalProperties: false
     IdeLaunchRequest:
@@ -1855,6 +1865,9 @@ components:
           type: string
         command:
           type: string
+        dir:
+          type: string
+          description: The directory the agent started in. Set by the agent launch only.
       additionalProperties: false
     LaunchError:
       allOf:
@@ -1864,6 +1877,11 @@ components:
           properties:
             ok:
               const: false
+            dir:
+              type: string
+              description: >-
+                The directory the agent would have started in. Present when
+                the agent launch itself failed, absent on a rejected request.
     SyncReport:
       type: object
       required: [scanned, ingested, skipped, issues, issuesByCode, failed, cancelled]
@@ -1939,13 +1957,47 @@ components:
           type: string
       additionalProperties: false
     SyncStatusResponse:
-      allOf:
-        - $ref: "#/components/schemas/SyncStatus"
-        - type: object
-          required: [timestamp]
-          properties:
-            timestamp:
-              type: string
+      type: object
+      required:
+        - last_sync_at
+        - in_progress
+        - last_report
+        - last_error
+        - ingested_count
+        - reason
+        - progress
+        - archive_synced
+        - timestamp
+      properties:
+        last_sync_at:
+          type: [string, "null"]
+        in_progress:
+          type: boolean
+        last_report:
+          type: [string, "null"]
+        last_error:
+          type: [string, "null"]
+        ingested_count:
+          type: [integer, "null"]
+          minimum: 0
+        reason:
+          description: What started the running sync. Null when idle and until the sync reports its first progress.
+          oneOf:
+            - $ref: "#/components/schemas/SyncReason"
+            - type: "null"
+        progress:
+          description: The latest progress of the running sync. Null when idle and until source discovery finishes.
+          oneOf:
+            - $ref: "#/components/schemas/SyncProgress"
+            - type: "null"
+        archive_synced:
+          description: >-
+            False while the archive is still being filled for the first time. The server
+            opened it with no sessions or ingested sources, and no sync has completed since.
+          type: boolean
+        timestamp:
+          type: string
+      additionalProperties: false
     SyncReason:
       type: string
       enum: [startup, watch, sweep, manual]
@@ -3176,6 +3228,10 @@ components:
         - first_seen_at
         - updated_at
         - implemented_at
+        - project_path
+        - project_root
+        - project_label
+        - project_remote
         - memory_layer
         - promotion_target
         - trigger
@@ -3222,6 +3278,27 @@ components:
           type: [string, "null"]
         implemented_at:
           type: [string, "null"]
+        project_path:
+          type: [string, "null"]
+          description: >-
+            For a row about one project, the directory an agent launch starts
+            in: the repository root, or its most recently seen worktree when
+            the root is known only by name. Not checked against the
+            filesystem until launch. Null for rows about the whole setup.
+        project_root:
+          type: [string, "null"]
+          description: >-
+            The repository key the row was computed for, the same value the
+            `repo` filter and the `repo` dimension use. Null for rows about
+            the whole setup.
+        project_label:
+          type: [string, "null"]
+          description: >-
+            Short display name for the project: its folder name, with the
+            parent folder added when two repositories share one.
+        project_remote:
+          type: [string, "null"]
+          description: The project's normalized git remote, when the archive has recorded one.
         memory_layer:
           type: [string, "null"]
         promotion_target:

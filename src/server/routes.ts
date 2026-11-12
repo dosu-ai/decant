@@ -18,6 +18,7 @@ import {
 import { openApiDocument } from "../openapi.ts";
 import { getSessionSummary } from "../query.ts";
 import {
+  launchDir,
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
@@ -71,7 +72,7 @@ import { isLoopbackPeer } from "./peers.ts";
 import { readOutputResponse, runRead } from "./read.ts";
 import type { ReadOpArgs, ReadOpName } from "./read-ops.ts";
 import { eventStream, publishServerEvent } from "./sse.ts";
-import { syncNow, syncStatus } from "./sync.ts";
+import { syncNow, syncStatus, syncStatusBody } from "./sync.ts";
 
 type DateFilter = ReturnType<typeof dateFilterFromSearch>;
 
@@ -380,7 +381,7 @@ export const COMPILED_ROUTES: CompiledRoute[] = API_ROUTE_PATHS.map((path) => ({
 }));
 
 function syncStatusResponse(): Response {
-  return json({ ...syncStatus, timestamp: new Date().toISOString() });
+  return json(syncStatusBody());
 }
 
 // Long enough for the response to reach the browser before this process
@@ -438,7 +439,7 @@ async function backgroundRoute(
 }
 
 async function launchAgentRoute(
-  { context }: RouteContext,
+  { config, context }: RouteContext,
   body: Record<string, unknown>,
 ): Promise<Response> {
   const { agent, prompt, key } = body;
@@ -463,6 +464,8 @@ async function launchAgentRoute(
   }
   const result = await launchAgent(agent, prompt, key ?? null, getSettings(), {
     platform: context.launchPlatform,
+    // The directory comes from the archive, never from the request body.
+    dir: key == null || key === "" ? null : recommendationLaunchDir(config, context, key),
   });
   if (result.ok) {
     return json(result);
@@ -471,9 +474,26 @@ async function launchAgentRoute(
   return errorResponse(
     isUnsupportedLaunchError(result.error) ? "launch_unsupported_platform" : "launch_failed",
     result.error ?? "launch failed",
-    { ok: false, ...(command == null ? {} : { command }) },
+    {
+      ok: false,
+      ...(command == null ? {} : { command }),
+      ...(result.dir == null ? {} : { dir: result.dir }),
+    },
     400,
   );
+}
+
+function recommendationLaunchDir(
+  config: Config,
+  context: RequestContext,
+  key: string,
+): string | null {
+  try {
+    return withDb(config, context, (db) => launchDir(db, key));
+  } catch {
+    // An unreadable archive must not stop a launch. It starts where it used to.
+    return null;
+  }
 }
 
 async function launchIdeRoute(

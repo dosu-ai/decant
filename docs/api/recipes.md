@@ -34,8 +34,12 @@ curl --fail --silent --show-error "$BASE/api/date-bounds"
 ```
 
 `sync-status` reports whether a sync is in progress, its last terminal report,
-and its last error. For a reproducible snapshot, wait for `in_progress` to be
-false or start the server with `--no-sync` before collecting endpoints.
+and its last error. While a sync runs, `progress` holds its latest counts
+(`scanned` of `total` sources) and `reason` says what started it.
+`archive_synced` is false while a new archive is still being filled by its
+first sync, so totals read before it turns true are partial. For a reproducible
+snapshot, wait for `in_progress` to be false or start the server with
+`--no-sync` before collecting endpoints.
 
 ## Query a complete date window
 
@@ -146,6 +150,11 @@ curl --fail --silent --show-error \
 curl --fail --silent --show-error \
   "$BASE/api/sessions/$SESSION_ID/issues"
 ```
+
+The CLI reads the same page without a running server:
+`decant show 123 --limit 100 --offset 0`. `decant show 123 --outline` lists a
+session's messages and their sizes, and `--max-chars` cuts long blocks. See
+[Read one session in pieces](../../README.md#read-one-session-in-pieces).
 
 ## Handle errors by code
 

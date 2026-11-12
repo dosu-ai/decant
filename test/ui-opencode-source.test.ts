@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { brandTone, modelBrandIcon, providerIdentity } from "../src/ui/badges.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { brandTone, modelBrandIcon, providerIdentity, ToolBadge } from "../src/ui/badges.tsx";
 import { readUiFile, readUiSource } from "./ui-source.ts";
 
 const main = readUiSource();
 
 describe("OpenCode source copy", () => {
   test("labels OpenCode sessions instead of falling back to the wire string", () => {
-    expect(main).toMatch(/tool === "opencode"[\s\S]{0,300}tone="opencode"[\s\S]{0,200}OpenCode/);
+    const badge = renderToStaticMarkup(createElement(ToolBadge, { tool: "opencode" }));
+    expect(badge).toContain('class="badge tone-opencode"');
+    expect(badge).toEndWith("OpenCode</span>");
     expect(providerIdentity("opencode")).toEqual({
       key: "opencode",
       label: "OpenCode",

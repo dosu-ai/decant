@@ -24,18 +24,20 @@ export function FilesView({
   dateBounds,
   dateRange,
   onDateRangeChange,
-  rows,
+  reloadKey,
 }: {
   dateBounds: DateBounds | null;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
-  rows: FileRow[];
+  /** Bumped when the archive changes, so the table reloads in place. */
+  reloadKey: number;
 }) {
   const [group, setGroup] = useState<"path" | "ext">("path");
   const [op, setOp] = useState<"read" | "edit" | "write" | "delete" | null>(null);
-  const [fileRows, setFileRows] = useState(rows);
+  const [fileRows, setFileRows] = useState<FileRow[]>([]);
   const [fileError, setFileError] = useState<unknown>(null);
-  const [filesLoading, setFilesLoading] = useState(false);
+  // True from the first render, so the page never opens on the empty state.
+  const [filesLoading, setFilesLoading] = useState(true);
   const [filesRetryKey, setFilesRetryKey] = useState(0);
   const [fileSort, setFileSort] = useState<SortState<FileSortKey>>({
     key: "total",
@@ -46,14 +48,11 @@ export function FilesView({
     [fileRows, fileSort],
   );
 
-  useEffect(() => {
-    if (group === "path" && op == null) {
-      setFileRows(rows);
-    }
-  }, [group, op, rows]);
-
+  // This view alone requests file activity. Loading the default grouping in
+  // a page slice as well would fetch it twice on every visit.
   useEffect(() => {
     void filesRetryKey;
+    void reloadKey;
     const controller = new AbortController();
     const opParam = op == null ? "" : `&op=${op}`;
     setFileError(null);
@@ -77,7 +76,7 @@ export function FilesView({
         }
       });
     return () => controller.abort();
-  }, [dateRange, filesRetryKey, group, op]);
+  }, [dateRange, filesRetryKey, group, op, reloadKey]);
 
   return (
     <div className="view-stack">

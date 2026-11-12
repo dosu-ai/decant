@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ApiError, getJson } from "./api.ts";
+import { ApiError, getJson, getSyncStatus } from "./api.ts";
 import { ApiFailureState } from "./api-failure.tsx";
 import dosuDecantUrl from "./assets/dosu-decant.png";
 import dosuOfficialUrl from "./assets/dosu-official.svg";
@@ -56,8 +56,16 @@ import {
   liveSessionsAction,
   parseSyncFailure,
   planArchiveUpdate,
+  restoreSync,
   sessionsAutoRefresh,
+  showsSync,
+  showsSyncComplete,
+  supersededStatus,
+  syncAnnouncement,
+  syncCompleteLabel,
+  syncNoticeDelay,
 } from "./sync-events.ts";
+import { SyncProgressLine, SyncProgressNotice } from "./sync-progress.tsx";
 import { hasOpenModal, isInteractiveTarget } from "./transcript-navigation.ts";
 import type {
   DashboardData,
@@ -66,6 +74,7 @@ import type {
   ServerEventPayload,
   SessionPageState,
   SyncProgress,
+  SyncStatus,
   ThemeChoice,
 } from "./types.ts";
 import { UpdateNudge } from "./update-nudge.tsx";
@@ -108,6 +117,9 @@ function App() {
   const [syncError, setSyncError] = useState<unknown>(null);
   const [syncComplete, setSyncComplete] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // Assumed synced until the server says otherwise, so nothing reads as a first sync by mistake.
+  const [archiveSynced, setArchiveSynced] = useState(true);
+  const [syncNoticeShown, setSyncNoticeShown] = useState(false);
   const [archiveUpdateAvailable, setArchiveUpdateAvailable] = useState(false);
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [liveConnectionKey, setLiveConnectionKey] = useState(0);
@@ -119,6 +131,14 @@ function App() {
   const liveDisconnectTimerRef = useRef<number | null>(null);
   const liveDroppedRef = useRef(false);
   const manualSyncPendingRef = useRef(false);
+  const syncStatusReadRef = useRef(0);
+  const syncStatusAppliedRef = useRef(0);
+  // An overtaken status answer saw a sync running that this tab has not shown.
+  const sawSyncRef = useRef(false);
+  // Counts syncs seen starting or ending, so a status answer overtaken by one
+  // is read again.
+  const syncEndedRef = useRef(0);
+  const archiveSyncedRef = useRef(true);
   const awaitingStatsRef = useRef(false);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
@@ -172,6 +192,105 @@ function App() {
     // rather than a stale closure over localSyncing.
     localSyncingRef.current = localSyncing;
   }, [localSyncing]);
+
+  useEffect(() => {
+    archiveSyncedRef.current = archiveSynced;
+  }, [archiveSynced]);
+
+  // Its timer would otherwise clear the counts of a sync that started inside the window.
+  const dismissSyncComplete = useCallback(() => {
+    if (syncCompleteTimerRef.current == null) {
+      return;
+    }
+    window.clearTimeout(syncCompleteTimerRef.current);
+    syncCompleteTimerRef.current = null;
+    setSyncComplete(false);
+    setSyncProgress(null);
+  }, []);
+
+  // EventSource does not replay events, so the server's status restores what a
+  // reload or a dropped stream missed. Resolves false when it could not be read.
+  const readSyncStatus = useCallback(async (): Promise<boolean> => {
+    let status: SyncStatus;
+    for (;;) {
+      const read = ++syncStatusReadRef.current;
+      const endedBefore = syncEndedRef.current;
+      try {
+        status = await getSyncStatus();
+      } catch {
+        return false;
+      }
+      if (read !== syncStatusReadRef.current) {
+        const superseded = supersededStatus(status, {
+          newerApplied: syncStatusAppliedRef.current === syncStatusReadRef.current,
+          syncing: localSyncingRef.current,
+        });
+        if (superseded.sawSync) {
+          sawSyncRef.current = true;
+        }
+        if (!superseded.readAgain) {
+          return true;
+        }
+      } else if (endedBefore === syncEndedRef.current) {
+        syncStatusAppliedRef.current = read;
+        break;
+      }
+    }
+    const restored = restoreSync(status, {
+      syncing: localSyncingRef.current,
+      manualPending: manualSyncPendingRef.current,
+      sawSync: sawSyncRef.current,
+    });
+    sawSyncRef.current = false;
+    setArchiveSynced(restored.archiveSynced);
+    if (restored.syncing) {
+      setLocalSyncing(true);
+      // A running sync supersedes the failure an earlier one left on screen.
+      setSyncError(null);
+      dismissSyncComplete();
+      if (restored.progress != null) {
+        syncProgressThrottleRef.current?.push(restored.progress);
+      }
+    } else {
+      syncProgressThrottleRef.current?.cancel();
+      setLocalSyncing(false);
+      setSyncProgress(null);
+    }
+    if (restored.ended) {
+      // Its terminal event was lost, so load what it wrote as that event would have.
+      setArchiveUpdateAvailable(false);
+      requestRefresh();
+      if (restored.failure != null) {
+        setSyncError(new ApiError(500, "internal_error", restored.failure));
+      }
+    }
+    return true;
+  }, [dismissSyncComplete, requestRefresh]);
+
+  useEffect(() => {
+    // Declared before the slice loads so this request is not queued behind them.
+    void readSyncStatus();
+  }, [readSyncStatus]);
+
+  const firstSync = localSyncing && !archiveSynced;
+  useEffect(() => {
+    if (!localSyncing) {
+      return;
+    }
+    const delay = syncNoticeDelay({ firstSync, requested: manualSyncPendingRef.current });
+    if (delay === 0) {
+      setSyncNoticeShown(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setSyncNoticeShown(true), delay);
+    return () => window.clearTimeout(timer);
+  }, [firstSync, localSyncing]);
+
+  useEffect(() => {
+    if (!localSyncing && !syncComplete) {
+      setSyncNoticeShown(false);
+    }
+  }, [localSyncing, syncComplete]);
 
   const sessionFailure = sessionPageFailure(sessionPageState, sessionPage);
   const liveSessions = sessionsAutoRefresh({
@@ -330,14 +449,18 @@ function App() {
         } else {
           setArchiveUpdateAvailable(true);
         }
-        // A sync seen only over this stream may have finished, failed, or died
-        // with the server while disconnected, so its terminal event is lost.
-        // A later progress event restores the indicator if it is still running.
-        if (!manualSyncPendingRef.current) {
-          progressThrottle.cancel();
-          setLocalSyncing(false);
-          setSyncProgress(null);
-        }
+        // A sync seen only over this stream may have ended while disconnected.
+        // Ask the server, and drop the indicator if it cannot say.
+        void readSyncStatus().then((read) => {
+          if (read) {
+            return;
+          }
+          if (!manualSyncPendingRef.current) {
+            progressThrottle.cancel();
+            setLocalSyncing(false);
+            setSyncProgress(null);
+          }
+        });
       }
       if (liveDisconnectTimerRef.current != null) {
         window.clearTimeout(liveDisconnectTimerRef.current);
@@ -352,10 +475,15 @@ function App() {
           progress?: SyncProgress;
           reason?: string;
         };
-        if (!isForegroundSync(payload.reason)) {
+        if (!showsSync(payload.reason, archiveSyncedRef.current)) {
           return;
         }
         if (payload.progress != null) {
+          if (!localSyncingRef.current) {
+            // A status answer from before this sync started would hide it.
+            syncEndedRef.current += 1;
+            dismissSyncComplete();
+          }
           progressThrottle.push(payload.progress);
           setLocalSyncing(true);
         }
@@ -372,7 +500,15 @@ function App() {
         // Treat malformed events as background updates so a broken optional
         // payload cannot cause an unexpected page refresh.
       }
-      if (!isForegroundSync(payload.reason)) {
+      // Any completed sync ends the archive's first-sync state, foreground or not.
+      const shown = showsSync(payload.reason, archiveSyncedRef.current);
+      syncEndedRef.current += 1;
+      setArchiveSynced(true);
+      if (!shown) {
+        return;
+      }
+      // This tab's own pending sync keeps the indicator when another one ends.
+      if (!isForegroundSync(payload.reason) && manualSyncPendingRef.current) {
         return;
       }
       progressThrottle.flush();
@@ -384,6 +520,7 @@ function App() {
         window.clearTimeout(syncCompleteTimerRef.current);
       }
       syncCompleteTimerRef.current = window.setTimeout(() => {
+        syncCompleteTimerRef.current = null;
         setSyncComplete(false);
         setSyncProgress(null);
       }, 1_500);
@@ -417,12 +554,23 @@ function App() {
         }
       }
     };
-    const handleOpen = () => markConnected();
+    const handleOpen = () => {
+      const dropped = liveDroppedRef.current;
+      markConnected();
+      // A sync can end between the first status read and this stream opening.
+      if (!dropped) {
+        void readSyncStatus();
+      }
+    };
     const handleError = (event: Event) => {
       const failure = parseSyncFailure(event);
       if (failure != null) {
         markConnected();
-        if (isForegroundSync(failure.reason)) {
+        syncEndedRef.current += 1;
+        if (
+          showsSync(failure.reason, archiveSyncedRef.current) &&
+          (isForegroundSync(failure.reason) || !manualSyncPendingRef.current)
+        ) {
           progressThrottle.cancel();
           setLocalSyncing(false);
           setSyncProgress(null);
@@ -470,7 +618,7 @@ function App() {
         window.clearTimeout(syncCompleteTimerRef.current);
       }
     };
-  }, [liveConnectionKey, requestRefresh]);
+  }, [dismissSyncComplete, liveConnectionKey, readSyncStatus, requestRefresh]);
 
   useEffect(() => {
     const openSearch = (event: KeyboardEvent) => {
@@ -505,12 +653,13 @@ function App() {
   // local day as the newest session row.
   const lastActivity = formatDay(data.dateBounds?.latest_started_at ?? null);
   const syncInProgress = localSyncing;
+  const syncCompleteShown = showsSyncComplete(syncComplete, syncInProgress);
   const runSync = () => {
     if (syncInProgress) {
       return;
     }
     setSyncError(null);
-    setSyncComplete(false);
+    dismissSyncComplete();
     syncProgressThrottleRef.current?.cancel();
     setSyncProgress(null);
     setArchiveUpdateAvailable(false);
@@ -519,10 +668,12 @@ function App() {
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
       .finally(() => {
         manualSyncPendingRef.current = false;
+        syncEndedRef.current += 1;
       })
       .then(() => {
         syncProgressThrottleRef.current?.flush();
         setArchiveUpdateAvailable(false);
+        setArchiveSynced(true);
         setLocalSyncing(false);
         setSyncComplete(true);
         requestRefresh();
@@ -530,6 +681,7 @@ function App() {
           window.clearTimeout(syncCompleteTimerRef.current);
         }
         syncCompleteTimerRef.current = window.setTimeout(() => {
+          syncCompleteTimerRef.current = null;
           setSyncComplete(false);
           setSyncProgress(null);
         }, 1_500);
@@ -645,30 +797,47 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Top-level sessions matching this page's filters">
-            <span className="sidebar-stat-icon">
-              <Icon name="trend" />
-            </span>
-            <span>
-              <strong>{formatInt(metrics?.sessions ?? 0)}</strong> sessions
-            </span>
-          </div>
-          <div className="sidebar-stat">
-            <span className="sidebar-stat-icon">
-              <Icon name="money" />
-            </span>
-            <span>
-              <strong>
-                <CostValue
-                  cost={metrics?.estimated_cost_usd ?? 0}
-                  sessions={metrics?.sessions ?? 0}
-                  usageSessions={metrics?.usage_sessions ?? 0}
-                />
-              </strong>{" "}
-              tracked
-            </span>
-          </div>
-          {lastActivity != null ? (
+          {firstSync ? (
+            // Totals read mid-sync are partial, so they are not shown as the archive's.
+            <div className="sidebar-stat">
+              <span className="sidebar-stat-icon">
+                <Icon name="trend" />
+              </span>
+              <span>Totals after the first sync</span>
+            </div>
+          ) : (
+            <>
+              <div className="sidebar-stat" title="Top-level sessions matching this page's filters">
+                <span className="sidebar-stat-icon">
+                  <Icon name="trend" />
+                </span>
+                <span>
+                  {/* An unloaded summary is unknown, not zero. */}
+                  <strong>{metrics == null ? "-" : formatInt(metrics.sessions)}</strong> sessions
+                </span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="sidebar-stat-icon">
+                  <Icon name="money" />
+                </span>
+                <span>
+                  <strong>
+                    {metrics == null ? (
+                      "-"
+                    ) : (
+                      <CostValue
+                        cost={metrics.estimated_cost_usd}
+                        sessions={metrics.sessions}
+                        usageSessions={metrics.usage_sessions}
+                      />
+                    )}
+                  </strong>{" "}
+                  tracked
+                </span>
+              </div>
+            </>
+          )}
+          {lastActivity != null && !firstSync ? (
             <div className="sidebar-stat">
               <span className="sidebar-stat-icon">
                 <Icon name="clock" />
@@ -743,11 +912,9 @@ function App() {
           </button>
           <span aria-live="polite" className="sr-only" role="status">
             {syncInProgress
-              ? syncProgress == null
-                ? "Syncing session logs"
-                : `Syncing ${syncProgress.scanned} of ${syncProgress.total}`
-              : syncComplete
-                ? `Sync complete${syncProgress?.ingested ? `, ${syncProgress.ingested} ingested` : ""}`
+              ? syncAnnouncement(syncProgress)
+              : syncCompleteShown
+                ? syncCompleteLabel(syncProgress)
                 : ""}
           </span>
           <Link
@@ -775,9 +942,19 @@ function App() {
               </button>
             ))}
           </fieldset>
+          {syncInProgress || syncComplete ? (
+            <SyncProgressLine complete={syncCompleteShown} progress={syncProgress} />
+          ) : null}
         </header>
         <main className="content">
           <div className="content-wrap">
+            {syncNoticeShown && (syncInProgress || syncComplete) ? (
+              <SyncProgressNotice
+                complete={syncCompleteShown}
+                firstSync={firstSync}
+                progress={syncProgress}
+              />
+            ) : null}
             {liveDisconnected ? (
               <div className="live-disconnected" role="status">
                 <span>Live updates disconnected · the browser will reconnect automatically.</span>
@@ -829,6 +1006,7 @@ function App() {
                 reloadKey,
                 runSync,
                 failedSlices,
+                firstSync,
                 loadedSlices: loadedSlicesRef.current,
                 recommendationsLoading,
                 sessionPageState,
@@ -878,6 +1056,8 @@ function renderView(
     reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
+    /** A sync is filling an archive that has never completed one. */
+    firstSync: boolean;
     loadedSlices: ReadonlyMap<DataSlice, string>;
     recommendationsLoading: boolean;
     sessionPageState: SessionPageState;
@@ -928,6 +1108,7 @@ function renderView(
         <AnalyticsView
           data={data}
           dateRange={actions.dateRange}
+          firstSync={actions.firstSync}
           onDateRangeChange={actions.onDateRangeChange}
           onSourceChange={actions.onSourceChange}
           onSync={actions.runSync}
@@ -945,6 +1126,7 @@ function renderView(
     case "insights":
       return (
         <InsightsView
+          firstSync={actions.firstSync}
           loading={actions.recommendationsLoading}
           loadFailed={actions.failedSlices.includes("recommendations")}
           rows={data.recommendations}

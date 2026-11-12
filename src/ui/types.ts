@@ -89,6 +89,16 @@ export type ServerEventPayload = {
   reason?: string;
 };
 
+/** `GET /api/sync-status`, read on load and reconnect because SSE is not replayed. */
+export type SyncStatus = {
+  in_progress: boolean;
+  last_error: string | null;
+  reason: string | null;
+  progress: SyncProgress | null;
+  /** False while a new archive waits for its first completed sync. */
+  archive_synced: boolean;
+};
+
 export type Activity = {
   by_hour: number[];
   by_weekday: number[];

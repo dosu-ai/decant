@@ -586,7 +586,20 @@ so a mistyped path is not answered with an empty result. `sync`, `serve`,
 [CLI output, errors, and exit codes](cli.md#the-archive-path).
 
 The web UI shows the startup sync's progress and loads its results as soon as
-it finishes, so a first launch fills the dashboard without a manual sync.
+it finishes, so a first launch fills the dashboard without a manual sync. A
+line along the top bar fills as the sync reads its files, and a notice at the
+top of the page gives the count, for example "Syncing 312 of 1,254 files". The
+notice appears at once for a manual sync and for the first sync of a new
+archive. For a later startup sync it appears only if the sync runs longer than
+about a second. The page reads `GET /api/sync-status` when it loads and when
+its event stream reconnects, so a reload during a sync shows the sync right
+away.
+
+While the first sync of a new archive is running, the pages do not present
+partial data as final. The sidebar holds its session and cost totals back,
+**Insights** says signals appear when the first sync finishes, and
+**Analytics** marks its numbers as still loading in. Signals are generated at
+the end of a sync, so none exist before then.
 
 Later watcher and sweep syncs refresh the first page of **Sessions** in place
 when it has no project, archive, or text filter. The date range doesn't matter,

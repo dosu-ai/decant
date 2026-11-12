@@ -93,6 +93,7 @@ describe("distribution helpers", () => {
       "build",
       "--compile",
       "--minify",
+      "--splitting",
       "--define",
       'process.env.NODE_ENV="production"',
       "--target",
@@ -108,6 +109,7 @@ describe("distribution helpers", () => {
       "build",
       "--compile",
       "--minify",
+      "--splitting",
       "--define",
       'process.env.NODE_ENV="production"',
       "--target",
@@ -123,10 +125,8 @@ describe("distribution helpers", () => {
   });
 
   test("ships the binary minified, since that halves what the browser parses", () => {
-    // Bun does not split chunks in a compiled binary, so echarts ships whether or
-    // not it is dynamically imported and the only lever on first-load parse cost
-    // is minification. Measured by fetching the bundle from each binary:
-    // 6,211,618 bytes without, 3,211,476 with.
+    // Measured by fetching the bundle from each binary before chunks were
+    // split: 6,211,618 bytes without --minify, 3,211,476 with.
     //
     // --sourcemap would recover the identifiers that minification mangles in
     // `exception.stacktrace`, but it breaks the compiled binary: the server dies
@@ -136,6 +136,14 @@ describe("distribution helpers", () => {
       const args = buildTargetArgs(target, "/tmp/decant");
       expect(args).toContain("--minify");
       expect(args).not.toContain("--sourcemap");
+    }
+  });
+
+  test("splits the UI bundle, so charts and highlighting load on first use", () => {
+    // Without --splitting Bun inlines every dynamic import into the one script
+    // the page loads first. scripts/dist-check.ts proves the chunks are served.
+    for (const target of selectTargets("all")) {
+      expect(buildTargetArgs(target, "/tmp/decant")).toContain("--splitting");
     }
   });
 

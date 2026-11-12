@@ -7,9 +7,9 @@ const uiDir = join(import.meta.dir, "..", "src", "ui");
 const main = readUiSource(["chart-runtime.ts"]);
 
 test("ECharts is only ever reached through the lazy chart runtime", () => {
-  // Bun's compiled binary does not split chunks, so laziness only defers module
-  // initialisation; what shrinks the download is registering just the parts of
-  // ECharts the analytics chart draws with, in one module.
+  // The release build splits chunks, so the runtime is fetched when a chart
+  // first renders. Registering just the parts of ECharts the charts draw with,
+  // in one module, keeps that chunk small.
   expect(main).not.toMatch(/^import \* as echarts/m);
   expect(main).not.toMatch(/^import echarts/m);
   expect(main).not.toMatch(/from "echarts/);

@@ -132,6 +132,45 @@ describe("server sync coordination", () => {
     expect(secondProgress).toEqual(firstProgress);
   });
 
+  test("runs the progress hook with each update the listeners get", async () => {
+    const config = freshConfig();
+    const runner: SyncWorkerRunner = async (_config, _cancel, onProgress) => {
+      for (let scanned = 0; scanned <= 100; scanned += 1) {
+        onProgress?.({ scanned, ingested: scanned, skipped: 0, failed: 0, total: 100 });
+      }
+      return {
+        scanned: 100,
+        ingested: 100,
+        skipped: 0,
+        issues: 0,
+        issuesByCode: {},
+        failed: 0,
+        cancelled: false,
+      };
+    };
+    const order: string[] = [];
+    const coordinator = createSyncCoordinator(runner, {
+      progressEveryFiles: 25,
+      progressEveryMs: Number.POSITIVE_INFINITY,
+      now: () => 0,
+      onProgress: (progress) => {
+        order.push(`hook ${progress.ingested}`);
+        // A failing hook must not fail the sync or starve its listeners.
+        throw new Error("statistics reload failed");
+      },
+      onCompleted: () => order.push("completed"),
+    });
+
+    await coordinator.run(config, undefined, (progress) =>
+      order.push(`listener ${progress.ingested}`),
+    );
+    expect(order).toEqual([
+      ...[0, 25, 50, 75, 100].flatMap((count) => [`hook ${count}`, `listener ${count}`]),
+      "completed",
+    ]);
+    await coordinator.close();
+  });
+
   test("manual route joins the physical sync already owned by the watcher coordinator", async () => {
     const config = freshConfig();
     const entered = Promise.withResolvers<void>();

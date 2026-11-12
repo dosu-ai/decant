@@ -55,9 +55,13 @@ function seedTool(
     `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error)
      VALUES (?1, ?2, ?3, ?4, ?5)`,
   );
-  for (let index = 0; index < calls; index += 1) {
-    insert.run(sessionId, kind, name, server, index < errors ? 1 : 0);
-  }
+  // One transaction, not one commit per row: thousands of autocommits pushed a
+  // test past bun's 5 s timeout on a slow runner.
+  db.transaction(() => {
+    for (let index = 0; index < calls; index += 1) {
+      insert.run(sessionId, kind, name, server, index < errors ? 1 : 0);
+    }
+  })();
 }
 
 function seedFileSessions(

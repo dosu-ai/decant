@@ -19,7 +19,7 @@ import {
   type WatchEvent,
 } from "../../watch.ts";
 import type { CliContext } from "../context.ts";
-import { collectOption, parseInteger } from "../parse.ts";
+import { collectOption, parseInteger, parsePort } from "../parse.ts";
 import { renderUpdateNotice } from "../update-notice.ts";
 
 export function registerSyncCommands(ctx: CliContext): void {
@@ -86,6 +86,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
       },
       {
+        create: true,
         overrides: {
           claudeDir: commandOptions.claudeDir,
           codexDir: commandOptions.codexDir,
@@ -223,7 +224,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "serve the web UI and keep the index current (the default when run with no arguments)",
     )
     .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
-    .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
+    .option("--port <n>", "port to bind", parsePort, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
@@ -359,56 +360,59 @@ export function registerSyncCommands(ctx: CliContext): void {
             }
             throw error;
           }
-          if (!ctx.globals().quiet) {
-            serverLogger.info("Server started.", {
-              "event.name": "decant.server.started",
-              "server.address": host,
-              "server.port": server.port,
-              "watch.enabled": syncEnabled,
-              "service.supervised": supervised,
-            });
-          }
-          const boundPort = server.port ?? wanted;
-          const url = displayUrl(host, boundPort);
-          const decision = openDecision(commandOptions.open !== false, environment);
-          if (!ctx.globals().quiet && !supervised) {
-            io.writeErr(serveBanner(url, decision.open));
-          }
-          void ctx.pendingUpdateNotice?.then(
-            (status) => {
-              const notice = renderUpdateNotice(status);
-              if (notice != null) {
-                io.writeErr(notice);
-              }
-            },
-            () => undefined,
-          );
-          if (decision.open && decision.command != null) {
-            openBrowser(url, decision.command);
-          }
-          let exitCode = 0;
-          const stopBinaryWatch =
-            binaryPath == null
-              ? null
-              : watchBinary(
-                  binaryPath,
-                  () => {
-                    // A failing exit is what makes launchd and systemd start the
-                    // new binary; a clean exit would leave the service stopped.
-                    exitCode = SERVICE_RESTART_EXIT_CODE;
-                    serverLogger.info("Decant was updated; restarting the background service.", {
-                      "event.name": "decant.service.binary_changed",
-                    });
-                    requestShutdown();
-                  },
-                  {
-                    intervalMs: BINARY_CHECK_MS,
-                    settleMs: BINARY_SETTLE_MS,
-                    initial: binaryAtStart,
-                  },
-                );
+          // Installed before anything is printed: a SIGTERM sent as soon as the
+          // URL appears must stop the server, not kill the process.
           const signal = waitForProcessSignal();
+          let exitCode = 0;
+          let stopBinaryWatch: (() => void) | null = null;
           try {
+            if (!ctx.globals().quiet) {
+              serverLogger.info("Server started.", {
+                "event.name": "decant.server.started",
+                "server.address": host,
+                "server.port": server.port,
+                "watch.enabled": syncEnabled,
+                "service.supervised": supervised,
+              });
+            }
+            const boundPort = server.port ?? wanted;
+            const url = displayUrl(host, boundPort);
+            const decision = openDecision(commandOptions.open !== false, environment);
+            if (!ctx.globals().quiet && !supervised) {
+              io.writeErr(serveBanner(url, decision.open));
+            }
+            void ctx.pendingUpdateNotice?.then(
+              (status) => {
+                const notice = renderUpdateNotice(status);
+                if (notice != null) {
+                  io.writeErr(notice);
+                }
+              },
+              () => undefined,
+            );
+            if (decision.open && decision.command != null) {
+              openBrowser(url, decision.command);
+            }
+            stopBinaryWatch =
+              binaryPath == null
+                ? null
+                : watchBinary(
+                    binaryPath,
+                    () => {
+                      // A failing exit is what makes launchd and systemd start the
+                      // new binary; a clean exit would leave the service stopped.
+                      exitCode = SERVICE_RESTART_EXIT_CODE;
+                      serverLogger.info("Decant was updated; restarting the background service.", {
+                        "event.name": "decant.service.binary_changed",
+                      });
+                      requestShutdown();
+                    },
+                    {
+                      intervalMs: BINARY_CHECK_MS,
+                      settleMs: BINARY_SETTLE_MS,
+                      initial: binaryAtStart,
+                    },
+                  );
             await Promise.race([signal.promise, shutdownRequested]);
           } finally {
             signal.cancel();

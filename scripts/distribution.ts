@@ -114,8 +114,9 @@ export function buildTargetArgs(
   outPath: string,
   version?: string,
 ): string[] {
-  // --minify roughly halves the UI bundle the embedded server hands the browser;
-  // Bun does not split chunks in a compiled binary, so density is the only lever.
+  // --minify roughly halves the UI bundle the embedded server hands the browser.
+  // --splitting keeps the chart runtime and the syntax highlighter in their own
+  // files, fetched on first use, so the first script is about a third the size.
   // Source runs stay unminified for fast, legible dev rebuilds. Mangled names
   // weaken `exception.stacktrace`, but every custom error class sets `this.name`
   // from a literal, so `exception.type` survives.
@@ -129,6 +130,7 @@ export function buildTargetArgs(
     "build",
     "--compile",
     "--minify",
+    "--splitting",
     "--define",
     'process.env.NODE_ENV="production"',
     "--target",

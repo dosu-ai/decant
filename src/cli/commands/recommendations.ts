@@ -1,9 +1,11 @@
 import {
   list as listRecommendations,
   markImplemented,
-  parseStatusFilter,
+  STATUS_FILTERS,
+  type StatusFilter,
 } from "../../recommendations.ts";
 import type { CliContext } from "../context.ts";
+import { parseChoice } from "../parse.ts";
 
 export function registerRecommendationsCommands(ctx: CliContext): void {
   const { program, io } = ctx;
@@ -14,20 +16,12 @@ export function registerRecommendationsCommands(ctx: CliContext): void {
   recommendations
     .command("ls")
     .description("list persisted recommendations")
-    .option("--status <status>", "open | implemented | all", "open")
-    .action((commandOptions: { status?: string }) =>
-      ctx.run(() => {
-        const status = parseStatusFilter(commandOptions.status ?? "open");
-        if (status == null) {
-          io.writeErr(
-            `error: unknown --status ${JSON.stringify(commandOptions.status)} ` +
-              "(expected: open | implemented | all)\n",
-          );
-          return 2;
-        }
-        return ctx.withArchive(
+    .option("--status <status>", STATUS_FILTERS.join(" | "), parseChoice(STATUS_FILTERS), "open")
+    .action((commandOptions: { status?: StatusFilter }) =>
+      ctx.run(() =>
+        ctx.withArchive(
           (archive) => {
-            const rows = listRecommendations(archive.db, status);
+            const rows = listRecommendations(archive.db, commandOptions.status ?? "open");
             ctx.output(
               rows,
               () =>
@@ -36,8 +30,8 @@ export function registerRecommendationsCommands(ctx: CliContext): void {
             );
           },
           { sync: true },
-        );
-      }),
+        ),
+      ),
     );
   recommendations
     .command("mark")
@@ -60,10 +54,11 @@ export function registerRecommendationsCommands(ctx: CliContext): void {
                 ? { ok: true, key, status: "implemented" }
                 : { ok: false, key, error: "recommendation not found" },
             );
+          } else if (!ok) {
+            // --quiet drops notes, not the reason a command failed.
+            io.writeErr(`error: recommendation not found: ${key}\n`);
           } else if (!ctx.globals().quiet) {
-            io[ok ? "writeOut" : "writeErr"](
-              ok ? `Marked ${key} as implemented.\n` : `recommendation not found: ${key}\n`,
-            );
+            io.writeOut(`Marked ${key} as implemented.\n`);
           }
           return ok ? 0 : 1;
         }),

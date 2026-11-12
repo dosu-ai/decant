@@ -1,21 +1,17 @@
 import type { CliContext } from "../context.ts";
+import { parseChoice } from "../parse.ts";
+
+const SHELLS = ["bash", "zsh", "fish", "powershell", "elvish"] as const;
+type Shell = (typeof SHELLS)[number];
 
 export function registerCompletionCommand(ctx: CliContext): void {
   ctx.program
     .command("completion")
     .description("generate a shell completion script")
-    .argument("<shell>", "bash | zsh | fish | powershell | elvish")
-    .action((shell: string) =>
+    .argument("<shell>", SHELLS.join(" | "), parseChoice(SHELLS))
+    .action((shell: Shell) =>
       ctx.run(() => {
-        const script = renderCompletion(shell);
-        if (script == null) {
-          ctx.io.writeErr(
-            `error: unknown completion shell ${JSON.stringify(shell)} ` +
-              "(expected: bash | zsh | fish | powershell | elvish)\n",
-          );
-          return 2;
-        }
-        ctx.io.writeOut(script);
+        ctx.io.writeOut(renderCompletion(shell));
       }),
     );
 }
@@ -64,7 +60,7 @@ const completionWords = [
   "--no-sync",
 ];
 
-function renderCompletion(shell: string): string | null {
+function renderCompletion(shell: Shell): string {
   const words = completionWords.join(" ");
   switch (shell) {
     case "bash":
@@ -91,7 +87,5 @@ _arguments '1:command:(${words})' '*::arg:->args'
   put ${completionWords.map((word) => JSON.stringify(word)).join(" ")}
 }
 `;
-    default:
-      return null;
   }
 }

@@ -81,10 +81,11 @@ export async function launchAgent(
   if (key != null && key !== "" && !isSafeRecommendationKey(key)) {
     return { ok: false, error: "Invalid recommendation key." };
   }
-  const { dir, missing, ofRow } = await resolveLaunchDir(options);
+  const { dir, missing } = await resolveLaunchDir(options);
   const fullPrompt = withMarkInstruction(withMissingDirNote(prompt, missing, dir), key);
-  // A pasted command runs wherever the terminal is, so it carries the project.
-  const copyable = command(agent, fullPrompt, ofRow ? dir : null);
+  // A pasted command runs wherever the terminal is, so it carries the
+  // directory the launch would have used, whichever source chose it.
+  const copyable = command(agent, fullPrompt, dir);
   if (!canLaunch(options.platform)) {
     return {
       ok: false,
@@ -115,9 +116,9 @@ export async function launchAgent(
   );
   if (!result.ok) {
     rmSync(promptDir, { recursive: true, force: true });
-    if (result.command != null) {
-      return { ...result, command: copyable ?? result.command, dir };
-    }
+    // Every failure offers the prepared command, which carries the directory
+    // and the mark instruction a bare agent command would lose.
+    return { ...result, command: copyable ?? result.command, dir };
   }
   return { ...result, dir };
 }
@@ -126,20 +127,18 @@ export async function launchAgent(
 // `missing` is a project directory that was asked for and not found.
 async function resolveLaunchDir(
   options: LaunchOptions,
-): Promise<{ dir: string; missing: string | null; ofRow: boolean }> {
+): Promise<{ dir: string; missing: string | null }> {
   const override = options.env?.DECANT_SKILLS_DIR ?? process.env.DECANT_SKILLS_DIR;
   if (override != null) {
-    return { dir: override, missing: null, ofRow: false };
+    return { dir: override, missing: null };
   }
   const wanted = options.dir;
   if (wanted == null || wanted === "") {
-    return { dir: homelikeDir(), missing: null, ofRow: false };
+    return { dir: homelikeDir(), missing: null };
   }
   const found =
     isAbsolute(wanted) && (await (options.isDirectory?.(wanted) ?? isDirectoryWithin(wanted)));
-  return found
-    ? { dir: wanted, missing: null, ofRow: true }
-    : { dir: homelikeDir(), missing: wanted, ofRow: false };
+  return found ? { dir: wanted, missing: null } : { dir: homelikeDir(), missing: wanted };
 }
 
 async function isDirectoryWithin(path: string): Promise<boolean> {

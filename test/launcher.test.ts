@@ -203,6 +203,29 @@ describe("launcher", () => {
       });
     });
 
+    test("a terminal that fails to open still offers the prepared command", async () => {
+      const result = await launch({
+        dir: project,
+        run: () => ({ ok: false, error: "app missing" }),
+      });
+      expect(result.result).toMatchObject({ ok: false, error: "app missing", dir: project });
+      // The command carries the project and the mark instruction, which a bare
+      // agent command built from the request alone would drop.
+      const pasted = result.result.command ?? "";
+      expect(pasted).toStartWith(`cd '${project.replaceAll("'", "'\\''")}' && claude `);
+      expect(pasted).toContain("decant recommendations mark catalog:skills");
+    });
+
+    test("every fallback directory is in the copyable command", async () => {
+      const unsupported = { platform: "linux" as const };
+      const override = await launch({ ...unsupported, env: { DECANT_SKILLS_DIR: "/work/a" } });
+      expect(override.result.command).toStartWith("cd '/work/a' && claude ");
+
+      const gone = await launch({ ...unsupported, dir: join(workDir, "deleted-worktree") });
+      expect(gone.result.dir).toBe(home);
+      expect(gone.result.command).toStartWith(`cd '${home}' && claude `);
+    });
+
     test("Warp opens in the project directory", async () => {
       let config = "";
       const result = await launchAgent(
@@ -273,6 +296,8 @@ describe("launcher", () => {
     expect(result).toEqual({
       ok: false,
       error: "open failed · open failed",
+      // The prepared command is the way out when no terminal opened.
+      command: "cd '/tmp/skills' && claude 'ship it'",
       dir: "/tmp/skills",
     });
     expect(calls[1]).toBe("warp://action/new_tab?path=%2Ftmp%2Fskills");
@@ -299,7 +324,7 @@ describe("launcher", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("did not confirm");
-    expect(result.command).toBe("claude 'ship it'");
+    expect(result.command).toBe("cd '/tmp/skills' && claude 'ship it'");
   });
 
   test("Warp reports success only after the private launch config is consumed", async () => {

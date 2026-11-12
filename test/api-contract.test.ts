@@ -461,6 +461,20 @@ describe("local API OpenAPI contract", () => {
         join(import.meta.dir, "..", "docs", "api", "routes.md"),
         "utf8",
       );
+      const schemas = (
+        document as unknown as {
+          components: {
+            schemas: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
+          };
+        }
+      ).components.schemas;
+      // Required, so the listing above fails validation if a row drops one.
+      const projectFields = ["project_path", "project_root", "project_label", "project_remote"];
+      expect(schemas.Recommendation?.required).toEqual(expect.arrayContaining(projectFields));
+      expect(Object.keys(schemas.LaunchResult?.properties ?? {})).toContain("dir");
+      for (const field of projectFields) {
+        expect(routesDocumentation).toContain(`\`${field}\``);
+      }
       expect(routesDocumentation).toContain("## UI routes");
       expect(routesDocumentation).toContain("GET /api/sessions/search-index");
       expect(routesDocumentation).toMatch(/final short\s+or empty page/);

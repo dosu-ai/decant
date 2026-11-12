@@ -91,6 +91,7 @@ export function addShowCommand(ctx: CliContext, command: Command): void {
           io.writeErr("error: --max-chars does not apply to --outline, which lists sizes\n");
           return 2;
         }
+        const invocation = readInvocation(ctx.globals());
         return ctx.withArchive(
           (archive) => {
             const resolved = resolveSessionRef(archive.db, ref);
@@ -120,7 +121,7 @@ export function addShowCommand(ctx: CliContext, command: Command): void {
                 getSessionOutline(archive.db, id) ?? [],
                 pageInfo(detail, options, 0),
               );
-              ctx.output(view, () => renderOutline(view));
+              ctx.output(view, () => renderOutline(view, invocation));
               return 0;
             }
             if (!paged && options.maxChars == null) {
@@ -139,7 +140,7 @@ export function addShowCommand(ctx: CliContext, command: Command): void {
               },
               () =>
                 `${toMarkdown(withTruncationMarkers(capped.detail))}` +
-                `${pageFooter(id, page, detail.messages.length, options, capped.truncatedBlocks)}\n`,
+                `${pageFooter(invocation, id, page, detail.messages.length, options, capped.truncatedBlocks)}\n`,
             );
             return 0;
           },
@@ -152,7 +153,8 @@ export function addShowCommand(ctx: CliContext, command: Command): void {
 function integerAtLeast(minimum: number): (value: string) => number {
   return (value) => {
     const parsed = parseInteger(value);
-    if (parsed < minimum) {
+    // SQLite rejects a bound integer past 2^63 with a datatype mismatch.
+    if (parsed < minimum || !Number.isSafeInteger(parsed)) {
       throw new InvalidArgumentError(`expected an integer of at least ${minimum}`);
     }
     return parsed;
@@ -229,7 +231,24 @@ function withTruncationMarkers(detail: SessionDetail): SessionDetail {
   };
 }
 
+/**
+ * How this run reached its archive, so a printed follow-up command reads the
+ * same archive and keeps sync off when this run had it off.
+ */
+export function readInvocation(globals: { db?: string; sync?: boolean }): string {
+  return [
+    "decant",
+    ...(globals.db == null ? [] : ["--db", shellWord(globals.db)]),
+    ...(globals.sync === false ? ["--no-sync"] : []),
+  ].join(" ");
+}
+
+function shellWord(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function pageFooter(
+  invocation: string,
   id: number,
   page: PageInfo,
   shown: number,
@@ -245,7 +264,7 @@ function pageFooter(
       `--limit ${page.message_limit ?? shown}`,
       ...(options.maxChars == null ? [] : [`--max-chars ${options.maxChars}`]),
     ];
-    lines.push(`[next page: decant show ${id} ${flags.join(" ")}]`);
+    lines.push(`[next page: ${invocation} show ${id} ${flags.join(" ")}]`);
   }
   if (truncatedBlocks > 0) {
     lines.push(
@@ -299,7 +318,7 @@ function outlineView(
 
 const PROMPT_PREVIEW_CHARS = 80;
 
-function renderOutline(view: SessionOutlineView): string {
+function renderOutline(view: SessionOutlineView, invocation: string): string {
   const { session } = view;
   const prompts = new Map(
     view.outline.filter((item) => item.kind === "prompt").map((item) => [item.seq, item.text]),
@@ -321,8 +340,8 @@ function renderOutline(view: SessionOutlineView): string {
       `tool calls: ${view.totals?.tool_call_count ?? 0}`,
     "index\trole\tchars\tblocks\tprompt",
     ...rows,
-    pageFooter(session.id, view, view.messages.length, { outline: true }, 0),
-    `[read messages: decant show ${session.id} --offset <index> --limit <n> --max-chars <n>]`,
+    pageFooter(invocation, session.id, view, view.messages.length, { outline: true }, 0),
+    `[read messages: ${invocation} show ${session.id} --offset <index> --limit <n> --max-chars <n>]`,
   ].join("\n");
 }
 

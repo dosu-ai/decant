@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readInvocation } from "../src/cli/commands/show.ts";
 import { runCli } from "../src/cli.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { toMarkdown } from "../src/export.ts";
@@ -139,7 +140,7 @@ describe("show --outline", () => {
       "4\tuser\t33\ttext 33\tThanks. Now list the slow steps",
       "5\tassistant\t17\ttext 17",
       "[showing 6 of 6 messages]",
-      `[read messages: decant show ${id} --offset <index> --limit <n> --max-chars <n>]`,
+      `[read messages: decant ${base.join(" ")} show ${id} --offset <index> --limit <n> --max-chars <n>]`,
       "",
     ]);
 
@@ -219,7 +220,9 @@ describe("show --outline", () => {
     expect(page.stdout).toContain("\n4\tuser\t");
     expect(page.stdout).not.toContain("\n5\tassistant\t");
     expect(page.stdout).toContain("[showing 2 of 6 messages from offset 3]");
-    expect(page.stdout).toContain(`[next page: decant show ${id} --outline --offset 5 --limit 2]`);
+    expect(page.stdout).toContain(
+      `[next page: decant ${base.join(" ")} show ${id} --outline --offset 5 --limit 2]`,
+    );
 
     const json = await runCli([...base, "--json", ...args]);
     const view = JSON.parse(json.stdout);
@@ -270,7 +273,8 @@ describe("show --limit and --offset", () => {
     expect(text.stdout).not.toContain("Summarize the build log\n\n## ");
     expect(text.stdout).not.toContain("No step was slow.");
     expect(text.stdout).toEndWith(
-      `[showing 2 of 6 messages from offset 1]\n[next page: decant show ${id} --offset 3 --limit 2]\n`,
+      "[showing 2 of 6 messages from offset 1]\n" +
+        `[next page: decant ${base.join(" ")} show ${id} --offset 3 --limit 2]\n`,
     );
   });
 
@@ -325,6 +329,9 @@ describe("show --limit and --offset", () => {
       ["--limit", "ten"],
       ["--offset", "-1"],
       ["--max-chars", "0"],
+      // Past 2^63 SQLite answers with a datatype mismatch instead.
+      ["--limit", "9223372036854775808"],
+      ["--offset", "9223372036854775808"],
     ]) {
       const result = await runCli([...base, "show", String(id), ...flags]);
       expect(result.code).toBe(2);
@@ -413,8 +420,29 @@ describe("show --max-chars", () => {
     const result = await runCli([...base, "show", String(id), "--limit", "3", "--max-chars", "40"]);
     expect(result.stdout).toEndWith(
       "[showing 3 of 6 messages]\n" +
-        `[next page: decant show ${id} --offset 3 --limit 3 --max-chars 40]\n` +
+        `[next page: decant ${base.join(" ")} show ${id} --offset 3 --limit 3 --max-chars 40]\n` +
         "[1 block cut at 40 chars. Raise --max-chars to read it in full.]\n",
+    );
+  });
+});
+
+describe("follow-up commands", () => {
+  test("name the archive and the sync setting this run used", async () => {
+    const { id, dbPath } = seed();
+    const quiet = await runCli(["--db", dbPath, "--no-sync", "show", String(id), "--limit", "1"]);
+    expect(quiet.stdout).toContain(
+      `[next page: decant --db ${dbPath} --no-sync show ${id} --offset 1 --limit 1]`,
+    );
+
+    const outline = await runCli(["--db", dbPath, "--no-sync", "show", String(id), "--outline"]);
+    expect(outline.stdout).toContain(
+      `[read messages: decant --db ${dbPath} --no-sync show ${id} --offset <index>`,
+    );
+
+    // A default run keeps the plain form, which reads the default archive.
+    expect(readInvocation({})).toBe("decant");
+    expect(readInvocation({ db: "/tmp/it's here/a.db", sync: true })).toBe(
+      "decant --db '/tmp/it'\\''s here/a.db'",
     );
   });
 });
@@ -433,6 +461,9 @@ describe("session lookup by source session id", () => {
   test("show and export accept the id the source tool uses", async () => {
     const { id, base } = seed();
     const byDecantId = await runCli([...base, "show", String(id)]);
+    // A leading + was accepted before source ids were, and still is.
+    expect(await runCli([...base, "show", `+${id}`])).toMatchObject(byDecantId);
+    expect((await runCli([...base, "export", `+${id}`])).code).toBe(0);
     const bySourceId = await runCli([...base, "show", SOURCE_ID]);
     expect(bySourceId).toMatchObject({ code: 0, stderr: "" });
     expect(bySourceId.stdout).toBe(byDecantId.stdout);

@@ -774,7 +774,8 @@ export interface SessionRefMatches {
 export function findSessionsByRef(db: Database, ref: string): SessionRefMatches {
   const select = "SELECT id, tool, started_at FROM session";
   const trimmed = ref.trim();
-  const id = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+  // A leading + was accepted when ids went through parseInteger.
+  const id = /^\+?\d+$/.test(trimmed) ? Number(trimmed) : null;
   return {
     byId:
       id != null && Number.isSafeInteger(id)

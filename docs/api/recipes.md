@@ -151,6 +151,11 @@ curl --fail --silent --show-error \
   "$BASE/api/sessions/$SESSION_ID/issues"
 ```
 
+The CLI reads the same page without a running server:
+`decant show 123 --limit 100 --offset 0`. `decant show 123 --outline` lists a
+session's messages and their sizes, and `--max-chars` cuts long blocks. See
+[Read one session in pieces](../../README.md#read-one-session-in-pieces).
+
 ## Handle errors by code
 
 JSON failures use `{ "error": string, "code": string, ... }`. Branch on the

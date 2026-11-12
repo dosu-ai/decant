@@ -52,7 +52,9 @@ export function parseInteger(value: string): number {
 
 /** Row limits: the queries fall back to their default for zero or less. */
 export function parsePositiveInteger(value: string): number {
-  if (!/^\s*\+?\d+\s*$/.test(value) || Number.parseInt(value, 10) < 1) {
+  const parsed = Number.parseInt(value, 10);
+  // Past 2^53 the value is not exact, and past 2^63 SQLite refuses to bind it.
+  if (!/^\s*\+?\d+\s*$/.test(value) || parsed < 1 || !Number.isSafeInteger(parsed)) {
     throw new InvalidArgumentError("expected a positive integer");
   }
   return parseInteger(value);

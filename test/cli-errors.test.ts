@@ -251,7 +251,8 @@ describe("invalid flag values", () => {
       details: { option: "--port", value: "70000" },
     },
     {
-      argv: ["show", "abc"],
+      // show also takes a source tool's id, so it no longer rejects "abc".
+      argv: ["distill", "replay", "abc"],
       message: "command-argument value 'abc' is invalid for argument 'id'. expected an integer",
       details: { argument: "id", value: "abc" },
     },

@@ -2,6 +2,15 @@ import type { Command } from "commander";
 import { listSessions } from "../../query.ts";
 import { setSessionUserState } from "../../session-user-state.ts";
 import type { CliContext } from "../context.ts";
+import {
+  fieldsParser,
+  outputRows,
+  parseDay,
+  parseOffset,
+  resolveListScope,
+  type ScopeOptions,
+  SESSION_FIELDS,
+} from "../list-options.ts";
 import { parseInteger } from "../parse.ts";
 import { addShowCommand } from "./show.ts";
 
@@ -13,28 +22,56 @@ export function registerSessionCommands(ctx: CliContext): void {
       .description("list sessions")
       .option("--tool <tool>", "only this tool")
       .option("--model <model>", "only this model")
-      .option("--project <path>", "only this project path")
+      .option("--project <path>", "only this project directory (relative paths are resolved)")
+      .option(
+        "--repo <value>",
+        "only this repository and its worktrees: a path such as ., a remote, or a name",
+      )
+      .option(
+        "--since <date>",
+        "only sessions started on or after this UTC day (YYYY-MM-DD)",
+        parseDay,
+      )
+      .option(
+        "--until <date>",
+        "only sessions started on or before this UTC day (YYYY-MM-DD)",
+        parseDay,
+      )
       .option("--include-subagents", "include nested subagent sessions")
       .option("--limit <n>", "max rows", parseInteger, 50)
+      .option("--offset <n>", "skip this many rows", parseOffset, 0)
+      .option(
+        "--fields <list>",
+        "print only these comma-separated fields (the keys of a --json row)",
+        fieldsParser(SESSION_FIELDS),
+      )
       .action(
-        (commandOptions: {
-          tool?: string;
-          model?: string;
-          project?: string;
-          includeSubagents?: boolean;
-          limit?: number;
-        }) =>
+        (
+          commandOptions: ScopeOptions & {
+            tool?: string;
+            model?: string;
+            includeSubagents?: boolean;
+            limit?: number;
+            offset?: number;
+            fields?: string[];
+          },
+        ) =>
           ctx.run(() =>
             ctx.withArchive(
               (archive) => {
+                const scope = resolveListScope(ctx, archive, commandOptions);
+                if (typeof scope === "number") {
+                  return scope;
+                }
                 const rows = listSessions(archive.db, {
+                  ...scope,
                   tool: commandOptions.tool,
                   model: commandOptions.model,
-                  project: commandOptions.project,
                   includeSubagents: commandOptions.includeSubagents === true,
                   limit: commandOptions.limit,
+                  offset: commandOptions.offset,
                 });
-                ctx.output(rows, () =>
+                outputRows(ctx, rows, commandOptions.fields, () =>
                   ctx.globals().quiet
                     ? `${rows.map((row) => row.id).join("\n")}${rows.length > 0 ? "\n" : ""}`
                     : `${rows.map((row) => `${row.id}\t${row.tool}\t${row.title ?? ""}`).join("\n")}\n`,

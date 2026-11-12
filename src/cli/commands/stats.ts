@@ -15,6 +15,7 @@ import {
 } from "../../stats.ts";
 import { tokenEconomics } from "../../token-economics.ts";
 import type { CliContext } from "../context.ts";
+import { parseDay, parseOffset, resolveListScope, type ScopeOptions } from "../list-options.ts";
 import { parseChoice, parseInteger, parseWith } from "../parse.ts";
 
 export function registerStatsCommands(ctx: CliContext): void {
@@ -24,19 +25,48 @@ export function registerStatsCommands(ctx: CliContext): void {
     .command("search")
     .description("full-text search across all sessions")
     .argument("<query>", "FTS query")
+    .option("--tool <tool>", "only this tool")
+    .option("--project <path>", "only this project directory (relative paths are resolved)")
+    .option(
+      "--repo <value>",
+      "only this repository and its worktrees: a path such as ., a remote, or a name",
+    )
+    .option(
+      "--since <date>",
+      "only sessions started on or after this UTC day (YYYY-MM-DD)",
+      parseDay,
+    )
+    .option(
+      "--until <date>",
+      "only sessions started on or before this UTC day (YYYY-MM-DD)",
+      parseDay,
+    )
     .option("--limit <n>", "max rows", parseInteger, 30)
-    .action((query: string, commandOptions: { limit?: number }) =>
-      ctx.run(() =>
-        ctx.withArchive(
-          (archive) => {
-            const rows = search(archive.db, query, commandOptions.limit ?? 30);
-            ctx.output(rows, () =>
-              rows.map((row) => `${row.session_id}\t${row.snippet}`).join("\n"),
-            );
-          },
-          { sync: true },
+    .option("--offset <n>", "skip this many rows", parseOffset, 0)
+    .action(
+      (
+        query: string,
+        commandOptions: ScopeOptions & { tool?: string; limit?: number; offset?: number },
+      ) =>
+        ctx.run(() =>
+          ctx.withArchive(
+            (archive) => {
+              const scope = resolveListScope(ctx, archive, commandOptions);
+              if (typeof scope === "number") {
+                return scope;
+              }
+              const rows = search(archive.db, query, commandOptions.limit ?? 30, {
+                ...scope,
+                tool: commandOptions.tool,
+                offset: commandOptions.offset,
+              });
+              ctx.output(rows, () =>
+                rows.map((row) => `${row.session_id}\t${row.snippet}`).join("\n"),
+              );
+            },
+            { sync: true },
+          ),
         ),
-      ),
     );
 
   program

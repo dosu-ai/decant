@@ -28,12 +28,28 @@ export function Badge({
   );
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  claude_code: "Claude",
+  codex: "Codex",
+  gemini: "Gemini",
+  opencode: "OpenCode",
+  cursor: "Cursor",
+  copilot: "Copilot",
+  vscode_copilot: "Copilot Chat",
+  atif: "ATIF",
+};
+
+/** The name a source tool's badge shows, so text filters can match it too. */
+export function toolLabel(tool: string): string {
+  return TOOL_LABELS[tool] ?? tool;
+}
+
 export function ToolBadge({ tool }: { tool: string | null | undefined }) {
   if (tool === "claude_code") {
     return (
       <Badge tone="claude">
         <BrandMark name="claude" />
-        Claude
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -41,7 +57,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="openai">
         <BrandMark name="openai" />
-        Codex
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -49,7 +65,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="gemini">
         <BrandMark name="gemini" />
-        Gemini
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -57,7 +73,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="opencode">
         <BrandMark name="opencode" />
-        OpenCode
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -65,7 +81,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="accent">
         <BrandMark name="cursor" />
-        Cursor
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -73,7 +89,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="accent">
         <BrandMark name="copilot" />
-        Copilot
+        {toolLabel(tool)}
       </Badge>
     );
   }
@@ -81,12 +97,12 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return (
       <Badge tone="accent">
         <BrandMark name="copilot" />
-        Copilot Chat
+        {toolLabel(tool)}
       </Badge>
     );
   }
   if (tool === "atif") {
-    return <Badge tone="info">ATIF</Badge>;
+    return <Badge tone="info">{toolLabel(tool)}</Badge>;
   }
   return <Badge>{tool ?? "-"}</Badge>;
 }

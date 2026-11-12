@@ -5,8 +5,19 @@ import {
   liveSessionsAction,
   parseSyncFailure,
   planArchiveUpdate,
+  restoreSync,
+  SYNC_NOTICE_DELAY_MS,
   sessionsAutoRefresh,
+  showsSync,
+  showsSyncComplete,
+  supersededStatus,
+  syncAnnouncement,
+  syncCompleteLabel,
+  syncFraction,
+  syncNoticeDelay,
+  syncProgressLabel,
 } from "../src/ui/sync-events.ts";
+import type { SyncProgress, SyncStatus } from "../src/ui/types.ts";
 
 test("manual and startup syncs run in the foreground", () => {
   expect(isForegroundSync("manual")).toBe(true);
@@ -134,5 +145,216 @@ describe("live Sessions refresh", () => {
   test("refreshes at most once every five to ten seconds", () => {
     expect(LIVE_SESSIONS_REFRESH_MS).toBeGreaterThanOrEqual(5_000);
     expect(LIVE_SESSIONS_REFRESH_MS).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("sync state restored from the status route", () => {
+  const progress: SyncProgress = {
+    scanned: 312,
+    ingested: 300,
+    skipped: 12,
+    failed: 0,
+    total: 1254,
+  };
+  const status = (overrides: Partial<SyncStatus> = {}): SyncStatus => ({
+    in_progress: false,
+    last_error: null,
+    reason: null,
+    progress: null,
+    archive_synced: true,
+    ...overrides,
+  });
+  const idleTab = { syncing: false, manualPending: false };
+  const watchingTab = { syncing: true, manualPending: false };
+
+  test("a reload during a foreground sync shows it at once, with its progress", () => {
+    for (const reason of ["startup", "manual"]) {
+      expect(restoreSync(status({ in_progress: true, reason, progress }), idleTab)).toEqual({
+        syncing: true,
+        progress,
+        archiveSynced: true,
+        ended: false,
+        failure: null,
+      });
+    }
+  });
+
+  test("watcher and sweep syncs stay quiet after a reload too", () => {
+    for (const reason of ["watch", "sweep"]) {
+      expect(restoreSync(status({ in_progress: true, reason, progress }), idleTab)).toMatchObject({
+        syncing: false,
+        progress: null,
+        ended: false,
+      });
+    }
+  });
+
+  test("any sync filling an archive that has never completed one is shown", () => {
+    for (const reason of ["watch", "sweep"]) {
+      expect(showsSync(reason, false)).toBe(true);
+      expect(showsSync(reason, true)).toBe(false);
+      expect(
+        restoreSync(
+          status({ in_progress: true, reason, progress, archive_synced: false }),
+          idleTab,
+        ),
+      ).toMatchObject({ syncing: true, progress, archiveSynced: false, ended: false });
+    }
+    expect(showsSync("startup", true)).toBe(true);
+    expect(showsSync(undefined, true)).toBe(false);
+  });
+
+  test("a sync that has not said what started it shows only while it fills a new archive", () => {
+    const starting = { in_progress: true, reason: null, progress: null };
+    expect(restoreSync(status({ ...starting, archive_synced: false }), idleTab)).toMatchObject({
+      syncing: true,
+      archiveSynced: false,
+    });
+    expect(restoreSync(status(starting), idleTab).syncing).toBe(false);
+  });
+
+  test("an idle server reports whether the archive has ever been synced", () => {
+    expect(restoreSync(status({ archive_synced: false }), idleTab)).toEqual({
+      syncing: false,
+      progress: null,
+      archiveSynced: false,
+      ended: false,
+      failure: null,
+    });
+  });
+
+  test("a sync that ended while the stream was down stops showing and loads its results", () => {
+    expect(restoreSync(status(), watchingTab)).toMatchObject({
+      syncing: false,
+      ended: true,
+      failure: null,
+    });
+  });
+
+  test("a sync that failed while the stream was down surfaces its error", () => {
+    expect(restoreSync(status({ last_error: "disk full" }), watchingTab)).toMatchObject({
+      syncing: false,
+      ended: true,
+      failure: "disk full",
+    });
+    // An older failure is not blamed on a background sync that is running now.
+    expect(
+      restoreSync(
+        status({ in_progress: true, reason: "watch", last_error: "disk full" }),
+        watchingTab,
+      ),
+    ).toMatchObject({ syncing: false, ended: true, failure: null });
+  });
+
+  test("a sync still running after a reconnect keeps showing", () => {
+    expect(
+      restoreSync(status({ in_progress: true, reason: "startup", progress }), watchingTab),
+    ).toMatchObject({ syncing: true, progress, ended: false });
+  });
+
+  test("this tab's own pending manual sync keeps its indicator whatever the server says", () => {
+    const pending = { syncing: true, manualPending: true };
+    expect(restoreSync(status(), pending)).toMatchObject({
+      syncing: true,
+      progress: null,
+      ended: false,
+      failure: null,
+    });
+  });
+
+  test("a sync only an overtaken status answer saw running loads its results when it ends", () => {
+    // The mount read saw a startup sync, the stream-open read overtook it, and
+    // the sync finished before the stream connected.
+    const running = status({ in_progress: true, reason: "startup", progress });
+    const pendingNewer = { newerApplied: false, syncing: false };
+    expect(supersededStatus(running, pendingNewer)).toEqual({ sawSync: true, readAgain: false });
+    expect(restoreSync(status(), { ...idleTab, sawSync: true })).toMatchObject({
+      syncing: false,
+      ended: true,
+      failure: null,
+    });
+    // Still running when the newer answer lands: it shows, and its end refreshes later.
+    expect(restoreSync(running, { ...idleTab, sawSync: true })).toMatchObject({
+      syncing: true,
+      ended: false,
+    });
+  });
+
+  test("an overtaken answer that arrives after the newer one reads the status again", () => {
+    const running = status({ in_progress: true, reason: "startup", progress });
+    expect(supersededStatus(running, { newerApplied: true, syncing: false })).toEqual({
+      sawSync: true,
+      readAgain: true,
+    });
+    // A sync the tab already shows reports its own end.
+    expect(supersededStatus(running, { newerApplied: true, syncing: true }).readAgain).toBe(false);
+  });
+
+  test("an overtaken answer that saw nothing worth showing changes nothing", () => {
+    const tab = { newerApplied: true, syncing: false };
+    expect(supersededStatus(status(), tab)).toEqual({ sawSync: false, readAgain: false });
+    expect(supersededStatus(status({ in_progress: true, reason: "watch", progress }), tab)).toEqual(
+      { sawSync: false, readAgain: false },
+    );
+    expect(restoreSync(status(), { ...idleTab, sawSync: false }).ended).toBe(false);
+  });
+});
+
+test("a sync that starts inside the last one's completion window reads as running", () => {
+  expect(showsSyncComplete(true, false)).toBe(true);
+  expect(showsSyncComplete(true, true)).toBe(false);
+  expect(showsSyncComplete(false, false)).toBe(false);
+});
+
+describe("sync progress copy", () => {
+  const at = (scanned: number, total: number, ingested = scanned): SyncProgress => ({
+    scanned,
+    ingested,
+    skipped: 0,
+    failed: 0,
+    total,
+  });
+
+  test("the fraction is unknown until the sync has counted its sources", () => {
+    expect(syncFraction(null)).toBeNull();
+    expect(syncFraction(at(0, 0))).toBeNull();
+    expect(syncFraction(at(0, 1254))).toBe(0);
+    expect(syncFraction(at(627, 1254))).toBe(0.5);
+    expect(syncFraction(at(2000, 1254))).toBe(1);
+  });
+
+  test("the visible label counts files with grouped digits", () => {
+    expect(syncProgressLabel(null)).toBe("Syncing session logs");
+    expect(syncProgressLabel(at(0, 0))).toBe("Syncing session logs");
+    expect(syncProgressLabel(at(312, 1254))).toBe("Syncing 312 of 1,254 files");
+    expect(syncProgressLabel(at(0, 1))).toBe("Syncing 0 of 1 file");
+  });
+
+  test("the completion label reports what was ingested", () => {
+    expect(syncCompleteLabel(null)).toBe("Sync complete");
+    expect(syncCompleteLabel(at(1254, 1254, 0))).toBe("Sync complete");
+    expect(syncCompleteLabel(at(1254, 1254, 1))).toBe("Sync complete, 1 file ingested");
+    expect(syncCompleteLabel(at(1254, 1254))).toBe("Sync complete, 1,254 files ingested");
+  });
+
+  test("the live announcement changes once per ten percent, not once per file", () => {
+    const spoken = new Set<string>();
+    for (let scanned = 0; scanned <= 1254; scanned += 1) {
+      spoken.add(syncAnnouncement(at(scanned, 1254)));
+    }
+    expect(spoken.size).toBe(10);
+    expect(syncAnnouncement(null)).toBe("Syncing session logs");
+    expect(syncAnnouncement(at(100, 1254))).toBe("Syncing session logs");
+    expect(syncAnnouncement(at(627, 1254))).toBe("Syncing session logs, 50% done");
+    expect(syncAnnouncement(at(1253, 1254))).toBe("Syncing session logs, 90% done");
+    // The last file is not the end of the sync, so "Sync complete" says 100%.
+    expect(syncAnnouncement(at(1254, 1254))).toBe("Syncing session logs, 90% done");
+  });
+
+  test("the progress notice opens at once for a first or requested sync, later otherwise", () => {
+    expect(syncNoticeDelay({ firstSync: true, requested: false })).toBe(0);
+    expect(syncNoticeDelay({ firstSync: false, requested: true })).toBe(0);
+    expect(syncNoticeDelay({ firstSync: false, requested: false })).toBe(SYNC_NOTICE_DELAY_MS);
+    expect(SYNC_NOTICE_DELAY_MS).toBeGreaterThanOrEqual(500);
   });
 });

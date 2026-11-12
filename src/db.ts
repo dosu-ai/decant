@@ -241,6 +241,7 @@ export function openDb(path: string): Database {
  */
 export function optimizeLongLivedConnection(db: Database): void {
   runAdvisoryStatistics(db, "PRAGMA optimize=0x10002;");
+  raiseTinyFtsDataEstimate(db);
 }
 
 /**
@@ -250,6 +251,39 @@ export function optimizeLongLivedConnection(db: Database): void {
  */
 export function refreshPlannerStatistics(db: Database): void {
   runAdvisoryStatistics(db, "PRAGMA optimize;");
+  raiseTinyFtsDataEstimate(db);
+}
+
+// SQLite's row estimate for a table that has never been analyzed.
+const UNANALYZED_ROW_ESTIMATE = 1_048_576;
+// FTS5 deletes merged segments by rowid range. Under 9 recorded rows SQLite
+// plans that delete as a scan of block_fts_data; 1,000 leaves a wide margin.
+const FTS_DATA_MIN_RECORDED_ROWS = 1_000;
+
+// An archive analyzed while its FTS index was near empty would otherwise scan
+// the whole index on every segment merge until the next full analysis.
+function raiseTinyFtsDataEstimate(db: Database): void {
+  if (db.query("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get() == null) {
+    return;
+  }
+  const tiny = db
+    .query(
+      `SELECT 1 FROM sqlite_stat1
+        WHERE tbl = 'block_fts_data' AND idx IS NULL
+          AND CAST(stat AS INTEGER) < ${FTS_DATA_MIN_RECORDED_ROWS}`,
+    )
+    .get();
+  if (tiny == null) {
+    return;
+  }
+  // Deleting the row would not help this connection: a reload applies the rows
+  // it finds but keeps the estimate of a table whose row is gone.
+  runAdvisoryStatistics(
+    db,
+    `UPDATE sqlite_stat1 SET stat = '${UNANALYZED_ROW_ESTIMATE}'
+      WHERE tbl = 'block_fts_data' AND idx IS NULL;
+     ANALYZE sqlite_schema;`,
+  );
 }
 
 /**

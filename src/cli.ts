@@ -13,7 +13,15 @@ import { registerStatsCommands } from "./cli/commands/stats.ts";
 import { registerSyncCommands } from "./cli/commands/sync.ts";
 import { registerUpdateCommand } from "./cli/commands/update.ts";
 import { type CliResult, type CliRunOptions, createContext, type Io } from "./cli/context.ts";
-import { parseOutputFormat } from "./cli/parse.ts";
+import {
+  argvRequestsJson,
+  CliError,
+  fromCommanderError,
+  toCliError,
+  usageError,
+} from "./cli/errors.ts";
+import { installHelp } from "./cli/help.ts";
+import { assertFormatSupported, installValueValidation, parseOutputFormat } from "./cli/parse.ts";
 import {
   renderUpdateNotice,
   shouldShowUpdateNotice,
@@ -72,10 +80,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .configureOutput({
       writeOut: (value) => io.writeOut(value),
       writeErr: (value) => io.writeErr(value),
+      // Commander's errors are printed below, where --json can reshape them.
+      outputError: () => undefined,
     })
-    .option("--db <path>", "path to the Decant SQLite database")
+    .option("--db <path>", "path to the Decant SQLite database (read commands never create it)")
     .option("--json", "emit machine-readable JSON")
-    .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
+    .option(
+      "--format <format>",
+      "output format (table | json | md); md only where a command prints Markdown",
+      parseOutputFormat,
+    )
     .option("-q, --quiet", "suppress non-essential output")
     .option("--no-color", "disable ANSI color")
     .option("--no-sync", "skip sync-on-read, and serve without the source watcher");
@@ -93,9 +107,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   registerUpdateCommand(ctx);
   registerDoctorCommand(ctx);
   registerServiceCommands(ctx);
+  installValueValidation(program);
+  installHelp(program);
 
   let noticeCommand: string | null = null;
   program.hook("preAction", (_root, actionCommand) => {
+    assertFormatSupported(commandPath(actionCommand), ctx.globals().format);
     const command = topLevelName(actionCommand);
     const deps = ctx.updateDeps;
     const show = shouldShowUpdateNotice({
@@ -139,14 +156,36 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       }
     }
   } catch (error) {
-    if (typeof error === "object" && error !== null && "exitCode" in error) {
-      setCode(commanderExitCode(error as { exitCode: number; code?: string }));
+    // The flags may not be parsed yet when the command line itself is wrong.
+    const json = ctx.isJson() || argvRequestsJson(argv);
+    if (error instanceof CliError || !isCommanderExit(error)) {
+      setCode(ctx.fail(toCliError(error), json));
+    } else if (HELP_EXITS.has(error.code ?? "")) {
+      const exitCode = commanderExitCode(error);
+      // A command group run without a subcommand prints its help and fails.
+      if (exitCode !== 0 && json) {
+        ctx.fail(usageError("usage_error", "a subcommand is required; see the help above"), json);
+      }
+      setCode(exitCode);
     } else {
-      io.writeErr(`error: ${error instanceof Error ? error.message : String(error)}\n`);
-      setCode(1);
+      ctx.fail(fromCommanderError(error), json);
+      setCode(commanderExitCode(error));
     }
   }
   return { code, stdout: io.stdout, stderr: io.stderr };
+}
+
+interface CommanderExit {
+  exitCode: number;
+  code?: string;
+  message?: string;
+}
+
+// Commander has already written the help or version text for these.
+const HELP_EXITS = new Set(["commander.help", "commander.helpDisplayed", "commander.version"]);
+
+function isCommanderExit(error: unknown): error is CommanderExit {
+  return typeof error === "object" && error !== null && "exitCode" in error;
 }
 
 // The entrypoint sets process.exitCode and lets the event loop drain, so a
@@ -169,6 +208,15 @@ function topLevelName(command: Command): string {
     current = current.parent;
   }
   return current.name();
+}
+
+/** The command's name under `decant`, such as "session show". */
+function commandPath(command: Command): string {
+  const names: string[] = [];
+  for (let current = command; current.parent != null; current = current.parent) {
+    names.unshift(current.name());
+  }
+  return names.join(" ");
 }
 
 function commanderExitCode(error: { exitCode: number; code?: string }): number {

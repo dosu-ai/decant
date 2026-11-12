@@ -1,3 +1,5 @@
+import type { SyncStatus } from "./types.ts";
+
 export type ApiErrorExtras = Record<string, unknown>;
 export type FetchJson = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type ApiRetryPolicy = {
@@ -72,6 +74,11 @@ export async function getJson<T>(
     }
     throw new ApiError(response.status, code, message, extras);
   }
+}
+
+/** The server's view of the running sync, for state the event stream cannot replay. */
+export function getSyncStatus(fetcher: FetchJson = fetch): Promise<SyncStatus> {
+  return getJson<SyncStatus>("/api/sync-status", undefined, fetcher);
 }
 
 function isSafeMethod(method: string | undefined): boolean {

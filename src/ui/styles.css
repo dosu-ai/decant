@@ -3661,6 +3661,141 @@ select {
   margin-bottom: 12px;
 }
 
+/* ===========================================================================
+ * Sync progress and first-sync states
+ * =========================================================================== */
+
+/* Sits on the sticky topbar's bottom border, so it adds no height. */
+.sync-line {
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--accent) 18%, var(--canvas));
+}
+
+.sync-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+}
+
+.sync-notice {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 10px 12px;
+}
+
+.sync-notice-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+}
+
+.sync-notice-label {
+  font-weight: var(--font-weight-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-notice-hint {
+  color: var(--muted);
+}
+
+.sync-notice-percent {
+  grid-column: 3;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-notice-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--elevated);
+}
+
+.sync-notice-bar .sync-fill {
+  border-radius: var(--radius-full);
+}
+
+.sync-line[data-complete] .sync-fill,
+.sync-notice[data-complete] .sync-fill {
+  background: var(--success);
+}
+
+/* Before the sync has counted its sources there is no fraction to draw. */
+.sync-fill[data-indeterminate] {
+  width: 100%;
+  opacity: 0.45;
+}
+
+.sync-partial-note {
+  max-width: 76ch;
+  margin: 0;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 1px 0 1px 12px;
+}
+
+@media (max-width: 640px) {
+  .sync-notice-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sync-notice-percent {
+    grid-area: 1 / 2;
+  }
+
+  .sync-notice-hint {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sync-fill {
+    transition: width var(--duration-overlay) linear;
+  }
+
+  .sync-fill[data-indeterminate] {
+    width: 30%;
+    opacity: 1;
+    animation: sync-indeterminate 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes sync-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(334%);
+  }
+}
+
+/* Forced-colours mode drops backgrounds, which are all a bar is. */
+@media (forced-colors: active) {
+  .sync-line,
+  .sync-notice-bar {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .sync-fill {
+    background: Highlight;
+  }
+}
+
 .api-failure {
   display: grid;
   gap: 8px;

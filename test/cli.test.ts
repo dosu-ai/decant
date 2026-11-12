@@ -279,6 +279,20 @@ describe("runCli", () => {
     expect((JSON.parse(implemented.stdout) as { key: string }[]).map((rec) => rec.key)).toContain(
       "catalog:agents-md",
     );
+
+    // --quiet drops the confirmation, not the reason a mark failed.
+    const missing = await runCli([
+      ...base.filter((arg) => arg !== "--json"),
+      "--quiet",
+      "recommendations",
+      "mark",
+      "catalog:no-such-row",
+    ]);
+    expect(missing).toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: "error: recommendation not found: catalog:no-such-row\n",
+    });
   });
 
   test("export --as trajectory writes a validating JSON array", async () => {
@@ -565,7 +579,10 @@ describe("runCli", () => {
       "bogus",
     ]);
     expect(badFormat.code).toBe(2);
-    expect(badFormat.stderr).toContain("error: unknown export format: bogus");
+    expect(badFormat.stderr).toBe(
+      "error: option '--as <format>' argument 'bogus' is invalid. " +
+        "expected: md | json | trajectory | atif\n",
+    );
 
     const jsonDefault = await runCli([
       "--db",
@@ -706,8 +723,13 @@ describe("runCli", () => {
     const fixtureCase = freshCase();
     const dbPath = join(dirname(fixtureCase.dbPath), "archive", "decant.db");
 
+    // A read command must not create an archive at a path the user named.
     const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
-    expect(list).toMatchObject({ code: 0, stderr: "" });
+    expect(list).toMatchObject({ code: 1, stdout: "" });
+    expect(existsSync(dirname(dbPath))).toBe(false);
+
+    const migrate = await runCli(["--db", dbPath, "--no-sync", "db", "migrate"]);
+    expect(migrate.code).toBe(0);
 
     expect(statSync(dirname(dbPath)).mode & 0o7777).toBe(0o700);
     expect(statSync(dbPath).mode & 0o7777).toBe(0o600);
@@ -743,7 +765,10 @@ describe("runCli", () => {
 
     const result = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "nope"]);
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain("unknown --by value");
+    expect(result.stderr).toBe(
+      "error: option '--by <dimension>' argument 'nope' is invalid. " +
+        "expected: tool | model | project | repo | outcome | day\n",
+    );
 
     const missingPath = await runCli(["--db", dbPath, "sync", "--path", "/tmp/definitely-missing"]);
     expect(missingPath.code).toBe(2);
@@ -763,7 +788,9 @@ describe("runCli", () => {
       "nope",
     ]);
     expect(distill.code).toBe(2);
-    expect(distill.stderr).toContain("unknown --as");
+    expect(distill.stderr).toBe(
+      "error: option '--as <format>' argument 'nope' is invalid. expected: sh | just | make\n",
+    );
 
     const recommendations = await runCli([
       "--db",
@@ -775,7 +802,10 @@ describe("runCli", () => {
       "maybe",
     ]);
     expect(recommendations.code).toBe(2);
-    expect(recommendations.stderr).toContain("unknown --status");
+    expect(recommendations.stderr).toBe(
+      "error: option '--status <status>' argument 'maybe' is invalid. " +
+        "expected: open | implemented | all\n",
+    );
   });
 
   test("version and live output mode", async () => {
@@ -807,7 +837,10 @@ describe("runCli", () => {
 
     const unknown = await runCli(["completion", "tcsh"]);
     expect(unknown.code).toBe(2);
-    expect(unknown.stderr).toContain("unknown completion shell");
+    expect(unknown.stderr).toBe(
+      "error: command-argument value 'tcsh' is invalid for argument 'shell'. " +
+        "expected: bash | zsh | fish | powershell | elvish\n",
+    );
   });
 
   test("watch and serve modes are discoverable", async () => {
@@ -932,6 +965,7 @@ describe("db info discloses what the archive stores", () => {
 
   test("an empty archive reports zeros rather than omitting the fields", async () => {
     const dbPath = join(workDir, "db-info-empty.db");
+    closeDb(openDb(dbPath));
     const info = await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"]);
     expect(info.code).toBe(0);
     expect(JSON.parse(info.stdout)).toMatchObject({
@@ -1192,6 +1226,25 @@ describe("session rm", () => {
     expect(refused.stderr).toContain("1 descendant");
     expect(refused.stderr).toContain("--yes");
     expect(refused.stdout).toBe("");
+
+    // Under --json the refusal is the result on stdout, still with exit 2.
+    const json = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--quiet",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+    ]);
+    expect(json).toMatchObject({ code: 2, stderr: "" });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      deleted: false,
+      session_id: rootId,
+      descendants: 1,
+      error: "refusing to delete a session tree without --yes",
+    });
 
     // There is no un-delete, so a refused guard has to leave the archive
     // byte-for-byte as it found it.

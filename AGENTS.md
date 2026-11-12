@@ -24,6 +24,8 @@ Start with these files and guides:
   and schema.
 - `src/server.ts` and `src/ui/` serve the local API and web UI.
 - `docs/architecture.md` maps module boundaries and data flow.
+- `docs/cli.md` is the CLI contract: exit codes, the `--json` error object, and
+  flag validation.
 - `docs/analytics-methodology.md` details metric definitions.
 - `docs/data-lifecycle.md` describes sync and local state.
 - `docs/sources.md` lists each source's default location, overrides, and
@@ -162,6 +164,7 @@ When changing:
   `docs/data-lifecycle.md`.
 - a route, update `docs/api/openapi.yaml`, `docs/api/routes.md`, and contract
   tests.
+- an exit code, an error code, or what a flag accepts, update `docs/cli.md`.
 - install or packaging behavior, update `docs/distribution.md` and the npm
   package README.
 - model rates, update `docs/pricing.md` with dated first-party sources.

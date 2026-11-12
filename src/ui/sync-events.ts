@@ -165,10 +165,14 @@ export interface RestoredSync {
   /** The running sync's latest counts, or null to keep what is on screen. */
   progress: SyncProgress | null;
   archiveSynced: boolean;
-  /** A sync this tab was showing ended while it was not listening. */
+  /** A sync this tab was showing, or an earlier status answer saw, ended unheard. */
   ended: boolean;
   /** The error that ended sync failed with, if it failed. */
   failure: string | null;
+}
+
+function runningShownSync(status: SyncStatus): boolean {
+  return status.in_progress && showsSync(status.reason ?? undefined, status.archive_synced);
 }
 
 /**
@@ -178,11 +182,10 @@ export interface RestoredSync {
  */
 export function restoreSync(
   status: SyncStatus,
-  shown: { syncing: boolean; manualPending: boolean },
+  shown: { syncing: boolean; manualPending: boolean; sawSync?: boolean },
 ): RestoredSync {
-  const running =
-    status.in_progress && showsSync(status.reason ?? undefined, status.archive_synced);
-  const ended = shown.syncing && !shown.manualPending && !running;
+  const running = runningShownSync(status);
+  const ended = (shown.syncing || shown.sawSync === true) && !shown.manualPending && !running;
   return {
     syncing: running || shown.manualPending,
     progress: running ? status.progress : null,
@@ -190,6 +193,23 @@ export function restoreSync(
     ended,
     failure: ended && !status.in_progress ? status.last_error : null,
   };
+}
+
+/**
+ * A status answer overtaken by a newer read may be the only one that saw a sync
+ * running while the page loaded, so its end must not go unnoticed.
+ */
+export function supersededStatus(
+  status: SyncStatus,
+  tab: { newerApplied: boolean; syncing: boolean },
+): { sawSync: boolean; readAgain: boolean } {
+  const sawSync = runningShownSync(status);
+  return { sawSync, readAgain: sawSync && tab.newerApplied && !tab.syncing };
+}
+
+/** A sync that starts inside the last one's completion window outranks it. */
+export function showsSyncComplete(complete: boolean, syncing: boolean): boolean {
+  return complete && !syncing;
 }
 
 /** How far through its sources a sync is, or null before it has counted them. */

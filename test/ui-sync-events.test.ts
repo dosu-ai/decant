@@ -9,6 +9,8 @@ import {
   SYNC_NOTICE_DELAY_MS,
   sessionsAutoRefresh,
   showsSync,
+  showsSyncComplete,
+  supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
   syncFraction,
@@ -259,6 +261,49 @@ describe("sync state restored from the status route", () => {
       failure: null,
     });
   });
+
+  test("a sync only an overtaken status answer saw running loads its results when it ends", () => {
+    // The mount read saw a startup sync, the stream-open read overtook it, and
+    // the sync finished before the stream connected.
+    const running = status({ in_progress: true, reason: "startup", progress });
+    const pendingNewer = { newerApplied: false, syncing: false };
+    expect(supersededStatus(running, pendingNewer)).toEqual({ sawSync: true, readAgain: false });
+    expect(restoreSync(status(), { ...idleTab, sawSync: true })).toMatchObject({
+      syncing: false,
+      ended: true,
+      failure: null,
+    });
+    // Still running when the newer answer lands: it shows, and its end refreshes later.
+    expect(restoreSync(running, { ...idleTab, sawSync: true })).toMatchObject({
+      syncing: true,
+      ended: false,
+    });
+  });
+
+  test("an overtaken answer that arrives after the newer one reads the status again", () => {
+    const running = status({ in_progress: true, reason: "startup", progress });
+    expect(supersededStatus(running, { newerApplied: true, syncing: false })).toEqual({
+      sawSync: true,
+      readAgain: true,
+    });
+    // A sync the tab already shows reports its own end.
+    expect(supersededStatus(running, { newerApplied: true, syncing: true }).readAgain).toBe(false);
+  });
+
+  test("an overtaken answer that saw nothing worth showing changes nothing", () => {
+    const tab = { newerApplied: true, syncing: false };
+    expect(supersededStatus(status(), tab)).toEqual({ sawSync: false, readAgain: false });
+    expect(supersededStatus(status({ in_progress: true, reason: "watch", progress }), tab)).toEqual(
+      { sawSync: false, readAgain: false },
+    );
+    expect(restoreSync(status(), { ...idleTab, sawSync: false }).ended).toBe(false);
+  });
+});
+
+test("a sync that starts inside the last one's completion window reads as running", () => {
+  expect(showsSyncComplete(true, false)).toBe(true);
+  expect(showsSyncComplete(true, true)).toBe(false);
+  expect(showsSyncComplete(false, false)).toBe(false);
 });
 
 describe("sync progress copy", () => {

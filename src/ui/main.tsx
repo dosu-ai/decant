@@ -59,6 +59,8 @@ import {
   restoreSync,
   sessionsAutoRefresh,
   showsSync,
+  showsSyncComplete,
+  supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
   syncNoticeDelay,
@@ -130,6 +132,9 @@ function App() {
   const liveDroppedRef = useRef(false);
   const manualSyncPendingRef = useRef(false);
   const syncStatusReadRef = useRef(0);
+  const syncStatusAppliedRef = useRef(0);
+  // An overtaken status answer saw a sync running that this tab has not shown.
+  const sawSyncRef = useRef(false);
   // Counts syncs seen starting or ending, so a status answer overtaken by one
   // is read again.
   const syncEndedRef = useRef(0);
@@ -192,6 +197,17 @@ function App() {
     archiveSyncedRef.current = archiveSynced;
   }, [archiveSynced]);
 
+  // Its timer would otherwise clear the counts of a sync that started inside the window.
+  const dismissSyncComplete = useCallback(() => {
+    if (syncCompleteTimerRef.current == null) {
+      return;
+    }
+    window.clearTimeout(syncCompleteTimerRef.current);
+    syncCompleteTimerRef.current = null;
+    setSyncComplete(false);
+    setSyncProgress(null);
+  }, []);
+
   // EventSource does not replay events, so the server's status restores what a
   // reload or a dropped stream missed. Resolves false when it could not be read.
   const readSyncStatus = useCallback(async (): Promise<boolean> => {
@@ -205,21 +221,33 @@ function App() {
         return false;
       }
       if (read !== syncStatusReadRef.current) {
-        return true;
-      }
-      if (endedBefore === syncEndedRef.current) {
+        const superseded = supersededStatus(status, {
+          newerApplied: syncStatusAppliedRef.current === syncStatusReadRef.current,
+          syncing: localSyncingRef.current,
+        });
+        if (superseded.sawSync) {
+          sawSyncRef.current = true;
+        }
+        if (!superseded.readAgain) {
+          return true;
+        }
+      } else if (endedBefore === syncEndedRef.current) {
+        syncStatusAppliedRef.current = read;
         break;
       }
     }
     const restored = restoreSync(status, {
       syncing: localSyncingRef.current,
       manualPending: manualSyncPendingRef.current,
+      sawSync: sawSyncRef.current,
     });
+    sawSyncRef.current = false;
     setArchiveSynced(restored.archiveSynced);
     if (restored.syncing) {
       setLocalSyncing(true);
       // A running sync supersedes the failure an earlier one left on screen.
       setSyncError(null);
+      dismissSyncComplete();
       if (restored.progress != null) {
         syncProgressThrottleRef.current?.push(restored.progress);
       }
@@ -237,7 +265,7 @@ function App() {
       }
     }
     return true;
-  }, [requestRefresh]);
+  }, [dismissSyncComplete, requestRefresh]);
 
   useEffect(() => {
     // Declared before the slice loads so this request is not queued behind them.
@@ -454,6 +482,7 @@ function App() {
           if (!localSyncingRef.current) {
             // A status answer from before this sync started would hide it.
             syncEndedRef.current += 1;
+            dismissSyncComplete();
           }
           progressThrottle.push(payload.progress);
           setLocalSyncing(true);
@@ -491,6 +520,7 @@ function App() {
         window.clearTimeout(syncCompleteTimerRef.current);
       }
       syncCompleteTimerRef.current = window.setTimeout(() => {
+        syncCompleteTimerRef.current = null;
         setSyncComplete(false);
         setSyncProgress(null);
       }, 1_500);
@@ -588,7 +618,7 @@ function App() {
         window.clearTimeout(syncCompleteTimerRef.current);
       }
     };
-  }, [liveConnectionKey, readSyncStatus, requestRefresh]);
+  }, [dismissSyncComplete, liveConnectionKey, readSyncStatus, requestRefresh]);
 
   useEffect(() => {
     const openSearch = (event: KeyboardEvent) => {
@@ -623,12 +653,13 @@ function App() {
   // local day as the newest session row.
   const lastActivity = formatDay(data.dateBounds?.latest_started_at ?? null);
   const syncInProgress = localSyncing;
+  const syncCompleteShown = showsSyncComplete(syncComplete, syncInProgress);
   const runSync = () => {
     if (syncInProgress) {
       return;
     }
     setSyncError(null);
-    setSyncComplete(false);
+    dismissSyncComplete();
     syncProgressThrottleRef.current?.cancel();
     setSyncProgress(null);
     setArchiveUpdateAvailable(false);
@@ -650,6 +681,7 @@ function App() {
           window.clearTimeout(syncCompleteTimerRef.current);
         }
         syncCompleteTimerRef.current = window.setTimeout(() => {
+          syncCompleteTimerRef.current = null;
           setSyncComplete(false);
           setSyncProgress(null);
         }, 1_500);
@@ -881,7 +913,7 @@ function App() {
           <span aria-live="polite" className="sr-only" role="status">
             {syncInProgress
               ? syncAnnouncement(syncProgress)
-              : syncComplete
+              : syncCompleteShown
                 ? syncCompleteLabel(syncProgress)
                 : ""}
           </span>
@@ -911,14 +943,14 @@ function App() {
             ))}
           </fieldset>
           {syncInProgress || syncComplete ? (
-            <SyncProgressLine complete={syncComplete} progress={syncProgress} />
+            <SyncProgressLine complete={syncCompleteShown} progress={syncProgress} />
           ) : null}
         </header>
         <main className="content">
           <div className="content-wrap">
             {syncNoticeShown && (syncInProgress || syncComplete) ? (
               <SyncProgressNotice
-                complete={syncComplete}
+                complete={syncCompleteShown}
                 firstSync={firstSync}
                 progress={syncProgress}
               />

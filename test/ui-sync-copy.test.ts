@@ -93,11 +93,30 @@ test("sync state is restored from the status route on load and reconnect", () =>
   expect(shell).toMatch(
     /if \(restored\.ended\) \{[^}]*setArchiveUpdateAvailable\(false\);\s*requestRefresh\(\);/,
   );
+  // An overtaken answer that saw a sync running is not thrown away.
+  expect(shell).toContain("const superseded = supersededStatus(status, {");
+  expect(shell).toContain("sawSync: sawSyncRef.current,");
+});
+
+test("a new sync replaces the last one's completion notice and cancels its timer", () => {
+  const shell = readUiFile("main.tsx");
+  // From a progress event, a status read, and the Sync button alike.
+  expect(shell).toMatch(/syncEndedRef\.current \+= 1;\s*dismissSyncComplete\(\);/);
+  expect(shell).toMatch(
+    /setSyncError\(null\);\s*dismissSyncComplete\(\);\s*if \(restored\.progress/,
+  );
+  expect(shell).toMatch(
+    /setSyncError\(null\);\s*dismissSyncComplete\(\);\s*syncProgressThrottleRef/,
+  );
+  expect(shell).toContain("window.clearTimeout(syncCompleteTimerRef.current);");
+  expect(shell).toContain("showsSyncComplete(syncComplete, syncInProgress)");
 });
 
 test("sync progress is visible without a second live announcement", () => {
   const shell = readUiFile("main.tsx");
-  expect(shell).toContain("<SyncProgressLine complete={syncComplete} progress={syncProgress} />");
+  expect(shell).toContain(
+    "<SyncProgressLine complete={syncCompleteShown} progress={syncProgress} />",
+  );
   expect(shell).toContain("<SyncProgressNotice");
   expect(shell.match(/aria-live=/g)).toHaveLength(1);
   expect(shell).toContain("? syncAnnouncement(syncProgress)");

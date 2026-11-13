@@ -16,7 +16,7 @@ describe("Dosu product copy", () => {
     expect(main).toContain("Make these patterns available to every coding agent");
     expect(main).toContain("Your agents keep relearning what your team already knows.");
     expect(main).toContain("Dosu gets them that knowledge faster and cheaper.");
-    expect(main).toMatch(/Decant is an\s+open source/);
+    expect(main).toMatch(/Decant is an\s+open\s+source/);
     expect(main).toContain(
       "Decant makes no outbound network calls. Your session logs stay on this machine.",
     );

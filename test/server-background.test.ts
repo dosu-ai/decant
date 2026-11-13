@@ -16,6 +16,7 @@ const config = { dbPath: join(workDir, "decant.db") } as Config;
 function fakeService(env: Record<string, string> = {}): {
   options: ServiceOptions;
   calls: string[];
+  run: (argv: string[]) => Promise<CommandResult>;
 } {
   counter += 1;
   const calls: string[] = [];
@@ -33,6 +34,7 @@ function fakeService(env: Record<string, string> = {}): {
   };
   return {
     calls,
+    run,
     options: {
       platform: "darwin",
       env,
@@ -172,6 +174,37 @@ describe("/api/background", () => {
     expect(exec.status).toBe(409);
     expect(await exec.json()).toMatchObject({ code: "background_unsupported" });
     expect(calls.some((call) => call.includes("bootstrap"))).toBe(false);
+  });
+
+  test("passes on the launchd error when launchd refuses a step", async () => {
+    const { options, run: fallback } = fakeService();
+    const run = async (argv: string[]): Promise<CommandResult> =>
+      argv[1] === "bootstrap"
+        ? { code: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" }
+        : fallback(argv);
+    const response = await post({ enabled: true }, { service: { ...options, run } });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({
+      code: "background_failed",
+      error: expect.stringContaining("Bootstrap failed: 5: Input/output error"),
+    });
+  });
+
+  test("keeps any other failure's details out of the response", async () => {
+    const { options } = fakeService();
+    for (const thrown of [
+      new Error("EACCES: permission denied, open '/opt/test/private/unit.plist'"),
+      "raw failure at /opt/test/private",
+    ]) {
+      const run = async (): Promise<CommandResult> => {
+        throw thrown;
+      };
+      const response = await post({ enabled: true }, { service: { ...options, run } });
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { code: string; error: string };
+      expect(body.code).toBe("internal_error");
+      expect(body.error).not.toContain("private");
+    }
   });
 
   test("reports unsupported installs as a conflict", async () => {

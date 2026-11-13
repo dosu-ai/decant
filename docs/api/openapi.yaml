@@ -281,7 +281,7 @@ paths:
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "500":
-          description: launchd or systemd refused the change
+          description: launchd or systemd refused the change (`background_failed`, with its error), or the change failed another way (`internal_error`)
           content:
             application/json:
               schema:

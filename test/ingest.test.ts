@@ -46,6 +46,7 @@ import { totals } from "../src/stats.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
 import { buildCursorChat } from "./cursor-fixture.ts";
 import { decodeGoldenRows, GOLDEN_NOW, ROW_QUERIES } from "./golden-rows.ts";
+import { buildHermesDb, buildHermesFixtureDb } from "./hermes-fixture.ts";
 import {
   buildOpenCodeDb,
   buildOpenCodeFixtureDb,
@@ -93,6 +94,7 @@ function stageFixtures(dir: string): IngestConfig {
   const cursorDir = join(dir, "sources", "cursor");
   const copilotDir = join(dir, "sources", "copilot", "session-state");
   const vscodeCopilotDir = join(dir, "sources", "vscode", "User");
+  const hermesDir = join(dir, "sources", "hermes");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -145,6 +147,8 @@ function stageFixtures(dir: string): IngestConfig {
       copyFileSync(join(fixtureRoot, "atif", file), join(atifDir, basename(file)));
     }
   }
+  mkdirSync(hermesDir, { recursive: true });
+  buildHermesFixtureDb(join(hermesDir, "state.db"), ["sample.sql", "subagent.sql"]);
 
   return {
     claudeDir,
@@ -156,6 +160,7 @@ function stageFixtures(dir: string): IngestConfig {
     copilotDir,
     vscodeCopilotDir,
     atifDir,
+    hermesDir,
   };
 }
 
@@ -1436,6 +1441,29 @@ describe("sync", () => {
     expect(names).toEqual(["1111aaaa-1111-aaaa-1111-aaaa1111aaaa.jsonl", "agent-abc123.jsonl"]);
   });
 
+  test("discovers one Hermes source per session, keeping the newest copy across profiles", () => {
+    const dir = freshCase();
+    const hermesDir = join(dir, "hermes");
+    const session = (started: number) =>
+      `INSERT INTO sessions (id, source, started_at) VALUES ('shared', 'cli', ${started});`;
+    mkdirSync(join(hermesDir, "profiles", "copy"), { recursive: true });
+    buildHermesDb(join(hermesDir, "state.db"), [session(1791790000)]);
+    buildHermesDb(join(hermesDir, "profiles", "copy", "state.db"), [
+      session(1791790000),
+      `INSERT INTO messages (session_id, role, content, timestamp)
+       VALUES ('shared', 'user', 'later', 1791790500);`,
+    ]);
+    const files = discover({
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      hermesDir,
+    });
+    expect(files.map((file) => [file.tool, file.path])).toEqual([
+      // Discovery resolves symlinks, such as macOS's /var to /private/var.
+      ["hermes", `${join(realpathSync(hermesDir), "profiles", "copy", "state.db")}#shared`],
+    ]);
+  });
+
   test("discoverSourcePaths skips workflow journal files", () => {
     const dir = freshCase();
     const journal = join(dir, "journal.jsonl");
@@ -2463,7 +2491,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 22, ingested: 22, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 24, ingested: 24, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2487,7 +2515,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 24, ingested: 0, skipped: 24, failed: 0 });
     expect(
       db
         .query(
@@ -2506,7 +2534,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 22, ingested: 0, skipped: 22, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 24, ingested: 0, skipped: 24, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

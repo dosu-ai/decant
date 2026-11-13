@@ -64,6 +64,13 @@ import {
   readCursorSource,
 } from "./sources/cursor.ts";
 import { parseGeminiSession } from "./sources/gemini.ts";
+import { parseHermesSession } from "./sources/hermes.ts";
+import {
+  type HermesLoadedSession,
+  type HermesSessionRef,
+  HermesStore,
+  HermesStoreError,
+} from "./sources/hermes-store.ts";
 import { parseOpenCodeSession } from "./sources/opencode.ts";
 import { parseOpenCodeLegacySession } from "./sources/opencode-legacy.ts";
 import {
@@ -125,6 +132,8 @@ export interface IngestConfig {
   vscodeCopilotInsidersDir?: string;
   /** Directory of ATIF trajectory files, read recursively. */
   atifDir?: string;
+  /** Hermes Agent home: `state.db` and `profiles/<name>/state.db`. */
+  hermesDir?: string;
   sourcePaths?: string[];
 }
 
@@ -167,6 +176,8 @@ export interface SourceFile {
   archived: boolean;
   /** Set for OpenCode sessions, whose `path` is the virtual `<db>#<session id>`. */
   opencode?: OpenCodeSessionRef;
+  /** Set for Hermes Agent sessions, whose `path` is the virtual `<db>#<session id>`. */
+  hermes?: HermesSessionRef;
 }
 
 interface Prepared {
@@ -204,6 +215,7 @@ export function discover(
     collectGemini(config.geminiDir, out);
   }
   out.push(...discoverOpenCode(openCodeDatabasePaths(config), warn));
+  out.push(...discoverHermes(hermesDatabasePaths(config.hermesDir), warn));
   if (config.cursorDir != null) {
     collect(config.cursorDir, "cursor", false, (name) => name === CURSOR_STORE_NAME, out);
   }
@@ -229,10 +241,106 @@ export function discoverSourcePaths(
 ): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
+  const hermesDatabases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out, databases, copilotDir, vscodeUserDirs);
+    collectSourcePath(path, out, databases, hermesDatabases, copilotDir, vscodeUserDirs);
   }
-  return [...preferVscodeLogs(dedupeSourceFiles(out)), ...discoverOpenCode(databases, warn)];
+  return [
+    ...preferVscodeLogs(dedupeSourceFiles(out)),
+    ...discoverOpenCode(databases, warn),
+    ...discoverHermes(hermesDatabases, warn),
+  ];
+}
+
+/** Hermes keeps one `state.db` per profile: the default profile's in the home
+ * directory and each named profile's under `profiles/<name>/`. A name starting
+ * with `.` is Hermes's own bookkeeping (`profiles/.deleted`), not a profile. */
+export function hermesDatabasePaths(hermesDir: string | undefined): string[] {
+  if (hermesDir == null || hermesDir === "") {
+    return [];
+  }
+  const paths = [join(hermesDir, HERMES_DATABASE_NAME)];
+  const profilesDir = join(hermesDir, "profiles");
+  let profiles: string[] = [];
+  try {
+    profiles = readdirSync(profilesDir);
+  } catch {
+    // No named profiles.
+  }
+  for (const name of profiles.sort(compareCodePoints)) {
+    if (!name.startsWith(".")) {
+      paths.push(join(profilesDir, name, HERMES_DATABASE_NAME));
+    }
+  }
+  return paths;
+}
+
+export const HERMES_DATABASE_NAME = "state.db";
+
+export function hermesSourcePath(ref: HermesSessionRef): string {
+  return `${ref.dbPath}#${ref.sessionId}`;
+}
+
+/** One virtual source per Hermes session. Profiles are separate databases, so
+ * one session ID in two of them (a copied profile) is read from the copy with
+ * the newest activity, a tie going to the code-point-smaller path. A missing
+ * file is skipped; one that is unreadable or not a Hermes store is skipped with
+ * a warning. */
+function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
+  const best = new Map<string, HermesSessionRef>();
+  for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
+    if (!existsSync(dbPath)) {
+      continue;
+    }
+    let store: HermesStore;
+    try {
+      store = HermesStore.open(dbPath);
+    } catch (error) {
+      warn("Hermes database could not be opened.", {
+        "event.name": "decant.ingest.hermes_open_failed",
+        "file.path": dbPath,
+        "error.message": hermesErrorMessage(error),
+      });
+      continue;
+    }
+    try {
+      for (const ref of store.listSessions()) {
+        const prior = best.get(ref.sessionId);
+        if (
+          prior == null ||
+          ref.activity > prior.activity ||
+          (ref.activity === prior.activity && compareCodePoints(ref.dbPath, prior.dbPath) < 0)
+        ) {
+          best.set(ref.sessionId, ref);
+        }
+      }
+    } catch (error) {
+      warn("Hermes database could not be listed.", {
+        "event.name": "decant.ingest.hermes_list_failed",
+        "file.path": dbPath,
+        "error.message": hermesErrorMessage(error),
+      });
+    } finally {
+      store.close();
+    }
+  }
+  return [...best.values()]
+    .sort(
+      (a, b) =>
+        compareCodePoints(a.dbPath, b.dbPath) || compareCodePoints(a.sessionId, b.sessionId),
+    )
+    .map((ref) => ({
+      tool: "hermes" as const,
+      path: hermesSourcePath(ref),
+      archived: false,
+      hermes: ref,
+    }));
+}
+
+/** Only Decant's own messages and SQLite's are logged; neither carries
+ * transcript content. */
+function hermesErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** `opencode.db` and channel variants under the data directory, plus the
@@ -397,6 +505,7 @@ export function sync(
     extraFile: config.opencodeExtraConfigPath,
   });
   const opencode = new OpenCodeRun(db, config.opencodeModelsPath);
+  const hermes = new HermesRun();
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
@@ -436,16 +545,23 @@ export function sync(
       }
 
       try {
-        if (file.opencode != null || file.tool === "cursor" || file.tool === "atif") {
+        if (
+          file.opencode != null ||
+          file.hermes != null ||
+          file.tool === "cursor" ||
+          file.tool === "atif"
+        ) {
           // Virtual `<db>#<session>` paths never exist on disk, a Cursor store
           // is a SQLite database with sidecars, and an ATIF document can hold
           // several sessions; the one-session text read below fits none.
           const outcome =
             file.opencode != null
               ? syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers)
-              : file.tool === "cursor"
-                ? syncCursorStore(db, file)
-                : syncAtifFile(db, file);
+              : file.hermes != null
+                ? syncHermesSession(db, file, file.hermes, hermes)
+                : file.tool === "cursor"
+                  ? syncCursorStore(db, file)
+                  : syncAtifFile(db, file);
           if (outcome.kind === "ingested") {
             report.ingested += 1;
             report.issues += outcome.issues.length;
@@ -575,6 +691,7 @@ export function sync(
     }
   } finally {
     opencode.close();
+    hermes.close();
   }
 
   refreshDerivedState(db, report, repriced, lineageMayHaveChanged);
@@ -865,6 +982,95 @@ function syncOpenCodeSession(
     hash: catalog.available ? changeKey : `${changeKey}${WITHOUT_CATALOG}`,
   };
   const outcome = writeIngestedFile(db, prepared, parsed, opencode);
+  return outcome === "tombstoned"
+    ? { kind: "tombstoned" }
+    : { kind: "ingested", issues: parsed.issues };
+}
+
+/** Hermes databases opened during one sync, each once. A database that
+ * cannot be opened is remembered as null, so its sessions fail without
+ * retrying the open for each one. */
+class HermesRun {
+  readonly #stores = new Map<string, HermesStore | null>();
+
+  store(dbPath: string): HermesStore | null {
+    if (!this.#stores.has(dbPath)) {
+      let store: HermesStore | null = null;
+      try {
+        store = HermesStore.open(dbPath);
+      } catch (error) {
+        logger.warning("Hermes database could not be opened.", {
+          "event.name": "decant.ingest.hermes_open_failed",
+          "file.path": dbPath,
+          "error.message": hermesErrorMessage(error),
+        });
+      }
+      this.#stores.set(dbPath, store);
+    }
+    return this.#stores.get(dbPath) ?? null;
+  }
+
+  close(): void {
+    for (const store of this.#stores.values()) {
+      store?.close();
+    }
+    this.#stores.clear();
+  }
+}
+
+/** Skip when the stored change key and pipeline revision match; otherwise
+ * read, parse, and write the session under its virtual path. A session
+ * deleted from `state.db` after discovery is skipped, and the archive keeps
+ * the copy it last ingested, as for OpenCode. */
+function syncHermesSession(
+  db: Database,
+  file: SourceFile,
+  ref: HermesSessionRef,
+  hermes: HermesRun,
+): SessionSyncOutcome {
+  const prior = queryRow<{ hash: string | null; ingest_revision: number }>(
+    db,
+    "SELECT hash, ingest_revision FROM ingest_source WHERE path = ?1",
+    [file.path],
+  );
+  if (
+    prior != null &&
+    prior.ingest_revision === INGEST_PIPELINE_REVISION &&
+    prior.hash === ref.fingerprint
+  ) {
+    return { kind: "skipped" };
+  }
+  const store = hermes.store(ref.dbPath);
+  if (store == null) {
+    return { kind: "failed" };
+  }
+  let loaded: HermesLoadedSession | null;
+  try {
+    loaded = store.loadSession(ref.sessionId);
+  } catch (error) {
+    logger.warning("Source file could not be read.", {
+      "event.name": "decant.ingest.source_read_failed",
+      "file.path": file.path,
+      "error.type": "hermes_read",
+      "error.message":
+        error instanceof HermesStoreError
+          ? error.message
+          : `Hermes session could not be read (${errorCode(error)})`,
+    });
+    return { kind: "failed" };
+  }
+  if (loaded == null) {
+    return { kind: "skipped" };
+  }
+  const parsed = parseHermesSession(loaded.session, loaded.messages, loaded.modelUsage);
+  const prepared: Prepared = {
+    file,
+    lineCount: loaded.messages.length,
+    mtime: Math.trunc(ref.activity),
+    size: 0,
+    hash: ref.fingerprint,
+  };
+  const outcome = writeIngestedFile(db, prepared, parsed);
   return outcome === "tombstoned"
     ? { kind: "tombstoned" }
     : { kind: "ingested", issues: parsed.issues };
@@ -1374,7 +1580,7 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_fields
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode', 'cursor', 'atif')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'gemini', 'opencode', 'cursor', 'atif', 'hermes')`,
   );
 
   const sessionBySource = new Map<string, number>();
@@ -2363,6 +2569,7 @@ function collectSourcePath(
   path: string,
   out: SourceFile[],
   databases: string[],
+  hermesDatabases: string[],
   copilotDir?: string,
   vscodeUserDirs: readonly (string | undefined)[] = [],
 ): void {
@@ -2379,6 +2586,10 @@ function collectSourcePath(
       if (isCursorConversationStore(path)) {
         out.push({ tool: "cursor", path, archived: false });
       }
+      return;
+    }
+    if (pathBasename(path) === HERMES_DATABASE_NAME) {
+      hermesDatabases.push(path);
       return;
     }
     if (path.endsWith(".db")) {
@@ -2400,6 +2611,10 @@ function collectSourcePath(
     if (isInVscodeStorage(child, vscodeUserDirs) && !isVscodeChatSessionFile(child)) continue;
     if (isOpenCodeDatabaseName(pathBasename(child))) {
       databases.push(child);
+      continue;
+    }
+    if (pathBasename(child) === HERMES_DATABASE_NAME) {
+      hermesDatabases.push(child);
       continue;
     }
     const source = sourceFileForPath(child, copilotDir, vscodeUserDirs);

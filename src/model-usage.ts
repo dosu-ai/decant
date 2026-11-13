@@ -77,10 +77,11 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   }
   const sessionModel = session.model ?? "";
   const totals = sessionTotals(session);
-  if (session.tool === "copilot") {
+  if (session.tool === "copilot" || session.tool === "hermes") {
     // Copilot records input and cache usage only as per-model session
-    // totals, which the parser keeps in raw_meta.modelUsage. Splitting them
-    // from per-response output would charge every model's input to one.
+    // totals, and Hermes records all of its usage that way, so the parser
+    // keeps them in raw_meta.modelUsage. Splitting them from per-response
+    // output would charge every model's input to one.
     const rows = copilotModelUsage(session.raw_meta);
     if (rows != null) {
       return rows;

@@ -19,6 +19,8 @@
     "fixtures/cursor/sample/store.json",
     "fixtures/gemini/mcp.jsonl",
     "fixtures/gemini/sample.jsonl",
+    "fixtures/hermes/sample.sql",
+    "fixtures/hermes/subagent.sql",
     "fixtures/opencode/mcp.sql",
     "fixtures/opencode/sample.sql",
     "fixtures/opencode/v1-sample.sql",

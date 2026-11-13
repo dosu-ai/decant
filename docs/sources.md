@@ -20,6 +20,7 @@ For how sync discovers, re-reads, and stores each source, see
 | GitHub Copilot CLI | `~/.copilot/session-state` | `DECANT_COPILOT_DIR` | `--copilot-dir` |
 | Copilot Chat in VS Code | VS Code's `User` directory | `DECANT_VSCODE_COPILOT_DIR` | `--vscode-copilot-dir` |
 | ATIF trajectories | `~/.decant/atif` | `DECANT_ATIF_DIR` | `--atif-dir` |
+| Hermes Agent | `~/.hermes` | `DECANT_HERMES_DIR` | `--hermes-dir` |
 
 The flags work on `sync`, `watch`, and `serve`.
 
@@ -204,6 +205,36 @@ Decant prices models it has a rate for and keeps a recorded `cost_usd` for
 models it cannot price. A trajectory with neither step metrics nor
 `final_metrics` shows tokens and cost as unavailable. See
 [ATIF imports](data-lifecycle.md#atif-imports) for the full mapping.
+
+## Hermes Agent
+
+Hermes Agent, from Nous Research, keeps every session in one SQLite database,
+`state.db`, in its home directory. Each named profile has its own database at
+`profiles/<name>/state.db`, and Decant reads all of them read-only, never
+writing to them or starting Hermes. When neither `DECANT_HERMES_DIR` nor
+`--hermes-dir` is set, Decant follows `HERMES_HOME`, then Hermes's own default:
+`~/.hermes`, or `%LOCALAPPDATA%\hermes` on Windows. A `HERMES_HOME` that names
+one profile's directory reads only that profile. Decant does not read the
+`sessions/*.jsonl` transcripts older Hermes builds left behind, which Hermes
+itself no longer reads.
+
+The transcript is what Hermes shows for the session: history an in-place
+compaction archived stays, each turn the compaction copied forward is shown
+once, and turns removed by a rewind or edit are left out. A session started by
+`delegate_task` is filed as a subagent under its parent. A child that continues
+a compressed, reset, or branched conversation is filed as its own session.
+
+Hermes records token usage per session and model, not per message, so Decant
+shows each session's tokens and cost split by model but has no per-message
+usage and no context-window figures for Hermes. Costs are Decant's estimates
+at each model's API rates, not what Hermes or your provider charged.
+
+Hermes names an MCP tool `mcp_<server>_<tool>` and replaces dashes and dots in
+both parts with underscores, so the boundary between the server and the tool
+is not recorded. Decant splits the name at its first underscore. A server whose
+own name holds an underscore or a dash is shown under its first word.
+
+`--path` also accepts a Hermes `state.db` file, or a directory holding one.
 
 ## Input limits
 

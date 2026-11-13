@@ -35,7 +35,7 @@ Without `--json`, an error is a line on stderr that starts with `error: `.
 
 ```console
 $ decant ls --tool claude
-error: option '--tool <tool>' argument 'claude' is invalid. expected: claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif
+error: option '--tool <tool>' argument 'claude' is invalid. expected: claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif | hermes
 ```
 
 With `--json`, the error is one JSON object on a single line, and it is the last
@@ -43,7 +43,7 @@ line of stderr. stdout stays empty.
 
 ```console
 $ decant ls --json --tool claude
-{"error":{"code":"invalid_argument","message":"option '--tool <tool>' argument 'claude' is invalid. expected: claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif","option":"--tool","value":"claude","expected":["claude_code","codex","gemini","opencode","cursor","copilot","vscode_copilot","atif"]}}
+{"error":{"code":"invalid_argument","message":"option '--tool <tool>' argument 'claude' is invalid. expected: claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif | hermes","option":"--tool","value":"claude","expected":["claude_code","codex","gemini","opencode","cursor","copilot","vscode_copilot","atif","hermes"]}}
 ```
 
 `code` and `message` are always present. `code` is stable, so branch on it.
@@ -88,7 +88,7 @@ before it is still reported as JSON.
 Decant rejects a value it would otherwise have to guess at.
 
 - `--tool` takes one of `claude_code`, `codex`, `gemini`, `opencode`, `cursor`,
-  `copilot`, `vscode_copilot`, or `atif`. These are the names `ls` prints.
+  `copilot`, `vscode_copilot`, `atif`, or `hermes`. These are the names `ls` prints.
 - `--limit` takes an integer of 1 or more.
 - `--format` takes `table`, `json`, or `md`. Only commands that print Markdown
   accept `md`: `show`, `session show`, `export`, and `distill skill`.

@@ -9,9 +9,9 @@
 
 Decant shows where your coding agents spend tokens, money, and time. It reads
 the session logs that Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code already write on your machine,
-plus [ATIF](https://harborframework.com/docs/agents/atif) trajectories you
-import, into one searchable archive. You explore it in a local web UI or from
+GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent already write on
+your machine, plus [ATIF](https://harborframework.com/docs/agents/atif)
+trajectories you import, into one searchable archive. You explore it in a local web UI or from
 the command line.
 
 Built by
@@ -64,6 +64,7 @@ else, or for per-agent details, see [Sources](docs/sources.md).
 | Cursor CLI | `~/.cursor/chats` | Not recorded by Cursor |
 | GitHub Copilot CLI | `~/.copilot/session-state` | Recorded, priced at the model's API rates |
 | Copilot Chat in VS Code | VS Code's `User` directory | VS Code builds from April 2026 on, as a rough estimate |
+| Hermes Agent | `~/.hermes` | Recorded per session and model, not per message |
 | ATIF trajectories | `~/.decant/atif` | From step `metrics` or `final_metrics` |
 
 When an agent records no usage, Decant shows tokens and cost as unavailable

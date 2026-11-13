@@ -118,9 +118,10 @@ export function FirstRunPanel({
         <h2>No sessions yet</h2>
         <p>
           Decant reads the session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub
-          Copilot CLI, and Copilot Chat in VS Code already write, plus any ATIF trajectories you
-          import, and turns them into a searchable session-log index with token, cost, and
-          context-window analytics wherever the source records usage. Nothing leaves this machine.
+          Copilot CLI, Copilot Chat in VS Code, and Hermes Agent already write, plus any ATIF
+          trajectories you import, and turns them into a searchable session-log index with token,
+          cost, and context-window analytics wherever the source records usage. Nothing leaves this
+          machine.
         </p>
         <code>decant sync</code>
         <button

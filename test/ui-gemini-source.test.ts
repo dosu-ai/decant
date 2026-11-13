@@ -33,10 +33,10 @@ describe("Gemini CLI source copy", () => {
     // JSX text wraps wherever the formatter puts it, so compare it as rendered.
     const copy = main.replace(/\s+/g, " ");
     expect(copy).toContain(
-      "Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code session log on this device, plus imported ATIF trajectories.",
+      "Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent session log on this device, plus imported ATIF trajectories.",
     );
     expect(copy).toContain(
-      "session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code already write",
+      "session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent already write",
     );
   });
 });

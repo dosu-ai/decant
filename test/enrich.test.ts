@@ -309,6 +309,33 @@ describe("facets", () => {
   });
 });
 
+describe("Hermes Agent file refs", () => {
+  test("reads read_file, patch, and write_file paths, and records none for a V4A patch", () => {
+    const at = (name: string, input: NormalizedBlock["toolInput"]) => {
+      const session = oneBlockSession("hermes", toolUse(name, input));
+      session.cwd = "/decant-fixture/example";
+      return fileRefs(session);
+    };
+    expect(at("read_file", { path: "notes.txt" })[0]).toMatchObject({
+      path: "notes.txt",
+      relPath: "notes.txt",
+      operation: "read",
+    });
+    expect(
+      at("patch", {
+        path: "/decant-fixture/example/src/app.ts",
+        old_string: "a",
+        new_string: "b",
+      })[0],
+    ).toMatchObject({ relPath: "src/app.ts", operation: "edit", ext: "ts" });
+    expect(at("write_file", { path: "out.md", content: "hi" })[0]).toMatchObject({
+      operation: "write",
+    });
+    expect(at("patch", { mode: "patch", patch: "*** Begin Patch\n*** End Patch" })).toEqual([]);
+    expect(at("terminal", { command: "cat notes.txt" })).toEqual([]);
+  });
+});
+
 describe("path helpers", () => {
   test("relativizes Windows file refs without rewriting the original path", () => {
     const path = String.raw`C:\project\src\app.ts`;

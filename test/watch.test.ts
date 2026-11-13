@@ -24,6 +24,7 @@ import {
   watchDirs,
   watchRoots,
 } from "../src/watch.ts";
+import { buildHermesFixtureDb } from "./hermes-fixture.ts";
 import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-watch-test-"));
@@ -227,6 +228,29 @@ describe("watch mode", () => {
         join(insiders, "workspaceStorage"),
       ),
     ).toBe(true);
+  });
+
+  test("Hermes roots are each profile's directory, polled for state.db and its -wal", () => {
+    const base = freshConfig();
+    const hermesDir = join(dirname(base.dbPath), "hermes");
+    const profileDir = join(hermesDir, "profiles", "work");
+    mkdirSync(profileDir, { recursive: true });
+    buildHermesFixtureDb(join(hermesDir, "state.db"), ["sample.sql"]);
+    buildHermesFixtureDb(join(profileDir, "state.db"), ["sample.sql"]);
+    const config: Config = { ...base, hermesDir };
+    const roots = watchRoots(config);
+    const home = roots.find((root) => root.dir === hermesDir);
+    const profile = roots.find((root) => root.dir === profileDir);
+    expect([home?.recursive, profile?.recursive]).toEqual([false, false]);
+    expect(home?.poll?.()).toBe(false);
+    expect(home?.accepts("config.yaml")).toBe(false);
+    expect(home?.accepts("state.db-shm")).toBe(false);
+    const writer = new Database(join(profileDir, "state.db"), { strict: true });
+    writer.exec("UPDATE sessions SET title = 'Renamed'");
+    writer.close();
+    expect(home?.poll?.()).toBe(false);
+    expect(profile?.poll?.()).toBe(true);
+    expect(profile?.poll?.()).toBe(false);
   });
 
   test("a symlinked OPENCODE_DB is watched in its real directory", () => {

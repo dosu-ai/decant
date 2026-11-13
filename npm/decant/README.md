@@ -5,10 +5,10 @@
 
 Decant shows where your coding agents spend tokens, money, and time. It keeps a
 searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code sessions, plus imported ATIF
-trajectories. See token and cost breakdowns, context-window usage, files
-touched, and tool usage, search prompts and tool calls, and browse complete
-transcripts.
+GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent sessions, plus
+imported ATIF trajectories. See token and cost breakdowns, context-window
+usage, files touched, and tool usage, search prompts and tool calls, and browse
+complete transcripts.
 
 Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine. The one exception is an update

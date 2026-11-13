@@ -43,6 +43,10 @@ export interface Config {
    * follow symbolic links. Absent in a config built by hand, which then reads
    * no ATIF directory. */
   atifDir?: string;
+  /** Hermes Agent home: `state.db` plus `profiles/<name>/state.db`, one per
+   * Hermes profile. Absent in a config built by hand, which then reads no
+   * Hermes data. */
+  hermesDir?: string;
 }
 
 export interface ConfigOverrides {
@@ -55,6 +59,7 @@ export interface ConfigOverrides {
   copilotDir?: string | null;
   vscodeCopilotDir?: string | null;
   atifDir?: string | null;
+  hermesDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
   /** Defaults to the running platform; tests pass one to check each layout. */
@@ -100,7 +105,26 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       join(nonEmpty(env.COPILOT_HOME) ?? join(home, ".copilot"), "session-state"),
     ...vscodeCopilotDirs(overrides, env, home),
     atifDir: overrides.atifDir ?? nonEmpty(env.DECANT_ATIF_DIR) ?? join(home, ".decant", "atif"),
+    // HERMES_HOME relocates all of Hermes's data, as it does for Hermes itself.
+    hermesDir:
+      overrides.hermesDir ??
+      nonEmpty(env.DECANT_HERMES_DIR) ??
+      nonEmpty(env.HERMES_HOME) ??
+      hermesDefaultHome(overrides.platform ?? process.platform, env, home),
   };
+}
+
+/** Hermes's platform default (`_platform_default_hermes_home` in
+ * hermes_constants.py): `%LOCALAPPDATA%\hermes` on Windows, else `~/.hermes`. */
+function hermesDefaultHome(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+  home: string,
+): string {
+  if (platform === "win32") {
+    return join(nonEmpty(env.LOCALAPPDATA) ?? join(home, "AppData", "Local"), "hermes");
+  }
+  return join(home, ".hermes");
 }
 
 /** One override replaces both VS Code builds' defaults, so a scratch run never

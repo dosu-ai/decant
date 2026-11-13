@@ -802,6 +802,49 @@ describe("Hermes discovery and ingest", () => {
     }
   });
 
+  test("an older profile's copy does not replace one from a profile that cannot be read", () => {
+    const root = scratch();
+    const home = join(root, "hermes");
+    const main = join(home, "state.db");
+    const work = join(home, "profiles", "work", "state.db");
+    mkdirSync(join(home, "profiles", "work"), { recursive: true });
+    buildHermesDb(main, [
+      sessionSql("shared-1"),
+      messageSql("shared-1", 1, "user", "hello from the default profile"),
+    ]);
+    buildHermesDb(work, [sessionSql("shared-1"), messageSql("shared-1", 50, "user", "[redacted]")]);
+    const config: IngestConfig = {
+      claudeDir: join(root, "claude"),
+      codexDir: join(root, "codex"),
+      hermesDir: home,
+    };
+    const db = openDb(join(root, "archive.db"));
+    const stored = (): unknown =>
+      db
+        .query(
+          `SELECT s.source_path AS path, b.text FROM session s JOIN block b ON b.session_id = s.id
+            WHERE s.source_session_id = 'shared-1' ORDER BY b.id`,
+        )
+        .all();
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      const fromWork = [{ path: `${work}#shared-1`, text: "[redacted]" }];
+      expect(stored()).toEqual(fromWork);
+      // A read failure is not an absence: the work copy stays until its
+      // database reads again or is gone.
+      writeFileSync(work, "not a database");
+      expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
+      expect(stored()).toEqual(fromWork);
+      rmSync(work);
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(stored()).toEqual([
+        { path: `${main}#shared-1`, text: "hello from the default profile" },
+      ]);
+    } finally {
+      closeDb(db);
+    }
+  });
+
   test("a session that recorded no usage reports it unavailable", () => {
     const root = scratch();
     const home = join(root, "hermes");

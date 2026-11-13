@@ -121,7 +121,10 @@ By default Decant discovers:
   When two profiles hold one session ID, Decant reads the copy with the most
   recent activity, and a tie goes to the database path that sorts first.
   Reading one copy forgets the change key recorded for the others, so if the
-  newer copy later disappears, the older one is read again. A
+  newer copy later disappears, the older one is read again. A database that
+  is still there but cannot be opened has not lost its copy, so while it
+  fails, its sessions keep their archived copies and count as failed rather
+  than being replaced from another profile. A
   session's transcript is the rows Hermes shows: live rows plus history an
   in-place compaction archived (`active = 0, compacted = 1`), with each row a
   compaction copied forward read once, and without rows a rewind or edit

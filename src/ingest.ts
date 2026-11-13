@@ -178,6 +178,10 @@ export interface SourceFile {
   opencode?: OpenCodeSessionRef;
   /** Set for Hermes Agent sessions, whose `path` is the virtual `<db>#<session id>`. */
   hermes?: HermesSessionRef;
+  /** Hermes databases that exist but could not be opened or listed during
+   * discovery. A session whose archived copy came from one of them is not
+   * replaced by another profile's copy until that database reads again. */
+  hermesUnreadable?: ReadonlySet<string>;
 }
 
 interface Prepared {
@@ -288,6 +292,7 @@ export function hermesSourcePath(ref: HermesSessionRef): string {
  * a warning. */
 function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
   const best = new Map<string, HermesSessionRef>();
+  const unreadable = new Set<string>();
   for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
     if (!existsSync(dbPath)) {
       continue;
@@ -296,6 +301,7 @@ function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
     try {
       store = HermesStore.open(dbPath);
     } catch (error) {
+      unreadable.add(dbPath);
       warn("Hermes database could not be opened.", {
         "event.name": "decant.ingest.hermes_open_failed",
         "file.path": dbPath,
@@ -315,6 +321,7 @@ function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
         }
       }
     } catch (error) {
+      unreadable.add(dbPath);
       warn("Hermes database could not be listed.", {
         "event.name": "decant.ingest.hermes_list_failed",
         "file.path": dbPath,
@@ -334,6 +341,7 @@ function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
       path: hermesSourcePath(ref),
       archived: false,
       hermes: ref,
+      hermesUnreadable: unreadable,
     }));
 }
 
@@ -1046,7 +1054,10 @@ class HermesRun {
  * deleted from `state.db` after discovery is skipped, and the archive keeps
  * the copy it last ingested, as for OpenCode. Writing a session releases its
  * copies' source rows in other profile databases, so a copy that wins again
- * after the newer one disappears is re-read. */
+ * after the newer one disappears is re-read. A copy that wins only because the
+ * database holding the archived one could not be read is not written: that
+ * database is still there, so its copy may hold edits (a redaction) the other
+ * lacks. The session fails and is retried on the next sync. */
 function syncHermesSession(
   db: Database,
   file: SourceFile,
@@ -1064,6 +1075,15 @@ function syncHermesSession(
     prior.hash === ref.fingerprint
   ) {
     return { kind: "skipped" };
+  }
+  const holder = unreadableArchivedCopy(db, file, ref);
+  if (holder != null) {
+    logger.warning("Hermes session kept from a profile database that could not be read.", {
+      "event.name": "decant.ingest.hermes_copy_unreadable",
+      "file.path": file.path,
+      "source.path": holder,
+    });
+    return { kind: "failed" };
   }
   const store = hermes.store(ref.dbPath);
   if (store == null) {
@@ -1099,6 +1119,27 @@ function syncHermesSession(
   return outcome === "tombstoned"
     ? { kind: "tombstoned" }
     : { kind: "ingested", issues: parsed.issues };
+}
+
+/** The source path of this session's archived copy when it was read from
+ * another profile database that discovery could not read, or null. */
+function unreadableArchivedCopy(
+  db: Database,
+  file: SourceFile,
+  ref: HermesSessionRef,
+): string | null {
+  for (const database of file.hermesUnreadable ?? []) {
+    const candidate = `${database}#${ref.sessionId}`;
+    if (
+      candidate !== file.path &&
+      queryRow(db, "SELECT 1 FROM ingest_source WHERE path = ?1 AND tool = 'hermes'", [
+        candidate,
+      ]) != null
+    ) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 /** A Cursor CLI chat is a SQLite store, with `meta.json` beside it for a chat

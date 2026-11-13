@@ -463,12 +463,24 @@ function recordUnbilled(
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
   );
   // A restore puts back what the clamp took, which can differ from the replies'
-  // own one-hour writes, so the last copy keeps whatever the others did not.
+  // own one-hour writes. It also caps the one-hour total at the cache writes.
   let left = taken1h ?? 0;
+  const ownShares = copies.map((copy) => {
+    const share = Math.min(copy.cacheCreation1h, left);
+    left -= share;
+    return share;
+  });
+  // The rest goes to copies with cache writes to spare. Anything still left is
+  // more than the copies wrote, and no restore could keep it.
+  const shares = copies.map((copy, index) => {
+    const own = ownShares[index] ?? 0;
+    const extra = Math.min((copy.cacheCreation ?? 0) - own, left);
+    left -= extra;
+    return own + extra;
+  });
   try {
     copies.forEach((copy, index) => {
-      const share = index === copies.length - 1 ? left : Math.min(copy.cacheCreation1h, left);
-      left -= share;
+      const share = shares[index] ?? 0;
       insert.run(
         sessionId,
         copy.messageId,
@@ -521,11 +533,20 @@ function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage
             s.total_cache_read_tokens AS cache_read,
             s.total_cache_creation_tokens AS cache_creation,
             s.total_cache_creation_1h_tokens AS cache_creation_1h,
-            COALESCE(SUM(m.input_tokens), 0) AS billed_input,
-            COALESCE(SUM(m.output_tokens), 0) AS billed_output,
-            COALESCE(SUM(m.cache_read_tokens), 0) AS billed_cache_read,
-            COALESCE(SUM(m.cache_creation_tokens), 0) AS billed_cache_creation
+            COALESCE(SUM(m.input_tokens), 0) + u.input AS billed_input,
+            COALESCE(SUM(m.output_tokens), 0) + u.output AS billed_output,
+            COALESCE(SUM(m.cache_read_tokens), 0) + u.cache_read AS billed_cache_read,
+            COALESCE(SUM(m.cache_creation_tokens), 0) + u.cache_creation AS billed_cache_creation
        FROM session s LEFT JOIN message m ON m.session_id = s.id
+            -- Copies taken earlier without reducing the totals still count as
+            -- billed, so the answer does not depend on how removals were batched.
+            CROSS JOIN (
+              SELECT COALESCE(SUM(input_tokens), 0) AS input,
+                     COALESCE(SUM(output_tokens), 0) AS output,
+                     COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+                     COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation
+                FROM unbilled_request WHERE session_id = ?1 AND totals_reduced = 0
+            ) u
       WHERE s.id = ?1
       GROUP BY s.id`,
     [sessionId],

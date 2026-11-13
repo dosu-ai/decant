@@ -34,6 +34,7 @@ const SECOND_BRANCH = "cccccccc-0000-4000-8000-000000000003";
 const LEAF = "dddddddd-0000-4000-8000-000000000004";
 const MIDDLE = "eeeeeeee-0000-4000-8000-000000000005";
 const ROOT = "ffffffff-0000-4000-8000-000000000006";
+const SECOND_ORIGINAL = "99999999-0000-4000-8000-000000000007";
 
 interface Turn {
   /** Suffix shared by the record uuids, `requestId`, and `message.id`. */
@@ -749,6 +750,107 @@ describe("requests copied into a branched Claude Code session", () => {
       remove(db, ORIGINAL);
       expect(archiveState(db)).toEqual(alone);
       closeDb(db);
+    }
+  });
+
+  // A --fork-session branch that copied one turn from each of two originals.
+  const fromOriginal: Turn = {
+    id: "5",
+    prompt: "Check the build.",
+    at: "2026-11-01T09:00:00.000Z",
+    input: 1_000,
+    output: 1_000,
+  };
+  const fromSecondOriginal: Turn = {
+    id: "6",
+    prompt: "Check the tests.",
+    at: "2026-11-01T09:30:00.000Z",
+    input: 1_000,
+    output: 1_000,
+  };
+  const branchOwn: Turn = {
+    id: "7",
+    prompt: "Fix the failing test.",
+    at: "2026-11-01T10:10:00.000Z",
+    input: 1_000,
+    output: 1_000,
+  };
+  function twoOriginals(first: Turn, second: Turn): [string, string][] {
+    return [
+      [ORIGINAL, jsonl(turn(ORIGINAL, first))],
+      [SECOND_ORIGINAL, jsonl(turn(SECOND_ORIGINAL, second))],
+    ];
+  }
+
+  test("totals that never covered every reply stay as recorded in every read order", () => {
+    // The result record covers two of the three replies, so neither copy comes
+    // off the totals, whether the copies leave together or one at a time.
+    const branch: [string, string] = [
+      BRANCH,
+      forkSessionTranscript([fromOriginal, fromSecondOriginal], [branchOwn]) +
+        jsonl([{ type: "result", usage: { input_tokens: 2_000, output_tokens: 2_000 } }]),
+    ];
+    const sources = [...twoOriginals(fromOriginal, fromSecondOriginal), branch];
+    const settled = stateOf(...sources);
+    expect(settled.sessions).toContainEqual(
+      expect.objectContaining({
+        source_session_id: BRANCH,
+        total_input_tokens: 2_000,
+        total_output_tokens: 2_000,
+      }),
+    );
+    const orders = permutations(sources);
+    expect(orders).toHaveLength(6);
+    for (const order of orders) {
+      const { db } = freshCase();
+      for (const [session, content] of order) {
+        ingest(db, session, content);
+      }
+      expect(archiveState(db)).toEqual(settled);
+      closeDb(db);
+    }
+  });
+
+  test("restoring copies in either order gives back the one-hour writes their totals lost", () => {
+    // Only the first copy wrote cache, and only the result record reports the
+    // one-hour writes, so none of them can be saved on the second copy.
+    const cached: Turn = { ...fromOriginal, cacheCreation: 100 };
+    const branch: [string, string] = [
+      BRANCH,
+      forkSessionTranscript([cached, fromSecondOriginal], [branchOwn]) +
+        jsonl([
+          {
+            type: "result",
+            usage: {
+              input_tokens: 3_000,
+              output_tokens: 3_000,
+              cache_creation_input_tokens: 100,
+              cache_creation: { ephemeral_1h_input_tokens: 100 },
+            },
+          },
+        ]),
+    ];
+    const alone = stateOf(branch);
+    expect(alone.sessions).toMatchObject([
+      { total_cache_creation_tokens: 100, total_cache_creation_1h_tokens: 100 },
+    ]);
+    const sources = [...twoOriginals(cached, fromSecondOriginal), branch];
+    for (const order of permutations(sources)) {
+      for (const removals of [
+        [ORIGINAL, SECOND_ORIGINAL],
+        [SECOND_ORIGINAL, ORIGINAL],
+      ]) {
+        const { db } = freshCase();
+        for (const [session, content] of order) {
+          ingest(db, session, content);
+        }
+        expect(stored(db, BRANCH).billed).toBe(1);
+        for (const session of removals) {
+          remove(db, session);
+        }
+        expect(archiveState(db)).toEqual(alone);
+        closeDb(db);
+      }
     }
   });
 

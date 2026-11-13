@@ -15,10 +15,10 @@ const valid = JSON.stringify({ type: "user", message: { role: "user", content: "
 
 test("deep, oversized and malformed records leave later records readable without copying text", () => {
   const content = [
-    "[".repeat(30000) + '"' + secret + '"' + "]".repeat(30000),
+    `${"[".repeat(30000)}"${secret}"${"]".repeat(30000)}`,
     JSON.stringify({ type: "user", text: secret + "x".repeat(MAX_RECORD_BYTES) }),
-    "{" + secret,
-    JSON.stringify({ type: secret + " invalid" }),
+    `{${secret}`,
+    JSON.stringify({ type: `${secret} invalid` }),
     valid,
   ].join("\n");
   const parsed = parseClaudeSession("limits", content);
@@ -31,22 +31,21 @@ test("deep, oversized and malformed records leave later records readable without
   ]);
   expect(JSON.stringify(parsed.issues.map((i) => i.error))).not.toContain(secret);
   expect(parsed.issues.slice(0, 2).every((i) => i.rawLine === null)).toBe(true);
-  expect(parsed.issues[2]?.rawLine).toBe("{" + secret);
+  expect(parsed.issues[2]?.rawLine).toBe(`{${secret}`);
 });
 
 test("canonical serialization rejects pathological nesting with a fixed error", () => {
-  const value = JSON.parse("[".repeat(30000) + "0" + "]".repeat(30000));
+  const value = JSON.parse(`${"[".repeat(30000)}0${"]".repeat(30000)}`);
   expect(() => canonicalJson(value)).toThrow("JSON nesting exceeds the depth limit");
-  const allowed = "[".repeat(MAX_JSON_DEPTH) + "0" + "]".repeat(MAX_JSON_DEPTH);
+  const allowed = `${"[".repeat(MAX_JSON_DEPTH)}0${"]".repeat(MAX_JSON_DEPTH)}`;
   expect(canonicalJson(JSON.parse(allowed))).toBe(allowed);
 });
 
 test("ATIF keeps root and sibling when a descendant exceeds the embedded cap", () => {
-  const deep =
-    '{"steps":[],"subagent_trajectories":['.repeat(30000) + '{"steps":[]}' + "]}".repeat(30000);
+  const deep = `${'{"steps":[],"subagent_trajectories":['.repeat(30000)}{"steps":[]}${"]}".repeat(30000)}`;
   const document = parseAtifDocument(
     "root",
-    '{"steps":[],"subagent_trajectories":[' + deep + ',{"trajectory_id":"sibling","steps":[]}]}',
+    `{"steps":[],"subagent_trajectories":[${deep},{"trajectory_id":"sibling","steps":[]}]}`,
   );
   expect(document.sessions).toHaveLength(MAX_ATIF_EMBEDDED_DEPTH + 2);
   expect(document.sessions.at(-1)?.key).toBe("sibling");
@@ -87,7 +86,7 @@ test("Cursor skips an oversized blob before decoding and keeps its next message"
 });
 
 test("unknown identifiers stay readable and other labels hide their content", () => {
-  for (const label of ["future-type", "api.request:v2", "A" + "x".repeat(63)]) {
+  for (const label of ["future-type", "api.request:v2", `A${"x".repeat(63)}`]) {
     expect(printableType(label)).toBe(label);
   }
   for (const label of ["", "_prefix", "a".repeat(65), "private words", "line\nbreak"]) {

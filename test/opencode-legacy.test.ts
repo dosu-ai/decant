@@ -178,13 +178,15 @@ describe("parseOpenCodeLegacySession", () => {
       cost: 0.0000416,
       providerID: "opencode-go",
     });
-    expect((first!.raw as { parts: { id: string }[] }).parts.map((p) => p.id)).toEqual([
-      "prt_v1s_04",
-      "prt_v1s_05",
-      "prt_v1s_06",
-      "prt_v1s_07",
-      "prt_v1s_08",
-    ]);
+    expect(first?.raw).toMatchObject({
+      parts: [
+        { id: "prt_v1s_04" },
+        { id: "prt_v1s_05" },
+        { id: "prt_v1s_06" },
+        { id: "prt_v1s_07" },
+        { id: "prt_v1s_08" },
+      ],
+    });
 
     expect(readResult?.blocks).toEqual([
       expect.objectContaining({

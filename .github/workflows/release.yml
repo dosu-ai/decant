@@ -22,7 +22,7 @@ defaults:
 jobs:
   meta:
     name: Release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -47,7 +47,7 @@ jobs:
 
   verify:
     name: Verify (biome, tsc, test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -70,7 +70,7 @@ jobs:
   build:
     name: Build, sign, and package binaries
     needs: [meta, verify]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -229,7 +229,7 @@ jobs:
   determinism:
     name: Determinism canary (non-blocking)
     needs: [meta, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -269,7 +269,7 @@ jobs:
     environment:
       name: release
       url: https://www.npmjs.com/package/@dosu/decant/v/${{ needs.meta.outputs.version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -321,7 +321,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
@@ -359,7 +359,7 @@ jobs:
     environment:
       name: release
       url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.meta.outputs.version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -397,7 +397,7 @@ jobs:
     environment:
       name: release
       url: ${{ github.server_url }}/${{ github.repository }}/pkgs/container/decant
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -485,7 +485,7 @@ jobs:
     name: Render Homebrew formula
     needs: [meta, build, github-release]
     if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -524,7 +524,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
           - os: macos-15
             target: darwin-arm64
@@ -579,7 +579,7 @@ jobs:
     environment:
       name: release
       url: ${{ github.server_url }}/dosu-ai/homebrew-dosu/blob/main/Formula/decant.rb
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

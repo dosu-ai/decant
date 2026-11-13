@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { reconcileBilledRequests } from "./billed-requests.ts";
+import { reconcileBilledRequests, releaseBilledRequests } from "./billed-requests.ts";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
@@ -1947,7 +1947,12 @@ function releaseSupersededOpenCodeSources(
   }
 }
 
-function deleteSessionRow(db: Database, id: number): void {
+/** `releaseClaims` is false only when the same session is written again in this
+ * transaction and claims its requests back. */
+function deleteSessionRow(db: Database, id: number, releaseClaims = true): void {
+  if (releaseClaims) {
+    releaseBilledRequests(db, [id]);
+  }
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
   ]);
@@ -2029,7 +2034,9 @@ function writeSession(
     [s.tool, s.sourceSessionId],
   );
   if (existing != null) {
-    deleteSessionRow(db, existing.id);
+    // Handing its requests to copies would only take them back below, on every
+    // growth of a live session.
+    deleteSessionRow(db, existing.id, false);
   }
 
   const refs = fileRefs(s);

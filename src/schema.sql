@@ -14,7 +14,7 @@
 -- without reading transcript rows. v30 records each project's repository
 -- remote, a name for it that does not depend on a local path. v31 names the
 -- session that bills each Claude Code API request, so a branched session's
--- copy of it is not billed again.
+-- copy of it is not billed again, and keeps the usage taken off each copy.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -209,6 +209,18 @@ CREATE TABLE billed_request (
   session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
   message_id INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE unbilled_request (
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  message_id INTEGER NOT NULL,
+  request_id TEXT NOT NULL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_creation_tokens INTEGER,
+  cache_creation_1h_tokens INTEGER NOT NULL,
+  totals_reduced INTEGER NOT NULL,
+  PRIMARY KEY (session_id, message_id)
+) WITHOUT ROWID;
 CREATE TABLE session_user_state (
   tool TEXT NOT NULL,
   source_session_id TEXT NOT NULL,
@@ -267,6 +279,7 @@ CREATE INDEX idx_toolcall_usage ON tool_call(session_id, tool_name, tool_kind, m
 CREATE INDEX idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use';
 CREATE INDEX idx_block_id_session ON block(id, session_id);
 CREATE INDEX idx_billed_request_session ON billed_request(session_id);
+CREATE INDEX idx_unbilled_request_request ON unbilled_request(request_id);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id',

@@ -899,6 +899,23 @@ function migrate(db: Database, current: number): void {
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_billed_request_session ON billed_request(session_id)",
       );
+      // Keeps the usage taken off each copy, so the copy can bill the request
+      // again exactly if the session that bills it is deleted.
+      db.exec(`CREATE TABLE IF NOT EXISTS unbilled_request (
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  message_id INTEGER NOT NULL,
+  request_id TEXT NOT NULL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_creation_tokens INTEGER,
+  cache_creation_1h_tokens INTEGER NOT NULL,
+  totals_reduced INTEGER NOT NULL,
+  PRIMARY KEY (session_id, message_id)
+) WITHOUT ROWID`);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_unbilled_request_request ON unbilled_request(request_id)",
+      );
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (31, datetime('now'))",
       ).run();

@@ -126,9 +126,10 @@ const BASELINE_TABLES = [
   "session_model_usage",
   "session_user_state",
   "tool_call",
+  "unbilled_request",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 29;
+const BASELINE_INDEX_COUNT = 30;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -429,12 +430,13 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
-  test("adds the billed request table to a v30 archive", () => {
+  test("adds the billed request tables to a v30 archive", () => {
     const path = freshPath();
     const fresh = openDb(path);
     const expected = buildSchemaManifest(fresh);
     fresh.exec(`
       DROP TABLE billed_request;
+      DROP TABLE unbilled_request;
       DELETE FROM schema_migrations WHERE version > 30;
     `);
     closeDb(fresh);
@@ -449,7 +451,7 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
-  test("finds a request's owner and a session's claims without a scan", () => {
+  test("finds a request's owner, copies, and a session's claims without a scan", () => {
     const db = openDb(freshPath());
     const plan = (sql: string): string =>
       (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
@@ -462,6 +464,20 @@ describe("openDb", () => {
     expect(plan("DELETE FROM billed_request WHERE session_id = 1")).toContain(
       "idx_billed_request_session",
     );
+    expect(plan("SELECT session_id FROM unbilled_request WHERE request_id = 'msg_1'")).toContain(
+      "idx_unbilled_request_request",
+    );
+    expect(plan("DELETE FROM unbilled_request WHERE session_id = 1")).toContain(
+      "USING PRIMARY KEY",
+    );
+    // A deleted session's claims lead to their copies through both indexes.
+    const release = plan(
+      `SELECT u.message_id FROM billed_request b
+         JOIN unbilled_request u ON u.request_id = b.request_id
+        WHERE b.session_id = 1`,
+    );
+    expect(release).toContain("idx_billed_request_session");
+    expect(release).toContain("idx_unbilled_request_request");
     closeDb(db);
   });
 

@@ -7,6 +7,7 @@ import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { type IngestConfig, sync, upsertSession } from "../src/ingest.ts";
 import type { TokenUsage } from "../src/model.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-billed-requests-test-"));
@@ -218,6 +219,31 @@ function ingest(db: Database, session: string, content: string): void {
   upsertSession(db, parseClaudeSession(session, content), `/x/${session}.jsonl`, 1, 2);
 }
 
+function estimate(db: Database, session: string): number {
+  return (
+    db
+      .query("SELECT est_reasoning_tokens AS n FROM session WHERE source_session_id = ?1")
+      .get(session) as { n: number }
+  ).n;
+}
+
+/** What a user delete does: the session and its rows leave the archive. */
+function remove(db: Database, session: string): void {
+  const row = db.query("SELECT id FROM session WHERE source_session_id = ?1").get(session) as {
+    id: number;
+  };
+  expect(setSessionUserState(db, row.id, "deleted")).toBe(true);
+}
+
+/** The branch as an archive that never held its original stores it. */
+function branchAlone(session: string, content: string): Stored & { estimate: number } {
+  const { db } = freshCase();
+  ingest(db, session, content);
+  const row = { ...stored(db, session), estimate: estimate(db, session) };
+  closeDb(db);
+  return row;
+}
+
 describe("requests copied into a branched Claude Code session", () => {
   test("a --fork-session copy is not billed again", () => {
     const { db, config } = freshCase();
@@ -371,6 +397,7 @@ describe("requests copied into a branched Claude Code session", () => {
     // rule. The transcripts are gone, so only stored rows can correct it.
     db.exec(`
       DELETE FROM billed_request;
+      DELETE FROM unbilled_request;
       UPDATE message
          SET input_tokens = json_extract(raw, '$.message.usage.input_tokens'),
              output_tokens = json_extract(raw, '$.message.usage.output_tokens')
@@ -386,6 +413,10 @@ describe("requests copied into a branched Claude Code session", () => {
     expectBilled(db, ORIGINAL, 2, FIRST);
     expectBilled(db, BRANCH, 4, SECOND);
     expect(sync(db, config).repriced).toBeUndefined();
+
+    // The correction kept what it took off the copy, so the copy can bill it again.
+    remove(db, ORIGINAL);
+    expectBilled(db, BRANCH, 4, FIRST, SECOND);
     closeDb(db);
   });
 
@@ -423,17 +454,153 @@ describe("requests copied into a branched Claude Code session", () => {
     ingest(db, ORIGINAL, originalTranscript([thinking]));
     ingest(db, BRANCH, forkSessionTranscript([thinking], [{ ...SECOND, thinking: true }]));
 
-    const estimate = (session: string): number =>
-      (
-        db
-          .query("SELECT est_reasoning_tokens AS n FROM session WHERE source_session_id = ?1")
-          .get(session) as { n: number }
-      ).n;
     // Both turns show a few characters of text, so nearly all output is
     // inferred reasoning: about 2,000 tokens in the original, 500 in the branch.
-    expect(estimate(ORIGINAL)).toBeGreaterThan(1_900);
-    expect(estimate(BRANCH)).toBeGreaterThan(400);
-    expect(estimate(BRANCH)).toBeLessThanOrEqual(500);
+    expect(estimate(db, ORIGINAL)).toBeGreaterThan(1_900);
+    expect(estimate(db, BRANCH)).toBeGreaterThan(400);
+    expect(estimate(db, BRANCH)).toBeLessThanOrEqual(500);
+    closeDb(db);
+  });
+
+  // Each reply shows "Reply N." (8 characters, 2 tokens), so the rest of its
+  // output is inferred reasoning when the turn shows thinking.
+  test("a copied turn's thinking leaves the branch with it", () => {
+    const { db } = freshCase();
+    const thinking: Turn = { ...FIRST, thinking: true };
+    ingest(db, ORIGINAL, originalTranscript([thinking]));
+    ingest(db, BRANCH, forkSessionTranscript([thinking], [SECOND]));
+
+    expect(estimate(db, ORIGINAL)).toBe(FIRST.output - 2);
+    expect(estimate(db, BRANCH)).toBe(0);
+    closeDb(db);
+  });
+
+  test("a branch's own thinking stays when the copied turn had none", () => {
+    const { db } = freshCase();
+    ingest(db, ORIGINAL, originalTranscript([FIRST]));
+    ingest(db, BRANCH, forkSessionTranscript([FIRST], [{ ...SECOND, thinking: true }]));
+
+    expect(estimate(db, ORIGINAL)).toBe(0);
+    expect(estimate(db, BRANCH)).toBe(SECOND.output - 2);
+    closeDb(db);
+  });
+
+  test("two /branch copies of a missing original keep a turn in the same one in either order", () => {
+    // Both start at the copied turn's timestamp and neither names the other.
+    const sources: [string, string][] = [
+      [SECOND_BRANCH, branchTranscript([FIRST], [THIRD], SECOND_BRANCH, ORIGINAL)],
+      [BRANCH, branchTranscript([FIRST], [SECOND], BRANCH, ORIGINAL)],
+    ];
+    for (const order of [sources, [...sources].reverse()]) {
+      const { db } = freshCase();
+      for (const [session, content] of order) {
+        ingest(db, session, content);
+      }
+      expectBilled(db, BRANCH, 4, FIRST, SECOND);
+      expectBilled(db, SECOND_BRANCH, 4, THIRD);
+      closeDb(db);
+    }
+  });
+
+  test("deleting the original bills the copy again while its source is still there", () => {
+    const { db, config } = freshCase();
+    write(sourcePath(config, ORIGINAL), originalTranscript([FIRST]));
+    write(sourcePath(config, BRANCH), forkSessionTranscript([FIRST], [SECOND]));
+    sync(db, config);
+    expectBilled(db, BRANCH, 4, SECOND);
+
+    remove(db, ORIGINAL);
+    expectBilled(db, BRANCH, 4, FIRST, SECOND);
+    // The branch is unchanged, so nothing re-reads it, and the delete holds.
+    expect(sync(db, config).ingested).toBe(0);
+    expectBilled(db, BRANCH, 4, FIRST, SECOND);
+    expect(db.query("SELECT COUNT(*) AS n FROM unbilled_request").get()).toEqual({ n: 0 });
+    closeDb(db);
+  });
+
+  // With the sources gone only stored rows can put the usage back, and the
+  // branch has to match an archive that never held its original.
+  const branches: [string, string][] = [
+    ["--fork-session", forkSessionTranscript([FIRST], [{ ...SECOND, thinking: true }])],
+    ["/branch", branchTranscript([{ ...FIRST, thinking: true }], [SECOND])],
+    [
+      "--fork-session with a result record for the whole transcript",
+      forkSessionTranscript([FIRST], [SECOND]) +
+        jsonl([{ type: "result", usage: { input_tokens: 2_000, output_tokens: 2_500 } }]),
+    ],
+    [
+      "--fork-session with a result record for the new run alone",
+      forkSessionTranscript([FIRST], [SECOND]) +
+        jsonl([{ type: "result", usage: { input_tokens: 1_000, output_tokens: 500 } }]),
+    ],
+  ];
+  for (const [kind, content] of branches) {
+    test(`deleting the original restores a ${kind} copy from stored rows in either order`, () => {
+      const alone = branchAlone(BRANCH, content);
+      const sources: [string, string][] = [
+        [ORIGINAL, originalTranscript([{ ...FIRST, thinking: true }])],
+        [BRANCH, content],
+      ];
+      for (const order of [sources, [...sources].reverse()]) {
+        const { db } = freshCase();
+        for (const [session, transcript] of order) {
+          ingest(db, session, transcript);
+        }
+        expect(stored(db, BRANCH).billed).toBe(1);
+
+        remove(db, ORIGINAL);
+        expect({ ...stored(db, BRANCH), estimate: estimate(db, BRANCH) }).toEqual(alone);
+        const totals = archiveTotals(db);
+        expect(totals).toMatchObject({ input: alone.input, output: alone.output });
+        expect(totals.cost).toBeCloseTo(alone.cost, 12);
+        closeDb(db);
+      }
+    });
+  }
+
+  test("a result record for the new run alone is not inflated when the copy is restored", () => {
+    const { db } = freshCase();
+    ingest(db, ORIGINAL, originalTranscript([FIRST]));
+    ingest(
+      db,
+      BRANCH,
+      forkSessionTranscript([FIRST], [SECOND]) +
+        jsonl([{ type: "result", usage: { input_tokens: 1_000, output_tokens: 500 } }]),
+    );
+
+    remove(db, ORIGINAL);
+    const row = stored(db, BRANCH);
+    expect(row).toMatchObject({ input: 1_000, output: 500, billed: 2, requests: 2 });
+    expect(row).toMatchObject({ model_input: 1_000, model_output: 500 });
+    closeDb(db);
+  });
+
+  test("deleting the original hands a turn to the copy the others were made from", () => {
+    const sources: [string, string][] = [
+      [ORIGINAL, originalTranscript([FIRST])],
+      [SECOND_BRANCH, branchTranscript([FIRST, SECOND], [THIRD], SECOND_BRANCH, BRANCH)],
+      [BRANCH, branchTranscript([FIRST], [SECOND])],
+    ];
+    for (const order of [sources, [...sources].reverse()]) {
+      const { db } = freshCase();
+      for (const [session, content] of order) {
+        ingest(db, session, content);
+      }
+      remove(db, ORIGINAL);
+      expectBilled(db, BRANCH, 4, FIRST, SECOND);
+      expectBilled(db, SECOND_BRANCH, 6, THIRD);
+      closeDb(db);
+    }
+  });
+
+  test("deleting a copy leaves the original's billing alone", () => {
+    const { db } = freshCase();
+    ingest(db, ORIGINAL, originalTranscript([FIRST]));
+    ingest(db, BRANCH, forkSessionTranscript([FIRST], [SECOND]));
+
+    remove(db, BRANCH);
+    expectBilled(db, ORIGINAL, 2, FIRST);
+    expect(db.query("SELECT COUNT(*) AS n FROM unbilled_request").get()).toEqual({ n: 0 });
     closeDb(db);
   });
 

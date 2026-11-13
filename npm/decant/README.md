@@ -3,11 +3,12 @@
 [![npm version](https://img.shields.io/npm/v/%40dosu%2Fdecant?logo=npm)](https://www.npmjs.com/package/@dosu/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/dosu-ai/decant/blob/main/LICENSE)
 
-Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and for imported ATIF
-trajectories. See token and cost
-breakdowns, context-window usage, files touched, and tool usage, search prompts
-and tool calls, and browse complete transcripts.
+Decant shows where your coding agents spend tokens, money, and time. It keeps a
+searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
+GitHub Copilot CLI, and Copilot Chat in VS Code sessions, plus imported ATIF
+trajectories. See token and cost breakdowns, context-window usage, files
+touched, and tool usage, search prompts and tool calls, and browse complete
+transcripts.
 
 Decant is local-first. It makes no outbound network calls at runtime,
 and your transcripts never leave your machine. The one exception is an update

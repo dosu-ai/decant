@@ -17,6 +17,7 @@ import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
 import { buildCursorChat } from "../test/cursor-fixture.ts";
 import { decodeGoldenRows, GOLDEN_NOW, ROW_QUERIES } from "../test/golden-rows.ts";
+import { buildHermesFixtureDb } from "../test/hermes-fixture.ts";
 import { buildOpenCodeFixtureDb } from "../test/opencode-fixture.ts";
 import { stripGoldenVolatility } from "./golden-normalize.ts";
 
@@ -48,11 +49,13 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   const atifDir = join(caseDir, "sources", "atif");
+  const hermesDir = join(caseDir, "sources", "hermes");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
   mkdirSync(opencodeDir, { recursive: true });
   const opencodeFixtures: string[] = [];
+  const hermesFixtures: string[] = [];
   for (const fixture of fixtures) {
     const source = join(repoRoot, fixture);
     const name = basename(source);
@@ -63,6 +66,8 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       copyFileSync(source, join(geminiDir, "synthetic-project", "chats", `session-${name}`));
     } else if (fixture.startsWith("fixtures/opencode/")) {
       opencodeFixtures.push(name);
+    } else if (fixture.startsWith("fixtures/hermes/")) {
+      hermesFixtures.push(name);
     } else if (fixture.startsWith("fixtures/cursor/")) {
       const chat = basename(dirname(source));
       buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
@@ -93,6 +98,9 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
+  // All Hermes sessions share one state.db, as they do in one Hermes profile.
+  mkdirSync(hermesDir, { recursive: true });
+  buildHermesFixtureDb(join(hermesDir, "state.db"), hermesFixtures);
   return {
     claudeDir,
     codexDir,
@@ -103,6 +111,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     copilotDir,
     vscodeCopilotDir,
     atifDir,
+    hermesDir,
   };
 }
 

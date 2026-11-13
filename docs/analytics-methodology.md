@@ -46,7 +46,7 @@ The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
 OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
 `vscode_copilot` for Copilot Chat in VS Code, `atif` for imported ATIF
-trajectories, and, for Codex, the recorded producer metadata splits sessions into
+trajectories, `hermes` for Hermes Agent, and, for Codex, the recorded producer metadata splits sessions into
 `codex_app`, `codex_cli`, and `codex_other`. That
 split reads only the session's own `originator` and `source` metadata. Desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI
@@ -117,6 +117,9 @@ subagent's events into its parent's journal and marks them with the
 subagent's `agentId`. Decant counts them as sidechain rows, like Claude Code's
 `isSidechain` rows in a parent transcript, so the subagent's prompt is not a
 turn and its calls stay off the parent's context-window curve.
+The summary Hermes Agent writes when it compacts a conversation in place can
+be stored under the user role. Decant files it as a system row that marks the
+compaction, so it is not a turn.
 Outcome looks at how the main transcript ended: a normal assistant completion,
 an interruption, a trailing user/tool turn, or an error result.
 
@@ -329,9 +332,25 @@ are the session's totals. Steps marked `is_copied_context` repeat another
 trajectory's turns and count nothing. See
 [ATIF imports](data-lifecycle.md#atif-imports).
 
+Hermes Agent records usage only per session and per model, in its `sessions`
+row and `session_model_usage` table, never per message. Hermes already stores
+input net of cache reads and writes, so Decant reads its input, output,
+cache-read, cache-write, and reasoning counts as written and prices each
+model's share at that model's rate. A route Hermes ran for an auxiliary task,
+such as title generation, counts as its own model row. Usage in the session
+row that the per-model rows do not cover, as in a database from before Hermes
+kept them, is charged to the session's model. If the per-model rows add up to
+more than the session row, the rows are the totals. Hermes messages carry no
+usage, so Hermes sessions have no per-message usage or context-window
+occupancy. Decant does not use the cost Hermes estimated or the cost a
+provider reported. A Hermes session with no recorded API call, no per-model
+usage row, and no tokens reports reasoning, tokens, and cost as unavailable.
+
 Cursor CLI records no token usage, so its sessions carry zero token and cost
 columns. Neither does a Copilot Chat session from a VS Code build that predates
-the usage fields, nor an ATIF trajectory whose steps carry no metrics. Session summaries mark such sessions
+the usage fields, nor an ATIF trajectory whose steps carry no metrics, nor a
+Hermes Agent session with no tokens, no recorded API call, and no per-model
+usage row. Session summaries mark such sessions
 `usage_available: false`, and the UI shows their tokens and cost as
 unavailable instead of $0. Stats totals,
 per-model, per-project, and per-day rows, and project rollups count only the
@@ -661,8 +680,10 @@ Claude or Gemini model, and the API marks inferred values. An
 inferred window grows to the next published tier when a call already exceeded
 the smaller one, so an inferred peak never reads above 100%.
 
-Compactions come from provider boundary records, and for ATIF from system
-steps whose `extra.context_management.type` is `compaction`. Pre- and post-compaction token
+Compactions come from provider boundary records, for ATIF from system
+steps whose `extra.context_management.type` is `compaction`, and for Hermes
+Agent from the summary row an in-place compaction writes
+(`_compressed_summary`). Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing
 values remain unavailable rather than being invented.
 

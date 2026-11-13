@@ -55,6 +55,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   copilot: "copilot-cli",
   vscode_copilot: "vscode-copilot-chat",
   atif: "atif",
+  hermes: "hermes",
 };
 
 /** Stripped from user text so downstream trajectory pipelines see it cleaned.

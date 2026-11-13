@@ -109,6 +109,7 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   const copilotDir = join(serveDir, "copilot");
   const vscodeCopilotDir = join(serveDir, "vscode", "User");
   const atifDir = join(serveDir, "atif");
+  const hermesDir = join(serveDir, "hermes");
   const codexSessionsDir = join(codexDir, "sessions");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexSessionsDir, { recursive: true });
@@ -149,6 +150,8 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
       vscodeCopilotDir,
       "--atif-dir",
       atifDir,
+      "--hermes-dir",
+      hermesDir,
     ],
     {
       env: {

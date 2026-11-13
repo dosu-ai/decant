@@ -15,6 +15,7 @@ daemon.
   + ~/.copilot/session-state/<session>/events.jsonl
   + <VS Code User>/workspaceStorage/<id>/chatSessions/<session>.jsonl
   + ~/.decant/atif/**/*.json (ATIF trajectories, such as Harbor jobs)
+  + ~/.hermes/state.db + ~/.hermes/profiles/<name>/state.db
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -80,15 +81,20 @@ reads the workspace's `workspace.json` to name the project. An ATIF file can
 hold a root trajectory and embedded subagents: `src/sources/atif.ts` returns
 one session for each, and ingest files the root under the file's path and each
 subagent under `<file>#<trajectory_id>`, removing a subagent the file no longer
-holds. Parsers retain canonical raw records while mapping
+holds. Hermes Agent keeps each profile's sessions in one SQLite `state.db`, so
+each session is a virtual source `<database path>#<session id>` as for
+OpenCode: `src/sources/hermes-store.ts` opens the database read-only and hands
+one session's rows to the pure parser in `src/sources/hermes.ts`. Parsers retain canonical raw records while mapping
 provider-specific roles, blocks, usage, tool calls, and lineage into shared
 tables. Malformed lines and unknown record types become diagnostics rather than
 aborting the file.
 
 Ingest uses file size and modification time to avoid unnecessary work on JSONL
-sources, and a per-session change key for OpenCode sessions, stored in
-`ingest_source.hash` and built per layout from the session's update time and
-its message (and, for 1.x, part) counts and update times; see
+sources, and a per-session change key for OpenCode and Hermes sessions, stored
+in `ingest_source.hash`. OpenCode's is built per layout from the session's
+update time and its message (and, for 1.x, part) counts and update times, and
+Hermes's from the session row's changing columns and its message rows' counts;
+see
 [data lifecycle](data-lifecycle.md). A changed session is replaced
 transactionally, then Decant materializes context-window rollups and versioned
 per-session economics vectors. Costs are also stored at ingest and reconciled

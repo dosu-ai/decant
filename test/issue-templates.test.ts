@@ -15,6 +15,7 @@ const BUG_FORM_LABELS: Record<Tool, string> = {
   copilot: "GitHub Copilot CLI",
   vscode_copilot: "Copilot Chat in VS Code",
   atif: "ATIF trajectories",
+  hermes: "Hermes Agent",
 };
 
 interface FormField {

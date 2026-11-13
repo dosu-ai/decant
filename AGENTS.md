@@ -10,7 +10,8 @@ truth.
 Decant is a local-first Bun and TypeScript application that turns Claude Code,
 Codex, Gemini CLI, and GitHub Copilot CLI JSONL session logs, OpenCode's
 SQLite session store, Cursor CLI's per-chat SQLite stores, Copilot Chat in
-VS Code's chat session files, and imported ATIF trajectory files into a
+VS Code's chat session files, Hermes Agent's SQLite `state.db`, and imported
+ATIF trajectory files into a
 normalized, full-text-searchable SQLite archive. The `decant` CLI owns
 parsing, ingest, reads, reports, distillation, recommendations, watch mode, and
 the React UI served by `decant serve`.
@@ -55,8 +56,8 @@ only needed when validating the container image.
 The default archive is `~/.decant/decant.db`. Override it with `DECANT_DB` or
 `--db`. Set `DECANT_NO_SYNC` or pass `--no-sync` whenever a command points at a
 scratch archive, or automatic sync may populate it from the real Claude Code,
-Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and VS Code
-directories.
+Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, VS Code, and
+Hermes Agent directories.
 
 ## Definition of done
 

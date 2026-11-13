@@ -81,7 +81,14 @@ describe("collectDoctorReport", () => {
       "copilot",
       "vscode_copilot",
       "atif",
+      "hermes",
     ]);
+    expect(report.sources.find((source) => source.tool === "hermes")).toEqual({
+      tool: "hermes",
+      roots: ["~/.hermes"],
+      exists: false,
+      found: 0,
+    });
     expect(report.sources.find((source) => source.tool === "atif")).toEqual({
       tool: "atif",
       roots: ["~/.decant/atif"],

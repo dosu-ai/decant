@@ -154,6 +154,8 @@ function sourceRoots(config: Config, tool: Tool): string[] {
         : [config.vscodeCopilotDir, config.vscodeCopilotInsidersDir];
     case "atif":
       return config.atifDir == null ? [] : [config.atifDir];
+    case "hermes":
+      return config.hermesDir == null ? [] : [config.hermesDir];
   }
 }
 

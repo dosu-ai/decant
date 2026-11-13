@@ -49,6 +49,9 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
   if (tool === "copilot") {
     return toolName === "task";
   }
+  if (tool === "hermes") {
+    return toolName === "delegate_task";
+  }
   if (tool === "vscode_copilot") {
     return toolName != null && VSCODE_COPILOT_SPAWN_TOOLS.has(toolName);
   }
@@ -91,6 +94,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "cursor") {
         keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (tool === "hermes") {
+        keyedRef(HERMES_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "vscode_copilot") {
         vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
       } else {
@@ -143,6 +148,15 @@ const COPILOT_FILE_TOOLS: FileToolTable = {
   view: { key: "path", operation: "read" },
   edit: { key: "path", operation: "edit" },
   create: { key: "path", operation: "write" },
+};
+
+// Hermes Agent's file tools (tools/file_tools.py) take `path`, which may be
+// relative to the session's working directory. `patch` in V4A mode carries
+// its paths inside the patch text instead and records no file ref.
+const HERMES_FILE_TOOLS: FileToolTable = {
+  read_file: { key: "path", operation: "read" },
+  patch: { key: "path", operation: "edit" },
+  write_file: { key: "path", operation: "write" },
 };
 
 const COPILOT_EDIT_KINDS: Record<string, Operation> = {
@@ -359,6 +373,9 @@ export function facets(session: NormalizedSession): Facets {
     const sidechain =
       rawBoolean(message.raw, "isSidechain") === true ||
       (session.tool === "copilot" && rawString(message.raw, "agentId") != null);
+    // Hermes flags the summary an in-place compaction writes in its row.
+    const hermesSummary =
+      session.tool === "hermes" && isObject(message.raw) && message.raw._compressed_summary === 1;
     const compactSummary = rawBoolean(message.raw, "isCompactSummary") === true;
     if (sidechain) {
       got.sidechainMessageCount += 1;
@@ -369,7 +386,8 @@ export function facets(session: NormalizedSession): Facets {
       rawString(message.raw, "type") === "compaction" ||
       (session.tool === "copilot" &&
         rawString(message.raw, "type") === "session.compaction_complete") ||
-      (session.tool === "atif" && atifCompaction(message.raw))
+      (session.tool === "atif" && atifCompaction(message.raw)) ||
+      hermesSummary
     ) {
       got.compactionCount += 1;
     }

@@ -1295,7 +1295,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes]
     Model:
       name: model
       in: query
@@ -1617,7 +1617,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, atifDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, atifDir, hermesDir, version]
       properties:
         dbPath:
           type: string
@@ -1638,6 +1638,9 @@ components:
         atifDir:
           type: [string, "null"]
           description: Directory read recursively for ATIF trajectory files. Null when the server's configuration names none.
+        hermesDir:
+          type: [string, "null"]
+          description: Hermes Agent home directory, whose `state.db` and `profiles/<name>/state.db` files are read. Null when the server's configuration names none.
         version:
           type: string
       additionalProperties: false
@@ -2183,10 +2186,11 @@ components:
           type: boolean
           description: >-
             False for a session from a source that may record no token usage
-            (Cursor CLI, or Copilot Chat in VS Code from builds that predate
-            its usage fields) when none of its messages carries usage. Token
-            totals and estimated_cost_usd are then 0 because usage is unknown,
-            not because the session was free.
+            (Cursor CLI, Copilot Chat in VS Code from builds that predate its
+            usage fields, ATIF trajectories, or Hermes Agent) when none of its
+            messages carries usage and the source's session-level record shows
+            none either. Token totals and estimated_cost_usd are then 0 because
+            usage is unknown, not because the session was free.
         estimated_cost_usd:
           type: number
           minimum: 0
@@ -3017,7 +3021,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes]
         label:
           type: string
       additionalProperties: false

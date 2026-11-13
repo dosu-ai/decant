@@ -2,8 +2,9 @@
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
-Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
-Copilot Chat in VS Code, or an ATIF trajectory file another agent wrote. `~/.decant/decant.db` is a searchable, rebuildable
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
+Copilot Chat in VS Code, or Hermes Agent, or an ATIF trajectory file another
+agent wrote. `~/.decant/decant.db` is a searchable, rebuildable
 index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
@@ -110,6 +111,25 @@ By default Decant discovers:
   writes there; it holds trajectories a user copies in. Symbolic links inside
   it are not followed, so point the setting at a Harbor `jobs` directory
   instead of linking one. See [ATIF imports](#atif-imports).
+- Hermes Agent sessions in `~/.hermes/state.db` and each named profile's
+  `profiles/<name>/state.db`, or the same files under the directory from
+  `--hermes-dir`, `DECANT_HERMES_DIR`, or `HERMES_HOME`, in that order
+  (`%LOCALAPPDATA%\hermes` is the default on Windows). Decant opens each
+  database read-only and never writes to or checkpoints it. A database
+  without Hermes's `sessions` and `messages` tables is skipped with a
+  warning. Each session becomes its own source `<database>#<session id>`.
+  When two profiles hold one session ID, Decant reads the copy with the most
+  recent activity, and a tie goes to the database path that sorts first.
+  Reading one copy forgets the change key recorded for the others, so if the
+  newer copy later disappears, the older one is read again. A database that
+  is still there but cannot be opened has not lost its copy, so while it
+  fails, its sessions keep their archived copies and count as failed rather
+  than being replaced from another profile. A
+  session's transcript is the rows Hermes shows: live rows plus history an
+  in-place compaction archived (`active = 0, compacted = 1`), with each row a
+  compaction copied forward read once, and without rows a rewind or edit
+  removed (`active = 0, compacted = 0`). A session deleted from `state.db`
+  stops being discovered, and the archive keeps the copy it last ingested.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
@@ -135,7 +155,16 @@ never coincide, so a session whose copy moves to the other layout is always
 re-ingested. An OpenCode
 session's change key also covers the MCP server names from the OpenCode
 configs that apply to its directory, so editing those names re-derives the
-affected sessions once. After a parser correction, the next
+affected sessions once. A Hermes session's change key is a digest of its
+title, model, source, routing key, model config, parent, end time and reason,
+working directory, branch, usage columns, archive flag, and transcript
+revision, plus its parent's end reason and routing key and its message count,
+highest row ID, and live and archived row counts, so a rewind or compaction
+that only flips existing rows still re-derives it. Hermes raises the
+transcript revision when it rewrites a stored message in place, as a
+redaction does; in a database from before that column, the summed lengths of
+the message columns Hermes rewrites stand in for it. Hermes's activity
+heartbeat and read state are not in the key. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Sync also
@@ -157,7 +186,10 @@ session's `events.jsonl`, not to the plans, checkpoints, and files Copilot
 also keeps in each session directory. VS Code's `workspaceStorage` directory is
 watched recursively, reacting only to files directly in a workspace's
 `chatSessions` directory, and its `emptyWindowChatSessions` directory is
-watched on its own.
+watched on its own. Hermes's home directory and each profile directory that
+exists when the watcher starts are watched non-recursively and polled like
+OpenCode's, by the size and modification time of `state.db` and its `-wal`.
+A profile created later is found by the periodic sweep.
 
 Sync repairs Copilot compaction metadata from retained message records and
 recomputes affected context peaks. This also works for compressed messages
@@ -174,7 +206,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-`opencode`, `cursor`, `copilot-cli`, and `vscode-copilot-chat`.
+`opencode`, `cursor`, `copilot-cli`, `vscode-copilot-chat`, and `hermes`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -197,8 +229,8 @@ filtered format.
 [ATIF](https://harborframework.com/docs/agents/atif) document, the trajectory
 format Harbor and Terminal-Bench use, declared as `ATIF-v1.7`. `--all --out
 <dir>` writes `<id>.atif.json` files. Agent names follow Harbor's:
-`claude-code`, `codex`, `gemini-cli`, `opencode`, `cursor-cli`, and
-`copilot-cli`. Harbor has no VS Code agent, so Copilot Chat sessions use
+`claude-code`, `codex`, `gemini-cli`, `opencode`, `cursor-cli`,
+`copilot-cli`, and `hermes`. Harbor has no VS Code agent, so Copilot Chat sessions use
 `vscode-copilot-chat`, the trajectory export's label. The root's `extra`
 carries the session's `cwd` and `git_branch`, and `repository` when the
 project's [repository identity](#repository-identity) is known.
@@ -364,8 +396,9 @@ subagent that records neither takes its root's.
 
 Tool names keep the producing agent's conventions. When `agent.name` is one of
 Harbor's names for a source Decant reads natively (`claude-code`, `codex`,
-`gemini-cli`, `opencode`, `cursor-cli`, `copilot-cli`, or
-`vscode-copilot-chat`), file and subagent attribution use that source's rules.
+`gemini-cli`, `opencode`, `cursor-cli`, `copilot-cli`,
+`vscode-copilot-chat`, or `hermes`), file and subagent attribution use that
+source's rules.
 Other agents use Claude Code's file tool names, then the Codex shell and patch
 rules. Exporting an imported session as ATIF keeps its original agent name, or
 writes `atif` when the document had none.
@@ -727,13 +760,14 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, or
-VS Code record remains on disk.
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
+VS Code, or Hermes Agent record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting
 its file would remove all OpenCode history. Remove an individual session from
-within OpenCode instead.
+within OpenCode instead. Hermes Agent also keeps every session of a profile in
+one `state.db`; remove a session with Hermes's own session commands.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
 that was sensitive enough to delete, run both commands:

@@ -37,6 +37,7 @@ const TOOL_LABELS: Record<string, string> = {
   copilot: "Copilot",
   vscode_copilot: "Copilot Chat",
   atif: "ATIF",
+  hermes: "Hermes",
 };
 
 /** The name a source tool's badge shows, so text filters can match it too. */
@@ -103,6 +104,10 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
   }
   if (tool === "atif") {
     return <Badge tone="info">{toolLabel(tool)}</Badge>;
+  }
+  // No brand mark: Decant ships only marks published under an open license.
+  if (tool === "hermes") {
+    return <Badge tone="accent">{toolLabel(tool)}</Badge>;
   }
   return <Badge>{tool ?? "-"}</Badge>;
 }
@@ -310,6 +315,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "atif") {
     return { key: "assistant", label: "Agent", tone: "info", icon: null };
+  }
+  if (tool === "hermes") {
+    return { key: "assistant", label: "Hermes", tone: "accent", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

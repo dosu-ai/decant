@@ -51,6 +51,7 @@ describe("golden harness", () => {
         "copilot",
         "vscode_copilot",
         "atif",
+        "hermes",
       ]),
     );
   });
@@ -110,11 +111,13 @@ describe("golden harness", () => {
     const key = (s: SessionKey) => `${s.tool}${keySeparator}${s.source_session_id}`;
     const listed = new Set(ls.map(key));
     expect(sessions.map(key)).toEqual(expect.arrayContaining([...listed]));
-    // `ls` lists top-level sessions. The only fixture subagents are the ATIF
-    // ones: one embedded in its document, one in a file of its own.
+    // `ls` lists top-level sessions. The fixture subagents are the ATIF ones,
+    // one embedded in its document and one in a file of its own, and the
+    // Hermes Agent run its parent delegated.
     expect(sessions.filter((s) => !listed.has(key(s))).map(key)).toEqual([
       `atif${keySeparator}synthetic-embedded:helper`,
       `atif${keySeparator}synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary`,
+      `hermes${keySeparator}20261101_090110_d4e5f6`,
     ]);
   });
 });

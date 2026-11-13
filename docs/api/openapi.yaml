@@ -2186,10 +2186,11 @@ components:
           type: boolean
           description: >-
             False for a session from a source that may record no token usage
-            (Cursor CLI, or Copilot Chat in VS Code from builds that predate
-            its usage fields) when none of its messages carries usage. Token
-            totals and estimated_cost_usd are then 0 because usage is unknown,
-            not because the session was free.
+            (Cursor CLI, Copilot Chat in VS Code from builds that predate its
+            usage fields, ATIF trajectories, or Hermes Agent) when none of its
+            messages carries usage and the source's session-level record shows
+            none either. Token totals and estimated_cost_usd are then 0 because
+            usage is unknown, not because the session was free.
         estimated_cost_usd:
           type: number
           minimum: 0

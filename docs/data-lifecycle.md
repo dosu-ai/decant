@@ -119,7 +119,9 @@ By default Decant discovers:
   without Hermes's `sessions` and `messages` tables is skipped with a
   warning. Each session becomes its own source `<database>#<session id>`.
   When two profiles hold one session ID, Decant reads the copy with the most
-  recent activity, and a tie goes to the database path that sorts first. A
+  recent activity, and a tie goes to the database path that sorts first.
+  Reading one copy forgets the change key recorded for the others, so if the
+  newer copy later disappears, the older one is read again. A
   session's transcript is the rows Hermes shows: live rows plus history an
   in-place compaction archived (`active = 0, compacted = 1`), with each row a
   compaction copied forward read once, and without rows a rewind or edit
@@ -151,11 +153,15 @@ re-ingested. An OpenCode
 session's change key also covers the MCP server names from the OpenCode
 configs that apply to its directory, so editing those names re-derives the
 affected sessions once. A Hermes session's change key is a digest of its
-title, model, parent, end time and reason, working directory, branch, usage
-columns, and archive flag, plus its parent's end reason and its message
-count, highest row ID, and live and archived row counts, so a rewind or
-compaction that only flips existing rows still re-derives it. Hermes's
-activity heartbeat and read state are not in the key. After a parser correction, the next
+title, model, source, routing key, model config, parent, end time and reason,
+working directory, branch, usage columns, archive flag, and transcript
+revision, plus its parent's end reason and routing key and its message count,
+highest row ID, and live and archived row counts, so a rewind or compaction
+that only flips existing rows still re-derives it. Hermes raises the
+transcript revision when it rewrites a stored message in place, as a
+redaction does; in a database from before that column, the summed lengths of
+the message columns Hermes rewrites stand in for it. Hermes's activity
+heartbeat and read state are not in the key. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Sync also

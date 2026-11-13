@@ -505,7 +505,7 @@ export function sync(
     extraFile: config.opencodeExtraConfigPath,
   });
   const opencode = new OpenCodeRun(db, config.opencodeModelsPath);
-  const hermes = new HermesRun();
+  const hermes = new HermesRun(db);
   const report: SyncReport = {
     ...(repriced > 0 ? { repriced } : {}),
     scanned: files.length,
@@ -889,18 +889,7 @@ class OpenCodeRun {
   /** Every `<db>` with an OpenCode source row, read on first use and then
    * extended by each session this sync writes. */
   sourceDatabases(): Set<string> {
-    if (this.#sourceDatabases == null) {
-      // rtrim with every non-'#' character of the path strips back to its last
-      // '#', the separator before the session ID.
-      this.#sourceDatabases = new Set(
-        queryRows<{ prefix: string }>(
-          this.#db,
-          `SELECT DISTINCT rtrim(path, replace(path, '#', '')) AS prefix
-             FROM ingest_source
-            WHERE tool = 'opencode' AND instr(path, '#') > 0`,
-        ).map((row) => row.prefix.slice(0, -1)),
-      );
-    }
+    this.#sourceDatabases ??= knownSourceDatabases(this.#db, "opencode");
     return this.#sourceDatabases;
   }
 
@@ -987,11 +976,38 @@ function syncOpenCodeSession(
     : { kind: "ingested", issues: parsed.issues };
 }
 
+/** Every `<db>` with a source row of a database-backed tool, whose sources are
+ * the virtual paths `<db>#<session id>`. */
+function knownSourceDatabases(db: Database, tool: "opencode" | "hermes"): Set<string> {
+  // rtrim with every non-'#' character of the path strips back to its last
+  // '#', the separator before the session ID.
+  return new Set(
+    queryRows<{ prefix: string }>(
+      db,
+      `SELECT DISTINCT rtrim(path, replace(path, '#', '')) AS prefix
+         FROM ingest_source
+        WHERE tool = ?1 AND instr(path, '#') > 0`,
+      [tool],
+    ).map((row) => row.prefix.slice(0, -1)),
+  );
+}
+
+/** A sync's view of the databases that back a database-backed tool's sources. */
+interface SourceDatabaseRun {
+  sourceDatabases(): Set<string>;
+}
+
 /** Hermes databases opened during one sync, each once. A database that
  * cannot be opened is remembered as null, so its sessions fail without
  * retrying the open for each one. */
 class HermesRun {
+  readonly #db: Database;
   readonly #stores = new Map<string, HermesStore | null>();
+  #sourceDatabases: Set<string> | null = null;
+
+  constructor(db: Database) {
+    this.#db = db;
+  }
 
   store(dbPath: string): HermesStore | null {
     if (!this.#stores.has(dbPath)) {
@@ -1010,6 +1026,13 @@ class HermesRun {
     return this.#stores.get(dbPath) ?? null;
   }
 
+  /** Every profile database with a Hermes source row, read on first use and
+   * then extended by each session this sync writes. */
+  sourceDatabases(): Set<string> {
+    this.#sourceDatabases ??= knownSourceDatabases(this.#db, "hermes");
+    return this.#sourceDatabases;
+  }
+
   close(): void {
     for (const store of this.#stores.values()) {
       store?.close();
@@ -1021,7 +1044,9 @@ class HermesRun {
 /** Skip when the stored change key and pipeline revision match; otherwise
  * read, parse, and write the session under its virtual path. A session
  * deleted from `state.db` after discovery is skipped, and the archive keeps
- * the copy it last ingested, as for OpenCode. */
+ * the copy it last ingested, as for OpenCode. Writing a session releases its
+ * copies' source rows in other profile databases, so a copy that wins again
+ * after the newer one disappears is re-read. */
 function syncHermesSession(
   db: Database,
   file: SourceFile,
@@ -1070,7 +1095,7 @@ function syncHermesSession(
     size: 0,
     hash: ref.fingerprint,
   };
-  const outcome = writeIngestedFile(db, prepared, parsed);
+  const outcome = writeIngestedFile(db, prepared, parsed, hermes);
   return outcome === "tombstoned"
     ? { kind: "tombstoned" }
     : { kind: "ingested", issues: parsed.issues };
@@ -2009,15 +2034,21 @@ function writeIngestedFile(
   db: Database,
   prepared: Prepared,
   parsed: ParsedSession,
-  opencode?: OpenCodeRun,
+  sources?: SourceDatabaseRun,
 ): "ingested" | "tombstoned" {
   return withImmediateTransaction(db, () => {
     releaseMisfiledFork(db, prepared.file.path, parsed);
     releaseReplacedCursorIdentity(db, prepared.file.path, parsed);
-    const ref = prepared.file.opencode;
-    if (ref != null && opencode != null) {
-      const databases = opencode.sourceDatabases();
-      releaseSupersededOpenCodeSources(db, prepared.file.path, ref.sessionId, databases);
+    const ref = prepared.file.opencode ?? prepared.file.hermes;
+    if (ref != null && sources != null) {
+      const databases = sources.sourceDatabases();
+      releaseSupersededSources(
+        db,
+        prepared.file.tool,
+        prepared.file.path,
+        ref.sessionId,
+        databases,
+      );
       databases.add(ref.dbPath);
     }
     runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
@@ -2125,14 +2156,16 @@ function releaseReplacedCursorIdentity(db: Database, path: string, parsed: Parse
   );
 }
 
-/** A session read from a newer copy in another database no longer belongs to
- * the old `<db>#<session>` path. Its source and issue rows go, so diagnostics
- * stop naming a path that backs nothing, and so the old copy is re-read rather
- * than skipped on a stale fingerprint if the newer database later disappears.
- * The candidates are one primary-key lookup per known database, not a scan of
- * every OpenCode source on each session write. */
-function releaseSupersededOpenCodeSources(
+/** A session read from a newer copy in another database (another OpenCode
+ * database, or another Hermes profile's `state.db`) no longer belongs to the
+ * old `<db>#<session>` path. Its source and issue rows go, so diagnostics stop
+ * naming a path that backs nothing, and so the old copy is re-read rather than
+ * skipped on a stale fingerprint if the newer copy later disappears. The
+ * candidates are one primary-key lookup per known database, not a scan of
+ * every source of the tool on each session write. */
+function releaseSupersededSources(
   db: Database,
+  tool: Tool,
   path: string,
   sessionId: string,
   databases: ReadonlySet<string>,
@@ -2146,8 +2179,9 @@ function releaseSupersededOpenCodeSources(
     const candidate = `${database}#${sessionId}`;
     if (
       candidate === path ||
-      queryRow(db, "SELECT 1 FROM ingest_source WHERE path = ?1 AND tool = 'opencode'", [
+      queryRow(db, "SELECT 1 FROM ingest_source WHERE path = ?1 AND tool = ?2", [
         candidate,
+        tool,
       ]) == null
     ) {
       continue;

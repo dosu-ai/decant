@@ -236,12 +236,15 @@ is configured). When no override is set, Decant also reads VS Code Insiders'
 Session summaries also carry `usage_available`. It is false for a session from
 a source that may record no token usage, when none of the session's messages
 carries any. Those sources are Cursor CLI, which stores none, Copilot Chat in
-VS Code, whose builds from before April 2026 wrote none, and ATIF
-trajectories, where every metric is optional. A session with
+VS Code, whose builds from before April 2026 wrote none, ATIF trajectories,
+where every metric is optional, and Hermes Agent, which records usage only per
+session. A session with
 `usage_available: false` reports `estimated_cost_usd` and token totals of 0.
 Show them as unavailable, not free. An ATIF session without per-step token
 counts still has usage when its `final_metrics` record token totals, zero
-included, or when its estimated cost is above zero. Stats totals,
+included, or when its estimated cost is above zero. A Hermes session has usage
+when its token totals are above zero, or when Hermes recorded an API call or a
+per-model usage row for it. Stats totals,
 `/api/stats/by-dimension` rows, and `/api/projects` rows carry
 `usage_sessions`, the number of top-level sessions in that scope or row with
 usage available. A row whose `usage_sessions` is 0 has unavailable cost. One

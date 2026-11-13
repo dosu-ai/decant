@@ -36,6 +36,8 @@ export interface HermesSessionRow {
   started_at: number | null;
   /** The surface that started the session: `cli`, `tui`, `telegram`, ... */
   source: string | null;
+  /** The gateway's routing key for a chat (platform, chat, thread). */
+  session_key: string | null;
   model: string | null;
   model_config: string | null;
   title: string | null;
@@ -66,6 +68,7 @@ export interface HermesSessionRow {
    * reset, or `/branch` continuation. */
   parent_end_reason: string | null;
   parent_ended_at: number | null;
+  parent_session_key: string | null;
 }
 
 /** One `messages` row. `content` is text, or `\0json:` followed by JSON for
@@ -128,8 +131,8 @@ interface ModelUsageEntry {
 /** Hermes's prefix for structured `content` (`_CONTENT_JSON_PREFIX`). */
 const CONTENT_JSON_PREFIX = "\u0000json:";
 
-/** Parent end reasons that make a child a continuation of one conversation
- * rather than a subagent run (`_ephemeral_child_sql` in hermes_state_common.py). */
+/** Parent end reasons after which a child on the parent's routing key is a
+ * reset continuation (`_RESET_END_REASONS` in hermes_state_common.py). */
 const RESET_END_REASONS = new Set([
   "session_reset",
   "session_switch",
@@ -488,17 +491,56 @@ function toolCallId(value: string | null | undefined): string | null {
   return trimmed.split("|", 1)[0]?.trim() || trimmed;
 }
 
-/** A child is a subagent run unless its parent ended for a compression,
- * reset, or `/branch`, which continue one conversation under a new ID. */
+/** Whether a child session is a subagent run rather than a compression,
+ * reset, or `/branch` continuation of its parent's conversation. This follows
+ * hermes_state_common.py: `_ephemeral_child_sql` (a child that is not a
+ * branch, compression, or reset child), `_BRANCH_CHILD_SQL`,
+ * `_COMPRESSION_CHILD_SQL`, `_RESET_CHILD_SQL` with `_legacy_reset_child_sql`,
+ * and `_non_continuation_child_sql`.
+ *
+ * Hermes writes a marker naming the parent into a new child's `model_config`:
+ * `_delegate_from` for `delegate_task`, `_reset_from` for a reset, and
+ * `_branched_from` for `/branch`. A compression continuation copies its
+ * parent's `model_config` verbatim, so a marker naming some other row was
+ * inherited and does not say what this row is; only a marker naming the
+ * parent is decisive. A reset marker beats a delegate marker on the same row,
+ * as Hermes heals that pair by dropping `_delegate_from` (#109073). A
+ * `source = 'tool'` child is never a continuation. Without a decisive marker,
+ * Hermes's own predicates apply: a compression child, any reset or branch
+ * marker, a child on its parent's exact non-empty routing key after a reset
+ * end reason (the key keeps a gateway chat's subagents out), or a child
+ * started once its parent ended `branched`. Anything else is a subagent, so a
+ * delegated run whose parent later expired `idle` stays one. */
 function isSubagentRun(row: HermesSessionRow): boolean {
-  if (row.parent_session_id == null) {
+  const parent = row.parent_session_id;
+  if (parent == null) {
+    return false;
+  }
+  const config = parseJsonObject(row.model_config);
+  const marker = (key: string): Json | undefined => get(config, key);
+  if (marker("_reset_from") === parent) {
+    return false;
+  }
+  if (marker("_delegate_from") === parent || row.source === "tool") {
+    return true;
+  }
+  if (marker("_branched_from") === parent) {
     return false;
   }
   const parentEnd = row.parent_end_reason;
-  if (parentEnd === "compression" || (parentEnd != null && RESET_END_REASONS.has(parentEnd))) {
+  if (parentEnd === "compression") {
     return false;
   }
-  if (get(parseJsonObject(row.model_config), "_branched_from") != null) {
+  if (marker("_reset_from") != null || marker("_branched_from") != null) {
+    return false;
+  }
+  if (
+    parentEnd != null &&
+    RESET_END_REASONS.has(parentEnd) &&
+    row.session_key != null &&
+    row.session_key !== "" &&
+    row.session_key === row.parent_session_key
+  ) {
     return false;
   }
   return !(
@@ -605,11 +647,14 @@ function sessionUsage(
 }
 
 /** The session row as Hermes stored it, with `model_config` parsed. The
- * system prompt is not read. */
+ * system prompt is not read. The gateway routing keys are left out: they
+ * name the platform chat or thread, and only subagent filing needs them. */
 function sessionMeta(row: HermesSessionRow): JsonObject {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(row)) {
-    meta[key] = value as Json;
+    if (key !== "session_key" && key !== "parent_session_key") {
+      meta[key] = value as Json;
+    }
   }
   meta.model_config = parseJsonObject(row.model_config) ?? row.model_config;
   return meta;

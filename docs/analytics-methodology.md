@@ -343,12 +343,14 @@ kept them, is charged to the session's model. If the per-model rows add up to
 more than the session row, the rows are the totals. Hermes messages carry no
 usage, so Hermes sessions have no per-message usage or context-window
 occupancy. Decant does not use the cost Hermes estimated or the cost a
-provider reported. A Hermes session with no recorded API call and no tokens
-reports reasoning as unavailable.
+provider reported. A Hermes session with no recorded API call, no per-model
+usage row, and no tokens reports reasoning, tokens, and cost as unavailable.
 
 Cursor CLI records no token usage, so its sessions carry zero token and cost
 columns. Neither does a Copilot Chat session from a VS Code build that predates
-the usage fields, nor an ATIF trajectory whose steps carry no metrics. Session summaries mark such sessions
+the usage fields, nor an ATIF trajectory whose steps carry no metrics, nor a
+Hermes Agent session with no tokens, no recorded API call, and no per-model
+usage row. Session summaries mark such sessions
 `usage_available: false`, and the UI shows their tokens and cost as
 unavailable instead of $0. Stats totals,
 per-model, per-project, and per-day rows, and project rollups count only the

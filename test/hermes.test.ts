@@ -12,8 +12,10 @@ import {
   sync,
 } from "../src/ingest.ts";
 import type { ParsedSession } from "../src/model.ts";
+import { listSessions } from "../src/query.ts";
 import { normalizeHermesToolName, parseHermesSession } from "../src/sources/hermes.ts";
 import { HermesStore, HermesStoreError } from "../src/sources/hermes-store.ts";
+import { totals } from "../src/stats.ts";
 import { buildHermesDb, buildHermesFixtureDb } from "./hermes-fixture.ts";
 
 const SAMPLE = "20261101_090000_a1b2c3";
@@ -335,11 +337,16 @@ describe("parseHermesSession", () => {
       agentId: SUBAGENT,
       rawMeta: { parentSessionId: SAMPLE },
     });
+    const key = "agent:main:example:dm:1";
     const db = dbWith(
       sessionSql("p-compressed", { ended_at: 1791790100, end_reason: "compression" }),
       sessionSql("c-compressed", { parent_session_id: "p-compressed", started_at: 1791790101 }),
-      sessionSql("p-reset", { ended_at: 1791790100, end_reason: "idle" }),
-      sessionSql("c-reset", { parent_session_id: "p-reset", started_at: 1791790101 }),
+      sessionSql("p-reset", { session_key: key, ended_at: 1791790100, end_reason: "idle" }),
+      sessionSql("c-reset", {
+        parent_session_id: "p-reset",
+        session_key: key,
+        started_at: 1791790101,
+      }),
       sessionSql("p-branched", { ended_at: 1791790100, end_reason: "branched" }),
       sessionSql("c-branched", { parent_session_id: "p-branched", started_at: 1791790101 }),
       sessionSql("p-plain"),
@@ -347,11 +354,66 @@ describe("parseHermesSession", () => {
         parent_session_id: "p-plain",
         model_config: '{"_branched_from":"p-plain"}',
       }),
+      sessionSql("c-reset-marked", {
+        parent_session_id: "p-plain",
+        model_config: '{"_reset_from":"p-plain"}',
+      }),
+      // Hermes drops the delegate marker from a reset row that picked one up.
+      sessionSql("c-reset-and-delegate", {
+        parent_session_id: "p-plain",
+        model_config: '{"_reset_from":"p-plain","_delegate_from":"p-plain"}',
+      }),
+      // A compression continuation of a subagent copies its config, marker included.
+      sessionSql("c-continued-subagent", {
+        parent_session_id: "p-compressed",
+        model_config: '{"_delegate_from":"p-plain"}',
+      }),
     );
-    for (const id of ["c-compressed", "c-reset", "c-branched", "c-marked"]) {
+    for (const id of [
+      "c-compressed",
+      "c-reset",
+      "c-branched",
+      "c-marked",
+      "c-reset-marked",
+      "c-reset-and-delegate",
+      "c-continued-subagent",
+    ]) {
       const { session } = parseFrom(db, id);
       expect([id, session.isSubagent, session.rootSourceSessionId]).toEqual([id, false, null]);
       expect(session.rawMeta).not.toHaveProperty("parentSessionId");
+    }
+    expect(JSON.stringify(parseFrom(db, "c-reset").session.rawMeta)).not.toContain(key);
+  });
+
+  test("a delegated run stays a subagent whatever its parent later ended with", () => {
+    const key = "agent:main:example:dm:1";
+    const db = dbWith(
+      sessionSql("p-idle", { session_key: key, ended_at: 1791790100, end_reason: "idle" }),
+      sessionSql("c-unkeyed", { parent_session_id: "p-idle", started_at: 1791790050 }),
+      // A keyed delegate that captured its parent's route keeps its marker.
+      sessionSql("c-keyed-delegate", {
+        parent_session_id: "p-idle",
+        session_key: key,
+        model_config: '{"_delegate_from":"p-idle"}',
+        started_at: 1791790060,
+      }),
+      sessionSql("p-compressed", { ended_at: 1791790100, end_reason: "compression" }),
+      sessionSql("c-delegate-before-compression", {
+        parent_session_id: "p-compressed",
+        model_config: '{"_delegate_from":"p-compressed"}',
+        started_at: 1791790050,
+      }),
+      sessionSql("c-tool", { parent_session_id: "p-compressed", source: "tool" }),
+    );
+    for (const [id, parent] of [
+      ["c-unkeyed", "p-idle"],
+      ["c-keyed-delegate", "p-idle"],
+      ["c-delegate-before-compression", "p-compressed"],
+      ["c-tool", "p-compressed"],
+    ] as const) {
+      const { session } = parseFrom(db, id);
+      expect([id, session.isSubagent, session.rootSourceSessionId]).toEqual([id, true, parent]);
+      expect(session.rawMeta).toMatchObject({ parentSessionId: parent });
     }
   });
 });
@@ -439,6 +501,46 @@ describe("HermesStore", () => {
     } finally {
       writer.close();
     }
+  });
+});
+
+describe("Hermes change key and in-place rewrites", () => {
+  function keyOf(path: string): string {
+    const store = HermesStore.open(path);
+    try {
+      return store.listSessions()[0]?.fingerprint ?? "";
+    } finally {
+      store.close();
+    }
+  }
+
+  test("a transcript revision bump changes the key", () => {
+    const path = fixtureDb(["sample.sql"]);
+    const initial = keyOf(path);
+    const writer = new Database(path);
+    try {
+      writer.exec(`UPDATE sessions SET transcript_revision = transcript_revision + 1`);
+    } finally {
+      writer.close();
+    }
+    expect(keyOf(path)).not.toBe(initial);
+  });
+
+  test("without a transcript revision, a rewrite that changes a message's length does", () => {
+    const path = join(scratch(), "state.db");
+    const db = new Database(path, { create: true });
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);
+      CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL);
+      INSERT INTO sessions VALUES ('old', 'cli', 1791790000);
+      INSERT INTO messages (session_id, role, content, timestamp) VALUES
+        ('old', 'user', 'hello', 1791790001);
+    `);
+    const initial = keyOf(path);
+    db.exec("UPDATE messages SET content = '[redacted]'");
+    db.close();
+    expect(keyOf(path)).not.toBe(initial);
   });
 });
 
@@ -614,6 +716,115 @@ describe("Hermes discovery and ingest", () => {
         writer.close();
       }
       expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("a message rewritten in place is re-ingested with its new text", () => {
+    const { root, home, config } = hermesHome();
+    const db = openDb(join(root, "archive.db"));
+    try {
+      sync(db, config);
+      const writer = new Database(join(home, "state.db"));
+      try {
+        // Hermes's messages_transcript_revision_update trigger bumps the
+        // revision on such a rewrite; the fixture schema has no triggers.
+        writer.exec(`
+          UPDATE messages SET content = 'Summary withheld.' WHERE id = 15;
+          UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = '${SAMPLE}';
+        `);
+      } finally {
+        writer.close();
+      }
+      expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
+      expect(
+        db
+          .query(
+            `SELECT b.text FROM block b JOIN message m ON m.id = b.message_id
+               JOIN session s ON s.id = b.session_id
+              WHERE s.source_session_id = ?1 AND m.source_uuid = 'uid-assistant-15'`,
+          )
+          .all(SAMPLE),
+      ).toEqual([{ text: "Summary withheld." }]);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("a session is read again from the older profile when its newer copy disappears", () => {
+    const root = scratch();
+    const home = join(root, "hermes");
+    const main = join(home, "state.db");
+    const work = join(home, "profiles", "work", "state.db");
+    mkdirSync(join(home, "profiles", "work"), { recursive: true });
+    buildHermesDb(main, [
+      sessionSql("shared-1"),
+      messageSql("shared-1", 1, "user", "hello from the default profile"),
+    ]);
+    buildHermesDb(work, []);
+    const config: IngestConfig = {
+      claudeDir: join(root, "claude"),
+      codexDir: join(root, "codex"),
+      hermesDir: home,
+    };
+    const writeWork = (sql: string): void => {
+      const writer = new Database(work);
+      try {
+        writer.exec(sql);
+      } finally {
+        writer.close();
+      }
+    };
+    const db = openDb(join(root, "archive.db"));
+    const stored = (): unknown =>
+      db
+        .query(
+          `SELECT s.source_path AS path, b.text FROM session s JOIN block b ON b.session_id = s.id
+            WHERE s.source_session_id = 'shared-1' ORDER BY b.id`,
+        )
+        .all();
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      const fromMain = [{ path: `${main}#shared-1`, text: "hello from the default profile" }];
+      expect(stored()).toEqual(fromMain);
+      writeWork(
+        `${sessionSql("shared-1")}
+         ${messageSql("shared-1", 50, "user", "hello from the work profile")}`,
+      );
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(stored()).toEqual([{ path: `${work}#shared-1`, text: "hello from the work profile" }]);
+      writeWork("DELETE FROM messages; DELETE FROM sessions;");
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(stored()).toEqual(fromMain);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("a session that recorded no usage reports it unavailable", () => {
+    const root = scratch();
+    const home = join(root, "hermes");
+    mkdirSync(home, { recursive: true });
+    buildHermesDb(join(home, "state.db"), [
+      sessionSql("u-none"),
+      messageSql("u-none", 1, "user", "hello"),
+      sessionSql("u-totals", { model: "gpt-5.4", input_tokens: 10, output_tokens: 2 }),
+      messageSql("u-totals", 2, "user", "hello"),
+      sessionSql("u-calls", { model: "gpt-5.4", api_call_count: 1 }),
+      messageSql("u-calls", 3, "user", "hello"),
+    ]);
+    const db = openDb(join(root, "archive.db"));
+    try {
+      sync(db, { claudeDir: join(root, "claude"), codexDir: join(root, "codex"), hermesDir: home });
+      const available = Object.fromEntries(
+        listSessions(db, { tool: "hermes" }).map((summary) => [
+          summary.source_session_id,
+          summary.usage_available,
+        ]),
+      );
+      expect(available).toEqual({ "u-none": false, "u-totals": true, "u-calls": true });
+      expect(totals(db, { tool: "hermes" })).toMatchObject({ sessions: 3, usage_sessions: 2 });
     } finally {
       closeDb(db);
     }

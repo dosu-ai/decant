@@ -34,6 +34,7 @@ export interface HermesLoadedSession {
 /** Columns read from `sessions`, beyond the required `id` and `started_at`. */
 const SESSION_COLUMNS = [
   "source",
+  "session_key",
   "model",
   "model_config",
   "title",
@@ -97,10 +98,17 @@ const MODEL_USAGE_COLUMNS = [
 /** The session columns that change when a session does. `last_activity_at`
  * is a heartbeat and `last_read_at`, `pinned`, and `hidden` are UI state, so
  * none of them is in the key: a session left open would otherwise re-ingest
- * every minute without anything new to read. */
+ * every minute without anything new to read. `source`, `session_key`, and
+ * `model_config` decide whether a child is a subagent. Hermes bumps
+ * `transcript_revision` from a trigger whenever an existing message is
+ * rewritten in place (a redaction or a prompt expansion), which moves neither
+ * the row count nor the highest ID. */
 const CHANGE_COLUMNS = [
   "title",
   "model",
+  "source",
+  "session_key",
+  "model_config",
   "parent_session_id",
   "ended_at",
   "end_reason",
@@ -115,6 +123,22 @@ const CHANGE_COLUMNS = [
   "cache_write_tokens",
   "reasoning_tokens",
   "archived",
+  "transcript_revision",
+] as const;
+
+/** Message columns whose in-place rewrite bumps `transcript_revision` (the
+ * `messages_transcript_revision_update` and `messages_display_revision_update`
+ * triggers). A database from before the column has no such signal, so their
+ * summed lengths stand in for it. */
+const REWRITE_COLUMNS = [
+  "role",
+  "content",
+  "tool_calls",
+  "tool_call_id",
+  "tool_name",
+  "reasoning",
+  "reasoning_content",
+  "display_kind",
 ] as const;
 
 export class HermesStoreError extends Error {}
@@ -151,10 +175,12 @@ export class HermesStore {
     const messageColumns = ["active", "compacted"].map((column) =>
       this.#has("messages", column) ? `IFNULL(SUM(m.${column}), -1)` : "-1",
     );
+    messageColumns.push(this.#rewriteAggregate());
     const rows = queryRows<{
       id: string;
       started_at: number | null;
       parent_end_reason: string | null;
+      parent_session_key: string | null;
       state: string;
       message_key: string | null;
       last_message_at: number | null;
@@ -162,6 +188,7 @@ export class HermesStore {
       this.#db,
       `SELECT CAST(s.id AS TEXT) AS id, s.started_at,
               ${this.#parentEndReason()} AS parent_end_reason,
+              ${this.#parentColumn("session_key")} AS parent_session_key,
               json_array(${changeColumns.join(", ")}) AS state,
               (SELECT COUNT(*) || ':' || IFNULL(MAX(m.id), -1) || ':' || ${messageColumns.join(" || ':' || ")}
                  FROM messages m WHERE m.session_id = s.id) AS message_key,
@@ -173,7 +200,12 @@ export class HermesStore {
     return rows.map((row) => ({
       dbPath: this.path,
       sessionId: row.id,
-      fingerprint: hermesFingerprint(row.state, row.parent_end_reason, row.message_key),
+      fingerprint: hermesFingerprint(
+        row.state,
+        row.parent_end_reason,
+        row.parent_session_key,
+        row.message_key,
+      ),
       activity: Math.max(finiteOr(row.started_at, 0), finiteOr(row.last_message_at, 0)),
     }));
   }
@@ -187,7 +219,8 @@ export class HermesStore {
       this.#db,
       `SELECT CAST(s.id AS TEXT) AS id, s.started_at, ${sessionColumns.join(", ")},
               ${this.#parentEndReason()} AS parent_end_reason,
-              ${this.#parentColumn("ended_at")} AS parent_ended_at
+              ${this.#parentColumn("ended_at")} AS parent_ended_at,
+              ${this.#parentColumn("session_key")} AS parent_session_key
          FROM sessions s WHERE s.id = ?1`,
       [sessionId],
     );
@@ -217,6 +250,20 @@ export class HermesStore {
 
   close(): void {
     this.#db.close(false);
+  }
+
+  /** -1 when `transcript_revision` covers in-place rewrites; otherwise the
+   * summed lengths of the rewritable columns, which catch a rewrite that
+   * changes a value's length. A same-length rewrite in such an old database
+   * is missed until the session next changes some other way. */
+  #rewriteAggregate(): string {
+    if (this.#has("sessions", "transcript_revision")) {
+      return "-1";
+    }
+    const lengths = REWRITE_COLUMNS.filter((column) => this.#has("messages", column)).map(
+      (column) => `IFNULL(LENGTH(m.${column}), 0)`,
+    );
+    return `IFNULL(SUM(${lengths.join(" + ")}), -1)`;
   }
 
   #parentEndReason(): string {
@@ -266,23 +313,28 @@ export class HermesStore {
   }
 }
 
-/** The session's own changing columns, its parent's end reason (which decides
- * whether it is a subagent), and its message set's count, newest row ID, and
- * active and archived counts. A rewind or compaction flips `active` and
- * `compacted` on existing rows without adding one, so those sums are in the
- * key. The title goes in only as part of a digest. */
+/** The session's own changing columns, its parent's end reason and routing
+ * key (which decide whether it is a subagent), and its message set's count,
+ * newest row ID, active and archived counts, and, in a database without
+ * `transcript_revision`, summed lengths of the rewritable columns. A rewind
+ * or compaction flips `active` and `compacted` on existing rows without
+ * adding one, so those sums are in the key. The title and model config go in
+ * only as part of a digest. */
 export function hermesFingerprint(
   state: string,
   parentEndReason: string | null,
+  parentSessionKey: string | null,
   messageKey: string | null,
 ): string {
   const digest = createHash("sha256")
     .update(state)
     .update("\0")
     .update(parentEndReason ?? "")
+    .update("\0")
+    .update(parentSessionKey ?? "")
     .digest("hex")
     .slice(0, 16);
-  return `hermes:v1:${digest}:${messageKey ?? "0:-1:-1:-1"}`;
+  return `hermes:v1:${digest}:${messageKey ?? "0:-1:-1:-1:-1"}`;
 }
 
 function finiteOr(value: number | null, fallback: number): number {

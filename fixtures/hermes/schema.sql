@@ -11,6 +11,7 @@ INSERT INTO schema_version (version) VALUES (33);
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
+    session_key TEXT,
     model TEXT,
     model_config TEXT,
     system_prompt TEXT,
@@ -40,6 +41,7 @@ CREATE TABLE sessions (
     api_call_count INTEGER DEFAULT 0,
     profile_name TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
+    transcript_revision INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 

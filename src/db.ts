@@ -22,7 +22,7 @@ import {
  * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
  * fresh archive is created in one step and stamped with the full history.
  */
-export const LATEST_SCHEMA_VERSION = 30;
+export const LATEST_SCHEMA_VERSION = 31;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -885,6 +885,22 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (30, datetime('now'))",
+      ).run();
+    }
+    if (current < 31) {
+      // Names the session that bills each Claude Code API request, so a copy
+      // of that request in a branched session is found without a scan. Sync
+      // fills it from stored messages.
+      db.exec(`CREATE TABLE IF NOT EXISTS billed_request (
+  request_id TEXT PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  message_id INTEGER NOT NULL
+) WITHOUT ROWID`);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_billed_request_session ON billed_request(session_id)",
+      );
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (31, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

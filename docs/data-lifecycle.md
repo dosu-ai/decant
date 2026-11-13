@@ -788,6 +788,17 @@ or under an older split rule, from those archived rows, so it reaches sessions
 whose source files are gone without a re-ingest. On a large archive the first
 backfill can take several seconds; later syncs find nothing to rebuild.
 
+The `billed_request` table names the session that bills each Claude Code API
+message. When a session is written, a message it shares with another session
+stays billed in one of them and keeps its transcript row in both.
+[Analytics methodology](analytics-methodology.md#token-and-cost-totals) says
+which one, and the order sessions are read in does not change it. The first
+sync after an upgrade applies the same rule to every stored Claude Code
+session from its archived rows, so it also corrects sessions whose source
+files are gone, and no source is re-read for it. Deleting the session that
+bills a message does not hand the usage to a copy. A copy picks it up the next
+time its own source is re-read.
+
 Costs are materialized at ingest and reconciled with current pricing on every
 sync. This includes unchanged and archived sessions, even when their source
 files are no longer available. Session costs and cached activity cost components

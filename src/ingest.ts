@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { reconcileBilledRequests } from "./billed-requests.ts";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
@@ -382,7 +383,7 @@ export function sync(
   onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
-  materializeMissingModelUsage(db);
+  materializeMissingModelUsage(db, (id) => reconcileBilledRequests(db, id, true));
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
@@ -2296,6 +2297,7 @@ function writeSession(
     insertFileRef.finalize();
   }
 
+  reconcileBilledRequests(db, sessionId, false);
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),

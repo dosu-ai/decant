@@ -39,8 +39,8 @@ interface Request {
 }
 
 /** A hand-written Claude Code journal: one prompt, then one assistant record
- * per request, each with its own API message id. */
-function transcript(requests: Request[]): string {
+ * per request, each with an API message id no other session shares. */
+function transcript(requests: Request[], session = "sess-usage"): string {
   const lines: object[] = [
     {
       type: "user",
@@ -73,10 +73,10 @@ function transcript(requests: Request[]): string {
       uuid: `a${index}`,
       parentUuid: index === 0 ? "u0" : `a${index - 1}`,
       sessionId: "sess-usage",
-      requestId: `req_${index}`,
+      requestId: `req_${session}_${index}`,
       timestamp: `2026-10-07T10:00:${String(index + 1).padStart(2, "0")}.000Z`,
       message: {
-        id: `msg_${index}`,
+        id: `msg_${session}_${index}`,
         role: "assistant",
         model: request.model,
         stop_reason: "end_turn",
@@ -89,7 +89,13 @@ function transcript(requests: Request[]): string {
 }
 
 function ingest(db: Database, requests: Request[], id = "sess-usage"): number {
-  return upsertSession(db, parseClaudeSession(id, transcript(requests)), `/x/${id}.jsonl`, 1, 2);
+  return upsertSession(
+    db,
+    parseClaudeSession(id, transcript(requests, id)),
+    `/x/${id}.jsonl`,
+    1,
+    2,
+  );
 }
 
 function usageOf(request: Request): TokenUsage {

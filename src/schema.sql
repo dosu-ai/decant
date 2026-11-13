@@ -1,5 +1,5 @@
--- decant:schema_version=30
--- Effective decant schema (migrations 1..30 applied), frozen as the current
+-- decant:schema_version=31
+-- Effective decant schema (migrations 1..31 applied), frozen as the current
 -- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
 -- enrichment changes can reprocess existing sources automatically once. v23
 -- indexes tool_call in the order the tool-call list pages through. v24 indexes
@@ -12,7 +12,9 @@
 -- compactions so the next sync recomputes them under the current rules.
 -- v29 indexes block ids with their session so search can filter matches
 -- without reading transcript rows. v30 records each project's repository
--- remote, a name for it that does not depend on a local path.
+-- remote, a name for it that does not depend on a local path. v31 names the
+-- session that bills each Claude Code API request, so a branched session's
+-- copy of it is not billed again.
 -- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
@@ -202,6 +204,11 @@ CREATE TABLE session_model_usage (
   reported_cost_usd REAL,
   PRIMARY KEY (session_id, model, tier)
 ) WITHOUT ROWID;
+CREATE TABLE billed_request (
+  request_id TEXT PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  message_id INTEGER NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE session_user_state (
   tool TEXT NOT NULL,
   source_session_id TEXT NOT NULL,
@@ -259,6 +266,7 @@ CREATE INDEX idx_toolcall_timestamp ON tool_call(timestamp DESC, id DESC);
 CREATE INDEX idx_toolcall_usage ON tool_call(session_id, tool_name, tool_kind, mcp_server, is_error, duration_ms, timestamp);
 CREATE INDEX idx_block_call_tool_use_id ON block(tool_use_id) WHERE type = 'tool_use';
 CREATE INDEX idx_block_id_session ON block(id, session_id);
+CREATE INDEX idx_billed_request_session ON billed_request(session_id);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id',

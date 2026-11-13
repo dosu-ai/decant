@@ -21,8 +21,9 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
  * session's rows once. A row keeps a source-reported cost only for a model
  * that was unpriced when the row was derived. Version 2 narrowed the Gemini
  * 3 Flash match, so OpenCode rows for IDs it no longer prices recover their
- * reported cost. */
-export const MODEL_USAGE_FORMAT_VERSION = 2;
+ * reported cost. Version 3 stops billing Claude Code turns that another
+ * session already bills. */
+export const MODEL_USAGE_FORMAT_VERSION = 3;
 
 /** One session's usage served by one model at one price tier. A session that
  * switches models, or sends some requests in fast mode or past a long-prompt
@@ -204,8 +205,13 @@ export function materializeModelUsage(db: Database, sessionId: number): ModelUsa
 }
 
 /** One-time upgrade/backfill path: sessions stored before this table existed,
- * or under an older split rule, get their rows rebuilt from stored messages. */
-export function materializeMissingModelUsage(db: Database): number {
+ * or under an older split rule, get their rows rebuilt from stored messages.
+ * `prepare` runs for every stale session before any row is rebuilt, because
+ * correcting one session's stored usage can change another's. */
+export function materializeMissingModelUsage(
+  db: Database,
+  prepare?: (sessionId: number) => void,
+): number {
   const stale = (): number[] =>
     queryRows<{ id: number }>(
       db,
@@ -222,6 +228,11 @@ export function materializeMissingModelUsage(db: Database): number {
   }
   return withImmediateTransaction(db, () => {
     const ids = stale();
+    if (prepare != null) {
+      for (const id of ids) {
+        prepare(id);
+      }
+    }
     for (const id of ids) {
       materializeModelUsage(db, id);
     }

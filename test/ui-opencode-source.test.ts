@@ -62,7 +62,7 @@ describe("OpenCode source copy", () => {
       "session logs Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code already write",
     );
     expect(copy).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and ATIF trajectories.",
+      "local-first, searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, with ATIF import and export.",
     );
   });
 });

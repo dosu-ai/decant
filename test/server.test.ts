@@ -141,7 +141,7 @@ describe("server routes", () => {
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
     expect(sourceHead).toContain(
-      "Local-first analytics for Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, and ATIF trajectories.",
+      "A local-first, searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, and Copilot Chat in VS Code sessions, with ATIF import and export.",
     );
   });
 

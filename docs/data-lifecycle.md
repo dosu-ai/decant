@@ -793,12 +793,13 @@ message, and `unbilled_request` keeps the usage taken off each copy. When a
 session is written, a message it shares with another session stays billed in
 one of them and keeps its transcript row in both.
 [Analytics methodology](analytics-methodology.md#token-and-cost-totals) says
-which one, and the order sessions are read in does not change it. Deleting the
-session that bills a message hands the message to the copy that ranks first
-among the sessions left. Decant restores that copy's usage, totals, cost, and
-reasoning estimate from stored rows, so it matches an archive that never held
-the deleted session, even when its source file is gone. The first sync after
-an upgrade applies the same rule to every stored Claude Code session from its
+which one, and the order sessions are read in does not change it. When a
+session is deleted, or re-read without a message it held, Decant ranks the
+sessions that still hold the message again, and the copy that ranks first bills
+it. Decant restores that copy's usage, totals, cost, and reasoning estimate
+from stored rows, so the copy matches an archive that never held the removed
+message, even when the copy's source file is gone. The first sync after an
+upgrade applies the same rule to every stored Claude Code session from its
 archived rows, so it also corrects sessions whose source files are gone, and
 no source is re-read for it.
 

@@ -29,6 +29,11 @@ const MODEL = "claude-sonnet-5";
 const ORIGINAL = "aaaaaaaa-0000-4000-8000-000000000001";
 const BRANCH = "bbbbbbbb-0000-4000-8000-000000000002";
 const SECOND_BRANCH = "cccccccc-0000-4000-8000-000000000003";
+// A /branch chain whose original is not archived: ROOT copied a turn from it,
+// MIDDLE from ROOT, and LEAF from MIDDLE. The root has the highest session ID.
+const LEAF = "dddddddd-0000-4000-8000-000000000004";
+const MIDDLE = "eeeeeeee-0000-4000-8000-000000000005";
+const ROOT = "ffffffff-0000-4000-8000-000000000006";
 
 interface Turn {
   /** Suffix shared by the record uuids, `requestId`, and `message.id`. */
@@ -38,6 +43,8 @@ interface Turn {
   input: number;
   output: number;
   thinking?: boolean;
+  cacheCreation?: number;
+  cacheCreation1h?: number;
 }
 
 const FIRST: Turn = {
@@ -60,6 +67,13 @@ const THIRD: Turn = {
   at: "2026-11-01T10:20:00.000Z",
   input: 3_000,
   output: 700,
+};
+const FOURTH: Turn = {
+  id: "4",
+  prompt: "Write the release note.",
+  at: "2026-11-01T10:30:00.000Z",
+  input: 4_000,
+  output: 900,
 };
 
 /** One prompt and its reply, written the way Claude Code journals them. A copy
@@ -91,7 +105,19 @@ function turn(session: string, t: Turn, forkedFrom?: string): object[] {
         role: "assistant",
         model: MODEL,
         stop_reason: "end_turn",
-        usage: { input_tokens: t.input, output_tokens: t.output },
+        usage: {
+          input_tokens: t.input,
+          output_tokens: t.output,
+          ...(t.cacheCreation == null
+            ? {}
+            : {
+                cache_creation_input_tokens: t.cacheCreation,
+                cache_creation: {
+                  ephemeral_5m_input_tokens: t.cacheCreation - (t.cacheCreation1h ?? 0),
+                  ephemeral_1h_input_tokens: t.cacheCreation1h ?? 0,
+                },
+              }),
+        },
         content: [
           ...(t.thinking === true ? [{ type: "thinking", thinking: "Considering." }] : []),
           { type: "text", text: `Reply ${t.id}.` },
@@ -233,6 +259,77 @@ function remove(db: Database, session: string): void {
     id: number;
   };
   expect(setSessionUserState(db, row.id, "deleted")).toBe(true);
+}
+
+/** Every stored number that billing changes, keyed by session ID instead of
+ * row ID so archives built in different orders compare equal. */
+function archiveState(db: Database): Record<string, unknown[]> {
+  return {
+    sessions: db
+      .query(
+        `SELECT source_session_id, total_input_tokens, total_output_tokens,
+                total_cache_read_tokens, total_cache_creation_tokens,
+                total_cache_creation_1h_tokens, est_reasoning_tokens, estimated_cost_usd
+           FROM session ORDER BY source_session_id`,
+      )
+      .all(),
+    models: db
+      .query(
+        `SELECT s.source_session_id, u.model, u.tier, u.requests, u.input_tokens,
+                u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens,
+                u.cache_creation_1h_tokens
+           FROM session_model_usage u JOIN session s ON s.id = u.session_id
+          ORDER BY 1, 2, 3`,
+      )
+      .all(),
+    billedMessages: db
+      .query(
+        `SELECT s.source_session_id, m.seq, m.input_tokens, m.output_tokens,
+                m.cache_creation_tokens
+           FROM message m JOIN session s ON s.id = m.session_id
+          WHERE m.output_tokens IS NOT NULL
+          ORDER BY 1, 2`,
+      )
+      .all(),
+    billed: db
+      .query(
+        `SELECT b.request_id, s.source_session_id
+           FROM billed_request b JOIN session s ON s.id = b.session_id
+          ORDER BY 1`,
+      )
+      .all(),
+    unbilled: db
+      .query(
+        `SELECT s.source_session_id, u.request_id, u.input_tokens, u.output_tokens,
+                u.cache_creation_tokens, u.cache_creation_1h_tokens, u.totals_reduced
+           FROM unbilled_request u JOIN session s ON s.id = u.session_id
+          ORDER BY 1, 2`,
+      )
+      .all(),
+  };
+}
+
+/** The state of an archive that only ever read these transcripts, in order. */
+function stateOf(...sources: [string, string][]): Record<string, unknown[]> {
+  const { db } = freshCase();
+  for (const [session, content] of sources) {
+    ingest(db, session, content);
+  }
+  const state = archiveState(db);
+  closeDb(db);
+  return state;
+}
+
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) {
+    return [[...items]];
+  }
+  return items.flatMap((item, index) =>
+    permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [
+      item,
+      ...rest,
+    ]),
+  );
 }
 
 /** The branch as an archive that never held its original stores it. */
@@ -592,6 +689,97 @@ describe("requests copied into a branched Claude Code session", () => {
       closeDb(db);
     }
   });
+
+  test("a chain of /branch copies bills a turn in its root in every read order", () => {
+    const leaf: [string, string] = [LEAF, branchTranscript([FIRST], [FOURTH], LEAF, MIDDLE)];
+    const middle: [string, string] = [MIDDLE, branchTranscript([FIRST], [THIRD], MIDDLE, ROOT)];
+    const root: [string, string] = [ROOT, branchTranscript([FIRST], [SECOND], ROOT, ORIGINAL)];
+    const orders = permutations([leaf, middle, root]);
+    expect(orders).toHaveLength(6);
+    const settled = stateOf(root, middle, leaf);
+    // With the root gone, the middle copy is the one the other was made from.
+    const withoutRoot = stateOf(middle, leaf);
+    for (const order of orders) {
+      const { db } = freshCase();
+      for (const [session, content] of order) {
+        ingest(db, session, content);
+      }
+      expectBilled(db, ROOT, 4, FIRST, SECOND);
+      expectBilled(db, MIDDLE, 4, THIRD);
+      expectBilled(db, LEAF, 4, FOURTH);
+      expect(archiveState(db)).toEqual(settled);
+
+      remove(db, ROOT);
+      expectBilled(db, MIDDLE, 4, FIRST, THIRD);
+      expectBilled(db, LEAF, 4, FOURTH);
+      expect(archiveState(db)).toEqual(withoutRoot);
+      closeDb(db);
+    }
+  });
+
+  test("a restored copy gets back only the one-hour cache writes its totals lost", () => {
+    const cached: Turn = { ...FIRST, cacheCreation: 100, cacheCreation1h: 100 };
+    // The result record reports cache writes without the one-hour breakdown,
+    // so the branch's one-hour total is 0 while the copied reply shows 100.
+    const branch: [string, string] = [
+      BRANCH,
+      forkSessionTranscript([cached], [SECOND]) +
+        jsonl([
+          {
+            type: "result",
+            usage: { input_tokens: 2_000, output_tokens: 2_500, cache_creation_input_tokens: 100 },
+          },
+        ]),
+    ];
+    const alone = stateOf(branch);
+    expect(alone.sessions).toMatchObject([
+      { total_cache_creation_tokens: 100, total_cache_creation_1h_tokens: 0 },
+    ]);
+    const original: [string, string] = [ORIGINAL, originalTranscript([cached])];
+    for (const order of [
+      [original, branch],
+      [branch, original],
+    ]) {
+      const { db } = freshCase();
+      for (const [session, content] of order) {
+        ingest(db, session, content);
+      }
+      expect(stored(db, BRANCH).billed).toBe(1);
+
+      remove(db, ORIGINAL);
+      expect(archiveState(db)).toEqual(alone);
+      closeDb(db);
+    }
+  });
+
+  // Re-reading the original rewrites its rows. A turn it no longer holds has
+  // to go to the copy, or the copy stays unbilled with nothing to bill it.
+  for (const branchSource of ["kept", "removed"]) {
+    test(`an original rewritten without a shared turn hands it to the copy (branch source ${branchSource})`, () => {
+      const { db, config } = freshCase();
+      const original = sourcePath(config, ORIGINAL);
+      const branch = sourcePath(config, BRANCH);
+      const branchContent = forkSessionTranscript([FIRST], [THIRD]);
+      write(original, originalTranscript([FIRST, SECOND]));
+      write(branch, branchContent);
+      sync(db, config);
+      expectBilled(db, BRANCH, 4, THIRD);
+
+      if (branchSource === "removed") {
+        rmSync(branch);
+      }
+      write(original, originalTranscript([SECOND]));
+      utimesSync(original, new Date(), new Date(Date.now() + 5_000));
+      expect(sync(db, config).ingested).toBe(1);
+
+      expectBilled(db, ORIGINAL, 2, SECOND);
+      expectBilled(db, BRANCH, 4, FIRST, THIRD);
+      expect(archiveState(db)).toEqual(
+        stateOf([ORIGINAL, originalTranscript([SECOND])], [BRANCH, branchContent]),
+      );
+      closeDb(db);
+    });
+  }
 
   test("deleting a copy leaves the original's billing alone", () => {
     const { db } = freshCase();

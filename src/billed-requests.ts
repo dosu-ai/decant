@@ -9,7 +9,7 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import { materializeSessionEconomics } from "./token-economics.ts";
 
 /** What one session's copy of an API request says about where it came from. */
-export interface RequestClaim {
+interface RequestClaim {
   sourceSessionId: string;
   startedAt: string | null;
   /** The session Claude Code names in `forkedFrom` on a record `/branch` copied. */
@@ -17,33 +17,6 @@ export interface RequestClaim {
   /** The record is older than its session's first record. `--fork-session`
    * writes new records first and the copied history after them. */
   predatesSession: boolean;
-}
-
-/** Decide whether a session that holds a request another session already
- * bills takes the request over. Returning false keeps the current owner. The
- * answer cannot depend on which session was read first, or a bulk sync would
- * file the same turn under different sessions from one run to the next, so
- * every pair of distinct sessions gets one answer and its reverse. */
-export function takesOver(incoming: RequestClaim, current: RequestClaim): boolean {
-  const incomingIsCopy = isCopy(incoming);
-  if (incomingIsCopy !== isCopy(current)) {
-    return !incomingIsCopy;
-  }
-  // Neither record stands out as the original, so the session the other one
-  // was copied from keeps the turn, then the one that began first.
-  const incomingIsSource = current.copiedFrom === incoming.sourceSessionId;
-  if (incomingIsSource !== (incoming.copiedFrom === current.sourceSessionId)) {
-    return incomingIsSource;
-  }
-  if (incoming.startedAt !== current.startedAt) {
-    // A session with no start time ranks after any session that has one.
-    return (
-      current.startedAt == null ||
-      (incoming.startedAt != null && incoming.startedAt < current.startedAt)
-    );
-  }
-  // `/branch` copies of one original share its start time.
-  return incoming.sourceSessionId < current.sourceSessionId;
 }
 
 function isCopy(claim: RequestClaim): boolean {
@@ -88,8 +61,30 @@ interface CopyRow {
   totals_reduced: number;
 }
 
+/** One session's stored reply to a request. */
+interface Holder {
+  sessionId: number;
+  messageId: number;
+  /** What was taken off the reply, while another session bills the request. */
+  copy: CopyRow | null;
+  claim: RequestClaim;
+}
+
+interface Changes {
+  removed: Map<number, Removal>;
+  /** Sessions that bill a request again, with the usage their totals get back. */
+  restored: Map<number, TokenUsage>;
+}
+
+interface Reply {
+  sessionId: number;
+  messageId: number;
+}
+
 const BILLED = `(m.input_tokens IS NOT NULL OR m.output_tokens IS NOT NULL
   OR m.cache_read_tokens IS NOT NULL OR m.cache_creation_tokens IS NOT NULL)`;
+
+const NO_SESSIONS: ReadonlySet<number> = new Set();
 
 /** Bill each Claude Code API request in one session only. `/branch` and
  * `--fork-session` copy earlier turns into a new transcript with their usage,
@@ -97,11 +92,13 @@ const BILLED = `(m.input_tokens IS NOT NULL OR m.output_tokens IS NOT NULL
  * transcript row and loses its usage. Works from stored rows, so it also
  * reaches sessions whose source files are gone. Runs inside the caller's
  * transaction; `refreshSelf` is false when the caller derives this session's
- * usage, cost, and context afterwards. */
+ * usage, cost, and context afterwards. `unsettled` names requests whose holders
+ * changed when this session's previous rows were removed. */
 export function reconcileBilledRequests(
   db: Database,
   sessionId: number,
   refreshSelf: boolean,
+  unsettled: Iterable<string> = [],
 ): void {
   const session = queryRow<{ tool: string }>(db, "SELECT tool FROM session WHERE id = ?1", [
     sessionId,
@@ -117,11 +114,12 @@ export function reconcileBilledRequests(
       ORDER BY m.seq`,
     [sessionId],
   );
-  if (billed.length === 0) {
+  const pending = new Set(unsettled);
+  if (billed.length === 0 && pending.size === 0) {
     return;
   }
 
-  const removed = new Map<number, Removal>();
+  const changes: Changes = { removed: new Map(), restored: new Map() };
   const findOwner = db.prepare<OwnerRow, [string]>(
     "SELECT session_id, message_id FROM billed_request WHERE request_id = ?1",
   );
@@ -136,139 +134,166 @@ export function reconcileBilledRequests(
         continue;
       }
       const owner = findOwner.get(requestId);
-      if (owner == null) {
+      if (owner == null && !pending.has(requestId)) {
         claim.run(requestId, sessionId, row.id);
         continue;
       }
-      if (owner.session_id === sessionId) {
-        continue;
-      }
-      const incoming = requestClaim(db, row.id);
-      const current = requestClaim(db, owner.message_id);
-      if (incoming != null && current != null && takesOver(incoming, current)) {
-        unbill(db, owner.message_id, owner.session_id, requestId, removed);
-        claim.run(requestId, sessionId, row.id);
-      } else {
-        unbill(db, row.id, sessionId, requestId, removed);
+      pending.delete(requestId);
+      if (owner?.session_id !== sessionId) {
+        settle(db, requestId, { sessionId, messageId: row.id }, NO_SESSIONS, changes);
       }
     }
   } finally {
     claim.finalize();
     findOwner.finalize();
   }
-
-  for (const [affected, removal] of removed) {
-    const reduced = subtractFromTotals(db, affected, removal.usage);
-    recordUnbilled(db, affected, removal.copies, reduced);
-    refreshReasoningEstimate(db, affected, true);
-    if (affected !== sessionId || refreshSelf) {
-      refreshDerivedUsage(db, affected);
-    }
+  for (const requestId of pending) {
+    settle(db, requestId, null, NO_SESSIONS, changes);
   }
+  applyChanges(db, changes, (affected) => affected !== sessionId || refreshSelf);
 }
 
-/** Before sessions are deleted, hand each request they bill to the copy that
- * ranks first among the sessions that stay, and give that copy back the usage
- * it lost. Without this a copy whose original leaves the archive would stay
- * unbilled, and an unchanged copy is never re-read to correct it. */
+/** Before sessions are deleted, settle their requests among the sessions that
+ * stay. An unchanged copy is never re-read, so it would stay unbilled. */
 export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): void {
   const gone = new Set(sessionIds);
-  const copies = new Map<string, CopyRow[]>();
+  const requests = new Set<string>();
   for (const id of gone) {
-    const rows = queryRows<CopyRow>(
-      db,
-      `SELECT u.request_id, u.session_id, u.message_id, u.input_tokens, u.output_tokens,
-              u.cache_read_tokens, u.cache_creation_tokens, u.cache_creation_1h_tokens,
-              u.totals_reduced
-         FROM billed_request b JOIN unbilled_request u ON u.request_id = b.request_id
-        WHERE b.session_id = ?1
-        ORDER BY u.session_id, u.message_id`,
-      [id],
-    );
-    for (const row of rows.filter((copy) => !gone.has(copy.session_id))) {
-      const list = copies.get(row.request_id);
-      if (list == null) {
-        copies.set(row.request_id, [row]);
-      } else {
-        list.push(row);
-      }
+    for (const requestId of unsettledRequests(db, id)) {
+      requests.add(requestId);
     }
   }
+  const changes: Changes = { removed: new Map(), restored: new Map() };
+  for (const requestId of requests) {
+    settle(db, requestId, null, gone, changes);
+  }
+  applyChanges(db, changes, () => true);
+}
 
-  const restored = new Map<number, TokenUsage>();
-  for (const [requestId, candidates] of copies) {
-    const best = firstCopy(db, candidates);
-    if (best == null) {
-      continue;
+/** The requests whose holders change when this session's rows go. */
+export function unsettledRequests(db: Database, sessionId: number): string[] {
+  return queryRows<{ request_id: string }>(
+    db,
+    `SELECT b.request_id FROM billed_request b
+      WHERE b.session_id = ?1
+        AND EXISTS (SELECT 1 FROM unbilled_request u WHERE u.request_id = b.request_id)
+     UNION
+     SELECT request_id FROM unbilled_request WHERE session_id = ?1`,
+    [sessionId],
+  ).map((row) => row.request_id);
+}
+
+/** Bill a request in the first of the sessions that hold it, apart from `gone`.
+ * `fresh` is a reply being written that neither table names yet. */
+function settle(
+  db: Database,
+  requestId: string,
+  fresh: Reply | null,
+  gone: ReadonlySet<number>,
+  changes: Changes,
+): void {
+  const owner = queryRow<OwnerRow>(
+    db,
+    "SELECT session_id, message_id FROM billed_request WHERE request_id = ?1",
+    [requestId],
+  );
+  const holders: Holder[] = [];
+  const hold = (sessionId: number, messageId: number, copy: CopyRow | null): void => {
+    const claim = gone.has(sessionId) ? null : requestClaim(db, messageId);
+    if (claim != null) {
+      holders.push({ sessionId, messageId, copy, claim });
     }
-    runStatement(
-      db,
-      `UPDATE message
-          SET input_tokens = ?2, output_tokens = ?3,
-              cache_read_tokens = ?4, cache_creation_tokens = ?5
-        WHERE id = ?1`,
-      [
-        best.message_id,
-        best.input_tokens,
-        best.output_tokens,
-        best.cache_read_tokens,
-        best.cache_creation_tokens,
-      ],
-    );
-    runStatement(db, "DELETE FROM unbilled_request WHERE session_id = ?1 AND message_id = ?2", [
-      best.session_id,
-      best.message_id,
-    ]);
-    runStatement(
-      db,
-      "UPDATE billed_request SET session_id = ?2, message_id = ?3 WHERE request_id = ?1",
-      [requestId, best.session_id, best.message_id],
-    );
-    const usage = restored.get(best.session_id) ?? emptyUsage();
-    // Totals a `result` record set for the new run alone never counted the copy.
-    if (best.totals_reduced !== 0) {
-      usage.input += best.input_tokens ?? 0;
-      usage.output += best.output_tokens ?? 0;
-      usage.cacheRead += best.cache_read_tokens ?? 0;
-      usage.cacheCreation += best.cache_creation_tokens ?? 0;
-      usage.cacheCreation1h += best.cache_creation_1h_tokens;
-    }
-    restored.set(best.session_id, usage);
+  };
+  if (owner != null) {
+    hold(owner.session_id, owner.message_id, null);
+  }
+  for (const copy of queryRows<CopyRow>(
+    db,
+    `SELECT request_id, session_id, message_id, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, totals_reduced
+       FROM unbilled_request WHERE request_id = ?1`,
+    [requestId],
+  )) {
+    hold(copy.session_id, copy.message_id, copy);
+  }
+  if (fresh != null) {
+    hold(fresh.sessionId, fresh.messageId, null);
   }
 
-  for (const [sessionId, usage] of restored) {
-    runStatement(
-      db,
-      `UPDATE session
-          SET total_input_tokens = total_input_tokens + ?2,
-              total_output_tokens = total_output_tokens + ?3,
-              total_cache_read_tokens = total_cache_read_tokens + ?4,
-              total_cache_creation_tokens = total_cache_creation_tokens + ?5,
-              total_cache_creation_1h_tokens = total_cache_creation_1h_tokens + ?6
-        WHERE id = ?1`,
-      [
-        sessionId,
-        usage.input,
-        usage.output,
-        usage.cacheRead,
-        usage.cacheCreation,
-        usage.cacheCreation1h,
-      ],
-    );
-    refreshReasoningEstimate(db, sessionId, false);
-    refreshDerivedUsage(db, sessionId);
+  const first = firstHolder(holders);
+  if (first == null || first.messageId === owner?.message_id) {
+    if (first != null && fresh != null) {
+      unbill(db, fresh.messageId, fresh.sessionId, requestId, changes.removed);
+    }
+    return;
+  }
+  if (owner != null && !gone.has(owner.session_id)) {
+    unbill(db, owner.message_id, owner.session_id, requestId, changes.removed);
+  }
+  if (fresh != null && first.messageId !== fresh.messageId) {
+    unbill(db, fresh.messageId, fresh.sessionId, requestId, changes.removed);
+  }
+  if (first.copy != null) {
+    restore(db, first.copy, changes.restored);
+  }
+  runStatement(
+    db,
+    `INSERT INTO billed_request(request_id, session_id, message_id) VALUES (?1, ?2, ?3)
+     ON CONFLICT(request_id) DO UPDATE SET session_id = ?2, message_id = ?3`,
+    [requestId, first.sessionId, first.messageId],
+  );
+}
+
+/** Ranks within the holders only, so the owner depends on which sessions hold
+ * the request and never on the order they were read in. */
+function firstHolder(holders: readonly Holder[]): Holder | null {
+  const bySource = new Map(holders.map((holder) => [holder.claim.sourceSessionId, holder]));
+  let best: { holder: Holder; copy: boolean; depth: number } | null = null;
+  for (const holder of holders) {
+    const ranked = {
+      holder,
+      copy: isCopy(holder.claim),
+      depth: lineageDepth(holder, bySource),
+    };
+    if (best == null || ranksBefore(ranked, best)) {
+      best = ranked;
+    }
+  }
+  return best?.holder ?? null;
+}
+
+/** A cycle stops the count where it closes. */
+function lineageDepth(holder: Holder, bySource: ReadonlyMap<string, Holder>): number {
+  const seen = new Set<Holder>([holder]);
+  let current = holder;
+  for (;;) {
+    const from = current.claim.copiedFrom;
+    const parent = from == null ? undefined : bySource.get(from);
+    if (parent == null || seen.has(parent)) {
+      return seen.size;
+    }
+    seen.add(parent);
+    current = parent;
   }
 }
 
-function firstCopy(db: Database, candidates: readonly CopyRow[]): CopyRow | null {
-  let best: { row: CopyRow; claim: RequestClaim } | null = null;
-  for (const row of candidates) {
-    const claim = requestClaim(db, row.message_id);
-    if (claim != null && (best == null || takesOver(claim, best.claim))) {
-      best = { row, claim };
-    }
+function ranksBefore(
+  a: { holder: Holder; copy: boolean; depth: number },
+  b: { holder: Holder; copy: boolean; depth: number },
+): boolean {
+  if (a.copy !== b.copy) {
+    return !a.copy;
   }
-  return best?.row ?? null;
+  if (a.depth !== b.depth) {
+    return a.depth < b.depth;
+  }
+  const aStart = a.holder.claim.startedAt;
+  const bStart = b.holder.claim.startedAt;
+  if (aStart !== bStart) {
+    // A session with no start time ranks after any session that has one.
+    return bStart == null || (aStart != null && aStart < bStart);
+  }
+  return a.holder.claim.sourceSessionId < b.holder.claim.sourceSessionId;
 }
 
 function requestClaim(db: Database, messageId: number): RequestClaim | null {
@@ -300,6 +325,77 @@ function requestClaim(db: Database, messageId: number): RequestClaim | null {
     predatesSession:
       row.timestamp != null && row.started_at != null && row.timestamp < row.started_at,
   };
+}
+
+function restore(db: Database, copy: CopyRow, restored: Map<number, TokenUsage>): void {
+  runStatement(
+    db,
+    `UPDATE message
+        SET input_tokens = ?2, output_tokens = ?3,
+            cache_read_tokens = ?4, cache_creation_tokens = ?5
+      WHERE id = ?1`,
+    [
+      copy.message_id,
+      copy.input_tokens,
+      copy.output_tokens,
+      copy.cache_read_tokens,
+      copy.cache_creation_tokens,
+    ],
+  );
+  runStatement(db, "DELETE FROM unbilled_request WHERE session_id = ?1 AND message_id = ?2", [
+    copy.session_id,
+    copy.message_id,
+  ]);
+  const usage = restored.get(copy.session_id) ?? emptyUsage();
+  // Totals a `result` record set for the new run alone never counted the copy.
+  if (copy.totals_reduced !== 0) {
+    usage.input += copy.input_tokens ?? 0;
+    usage.output += copy.output_tokens ?? 0;
+    usage.cacheRead += copy.cache_read_tokens ?? 0;
+    usage.cacheCreation += copy.cache_creation_tokens ?? 0;
+    usage.cacheCreation1h += copy.cache_creation_1h_tokens;
+  }
+  restored.set(copy.session_id, usage);
+}
+
+function applyChanges(
+  db: Database,
+  changes: Changes,
+  refreshDerived: (sessionId: number) => boolean,
+): void {
+  // Restored usage goes back first, because the check for totals that cover
+  // every billed request counts the restored replies.
+  for (const [sessionId, usage] of changes.restored) {
+    runStatement(
+      db,
+      `UPDATE session
+          SET total_input_tokens = total_input_tokens + ?2,
+              total_output_tokens = total_output_tokens + ?3,
+              total_cache_read_tokens = total_cache_read_tokens + ?4,
+              total_cache_creation_tokens = total_cache_creation_tokens + ?5,
+              total_cache_creation_1h_tokens =
+                MIN(total_cache_creation_1h_tokens + ?6, total_cache_creation_tokens + ?5)
+        WHERE id = ?1`,
+      [
+        sessionId,
+        usage.input,
+        usage.output,
+        usage.cacheRead,
+        usage.cacheCreation,
+        usage.cacheCreation1h,
+      ],
+    );
+  }
+  for (const [sessionId, removal] of changes.removed) {
+    const taken1h = subtractFromTotals(db, sessionId, removal.usage);
+    recordUnbilled(db, sessionId, removal.copies, taken1h);
+  }
+  for (const sessionId of new Set([...changes.restored.keys(), ...changes.removed.keys()])) {
+    refreshReasoningEstimate(db, sessionId, !changes.restored.has(sessionId));
+    if (refreshDerived(sessionId)) {
+      refreshDerivedUsage(db, sessionId);
+    }
+  }
 }
 
 function unbill(
@@ -358,7 +454,7 @@ function recordUnbilled(
   db: Database,
   sessionId: number,
   copies: readonly UnbilledCopy[],
-  totalsReduced: boolean,
+  taken1h: number | null,
 ): void {
   const insert = db.prepare(
     `INSERT OR REPLACE INTO unbilled_request(
@@ -366,8 +462,13 @@ function recordUnbilled(
        cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, totals_reduced)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
   );
+  // A restore puts back what the clamp took, which can differ from the replies'
+  // own one-hour writes, so the last copy keeps whatever the others did not.
+  let left = taken1h ?? 0;
   try {
-    for (const copy of copies) {
+    copies.forEach((copy, index) => {
+      const share = index === copies.length - 1 ? left : Math.min(copy.cacheCreation1h, left);
+      left -= share;
       insert.run(
         sessionId,
         copy.messageId,
@@ -376,10 +477,10 @@ function recordUnbilled(
         copy.output,
         copy.cacheRead,
         copy.cacheCreation,
-        copy.cacheCreation1h,
-        totalsReduced ? 1 : 0,
+        share,
+        taken1h == null ? 0 : 1,
       );
-    }
+    });
   } finally {
     insert.finalize();
   }
@@ -399,10 +500,11 @@ function oneHourWrites(usageJson: string | null): number {
   return isObject(creation) ? (asInteger(creation.ephemeral_1h_input_tokens) ?? 0) : 0;
 }
 
-/** Take the copied usage out of the session's totals, and report whether it
- * did. Totals from an SDK `result` record can describe the new run alone; they
- * are left as recorded unless they cover every request the transcript billed. */
-function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage): boolean {
+/** Take the copied usage out of the session's totals, and return how much came
+ * off the one-hour total, or null when nothing did. Totals from an SDK `result`
+ * record can describe the new run alone; they are left as recorded unless they
+ * cover every request the transcript billed. */
+function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage): number | null {
   const row = queryRow<{
     input: number;
     output: number;
@@ -435,9 +537,13 @@ function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage
     row.cache_read < row.billed_cache_read + removed.cacheRead ||
     row.cache_creation < row.billed_cache_creation + removed.cacheCreation
   ) {
-    return false;
+    return null;
   }
   const cacheCreation = row.cache_creation - removed.cacheCreation;
+  const cacheCreation1h = Math.min(
+    Math.max(0, row.cache_creation_1h - removed.cacheCreation1h),
+    cacheCreation,
+  );
   runStatement(
     db,
     `UPDATE session
@@ -450,10 +556,10 @@ function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage
       row.output - removed.output,
       row.cache_read - removed.cacheRead,
       cacheCreation,
-      Math.min(Math.max(0, row.cache_creation_1h - removed.cacheCreation1h), cacheCreation),
+      cacheCreation1h,
     ],
   );
-  return true;
+  return row.cache_creation_1h - cacheCreation1h;
 }
 
 /** Recompute the reasoning estimate from the session's stored replies, leaving

@@ -173,9 +173,10 @@ holds the original of every copied reply, the branch's totals and cost cover
 only the turns made after it was created. The session that made the request
 keeps it, whichever transcript Decant reads first. A copied reply whose
 original session is not in the archive stays billed, because nothing else
-counts it. When only copies of a reply are archived, the session the other was
-copied from keeps it, then the one that started first, then the one with the
-lower session ID. When a session loses or regains copied replies, its
+counts it. When only copies of a reply are archived, Decant ranks every
+session that holds one. The copy nearest the root of the chain of `/branch`
+copies among them keeps it, then the one that started first, then the one with
+the lowest session ID. When a session loses or regains copied replies, its
 reasoning estimate is recomputed from the replies it still bills. `result`
 totals are reduced only when they cover every reply the transcript billed. A
 `result` record for the new run alone is kept as recorded.

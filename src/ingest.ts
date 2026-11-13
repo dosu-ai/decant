@@ -14,7 +14,11 @@ import {
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { reconcileBilledRequests, releaseBilledRequests } from "./billed-requests.ts";
+import {
+  reconcileBilledRequests,
+  releaseBilledRequests,
+  unsettledRequests,
+} from "./billed-requests.ts";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
@@ -2033,9 +2037,11 @@ function writeSession(
     "SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2",
     [s.tool, s.sourceSessionId],
   );
+  let unsettled: string[] = [];
   if (existing != null) {
     // Handing its requests to copies would only take them back below, on every
-    // growth of a live session.
+    // growth of a live session. The reconcile below settles the ones it dropped.
+    unsettled = unsettledRequests(db, existing.id);
     deleteSessionRow(db, existing.id, false);
   }
 
@@ -2304,7 +2310,7 @@ function writeSession(
     insertFileRef.finalize();
   }
 
-  reconcileBilledRequests(db, sessionId, false);
+  reconcileBilledRequests(db, sessionId, false, unsettled);
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),

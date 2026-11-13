@@ -80,6 +80,10 @@ interface TurnAcc {
   hasThinking: boolean;
 }
 
+/** Reasoning-estimate inputs per API request. A streamed reply spans several
+ * records that share one request. */
+type ReasoningTurns = Map<string, TurnAcc>;
+
 export interface ClaudeParseOptions {
   sourcePath?: string;
   sidecarMeta?: Json;
@@ -93,7 +97,7 @@ export function parseClaudeSession(
   const messages: NormalizedMessage[] = [];
   const issues: ParsedSession["issues"] = [];
   const billed = new Map<string, number>();
-  const turns = new Map<string, TurnAcc>();
+  const turns: ReasoningTurns = new Map();
 
   let rootSourceSessionId: string | null = null;
   const pathIndicatesSubagent = isSubagentPath(options.sourcePath) || isObject(options.sidecarMeta);
@@ -154,17 +158,8 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "assistant") {
       const message = parseAssistant(value, seq);
-      // Journal content blocks can repeat a message's full usage without a
-      // request id. The API message id still identifies the billable turn.
-      const requestId =
-        stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
-      const key = requestId ?? `\0seq${seq}`;
-      const [output, visible, hasThinking] = lineReasoningInputs(message);
-      const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
-      acc.output = Math.max(acc.output, output);
-      acc.visible += visible;
-      acc.hasThinking ||= hasThinking;
-      turns.set(key, acc);
+      const requestId = assistantRequestId(value);
+      addReasoningRecord(turns, requestId ?? `\0seq${seq}`, message);
       billAssistant(messages, billed, message, requestId);
       seq += 1;
     } else if (typ === "system") {
@@ -211,18 +206,11 @@ export function parseClaudeSession(
   }
   const totals = resultTotals ?? messageTotals;
 
-  let estReasoningTokens = 0;
-  let anyThinking = false;
-  for (const turn of turns.values()) {
-    if (!turn.hasThinking) {
-      continue;
-    }
-    anyThinking = true;
-    estReasoningTokens += Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN));
-  }
+  let estReasoningTokens = reasoningEstimate(turns);
   if (resultTotals != null) {
     estReasoningTokens = Math.min(estReasoningTokens, resultTotals.output);
   }
+  const anyThinking = [...turns.values()].some((turn) => turn.hasThinking);
 
   const model = primaryModel(messages) ?? sessionModel;
   const meta = isObject(options.sidecarMeta) ? options.sidecarMeta : {};
@@ -273,6 +261,51 @@ export function parseClaudeSession(
   issues.push(...linkageIssues(normalized));
 
   return { session: normalized, issues };
+}
+
+/** The API request an assistant record bills. Journal content blocks can
+ * repeat a message's full usage without a request id, and the API message id
+ * still names the request. */
+function assistantRequestId(value: Json): string | null {
+  return stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
+}
+
+function addReasoningRecord(turns: ReasoningTurns, key: string, message: NormalizedMessage): void {
+  const [output, visible, hasThinking] = lineReasoningInputs(message);
+  const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
+  acc.output = Math.max(acc.output, output);
+  acc.visible += visible;
+  acc.hasThinking ||= hasThinking;
+  turns.set(key, acc);
+}
+
+/** Output a request spent beyond the text and tool input it shows, summed over
+ * the requests that show thinking. */
+function reasoningEstimate(turns: ReasoningTurns): number {
+  let tokens = 0;
+  for (const turn of turns.values()) {
+    if (turn.hasThinking) {
+      tokens += Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN));
+    }
+  }
+  return tokens;
+}
+
+/** The parser's reasoning estimate for stored Claude Code assistant records,
+ * so a session's estimate can be recomputed from archived rows. The parser
+ * caps it at a `result` record's output, which `outputCap` stands for. */
+export function inferredReasoningTokens(records: Iterable<Json>, outputCap: number): number {
+  const turns: ReasoningTurns = new Map();
+  let index = 0;
+  for (const record of records) {
+    addReasoningRecord(
+      turns,
+      assistantRequestId(record) ?? `\0record${index}`,
+      parseAssistant(record, index),
+    );
+    index += 1;
+  }
+  return Math.min(reasoningEstimate(turns), outputCap);
 }
 
 function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {

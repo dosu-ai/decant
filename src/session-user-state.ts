@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { releaseBilledRequests } from "./billed-requests.ts";
 import { withImmediateTransaction } from "./db.ts";
 
 export type SessionUserState = "archived" | "deleted";
@@ -300,6 +301,10 @@ function deleteSessionIdentities(db: Database, identities: readonly SessionIdent
      SET parent_session_id = NULL
      WHERE parent_session_id IN (SELECT value FROM json_each(?1))`,
   ).run(ids);
+  releaseBilledRequests(
+    db,
+    identities.map((identity) => identity.id),
+  );
   db.query("DELETE FROM session WHERE id IN (SELECT value FROM json_each(?1))").run(ids);
   db.query(
     `UPDATE ingest_source

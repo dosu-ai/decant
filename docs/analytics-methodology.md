@@ -165,6 +165,22 @@ reasoning estimates. Records with neither identifier are counted separately.
 All content blocks remain in the transcript. Stream `result` usage, when
 present, takes precedence for session totals.
 
+Claude Code's `/branch` and `claude --resume <id> --fork-session` start a new
+transcript with a copy of the conversation so far. Each copied reply keeps its
+`message.id` and usage. Decant bills an API message in one session and stores
+the copy in the other session's transcript without usage. When the archive
+holds the original of every copied reply, the branch's totals and cost cover
+only the turns made after it was created. The session that made the request
+keeps it, whichever transcript Decant reads first. A copied reply whose
+original session is not in the archive stays billed, because nothing else
+counts it. When only copies of a reply are archived, Decant ranks every
+session that holds one. The copy nearest the root of the chain of `/branch`
+copies among them keeps it, then the one that started first, then the one with
+the lowest session ID. When a session loses or regains copied replies, its
+reasoning estimate is recomputed from the replies it still bills. `result`
+totals are reduced only when they cover every reply the transcript billed. A
+`result` record for the new run alone is kept as recorded.
+
 Gemini CLI reports usage per model turn in the Gemini API's shape, which Decant
 normalizes at ingest: the reported prompt count already includes cached
 content, so input is stored net of cache reads, and thought tokens are

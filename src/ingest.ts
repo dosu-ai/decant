@@ -14,6 +14,11 @@ import {
 } from "node:fs";
 import { dirname, extname, join, basename as pathBasename, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import {
+  reconcileBilledRequests,
+  releaseBilledRequests,
+  unsettledRequests,
+} from "./billed-requests.ts";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
@@ -382,7 +387,7 @@ export function sync(
   onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
-  materializeMissingModelUsage(db);
+  materializeMissingModelUsage(db, (id) => reconcileBilledRequests(db, id, true));
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
@@ -1946,7 +1951,12 @@ function releaseSupersededOpenCodeSources(
   }
 }
 
-function deleteSessionRow(db: Database, id: number): void {
+/** `releaseClaims` is false only when the same session is written again in this
+ * transaction and claims its requests back. */
+function deleteSessionRow(db: Database, id: number, releaseClaims = true): void {
+  if (releaseClaims) {
+    releaseBilledRequests(db, [id]);
+  }
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
   ]);
@@ -2027,8 +2037,12 @@ function writeSession(
     "SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2",
     [s.tool, s.sourceSessionId],
   );
+  let unsettled: string[] = [];
   if (existing != null) {
-    deleteSessionRow(db, existing.id);
+    // Handing its requests to copies would only take them back below, on every
+    // growth of a live session. The reconcile below settles the ones it dropped.
+    unsettled = unsettledRequests(db, existing.id);
+    deleteSessionRow(db, existing.id, false);
   }
 
   const refs = fileRefs(s);
@@ -2296,6 +2310,7 @@ function writeSession(
     insertFileRef.finalize();
   }
 
+  reconcileBilledRequests(db, sessionId, false, unsettled);
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),

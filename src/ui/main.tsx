@@ -14,7 +14,7 @@ import { dosuLink } from "./dosu-links.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { useDisabledFocusRescue } from "./focus.ts";
 import { formatDay, formatInt, versionLabel } from "./format.ts";
-import { isFramed } from "./frame-guard.ts";
+import { isFramedOrUnknown } from "./frame-guard.ts";
 import { Icon } from "./icons.tsx";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
 import { Link, locationPath, visit } from "./link.tsx";
@@ -1155,7 +1155,7 @@ if (root == null) {
   throw new Error("missing #root");
 }
 createRoot(root).render(
-  isFramed(window) ? (
+  isFramedOrUnknown(window) ? (
     <FramedNotice />
   ) : (
     <ErrorBoundary>

@@ -322,12 +322,15 @@ export function transcriptCollapseLabel(value: CollapsedTranscriptText): string 
   return "Show full result";
 }
 
+const ALLOWED_LINK_SCHEMES = /^(?:https?|mailto):/i;
+const OPENS_IN_NEW_TAB = /^(?:https?:|mailto:|\/\/)/i;
+
 export function markdownLinkBehavior(href: string | null | undefined): MarkdownLinkBehavior {
   const safeHref = safeMarkdownUrl(href);
   if (safeHref == null) {
     return { external: false, href: undefined };
   }
-  const external = /^(?:https?:|mailto:|\/\/)/i.test(safeHref);
+  const external = OPENS_IN_NEW_TAB.test(safeHref);
   return external
     ? {
         external: true,
@@ -346,14 +349,18 @@ export function safeMarkdownUrl(value: string | null | undefined): string | unde
   if (url === "") {
     return undefined;
   }
-  const colon = url.indexOf(":");
-  const boundary = [url.indexOf("/"), url.indexOf("?"), url.indexOf("#")]
-    .filter((index) => index >= 0)
-    .reduce((lowest, index) => Math.min(lowest, index), Number.POSITIVE_INFINITY);
-  if (colon < 0 || colon > boundary) {
+  if (!hasUrlScheme(url)) {
     return url;
   }
-  return /^(?:https?|mailto):/i.test(url) ? url : undefined;
+  return ALLOWED_LINK_SCHEMES.test(url) ? url : undefined;
+}
+
+function hasUrlScheme(url: string): boolean {
+  const colon = url.indexOf(":");
+  const pathQueryOrFragmentStart = [url.indexOf("/"), url.indexOf("?"), url.indexOf("#")]
+    .filter((index) => index >= 0)
+    .reduce((lowest, index) => Math.min(lowest, index), Number.POSITIVE_INFINITY);
+  return colon >= 0 && colon <= pathQueryOrFragmentStart;
 }
 
 export function presentationForTool(

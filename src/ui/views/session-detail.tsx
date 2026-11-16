@@ -377,35 +377,17 @@ export function SessionDetailView({
             if (page.messages.length === 0) {
               return false;
             }
-            let anchorSeq: number | null = null;
-            let anchorTop: number | null = null;
-            for (const message of latest.messages) {
-              const top = document
-                .getElementById(`message-${message.seq}`)
-                ?.getBoundingClientRect().top;
-              if (top != null) {
-                anchorSeq = message.seq;
-                anchorTop = top;
-                break;
-              }
-            }
-            const nextDetail = {
-              ...latest,
-              messages: prependTranscriptPage(latest.messages, page.messages),
-              message_offset: request.offset,
-            };
-            detailRef.current = nextDetail;
-            flushSync(() => {
-              setDetail(nextDetail);
+            preserveScrollAcrossPrepend(latest.messages, () => {
+              const nextDetail = {
+                ...latest,
+                messages: prependTranscriptPage(latest.messages, page.messages),
+                message_offset: request.offset,
+              };
+              detailRef.current = nextDetail;
+              flushSync(() => {
+                setDetail(nextDetail);
+              });
             });
-            if (anchorSeq != null && anchorTop != null) {
-              const after = document
-                .getElementById(`message-${anchorSeq}`)
-                ?.getBoundingClientRect().top;
-              if (after != null && after !== anchorTop) {
-                window.scrollBy({ behavior: "auto", top: after - anchorTop });
-              }
-            }
             return true;
           })
           .catch((err: unknown) => {
@@ -1057,6 +1039,29 @@ export function SessionDetailView({
       </div>
     </div>
   );
+}
+
+function preserveScrollAcrossPrepend(
+  renderedMessages: readonly { seq: number }[],
+  prepend: () => void,
+): void {
+  let anchorSeq: number | null = null;
+  let anchorTop: number | null = null;
+  for (const message of renderedMessages) {
+    const top = document.getElementById(`message-${message.seq}`)?.getBoundingClientRect().top;
+    if (top != null) {
+      anchorSeq = message.seq;
+      anchorTop = top;
+      break;
+    }
+  }
+  prepend();
+  if (anchorSeq != null && anchorTop != null) {
+    const after = document.getElementById(`message-${anchorSeq}`)?.getBoundingClientRect().top;
+    if (after != null && after !== anchorTop) {
+      window.scrollBy({ behavior: "auto", top: after - anchorTop });
+    }
+  }
 }
 
 export function IngestIssuesPanel({

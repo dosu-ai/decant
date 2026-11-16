@@ -34,7 +34,8 @@ the session preview intentionally omits transcript content.
 
 Analytics statistics and reports accept a combined `source` filter. The
 current values are `claude_code`, `codex_app`, `codex_cli`, `codex_other`,
-`gemini_cli`, `opencode`, `cursor_cli`, `copilot_cli`, `vscode_copilot`, and `atif`.
+`gemini_cli`, `opencode`, `cursor_cli`, `copilot_cli`, `vscode_copilot`, `atif`,
+and `hermes`.
 An unknown value
 returns `400` with the accepted values in `allowed`, before the archive is read. The Codex split reads
 the source session's recorded `originator`/`source` metadata. The filter does
@@ -225,21 +226,25 @@ Token-economics totals expose the reported share as `reported_cost_usd`.
 `model_provider` is the provider route the model ran through when the source
 records one. `GET /api/config` includes `opencodeDir`, the OpenCode data
 directory being read, `cursorDir`, the Cursor CLI chats directory,
-`copilotDir`, the GitHub Copilot CLI session-state directory, and
-`vscodeCopilotDir`, the VS Code `User` directory read for Copilot Chat, and
+`copilotDir`, the GitHub Copilot CLI session-state directory,
+`vscodeCopilotDir`, the VS Code `User` directory read for Copilot Chat,
 `atifDir`, the directory read for ATIF trajectory files (null when none is
-configured). When no override is set, Decant also reads VS Code Insiders'
+configured), and `hermesDir`, the Hermes Agent home directory (null when none
+is configured). When no override is set, Decant also reads VS Code Insiders'
 `User` directory, which `vscodeCopilotDir` does not list.
 
 Session summaries also carry `usage_available`. It is false for a session from
 a source that may record no token usage, when none of the session's messages
 carries any. Those sources are Cursor CLI, which stores none, Copilot Chat in
-VS Code, whose builds from before April 2026 wrote none, and ATIF
-trajectories, where every metric is optional. A session with
+VS Code, whose builds from before April 2026 wrote none, ATIF trajectories,
+where every metric is optional, and Hermes Agent, which records usage only per
+session. A session with
 `usage_available: false` reports `estimated_cost_usd` and token totals of 0.
 Show them as unavailable, not free. An ATIF session without per-step token
 counts still has usage when its `final_metrics` record token totals, zero
-included, or when its estimated cost is above zero. Stats totals,
+included, or when its estimated cost is above zero. A Hermes session has usage
+when its token totals are above zero, or when Hermes recorded an API call or a
+per-model usage row for it. Stats totals,
 `/api/stats/by-dimension` rows, and `/api/projects` rows carry
 `usage_sessions`, the number of top-level sessions in that scope or row with
 usage available. A row whose `usage_sessions` is 0 has unavailable cost. One

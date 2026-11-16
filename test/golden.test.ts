@@ -47,6 +47,7 @@ describe("golden harness", () => {
         "copilot",
         "vscode_copilot",
         "atif",
+        "hermes",
       ]),
     );
   });
@@ -109,6 +110,7 @@ describe("golden harness", () => {
     expect(sessions.filter((s) => !listed.has(key(s))).map(key)).toEqual([
       `atif${keySeparator}synthetic-embedded:helper`,
       `atif${keySeparator}synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary`,
+      `hermes${keySeparator}20261101_090110_d4e5f6`,
     ]);
   });
 });

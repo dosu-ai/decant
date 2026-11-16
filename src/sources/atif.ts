@@ -33,6 +33,7 @@ export const ATIF_AGENT_NAMES = {
   cursor: "cursor-cli",
   copilot: "copilot-cli",
   vscode_copilot: "vscode-copilot-chat",
+  hermes: "hermes",
 } as const satisfies Record<Exclude<Tool, "atif">, string>;
 
 export function atifNativeTool(rawMeta: Json | undefined): Exclude<Tool, "atif"> | null {

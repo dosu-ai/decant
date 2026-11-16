@@ -15,6 +15,7 @@ import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
 import { DECANT_VERSION } from "../src/version.ts";
 import { buildCursorChat, cursorFixtureNames } from "./cursor-fixture.ts";
+import { buildHermesFixtureDb } from "./hermes-fixture.ts";
 import { buildOpenCodeFixtureDb } from "./opencode-fixture.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
@@ -45,6 +46,7 @@ function stageFixtures(caseDir: string): {
   copilotDir: string;
   vscodeCopilotDir: string;
   atifDir: string;
+  hermesDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
@@ -54,6 +56,7 @@ function stageFixtures(caseDir: string): {
   const copilotDir = join(caseDir, "sources", "copilot", "session-state");
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   const atifDir = join(caseDir, "sources", "atif");
+  const hermesDir = join(caseDir, "sources", "hermes");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -100,6 +103,11 @@ function stageFixtures(caseDir: string): {
     recursive: true,
   });
   stageAtifFlat(atifDir);
+  mkdirSync(hermesDir, { recursive: true });
+  buildHermesFixtureDb(
+    join(hermesDir, "state.db"),
+    fixtureFiles("hermes", ".sql").filter((file) => file !== "schema.sql"),
+  );
   return {
     claudeDir,
     codexDir,
@@ -110,6 +118,7 @@ function stageFixtures(caseDir: string): {
     copilotDir,
     vscodeCopilotDir,
     atifDir,
+    hermesDir,
   };
 }
 
@@ -186,6 +195,7 @@ describe("CLI golden parity", () => {
       copilotDir,
       vscodeCopilotDir,
       atifDir,
+      hermesDir,
     } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
@@ -210,6 +220,8 @@ describe("CLI golden parity", () => {
         vscodeCopilotDir,
         "--atif-dir",
         atifDir,
+        "--hermes-dir",
+        hermesDir,
       ],
       {
         env: {

@@ -1,6 +1,6 @@
 {
   "scope": "all sessions",
-  "session_count": 23,
+  "session_count": 25,
   "date_from": "2025-07-14T10:30:00.000Z",
   "date_to": "2026-10-12T07:26:40.000Z",
   "generated_with": "0.0.0-dev",
@@ -138,5 +138,5 @@
       "success_rate": 1
     }
   ],
-  "artifact": "#!/usr/bin/env bash\n# Distilled by Decant 0.0.0-dev from all sessions\n# 23 session(s) (2025-07-14..2026-10-12). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\nset -euo pipefail\nPROJECT_ROOT=\"${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}\"\n\n# test\n# seen 3/23, 100% ok\ncargo test --workspace\n"
+  "artifact": "#!/usr/bin/env bash\n# Distilled by Decant 0.0.0-dev from all sessions\n# 25 session(s) (2025-07-14..2026-10-12). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\nset -euo pipefail\nPROJECT_ROOT=\"${PROJECT_ROOT:-$(git rev-parse --show-toplevel)}\"\n\n# test\n# seen 3/25, 100% ok\ncargo test --workspace\n"
 }

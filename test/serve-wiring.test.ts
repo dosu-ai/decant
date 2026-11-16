@@ -80,6 +80,7 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
   const cursorDir = join(dir, "cursor");
   const copilotDir = join(dir, "copilot");
   const vscodeCopilotDir = join(dir, "vscode", "User");
+  const hermesDir = join(dir, "hermes");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexDir, { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
@@ -116,6 +117,8 @@ async function withServe<T>(c: ServeCase, run: (port: number) => Promise<T>): Pr
       copilotDir,
       "--vscode-copilot-dir",
       vscodeCopilotDir,
+      "--hermes-dir",
+      hermesDir,
       ...(c.flags ?? []),
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
@@ -195,6 +198,7 @@ async function withSeededServe<T>(
   const cursorDir = join(dir, "cursor");
   const copilotDir = join(dir, "copilot");
   const vscodeCopilotDir = join(dir, "vscode", "User");
+  const hermesDir = join(dir, "hermes");
   const projectDir = join(claudeDir, "-Users-dev-proj");
   const codexSessionsDir = join(codexDir, "sessions");
   const claudeSessionPath = join(projectDir, "s1.jsonl");
@@ -241,6 +245,8 @@ async function withSeededServe<T>(
       copilotDir,
       "--vscode-copilot-dir",
       vscodeCopilotDir,
+      "--hermes-dir",
+      hermesDir,
     ],
     { cwd: repoRoot, env, stdout: "ignore", stderr: "pipe" },
   );

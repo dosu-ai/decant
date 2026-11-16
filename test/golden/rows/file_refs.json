@@ -160,6 +160,26 @@
     "timestamp": "2026-06-01T10:00:02.000Z"
   },
   {
+    "tool": "hermes",
+    "source_session_id": "20261101_090000_a1b2c3",
+    "seq": 1,
+    "path": "notes.txt",
+    "rel_path": "notes.txt",
+    "ext": "txt",
+    "operation": "read",
+    "timestamp": "2026-10-12T06:20:04.000Z"
+  },
+  {
+    "tool": "hermes",
+    "source_session_id": "20261101_090000_a1b2c3",
+    "seq": 10,
+    "path": "/decant-fixture/example/notes.txt",
+    "rel_path": "notes.txt",
+    "ext": "txt",
+    "operation": "edit",
+    "timestamp": "2026-10-12T06:21:50.000Z"
+  },
+  {
     "tool": "opencode",
     "source_session_id": "ses_sample",
     "seq": 1,

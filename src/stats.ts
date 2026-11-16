@@ -39,11 +39,13 @@ export interface StatsFilter extends DateFilter {
 
 /** Sources whose sessions may hold no token usage at all: Cursor CLI stores
  * none, VS Code builds from before April 2026 wrote none for Copilot Chat,
- * and ATIF makes every metric optional. */
+ * ATIF makes every metric optional, and a Hermes Agent session that never
+ * reached a model has no usage on its session row. */
 export const USAGE_OPTIONAL_TOOLS = [
   "cursor",
   "vscode_copilot",
   "atif",
+  "hermes",
 ] as const satisfies readonly Tool[];
 
 export function sessionUsageAvailableSql(alias: string): string {
@@ -66,6 +68,13 @@ export function sessionUsageAvailableSql(alias: string): string {
                         IN ('integer', 'real')
                    OR json_type(${alias}.raw_meta, '$.final_metrics.total_completion_tokens')
                         IN ('integer', 'real')
+               END) = 1))
+         OR (${alias}.tool = 'hermes' AND (
+           ${alias}.total_input_tokens + ${alias}.total_output_tokens
+             + ${alias}.total_cache_read_tokens + ${alias}.total_cache_creation_tokens > 0
+           OR (CASE WHEN json_valid(${alias}.raw_meta)
+                 THEN json_extract(${alias}.raw_meta, '$.session.api_call_count') > 0
+                   OR json_array_length(${alias}.raw_meta, '$.modelUsage') > 0
                END) = 1))), 0)`;
 }
 

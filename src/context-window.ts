@@ -95,7 +95,8 @@ export interface MessageRawMeta {
 
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
-  '$.agentId', '$.data.preCompactionTokens', '$.extra.context_management.type')`;
+  '$.agentId', '$.data.preCompactionTokens', '$.extra.context_management.type',
+  '$._compressed_summary')`;
 
 export function parseMessageRawMeta(value: string | null, tool?: string): MessageRawMeta {
   const none: MessageRawMeta = {
@@ -128,7 +129,11 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     agentId,
     copilotPreTokens,
     contextManagement,
+    hermesSummary,
   ] = parsed as unknown[];
+  // Hermes Agent's in-place compaction writes one summary row, which is both
+  // the boundary and the summary.
+  const hermesCompaction = tool === "hermes" && hermesSummary === 1;
   const recordedPreTokens = tool === "copilot" ? copilotPreTokens : preTokens;
   return {
     // Copilot CLI marks a subagent's events in the parent journal with the
@@ -140,10 +145,10 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     rawType:
       typeof rawType === "string"
         ? rawType
-        : contextManagement === "compaction"
+        : contextManagement === "compaction" || hermesCompaction
           ? "compaction"
           : null,
-    isCompactSummary: compactSummary === true,
+    isCompactSummary: compactSummary === true || hermesCompaction,
     compactTrigger: typeof trigger === "string" ? trigger : null,
     compactPreTokens:
       typeof recordedPreTokens === "number" &&

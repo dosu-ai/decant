@@ -53,6 +53,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   copilot: "copilot-cli",
   vscode_copilot: "vscode-copilot-chat",
   atif: "atif",
+  hermes: "hermes",
 };
 
 const TRAJECTORY_NOISE_PREFIXES = [

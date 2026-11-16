@@ -60,6 +60,16 @@
     "estimated_cost_usd": 0.01015
   },
   {
+    "key": "anthropic/claude-sonnet-5-5",
+    "sessions": 1,
+    "usage_sessions": 1,
+    "input_tokens": 900,
+    "output_tokens": 240,
+    "reasoning_tokens": 60,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0.0055
+  },
+  {
     "key": "claude-haiku-4.5",
     "sessions": 1,
     "usage_sessions": 1,
@@ -88,5 +98,15 @@
     "reasoning_tokens": 25,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.0108
+  },
+  {
+    "key": "gpt-5.4-mini",
+    "sessions": 0,
+    "usage_sessions": 0,
+    "input_tokens": 520,
+    "output_tokens": 42,
+    "reasoning_tokens": 0,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0.0005939999999999999
   }
 ]

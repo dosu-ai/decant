@@ -25,6 +25,18 @@ describe("source and provenance marks", () => {
     });
   });
 
+  test("Hermes Agent has a labeled badge without a brand mark", () => {
+    const html = renderToStaticMarkup(<ToolBadge tool="hermes" />);
+    expect(html).not.toContain('class="brand-mark"');
+    expect(html).toContain("Hermes");
+    expect(providerIdentity("hermes")).toEqual({
+      key: "assistant",
+      label: "Hermes",
+      tone: "accent",
+      icon: null,
+    });
+  });
+
   test("GitHub Copilot CLI has a brand mark in source badges and assistant turns", () => {
     const html = renderToStaticMarkup(<ToolBadge tool="copilot" />);
     expect(html).toContain('class="brand-mark"');

@@ -36,6 +36,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     copilotDir?: string;
     vscodeCopilotDir?: string;
     atifDir?: string;
+    hermesDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -90,6 +91,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           copilotDir: commandOptions.copilotDir,
           vscodeCopilotDir: commandOptions.vscodeCopilotDir,
           atifDir: commandOptions.atifDir,
+          hermesDir: commandOptions.hermesDir,
         },
       },
     );
@@ -109,6 +111,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "override the VS Code User directory read for Copilot Chat",
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
+    .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
@@ -125,6 +128,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         copilotDir?: string;
         vscodeCopilotDir?: string;
         atifDir?: string;
+        hermesDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -152,6 +156,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "override the VS Code User directory read for Copilot Chat",
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
+    .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -173,6 +178,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         copilotDir?: string;
         vscodeCopilotDir?: string;
         atifDir?: string;
+        hermesDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -187,6 +193,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             copilotDir: commandOptions.copilotDir,
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
+            hermesDir: commandOptions.hermesDir,
           });
           const signal = waitForProcessSignal();
           try {
@@ -226,6 +233,7 @@ export function registerSyncCommands(ctx: CliContext): void {
       "override the VS Code User directory read for Copilot Chat",
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
+    .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -256,6 +264,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         copilotDir?: string;
         vscodeCopilotDir?: string;
         atifDir?: string;
+        hermesDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -272,6 +281,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             copilotDir: commandOptions.copilotDir,
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
+            hermesDir: commandOptions.hermesDir,
           });
           const syncEnabled = ctx.shouldSync();
           const { parsePeerList, serve: serveApp } = await import("../../server.ts");

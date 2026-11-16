@@ -20,9 +20,9 @@
   {
     "path": "/decant-fixture/example",
     "name": "example",
-    "sessions": 3,
-    "usage_sessions": 3,
-    "estimated_cost_usd": 0.0109688,
+    "sessions": 4,
+    "usage_sessions": 4,
+    "estimated_cost_usd": 0.0170628,
     "last_seen_at": "2026-10-12T07:27:40.000Z",
     "is_worktree": false,
     "root_path": "/decant-fixture/example",
@@ -31,6 +31,7 @@
     "root_source": "self",
     "worktree_count": 0,
     "session_tools": [
+      "hermes",
       "opencode"
     ]
   },

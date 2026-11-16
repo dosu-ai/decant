@@ -304,6 +304,7 @@ describe("rules the code depends on", () => {
       ["sessionId"],
       ["agentId"],
       ["extra", "context_management", "type"],
+      ["_compressed_summary"],
     ]);
   });
 });

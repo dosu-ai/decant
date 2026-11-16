@@ -12,6 +12,8 @@ import { basename, dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import {
+  HERMES_DATABASE_NAME,
+  hermesDatabasePaths,
   sync as ingestSync,
   isOpenCodeDatabaseName,
   type SyncProgress,
@@ -330,6 +332,15 @@ export function watchRoots(config: Config): WatchRoot[] {
     ...(config.atifDir != null
       ? [{ dir: config.atifDir, recursive: true, accepts: () => atifEvents }]
       : []),
+    // A running Hermes keeps its connection open and appends to the `-wal`,
+    // which is the same event gap OpenCode has, so each profile's directory
+    // is polled with the same database filter.
+    ...hermesDatabasePaths(config.hermesDir).map((path) => ({
+      dir: dirname(path),
+      recursive: false,
+      polled: true,
+      accepts: () => openCodeEvents(dirname(path), (name) => name === HERMES_DATABASE_NAME),
+    })),
   ];
   const roots = new Map<
     string,

@@ -43,6 +43,7 @@ describe("resolveConfig", () => {
         DECANT_COPILOT_DIR: "/env/copilot",
         DECANT_VSCODE_COPILOT_DIR: "/env/vscode",
         DECANT_ATIF_DIR: "/env/atif",
+        DECANT_HERMES_DIR: "/env/hermes",
       },
       homeDir: "/home/dev",
     });
@@ -60,6 +61,7 @@ describe("resolveConfig", () => {
       copilotDir: "/env/copilot",
       vscodeCopilotDir: "/env/vscode",
       atifDir: "/env/atif",
+      hermesDir: "/env/hermes",
     });
   });
 
@@ -78,6 +80,7 @@ describe("resolveConfig", () => {
     expect(config.cursorDir).toBe("/home/dev/.cursor/chats");
     expect(config.copilotDir).toBe("/home/dev/.copilot/session-state");
     expect(config.atifDir).toBe("/home/dev/.decant/atif");
+    expect(config.hermesDir).toBe("/home/dev/.hermes");
   });
 
   test("reads VS Code and VS Code Insiders from each platform's user data directory", () => {
@@ -115,6 +118,21 @@ describe("resolveConfig", () => {
     expect(flag.vscodeCopilotInsidersDir).toBeUndefined();
     const env = resolveConfig({ env: { DECANT_VSCODE_COPILOT_DIR: "" }, homeDir: "/h" });
     expect(env.vscodeCopilotInsidersDir).toBeDefined();
+  });
+
+  test("follows HERMES_HOME and Hermes's platform default for the Hermes Agent home", () => {
+    const at = (env: Record<string, string>, platform: NodeJS.Platform = "linux") =>
+      resolveConfig({ env, homeDir: "/h", platform }).hermesDir;
+    expect(at({ HERMES_HOME: "/hh" })).toBe("/hh");
+    expect(at({ HERMES_HOME: "/hh", DECANT_HERMES_DIR: "/d" })).toBe("/d");
+    expect(at({ HERMES_HOME: "" })).toBe("/h/.hermes");
+    expect(at({}, "darwin")).toBe("/h/.hermes");
+    expect(at({ LOCALAPPDATA: "/local" }, "win32")).toBe("/local/hermes");
+    expect(at({}, "win32")).toBe("/h/AppData/Local/hermes");
+    expect(
+      resolveConfig({ hermesDir: "/flag", env: { DECANT_HERMES_DIR: "/d" }, homeDir: "/h" })
+        .hermesDir,
+    ).toBe("/flag");
   });
 
   test("follows COPILOT_HOME for the Copilot CLI session state", () => {

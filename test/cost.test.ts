@@ -149,6 +149,27 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
   });
 
+  test("Cyber trusted-access models use their own rates, not the base model's", () => {
+    const pricing = defaultPricing();
+    const usage = { ...usage1m(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
+    // gpt-6-cyber bills the 30-minute cache write at 1.25x input.
+    expect(estimateCostParts("gpt-6-cyber", usage, pricing)).toEqual({
+      input: 20,
+      output: 100,
+      cacheRead: 2,
+      cacheCreation: 25,
+    });
+    // gpt-5.5-cyber-preview lists no cache-write fee, and its ID must not fall
+    // through to GPT-5.5's $5 / $30 prefix match.
+    expect(estimateCostParts("gpt-5.5-cyber-preview", usage, pricing)).toEqual({
+      input: 12.5,
+      output: 75,
+      cacheRead: 1.25,
+      cacheCreation: 12.5,
+    });
+    expect(estimateCost("openai/gpt-6-cyber", usage1m(), pricing)).toBeCloseTo(120, 6);
+  });
+
   test("Astra prices input, output, cache reads, and cache writes separately", () => {
     const pricing = defaultPricing();
     const usage = {
@@ -654,17 +675,51 @@ describe("isPriceable", () => {
         cacheCreation: 0,
       });
     }
-    // Carbon and unannounced Argon variants have no public rate, so they stay
-    // unpriced rather than borrowing Argon's or an older flash rate.
+    // Unannounced Gemini 4 variants have no public rate, so they stay unpriced
+    // rather than borrowing a sibling's or an older flash rate.
     for (const model of [
-      "gemini-4-carbon",
       "gemini-4-argon-flash",
       "gemini-4-argon-lite",
+      "gemini-4-carbon-lite",
+      "gemini-4-hydrogen-lite",
+      "gemini-4-helium",
       "gemini-4.3-flash",
     ]) {
       expect(isPriceable(model)).toBe(false);
     }
     expect(isPriceable("models/gemini-3-flash-preview")).toBe(true);
+  });
+
+  test("prices Gemini 4 Carbon and Hydrogen at their published rates", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...emptyUsage(),
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheCreation: 1_000_000,
+    };
+    const cases: Array<[string, number, number, number]> = [
+      // Carbon's December 1 rate, like Argon's.
+      ["gemini-4-carbon", 4, 20, 0.2],
+      ["gemini-4-carbon-001", 4, 20, 0.2],
+      ["models/gemini-4-carbon", 4, 20, 0.2],
+      ["google/gemini-4-carbon:floor", 4, 20, 0.2],
+      ["gemini-4-hydrogen", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-latest", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-preview-11-2026", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-20261112", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen[1m]", 1.5, 7.5, 0.075],
+    ];
+    for (const [model, input, output, cacheRead] of cases) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input,
+        output,
+        cacheRead,
+        cacheCreation: input,
+      });
+    }
   });
 });
 
@@ -731,6 +786,7 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
       ["glm-5.2", 5.8],
       ["glm-5.1", 5.8],
       ["glm-5.3-flashx", 1.62],
+      ["glm-5.3-flashx-legal", 1.62],
       ["glm-5.3-flash", 0.65],
       ["glm-5", 4.2],
       ["glm-4.7", 2.8],
@@ -747,6 +803,8 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
       ["muse-spark-1.1", 5.5],
       ["muse-spark-1.3-contributor", 0.3],
       ["muse-spark-1.2-contributor", 0.3],
+      // Checked 2026-11-16.
+      ["muse-ember-1.0", 0.6],
     ];
     for (const [model, expected] of cases) {
       expect(isPriceable(model)).toBe(true);
@@ -887,6 +945,25 @@ describe("open-weight lab pricing", () => {
       ["qwen3.6-35b-a3b", 2.625, 0.375, 0.375],
       ["step-5-preview", 3.7, 0.1, 1.0],
       ["hy3", 0.66, 0.033, 0.132],
+      // Checked 2026-11-16.
+      ["minimax-m3.1-flash", 0.75, 0.015, 0.15],
+      ["qwen3.5-35b-a3b", 2.25, 0.25, 0.25],
+      ["qwen3.5-27b", 2.7, 0.3, 0.3],
+      ["qwen3.6-27b", 4.2, 0.6, 0.6],
+      ["step-3.7-flash", 1.35, 0.04, 0.2],
+      ["step-3.5-flash", 0.4, 0.02, 0.1],
+      // Tencent's list rates, not its temporary 50% promotions.
+      ["hy4", 3.335, 0.042, 0.834],
+      ["hy4-preview", 3.335, 0.042, 0.834],
+      ["hy4-flash", 0.351, 0.003, 0.07],
+      ["grok-4.7", 8.0, 0.5, 2.0],
+      ["grok-4.6", 8.0, 0.5, 2.0],
+      ["grok-4.5", 8.0, 0.3, 2.0],
+      ["grok-4.3", 3.75, 0.2, 1.25],
+      ["grok-4.20-0309-reasoning", 3.75, 0.2, 1.25],
+      ["grok-4.20-0309-non-reasoning", 3.75, 0.2, 1.25],
+      ["grok-4.20-multi-agent-0309", 3.75, 0.2, 1.25],
+      ["grok-build-0.1", 3.0, 0.2, 1.0],
     ];
     for (const [model, inputOutput, cacheRead, cacheWrite] of cases) {
       expect(isPriceable(model)).toBe(true);
@@ -894,6 +971,21 @@ describe("open-weight lab pricing", () => {
       expect(estimateCost(model, read, pricing)).toBeCloseTo(cacheRead, 6);
       expect(estimateCost(model, write, pricing)).toBeCloseTo(cacheWrite, 6);
     }
+  });
+
+  test("prices Qwen4-Max cache reads and both explicit cache-write TTLs", () => {
+    const usage = {
+      ...usage1m(),
+      cacheRead: 1_000_000,
+      cacheCreation: 2_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    expect(estimateCostParts("qwen4-max", usage, defaultPricing())).toEqual({
+      input: 1.5,
+      output: 4.5,
+      cacheRead: 0.075,
+      cacheCreation: 4.875,
+    });
   });
 
   test("prices Reflection's free beta at zero while keeping it priceable", () => {
@@ -921,6 +1013,13 @@ describe("open-weight lab pricing", () => {
       ["tencent/hy3", 0.66],
       ["deepseek-v4-pro-20260813", 5.28],
       ["tencent/hy3-20261001", 0.66],
+      ["tencent/hy4", 3.335],
+      ["Qwen4-Max", 6.0],
+      ["qwen/qwen4-max:nitro", 6.0],
+      ["minimax/minimax-m3.1-flash", 0.75],
+      ["stepfun/step-3.5-flash-2603", 0.4],
+      ["x-ai/grok-4.7", 8.0],
+      ["x-ai/grok-build-0.1:cloud", 3.0],
     ];
     for (const [model, expected] of cases) {
       expect(estimateCost(model, u, pricing)).toBeCloseTo(expected, 6);
@@ -946,6 +1045,13 @@ describe("open-weight lab pricing", () => {
       "hunyuan-hy3",
       "step-5",
       "beam-501b-a23b",
+      // xAI routes the retired grok-code-fast-1 to grok-build-0.1 without
+      // saying what it bills, and qwen4-max-preview was Token Plan only.
+      "grok-code-fast-1",
+      "x-ai/grok-code-fast-1-0825",
+      "grok-4.7-fast",
+      "qwen4-max-preview",
+      "muse-ember",
       // Proprietary siblings that are not open-weight and not yet verified.
       "kimi-k3.1",
       "qwen3.8-flash",

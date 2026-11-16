@@ -8,11 +8,6 @@ export interface TranscriptRequestRef<T> {
   current: Promise<T> | null;
 }
 
-/**
- * Wait for the shared transcript request slot, then claim it before yielding.
- * Re-checking the ref after every await serializes callers that resume from the
- * same request.
- */
 export async function runWithTranscriptRequestSlot<T>(
   requestRef: TranscriptRequestRef<T>,
   isCurrent: () => boolean,
@@ -39,10 +34,6 @@ export async function runWithTranscriptRequestSlot<T>(
   }
 }
 
-/**
- * Append a transcript page without duplicating rows if a retry overlaps the
- * previous page. Message sequence numbers are unique within a session.
- */
 export function appendTranscriptPage<T extends SequencedTranscriptMessage>(
   current: readonly T[],
   incoming: readonly T[],
@@ -54,11 +45,6 @@ export function appendTranscriptPage<T extends SequencedTranscriptMessage>(
   return [...current, ...incoming.filter((message) => !seen.has(message.seq))];
 }
 
-/**
- * Prepend an earlier transcript page, deduplicating for the same reason
- * `appendTranscriptPage` does. Order matters: the transcript renders in `seq`
- * order, so the earlier page goes in front.
- */
 export function prependTranscriptPage<T extends SequencedTranscriptMessage>(
   current: readonly T[],
   incoming: readonly T[],
@@ -70,14 +56,6 @@ export function prependTranscriptPage<T extends SequencedTranscriptMessage>(
   return [...incoming.filter((message) => !seen.has(message.seq)), ...current];
 }
 
-/**
- * The request that fills the gap in front of a window, or null when the window
- * already reaches the start of the session.
- *
- * The limit is the size of the gap rather than a full page, so the fetch stops
- * exactly where the loaded window begins. Asking for a full page here would
- * re-fetch rows already held whenever the window starts less than a page in.
- */
 export function previousTranscriptPageRequest(
   offset: number,
   pageSize: number,
@@ -94,27 +72,10 @@ export function previousTranscriptPageRequest(
   return { offset: previousOffset, limit: start - previousOffset };
 }
 
-/**
- * Keep a little preceding context when opening an unloaded outline target.
- *
- * Treats `seq` as a dense, zero-based row index, because the server pages with
- * `LIMIT/OFFSET` over `ORDER BY seq`. Both parsers currently guarantee that:
- * every branch that increments `seq` also emits exactly one message. Nothing in
- * the schema enforces it. A parser that ever skipped a `seq` would send outline
- * clicks and compaction jumps to a window that does not contain the target.
- */
 export function transcriptWindowOffset(seq: number, contextBefore = 20): number {
   return Math.max(0, Math.trunc(seq) - Math.max(0, Math.trunc(contextBefore)));
 }
 
-/**
- * Load every transcript row through a deep-link target.
- *
- * A focused jump is an introspection action, not a reason to replace the
- * transcript with a partial window. Starting at offset zero means the reader
- * can scroll upward from the target without first encountering an "earlier
- * messages not loaded" gap.
- */
 export function transcriptPrefixRequest(
   seq: number,
   messageCount: number,
@@ -129,12 +90,6 @@ export function transcriptPrefixRequest(
   };
 }
 
-/**
- * Hold a window offset inside the session so it always addresses a page with
- * rows in it. Deep links travel between archives: `#message-1400` pasted from a
- * longer copy of the same session would otherwise request an offset past the
- * end, get an empty page back, and blank the transcript.
- */
 export function clampTranscriptWindowOffset(
   offset: number,
   messageCount: number,
@@ -157,14 +112,6 @@ export interface TranscriptPage<M> {
   has_more_messages?: boolean;
 }
 
-/**
- * Fetch `limit` messages from `offset` in requests no larger than the server's
- * per-request cap, and join them into one page. A prefix that reaches a deep
- * message in a long session can exceed that cap. Stops early at the end of the
- * transcript, and before any further request once `isCurrent` turns false,
- * as when the reader navigates away mid-load. The result carries the last
- * request's metadata, with every fetched message.
- */
 export async function fetchTranscriptRange<M, P extends TranscriptPage<M>>(
   fetchPage: (offset: number, limit: number) => Promise<P>,
   offset: number,

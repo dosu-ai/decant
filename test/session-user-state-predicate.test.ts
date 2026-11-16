@@ -18,9 +18,7 @@ function freshDb(): Database {
   return openDb(join(workDir, `predicate-${dbCounter}.db`));
 }
 
-// The per-row correlated form this module used before the hidden set was
-// precomputed. It stays here as the semantic oracle.
-function oraclePredicate(alias: string, includeArchived: boolean): string {
+function legacyCorrelatedOracle(alias: string, includeArchived: boolean): string {
   const hiddenStates = includeArchived ? "'deleted'" : "'archived', 'deleted'";
   return `NOT EXISTS (
     WITH RECURSIVE visibility_lineage(id, tool, source_session_id, parent_session_id) AS (
@@ -41,7 +39,7 @@ function oraclePredicate(alias: string, includeArchived: boolean): string {
   )`;
 }
 
-function oracleArchivedExpression(alias: string): string {
+function legacyCorrelatedArchivedOracle(alias: string): string {
   return `EXISTS (
     WITH RECURSIVE archive_lineage(id, tool, source_session_id, parent_session_id) AS (
       SELECT ${alias}.id, ${alias}.tool, ${alias}.source_session_id, ${alias}.parent_session_id
@@ -102,8 +100,6 @@ function archivedIds(db: Database, expression: string): number[] {
 describe("sessionUserStatePredicate", () => {
   test("inherits hidden states down subagent lineage and matches identity by tool", () => {
     const db = freshDb();
-    // 1 archived root -> 2 -> 3 (grandchild); 4 unrelated root with a deleted child 5;
-    // 6 shares 1's source id under another tool, so the state must not reach it.
     addSession(db, 1, "claude_code", "root");
     addSession(db, 2, "claude_code", "child");
     addSession(db, 3, "claude_code", "grandchild");
@@ -134,11 +130,11 @@ describe("sessionUserStatePredicate", () => {
     setState(db, "codex", "a", "archived");
 
     expect(visibleIds(db, sessionUserStatePredicate("s"))).toEqual([4]);
-    expect(visibleIds(db, oraclePredicate("s", false))).toEqual([4]);
+    expect(visibleIds(db, legacyCorrelatedOracle("s", false))).toEqual([4]);
     db.close();
   });
 
-  test("selects the same rows and archive flags as the correlated oracle on random forests", () => {
+  test("selects the same rows and archive flags as the legacy correlated oracle on random forests", () => {
     for (let seed = 1; seed <= 6; seed += 1) {
       const db = freshDb();
       let state = seed * 2654435761;
@@ -147,7 +143,6 @@ describe("sessionUserStatePredicate", () => {
         return state / 4294967296;
       };
       const count = 80;
-      // Ids i and i + 40 share a source id under different tools.
       const toolOf = (id: number): string =>
         Math.floor(id / 40) % 2 === 0 ? "claude_code" : "codex";
       const sourceOf = (id: number): string => `src-${id % 40}`;
@@ -171,11 +166,11 @@ describe("sessionUserStatePredicate", () => {
 
       for (const includeArchived of [false, true]) {
         expect(visibleIds(db, sessionUserStatePredicate("s", includeArchived))).toEqual(
-          visibleIds(db, oraclePredicate("s", includeArchived)),
+          visibleIds(db, legacyCorrelatedOracle("s", includeArchived)),
         );
       }
       expect(archivedIds(db, sessionIsUserArchivedExpression("s"))).toEqual(
-        archivedIds(db, oracleArchivedExpression("s")),
+        archivedIds(db, legacyCorrelatedArchivedOracle("s")),
       );
       const visible = visibleIds(db, sessionUserStatePredicate("s")).length;
       expect(visible).toBeGreaterThan(0);

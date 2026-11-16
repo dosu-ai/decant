@@ -10,44 +10,34 @@ import { getDecantLogger } from "./logging.ts";
 const logger = getDecantLogger("ingest");
 
 export interface ProbeFs {
-  /** The file's text, or null when it is missing, unreadable, or over
-   * `MAX_TEXT_BYTES`. */
   readText(path: string): string | null;
-  /** A regular file's text, or null when it is anything else, unreadable, or
-   * over `maxBytes`. Decided on the open descriptor, and the read is bounded. */
   readSmallFile(path: string, maxBytes: number): string | null;
-  /** The absolute path with symlinks resolved, or just made absolute when it
-   * cannot be resolved. */
   realPath(path: string): string;
   isDirectory(path: string): boolean;
-  /** Calls so far that got no answer because their location stalls. */
   readonly unanswered: number;
 }
 
 export interface BoundedFsOptions {
-  /** Longest wait for one call, in milliseconds. */
   deadlineMs?: number;
-  /** Stalled roots, shared by every thread that holds the same buffer. */
   ledger?: SharedArrayBuffer;
-  /** Test seam: a path at or under `prefix` answers only once `gate` is set. */
   stall?: { prefix: string; gate: SharedArrayBuffer };
 }
 
-/** Local disks answer in microseconds; this leaves room for a slow mount. */
 export const DEFAULT_PROBE_DEADLINE_MS = 2000;
 
 const HELPER_START_MS = 5000;
 
-/** Largest file `readText` returns. A read past the deadline keeps running on
- * the helper, so it must not grow with the file. */
 export const MAX_TEXT_BYTES = 8 * 1024 * 1024;
 
-// Ledger layout: a version counter, then a state, a byte length, and a count of
-// parked helpers per slot, then each slot's UTF-8 path.
 const SLOTS = 8;
 const PATH_BYTES = 4096;
+const LEDGER_VERSION_INDEX = 0;
+const LEDGER_SLOTS_START = 1;
+const SLOT_STATE_OFFSET = 0;
+const SLOT_PATH_LENGTH_OFFSET = 1;
+const SLOT_HOLDERS_OFFSET = 2;
 const SLOT_INTS = 3;
-const HEADER_INTS = 1 + SLOTS * SLOT_INTS;
+const HEADER_INTS = LEDGER_SLOTS_START + SLOTS * SLOT_INTS;
 const FREE = 0;
 const CLAIMED = 1;
 const BLOCKED = 2;
@@ -137,9 +127,9 @@ self.onmessage = ({ data }) => {
       // Only the last parked helper on the slot frees it, so a call that is
       // still blocked stays counted against the cap.
       const ledger = new Int32Array(data.ledger);
-      if (Atomics.sub(ledger, data.stateIndex + 2, 1) === 1) {
-        Atomics.store(ledger, data.stateIndex, 0);
-        Atomics.add(ledger, 0, 1);
+      if (Atomics.sub(ledger, data.stateIndex + ${SLOT_HOLDERS_OFFSET}, 1) === 1) {
+        Atomics.store(ledger, data.stateIndex + ${SLOT_STATE_OFFSET}, ${FREE});
+        Atomics.add(ledger, ${LEDGER_VERSION_INDEX}, 1);
       }
     }
     self.onmessage = null;
@@ -163,17 +153,14 @@ let helperUrl: string | null = null;
 // Bun's worker has ref and unref; the DOM type in scope does not.
 type HelperWorker = Worker & { ref(): void; unref(): void };
 
-/** One helper thread and the shared memory it answers through. */
 class ProbeHelper {
   readonly #worker: HelperWorker;
   readonly #state = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
-  // A file over the ceiling fails to grow the buffer and reads as unreadable.
   readonly #reply = new SharedArrayBuffer(64 * 1024, { maxByteLength: 64 * 1024 * 1024 });
 
   private constructor(stall: BoundedFsOptions["stall"]) {
     helperUrl ??= URL.createObjectURL(new Blob([HELPER_SOURCE], { type: "text/javascript" }));
     this.#worker = new Worker(helperUrl) as HelperWorker;
-    // An idle helper must not keep the process or a sync worker alive.
     this.#worker.unref();
     this.#worker.postMessage({ state: this.#state.buffer, reply: this.#reply, stall });
   }
@@ -199,11 +186,8 @@ class ProbeHelper {
       : null;
   }
 
-  /** Ends the helper once its stalled call returns. With a ledger slot, it
-   * releases its hold on that slot first. */
   leaveOnReturn(ledger?: SharedArrayBuffer, stateIndex?: number): void {
     if (ledger != null && !isMainThread) {
-      // A sync worker that drains would end the helper before it reports.
       this.#worker.ref();
     }
     this.#worker.postMessage({ op: "leave", ledger, stateIndex });
@@ -221,8 +205,6 @@ export function createProbeLedger(): SharedArrayBuffer {
 
 const LEDGER_KEY = "decant.unreachable-roots";
 
-// `decant serve` runs each sync on a new worker thread. Workers inherit this
-// buffer, so a root that stalled once is not tried again by the next sync.
 function processLedger(): SharedArrayBuffer {
   const inherited = getEnvironmentData(LEDGER_KEY);
   if (inherited instanceof SharedArrayBuffer) {
@@ -245,20 +227,23 @@ function slotBytes(ledger: SharedArrayBuffer, slot: number, length: number): Uin
   );
 }
 
+function slotStart(slot: number): number {
+  return LEDGER_SLOTS_START + slot * SLOT_INTS;
+}
+
 function blockedRoots(ledger: SharedArrayBuffer): string[] {
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const roots: string[] = [];
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    if (Atomics.load(ints, 1 + slot * SLOT_INTS) === BLOCKED) {
-      const length = Atomics.load(ints, 2 + slot * SLOT_INTS);
+    const start = slotStart(slot);
+    if (Atomics.load(ints, start + SLOT_STATE_OFFSET) === BLOCKED) {
+      const length = Atomics.load(ints, start + SLOT_PATH_LENGTH_OFFSET);
       roots.push(Buffer.from(slotBytes(ledger, slot, length)).toString("utf8"));
     }
   }
   return roots;
 }
 
-/** A slot held by `holders` parked helpers until each one returns: a free slot
- * for `root`, else one that is already taken. Null when neither is found. */
 function holdSlot(
   ledger: SharedArrayBuffer,
   root: string,
@@ -267,23 +252,22 @@ function holdSlot(
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const bytes = Buffer.from(root, "utf8");
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    const stateIndex = 1 + slot * SLOT_INTS;
+    const stateIndex = slotStart(slot) + SLOT_STATE_OFFSET;
     if (Atomics.compareExchange(ints, stateIndex, FREE, CLAIMED) !== FREE) {
       continue;
     }
     slotBytes(ledger, slot, bytes.length).set(bytes);
-    Atomics.store(ints, stateIndex + 1, bytes.length);
-    Atomics.store(ints, stateIndex + 2, holders);
+    Atomics.store(ints, stateIndex + SLOT_PATH_LENGTH_OFFSET, bytes.length);
+    Atomics.store(ints, stateIndex + SLOT_HOLDERS_OFFSET, holders);
     Atomics.store(ints, stateIndex, BLOCKED);
-    Atomics.add(ints, 0, 1);
+    Atomics.add(ints, LEDGER_VERSION_INDEX, 1);
     return { stateIndex, claimed: true };
   }
-  // Another thread filled the last slot first. Joining a taken slot keeps
-  // these helpers counted, and a full ledger tries nothing new meanwhile.
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    const stateIndex = 1 + slot * SLOT_INTS;
-    const held = Atomics.load(ints, stateIndex + 2);
-    if (held > 0 && Atomics.compareExchange(ints, stateIndex + 2, held, held + holders) === held) {
+    const stateIndex = slotStart(slot) + SLOT_STATE_OFFSET;
+    const holdersIndex = stateIndex + SLOT_HOLDERS_OFFSET;
+    const held = Atomics.load(ints, holdersIndex);
+    if (held > 0 && Atomics.compareExchange(ints, holdersIndex, held, held + holders) === held) {
       return { stateIndex, claimed: false };
     }
   }
@@ -294,7 +278,6 @@ function isUnder(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
 
-/** Every ancestor of `path`, from the filesystem root down. */
 function ancestors(path: string): string[] {
   const out: string[] = [];
   for (let current = dirname(path); ; current = dirname(current)) {
@@ -305,13 +288,10 @@ function ancestors(path: string): string[] {
   }
 }
 
-/** `ProbeFs` whose calls each wait at most the deadline. A call that times out
- * answers as an unreadable path does, and its location is skipped without
- * another wait until the stalled call returns. */
 export class BoundedFs implements ProbeFs {
   readonly #deadlineMs: number;
   readonly #ledger: SharedArrayBuffer;
-  readonly #version: Int32Array;
+  readonly #header: Int32Array;
   readonly #stall: BoundedFsOptions["stall"];
   #idle: ProbeHelper | null = null;
   #helperFailed = false;
@@ -322,7 +302,7 @@ export class BoundedFs implements ProbeFs {
   constructor(options: BoundedFsOptions = {}) {
     this.#deadlineMs = options.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS;
     this.#ledger = options.ledger ?? sharedLedger;
-    this.#version = new Int32Array(this.#ledger, 0, 1);
+    this.#header = new Int32Array(this.#ledger, 0, HEADER_INTS);
     this.#stall = options.stall;
   }
 
@@ -371,7 +351,7 @@ export class BoundedFs implements ProbeFs {
   }
 
   #isBlocked(path: string): boolean {
-    const version = Atomics.load(this.#version, 0);
+    const version = Atomics.load(this.#header, LEDGER_VERSION_INDEX);
     if (version !== this.#seenVersion) {
       this.#roots = blockedRoots(this.#ledger);
       this.#seenVersion = version;
@@ -379,7 +359,6 @@ export class BoundedFs implements ProbeFs {
     if (this.#roots.length === 0) {
       return false;
     }
-    // A full ledger cannot remember another root, so nothing new is tried.
     return this.#roots.length === SLOTS || this.#roots.some((root) => isUnder(path, root));
   }
 
@@ -397,8 +376,6 @@ export class BoundedFs implements ProbeFs {
   }
 
   #block(path: string, stalled: ProbeHelper): void {
-    // The shallowest ancestor that also stalls covers its siblings in one
-    // entry, at the cost of one more stalled helper.
     let root = path;
     const parked = [stalled];
     for (const ancestor of ancestors(path)) {
@@ -413,8 +390,6 @@ export class BoundedFs implements ProbeFs {
         break;
       }
     }
-    // The ancestor can answer while the first call stays blocked, so both
-    // helpers hold the slot.
     const slot = holdSlot(this.#ledger, root, parked.length);
     for (const helper of parked) {
       helper.leaveOnReturn(slot == null ? undefined : this.#ledger, slot?.stateIndex);
@@ -430,6 +405,4 @@ export class BoundedFs implements ProbeFs {
   }
 }
 
-/** The default for paths taken from session logs. One per thread; its helper
- * starts on first use. */
 export const boundedFs: ProbeFs = new BoundedFs();

@@ -4,7 +4,6 @@ import { readUiFile, readUiSource, sourceFrom } from "./ui-source.ts";
 
 describe("nearestUsableIndex", () => {
   test("prefers the control before the one that just disabled itself", () => {
-    // Previous, Next: Next disables on the last page and focus lands on Previous.
     expect(nearestUsableIndex(1, [true, false])).toBe(0);
   });
 

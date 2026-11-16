@@ -8,7 +8,7 @@ import { OverflowMenu } from "../common.tsx";
 import { SESSION_DETAIL_MESSAGE_PAGE_SIZE } from "../constants.ts";
 import { ContextWindowPanel } from "../context-window-strip.tsx";
 import { costSourceLabel, costSourceTooltip } from "../cost-source.ts";
-import { useDialogFocusTrap } from "../focus.ts";
+import { useBackdropDismiss, useDialogFocusTrap } from "../focus.ts";
 import { basename, compact, errorMessage, formatInt, money } from "../format.ts";
 import { Icon } from "../icons.tsx";
 import { formatIssueBadge, unknownRecordTypeSummary } from "../ingest-issues.ts";
@@ -78,6 +78,7 @@ export function DeleteSessionDialog({
   pending: boolean;
   title: string;
 }) {
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
@@ -85,19 +86,12 @@ export function DeleteSessionDialog({
   onCloseRef.current = onClose;
   const requestClose = useCallback(() => onCloseRef.current(), []);
   useDialogFocusTrap(open, dialogRef, requestClose);
+  useBackdropDismiss(open && !pending, backdropRef, requestClose);
   if (!open) {
     return null;
   }
   return createPortal(
-    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and explicit Cancel/close controls.
-    <div
-      className="report-review-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !pending) {
-          requestClose();
-        }
-      }}
-    >
+    <div className="report-review-backdrop" ref={backdropRef}>
       <section
         aria-describedby={descriptionId}
         aria-labelledby={titleId}
@@ -170,9 +164,6 @@ export function SessionDetailView({
   const [economicsError, setEconomicsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  // Separate from loadMoreError: the two loads fail in different places and
-  // retry in opposite directions, so one shared message would report a failed
-  // backward load at the foot of the transcript under the wrong wording.
   const [loadEarlierError, setLoadEarlierError] = useState<string | null>(null);
   const [showIssues, setShowIssues] = useState(false);
   const [issues, setIssues] = useState<SessionIngestIssue[] | null>(null);
@@ -253,9 +244,7 @@ export function SessionDetailView({
           setOutline(nextOutline);
         }
       })
-      .catch(() => {
-        // The loaded transcript still supplies a progressive outline.
-      });
+      .catch(() => {});
     void getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`)
       .then((nextEconomics) => {
         if (!cancelled) {
@@ -273,22 +262,13 @@ export function SessionDetailView({
           setContextWindow(nextTimeline);
         }
       })
-      .catch(() => {
-        // The context strip is progressive enhancement; the transcript stands alone.
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
-      // Leaving the view, or reloading it, makes every request this session
-      // version started stale, including transcript chunks still to come.
       sessionVersionRef.current += 1;
     };
   }, [detailRetryKey, id]);
 
-  // Ingest issues are fetched lazily, on first expand, rather than eagerly
-  // alongside outline/economics/context-window above: most sessions have
-  // none, and the raw_line the row can join against is display-local by
-  // design (never logged), so there is no reason to pull it over the wire
-  // before the user asks to see it.
   useEffect(() => {
     if (!showIssues || issues != null || issuesError != null) {
       return;
@@ -363,7 +343,6 @@ export function SessionDetailView({
     return request;
   }, [id]);
 
-  /** A deep link, outline click or compaction jump lands mid-session; without this ArrowUp stops at the window's top. */
   const loadPreviousMessages = useCallback((): Promise<boolean> => {
     const sessionVersion = sessionVersionRef.current;
     return runWithTranscriptRequestSlot(
@@ -398,41 +377,17 @@ export function SessionDetailView({
             if (page.messages.length === 0) {
               return false;
             }
-            // Browser scroll anchoring does not compensate for prepended turns
-            // (measured in Chromium), so the correction below is required.
-            // Anchor on a surviving turn rather than scrollHeight: the
-            // content-visibility placeholders only estimate their height.
-            let anchorSeq: number | null = null;
-            let anchorTop: number | null = null;
-            for (const message of latest.messages) {
-              const top = document
-                .getElementById(`message-${message.seq}`)
-                ?.getBoundingClientRect().top;
-              if (top != null) {
-                anchorSeq = message.seq;
-                anchorTop = top;
-                break;
-              }
-            }
-            const nextDetail = {
-              ...latest,
-              messages: prependTranscriptPage(latest.messages, page.messages),
-              message_offset: request.offset,
-            };
-            detailRef.current = nextDetail;
-            // flushSync so the measurement sees the new DOM and the shifted
-            // position is never painted before it is corrected.
-            flushSync(() => {
-              setDetail(nextDetail);
+            preserveScrollAcrossPrepend(latest.messages, () => {
+              const nextDetail = {
+                ...latest,
+                messages: prependTranscriptPage(latest.messages, page.messages),
+                message_offset: request.offset,
+              };
+              detailRef.current = nextDetail;
+              flushSync(() => {
+                setDetail(nextDetail);
+              });
             });
-            if (anchorSeq != null && anchorTop != null) {
-              const after = document
-                .getElementById(`message-${anchorSeq}`)
-                ?.getBoundingClientRect().top;
-              if (after != null && after !== anchorTop) {
-                window.scrollBy({ behavior: "auto", top: after - anchorTop });
-              }
-            }
             return true;
           })
           .catch((err: unknown) => {
@@ -483,17 +438,12 @@ export function SessionDetailView({
             request.offset,
             request.limit,
             SESSION_MESSAGE_PAGE_MAX,
-            // A reader who leaves this session mid-load stops the remaining
-            // chunks; the result below is discarded as stale anyway.
             () => sessionVersionRef.current === sessionVersion,
           )
             .then((page) => {
               if (sessionVersionRef.current !== sessionVersion) {
                 return false;
               }
-              // Never trade a populated transcript for an empty one. The clamp
-              // above keeps the offset in range against the count we hold, but
-              // that count can lag the archive after a re-sync.
               if (page.messages.length === 0) {
                 return false;
               }
@@ -729,9 +679,6 @@ export function SessionDetailView({
     [id],
   );
 
-  // Hoisted above the early returns because hooks cannot run conditionally.
-  // TranscriptTurn is memoized, and a Map rebuilt every render would defeat
-  // that for every turn on the screen.
   const subagents = detail?.subagents;
   const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
   const detailMessages = detail?.messages;
@@ -1009,8 +956,6 @@ export function SessionDetailView({
         <div className="transcript-column">
           {(detail.message_offset ?? 0) > 0 ? (
             <div className="transcript-window-start">
-              {/* Count of missing messages: the offset is a zero-based row
-                  index and would contradict the #message-<seq> anchor as an ordinal. */}
               <span>
                 {formatInt(detail.message_offset ?? 0)} earlier{" "}
                 {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
@@ -1096,6 +1041,29 @@ export function SessionDetailView({
   );
 }
 
+function preserveScrollAcrossPrepend(
+  renderedMessages: readonly { seq: number }[],
+  prepend: () => void,
+): void {
+  let anchorSeq: number | null = null;
+  let anchorTop: number | null = null;
+  for (const message of renderedMessages) {
+    const top = document.getElementById(`message-${message.seq}`)?.getBoundingClientRect().top;
+    if (top != null) {
+      anchorSeq = message.seq;
+      anchorTop = top;
+      break;
+    }
+  }
+  prepend();
+  if (anchorSeq != null && anchorTop != null) {
+    const after = document.getElementById(`message-${anchorSeq}`)?.getBoundingClientRect().top;
+    if (after != null && after !== anchorTop) {
+      window.scrollBy({ behavior: "auto", top: after - anchorTop });
+    }
+  }
+}
+
 export function IngestIssuesPanel({
   error,
   issues,
@@ -1163,16 +1131,12 @@ export function IngestIssuesPanel({
                 </div>
               </div>
             ) : null}
-            {otherIssues.map((issue, index) => (
-              // No stable id in the wire shape; composite of the fields shown
-              // plus the map index, since byte-identical rows (e.g. repeated
-              // duplicate_tool_result issues) would otherwise collide.
+            {otherIssues.map((issue) => (
               <div
                 className={`ingest-issue-row ${
                   issue.code === "unparsed_line" ? "is-warning" : "is-informational"
                 }`}
-                // biome-ignore lint/suspicious/noArrayIndexKey: fetched once and never reorders; index only disambiguates byte-identical rows.
-                key={`${issue.code}-${issue.line_no}-${issue.error}-${index}`}
+                key={issue.id}
               >
                 <div>
                   <div>

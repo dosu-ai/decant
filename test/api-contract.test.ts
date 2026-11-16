@@ -64,8 +64,6 @@ describe("local API OpenAPI contract", () => {
       config,
       hostname: "127.0.0.1",
       port: 0,
-      // A temp home and a fake launchctl keep these cases off the real
-      // machine's login items.
       service: {
         platform: "darwin",
         env: {},
@@ -74,7 +72,6 @@ describe("local API OpenAPI contract", () => {
         install: { channel: "installer", binaryPath: "/opt/test/decant" },
         execPath: "/opt/test/decant",
         run: async (argv) => {
-          // Like launchd: the job is known only between bootstrap and bootout.
           if (argv[1] === "bootstrap") launchdLoaded = true;
           if (argv[1] === "bootout") launchdLoaded = false;
           return argv[1] === "print" && !launchdLoaded
@@ -405,7 +402,6 @@ describe("local API OpenAPI contract", () => {
         },
       ];
 
-      // A route may appear in several cases (one per source filter), so compare operations, not cases.
       expect(operationKeys(document)).toEqual(
         [...new Set(cases.map((entry) => `${entry.method.toUpperCase()} ${entry.path}`))].sort(),
       );
@@ -468,7 +464,6 @@ describe("local API OpenAPI contract", () => {
           };
         }
       ).components.schemas;
-      // Required, so the listing above fails validation if a row drops one.
       const projectFields = ["project_path", "project_root", "project_label", "project_remote"];
       expect(schemas.Recommendation?.required).toEqual(expect.arrayContaining(projectFields));
       expect(Object.keys(schemas.LaunchResult?.properties ?? {})).toContain("dir");

@@ -24,18 +24,12 @@ test("sync stays visually icon-led while retaining a hidden live announcement", 
 
 test("background archive activity waits for an explicit update", () => {
   expect(main).toContain("const [archiveUpdateAvailable, setArchiveUpdateAvailable]");
-  // The progress handler and the terminal handler share one rule for what shows.
   expect(main.match(/showsSync\(payload\.reason, archiveSyncedRef\.current\)/g)).toHaveLength(2);
   expect(main).toMatch(
     /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
   );
   expect(main).toContain("localSyncingRef.current = localSyncing;");
-  // Server sync failures share EventSource's "error" listener and must end a
-  // foreground sync rather than read as a dropped connection.
   expect(main).toContain("const failure = parseSyncFailure(event);");
-  // Reconnecting drops a stream-only sync indicator whose terminal event was
-  // lost, when the status route cannot say whether the sync still runs, but
-  // never one owned by this tab's own pending POST /api/sync.
   expect(main).toMatch(
     /if \(!manualSyncPendingRef\.current\) \{\s*progressThrottle\.cancel\(\);\s*setLocalSyncing\(false\);/,
   );
@@ -43,29 +37,22 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).not.toContain('events.addEventListener("archive_updated", requestRefresh)');
   expect(main).toContain('archiveUpdateAvailable ? "Update" : "Sync"');
   expect(main).toContain("archiveUpdateAvailable ? loadArchiveUpdates : runSync");
-  // The shell stopped rendering server-wide sync status, so the slice that
-  // carried it must not be fetched on every route either.
   expect(main).not.toContain("/api/analytics/now");
 });
 
 test("the unfiltered Sessions list loads background activity itself, throttled", () => {
-  // Background activity goes to the live throttle only while the list
-  // qualifies. Anywhere else it still lights Update.
   expect(main).toMatch(
     /if \(liveSessionsRef\.current && liveRefresh != null\) \{\s*liveRefresh\.push\(null\);\s*\} else \{\s*setArchiveUpdateAvailable\(true\);\s*\}/,
   );
   expect(main).toMatch(
     /createLatestThrottle<null>\(\(\) => \{\s*const action = liveSessionsAction\(\s*liveSessionsRef\.current,\s*localSyncingRef\.current,\s*liveSessionsViewer\(\),\s*\);/,
   );
-  // Held-back activity loads once the reader is back at the top of a visible tab.
   expect(main).toContain('window.addEventListener("scroll", resume, { passive: true });');
   expect(main).toContain('document.addEventListener("visibilitychange", resume);');
   expect(main).toContain("}, LIVE_SESSIONS_REFRESH_MS);");
-  // A refresh does what Update would, so Update goes dark with it.
   expect(main).toMatch(
     /if \(action === "refresh"\) \{\s*setArchiveUpdateAvailable\(false\);\s*requestRefresh\(\);/,
   );
-  // Activity that lit Update elsewhere loads on return to the list.
   expect(main).toMatch(
     /if \(liveSessions && archiveUpdateAvailable\) \{\s*liveSessionsThrottleRef\.current\?\.push\(null\);/,
   );
@@ -74,33 +61,24 @@ test("the unfiltered Sessions list loads background activity itself, throttled",
 
 test("sync state is restored from the status route on load and reconnect", () => {
   const shell = readUiFile("main.tsx");
-  // EventSource does not replay events, so a reload or a dropped stream asks
-  // the server instead of waiting for the next progress event.
   expect(shell).toContain("status = await getSyncStatus();");
   expect(shell).toContain("const restored = restoreSync(status, {");
-  // The first read is issued before the slice loads, which would otherwise
-  // hold every connection the browser allows this origin.
   expect(shell.indexOf("void readSyncStatus();")).toBeLessThan(
     shell.indexOf("loadSlicesIndependently<DataSlice, DashboardData>("),
   );
-  // A reconnect asks the server before dropping the indicator.
   expect(shell).toMatch(
     /void readSyncStatus\(\)\.then\(\(read\) => \{\s*if \(read\) \{\s*return;\s*\}\s*if \(!manualSyncPendingRef\.current\) \{/,
   );
-  // The stream opening is the other moment a terminal event can have been missed.
   expect(shell).toMatch(/if \(!dropped\) \{\s*void readSyncStatus\(\);\s*\}/);
-  // A lost terminal event loads the sync's results as the event would have.
   expect(shell).toMatch(
     /if \(restored\.ended\) \{[^}]*setArchiveUpdateAvailable\(false\);\s*requestRefresh\(\);/,
   );
-  // An overtaken answer that saw a sync running is not thrown away.
   expect(shell).toContain("const superseded = supersededStatus(status, {");
   expect(shell).toContain("sawSync: sawSyncRef.current,");
 });
 
 test("a new sync replaces the last one's completion notice and cancels its timer", () => {
   const shell = readUiFile("main.tsx");
-  // From a progress event, a status read, and the Sync button alike.
   expect(shell).toMatch(/syncEndedRef\.current \+= 1;\s*dismissSyncComplete\(\);/);
   expect(shell).toMatch(
     /setSyncError\(null\);\s*dismissSyncComplete\(\);\s*if \(restored\.progress/,
@@ -121,8 +99,7 @@ test("sync progress is visible without a second live announcement", () => {
   expect(shell.match(/aria-live=/g)).toHaveLength(1);
   expect(shell).toContain("? syncAnnouncement(syncProgress)");
   expect(readUiFile("sync-progress.tsx")).not.toContain("aria-live");
-  // The bar's fill animates only for readers who have not asked for less motion.
-  const block = styles.slice(styles.indexOf(" * Sync progress and first-sync states"));
+  const block = styles.slice(styles.indexOf(".sync-line {"));
   expect(block).toMatch(
     /@media \(prefers-reduced-motion: no-preference\) \{[^@]*animation: sync-indeterminate/,
   );

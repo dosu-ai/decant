@@ -193,7 +193,6 @@ describe("resolveConfig", () => {
         homeDir: "/h",
       }).opencodeModelsPath,
     ).toBe("/m.json");
-    // Empty values behave like unset ones.
     expect(resolveConfig({ env: { OPENCODE_DB: "" }, homeDir: "/h" }).opencodeDb).toBeUndefined();
     expect(
       resolveConfig({ env: { OPENCODE_CONFIG: "", OPENCODE_CONFIG_DIR: "" }, homeDir: "/h" }),

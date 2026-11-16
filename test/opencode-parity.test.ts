@@ -21,12 +21,12 @@ import {
   compareSessionTotals,
   compareStructure,
   costDecantModelGroups,
+  decantRuleModelTotals,
   type LegacySession,
   lettaStructure,
   type ModelTotals,
   mergeModelTotals,
   type OpenCodeAssistantRow,
-  openCodeModelTotals,
   openCodeRuleDifferences,
   parseStatsJson,
   readLegacyCompaction,
@@ -35,6 +35,7 @@ import {
   readLegacySessionTotals,
   readOpenCodeAssistantRows,
   type SessionTotals,
+  statsRuleModelTotals,
   type TranscriptStructure,
   toolNamesMatch,
 } from "../scripts/opencode-parity.ts";
@@ -67,7 +68,6 @@ function openReadOnly(path: string): Database {
   return new Database(path, { readonly: true, strict: true });
 }
 
-/** Runs `fn` on a read-only handle and closes it. */
 function withDb<T>(path: string, fn: (db: Database) => T): T {
   const db = openReadOnly(path);
   try {
@@ -103,7 +103,6 @@ function exportOf(db: Database, sessionId: string) {
   return buildLegacyExport(session, messages, parts);
 }
 
-/** Every focused 1.x session script (old-shape needs its own table shape). */
 const V1_SESSIONS = [
   "v1-sample.sql",
   "v1/compaction.sql",
@@ -113,13 +112,18 @@ const V1_SESSIONS = [
   "v1/malformed.sql",
 ];
 
-const MIXED = [
-  "v1-sample.sql",
-  "v1/fork.sql",
-  "v1/compaction.sql",
-  "v1/tokens.sql",
-  "v1/migrated.sql",
-];
+const MIXED_COUNTED_USAGE: Record<string, { steps: number; input: number; output: number }> = {
+  "v1-sample.sql": { steps: 2, input: 370, output: 57 },
+  "v1/fork.sql": { steps: 1, input: 90, output: 10 },
+  "v1/compaction.sql": { steps: 1, input: 100, output: 40 },
+  "v1/tokens.sql": { steps: 3, input: 300, output: 150 },
+  "v1/migrated.sql": { steps: 1, input: 40, output: 6 },
+};
+const MIXED = Object.keys(MIXED_COUNTED_USAGE);
+
+function sumMixed(field: "steps" | "input" | "output"): number {
+  return Object.values(MIXED_COUNTED_USAGE).reduce((sum, usage) => sum + usage[field], 0);
+}
 
 function model(overrides: Partial<ModelTotals>): ModelTotals {
   return {
@@ -175,8 +179,6 @@ describe("opencode parity comparisons", () => {
   });
 
   test("takes reasoning charged twice before 1.3.16 off the recorded cost", () => {
-    // 100 in + 50 out (holding 20 reasoning) at 0.15 / 0.5 per 1M is 40e-6;
-    // OpenCode 1.3.10 recorded 50e-6, charging the 20 reasoning tokens again.
     const reference = [
       model({
         input: 100,
@@ -219,7 +221,6 @@ describe("opencode parity comparisons", () => {
     ];
     const decant = [
       model({ ...unpriced, cost: 0.0012345, costSource: "reported" }),
-      // A free route stays at list price: informational, never a mismatch.
       model({ provider: "zai-coding-plan", cost: 0.0000794, costSource: "list" }),
       model({ provider: "example", model: "example-free", cost: 0, costSource: "reported" }),
     ];
@@ -266,7 +267,6 @@ describe("opencode parity comparisons", () => {
       ["example", "reported"],
     ]);
     expect(rows[0]?.cost).toBeGreaterThan(0);
-    // One model's stored figure is shared by what each provider recorded.
     expect(rows[1]?.cost).toBeCloseTo(0.0075, 12);
     expect(rows[2]?.cost).toBeCloseTo(0.0025, 12);
     expect(rows[3]?.cost).toBe(0);
@@ -286,7 +286,6 @@ describe("opencode parity comparisons", () => {
     const reference: SessionTotals[] = [
       base,
       { ...base, sessionId: "ses_b", input: 400 },
-      // Migrated from 1.x: session_v2 sums each message's last step only.
       { ...base, sessionId: "ses_c", input: 400, migrated: true },
     ];
     const decant: SessionTotals[] = [
@@ -318,7 +317,6 @@ describe("opencode parity comparisons", () => {
         },
       ],
     });
-    // Variants collapse into one provider/model line.
     const parsed = parseStatsJson(text);
     expect(parsed).toHaveLength(1);
     expect(parsed[0]).toMatchObject({
@@ -337,29 +335,36 @@ describe("opencode parity comparisons", () => {
 });
 
 describe("opencode parity: 1.x reference totals", () => {
+  for (const [fixture, usage] of Object.entries(MIXED_COUNTED_USAGE)) {
+    test(`${fixture} alone counts its row of the mixed usage table`, () => {
+      const path = freshPath();
+      buildOpenCodeFixtureDb(path, [fixture]);
+      const totals = withDb(path, readLegacyModelTotals);
+      expect(
+        totals.map((row) => ({
+          steps: row.steps,
+          input: row.input,
+          output: row.output + row.reasoning,
+        })),
+      ).toEqual([usage]);
+    });
+  }
+
   test("sums step-finish usage per model under Decant's 1.x rules", () => {
     const path = freshPath();
     buildOpenCodeFixtureDb(path, MIXED);
     const totals = withDb(path, readLegacyModelTotals);
-    // sample (2 steps: 370 in, 47 out + 10 reasoning, 100 cache read, 16
-    // cache write), the fork's own step (90/10), the compaction session's
-    // ordinary step (100/40; its summary is counted separately), the 1.3.10
-    // session (2 steps whose output already holds reasoning: 100 out, 40
-    // reasoning), the 1.4.0 session (30 out + 20 reasoning), and ses_v1_only
-    // (40/6). The unfinished sample message has no usage and is no step.
     expect(totals).toHaveLength(1);
     expect(totals[0]).toMatchObject({
       provider: "opencode-go",
       model: "glm-5.3-flash",
-      steps: 8,
-      input: 900,
+      steps: sumMixed("steps"),
+      input: sumMixed("input"),
       reasoning: 70,
       cacheRead: 100,
       cacheWrite: 16,
     });
-    // OpenCode's convention: output excludes reasoning, so output + reasoning
-    // is Decant's output (57 + 10 + 40 + 100 + 50 + 6).
-    expect((totals[0]?.output ?? 0) + (totals[0]?.reasoning ?? 0)).toBe(263);
+    expect((totals[0]?.output ?? 0) + (totals[0]?.reasoning ?? 0)).toBe(sumMixed("output"));
     expect(totals[0]?.cost).toBeCloseTo(0.0002919, 12);
   });
 
@@ -378,7 +383,6 @@ describe("opencode parity: 1.x reference totals", () => {
           cacheRead: 0,
           cacheWrite: 0,
           cost: 0.00005,
-          // 1.2.0 kept reasoning inside output and charged it twice.
           doubleCharged: 20,
         },
       ]);
@@ -397,8 +401,6 @@ describe("opencode parity: 1.x reference totals", () => {
     const path = freshPath();
     buildOpenCodeDb(path, [
       opencodeFixtureSql("v1/migrated.sql"),
-      // A 2.x step for the shared session, which must not be counted while
-      // the newer 1.x copy is the one Decant reads.
       `INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
        VALUES ('msg_v1m_2', 'ses_shared', 'assistant', 1, 1791796001000, 1791796001000,
          '{"model":{"providerID":"opencode-go","id":"glm-5.3-flash"},"content":[],"cost":0.00001,"tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1791796001000}}');`,
@@ -409,10 +411,9 @@ describe("opencode parity: 1.x reference totals", () => {
       expect(readLegacySessions(db).map((row) => row.id)).toEqual(["ses_shared", "ses_v1_only"]);
       const rows = shared(db);
       expect(rows.map((row) => row.legacyPreferred)).toEqual([true]);
-      expect(openCodeModelTotals(rows, "decant")).toEqual([]);
-      expect(openCodeModelTotals(rows, "stats")[0]?.steps).toBe(1);
+      expect(decantRuleModelTotals(rows)).toEqual([]);
+      expect(statsRuleModelTotals(rows)[0]?.steps).toBe(1);
     });
-    // On a tie the 2.x copy wins.
     const writable = new Database(path, { strict: true });
     writable.exec("UPDATE session SET time_updated = 1791796000000 WHERE id = 'ses_shared'");
     writable.close();
@@ -424,7 +425,6 @@ describe("opencode parity: 1.x reference totals", () => {
 
   test("reads nothing as 1.x from a pre-split 2.x preview database", () => {
     const path = freshPath();
-    // session_message without session_v2: the `session` rows are 2.x-shaped.
     buildOpenCodeV1Db(path, [
       opencodeFixtureSql("v1-sample.sql"),
       "CREATE TABLE session_message (id text PRIMARY KEY);",
@@ -438,8 +438,6 @@ describe("opencode parity: 1.x reference totals", () => {
   test("never modifies the OpenCode database", () => {
     const path = freshPath();
     buildOpenCodeFixtureDb(path, MIXED);
-    // Read the bytes and mtime through one descriptor so both describe the
-    // same file state.
     const snapshot = () => {
       const fd = openSync(path, "r");
       try {
@@ -482,19 +480,14 @@ describe("opencode parity: 2.x counting rules", () => {
   test("Decant skips every inherited row and keeps 1.x reasoning semantics", () => {
     const rows = [
       row({}),
-      // Migrated before 1.3.16: output already includes reasoning.
       row({ version: "1.3.10" }),
-      // A migrated fork's inherited row: no fork link, so only Decant skips it.
       row({ inherited: true }),
-      // A 2.x fork's inherited row: both skip it.
       row({ inherited: true, forkLinked: true }),
     ];
-    const decant = openCodeModelTotals(rows, "decant")[0];
-    const stats = openCodeModelTotals(rows, "stats")[0];
-    // 2.0.27: 50 + 20; 1.3.10: 50 (holding 20 reasoning).
+    const decant = decantRuleModelTotals(rows)[0];
+    const stats = statsRuleModelTotals(rows)[0];
     expect(decant).toMatchObject({ steps: 2, input: 200, reasoning: 40 });
     expect((decant?.output ?? 0) + (decant?.reasoning ?? 0)).toBe(120);
-    // opencode stats adds reasoning to every row it counts.
     expect(stats).toMatchObject({ steps: 3, input: 300, output: 150, reasoning: 60 });
     expect(openCodeRuleDifferences(rows)).toEqual({
       inheritedWithoutForkLink: 1,
@@ -514,10 +507,7 @@ describe("opencode parity: 2.x counting rules", () => {
       ["msg_mg_2", true, 250],
       ["msg_mg_6", true, null],
     ]);
-    // msg_mg_2: both steps (250 in), not the migrated last step (150 in).
-    // msg_mg_6 was written by 2.x after the migration: its 4 reasoning
-    // tokens are added to output although the session predates 1.3.16.
-    expect(openCodeModelTotals(rows, "decant")).toEqual([
+    expect(decantRuleModelTotals(rows)).toEqual([
       model({
         steps: 2,
         input: 310,
@@ -528,7 +518,7 @@ describe("opencode parity: 2.x counting rules", () => {
         cost: 0.0000805,
       }),
     ]);
-    expect(openCodeModelTotals(rows, "stats")[0]).toMatchObject({ input: 210, output: 38 });
+    expect(statsRuleModelTotals(rows)[0]).toMatchObject({ input: 210, output: 38 });
     expect(openCodeRuleDifferences(rows)).toMatchObject({ stepSums: 1, reasoningIncluded: 0 });
   });
 
@@ -573,7 +563,6 @@ describe("opencode parity: 1.x session columns", () => {
         cacheWrite: 16,
         cost: 0.0000894,
       },
-      // The fork's columns include its inherited usage; Decant's do not.
       {
         sessionId: "ses_v1_fork",
         input: 90,
@@ -611,18 +600,14 @@ describe("opencode parity: Letta structural cross-check", () => {
         "msg_v1s_3",
         "msg_v1s_4",
       ]);
-      // The synthetic text part is dropped; the user text and file stay.
       expect(sample.messages[0]?.parts.map((part) => part.id)).toEqual([
         "prt_v1s_01",
         "prt_v1s_03",
       ]);
-      // Inherited fork history is not part of the fork.
       expect(exportOf(db, "ses_v1_fork").messages.map((message) => message.info.id)).toEqual([
         "msg_v1f_3",
         "msg_v1f_4",
       ]);
-      // The compaction request and its summary become one system message in
-      // Decant, so neither is exported.
       expect(exportOf(db, "ses_v1_compact").messages.map((message) => message.info.id)).toEqual([
         "msg_v1c_1",
         "msg_v1c_2",
@@ -644,13 +629,45 @@ describe("opencode parity: Letta structural cross-check", () => {
       call_v1_read: { name: "read", outcome: "ok" },
       call_v1_mcp: { name: "dosu_search", outcome: "ok" },
       call_v1_bash: { name: "bash", outcome: "error" },
-      call_v1_pending: { name: "read", outcome: "none" },
+      call_v1_pending: { name: "read", outcome: "no-result" },
     });
     expect([letta.user, letta.assistantText, letta.reasoning]).toEqual([1, 1, 1]);
-    // The retry part is the only one Letta reports dropping.
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
       "noise_record_dropped",
     ]);
+  });
+
+  test("keeps a result without a status apart from a call with no result", () => {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const letta = lettaStructure([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "call_unanswered", name: "read", args: "{}" },
+          { id: "call_unflagged", name: "read", args: "{}" },
+        ],
+        timestamp,
+      },
+      { role: "tool", tool_call_id: "call_unflagged", content: "", timestamp },
+    ]);
+    expect(Object.fromEntries(letta.toolCalls)).toEqual({
+      call_unanswered: { name: "read", outcome: "no-result" },
+      call_unflagged: { name: "read", outcome: "result-without-status" },
+    });
+    const decant: TranscriptStructure = {
+      toolCalls: new Map([
+        ["call_unanswered", { name: "read", outcome: "no-result" as const }],
+        ["call_unflagged", { name: "read", outcome: "no-result" as const }],
+      ]),
+      user: 0,
+      assistantText: 0,
+      reasoning: 0,
+    };
+    expect(compareStructure("ses_x", decant, letta)[0]).toEqual({
+      level: "mismatch",
+      text: "ses_x: 1 tool result flag(s) differ from Letta",
+    });
   });
 
   const decantSample = (): TranscriptStructure => ({
@@ -658,7 +675,7 @@ describe("opencode parity: Letta structural cross-check", () => {
       ["call_v1_read", { name: "read", outcome: "ok" as const }],
       ["call_v1_mcp", { name: "mcp__dosu__search", outcome: "ok" as const }],
       ["call_v1_bash", { name: "bash", outcome: "error" as const }],
-      ["call_v1_pending", { name: "read", outcome: "none" as const }],
+      ["call_v1_pending", { name: "read", outcome: "no-result" as const }],
     ]),
     user: 1,
     assistantText: 1,
@@ -712,13 +729,8 @@ describe("opencode parity: Letta structural cross-check", () => {
     expect(toolNamesMatch("read", "write")).toBe(false);
   });
 
-  // End to end: sync synthetic fixtures into a scratch archive with every
-  // source and config path pointed at the case directory, then run the
-  // script as a developer would.
   for (const [name, build] of [
-    // 1.x sessions in a database only 1.x opened.
     ["a 1.x-only database", (path: string) => buildOpenCodeV1FixtureDb(path, V1_SESSIONS)],
-    // The same beside 2.x sessions and a migrated session in one database.
     [
       "a 2.x database holding 1.x and migrated sessions",
       (path: string) =>
@@ -732,8 +744,6 @@ describe("opencode parity: Letta structural cross-check", () => {
       mkdirSync(opencodeDir, { recursive: true });
       const opencodePath = join(opencodeDir, "opencode.db");
       build(opencodePath);
-      // Names the dosu MCP server, so 1.x `dosu_search` calls become
-      // mcp__dosu__search on both sides of the structural check.
       const configPath = join(dir, "opencode.json");
       writeFileSync(
         configPath,

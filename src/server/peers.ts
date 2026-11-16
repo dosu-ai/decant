@@ -67,25 +67,17 @@ const DEFAULT_ROUTE_TABLE_PATH = "/proc/net/route";
 
 const DEFAULT_SYS_CLASS_NET_PATH = "/sys/class/net";
 
-/** `/proc/net/route` flag bits: the route is usable, and it hops through a
- * gateway instead of being on-link. */
 const RTF_UP = 0x1;
 
 const RTF_GATEWAY = 0x2;
 
-/** Bound on gateway auto-trust, not an allowlist. Only the detected bridge
- * gateway is trusted; host, macvlan, ipvlan, LAN, and VPC gateways are excluded. */
 const GATEWAY_AUTO_TRUST_RANGE = "172.16.0.0/12";
 
-/** Test seam: where the Linux network facts are read from. */
 export interface TrustedPeerSources {
   routeTablePath?: string;
   sysClassNetPath?: string;
 }
 
-/** Peers admitted on a non-loopback bind, resolved once at startup. The first
- * present source replaces the rest (an empty DECANT_TRUSTED_PEERS trusts
- * nobody); precedence is documented in docs/api/routes.md. */
 export function resolveTrustedPeers(
   configured?: string[],
   env: Record<string, string | undefined> = process.env,
@@ -149,8 +141,6 @@ interface RouteRow {
   mask: number;
 }
 
-/** Rows of the Linux IPv4 route table, or `null` when it cannot be read (any
- * non-Linux host), which leaves the guard closed rather than guessing. */
 function readRouteTable(routeTablePath: string): RouteRow[] | null {
   let table: string;
   try {
@@ -180,8 +170,6 @@ function readRouteTable(routeTablePath: string): RouteRow[] | null {
   return rows;
 }
 
-/** A gateway reachable without another hop on the same interface, which is how
- * a container's bridge gateway always appears. */
 function hasOnLinkRoute(routes: RouteRow[], iface: string, gateway: number): boolean {
   return routes.some(
     (route) =>
@@ -193,9 +181,6 @@ function hasOnLinkRoute(routes: RouteRow[], iface: string, gateway: number): boo
   );
 }
 
-/** Whether `iface` is this container's veth: a virtual device, not stacked on a
- * parent in this namespace, whose link peer lives in another namespace. The
- * host's own namespace never satisfies all three for its default route. */
 function isContainerVeth(iface: string, sysClassNetPath: string): boolean {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.@-]*$/.test(iface)) {
     return false;
@@ -262,8 +247,6 @@ function readIfIndex(path: string): number | null {
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-/** Every interface index visible in this network namespace, or `null` when the
- * directory cannot be listed. */
 function collectIfIndexes(sysClassNetPath: string): Set<number> | null {
   let entries: string[];
   try {

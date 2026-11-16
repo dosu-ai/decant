@@ -60,8 +60,6 @@ describe("repository and outcome rollups", () => {
       ["(unclassified)", 1, 4],
       ["abandoned", 1, 2 + 16 + 32],
     ]);
-    // An unlabelled top-level session keeps its subagents unclassified too,
-    // whatever their own labels say.
     db.exec(`
       INSERT INTO session(id, tool, source_session_id, project_id, model, started_at,
                           estimated_cost_usd, outcome, is_subagent, parent_session_id) VALUES
@@ -72,14 +70,11 @@ describe("repository and outcome rollups", () => {
     expect(withOrphans.find((row) => row.key === "(unclassified)")?.estimated_cost_usd).toBe(
       4 + 64,
     );
-    // A subagent whose parent is missing keeps its own label.
     expect(withOrphans.find((row) => row.key === "failed")).toMatchObject({
       sessions: 0,
       estimated_cost_usd: 128,
     });
     db.exec("DELETE FROM session WHERE id IN (7, 8)");
-    // The date filter keeps the subagents and drops their parent; they still
-    // count under the parent's label.
     const filtered = byDimension(db, "outcome", { from: "2026-02-03", to: "2026-02-03" });
     expect(filtered.map((row) => [row.key, row.sessions, row.estimated_cost_usd])).toEqual([
       ["abandoned", 0, 48],

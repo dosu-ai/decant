@@ -26,14 +26,11 @@ export const HOMEBREW_FORMULA = "dosu-ai/dosu/decant";
 export const INSTALLER_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh";
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-/** How soon a failed check is retried, so one slow request does not hide a release for a day. */
 export const FAILED_CHECK_RETRY_MS = 60 * 60 * 1000;
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 const CHECK_TIMEOUT_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-// GitHub takes one hop to reach its asset CDN. The rest is headroom for a
-// mirror that sits behind its own redirects.
 const MAX_DOWNLOAD_REDIRECTS = 10;
 const RELEASE_TARGETS = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
 
@@ -55,12 +52,7 @@ export function parseVersion(value: string): Semver | null {
   };
 }
 
-/**
- * The version string as the registry or cache should hold it. parseVersion
- * trims, so without this "1.2.3\n" would pass the check and still reach the
- * cache file and the release URL with the newline attached.
- */
-function cleanVersion(value: unknown): string | null {
+function trimmedValidVersion(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -68,7 +60,6 @@ function cleanVersion(value: unknown): string | null {
   return parseVersion(trimmed) == null ? null : trimmed;
 }
 
-/** Semver precedence: negative when `a` is older than `b`. */
 export function compareVersions(a: Semver, b: Semver): number {
   const core = a.core
     .map((part, index) => part - (b.core[index] ?? 0))
@@ -123,7 +114,6 @@ export type InstallChannel =
 
 export interface InstallInfo {
   channel: InstallChannel;
-  /** The real path of the running binary when Decant may replace it itself. */
   binaryPath: string | null;
 }
 
@@ -158,7 +148,6 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
     try {
       return realpath(target);
     } catch {
-      // Fall back to the unresolved path; classification only reads its shape.
       return target;
     }
   };
@@ -175,9 +164,6 @@ export function detectInstall(options: DetectInstallOptions = {}): InstallInfo {
     // another package manager such as bun or pnpm.
     return { channel: path.includes("/lib/node_modules/") ? "npm" : "npm-local", binaryPath: null };
   }
-  // Only a binary in the installer's directory is Decant's to replace. A copy
-  // somewhere else may belong to mise, aqua, a distro package, or a manual
-  // download, and renaming over it would desync whatever tracks that file.
   const binaryDir = dirname(path);
   const installDirs = [join(options.homeDir ?? homedir(), ".local", "bin")];
   const customDir = nonEmpty(env.DECANT_INSTALL_DIR);
@@ -196,7 +182,6 @@ function nonEmpty(value: string | undefined): string | null {
   return value == null || value.trim() === "" ? null : value;
 }
 
-/** The command a nudge tells the user to run for this install. */
 export function updateCommandFor(channel: InstallChannel): string {
   switch (channel) {
     case "npx":
@@ -208,20 +193,16 @@ export function updateCommandFor(channel: InstallChannel): string {
     case "source":
       return "git pull && bun install";
     default:
-      // `decant update` explains what to do for a standalone copy. A bare
-      // installer command would install a second copy in ~/.local/bin.
       return "decant update";
   }
 }
 
 export interface PlanCommand {
   argv: string[];
-  /** A failure is reported but does not stop the commands after it. */
   bestEffort?: boolean;
 }
 
 export type UpdatePlan =
-  /** Commands run in order; a failure stops the rest unless it is best effort. */
   | { kind: "run"; commands: PlanCommand[] }
   | { kind: "replace"; binaryPath: string }
   | { kind: "manual"; instructions: string };
@@ -304,7 +285,7 @@ export async function fetchLatestVersion(
     throw new Error(`the npm registry returned HTTP ${response.status}`);
   }
   const body = (await response.json()) as { version?: unknown };
-  const version = cleanVersion(body.version);
+  const version = trimmedValidVersion(body.version);
   if (version == null) {
     throw new Error("the npm registry did not return a valid version");
   }
@@ -314,7 +295,6 @@ export async function fetchLatestVersion(
 export interface UpdateCheckRecord {
   checkedAt: string;
   latest: string | null;
-  /** Set when this attempt failed, which makes the next one due sooner. */
   failed?: boolean;
 }
 
@@ -333,7 +313,7 @@ export function readUpdateCheck(options: SettingsOptions = {}): UpdateCheckRecor
     }
     return {
       checkedAt: parsed.checkedAt,
-      latest: cleanVersion(parsed.latest),
+      latest: trimmedValidVersion(parsed.latest),
       ...(parsed.failed === true ? { failed: true } : {}),
     };
   } catch {
@@ -341,11 +321,7 @@ export function readUpdateCheck(options: SettingsOptions = {}): UpdateCheckRecor
   }
 }
 
-// What this process last checked, per cache file. It holds the daily limit
-// when the file cannot be written, such as under a read-only config dir.
 const lastChecks = new Map<string, UpdateCheckRecord>();
-// A server checking at startup and a browser loading the page at the same
-// moment share one request.
 const inflightChecks = new Map<string, Promise<CheckAttempt>>();
 
 interface CheckAttempt {
@@ -356,8 +332,6 @@ interface CheckAttempt {
 function writeUpdateCheck(record: UpdateCheckRecord, options: SettingsOptions): void {
   const path = updateCheckPath(options);
   lastChecks.set(path, record);
-  // Write then rename, like saveSettings, so a concurrent reader never sees
-  // a truncated file and starts a second check.
   const temp = `${path}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
@@ -378,9 +352,6 @@ async function attemptCheck(
     const latest = await fetchLatestVersion({ fetch: options.fetch, timeoutMs: options.timeoutMs });
     attempt = { record: { checkedAt: now.toISOString(), latest }, error: null };
   } catch (failure) {
-    // Recording the failed attempt holds an offline machine to one timeout
-    // an hour instead of one per command. Waiting a full day would let one
-    // slow answer to a short CLI timeout hide a release from serve too.
     attempt = {
       record: { checkedAt: now.toISOString(), latest: previous?.latest ?? null, failed: true },
       error: failure instanceof Error ? failure.message : String(failure),
@@ -400,7 +371,6 @@ function newerRecord(
   return Date.parse(b.checkedAt) > Date.parse(a.checkedAt) ? b : a;
 }
 
-/** `DECANT_UPDATE_CHECK` as a boolean, or null when it is unset or unrecognized. */
 function updateCheckFromEnv(env: Record<string, string | undefined>): boolean | null {
   const flag = env.DECANT_UPDATE_CHECK?.trim().toLowerCase();
   if (flag === "1" || flag === "true" || flag === "on") {
@@ -412,14 +382,12 @@ function updateCheckFromEnv(env: Record<string, string | undefined>): boolean | 
   return null;
 }
 
-/** `DECANT_UPDATE_CHECK` overrides the saved setting in either direction. */
 export function updateCheckEnabled(options: SettingsOptions = {}): boolean {
   return updateCheckFromEnv(options.env ?? process.env) ?? getSettings(options).updateCheck;
 }
 
 export interface UpdateStatus {
   enabled: boolean;
-  /** True when `DECANT_UPDATE_CHECK` decided `enabled` instead of the setting. */
   envOverride: boolean;
   current: string;
   latest: string | null;
@@ -436,15 +404,9 @@ export interface CheckForUpdateOptions extends SettingsOptions {
   fetch?: FetchLike;
   now?: () => Date;
   timeoutMs?: number;
-  /** Contact the registry even when checks are off or the cache is fresh. */
   force?: boolean;
 }
 
-/**
- * Reports whether a newer release exists. The registry is contacted only when
- * the user opted in and the cached answer is a day old, or when `force` says
- * the user asked directly.
- */
 export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promise<UpdateStatus> {
   const current = options.current ?? DECANT_VERSION;
   const install = options.install ?? detectInstall();
@@ -453,16 +415,11 @@ export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promi
   const force = options.force === true;
   const now = (options.now ?? (() => new Date()))();
   const cachePath = updateCheckPath(options);
-  // The file can be older than this process's last check when the config dir
-  // is read-only, so the newer of the two holds the daily limit.
   let record = newerRecord(readUpdateCheck(options), lastChecks.get(cachePath) ?? null);
   let error: string | null = null;
 
   const age =
     record == null ? Number.POSITIVE_INFINITY : now.getTime() - Date.parse(record.checkedAt);
-  // A checkout is never nudged, so a passive check there would be a wasted request.
-  // A negative age means the clock was wrong when the cache was written, and
-  // trusting it would stop checks until that date.
   const interval = record?.failed === true ? FAILED_CHECK_RETRY_MS : UPDATE_CHECK_INTERVAL_MS;
   const due = enabled && install.channel !== "source" && (age < 0 || age >= interval);
   if (force || due) {
@@ -482,8 +439,6 @@ export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promi
     ({ record, error } = await attempt);
   }
 
-  // A result cached by an explicit check must not keep nudging after the
-  // user turned checks off.
   const known = enabled || force ? record : null;
   const latest = known?.latest ?? null;
   return {
@@ -491,8 +446,6 @@ export async function checkForUpdate(options: CheckForUpdateOptions = {}): Promi
     envOverride: envSetting != null,
     current,
     latest,
-    // A checkout's `git describe` version says nothing about how far it is
-    // from a release, so only installed builds are compared.
     updateAvailable:
       install.channel !== "source" && latest != null && isNewerVersion(latest, current),
     checkedAt: known?.checkedAt ?? null,
@@ -513,7 +466,6 @@ export function releaseTarget(
   return `decant-${key}`;
 }
 
-/** Where npm serves the platform package `npm install` needs for this machine. */
 export function npmPlatformTarballUrl(
   version: string,
   platform: NodeJS.Platform = process.platform,
@@ -576,12 +528,6 @@ export interface ReplaceBinaryOptions {
   reportedVersion?: (binary: string) => string | null;
 }
 
-/**
- * SHA256SUMS is only as trustworthy as the channel it arrives on, so a mirror
- * must be HTTPS. file:// and plain HTTP to this machine's own loopback
- * address (an SSH port forward, say) stay allowed because neither crosses a
- * network. install.sh accepts the same three forms and the same host names.
- */
 export function releaseBaseUrl(baseUrl: string | undefined): string {
   const base = (baseUrl ?? RELEASES_URL).replace(/\/+$/, "");
   if (!isTrustedMirror(base)) {
@@ -612,21 +558,14 @@ function isRedirect(response: Response): boolean {
   return response.status >= 300 && response.status < 400 && response.headers.has("location");
 }
 
-/**
- * Downloads a release tarball, checks it against the release's SHA256SUMS,
- * and renames the new binary over `binaryPath`. Mirrors install.sh so both
- * paths trust the same artifacts.
- */
 export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void> {
-  const version = cleanVersion(options.version)?.replace(/^v/, "");
+  const version = trimmedValidVersion(options.version)?.replace(/^v/, "");
   if (version == null) {
     throw new Error(`not a release version: ${JSON.stringify(options.version)}`);
   }
   const base = releaseBaseUrl(options.baseUrl);
   const target = releaseTarget(options.platform, options.arch);
   const tarballName = `${target}.tar.gz`;
-  // Checked before downloading, so a read-only install fails without fetching
-  // the whole release first.
   const installDir = dirname(options.binaryPath);
   try {
     accessSync(installDir, constants.W_OK);
@@ -656,8 +595,6 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
       current = next.href;
       response = await (options.fetch ?? fetch)(current, { redirect: "manual", signal });
     }
-    // The release workflow publishes to npm before it creates the GitHub
-    // release, so for a few minutes the registry names a version with no assets.
     if (response.status === 404) {
       throw new Error(
         `v${version} is not on the release page yet (HTTP 404 for ${url}). Try again in a few minutes.`,
@@ -691,8 +628,6 @@ export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void
     writeFileSync(tarballPath, tarball);
     (options.extract ?? extractBinary)(tarballPath, staging);
     const next = join(staging, "decant");
-    // lstat, like install.sh's `-f`: a symlink entry would point the chmod
-    // and rename below at a file outside the release.
     if (!lstatSync(next, { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`${tarballName} did not contain a decant binary`);
     }
@@ -719,7 +654,6 @@ function extractBinary(tarball: string, intoDir: string): void {
   }
 }
 
-/** What `<binary> --version` prints, or null when it fails to run. */
 export function reportedVersion(binary: string): string | null {
   const result = spawnSync(binary, ["--version"], {
     encoding: "utf8",

@@ -18,11 +18,6 @@ export interface ReleaseMeta {
   tag: string;
 }
 
-/**
- * A prerelease never moves a stable channel. A stable release moves them only
- * when it is the highest stable tag, so a backport such as v0.2.5 cut after
- * v0.3.0 cannot roll npm, GitHub, GHCR or the Homebrew tap back.
- */
 export interface ReleaseChannel {
   isPrerelease: boolean;
   isLatest: boolean;
@@ -35,7 +30,6 @@ export function parseReleaseVersion(raw: string): ReleaseMeta {
   return { version, tag: `v${version}` };
 }
 
-/** Stable versions named by `git ls-remote --tags` output, with peeled `^{}` refs folded in. */
 export function stableVersionsFromLsRemote(output: string): string[] {
   const versions = new Set<string>();
   for (const line of output.split("\n")) {
@@ -73,7 +67,6 @@ export function releaseChannel(version: string, stableTags: readonly string[]): 
 
 const RELEASE_BRANCH = /^release\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
-/** `main`, plus `release/*` for backports that can't come from main. */
 export function isReleaseBranch(name: string): boolean {
   return name === "main" || RELEASE_BRANCH.test(name);
 }
@@ -101,7 +94,6 @@ export function releaseBranchRefspecs(branches: readonly string[]): string[] {
   return branches.map((branch) => `+refs/heads/${branch}:${remoteBranchRef(branch)}`);
 }
 
-/** The release environment admits only tag refs. */
 export function runRefMismatchMessage(tag: string, ref: string): string | null {
   return ref === `refs/tags/${tag}`
     ? null
@@ -112,7 +104,6 @@ export function offReleaseBranchMessage(tag: string, commit: string): string {
   return `tag ${tag} points at ${commit}, which is not on main or a release/* branch on origin. Tag a commit that is merged to main, or cut a backport from a release/* branch`;
 }
 
-/** Reads the channel the meta job passed into a downstream job's environment. */
 export function channelFromEnv(env: Env = process.env): ReleaseChannel {
   const flag = (name: string): boolean =>
     oneOf(name, requireEnv(name, env), ["true", "false"] as const) === "true";
@@ -149,7 +140,6 @@ function main(): void {
     );
   }
 
-  // Catches a mistagged commit; the tag ruleset and environment stop deliberate ones.
   const branches = releaseBranchesFromLsRemote(
     capture("git", ["ls-remote", "--heads", "origin", "main", "release/*"]),
   );

@@ -167,9 +167,6 @@ function validateTrajectory(doc: AtifTrajectory, where: string): void {
   expectKeys(doc.final_metrics, FINAL_KEYS, `${where}.final_metrics`);
 }
 
-/** Harbor's validator plus two document-level checks it leaves to consumers:
- * call ids unique across the document, and every embedded ref resolving
- * against the root's `subagent_trajectories`. */
 function assertValidAtif(doc: AtifTrajectory): void {
   validateTrajectory(doc, "root");
   const embeddedIds = new Set<string>();
@@ -211,7 +208,6 @@ function exportOk(db: Database, id: number): AtifTrajectory {
   return out.trajectory;
 }
 
-/** A parent that delegates through `toolu_task` and the subagent it spawned. */
 function seedDelegation(db: Database): { parentId: number; childId: number } {
   const parentId = upsertSession(
     db,
@@ -491,11 +487,9 @@ describe("exportAtif", () => {
           subagent_trajectory_ref: [{ trajectory_id: "child:a1", session_id: "child" }],
         },
       ]);
-      // Root totals include the embedded subagent; the subagent's are its own.
       expect(doc.final_metrics.total_prompt_tokens).toBe(150);
       expect(doc.final_metrics.extra).toMatchObject({
         includes_subagents: true,
-        // The root session's own share, for a reader that splits subagents out.
         session_metrics: {
           total_prompt_tokens: 100,
           total_completion_tokens: 10,
@@ -508,7 +502,6 @@ describe("exportAtif", () => {
         "session_metrics",
       );
 
-      // Importing the export gives each session back its own totals.
       const imported = parseAtifDocument("fallback", JSON.stringify(doc)).sessions.map(
         ({ parsed }) => parsed.session.totals.input,
       );
@@ -555,12 +548,10 @@ describe("exportAtif", () => {
           ],
         },
       ]);
-      // The totals are the parent's alone: the subagent's travel in its own document.
       expect(doc.final_metrics.total_prompt_tokens).toBe(100);
       expect(doc.final_metrics.extra).not.toHaveProperty("includes_subagents");
       expect(doc.final_metrics.extra).not.toHaveProperty("session_metrics");
 
-      // The subagent's own export carries the id the parent points at.
       const child = exportAtif(db, childId, { subagentPath: () => "unused" });
       if (!child.ok) throw new Error(child.reason);
       validateTrajectory(child.trajectory, "root");
@@ -772,13 +763,10 @@ describe("exportAtif", () => {
       expect(out.trajectory.subagent_trajectories?.map((sub) => sub.trajectory_id)).toEqual([
         "grandchild",
       ]);
-      // The grandchild's spawner lives in the empty child, which has no steps.
       expect(out.report).toMatchObject({ subagents_embedded: 1, subagents_unlinked: 1 });
       expect(out.trajectory.trajectory_id).toBe("root");
       expect(out.trajectory.final_metrics.total_prompt_tokens).toBe(14_500 + 40);
 
-      // Exported on its own, the root has no document to point at for the
-      // empty child, and the grandchild is that child's to reference.
       const alone = exportAtif(db, rootId, { subagentPath: () => "unused" });
       if (!alone.ok) throw new Error(alone.reason);
       validateTrajectory(alone.trajectory, "root");

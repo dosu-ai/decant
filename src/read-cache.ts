@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite";
 
-/** Entries kept per connection; least recently used entries go first. */
 export const READ_CACHE_MAX_ENTRIES = 32;
 
 interface ReadCache {
@@ -10,14 +9,6 @@ interface ReadCache {
 
 const caches = new WeakMap<Database, ReadCache>();
 
-/**
- * Memoizes a read-only aggregate per connection until the archive changes.
- * `data_version` moves when another connection, such as a sync worker,
- * commits. `total_changes()` moves when this connection writes rows, and
- * `schema_version` moves on DDL. Any of them empties the cache before the next
- * lookup. Callers key entries by the exact SQL and parameters they run, and
- * must treat returned values as shared and read-only.
- */
 export function cachedRead<T>(db: Database, key: string, compute: () => T): T {
   // total_changes() does not rewind on ROLLBACK, so a value read inside a
   // transaction could outlive the rows it saw.
@@ -51,15 +42,12 @@ export function cachedRead<T>(db: Database, key: string, compute: () => T): T {
   return value;
 }
 
-/** Cache key for a statement: its SQL text plus bound parameters. */
 export function statementKey(sql: string, params: readonly unknown[]): string {
   return `${sql}\u0000${JSON.stringify(params)}`;
 }
 
 function archiveVersion(db: Database): string | null {
   try {
-    // Reading schema_version opens a read transaction, which refreshes
-    // data_version for commits made by other connections.
     const row = db
       .query(
         `SELECT total_changes() AS changes,

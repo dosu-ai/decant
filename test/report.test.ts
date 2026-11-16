@@ -90,8 +90,6 @@ const secondDay = {
 
 const daily = [firstDay, secondDay];
 
-// Series keys are dates in practice; a free-text key checks that the renderer
-// escapes whatever label text reaches the SVG.
 function seriesWithKey(key: string): DaySeries {
   return {
     granularity: "day",
@@ -299,7 +297,6 @@ describe("report charts", () => {
   });
 
   test("the cost line marks a known day that sits between unknown days", () => {
-    // ECharts draws each line marker as a small arc path.
     const markers = (svg: string) => (svg.match(/<path d="M1 0A1 1 0 1 1/g) ?? []).length;
     const series = (costs: (number | null)[]): DaySeries => ({
       granularity: "day",
@@ -317,8 +314,9 @@ describe("report charts", () => {
       '<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[.chart{}]]></style><rect width="1" height="1"/></svg>';
     const sanitized = sanitizeReportSvg(svg);
     expect(sanitized).not.toContain("<style");
-    expect(sanitized).toHaveLength(svg.length);
-    expect(sanitized).toContain('<rect width="1" height="1"/>');
+    expect(sanitized).toBe(
+      '<svg xmlns="http://www.w3.org/2000/svg"> <rect width="1" height="1"/></svg>',
+    );
   });
 
   test("marks model and project costs that lack usage data", () => {
@@ -355,6 +353,32 @@ describe("report charts", () => {
     expect(html).toContain("Per completed session");
     expect(html).toContain("Cache reads");
     expect(html).toContain("Sessions per UTC day");
+  });
+
+  test("places each sanitized chart inside its figure", () => {
+    const analyticsHtml = renderAnalyticsReport(analytics);
+    const sessionHtml = renderSessionReport(session);
+    expect(analyticsHtml.match(/<div class="chart"><svg\b/g)).toHaveLength(2);
+    expect(sessionHtml.match(/<div class="chart"><svg\b/g)).toHaveLength(1);
+    expect(analyticsHtml).not.toContain("data-report-chart");
+    expect(sessionHtml).not.toContain("data-report-chart");
+  });
+
+  test("renders the same report bytes no matter how many charts the process drew before", () => {
+    const first = renderAnalyticsReport(analytics);
+    for (let render = 0; render < 120; render += 1) {
+      renderSessionReport(session);
+    }
+    const second = renderAnalyticsReport(analytics);
+    expect(second).toBe(first);
+    expect(renderSessionReport(session)).toBe(renderSessionReport(session));
+  });
+
+  test("keeps every SVG id unique across the charts in one report", () => {
+    const html = renderAnalyticsReport(analytics);
+    const ids = [...html.matchAll(/\bid="(zr[^"]+)"/g)].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(html).not.toMatch(/class="zr\d+-cls-\d+"/);
   });
 
   test("labels each outcome share with its own one-decimal rounding", () => {
@@ -631,13 +655,9 @@ describe("static report rendering", () => {
         },
       ],
     });
-    // Both registrations of Dosu are in this table, so each says where it came
-    // from rather than both reading "mcp · Dosu".
     expect(html).toContain("mcp · Dosu (local)");
     expect(html).toContain("mcp · Dosu (connector)");
-    // A server nothing else collides with keeps the short name.
     expect(html).toContain("mcp · Playwright");
-    // The raw slug stays reachable on hover, and is no longer the visible text.
     expect(html).toContain('title="claude_ai_Dosu"');
     expect(html).not.toContain("mcp · claude_ai_Dosu<");
   });

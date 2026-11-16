@@ -4,12 +4,8 @@ import { dirname, join, resolve, sep, win32 } from "node:path";
 import { normalizeRemoteUrl, resolveRepoRemote } from "./repo-remote.ts";
 import { resolveGitRoot } from "./worktree.ts";
 
-// Maps a typed project or repository to the keys the archive stores. Only the
-// typed directory is read from disk: stored paths come from logs.
-
 export interface ScopeEnv {
   cwd: string;
-  /** Expands a leading `~`. Null or undefined leaves it alone. */
   homeDir?: string | null;
 }
 
@@ -20,12 +16,8 @@ export type RepoMatch =
   | { kind: "ambiguous"; candidates: string[] }
   | { kind: "none"; tried: string[] };
 
-/** The absolute forms a typed path can be stored under: resolved against the
- * current directory, then with symlinks resolved when the directory exists. */
 export function pathCandidates(value: string, env: ScopeEnv): string[] {
   if (isForeignWindowsPath(value)) {
-    // It comes from a log written on another machine, so a lookup here would
-    // read an unrelated local file.
     return [normalizeWindowsPath(value)];
   }
   const home = env.homeDir;
@@ -33,7 +25,6 @@ export function pathCandidates(value: string, env: ScopeEnv): string[] {
     home != null && home !== "" && (value === "~" || value.startsWith("~/"))
       ? join(home, value.slice(1))
       : value;
-  // resolve() also drops a trailing slash and folds `.` and `..`.
   const absolute = resolve(env.cwd, expanded);
   const candidates = [absolute];
   try {
@@ -41,16 +32,11 @@ export function pathCandidates(value: string, env: ScopeEnv): string[] {
     if (real !== absolute) {
       candidates.push(real);
     }
-  } catch {
-    // A directory that is gone can still be a stored project.
-  }
+  } catch {}
   return candidates;
 }
 
-/** The one stored project path `value` names, or the paths that were tried. */
 export function resolveProjectPath(db: Database, value: string, env: ScopeEnv): ProjectMatch {
-  // The value as typed goes first, so a stored path that is not a local
-  // absolute path still matches exactly.
   const resolved = pathCandidates(value, env);
   for (const path of unique([value, ...resolved])) {
     if (db.query("SELECT 1 FROM project WHERE path = ?1").get(path) != null) {
@@ -60,11 +46,7 @@ export function resolveProjectPath(db: Database, value: string, env: ScopeEnv): 
   return { path: null, tried: resolved };
 }
 
-/** The repository roots `value` names. Checkouts that share a remote identity
- * are one repository, so the answer can hold several roots. */
 export function resolveRepoRoots(db: Database, value: string, env: ScopeEnv): RepoMatch {
-  // A same-named subdirectory here must not hide two repositories that share
-  // the name, so a bare name is tried as a name first.
   if (isBareName(value)) {
     const named = matchName(db, value);
     if (named != null) {
@@ -73,8 +55,6 @@ export function resolveRepoRoots(db: Database, value: string, env: ScopeEnv): Re
   }
   const dirs = pathCandidates(value, env);
   const tree = isForeignWindowsPath(value) ? null : workingTree(dirs.at(-1) as string);
-  // Every key is the typed value or lies in its working tree, so all of them
-  // name the same repository.
   const keys = unique([value, ...dirs, ...(tree?.inside ?? []), tree?.mainRoot]);
   const roots = repoGroup(
     db,
@@ -101,7 +81,6 @@ function isBareName(value: string): boolean {
   );
 }
 
-/** The repositories whose root directory is called `name`, or null for none. */
 function matchName(db: Database, name: string): RepoMatch | null {
   const named = (
     db
@@ -115,13 +94,10 @@ function matchName(db: Database, name: string): RepoMatch | null {
   if (first == null) {
     return null;
   }
-  // Two checkouts of one repository share a name and a group.
   const same = groups.every((group) => group.join("\n") === first.join("\n"));
   return same ? { kind: "matched", roots: first } : { kind: "ambiguous", candidates: named };
 }
 
-// A drive letter or a UNC share. On a Windows host the host path module
-// already reads these, so only other hosts need the win32 rules.
 const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
 
 function isForeignWindowsPath(value: string): boolean {
@@ -136,15 +112,11 @@ function normalizeWindowsPath(value: string): string {
 }
 
 interface WorkingTree {
-  /** `dir` and its parents up to the top of the working tree. */
   inside: string[];
-  /** The main checkout, when the tree is a linked worktree. */
   mainRoot: string | null;
   remote: string | null;
 }
 
-/** The Git working tree that holds `dir`. A directory that is gone answers
- * null: its parents would speak for some other repository. */
 function workingTree(dir: string): WorkingTree | null {
   if (!exists(dir)) {
     return null;
@@ -195,7 +167,6 @@ function remotesOf(db: Database, path: string): string[] {
   ).map((row) => row.remote);
 }
 
-// A root from a log written on Windows keeps its backslashes.
 function lastSegment(path: string): string {
   return (
     path
@@ -205,9 +176,6 @@ function lastSegment(path: string): string {
   );
 }
 
-/** `roots` plus every root that has one of the remote identities. Of a root's
- * worktrees only those Git resolved are asked: one grouped by name could be
- * another repository. */
 function repoGroup(db: Database, roots: string[], remotes: string[]): string[] {
   const group = new Set(roots);
   const identities = new Set(remotes);

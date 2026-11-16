@@ -11,7 +11,6 @@ const SHELL_TOOLS = new Set([
   "local_shell",
   "powershell",
   "run_shell_command",
-  // Copilot Chat in VS Code.
   "run_in_terminal",
   "shell",
 ]);
@@ -23,9 +22,7 @@ const CODE_TOOLS = new Set([
   "multiedit",
   "write_file",
   "replace",
-  // Copilot CLI's new-file tool.
   "create",
-  // Copilot Chat in VS Code's file edits.
   "create_file",
   "replace_string_in_file",
   "multi_replace_string_in_file",
@@ -42,11 +39,8 @@ const PLANNING_TOOLS = new Set([
   "todowrite",
   "update_plan",
   "write_todos",
-  // Copilot CLI's todo list.
   "update_todo",
-  // Copilot Chat in VS Code's todo list.
   "manage_todo_list",
-  // Claude Code's task list, which replaced TodoWrite.
   "taskcreate",
   "taskupdate",
   "tasklist",
@@ -139,10 +133,6 @@ const READONLY_GIT = new Set([
   "shortlog",
   "version",
 ]);
-// Commands that only change the shell's own state. A statement made of these
-// neither reads nor writes the repo, so it never decides a compound command.
-// `sleep` and `wait` are not here: an agent sleeps to wait on a build, a test
-// run, or CI, and that time belongs to the work it waits on.
 const NAVIGATION = new Set([
   "cd",
   "pushd",
@@ -162,22 +152,15 @@ const NAVIGATION = new Set([
   "fi",
   "}",
 ]);
-// Keywords and wrappers that run the words after them: classify those words.
 const COMMAND_PREFIXES = new Set(["if", "elif", "then", "else", "while", "until", "do", "!", "{"]);
 const COMMAND_WRAPPERS = new Set(["time", "nohup", "timeout", "xargs"]);
-// Wrapper options whose value is the next word, so it is not mistaken for the command.
 const WRAPPER_VALUE_OPTIONS = new Set(["-k", "-s", "-I", "-n", "-P", "-L", "-d", "-E", "-u", "-C"]);
 // A bare `version` word is not here: `yarn version` and `changeset version` bump versions.
 const VERSION_ARGS = new Set(["--version", "-v", "-V", "--help", "-h", "help"]);
-// `bash -lc "<script>"` and friends: classify the script, not the shell.
 const SHELL_WRAPPER = /^\s*(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+([\s\S]*?)\s*$/;
 const SHELLS = new Set(["sh", "bash", "zsh", "dash"]);
-// An output redirect (`>`, `>>`, `>|`, `2>`, `&>`, `>&`, `<>`) writes a file
-// unless it targets a descriptor or a device like /dev/null.
 const WRITE_REDIRECT =
   /(?:&>>?|\d*(?:>>|>\||<>|>))(?!&\d|&-|\s*\/dev\/(?:null|stdout|stderr|tty)\b)/;
-// Command substitutions and `sh -c` scripts nest; past this depth a command is
-// treated as unrecognized (code) rather than parsed further.
 const MAX_NESTING = 8;
 
 const SEARCH_COMMANDS = new Set([
@@ -193,16 +176,7 @@ const SEARCH_COMMANDS = new Set([
 ]);
 const SEARCH_TOOLS = new Set(["grep", "glob"]);
 
-/** Counts how many search operations a tool call represents: 1 for a
- * structured Grep/Glob call, or one per shell statement whose command is a
- * search binary (rg, grep, find, ...) or `git grep`. Statements are split the
- * way bashBucket splits them, and the command is found the same way, past
- * assignments, wrappers, and `git -C dir`. Only a pipeline's first stage
- * counts: `ps aux | grep node` filters output rather than searching a repo, so
- * counting it would make the code-map suggestion useless. */
 export function countSearches(toolName: string, input: string | null): number {
-  // Raw name, before localToolName: an MCP server may be named `exec`, and a
-  // dotted `mcp__x__y.shell` would otherwise flatten to `shell`.
   if (toolName.startsWith("mcp__")) {
     return 0;
   }
@@ -244,7 +218,6 @@ function scriptSearches(script: string, depth: number): number {
     } else if (head === "git" && skipOptions(args, GIT_VALUE_OPTIONS)[0] === "grep") {
       count += 1;
     } else if (SHELLS.has(head)) {
-      // `cd repo && bash -lc "rg x"`: count the searches in the script it runs.
       const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
       const body = flag === -1 ? undefined : args[flag + 1];
       if (body != null) {
@@ -289,8 +262,6 @@ export function toolBucket(
   return "context";
 }
 
-/** An MCP tool, named `mcp__<server>__<tool>`: browser, desktop, and REPL
- * servers split into reads and actions; other tools keep the context default. */
 function mcpToolBucket(name: string, input: string | Json | undefined): ActivityBucket {
   const match = /^mcp__(.+?)__+(.+)$/.exec(name);
   if (match == null) {
@@ -307,26 +278,19 @@ function mcpToolBucket(name: string, input: string | Json | undefined): Activity
   return uiToolActs(server, tool, parseToolInput(input)) ? "code" : "context";
 }
 
-// Tools that ask the user a question and wait for the answer: the model is
-// talking to the user, as it does in visible text.
 const USER_QUESTION_TOOLS = new Set([
   "askuserquestion",
   "request_user_input",
   "request_user_input_async",
-  // Copilot Chat in VS Code.
   "vscode_askquestions",
 ]);
 
-/** True for a tool that asks the user a question, in any spelling, including
- * an MCP copy such as `mcp__<server>__AskUserQuestion`. Its result arrives
- * when the user answers, so the time before it is the user's. */
 export function isUserQuestionTool(
   toolName: string | null | undefined,
   input?: string | Json,
 ): boolean {
   const inner = codexExecCalls(toolName, input);
   if (inner.length > 0) {
-    // A Codex `exec` program that only asks the user something.
     return inner.every((call) => isUserQuestionTool(call.name));
   }
   const name = toolName ?? "";
@@ -335,9 +299,6 @@ export function isUserQuestionTool(
     : localToolName(name);
   return USER_QUESTION_TOOLS.has(tool.toLowerCase());
 }
-// Tools that write a note or checkpoint outside the workspace: Codex notes, an
-// Obsidian vault, a Dosu knowledge entry. Writing is code, but a note is the
-// agent's memory rather than the work product, so it never marks the first edit.
 const NOTE_WRITE_TOOLS = new Set([
   "notes__write_file",
   "notes__append_to_file",
@@ -345,10 +306,6 @@ const NOTE_WRITE_TOOLS = new Set([
   "write_knowledge",
 ]);
 
-// Browser and desktop automation reads when it looks (snapshot, screenshot, page
-// text, console, tabs) or goes somewhere (navigate, wait), and acts when it sends
-// input or runs code in the page. Hover and mouse moves count as input: they fire
-// page handlers and open menus, the same as the click or scroll they lead into.
 const PLAYWRIGHT_ACTIONS = new Set([
   "browser_click",
   "browser_type",
@@ -378,7 +335,6 @@ const CHROME_ACTIONS = new Set([
   "resize_window",
   "shortcuts_execute",
 ]);
-// Desktop control is all input except these looks and permission checks.
 const COMPUTER_READS = new Set([
   "screenshot",
   "zoom",
@@ -389,10 +345,8 @@ const COMPUTER_READS = new Set([
   "list_granted_applications",
 ]);
 
-/** True when a browser, desktop-control, or REPL tool changes state. */
 function uiToolActs(server: string, tool: string, input: Json | undefined): boolean {
   if (server.includes("repl")) {
-    // A REPL call runs code.
     return true;
   }
   if (tool === "computer") {
@@ -443,26 +397,16 @@ function get(value: Json | undefined, key: string): Json | undefined {
     : undefined;
 }
 
-// High-precision markers that a shell command mutates a source file. Kept
-// deliberately narrow: a false positive moves the phase boundary earlier and
-// mislabels orientation as implementation, which is worse than missing one. So
-// no bare `>` redirect (too often /dev/null, /tmp, logs) -- only unambiguous
-// in-place edits, patch application, and explicit file writes.
-const SHELL_EDIT_PATTERNS: RegExp[] = [
-  /\bgit\s+apply\b(?![^\n]*--(?:check|stat|summary|numstat))/, // apply a patch for real
-  /\bsed\b[^\n|]*\s-i\b/, // in-place edit
-  /\bpatch\b[^\n|]*-p\d/, // patch -p1 < ...
-  /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/, // node fs writes (node -e ...)
-  /\bopen\([^)]*['"][wa]\+?['"]/, // python open(..., "w"/"a")
-  /\.write_(?:text|bytes)\(/, // python pathlib Path.write_text / write_bytes
-  /\bapplypatch\b/,
-];
+const SHELL_EDIT_PATTERNS = {
+  gitApplyThatWrites: /\bgit\s+apply\b(?![^\n]*--(?:check|stat|summary|numstat))/,
+  sedInPlace: /\bsed\b[^\n|]*\s-i\b/,
+  patchWithStripLevel: /\bpatch\b[^\n|]*-p\d/,
+  nodeFileWrite: /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/,
+  pythonOpenForWrite: /\bopen\([^)]*['"][wa]\+?['"]/,
+  pythonPathWrite: /\.write_(?:text|bytes)\(/,
+  applypatch: /\bapplypatch\b/,
+} satisfies Record<string, RegExp>;
 
-/** True for tools that mutate a file on disk (the phase boundary marker): the
- * first such tool_use flips a session from orientation to implementation. Covers
- * the structured edit tools (edit/write/patch) AND shell commands that clearly
- * write a file (git apply, sed -i, fs.writeFileSync, ...), since agents sometimes
- * implement through the shell rather than the edit tool. */
 export function isCodeEditTool(
   toolName: string | null | undefined,
   input?: string | Json,
@@ -477,11 +421,9 @@ export function isCodeEditTool(
   }
   if (SHELL_TOOLS.has(normalized)) {
     const command = commandFromInput(input);
-    // The patterns match anywhere in the text, so `rg writeFileSync src` or
-    // `sed -n 1p f; grep -i x` would look like edits; an edit is never a read.
     return (
       command != null &&
-      SHELL_EDIT_PATTERNS.some((re) => re.test(command)) &&
+      Object.values(SHELL_EDIT_PATTERNS).some((re) => re.test(command)) &&
       bashBucket(command) === "code"
     );
   }
@@ -502,10 +444,6 @@ export function blockBucket(
   return "communicating";
 }
 
-/** A shell command is context only when every statement and pipeline stage
- * in it is read-only; one mutating or unrecognized part makes it code. Agents
- * routinely chain reads (`cd repo; grep -n x src; sed -n 1,40p f`), so judging
- * the whole command by its first word filed that reading under code. */
 export function bashBucket(command: string | null): ActivityBucket {
   const script = unwrapShell(command);
   if (script == null || script.trim() === "") {
@@ -536,7 +474,6 @@ function statementsBucket(script: string): ActivityBucket {
     if (WRITE_REDIRECT.test(stripQuoted(statement))) {
       return "code";
     }
-    // `$(...)` runs too: `X=$(git merge-base a b)` reads, `X=$(rm f)` does not.
     if (substitutions(statement).some((body) => scriptBucket(body) === "code")) {
       return "code";
     }
@@ -547,17 +484,10 @@ function statementsBucket(script: string): ActivityBucket {
   return "context";
 }
 
-// A lone `&` backgrounds a job and starts the next statement; `&>`, `>&`, and
-// `|&` are redirects or pipes, which the preceding character rules out. The
-// separators are sticky so splitting matches in place instead of re-slicing the
-// rest of the text at every character.
 const STATEMENT_BREAK = /\n|;|&&|\|\||&(?!>)/y;
 const PIPE = /\|&?(?!\|)/y;
 const WORD_BREAK = /\s+/y;
 
-/** Splits on `separator` (a sticky regex) outside quotes, escapes, and
- * `$(...)`, so a grep pattern like "a\\|b", a sed script like 's/a;b/c/',
- * `find -exec cat {} \;`, or `$(git log | head -1)` stays one piece. */
 function splitUnquoted(text: string, separator: RegExp): string[] {
   const parts: string[] = [];
   let current = "";
@@ -602,7 +532,6 @@ function splitUnquoted(text: string, separator: RegExp): string[] {
       current += char;
       continue;
     }
-    // `>&2` and `|&` are not a backgrounding `&`.
     const redirect = char === "&" && "<>|".includes(text[i - 1] ?? "");
     separator.lastIndex = i;
     const match = redirect ? null : separator.exec(text);
@@ -618,9 +547,6 @@ function splitUnquoted(text: string, separator: RegExp): string[] {
   return parts;
 }
 
-/** The bodies of `$(...)` substitutions outside single quotes, and of `<(...)`
- * and backtick substitutions outside any quotes. Arithmetic `$((...))` runs
- * nothing and is skipped. */
 function substitutions(statement: string): string[] {
   const bodies: string[] = [];
   let quote: string | null = null;
@@ -641,7 +567,6 @@ function substitutions(statement: string): string[] {
     } else if (char === '"') {
       quote = quote == null ? '"' : null;
     } else if (char === "$" && statement.startsWith("((", i + 1)) {
-      // Arithmetic runs nothing itself, but a `$(...)` inside it still runs.
       i += 2;
     } else if ((char === "$" || (char === "<" && quote == null)) && statement[i + 1] === "(") {
       let depth = 1;
@@ -656,8 +581,6 @@ function substitutions(statement: string): string[] {
       bodies.push(statement.slice(i + 2, depth === 0 ? end - 1 : end));
       i = end - 1;
     } else if (char === "`" && quote == null) {
-      // Inside double quotes a backtick pair is almost always a Markdown code
-      // span in a grep pattern or label, not a command the agent meant to run.
       const end = statement.indexOf("`", i + 1);
       if (end === -1) {
         break;
@@ -671,10 +594,6 @@ function substitutions(statement: string): string[] {
 
 const HEREDOC = /(?<!<)<<-?\s*(['"]?)([A-Za-z_][\w.-]*)\1/g;
 
-/** Drops heredoc bodies so their lines are not read as statements. The line
- * that opens the heredoc still decides: `cat > f <<EOF` writes, `python3 - <<EOF`
- * runs code, and a bare `cat <<EOF` only prints. An unterminated heredoc keeps
- * the script intact rather than hiding what follows it. */
 function stripHeredocBodies(script: string): string {
   if (!script.includes("<<")) {
     return script;
@@ -713,10 +632,6 @@ function outsideQuotes(text: string, index: number): boolean {
   return quote == null;
 }
 
-// Escapes go first so `\"` does not open a quote, and an unterminated quote
-// runs to the end, as it does in splitUnquoted (a closing quote is optional so
-// an unbalanced string cannot make this quadratic). Arithmetic goes too, since
-// `$((a > b))` compares rather than redirects.
 function stripQuoted(text: string): string {
   return text.replace(
     /\\[\s\S]|'[^']*'?|"(?:[^"\\]|\\[\s\S])*"?|\$\(\((?:[^()]|\([^()]*\))*\)\)/g,
@@ -734,7 +649,6 @@ function unwrapShell(command: string | null): string | null {
     const body = match[1] ?? "";
     if (/^['"]/.test(body)) {
       const script = quotedWord(body);
-      // `bash -c 'a' _ b` or `bash -c "a"; rm b`: the stage check reads each wrapper.
       if (script == null) {
         return current;
       }
@@ -746,8 +660,6 @@ function unwrapShell(command: string | null): string | null {
   return current;
 }
 
-/** The contents of one single- or double-quoted word, or null when `word` is
- * anything more than that. */
 function quotedWord(word: string): string | null {
   const single = /^'([^']*)'$/.exec(word);
   if (single != null) {
@@ -757,7 +669,6 @@ function quotedWord(word: string): string | null {
   return double == null ? null : (double[1] ?? "").replace(/\\(["\\$`])/g, "$1");
 }
 
-/** `sh -c '<script>' [name args...]` runs the script; any other shell call runs a file or stdin. */
 function shellVerdict(args: string[]): ActivityBucket {
   const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
   const script = flag === -1 ? undefined : args[flag + 1];
@@ -789,9 +700,6 @@ function stageVerdict(stage: string): ActivityBucket | "neutral" {
   return READONLY_WHEN[head]?.(args) ? "context" : "code";
 }
 
-/** The words of the command a stage actually runs: without leading variable
- * assignments, subshell parens, control keywords (`do`, `then`, `if`), or
- * wrappers (`env`, `timeout 30`, `xargs -n1`, `time`). */
 function commandWords(stage: string): string[] {
   let words = shellWords(stage);
   for (let guard = 0; guard < 16 && words.length > 0; guard += 1) {
@@ -800,7 +708,6 @@ function commandWords(stage: string): string[] {
       const rest = first.replace(/^\(+/, "");
       words = rest === "" ? words.slice(1) : [rest, ...words.slice(1)];
     } else if (/^[A-Za-z_]\w*=\(/.test(first)) {
-      // An array assignment, `dirs=(src tests)`, ends at the word closing it.
       const end = words.findIndex((word) => word.endsWith(")"));
       words = words.slice(end === -1 ? words.length : end + 1);
     } else if (/^[A-Za-z_]\w*=/.test(first) || COMMAND_PREFIXES.has(first)) {
@@ -827,8 +734,6 @@ function commandWords(stage: string): string[] {
   return words;
 }
 
-/** Whitespace-split words, keeping quoted strings, escapes, and `$(...)` whole
- * and dropping redirections, which the statement-level check already judged. */
 function shellWords(stage: string): string[] {
   const words = splitUnquoted(stage, WORD_BREAK).filter((word) => word !== "");
   const kept: string[] = [];
@@ -858,7 +763,6 @@ function unquote(value: string): string {
   return value.replace(/^['"]|['"]$/g, "");
 }
 
-// Commands that are read-only only with some arguments.
 const READONLY_WHEN: Record<string, (args: string[]) => boolean> = {
   git: gitReadOnly,
   gh: ghReadOnly,
@@ -886,7 +790,6 @@ const READONLY_WHEN: Record<string, (args: string[]) => boolean> = {
   npm: (args) =>
     ["view", "info", "show", "ls", "list", "outdated", "why", "explain"].includes(args[0] ?? ""),
   "ssh-add": (args) => args.length > 0 && args.every((arg) => arg === "-l" || arg === "-L"),
-  // macOS unified log: `log show` and `log stream` only read.
   log: (args) => args[0] === "show" || args[0] === "stream",
   sysctl: (args) => !args.some((arg) => arg === "-w" || /^[\w.]+=/.test(arg)),
   aws: (args) => {
@@ -904,10 +807,8 @@ const READONLY_WHEN: Record<string, (args: string[]) => boolean> = {
 };
 
 const AWS_VALUE_OPTIONS = new Set(["--region", "--profile", "--output", "--endpoint-url"]);
-// Reads that save the response to an outfile argument.
 const AWS_DOWNLOADS = new Set(["get-object", "get-object-torrent", "get-media", "get-job-output"]);
 
-/** The non-option words of `args`, skipping the value of each option in `valueOptions`. */
 function positionals(args: string[], valueOptions: Set<string>): string[] {
   const words: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -921,8 +822,6 @@ function positionals(args: string[], valueOptions: Set<string>): string[] {
   return words;
 }
 
-/** True when `args` use one of `flags`, including `--flag=value` and short-flag
- * clusters such as `-rd` or `-uorigin/main`. */
 function usesFlag(args: string[], flags: Set<string>): boolean {
   return args.some((arg) =>
     arg.startsWith("--")
@@ -936,8 +835,6 @@ function usesFlag(args: string[], flags: Set<string>): boolean {
 const SED_SCRIPT_WRITES =
   /(?:^|[;{}\n\d$/!])\s*(?:[wWe](?:\s|$)|s([^\w\s\\])(?:\\.|(?!\1)[^\\])*\1(?:\\.|(?!\1)[^\\])*\1[gpiImM\d]*[we])/;
 
-/** sed reads unless it edits in place, runs a script file it does not show, or
- * its script writes a file (`w`, `s///w`) or runs a command (`e`, `s///e`). */
 function sedReadOnly(args: string[]): boolean {
   const scripts: string[] = [];
   let explicit = false;
@@ -966,8 +863,6 @@ const SQLITE_VALUE_OPTIONS = new Set(["-separator", "-newline", "-nullvalue", "-
 const SQLITE_WRITES =
   /(?:^|[\s;])\.(?:output|once|save|backup|clone|open|shell|system|import|log|trace|excel)\b|\bvacuum\s+into\b/i;
 
-/** `sqlite3 -readonly db 'sql'` reads. SQL from stdin, `-init`, or a heredoc is
- * not visible here, so it counts as code. */
 function sqliteReadOnly(args: string[]): boolean {
   const sql: string[] = [];
   let positional = 0;
@@ -995,7 +890,6 @@ function sqliteReadOnly(args: string[]): boolean {
   );
 }
 
-// Global options whose value is the next word (`git -C dir log`).
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
 const GIT_BRANCH_WRITES = new Set([
   "-d",
@@ -1044,7 +938,6 @@ const GIT_TAG_WRITES = new Set([
   "--file",
   "--edit",
 ]);
-// Listing flags that take a commit or pattern, so a positional word is not a new ref name.
 const GIT_LIST_FLAGS = new Set([
   "-l",
   "--list",
@@ -1072,7 +965,6 @@ function gitReadOnly(args: string[]): boolean {
       return rest[0] === "list" || rest[0] === "show";
     case "config": {
       const [first, ...keys] = rest.filter((arg) => !arg.startsWith("-"));
-      // Keys have a dot, so a bare first word is a subcommand (`git config get x`).
       if (first != null && !first.includes(".")) {
         return first === "list" || (first === "get" && !usesFlag(rest, GIT_CONFIG_WRITES));
       }
@@ -1112,7 +1004,6 @@ function ghReadOnly(args: string[]): boolean {
   if (group === "api") {
     return ghApiReadOnly(args.slice(1));
   }
-  // `gh pr checks --watch` waits on CI, like `gh run watch`.
   return (
     group != null &&
     verb != null &&
@@ -1269,8 +1160,6 @@ const CURL_WRITE_OPTIONS =
   /^--(?:data|form|json|upload-file|remote-name|dump-header|cookie-jar|output-dir|trace|config|quote|libcurl|stderr|etag-save|hsts|alt-svc)/;
 const LOCAL_HOST = /\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\[::1\]/;
 
-/** A remote GET that prints its response is web retrieval. Probing a local
- * dev server verifies the work, so it stays code, like running its tests. */
 function curlReadOnly(args: string[]): boolean {
   // `-w '%output{file}'` switches the write-out to a file.
   if (args.some((arg) => LOCAL_HOST.test(arg) || arg.includes("%output{"))) {
@@ -1321,8 +1210,6 @@ function readOnlyCurlValue(flag: string, value: string | undefined): boolean {
 const FIND_WRITES = new Set(["-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]);
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-/** `find` reads unless it deletes, writes a listing, or `-exec`s a command
- * that is not itself read-only (`-exec cat {} \;` reads, `-exec rm` does not). */
 function findReadOnly(args: string[]): boolean {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
@@ -1345,7 +1232,6 @@ function findReadOnly(args: string[]): boolean {
 /** awk reads unless its program shells out or prints into a file or command.
  * A lone `|` after print pipes to a command; `||` is only a logical or. */
 function awkReadOnly(args: string[]): boolean {
-  // Judge the program without its string literals, so `printf "a | b"` stays a read.
   const program = args
     .map((arg) => quotedWord(arg) ?? arg)
     .join(" ")
@@ -1398,10 +1284,8 @@ function localToolName(name: string): string {
   return name.split(".").filter(Boolean).at(-1) ?? name;
 }
 
-/** One `tools.<name>(...)` call inside a Codex `exec` program. */
 export interface CodexExecCall {
   name: string;
-  /** The literal `cmd` of an `exec_command` call; null when it is built at runtime. */
   command: string | null;
 }
 
@@ -1411,7 +1295,6 @@ export interface CodexExecCall {
 // as context, so each inner call is classified on its own terms.
 function isCodexExec(toolName: string | null | undefined): boolean {
   const name = toolName ?? "";
-  // Raw name check: an MCP server's tool may also be called `exec`.
   return !name.startsWith("mcp__") && name.toLowerCase() === "exec";
 }
 
@@ -1435,7 +1318,6 @@ function execCommandArgument(
   argument: CallExpression["arguments"][number] | undefined,
 ): string | null {
   if (argument?.type !== "ObjectExpression") return null;
-  // Later properties win; a spread or computed key may overwrite cmd at runtime.
   for (const property of argument.properties.toReversed()) {
     if (property.type === "SpreadElement" || property.computed) return null;
     const key = property.key;
@@ -1454,8 +1336,6 @@ function execCommandArgument(
   return null;
 }
 
-/** The inner tool calls of a Codex `exec` program, in source order. Empty for any
- * other tool, or for a program that cannot be parsed or calls no tools. */
 export function codexExecCalls(
   toolName: string | null | undefined,
   input?: string | Json,
@@ -1497,13 +1377,10 @@ export function codexExecCalls(
     });
     return calls.sort((a, b) => a.start - b.start).map(({ name, command }) => ({ name, command }));
   } catch {
-    // Invalid or deeply nested source must not crash ingest or invent tool calls.
     return [];
   }
 }
 
-// A program that reads and then patches is an implementation step, so the strongest
-// inner bucket labels the whole call. A program that asks the user is communicating.
 const EXEC_BUCKET_PRECEDENCE: ActivityBucket[] = ["code", "planning", "communicating", "context"];
 
 function innerInput(call: CodexExecCall): Json | undefined {

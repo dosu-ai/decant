@@ -6,6 +6,8 @@ export type SessionLoadPlan = {
   page: number;
 };
 
+const NEXT_PAGE_PROBE_ROWS = 1;
+
 export function planSessionPageLoad({
   page,
   pageSize,
@@ -18,7 +20,7 @@ export function planSessionPageLoad({
   const candidateOffset = (requestedPage - 1) * normalizedPageSize;
   const offset = Number.isSafeInteger(candidateOffset) ? candidateOffset : 0;
   const normalizedPage = offset === candidateOffset ? requestedPage : 1;
-  const limit = Math.min(SESSION_LIST_MAX_LIMIT, normalizedPageSize + 1);
+  const limit = Math.min(SESSION_LIST_MAX_LIMIT, normalizedPageSize + NEXT_PAGE_PROBE_ROWS);
   return { limit, offset, page: normalizedPage };
 }
 

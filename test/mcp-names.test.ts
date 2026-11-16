@@ -16,16 +16,10 @@ describe("formatMcpServer", () => {
     ["plugin_my-vendor_analytics", "Analytics"],
     ["dosu", "Dosu"],
     ["some_raw_server", "Some Raw Server"],
-    // Hyphens separate words as often as underscores do.
     ["claude-in-chrome", "Claude In Chrome"],
     ["linear-server", "Linear Server"],
-    // A segment that already carries capitals keeps them, but still gains an
-    // initial capital so it lines up with every other name in the column.
     ["dataAnalyticsWidgets", "DataAnalyticsWidgets"],
-    // A generated id is not a name: word-splitting it produces hex noise.
     ["4b9d01f4-ab8b-4e2e-a545-d04b1af2fbaa", "4b9d01f4-ab8b-4e2e-a545-d04b1af2fbaa"],
-    // At most one namespace prefix comes off, and a prefix-only slug has no
-    // name left to show.
     ["claude_ai_", ""],
     [null, ""],
     [undefined, ""],
@@ -38,10 +32,8 @@ describe("formatMcpServer", () => {
 describe("mcpServerOrigin", () => {
   test.each([
     ["claude_ai_Dosu", "connector"],
-    // A plugin named after its own server would only stutter.
     ["plugin_posthog_posthog", "plugin"],
     ["plugin_vercel_vercel", "plugin"],
-    // A plugin whose name the display name does not already carry earns it.
     ["plugin_my-vendor_analytics", "my-vendor plugin"],
     ["dosu", "local"],
     ["node_repl", "local"],
@@ -51,8 +43,6 @@ describe("mcpServerOrigin", () => {
 });
 
 describe("mcpServerLabels", () => {
-  // Every collision group observed in a real archive: the same server reached
-  // it as a bare `.mcp.json` id and as a connector or a plugin bundle.
   test("disambiguates names shared by two registrations, and only those", () => {
     const labels = mcpServerLabels([
       "dosu",
@@ -67,7 +57,6 @@ describe("mcpServerLabels", () => {
       claude_ai_Dosu: "Dosu (connector)",
       posthog: "Posthog (local)",
       plugin_posthog_posthog: "Posthog (plugin)",
-      // Untouched: nothing else formats to these.
       codex_apps: "Codex Apps",
       playwright: "Playwright",
     });

@@ -1,4 +1,3 @@
-// One probe per process, for tests whose regression would block forever.
 import { closeDb, openDb } from "../src/db.ts";
 import { sync } from "../src/ingest.ts";
 import { OpenCodeMcpServerNames } from "../src/sources/opencode-store.ts";

@@ -48,7 +48,5 @@ self.addEventListener("message", function onMessage(event) {
       closeDb(db);
     }
   }
-  // Completion means every native SQLite resource has been released. Return
-  // to the drained event loop rather than racing a parent-thread termination.
   self.postMessage(result);
 });

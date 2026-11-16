@@ -9,12 +9,6 @@ import { TOOLS, type Tool } from "./model.ts";
 import { detectInstall, type InstallChannel, updateCheckEnabled } from "./update.ts";
 import { DECANT_VERSION } from "./version.ts";
 
-/**
- * Everything a bug report needs about the machine, and nothing from a
- * transcript. The report is meant to be pasted into a public issue, so paths
- * outside the home directory are replaced with CUSTOM_PATH and environment
- * variables are reported by name only.
- */
 export interface DoctorReport {
   decant_version: string;
   install_channel: InstallChannel;
@@ -26,9 +20,7 @@ export interface DoctorReport {
   update_check: boolean;
   archive: DoctorArchive;
   sources: DoctorSource[];
-  /** Set by discovery failures; source counts are then incomplete. */
   discovery_error: string | null;
-  /** Event names of warnings discovery raised, such as an unreadable OpenCode database. */
   discovery_warnings: string[];
   env: string[];
 }
@@ -46,7 +38,6 @@ export interface DoctorSource {
   tool: Tool;
   roots: string[];
   exists: boolean;
-  /** Session sources discovery found: files for JSONL tools, sessions for OpenCode. */
   found: number;
 }
 
@@ -54,13 +45,11 @@ export interface DoctorOptions {
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
   install?: { channel: InstallChannel };
-  /** Injected so tests do not depend on the machine's discovery result. */
   discover?: typeof discover;
 }
 
 export const CUSTOM_PATH = "(custom path)";
 
-// Names only: values can hold paths with a user name in them.
 const ENV_PREFIXES = ["DECANT_", "OPENCODE_"];
 const ENV_NAMES = new Set(["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]);
 
@@ -113,13 +102,10 @@ export function collectDoctorReport(config: Config, options: DoctorOptions = {})
   };
 }
 
-/** `~/...` for paths under the home directory, CUSTOM_PATH for anything else. */
 export function displayPath(rawPath: string, rawHome: string): string {
   if (rawHome === "") {
     return CUSTOM_PATH;
   }
-  // Resolved first so `~/../other` cannot leave the home directory in the
-  // printed form, and so a trailing separator on either side does not matter.
   const home = resolve(rawHome);
   const path = resolve(rawPath);
   if (home === resolve(sep)) {
@@ -159,8 +145,6 @@ function sourceRoots(config: Config, tool: Tool): string[] {
   }
 }
 
-// Opened read-only and never migrated: doctor must work on an archive that a
-// newer or older Decant wrote, which is often why someone runs it.
 function inspectArchive(path: string, display: (path: string) => string): DoctorArchive {
   const archive: DoctorArchive = {
     path: display(path),
@@ -184,7 +168,6 @@ function inspectArchive(path: string, display: (path: string) => string): Doctor
       const row = db.query("SELECT max(version) AS version FROM schema_migrations").get() as {
         version: unknown;
       };
-      // A damaged archive can hold any text here, including a path.
       if (Number.isSafeInteger(row.version) && (row.version as number) >= 0) {
         archive.schema_version = row.version as number;
       } else if (row.version != null) {
@@ -221,8 +204,6 @@ function countByTool(tools: Tool[]): Partial<Record<Tool, number>> {
   return counts;
 }
 
-// Error messages from SQLite and the filesystem can quote paths, so the report
-// keeps the error class or SQLite code only.
 function errorName(error: unknown): string {
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code;

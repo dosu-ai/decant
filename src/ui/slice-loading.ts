@@ -20,8 +20,6 @@ export function dateScopedSliceStatus(
   return failed ? "failed" : "loading";
 }
 
-/** Publish each request as it settles so a slow analytics slice cannot hold
- * back data that is already available to render. */
 export async function loadSlicesIndependently<Slice extends string, Data extends object>(
   slices: readonly Slice[],
   load: (slice: Slice) => Promise<Partial<Data>>,

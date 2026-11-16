@@ -5,11 +5,6 @@ import { join } from "node:path";
 import { closeDb, openDb } from "../src/db.ts";
 import { listSessions } from "../src/query.ts";
 
-// End-to-end coverage for standalone `decant watch`: the real CLI must keep
-// running until a signal arrives, ingest changes made while it runs, and exit
-// cleanly on SIGTERM. Every source directory and the archive live in a scratch
-// directory so the child never reads the developer's real session logs.
-
 const repoRoot = join(import.meta.dir, "..");
 const workDir = mkdtempSync(join(tmpdir(), "decant-watch-process-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -43,10 +38,8 @@ describe("decant watch process", () => {
       DECANT_CONFIG_DIR: join(workDir, "config"),
       DECANT_LOG_LEVEL: "info",
     };
-    // --db names the archive, and the watcher's own startup sync must run.
     delete env.DECANT_DB;
     delete env.DECANT_NO_SYNC;
-    // OPENCODE_DB adds a source even when --opencode-dir is overridden.
     delete env.OPENCODE_DB;
     delete env.OPENCODE_CONFIG;
     delete env.OPENCODE_CONFIG_DIR;
@@ -78,8 +71,10 @@ describe("decant watch process", () => {
         for (const line of lines) {
           try {
             events.push(JSON.parse(line) as SyncCompleted);
-          } catch {
-            // Non-JSON output is kept out of the event list.
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) {
+              throw error;
+            }
           }
         }
       }
@@ -99,7 +94,6 @@ describe("decant watch process", () => {
 
     try {
       await waitFor(() => completed().length > 0, "the startup sync");
-      // The regression exited right after the startup sync without a signal.
       await Bun.sleep(1_000);
       expect(proc.exitCode).toBeNull();
 

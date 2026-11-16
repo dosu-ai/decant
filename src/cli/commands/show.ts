@@ -19,21 +19,16 @@ interface ShowOptions {
   maxChars?: number;
 }
 
-// getSession pages only when it has a limit, so an offset alone needs one
-// that no session reaches.
 const NO_MESSAGE_LIMIT = 2 ** 31 - 1;
 
 const CAPPED_FIELDS = ["text", "tool_input", "tool_result"] as const;
 type CappedField = (typeof CAPPED_FIELDS)[number];
 
-/** A block whose long fields were cut. The flags are absent on an uncut block. */
 export interface CappedBlock extends BlockView {
   truncated?: true;
-  /** Length before the cut, for each field that was cut. */
   original_chars?: Partial<Record<CappedField, number>>;
 }
 
-/** What a reader needs to tell a partial result from a whole one and to page on. */
 export interface PageInfo {
   message_count: number;
   message_offset: number;
@@ -49,7 +44,6 @@ export interface OutlineBlock {
 }
 
 export interface OutlineMessage {
-  /** Position in the transcript, which is what `--offset` counts. */
   index: number;
   seq: number;
   role: string;
@@ -68,7 +62,6 @@ export interface SessionOutlineView extends PageInfo {
   };
   totals: SessionTotals | undefined;
   messages: OutlineMessage[];
-  /** The items `GET /api/sessions/{id}/outline` returns, for the listed messages. */
   outline: SessionOutlineItem[];
 }
 
@@ -153,7 +146,6 @@ export function addShowCommand(ctx: CliContext, command: Command): void {
 function integerAtLeast(minimum: number): (value: string) => number {
   return (value) => {
     const parsed = parseInteger(value);
-    // SQLite rejects a bound integer past 2^63 with a datatype mismatch.
     if (parsed < minimum || !Number.isSafeInteger(parsed)) {
       throw new InvalidArgumentError(`expected an integer of at least ${minimum}`);
     }
@@ -173,7 +165,6 @@ function pageInfo(detail: SessionDetail, options: ShowOptions, truncatedBlocks: 
   };
 }
 
-/** Cut every long field to `maxChars`, recording each field's original length. */
 export function capBlocks(
   detail: SessionDetail,
   maxChars: number | undefined,
@@ -206,12 +197,13 @@ export function capBlocks(
 
 function cut(value: string, maxChars: number): string {
   const last = value.charCodeAt(maxChars - 1);
-  // Ending on a high surrogate would leave half a character behind.
-  return value.slice(0, last >= 0xd800 && last <= 0xdbff ? maxChars - 1 : maxChars);
+  return value.slice(0, isHighSurrogate(last) ? maxChars - 1 : maxChars);
 }
 
-// JSON carries the cut in fields. Text has nowhere else to say it, so the
-// marker goes where the content stops.
+function isHighSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+}
+
 function withTruncationMarkers(detail: SessionDetail): SessionDetail {
   return {
     ...detail,
@@ -231,10 +223,6 @@ function withTruncationMarkers(detail: SessionDetail): SessionDetail {
   };
 }
 
-/**
- * How this run reached its archive, so a printed follow-up command reads the
- * same archive and keeps sync off when this run had it off.
- */
 export function readInvocation(globals: { db?: string; sync?: boolean }): string {
   return [
     "decant",
@@ -349,7 +337,6 @@ function promptPreview(prompt: string | undefined): string[] {
   if (prompt == null) {
     return [];
   }
-  // A row is one line of tab-separated columns, so the preview cannot hold either.
   const flat = prompt.replaceAll(/\s+/g, " ").trim();
   return [flat.length > PROMPT_PREVIEW_CHARS ? `${cut(flat, PROMPT_PREVIEW_CHARS)}...` : flat];
 }

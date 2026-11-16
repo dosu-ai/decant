@@ -23,9 +23,6 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-// Top-level records Codex writes for its own bookkeeping. The model never sees
-// them and they carry no conversation, so they're skipped without a drift
-// diagnostic.
 const IGNORED_TOP_LEVEL = new Set([
   "world_state",
   "token_usage_record",
@@ -72,8 +69,7 @@ export function parseCodexSession(
     const payload = get(value, "payload") ?? null;
     // A forked subagent's rollout opens with its own session_meta, then
     // replays the thread it forked from, sometimes with that thread's
-    // session_meta. Those records belong to the parent's own rollout, and
-    // adopting the replayed id would file this child over it.
+    // session_meta.
     const metaId = typ === "session_meta" ? asString(get(payload, "id")) : null;
     const ordinal = asInteger(get(value, "ordinal"));
     if (
@@ -133,9 +129,6 @@ export function parseCodexSession(
       sawTokenCount = true;
       totals = usageFrom(source);
       contextWindow = asInteger(get(info, "model_context_window")) ?? contextWindow;
-      // last_token_usage is the most recent request's context reading; stamp
-      // it on the assistant message that request produced so per-call window
-      // occupancy is queryable, exactly like Claude's per-message usage.
       const last = get(info, "last_token_usage");
       if (isObject(last)) {
         stampLatestAssistant(messages, usageFrom(last));
@@ -161,11 +154,6 @@ export function parseCodexSession(
         seq += 1;
       }
     } else if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
-      // Remaining event_msg subtypes are stream noise whose durable copy is a
-      // response_item. The exceptions are token_count and mcp_tool_call_end,
-      // handled above — MCP calls have no response_item in current rollouts.
-      // Anything else is a top-level record type this parser has never seen —
-      // the drift sensor.
       countUnknown(unknownTypes, typ, index + 1);
     }
   }
@@ -209,10 +197,8 @@ export function parseCodexSession(
   return { session: normalized, issues };
 }
 
-/** First ordinal a forked subagent's rollout owns, read from its first
- * session_meta payload; null when the rollout is not a fork. Guardian rollouts
- * carry subagent_history_start_ordinal over turns of their own, so the ordinal
- * marks replayed history only alongside forked_from_id. */
+/** Guardian rollouts carry subagent_history_start_ordinal over turns of their
+ * own, so the ordinal marks replayed history only alongside forked_from_id. */
 export function forkHistoryStart(sessionMeta: Json | undefined): number | null {
   return asString(get(sessionMeta, "forked_from_id")) == null
     ? null
@@ -223,16 +209,10 @@ function usageFrom(source: Json | undefined): TokenUsage {
   const totalInput = getInteger(source, "input_tokens");
   const cached = getInteger(source, "cached_input_tokens");
   const cacheWrite = getInteger(source, "cache_write_input_tokens");
-  // Current Codex logs, when they carry cache_write_input_tokens at all, report
-  // cached and cache-write input as subsets of input_tokens. Gate that contract:
-  // if a future producer emits an incompatible breakdown, preserve the inclusive
-  // total and cached portion instead of silently zeroing uncached input or
-  // double-counting the write bucket.
   const disjointBreakdown = cached + cacheWrite <= totalInput;
   return {
     // Codex reports input_tokens as the inclusive prompt total. Cached and
-    // cache-write tokens are component breakdowns, so normalize them into
-    // disjoint buckets before the rest of Decant adds the buckets together.
+    // cache-write tokens are component breakdowns of it.
     input: Math.max(0, totalInput - cached - (disjointBreakdown ? cacheWrite : 0)),
     output: getInteger(source, "output_tokens"),
     cacheRead: cached,
@@ -242,11 +222,8 @@ function usageFrom(source: Json | undefined): TokenUsage {
   };
 }
 
-/** Applies a token_count reading to the assistant message its request produced.
- * Readings land after the response items they describe, so walk back past tool
- * rows to the nearest assistant message. User and system rows are hard
- * boundaries: in particular, post-compaction zero readings must not overwrite
- * the pre-compaction assistant peak. Later readings within one request win. */
+/** Readings land after the response items they describe, and the reading
+ * right after a compaction is zero. */
 function stampLatestAssistant(messages: NormalizedMessage[], usage: TokenUsage): void {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -430,10 +407,6 @@ function mcpEventMessages(
   };
 }
 
-/** Readable projection of an MCP result: Ok text content first, then
- * structured content, then empty for a bare success — never the Result
- * envelope, which stays available on message.raw. Non-Ok results (Err,
- * unrecognized) serialize whole so the failure remains visible. */
 function mcpResultText(result: Json): string {
   const ok = get(result, "Ok");
   if (ok === undefined) {
@@ -456,7 +429,6 @@ function mcpResultText(result: Json): string {
   return Array.isArray(content) ? "" : canonicalJson(result);
 }
 
-/** Event timestamp minus the reported duration; the event marks the call's end. */
 function backdate(timestamp: string | null, duration: Json | undefined): string | null {
   if (timestamp == null) {
     return null;
@@ -472,13 +444,10 @@ function backdate(timestamp: string | null, duration: Json | undefined): string 
 }
 
 // Context Codex injects as a "user" message: the workspace's AGENTS.md, the
-// environment block, and app-supplied context. The user never typed it, so it is
-// neither a turn nor time spent waiting on the user.
+// environment block, and app-supplied context.
 const INJECTED_CONTEXT =
   /^\s*(?:# AGENTS\.md instructions\b|<(?:environment_context|user_instructions|recommended_plugins|codex_internal_context|in-app-browser-context)>)/;
 
-/** `developer` messages and injected context are harness instructions, so they
- * are system rows; a user message is a turn only when the user wrote part of it. */
 function messageRole(role: string | null, content: Json | undefined): Role {
   if (role === "assistant" || role === "system") {
     return role;
@@ -491,7 +460,6 @@ function messageRole(role: string | null, content: Json | undefined): Role {
 
 function isInjectedContext(content: Json | undefined): boolean {
   const parts = typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
-  // An attached image, or any part that is not injected text, is the user's.
   return (
     parts.length > 0 &&
     parts.every((part) => {

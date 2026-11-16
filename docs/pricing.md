@@ -1,8 +1,14 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
-Claude Fable 5.2 and Mythos 5.2 rates, including their fast-mode rates, were
-verified on November 9, 2026. Claude Haiku 5.5 rates, the Claude Sonnet 5.5 cache-read rate, and fast-mode
+On November 16, 2026, every Anthropic, OpenAI, Gemini, Z.ai, Meta, DeepSeek,
+MiniMax, MiMo, Qwen, StepFun, Tencent, and Reflection rate in the table below
+was checked against the provider pages listed here and found unchanged, and the
+new Gemini 4 Carbon and Hydrogen, GPT-6 Cyber, GPT-5.5 Cyber Preview,
+Qwen4-Max, Muse Ember, MiniMax-M3.1-Flash, Hy4, Step 3.7 Flash, and xAI Grok
+rates were added. The dates that follow record when each rate was first
+verified. Claude Fable 5.2 and Mythos 5.2 rates, including their fast-mode
+rates, were verified on November 9, 2026. Claude Haiku 5.5 rates, the Claude Sonnet 5.5 cache-read rate, and fast-mode
 rates were verified on October 7, 2026, and all other Anthropic rates on
 September 28, 2026, against the Anthropic pricing and model deprecation pages
 below. GPT-6.1 Terra rates were verified on October 26, 2026, GPT-6.1 Sol
@@ -33,24 +39,29 @@ a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 - [Introducing GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/)
 - [OpenAI GPT-6.1 Terra pricing](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
 - [OpenAI GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
+- [OpenAI GPT-6 Cyber pricing](https://developers.openai.com/api/docs/models/gpt-6-cyber) (checked November 16, 2026)
+- [OpenAI GPT-5.6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) (promotion end date, checked November 16, 2026)
 - [OpenAI Codex credit pricing](https://learn.chatgpt.com/docs/pricing)
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
-- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked November 5, 2026)
-- [Gemini models](https://ai.google.dev/gemini-api/docs/models) (Gemini 4 Argon model code, checked November 5, 2026)
-- [Z.ai pricing](https://docs.z.ai/guides/overview/pricing) (checked October 26, 2026)
-- [Meta Model API pricing](https://dev.meta.ai/docs/pricing-rate-limits) (checked October 26, 2026)
-- [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/) (checked October 26, 2026)
+- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked November 16, 2026)
+- [Gemini models](https://ai.google.dev/gemini-api/docs/models) (Gemini 4 Argon, Carbon, and Hydrogen model codes, checked November 16, 2026)
+- [Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog) (Gemini 3.5 Flash and 3.7 Flash deprecations, checked November 16, 2026)
+- [Z.ai pricing](https://docs.z.ai/guides/overview/pricing) (checked November 16, 2026)
+- [Meta Model API pricing](https://dev.meta.ai/docs/pricing-rate-limits) (checked November 16, 2026)
+- [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/) (checked November 16, 2026)
 - [Kimi API pricing](https://platform.kimi.ai/docs/pricing/chat) and [context caching](https://platform.kimi.ai/docs/guide/context-caching.md) (checked October 26, 2026)
 - [Kimi K3.1 Pro API pricing](https://www.kimi.ai/resources/kimi-k3-1-pro-pricing) (checked October 25, 2026)
-- [MiniMax pricing](https://platform.minimax.io/docs/pricing/overview) (checked October 26, 2026)
-- [Xiaomi MiMo pay-as-you-go pricing](https://mimo.mi.com/docs/en-US/price/pay-as-you-go) (checked October 26, 2026)
-- [Alibaba Cloud Model Studio pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing) and [context cache](https://www.alibabacloud.com/help/en/model-studio/context-cache) (checked October 26, 2026)
-- [QwenCloud Qwen3.8 2.4T A95B model page](https://www.qwencloud.com/models/qwen3.8-2.4t-a95b) (its cached-input rate, checked October 26, 2026)
-- [StepFun pricing](https://platform.stepfun.ai/docs/en/guides/pricing/details) (checked October 26, 2026)
-- [Tencent Cloud TokenHub model pricing](https://www.tencentcloud.com/document/product/1300/78937) (checked October 26, 2026)
-- [Reflection beta pricing](https://reflection.ai/legal/beta-pricing-information) and [models](https://developers.reflection.ai/models) (checked October 26, 2026)
+- [MiniMax pricing](https://platform.minimax.io/docs/pricing/overview) (checked November 16, 2026)
+- [Xiaomi MiMo pay-as-you-go pricing](https://mimo.mi.com/docs/en-US/price/pay-as-you-go) (checked November 16, 2026)
+- [Alibaba Cloud Model Studio pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing) and [context cache](https://www.alibabacloud.com/help/en/model-studio/context-cache) (checked November 16, 2026)
+- [QwenCloud Qwen3.8 2.4T A95B model page](https://www.qwencloud.com/models/qwen3.8-2.4t-a95b) (its cached-input rate, checked November 16, 2026)
+- [QwenCloud Qwen4-Max model page](https://www.qwencloud.com/models/qwen4-max) and [Model Studio new models](https://www.alibabacloud.com/help/en/model-studio/newly-released-models) (checked November 16, 2026)
+- [StepFun pricing](https://platform.stepfun.ai/docs/en/guides/pricing/details) (checked November 16, 2026)
+- [Tencent Cloud TokenHub model pricing](https://www.tencentcloud.com/document/product/1300/78937) (checked November 16, 2026)
+- [Reflection beta pricing](https://reflection.ai/legal/beta-pricing-information) and [models](https://developers.reflection.ai/models) (checked November 16, 2026)
+- [xAI pricing](https://docs.x.ai/developers/pricing) and [May 15 retirement](https://docs.x.ai/developers/migration/may-15-retirement) (checked November 16, 2026)
 
 All dollar amounts below are USD per million tokens. A dash means that the
 provider does not publish a first-party API token price for that model slug.
@@ -72,6 +83,7 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Haiku 4.5 | $1.00 | $0.10 | $1.25 / $2.00 | $5.00 |
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
 | Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
+| GPT-6 Cyber | $20.00 | $2.00 | $25.00 | $100.00 |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
 | GPT-6.1 Sol | $2.00 | $0.10 | $2.50 | $10.00 |
@@ -81,6 +93,7 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
 | GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
 | GPT-5.6 Cyber, Daybreak Red | $12.50 | $1.25 | $15.625 | $75.00 |
+| GPT-5.5 Cyber Preview | $12.50 | $1.25 | no additional fee | $75.00 |
 | GPT-5.5 | $5.00 | $0.50 | no additional fee | $30.00 |
 | GPT-5.4 | $2.50 | $0.25 | no additional fee | $15.00 |
 | GPT-5.4 mini | $0.75 | $0.075 | no additional fee | $4.50 |
@@ -89,7 +102,8 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
-| Gemini 4 Argon | $4.00 | $0.20 | $4.00-equiv | $20.00 |
+| Gemini 4 Argon, Gemini 4 Carbon | $4.00 | $0.20 | $4.00-equiv | $20.00 |
+| Gemini 4 Hydrogen | $1.50 | $0.075 | $1.50-equiv | $7.50 |
 | Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
 | Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
@@ -101,7 +115,7 @@ provider does not publish a first-party API token price for that model slug.
 | Gemini 2.5 Flash-Lite | $0.10 | $0.01 | $0.10-equiv | $0.40 |
 | Gemini image, TTS, live, transcribe, native-audio, computer-use variants | — | — | — | — |
 | GLM-5.3, GLM-5.2, GLM-5.1 | $1.40 | $0.26 | no additional fee | $4.40 |
-| GLM-5.3-FlashX | $0.37 | $0.075 | no additional fee | $1.25 |
+| GLM-5.3-FlashX, GLM-5.3-FlashX-Legal | $0.37 | $0.075 | no additional fee | $1.25 |
 | GLM-5.3-Flash | $0.15 | $0.03 | no additional fee | $0.50 |
 | GLM-5 | $1.00 | $0.20 | no additional fee | $3.20 |
 | GLM-4.7, GLM-4.6, GLM-4.5 | $0.60 | $0.11 | no additional fee | $2.20 |
@@ -115,6 +129,7 @@ provider does not publish a first-party API token price for that model slug.
 | Muse Wonder 1.0 | $4.00 | $0.20 | no additional fee | $20.00 |
 | Muse Spark 1.3, 1.2, 1.1 | $1.25 | $0.15 | no additional fee | $4.25 |
 | Muse Spark 1.3 Contributor, 1.2 Contributor | $0.10 | $0.002 | no additional fee | $0.20 |
+| Muse Ember 1.0 | $0.10 | $0.004 | no additional fee | $0.50 |
 | Muse Wonder Full, Muse Glimmer, Muse Image, Muse Voice | — | — | — | — |
 | DeepSeek Flash (`deepseek-flash`, `deepseek-v4-flash`) | $0.30 | $0.006 | no additional fee | $1.20 |
 | DeepSeek V4 Pro | $1.32 | $0.044 | no additional fee | $3.96 |
@@ -122,22 +137,35 @@ provider does not publish a first-party API token price for that model slug.
 | Kimi K2.7 Code HighSpeed | $1.90 | $0.38 | no additional fee | $8.00 |
 | Kimi K3.1 Pro | $2.00 | $0.20 | $2.00 / $4.00 | $10.00 |
 | MiniMax-M3 | $0.30 | $0.06 | no additional fee | $1.20 |
+| MiniMax-M3.1-Flash | $0.15 | $0.015 | no additional fee | $0.60 |
 | MiMo-V2.6-Pro | $0.435 | $0.0036 | free | $0.87 |
 | MiMo-V2.6-Flash | $0.14 | $0.0028 | free | $0.28 |
 | MiMo-V2.6-Pro-UltraSpeed | $4.35 | $0.036 | free | $8.70 |
+| Qwen4-Max | $1.50 | $0.075 | $1.875 / $3.00 | $4.50 |
 | Qwen3.8 2.4T A95B | $2.00 | $0.25 | $2.50 | $6.00 |
 | Qwen3.8 27B | $0.50 | $0.10 | $0.625 | $3.00 |
 | Qwen3.5 397B A17B | $0.60 | no cache | no cache | $3.60 |
 | Qwen3.5 122B A10B | $0.40 | no cache | no cache | $3.20 |
 | Qwen3.6 35B A3B | $0.375 | no cache | no cache | $2.25 |
+| Qwen3.6 27B | $0.60 | no cache | no cache | $3.60 |
+| Qwen3.5 35B A3B | $0.25 | no cache | no cache | $2.00 |
+| Qwen3.5 27B | $0.30 | no cache | no cache | $2.40 |
 | Step 5 Preview | $1.00 | $0.10 | no additional fee | $2.70 |
+| Step 3.7 Flash | $0.20 | $0.04 | no additional fee | $1.15 |
+| Step 3.5 Flash | $0.10 | $0.02 | no additional fee | $0.30 |
+| Hy4, Hy4 preview | $0.834 | $0.042 | no additional fee | $2.501 |
+| Hy4 flash | $0.07 | $0.003 | no additional fee | $0.281 |
 | Hy3 | $0.132 | $0.033 | no additional fee | $0.528 |
+| Grok 4.7, Grok 4.6 | $2.00 | $0.50 | no additional fee | $6.00 |
+| Grok 4.5 | $2.00 | $0.30 | no additional fee | $6.00 |
+| Grok 4.3, Grok 4.20 (`0309` reasoning, non-reasoning, multi-agent) | $1.25 | $0.20 | no additional fee | $2.50 |
+| Grok Build 0.1 | $1.00 | $0.20 | no additional fee | $2.00 |
 | Beam 1.0 | free | free | free | free |
-| `deepseek-chat`, `deepseek-reasoner`, Kimi K2.5, Kimi K3 and K3.1, MiniMax M2.x, MiMo V2.5, Qwen3.8-Flash, Qwen3.8-Flash-Next, `hy3-preview` | — | — | — | — |
+| `deepseek-chat`, `deepseek-reasoner`, Kimi K2.5, Kimi K3 and K3.1, MiniMax M2.x, MiMo V2.5, Qwen3.8-Flash, Qwen3.8-Flash-Next, `qwen4-max-preview`, `hy3-preview`, `grok-code-fast-1` | — | — | — | — |
 | Ling 3.1 Flash, Muse Spark Open, Nemotron 3.5 Super VL, Nemotron 3 Ultra, Inkling, K2 Horizon | — | — | — | — |
 
-The two cache-write figures for Claude and Kimi K3.1 Pro are the 5-minute and
-1-hour rates. Kimi K3.1 Pro uses flat rates across its full context window.
+The two cache-write figures for Claude, Kimi K3.1 Pro, and Qwen4-Max are the
+5-minute and 1-hour rates. Kimi K3.1 Pro uses flat rates across its full context window.
 OpenAI cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
 and GPT-6.1 models above bill cache writes at 1.25 times the uncached-input
 rate, which OpenAI lists as the 30-minute cache write. OpenAI also lists a
@@ -162,8 +190,11 @@ OpenRouter's `:free` and Ollama's `:cloud`, and promotional `-free` copies are
 priced at the model's list rate. Other tags, such as an Ollama or LM Studio
 quantization like `:q4_K_M`, name a local build with no API spend, so Decant
 leaves them unpriced. The same rules apply to the DeepSeek, Kimi, MiniMax,
-MiMo, Qwen, StepFun, Hy, and Beam IDs, so `moonshotai/kimi-k2.6` and
-`deepseek-v4-pro:cloud` reach the list rate and `qwen3.8:27b` stays unpriced.
+MiMo, Qwen, StepFun, Hy, Grok, and Beam IDs, so `moonshotai/kimi-k2.6`,
+`x-ai/grok-4.7`, and `deepseek-v4-pro:cloud` reach the list rate and
+`qwen3.8:27b` stays unpriced. Meta lists Muse Ember 1.0's rate above for
+prompts up to 200,000 tokens and three times it for longer prompts. Decant
+applies the shorter-prompt rate only, so estimates for longer requests are low.
 
 DeepSeek charges the rates above during peak hours, 01:00 to 04:00 and 06:00
 to 10:00 UTC on weekdays, and half those rates at all other times. Decant
@@ -183,7 +214,8 @@ MiniMax describes the MiniMax-M3 rates above as a permanent 50% discount from
 its list price, and Decant uses the discounted rates it actually charges.
 Prompts above 512,000 tokens bill at twice those rates, and the Priority
 service tier at 1.5 times. Decant applies neither modifier, so estimates for
-those requests are low. Moonshot's Kimi K2 models do not support cache writes,
+those requests are low. MiniMax lists no cache-write fee for
+MiniMax-M3.1-Flash. Moonshot's Kimi K2 models do not support cache writes,
 and Moonshot retires all K2 models by the end of December 2026. Kimi K3 and
 K3.1 are not open-weight and are not yet priced. Kimi K3.1 Pro has its own
 published rates and is priced above.
@@ -195,8 +227,27 @@ explicit caching creates a cache entry, at 125% of input. The Qwen3.5 and
 Qwen3.6 open models do not support caching, so any cache reads reported for
 them bill at the input rate. Qwen3.8-Flash-Next has no first-party API, and
 the hosted `qwen3.8-flash` built on it is a commercial model, so neither is
-priced. Reflection's Beam API is free during its beta, subject to daily
-limits, so Decant prices `Beam-1.0-501B-A23B` at zero. The preview ID
+priced. Qwen4-Max, released November 16, 2026, is the first Qwen flagship
+without open weights. Decant prices it because it is Alibaba's current
+flagship. Its implicit and explicit cache reads both bill at $0.075, and
+explicit cache writes bill by TTL. Its preview, `qwen4-max-preview`, was
+offered only through Alibaba's Token Plan with no per-token rate, so it stays
+unpriced. Alibaba has said smaller open-weight Qwen4 models will follow but
+has not named or priced them.
+
+Tencent lists the Hy4 and Hy4 flash rates above as list prices and charges
+half of them for usage through December 31, 2026 for Hy4 and through
+November 30, 2026 for Hy4 flash, both on Beijing time. Decant prices them at
+list rate, so estimates for usage during those promotions are twice what
+Tencent bills. StepFun's cache-miss input price includes writing to the cache.
+
+xAI bills every token in a request at twice the rates above once the prompt
+reaches 200,000 tokens, and charges 1.1 times for its US regional endpoint.
+Decant applies neither modifier. xAI retired `grok-code-fast-1` on May 15,
+2026 and now routes its requests to Grok Build 0.1 without saying what they
+bill, so that ID and its aliases stay unpriced.
+
+Reflection's Beam API is free during its beta, subject to daily limits, so Decant prices `Beam-1.0-501B-A23B` at zero. The preview ID
 `Beam-501B-A23B` is not documented as an alias and stays unpriced.
 
 Several open-weight models with high Artificial Analysis scores have no USD
@@ -221,14 +272,22 @@ Fable 5's input, cache-write, and output rates but reduce cache reads from
 $1.00 to $0.25. Claude Fable 5.2 and Mythos 5.2 launched on November 9, 2026
 at rates 20% below Fable 5.1, with the same 0.025x cache-read multiplier.
 OpenAI describes the
-current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
-Google priced Gemini 4 Argon at $2.00 input, $0.10 cached, and $10.00 output
-through November 30, 2026. The rate above applies from December 1, 2026, and
-Decant reprices stored Argon usage at it on the next sync, as it does for
-every rate change. Argon supports implicit caching only.
+current GPT-5.6 Sol rate as promotional through November 30, 2026. GPT-6 Cyber
+and GPT-5.5 Cyber Preview are available only through OpenAI's Daybreak trusted
+access program. GPT-5.5 Cyber Preview lists no cache-write fee and has its own
+rate, so Decant no longer bills it at GPT-5.5's rate.
+Google prices Gemini 4 Argon and Gemini 4 Carbon at $2.00 input, $0.10 cached,
+and $10.00 output through November 30, 2026. The rate above applies from
+December 1, 2026, and Decant reprices stored Argon and Carbon usage at it on
+the next sync, as it does for every rate change. Gemini 4 Hydrogen launched on
+November 12, 2026 with no promotion. The Gemini 4 models support implicit
+caching only.
 Google's Gemini 3.8 Flash, 3.7 Flash, and 3.6 Flash listed above carry a promotional rate
 through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
-output on January 1, 2027. Google no longer lists the Gemini 2.0 line or Gemini 3
+output on January 1, 2027. Google deprecated Gemini 3.7 Flash and Gemini 3.5
+Flash on October 8, 2026 and routes their requests to Gemini 3.8 Flash and
+3.6 Flash. It does not say what routed requests bill, so Decant keeps each
+model's last published rate. Google no longer lists the Gemini 2.0 line or Gemini 3
 Pro Preview on the pricing page, and Gemini versions without a published rate stay unpriced
 rather than inheriting a neighbor's rate.
 

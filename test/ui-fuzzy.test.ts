@@ -485,7 +485,6 @@ describe("fetchSessionSearchIndex", () => {
   });
 
   test("stops against a server that ignores paging and returns every row", async () => {
-    // A tab left open across a downgrade talks to a server from before paging.
     const all = Array.from({ length: 8 }, (_, index) => row(index + 1));
     let calls = 0;
     const rows = await fetchSessionSearchIndex(async () => {
@@ -508,8 +507,6 @@ describe("fetchSessionSearchIndex", () => {
   });
 
   test("drops a row a sync pushed onto the next page", async () => {
-    // A new session lands between the two requests, so the second page
-    // starts with the row the first page already ended on.
     const pages = [
       [row(9), row(8), row(7)],
       [row(7), row(6)],

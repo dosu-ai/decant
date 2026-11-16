@@ -11,6 +11,7 @@ import {
 import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { ACTIVE_GAP_CAP_SECONDS } from "./enrich.ts";
 import { byteLength } from "./json.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { TokenUsage } from "./model.ts";
@@ -20,15 +21,12 @@ import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
 const CHARS_PER_TOKEN = 4;
-// Bump when vector semantics change so the next sync rebuilds derived rows.
 export const SESSION_ECONOMICS_FORMAT_VERSION = 12;
 
-// Caps each inter-message gap so long pauses do not dominate the timing
-// breakdown; matches ACTIVE_GAP_CAP_SECONDS in enrich.ts.
-const ACTIVE_GAP_CAP_MS = 300_000;
+const ACTIVE_GAP_CAP_MS = ACTIVE_GAP_CAP_SECONDS * 1000;
 
-/** A run splits at the first file edit into "orientation" (reading, planning)
- * and "implementation" (writing); every bucket carries both halves. */
+const TOOLS_STAMPING_OUTPUT_ON_TOOL_CALL_ROWS: ReadonlySet<string> = new Set(["codex"]);
+
 export type Phase = "orientation" | "implementation";
 
 export interface PhaseAmounts {
@@ -46,8 +44,6 @@ export interface TokenEconomicsBucket {
   tool_calls: number;
   sessions: number;
   cost_share: number;
-  // Capped gaps charged to the activity mix of the message that closed each
-  // one (see allocateLatency); user-response gaps are totalled separately.
   active_ms: number;
   phases?: Record<Phase, PhaseAmounts>;
 }
@@ -60,13 +56,9 @@ export interface TokenEconomics {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
-    // Cost taken from the source's own record (OpenCode) for models Decant
-    // cannot price. Never split into input and output.
     reported_cost_usd: number;
     active_ms: number;
-    // Gaps closed by user-authored text, kept apart from agent time.
     waiting_on_user_ms: number;
-    // Agent time plus waiting.
     attributed_ms: number;
     phases?: Record<Phase, PhaseAmounts>;
   };
@@ -95,15 +87,12 @@ interface BlockRow {
   // The API message id behind an assistant record. Claude Code journals one
   // response as a record per content block, all sharing this id.
   response_id: string | null;
-  // Reasoning tokens an OpenCode step reported, as its parser mapped them
-  // (raw.reasoning_tokens); null for every other source.
   reasoning_tokens: number | null;
   type: string | null;
   tool_name: string | null;
   tool_input: string | null;
   text_bytes: number;
   timestamp: string | null;
-  // The record type behind an `other` block, e.g. Codex `agent_message`.
   other_kind: string | null;
 }
 
@@ -121,8 +110,6 @@ interface MutableBucket {
   cost: number;
   toolCalls: number;
   sessions: Set<number>;
-  // Pre-first-edit portions; implementation is the total minus these.
-  // costOrientation is derived at aggregation only (the builder leaves it 0).
   genOrientation: number;
   windowOrientation: number;
   costOrientation: number;
@@ -151,8 +138,6 @@ export interface SessionEconomicsVector {
       context_window: number;
       tool_calls: number;
       touched: boolean;
-      // Pre-first-edit portions; context_window_orientation excludes folded-in
-      // generation, like context_window.
       generation_orientation: number;
       context_window_orientation: number;
       active_ms: number;
@@ -185,9 +170,6 @@ export function tokenEconomics(db: Database, filter?: TokenEconomicsFilter | nul
   );
 }
 
-/** Load persisted per-session activity vectors for the in-memory server cache.
- * This intentionally never falls back to transcript scans: startup sync
- * backfills missing rows and then invalidates the cache. */
 export function computeSessionEconomicsVectors(
   db: Database,
   options: { cancelled?: () => boolean } = {},
@@ -205,7 +187,6 @@ export function computeSessionEconomicsVectors(
   );
 }
 
-/** Mirrors sessionDatePredicate: string-compare on the YYYY-MM-DD prefix. */
 export function economicsVectorMatchesFilter(
   vector: SessionEconomicsVector,
   filter?: DateFilter | null,
@@ -235,9 +216,6 @@ export function aggregateEconomicsVectors(
     outputCost += vector.output_cost;
     reportedCost += vector.reported_cost;
     waitingOnUserMs += vector.waiting_on_user_ms;
-    // Each session's cost is split by its own activity before summing. Pooling
-    // first would let one expensive session's dollars follow another session's
-    // mix, so an archive total would not equal the sum of its sessions.
     let generation = 0;
     let window = 0;
     let windowOrientation = 0;
@@ -253,8 +231,6 @@ export function aggregateEconomicsVectors(
       if (entry == null || part == null) {
         continue;
       }
-      // Generation is part of the window; mirror it into the orientation
-      // portion so the phase cost split uses the same window basis.
       const partWindow = part.context_window + part.generation;
       const partWindowOrientation = part.context_window_orientation + part.generation_orientation;
       entry.generation += part.generation;
@@ -264,8 +240,6 @@ export function aggregateEconomicsVectors(
       entry.activeMs += part.active_ms;
       entry.activeMsOrientation += part.active_ms_orientation;
       entry.toolCalls += part.tool_calls;
-      // Reported cost has no input/output split; it follows the window share
-      // like input cost so bucket costs still reconcile to the session total.
       entry.cost +=
         vector.output_cost * share(part.generation, generation) +
         (vector.input_cost + vector.reported_cost) * share(partWindow, window);
@@ -276,9 +250,6 @@ export function aggregateEconomicsVectors(
         entry.sessions.add(vector.id);
       }
     }
-    // Dollars with no activity weight to follow still belong to the session,
-    // so bucket costs reconcile to its estimate. A session with no recorded
-    // activity never edited a file, so it is orientation.
     const orientationShare = window > 0 ? windowOrientation / window : 1;
     if (generation <= 0) {
       chargeUnattributed(buckets, "communicating", vector.id, vector.output_cost, orientationShare);
@@ -329,9 +300,6 @@ export function tokenEconomicsForSession(db: Database, sessionId: number): Token
   return aggregateEconomicsVectors(withBilledInputWindow(vectors));
 }
 
-/** Session panels retain their billed-input Window total while using the same
- * block-level activity weights as archive analytics. Allocate each run's input
- * volume over the content that actually contributed to its context. */
 function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconomicsVector[] {
   return vectors.map((vector) => {
     const totalWeight = ACTIVITY_BUCKETS.reduce((sum, bucket) => {
@@ -363,9 +331,6 @@ function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconom
   });
 }
 
-/** Persist the complete per-session vector while its normalized rows are hot
- * in the ingest transaction. Descendant rollups stay dynamic: parent reads
- * aggregate the independently cached vectors for the current subtree. */
 export function materializeSessionEconomics(db: Database, sessionId: number): boolean {
   const vectors = vectorsForScope(
     db,
@@ -387,8 +352,6 @@ interface CostRefresh {
   staleVector: SessionEconomicsVector | null;
 }
 
-/** Sessions whose stored cost or cached activity cost differs from current
- * rates. Check the components too: a rate change can leave the total unchanged. */
 function pendingCostRefreshes(db: Database): CostRefresh[] {
   const pricing = defaultPricing();
   const rows = queryRows<
@@ -436,9 +399,6 @@ function pendingCostRefreshes(db: Database): CostRefresh[] {
   return pending;
 }
 
-/** Reprice stored usage without rereading transcripts or replacing user state.
- * The write lock is taken only when something changed, and the check reruns
- * under it so a concurrent writer cannot make it stale. */
 export function refreshSessionCosts(db: Database): number {
   if (pendingCostRefreshes(db).length === 0) {
     return 0;
@@ -460,8 +420,6 @@ export function refreshSessionCosts(db: Database): number {
   });
 }
 
-/** One-time upgrade/backfill path. Normal ingest writes vectors immediately;
- * sync also calls this so unchanged pre-v10 sessions become cached after upgrading. */
 export function materializeMissingSessionEconomics(db: Database): number {
   const rows = queryRows<{
     id: number;
@@ -619,10 +577,6 @@ function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): voi
   );
 }
 
-/** Load ordered block rows for generation and latency allocation. Tool-result
- * blocks do not duplicate their calling tool metadata, so resolve it through
- * the ingest-time tool_call linkage. The scope-first join is intentional: it
- * prevents SQLite from scanning the whole block table for a single session. */
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
   return queryRows<BlockRow>(
     db,
@@ -692,10 +646,6 @@ function vectorsForScope(
     });
   }
 
-  // Ship byte lengths, not text: bucket math only needs sizes, plus the tool
-  // input for the block types whose bucket depends on the command being run.
-  // Ordering (session, seq, ordinal) lets us place each block before/after the
-  // session's first file edit.
   const blocks = blockRowsForScope(db, scopeCte, params).filter(
     (block) => blockActivity(block) !== "skip",
   );
@@ -739,9 +689,6 @@ function vectorsForScope(
     entry.contextWindow += tokens;
     entry.toolCalls += 1;
     entry.sessions.add(row.session_id);
-    // A tool result belongs to orientation if its call happened before the
-    // session's first edit. Unplaceable calls (no call block) default to
-    // implementation so orientation is never overstated.
     if (phaseOf(boundaries, row.session_id, row.call_seq) === "orientation") {
       entry.windowOrientation += tokens;
     }
@@ -781,7 +728,6 @@ function vectorsForScope(
   });
 }
 
-/** Totals and label used to price a session that has no per-model rows yet. */
 function sessionFallback(session: SessionRow): { model: string | null; usage: TokenUsage } {
   return {
     model: session.model,
@@ -798,10 +744,6 @@ function sessionFallback(session: SessionRow): { model: string | null; usage: To
 
 type PerSessionBuckets = Map<ActivityBucket, MutableBucket>;
 
-/** First-edit boundary per session: the message seq of the first file-editing
- * tool_use. Messages with seq < boundary are orientation; the edit's own
- * message and everything after are implementation. Sessions that never edit
- * have no boundary (Infinity) -> the whole run is orientation. */
 function firstEditSeqBySession(blocks: BlockRow[]): Map<number, number> {
   const boundary = new Map<number, number>();
   for (const block of blocks) {
@@ -853,11 +795,7 @@ function allocateGeneration(
         messageOutput.set(key, Math.max(messageOutput.get(key) ?? 0, block.output_tokens));
       }
     }
-    // Codex per-message output is persisted for context-window tooltips, but
-    // token economics intentionally keeps its established aggregate allocation:
-    // one token_count reading may stamp a tool-call row and would otherwise
-    // collapse reported reasoning/planning into that tool bucket.
-    if (messageOutput.size > 0 && session.tool !== "codex") {
+    if (messageOutput.size > 0 && !TOOLS_STAMPING_OUTPUT_ON_TOOL_CALL_ROWS.has(session.tool)) {
       for (const [messageId, outputTokens] of messageOutput) {
         const rows = messageBlocks.get(messageId) ?? [];
         const phase = phaseOf(boundaries, session.id, rows[0]?.seq);
@@ -879,8 +817,6 @@ function allocateGeneration(
     const assistantBlocks = sessionBlocks.filter(
       (block) => block.role === "assistant" && block.type !== "thinking",
     );
-    // No per-message usage: split the aggregate planning lump between phases by
-    // the size-weight of assistant blocks on each side of the boundary.
     const orientationWeight = assistantBlocks
       .filter((block) => phaseOf(boundaries, session.id, block.seq) === "orientation")
       .reduce((sum, block) => sum + Math.max(1, blockSize(block)), 0);
@@ -910,12 +846,6 @@ function allocateGeneration(
   }
 }
 
-/** Charge wall-clock time to activity buckets. The gap between a message and
- * the one before it is the time that produced the later message: the model
- * generating, a tool executing, or the human writing the next prompt. Each gap
- * is capped like session active_seconds, then split across the closing
- * message's blocks by the same byte weight generation uses. Blockless messages
- * are absent here, so attributed time only approximates active_seconds. */
 function allocateLatency(
   session: SessionRow,
   blocks: BlockRow[],
@@ -955,7 +885,6 @@ interface OrderedMessage {
   blocks: BlockRow[];
 }
 
-/** Regroup seq-ordered blocks back into their messages, preserving order. */
 function orderedMessages(blocks: BlockRow[]): OrderedMessage[] {
   const byId = new Map<number, OrderedMessage>();
   const order: number[] = [];
@@ -971,9 +900,6 @@ function orderedMessages(blocks: BlockRow[]): OrderedMessage[] {
   return order.map((id) => byId.get(id) as OrderedMessage);
 }
 
-/** Split one message's gap across its blocks by byte-weight into their
- * buckets. With `planningShare`, that share of the gap is planning and the
- * visible blocks split the rest; see `reportedReasoning`. */
 function distributeLatency(
   ms: number,
   blocks: BlockRow[],
@@ -1008,37 +934,22 @@ function distributeLatency(
   }
 }
 
-// Kept records that are neither model output nor a tool call. Messages from
-// other agents and compacted history are input the model reads, like an Agent or
-// SendMessage result. Anything else kept with role "other" (CLI notices, record
-// types the parser does not recognize) and model-fallback notices are harness
-// bookkeeping that never reached the model.
 const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
 
-/** Where a block's time goes: an activity bucket, the user's turn, or nowhere.
- * Skipped blocks are dropped before allocation, so they carry no generation,
- * window volume, or time, and the gap around them closes on the next message. */
 function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
   if (
     block.type === "tool_result" &&
     isUserQuestionTool(block.tool_name, block.tool_input ?? undefined)
   ) {
-    // A question's answer arrives when the user replies, so the gap before it
-    // is the user deciding, like the gap before a typed prompt. The question
-    // itself stays communicating.
     return "waiting";
   }
   if (block.role === "user" && block.type !== "tool_result") {
-    // Text, and any image or document the user attached to the prompt.
     return "waiting";
   }
   if (block.role === "other") {
     return MODEL_INPUT_KINDS.has(block.other_kind ?? "") ? "context" : "skip";
   }
   if (block.role === "system") {
-    // Instructions the harness injects (Codex developer messages, AGENTS.md,
-    // the environment block). The gap before one belongs to whatever the next
-    // message is: the user's prompt it precedes, or the model's next step.
     return "skip";
   }
   if (block.type === "other") {
@@ -1046,15 +957,12 @@ function blockActivity(block: BlockRow): ActivityBucket | "waiting" | "skip" {
       return "skip";
     }
     if (block.role === "tool") {
-      // An image returned alongside a tool result.
       return "context";
     }
   }
   return blockBucket(block.type, block.tool_name, block.tool_input);
 }
 
-/** A message from another agent enters the window as input, like the result of
- * an Agent or SendMessage call, so its text counts toward context volume. */
 function allocateAgentMessages(
   sessionId: number,
   blocks: BlockRow[],
@@ -1094,9 +1002,6 @@ function addLatency(
   }
 }
 
-/** Parse an ISO-8601 `...Z` timestamp to epoch milliseconds, keeping any
- * fractional-second precision. Returns null for anything not UTC-suffixed,
- * matching the conservative parsing enrich.ts uses for active_seconds. */
 function epochMillis(timestamp: string | null): number | null {
   if (timestamp == null || !timestamp.endsWith("Z")) {
     return null;
@@ -1126,14 +1031,6 @@ function epochMillis(timestamp: string | null): number | null {
   );
 }
 
-/** Reasoning tokens an OpenCode step reported. OpenCode records them per
- * step, so its planning is that count rather than the output its visible
- * blocks cannot explain, which would overstate planning once hidden reasoning
- * keeps an empty thinking block. Its time follows the same token share: an
- * apportionment, because a step's parts stream concurrently and their times
- * cannot separate reasoning from visible output. Some providers stream
- * reasoning text but report zero reasoning tokens; that zero is not a count,
- * so such a step falls back to the estimate other sources use. */
 function reportedReasoning(session: SessionRow, blocks: BlockRow[]): number | null {
   const block = blocks[0];
   if (session.tool !== "opencode" || block?.role !== "assistant") {
@@ -1172,15 +1069,12 @@ function allocateOutput(
   addBucket(buckets, "planning", planning, sessionId, phase);
   const rest = Math.max(0, outputTokens - planning);
   if (reasoning != null && visibleBlocks.length === 0) {
-    // Output beyond the reported reasoning with no visible block to carry it
-    // is still model output, so it counts as communicating.
     addBucket(buckets, "communicating", rest, sessionId, phase);
     return;
   }
   distributeVisible(sessionId, rest, visibleBlocks, buckets, phase);
 }
 
-/** Distribute across blocks that all share one phase (used per-message). */
 function distributeVisible(
   sessionId: number,
   tokens: number,
@@ -1204,8 +1098,6 @@ function distributeVisible(
   }
 }
 
-/** Distribute across blocks that may straddle the boundary (fallback branch);
- * each block's phase is decided by its own seq. */
 function distribute(
   sessionId: number,
   tokens: number,
@@ -1217,8 +1109,6 @@ function distribute(
     return;
   }
   if (blocks.length === 0) {
-    // Blockless output is still model output, so it counts as communicating
-    // instead of vanishing from generation.
     addBucket(
       buckets,
       "communicating",
@@ -1318,8 +1208,6 @@ function finish(
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
   const entries = ACTIVITY_BUCKETS.map((bucket) => buckets.get(bucket));
-  // Rounding each figure on its own lets rows and phases drift from the totals.
-  // Round each total once, then apportion it to rows and each row to phases.
   const counts = {} as Record<CountKey, { total: number; rows: number[]; phases: number[][] }>;
   for (const { key, total, orientation } of COUNTS) {
     const raw = entries.map((entry) => Math.max(0, entry?.[total] ?? 0));

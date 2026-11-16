@@ -20,17 +20,13 @@ describe("Gemini CLI source copy", () => {
   });
 
   test("shows the derived thinking state when effort is unrecorded but reasoning is observed", () => {
-    // Gemini CLI logs extended-thinking tokens but no discrete effort level,
-    // so the Effort cell falls back to a derived badge instead of "-".
     expect(main).toContain("thinking on");
     expect(main).toContain("This source does not record a discrete effort level.");
-    // The badge only appears for observed reasoning, never as a guessed "off".
     expect(main).toMatch(/\(effort \?\? ""\)\.trim\(\) === "" && totalReasoningTokens > 0/);
     expect(main).not.toContain("thinking off");
   });
 
   test("names Gemini CLI alongside Claude Code and Codex in product copy", () => {
-    // JSX text wraps wherever the formatter puts it, so compare it as rendered.
     const copy = main.replace(/\s+/g, " ");
     expect(copy).toContain(
       "Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent session log on this device, plus imported ATIF trajectories.",

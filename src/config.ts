@@ -6,42 +6,16 @@ export interface Config {
   claudeDir: string;
   codexDir: string;
   geminiDir: string;
-  /** OpenCode data directory: `opencode.db` plus channel variants
-   * `opencode-<channel>.db`. */
   opencodeDir: string;
-  /** Explicit OpenCode database file from `OPENCODE_DB`; present only when
-   * that variable is set. Read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** OpenCode's global config directory, whose `opencode.json` and
-   * `opencode.jsonc` name the MCP servers OpenCode prefixes tool names with:
-   * `OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`. Ingest also reads
-   * each session's project configs. */
   opencodeConfigDir?: string;
-  /** `DECANT_OPENCODE_CONFIG`: one file read in place of the global
-   * directory's files. */
   opencodeConfigPath?: string;
-  /** `OPENCODE_CONFIG`: an extra file OpenCode loads in addition to the global
-   * and project configs, so Decant reads it in addition too. */
   opencodeExtraConfigPath?: string;
-  /** OpenCode 1.x's models.dev cache, read for context windows when a
-   * database has no catalog of its own: `OPENCODE_MODELS_PATH`, else
-   * `$XDG_CACHE_HOME/opencode/models.json`. */
   opencodeModelsPath?: string;
   cursorDir: string;
-  /** GitHub Copilot CLI session-state directory: one `<session id>/events.jsonl`
-   * per session. */
   copilotDir: string;
-  /** VS Code's `User` directory, whose workspace and global storage hold
-   * Copilot Chat sessions. */
   vscodeCopilotDir: string;
-  /** VS Code Insiders' `User` directory, read beside the stable one. Present
-   * only when no override names a single directory. */
   vscodeCopilotInsidersDir?: string;
-  /** ATIF trajectory files, such as Harbor job directories or `decant export
-   * --as atif` output, read recursively on every sync. No tool writes to the
-   * default; a user copies trajectories into it, because discovery does not
-   * follow symbolic links. Absent in a config built by hand, which then reads
-   * no ATIF directory. */
   atifDir?: string;
   /** Hermes Agent home: `state.db` plus `profiles/<name>/state.db`, one per
    * Hermes profile. Absent in a config built by hand, which then reads no
@@ -62,7 +36,6 @@ export interface ConfigOverrides {
   hermesDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
-  /** Defaults to the running platform; tests pass one to check each layout. */
   platform?: NodeJS.Platform;
 }
 
@@ -80,8 +53,6 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
     claudeDir: overrides.claudeDir ?? env.DECANT_CLAUDE_DIR ?? join(home, ".claude", "projects"),
     codexDir: overrides.codexDir ?? env.DECANT_CODEX_DIR ?? join(home, ".codex"),
     geminiDir: overrides.geminiDir ?? env.DECANT_GEMINI_DIR ?? join(home, ".gemini", "tmp"),
-    // OpenCode's own variables come after Decant's so a user who relocated
-    // OpenCode's data is found without extra configuration.
     opencodeDir:
       overrides.opencodeDir ??
       nonEmpty(env.DECANT_OPENCODE_DIR) ??
@@ -127,9 +98,6 @@ function hermesDefaultHome(
   return join(home, ".hermes");
 }
 
-/** One override replaces both VS Code builds' defaults, so a scratch run never
- * reads the real Insiders data. Other editors built on VS Code keep their own
- * data directories and are not read. */
 function vscodeCopilotDirs(
   overrides: ConfigOverrides,
   env: Record<string, string | undefined>,

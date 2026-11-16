@@ -107,8 +107,6 @@ function historicalArchive(path: string, version: 8 | 9 | 12 | 13 | 14): Databas
   return db;
 }
 
-// Inventory of the frozen schema baseline. Shadow tables
-// of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "billed_request",
   "block",
@@ -232,10 +230,7 @@ describe("openDb", () => {
     migrated.close();
   });
 
-  test("adds the tool-call paging index when upgrading a v22 archive", () => {
-    // listToolCalls orders by (timestamp DESC, id DESC). Without this index
-    // SQLite sorts every tool call in a temp b-tree to return a page of fifty,
-    // drawing a random `message` row per call on the way.
+  test("adds the (timestamp DESC, id DESC) index listToolCalls pages by when upgrading a v22 archive", () => {
     const path = freshPath();
     const legacy = openDb(path);
     legacy.exec("DROP INDEX IF EXISTS idx_toolcall_timestamp");
@@ -254,9 +249,7 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
-  test("serves the tool-call page order from an index rather than a sort", () => {
-    // Covers the unfiltered shape only; a tool_name or project filter picks a
-    // different index.
+  test("serves the unfiltered tool-call page order from an index rather than a sort", () => {
     const db = openDb(freshPath());
     const where = [
       visibleSessionPredicate("s"),
@@ -325,8 +318,6 @@ describe("openDb", () => {
 
     const migrated = openDb(path);
     expect(buildSchemaManifest(migrated)).toEqual(expected);
-    // Rows are derived on sync, so the migration leaves the table empty and
-    // the session untouched.
     expect(migrated.query("SELECT COUNT(*) AS n FROM session_model_usage").get()).toEqual({ n: 0 });
     expect(migrated.query("SELECT model, total_input_tokens FROM session").get()).toEqual({
       model: "claude-opus-5-5",
@@ -352,7 +343,6 @@ describe("openDb", () => {
 
     const migrated = openDb(path);
     expect(buildSchemaManifest(migrated)).toEqual(expected);
-    // Existing rows were priced by Decant, which a NULL reported cost means.
     expect(
       migrated.query("SELECT model, reported_cost_usd FROM session_model_usage").all(),
     ).toEqual([{ model: "claude-opus-5-5", reported_cost_usd: null }]);
@@ -393,8 +383,6 @@ describe("openDb", () => {
     `);
     closeDb(legacy);
 
-    // Sessions whose transcripts are gone are not re-ingested, so the next
-    // sync recomputes a cleared peak from stored rows instead.
     const migrated = openDb(path);
     expect(migrated.query("SELECT id, peak_context_tokens FROM session ORDER BY id").all()).toEqual(
       [
@@ -418,7 +406,6 @@ describe("openDb", () => {
 
     const migrated = openDb(path);
     expect(buildSchemaManifest(migrated)).toEqual(expected);
-    // Sync fills the remote in; the migration leaves existing projects unset.
     expect(migrated.query("SELECT path, repo_remote FROM project").all()).toEqual([
       { path: "/synthetic/app", repo_remote: null },
     ]);
@@ -460,7 +447,6 @@ describe("openDb", () => {
     expect(plan("SELECT session_id FROM billed_request WHERE request_id = 'msg_1'")).toContain(
       "USING PRIMARY KEY",
     );
-    // The cascade from a deleted session looks its claims up by session.
     expect(plan("DELETE FROM billed_request WHERE session_id = 1")).toContain(
       "idx_billed_request_session",
     );
@@ -470,7 +456,6 @@ describe("openDb", () => {
     expect(plan("DELETE FROM unbilled_request WHERE session_id = 1")).toContain(
       "USING PRIMARY KEY",
     );
-    // A deleted session's claims lead to their copies through both indexes.
     const release = plan(
       `SELECT u.message_id FROM billed_request b
          JOIN unbilled_request u ON u.request_id = b.request_id
@@ -481,17 +466,21 @@ describe("openDb", () => {
     closeDb(db);
   });
 
-  test("keeps the message parent index that backs the foreign key", () => {
-    // parent_id is never written, but every deleted message still checks for
-    // children referencing it. Without this index that check scans the whole
-    // message table per deleted row (minutes for a 60-message session on a
-    // 125k-message archive).
+  test("keeps the message parent index so each deleted message finds its children without a table scan", () => {
     const db = openDb(freshPath());
     expect(
       db
         .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_message_parent'")
         .get(),
     ).not.toBeNull();
+    const childLookupPlan = (
+      db.query("EXPLAIN QUERY PLAN SELECT id FROM message WHERE parent_id = 1").all() as {
+        detail: string;
+      }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(childLookupPlan).toContain("idx_message_parent");
     closeDb(db);
   });
 
@@ -514,8 +503,6 @@ describe("openDb", () => {
   });
 
   test("filters search matches by session without reading block rows", () => {
-    // The block row carries transcript text, so reading one per match is what
-    // made a common search term slow on a cold archive.
     const db = openDb(freshPath());
     const plan = (
       db
@@ -1072,7 +1059,7 @@ describe("openDb", () => {
     `);
     db.close();
 
-    db = openDb(path); // reopen: migrate() runs v16 again over the seeded rows
+    db = openDb(path);
     const ids = (
       db.query("SELECT source_session_id FROM session ORDER BY source_session_id").all() as {
         source_session_id: string;
@@ -1097,13 +1084,11 @@ describe("openDb", () => {
       VALUES ('/a.jsonl', 1, 'bad', '{', datetime('now'));
       DELETE FROM schema_migrations WHERE version >= 17;
     `);
-    // Simulate a pre-v17 table: drop the column the baseline now carries, and
-    // the index the migration creates alongside it.
     db.exec("ALTER TABLE ingest_issue DROP COLUMN code;");
     db.exec("DROP INDEX idx_ingest_issue_source;");
     db.close();
 
-    db = openDb(path); // reopen: migrate() runs v17 over the pre-v17 table
+    db = openDb(path);
     const row = db.query("SELECT code FROM ingest_issue").get() as { code: string };
     expect(row.code).toBe("unparsed_line");
     expect(
@@ -1566,12 +1551,7 @@ describe("deleting a session", () => {
       }
     ).n;
 
-  /**
-   * Seeds through the real tables rather than raw fixtures so the block_fts
-   * triggers and the ON DELETE CASCADE chains fire exactly as they do during
-   * ingest -- that wiring is what these tests exist to pin.
-   */
-  function seedSession(
+  function seedSessionThroughRealTables(
     db: Database,
     spec: { sourceSessionId: string; parentId?: number; text?: string; toolInput?: string },
   ): number {
@@ -1606,7 +1586,7 @@ describe("deleting a session", () => {
 
   test("clears its rows and its full-text index entries", () => {
     const db = openDb(freshPath());
-    const sessionId = seedSession(db, {
+    const sessionId = seedSessionThroughRealTables(db, {
       sourceSessionId: "root",
       text: "CANARYBLOCKTEXT",
       toolInput: "CANARYTOOLINPUT",
@@ -1627,13 +1607,20 @@ describe("deleting a session", () => {
 
   test("removes the whole descendant tree, not just the named session", () => {
     const db = openDb(freshPath());
-    const rootId = seedSession(db, { sourceSessionId: "root", text: "ROOTCANARY" });
-    const childId = seedSession(db, {
+    const rootId = seedSessionThroughRealTables(db, {
+      sourceSessionId: "root",
+      text: "ROOTCANARY",
+    });
+    const childId = seedSessionThroughRealTables(db, {
       sourceSessionId: "child",
       parentId: rootId,
       text: "CHILDCANARY",
     });
-    seedSession(db, { sourceSessionId: "grandchild", parentId: childId, text: "GRANDCANARY" });
+    seedSessionThroughRealTables(db, {
+      sourceSessionId: "grandchild",
+      parentId: childId,
+      text: "GRANDCANARY",
+    });
 
     expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
 
@@ -1645,8 +1632,11 @@ describe("deleting a session", () => {
 
   test("authorizes the exact descendant tree before mutating it", () => {
     const db = openDb(freshPath());
-    const rootId = seedSession(db, { sourceSessionId: "root" });
-    const childId = seedSession(db, { sourceSessionId: "child", parentId: rootId });
+    const rootId = seedSessionThroughRealTables(db, { sourceSessionId: "root" });
+    const childId = seedSessionThroughRealTables(db, {
+      sourceSessionId: "child",
+      parentId: rootId,
+    });
     let guardedIds: readonly number[] = [];
 
     expect(
@@ -1672,13 +1662,11 @@ describe("deleting a session", () => {
 
   test("keeps the ingest_source tombstone so a later sync cannot resurrect it", () => {
     const db = openDb(freshPath());
-    const sessionId = seedSession(db, { sourceSessionId: "root" });
+    const sessionId = seedSessionThroughRealTables(db, { sourceSessionId: "root" });
     const sourcePath = "/home/u/.claude/projects/p/root.jsonl";
 
     expect(setSessionUserState(db, sessionId, "deleted")).toBe(true);
 
-    // session_id is cleared alongside the status, so the surviving row is only
-    // reachable by path.
     const source = db
       .query("SELECT session_id, status FROM ingest_source WHERE path = ?1")
       .get(sourcePath) as { session_id: number | null; status: string } | null;
@@ -1770,8 +1758,6 @@ describe("schema manifest", () => {
   });
 });
 
-/// The archive aggregates transcripts that Claude Code and Codex keep in 0600
-/// files, so it must not come out of SQLite at the default 0644.
 describe("archive permissions", () => {
   function permissions(path: string): Record<string, number> {
     const out: Record<string, number> = {};
@@ -1791,8 +1777,6 @@ describe("archive permissions", () => {
   test("creates the archive and its WAL sidecars owner-only", () => {
     const path = freshPath();
     const db = openDb(path);
-    // SQLite copies the database file's mode onto the -wal/-shm files it
-    // creates for the schema write, so all three land at 0600.
     expect(permissions(path)).toEqual({ db: 0o600, wal: 0o600, shm: 0o600 });
     db.close();
   });
@@ -1811,10 +1795,7 @@ describe("archive permissions", () => {
     db.close();
   });
 
-  test("never changes the mode through a symlink planted at an archive name", () => {
-    // The -wal/-shm names do not exist yet on a fresh archive, so anyone who
-    // can write to the archive's directory could otherwise point them at a
-    // file of their choosing and have decant chmod that instead.
+  test("never chmods the target of a symlink planted at an archive or sidecar name", () => {
     for (const suffix of ["", "-wal", "-shm"]) {
       const path = freshPath();
       const victim = `${path}.victim`;
@@ -1851,8 +1832,6 @@ describe("planner statistics helpers", () => {
     return details.find((detail) => detail.includes(" b ")) ?? details.join("\n");
   }
 
-  // Statistics shaped like a real archive: many blocks share a type, few share
-  // a message. Writing them by hand keeps the fixture free of transcript rows.
   function writeBlockStatistics(path: string): void {
     const writer = new Database(path, { strict: true });
     try {
@@ -1881,7 +1860,6 @@ describe("planner statistics helpers", () => {
     try {
       expect(blockIndex(db)).toContain("idx_block_type");
       writeBlockStatistics(path);
-      // The open connection keeps the statistics it loaded with the schema.
       expect(blockIndex(db)).toContain("idx_block_type");
       reloadPlannerStatistics(db);
       expect(blockIndex(db)).toContain("idx_block_message");
@@ -1968,7 +1946,6 @@ describe("planner statistics helpers", () => {
       // An empty index holds two bookkeeping rows, and analyzing it as-is
       // records a size at which SQLite scans instead.
       expect(ftsSegmentRangePlan(db)).toBe(ROWID_RANGE_SEARCH);
-      // The sync worker opens its own connection after serve has optimized.
       const worker = openDb(path);
       try {
         expect(ftsSegmentRangePlan(worker)).toBe(ROWID_RANGE_SEARCH);

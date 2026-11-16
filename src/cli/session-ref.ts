@@ -5,13 +5,8 @@ export type SessionRefResolution =
   | { ok: true; id: number }
   | { ok: false; code: 1 | 2; message: string };
 
-/**
- * Resolve what a user typed for a session: Decant's id, or the id the source
- * tool uses when exactly one session carries it.
- */
 export function resolveSessionRef(db: Database, ref: string): SessionRefResolution {
   const { byId, bySourceId } = findSessionsByRef(db, ref);
-  // Decant's id wins, so an integer keeps naming the session it always named.
   if (byId != null) {
     return { ok: true, id: byId.id };
   }

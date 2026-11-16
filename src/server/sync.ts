@@ -38,11 +38,7 @@ export interface SyncCoordinatorOptions {
   progressEveryFiles?: number;
   progressEveryMs?: number;
   now?: () => number;
-  /** Runs on the server thread with each progress update the listeners get,
-   * before they do. */
   onProgress?: (progress: SyncProgress) => void;
-  /** Runs on the server thread after a worker sync succeeds, before callers
-   * see the report. */
   onCompleted?: (report: SyncReport) => void;
 }
 
@@ -54,15 +50,12 @@ export const syncStatus = {
   ingested_count: null as number | null,
 };
 
-/** What the running sync last reported, for a client that missed its events. */
 const syncActivity = {
   reason: null as SyncReason | null,
   progress: null as SyncProgress | null,
-  // True unless the archive was opened empty and no sync has completed since.
   archiveSynced: true,
 };
 
-/** Reads whether the archive already holds synced data. Call before any sync. */
 export function noteArchiveOpened(db: Db): void {
   const row = db
     .query<{ synced: number }, []>(
@@ -82,7 +75,6 @@ function endSyncActivity(report?: SyncReport): void {
   }
 }
 
-/** The body of the sync status routes. */
 export function syncStatusBody() {
   return {
     ...syncStatus,
@@ -194,9 +186,6 @@ function runSyncWorker(
       reject(workerError(event, "sync worker failed"));
     });
     if (cancel != null) {
-      // Share cancellation with the worker so it can stop between files and
-      // close SQLite itself. Terminating a worker while it owns a native
-      // connection can race Bun's SQLite finalizers during server shutdown.
       if (cancel.aborted && cancelView != null) {
         Atomics.store(cancelView, 0, 1);
       }
@@ -210,12 +199,6 @@ function runSyncWorker(
   });
 }
 
-/**
- * Owns the one physical sync worker allowed per server. Overlapping watcher and
- * manual requests join the same Promise instead of opening competing SQLite
- * writers. Progress is fanned out at a bounded cadence while retaining the
- * first update and the final update observed before completion.
- */
 export function createSyncCoordinator(
   worker: SyncWorkerRunner = runSyncWorker,
   options: SyncCoordinatorOptions = {},
@@ -278,17 +261,9 @@ export function createSyncCoordinator(
       pending = null;
       lastEmitted = progress;
       lastEmittedAt = now();
-      try {
-        options.onProgress?.(progress);
-      } catch {
-        // Mid-sync housekeeping must never fail the sync or its listeners.
-      }
+      runIsolated(() => options.onProgress?.(progress));
       for (const listener of [...listeners]) {
-        try {
-          listener(progress);
-        } catch {
-          // Progress reporting must never fail the archive sync itself.
-        }
+        runIsolated(() => listener(progress));
       }
     };
     const forward = (progress: SyncProgress): void => {
@@ -309,12 +284,7 @@ export function createSyncCoordinator(
       .then(
         (report) => {
           flush();
-          try {
-            options.onCompleted?.(report);
-          } catch {
-            // Post-sync housekeeping must never fail a sync that already
-            // committed.
-          }
+          runIsolated(() => options.onCompleted?.(report));
           return report;
         },
         (error) => {
@@ -340,18 +310,12 @@ export function createSyncCoordinator(
     ownedCancel.aborted = true;
     try {
       await active?.promise;
-    } catch {
-      // The request or watcher that started the run owns its user-facing
-      // failure. Shutdown only needs to wait until the worker has released its
-      // SQLite connection.
-    }
+    } catch {}
   };
 
   return { run, runWithOwnership, close };
 }
 
-/** Runs one watcher-triggered sync in a worker thread, keeping request
- * handling responsive while multi-second ingests run. */
 export async function workerSyncRunner(
   config: Config,
   status: SyncStatusStore,
@@ -363,7 +327,6 @@ export async function workerSyncRunner(
   }),
 ): Promise<SyncRunnerResult | SyncRunnerFailure> {
   status.start();
-  // No watcher event arrives until discovery ends; a status read must not say idle.
   syncStatus.in_progress = true;
   const handle = runSync(config, cancel, onProgress);
   try {
@@ -374,7 +337,6 @@ export async function workerSyncRunner(
     status.finishErr(error instanceof Error ? error.message : String(error));
     return { error, emitTerminal: handle.owned };
   } finally {
-    // A joined run emits no terminal event, and the run it joined is over.
     if (!handle.owned) {
       syncStatus.in_progress = false;
     }
@@ -405,4 +367,10 @@ export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): v
       last_sync_at: syncStatus.last_sync_at,
     });
   }
+}
+
+function runIsolated(observer: () => void): void {
+  try {
+    observer();
+  } catch {}
 }

@@ -49,7 +49,6 @@ describe("filterProjects", () => {
   test("matches the name, the path and the root, ignoring case", () => {
     expect(ids(filterProjects(all, "WEB"))).toEqual([2]);
     expect(ids(filterProjects(all, "login"))).toEqual([3]);
-    // The worktree matches through its root path as well as its own.
     expect(ids(filterProjects(all, "acme/api"))).toEqual([1, 3]);
   });
 
@@ -57,7 +56,6 @@ describe("filterProjects", () => {
     expect(ids(filterProjects(all, "worktree"))).toEqual([3]);
     expect(ids(filterProjects(all, "conductor"))).toEqual([3]);
     expect(ids(filterProjects(all, "codex"))).toEqual([2]);
-    // The badge reads "Copilot Chat" for vscode_copilot, so that text matches.
     const chat = project({ id: 4, path: "/synthetic/ide", session_tools: ["vscode_copilot"] });
     expect(ids(filterProjects([...all, chat], "copilot chat"))).toEqual([4]);
     expect(ids(filterProjects([...all, chat], "vscode_copilot"))).toEqual([4]);
@@ -76,7 +74,6 @@ describe("Projects filter control", () => {
       <ProjectsView onSync={() => {}} projects={all} syncing={false} />,
     );
     expect(html).toContain('aria-label="Filter projects"');
-    // Nothing is typed yet, so every row shows and the count stays silent.
     expect(html.match(/<tr>/g)).toHaveLength(all.length + 1);
     expect(html).toContain('<span role="status"></span>');
   });

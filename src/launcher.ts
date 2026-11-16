@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { RECOMMENDATION_KEY_CHARS } from "./recommendation-key.ts";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
 
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
@@ -21,7 +22,6 @@ export interface LaunchResult {
   ok: boolean;
   error?: string;
   command?: string;
-  /** The directory the agent starts in. */
   dir?: string;
 }
 
@@ -32,17 +32,12 @@ export interface LaunchOptions {
   env?: Record<string, string | undefined>;
   run?: Run;
   tempName?: () => string;
-  /** The project directory of the row being run, when it is about one project. */
   dir?: string | null;
-  /** Test seam for the one existence check on `dir`. */
   isDirectory?: (path: string) => boolean | Promise<boolean>;
-  /** Test seam for Warp's observable config-consumption check. */
   warpConsumed?: (configDir: string) => boolean | Promise<boolean>;
 }
 
-// Mirrors the characters recommendation keys are generated from; the key is
-// spliced into the agent prompt, so anything else could inject instructions.
-const RECOMMENDATION_KEY_PATTERN = /^[A-Za-z0-9._:/-]{1,256}$/;
+const RECOMMENDATION_KEY_PATTERN = new RegExp(`^[${RECOMMENDATION_KEY_CHARS}]{1,256}$`);
 
 const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
 const WARP_CONSUME_TIMEOUT_MS = 1_500;
@@ -57,7 +52,6 @@ export function isSafeRecommendationKey(key: string): boolean {
   return RECOMMENDATION_KEY_PATTERN.test(key);
 }
 
-/** The command to paste into a terminal. `dir` is a row's project directory. */
 export function command(agent: string, prompt: string, dir?: string | null): string | null {
   const got = agents[agent as AgentKey];
   if (got == null) {
@@ -83,8 +77,6 @@ export async function launchAgent(
   }
   const { dir, missing } = await resolveLaunchDir(options);
   const fullPrompt = withMarkInstruction(withMissingDirNote(prompt, missing, dir), key);
-  // A pasted command runs wherever the terminal is, so it carries the
-  // directory the launch would have used, whichever source chose it.
   const copyable = command(agent, fullPrompt, dir);
   if (!canLaunch(options.platform)) {
     return {
@@ -116,15 +108,11 @@ export async function launchAgent(
   );
   if (!result.ok) {
     rmSync(promptDir, { recursive: true, force: true });
-    // Every failure offers the prepared command, which carries the directory
-    // and the mark instruction a bare agent command would lose.
     return { ...result, command: copyable ?? result.command, dir };
   }
   return { ...result, dir };
 }
 
-// DECANT_SKILLS_DIR wins, then the row's project directory, then home.
-// `missing` is a project directory that was asked for and not found.
 async function resolveLaunchDir(
   options: LaunchOptions,
 ): Promise<{ dir: string; missing: string | null }> {
@@ -157,7 +145,6 @@ async function isDirectoryWithin(path: string): Promise<boolean> {
   }
 }
 
-// The prompt names the project, so say so when the session starts elsewhere.
 function withMissingDirNote(prompt: string, missing: string | null, dir: string): string {
   return missing == null
     ? prompt
@@ -289,10 +276,7 @@ async function sweepStaleLaunchDirs(now = Date.now()): Promise<void> {
       if (now - (await stat(path)).mtimeMs >= STALE_LAUNCH_AGE_MS) {
         await rm(path, { recursive: true, force: true });
       }
-    } catch {
-      // Cleanup is best-effort; launch must not fail on a raced or inaccessible
-      // temp entry.
-    }
+    } catch {}
   }
 }
 
@@ -313,8 +297,6 @@ export async function runCommand(bin: string, args: string[]): Promise<LaunchRes
     }
     return { ok: false, error: (stderr || stdout || "launch failed").trim() };
   } catch {
-    // The launch routes return this error to the browser, so a spawn
-    // exception's own text stays on the server.
     return { ok: false, error: `Could not start ${bin}.` };
   }
 }

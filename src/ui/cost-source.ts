@@ -2,7 +2,6 @@ import type { SessionSummary } from "./types.ts";
 
 type CostSource = SessionSummary["cost_source"];
 
-/** Short suffix shown beside a session's cost; null when Decant priced it. */
 export function costSourceLabel(source: CostSource): string | null {
   if (source === "reported") {
     return "reported by OpenCode";

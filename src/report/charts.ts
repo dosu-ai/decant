@@ -63,11 +63,6 @@ export interface ReportCompactionLabel {
   text: string;
 }
 
-/**
- * Render an ECharts option as a standalone SVG string. ECharts' SSR mode does
- * not create a DOM and animation is forced off so exported reports contain no
- * script or animation CSS.
- */
 export function renderChartSvg(option: echarts.EChartsOption, size: ReportChartSize = {}): string {
   const width = size.width ?? DEFAULT_WIDTH;
   const height = size.height ?? DEFAULT_HEIGHT;
@@ -94,11 +89,6 @@ export function renderChartSvg(option: echarts.EChartsOption, size: ReportChartS
   }
 }
 
-/**
- * ECharts renders a fixed, local option schema in SSR mode, but attribute values
- * are not an HTML escaping boundary. Reject active markup before an SVG reaches
- * the report's intentionally inline render path.
- */
 export function sanitizeReportSvg(svg: string): string {
   const styleElements = [...svg.matchAll(SVG_STYLE_ELEMENT)];
   if (styleElements.length > 1) {
@@ -116,7 +106,7 @@ export function sanitizeReportSvg(svg: string): string {
   const sanitized =
     styleElement?.index == null
       ? svg
-      : `${svg.slice(0, styleElement.index)}${" ".repeat(styleElement[0].length)}${svg.slice(styleElement.index + styleElement[0].length)}`;
+      : `${svg.slice(0, styleElement.index)} ${svg.slice(styleElement.index + styleElement[0].length)}`;
   assertSafeReportSvg(sanitized);
   return sanitized;
 }
@@ -153,11 +143,6 @@ function assertSafeReportSvg(svg: string): void {
   }
 }
 
-/**
- * Attributes of every tag, split the way an HTML parser splits them: quotes
- * only delimit a value that starts with one, and `/` separates attributes.
- * Text nodes are skipped, so a label such as `my-src=2` is not an attribute.
- */
 function* svgAttributes(svg: string): Generator<[string, string]> {
   let index = 0;
   while (index < svg.length) {
@@ -218,8 +203,6 @@ function* svgAttributes(svg: string): Generator<[string, string]> {
   }
 }
 
-/** Sessions per point of a continuous series (see buildDaySeries), drawn as
- * bars: counts are discrete, and a line would imply values between days. */
 export function renderSessionsByDayChart(series: DaySeries, size?: ReportChartSize): string {
   const ordered = series.points;
   return renderChartSvg(
@@ -253,8 +236,6 @@ export function renderSessionsByDayChart(series: DaySeries, size?: ReportChartSi
   );
 }
 
-/** Estimated cost per point. A point whose sessions all lack usage data has
- * an unknown cost and draws as a gap, not as zero. */
 export function renderCostByDayChart(series: DaySeries, size?: ReportChartSize): string {
   const ordered = series.points;
   const isolated = isolatedPoints(ordered.map((row) => row.cost));
@@ -281,7 +262,6 @@ export function renderCostByDayChart(series: DaySeries, size?: ReportChartSize):
       series: [
         {
           type: "line",
-          // Only points with no known neighbour get a marker; the rest sit on the line.
           data: ordered.map((row, index) => ({
             value: row.cost,
             symbol: isolated[index] === true ? "circle" : "none",
@@ -408,11 +388,6 @@ export function renderContextWindowChart(
   );
 }
 
-/**
- * Nearby compaction lines share one count label. Repeating the same word above
- * every line adds no information and makes dense report charts unreadable.
- * Remaining edge collisions move into additional lanes above the plot.
- */
 export function reportCompactionLabels(
   compactionXs: readonly number[],
   width = DEFAULT_WIDTH,
@@ -455,12 +430,6 @@ export function reportCompactionLabels(
   });
 }
 
-/**
- * Map the shared live-strip geometry into ECharts' normalized value-axis
- * coordinates. Keeping ECharts as the report renderer preserves its static SVG
- * typography and styling while sharing call slots, curve breaks, and exact
- * compaction positions with the interactive app.
- */
 export function reportContextWindowGeometry(
   timeline: ContextWindowTimeline,
   width = DEFAULT_WIDTH,

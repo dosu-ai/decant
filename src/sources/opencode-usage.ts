@@ -1,11 +1,10 @@
-// Token mapping shared by the OpenCode readers. OpenCode's tokens object is
-// {input, output, reasoning, cache:{read, write}, total?}. `input` never
-// includes cached tokens. Whether `output` includes `reasoning` depends on the
-// release that wrote the row: up to 1.3.15 it did for most providers (and
-// OpenCode then charged reasoning a second time); from 1.3.16 on, and in 2.x,
-// it does not. The recorded `total` decides when present (anomalyco/opencode
-// getUsage, in packages/opencode/src/session/index.ts and, from 1.18,
-// packages/opencode/src/session/session.ts).
+// OpenCode's tokens object is {input, output, reasoning, cache:{read, write},
+// total?}. `input` never includes cached tokens. Whether `output` includes
+// `reasoning` depends on the release that wrote the row: up to 1.3.15 it did
+// for most providers (and OpenCode then charged reasoning a second time); from
+// 1.3.16 on, and in 2.x, it does not. The recorded `total` decides when
+// present (anomalyco/opencode getUsage, in packages/opencode/src/session/index.ts
+// and, from 1.18, packages/opencode/src/session/session.ts).
 import { asString, isObject, type JsonObject } from "../json.ts";
 import { emptyUsage, type Json, type TokenUsage } from "../model.ts";
 import type { OpenCodeLegacyMessageRow, OpenCodeLegacyPartRow } from "./opencode-legacy.ts";
@@ -21,7 +20,7 @@ const DISJOINT_SINCE: Version = [1, 3, 16];
 const PREVIEW_VERSION = /^0\.0\.0-.+-(\d{12})$/;
 
 /** When 1.3.16 was tagged (2026-04-06T03:44Z), in the preview stamp's format. */
-const DISJOINT_SINCE_BUILD = "202604060344";
+export const DISJOINT_SINCE_BUILD = "202604060344";
 
 export function parseOpenCodeVersion(version: string | null): [number, number, number] | null {
   const match = version == null ? null : /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);
@@ -36,9 +35,6 @@ function count(value: Json | undefined): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
-/** The provider's `total`, when recorded, decides; otherwise the release that
- * created the session does, or a preview build's date. A real 0.x release
- * predates 1.3.16; an unparseable version is treated as current. */
 export function reasoningOverlap(tokens: JsonObject, version: string | null): ReasoningOverlap {
   const reasoning = count(tokens.reasoning);
   if (reasoning === 0) {
@@ -57,7 +53,6 @@ export function reasoningOverlap(tokens: JsonObject, version: string | null): Re
   }
   const preview = version == null ? null : PREVIEW_VERSION.exec(version);
   if (preview?.[1] != null) {
-    // Same-length digit strings compare in time order.
     return preview[1] < DISJOINT_SINCE_BUILD ? "included" : "disjoint";
   }
   const parsed = parseOpenCodeVersion(version);
@@ -67,8 +62,6 @@ export function reasoningOverlap(tokens: JsonObject, version: string | null): Re
   return compareVersions(parsed, DISJOINT_SINCE) < 0 ? "included" : "disjoint";
 }
 
-/** Decant counts reasoning inside `output`. When the row already did, only
- * the reasoning that fits inside `output` is credible as reasoning. */
 export function openCodeUsage(
   tokens: Json | undefined,
   overlap: ReasoningOverlap,
@@ -106,8 +99,7 @@ function mapped(tokens: JsonObject, version: string | null): TokenUsage {
 }
 
 /** 1.x overwrites `info.tokens` with the last step's usage while summing
- * `info.cost`, so a message's usage is the sum of its step-finish parts. A
- * message with none uses `info.tokens`, unless nothing was recorded. */
+ * `info.cost`. */
 export function legacyAssistantUsage(
   info: JsonObject,
   parts: readonly Json[],
@@ -132,11 +124,9 @@ export function legacyAssistantUsage(
   return recorded > 0 || cost > 0 ? usage : null;
 }
 
-/** What the 1.x tables record for one row the 2.x migrator copied. */
 export interface LegacyRowUsage {
   usage: TokenUsage | null;
   modelId: string | null;
-  /** The message's recorded `info.cost`, which sums its steps. */
   cost: number | null;
 }
 
@@ -146,15 +136,10 @@ export interface LegacyRowUsage {
  * and folds a compaction request plus its `summary` assistant into one
  * compaction row that has the request's id and no usage. */
 export interface MigratedUsage {
-  /** By assistant message id, which is also the 2.x row id. */
   assistants: ReadonlyMap<string, LegacyRowUsage>;
-  /** By compaction request id: the summary assistant that answered it. */
   compactions: ReadonlyMap<string, LegacyRowUsage>;
 }
 
-/** Builds `MigratedUsage` from the 1.x message rows (in OpenCode's order) and
- * their parts; only step-finish parts matter. Rows that do not parse are
- * left out, so their 2.x copies keep their own tokens. */
 export function migratedUsage(
   version: string | null,
   messages: readonly Pick<OpenCodeLegacyMessageRow, "id" | "data">[],

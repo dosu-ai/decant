@@ -144,7 +144,6 @@ describe("settings", () => {
         agent: "codex",
         terminal: "ghostty",
         ide: "zed",
-        // Removed preferences from older settings files are pruned on save.
         dosuSuggestions: "hide",
         unknown: "ignored",
       },

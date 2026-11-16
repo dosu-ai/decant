@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { asString, assertJsonDepth, canonicalJson, get, JsonDepthError } from "../json.ts";
 import type { BlockType, Issue, Json, NormalizedBlock } from "../model.ts";
 
-// Tool outputs can be large, but a single record should not consume the heap.
 export const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 export const RECORD_LIMIT_MESSAGE = "record exceeds the byte limit";
 
@@ -37,8 +36,6 @@ export function printableType(typ: string): string {
 
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
-/** Returns undefined for blank lines and records an `unparsed_line` issue for
- * malformed ones, so a bad record never aborts the rest of the file. */
 export function parseJsonLine(line: string, lineNo: number, issues: Issue[]): Json | undefined {
   if (line.trim() === "") {
     return undefined;
@@ -63,8 +60,12 @@ export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: nu
   unknownTypes.set(label, seen);
 }
 
-/** `handling` completes the message, e.g. `ignored` or `kept as role "other"`. */
-export function unknownTypeIssues(unknownTypes: UnknownTypes, handling: string): Issue[] {
+export type UnknownTypeHandling = "ignored" | 'kept as role "other"' | "read as ATIF-v1.8";
+
+export function unknownTypeIssues(
+  unknownTypes: UnknownTypes,
+  handling: UnknownTypeHandling,
+): Issue[] {
   const issues: Issue[] = [];
   for (const [typ, seen] of unknownTypes) {
     issues.push({
@@ -95,10 +96,6 @@ export function block(
   };
 }
 
-/** Tool-result content as the model read it: text items joined by newlines,
- * anything else (images, structured items) kept as canonical JSON. Claude and
- * Codex both send arrays of content items, and storing the array's JSON would
- * count the wrapper keys as window volume the model never saw. */
 export function contentText(content: Json | undefined): string {
   if (typeof content === "string") {
     return content;

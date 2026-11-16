@@ -29,8 +29,6 @@ export function toolSummaryNeedsRefresh(
   return saved?.scopeKey !== scopeKey || saved.reloadKey !== reloadKey;
 }
 
-/** Later call pages omit the summary. A direct link to one requests a single
- * first-page row to obtain it, using only the filters that scope the cards. */
 export function toolSummaryQuery(scope: SummaryScope): string {
   const params = new URLSearchParams({ limit: "1", offset: "0" });
   if (scope.tool !== "") {

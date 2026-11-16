@@ -4,7 +4,6 @@ export interface SearchSessionHit {
   session_id: number;
 }
 
-/** Flatten hits in the same session-group order the search page renders. */
 export function visuallyOrderedSearchHits<T extends SearchSessionHit>(hits: readonly T[]): T[] {
   const groups = new Map<number, T[]>();
   for (const hit of hits) {
@@ -24,7 +23,6 @@ export interface SearchSnippetPart {
   match: boolean;
 }
 
-/** Split only private FTS markers. Literal [bracketed] source text stays text. */
 export function searchSnippetParts(snippet: string): SearchSnippetPart[] {
   const parts: SearchSnippetPart[] = [];
   let remaining = snippet;

@@ -29,6 +29,22 @@ const workDir = mkdtempSync(join(tmpdir(), "decant-query-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 let dbCounter = 0;
+function recordIngestIssueAsSyncDoes(
+  db: Database,
+  issue: {
+    sourcePath: string | null;
+    error: string;
+    code: string;
+    lineNo?: number;
+    rawLine?: string;
+  },
+): void {
+  db.query(
+    `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+  ).run(issue.sourcePath, issue.lineNo ?? null, issue.error, issue.rawLine ?? null, issue.code);
+}
+
 function freshDb(): Database {
   dbCounter += 1;
   return openDb(join(workDir, `query-${dbCounter}.db`));
@@ -281,13 +297,9 @@ describe("query reads", () => {
     if (totals == null) {
       throw new Error("a real session read must carry totals");
     }
-    // Guard against a vacuous assertion: a session with nothing to count would
-    // let a page-scoped implementation pass this test unchanged.
     expect(totals.reply_count).toBeGreaterThan(0);
     expect(totals.tool_call_count).toBeGreaterThan(0);
 
-    // The first page deliberately excludes later replies and tool calls, so a
-    // count taken over `messages` would come back smaller here.
     const firstPage = getSession(db, id, { messageLimit: 1, messageOffset: 0 });
     expect(firstPage?.has_more_messages).toBe(true);
     expect(firstPage?.totals).toEqual(totals);
@@ -297,9 +309,6 @@ describe("query reads", () => {
     ).length;
     expect(repliesOnPage).toBeLessThan(totals.reply_count ?? 0);
 
-    // The aggregate must agree with the reader's own rule, or the header would
-    // contradict a transcript the reader can count by hand. Recomputed here the
-    // way the UI does it, over a fully loaded session.
     const renderable = (whole?.messages ?? []).filter(
       (message) =>
         message.is_compact_boundary ||
@@ -320,8 +329,6 @@ describe("query reads", () => {
       ),
     ).toBe(totals.tool_call_count);
 
-    // Stubs carry structure and a summary but no messages, so they carry no
-    // totals either rather than reporting a misleading zero.
     for (const subagent of whole?.subagents ?? []) {
       expect(subagent.totals).toBeUndefined();
     }
@@ -398,8 +405,6 @@ describe("query reads", () => {
         (3, 2, 0, 'text', '<system-reminder>Hook context</system-reminder>'),
         (4, 2, 0, 'text', 'Claude prompt');
     `);
-    // LIKE reads "_" as any character. The SQL pass must skip no more than the
-    // JS check, which treats only the underscore tag as agent context.
     expect(getSession(db, 1)?.summary.title).toBe("Cursor prompt");
     expect(getSession(db, 2)?.summary.title).toBe(
       "<system-reminder>Hook context</system-reminder>",
@@ -744,14 +749,17 @@ describe("query reads", () => {
       2,
       "h",
     );
-    // upsertSession does not write ingest_issue (writeIngestedFile does); simulate the sync path:
-    db.query(
-      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
-       VALUES ('/issues.jsonl', 99, 'x', 'not json', 'unparsed_line', datetime('now'))`,
-    ).run();
+    recordIngestIssueAsSyncDoes(db, {
+      sourcePath: "/issues.jsonl",
+      lineNo: 99,
+      error: "x",
+      rawLine: "not json",
+      code: "unparsed_line",
+    });
     const issues = sessionIngestIssues(db, sessionId);
     expect(issues).toEqual([
       {
+        id: expect.any(Number),
         code: "unparsed_line",
         line_no: 99,
         error: "x",
@@ -764,10 +772,8 @@ describe("query reads", () => {
     expect(detail?.summary.ingest_issue_count).toBe(1);
     expect(listSessions(db)[0]?.ingest_issue_count).toBe(1);
 
-    // A session with no source file cannot match issue rows by path, and must
-    // not fall through to every row whose source_path is also NULL.
     db.exec("INSERT INTO session(tool, source_session_id) VALUES ('claude_code', 'no-source')");
-    db.query("INSERT INTO ingest_issue (source_path, error, code) VALUES (NULL, 'y', 'x')").run();
+    recordIngestIssueAsSyncDoes(db, { sourcePath: null, error: "y", code: "x" });
     const pathless = db
       .query("SELECT id FROM session WHERE source_session_id = 'no-source'")
       .get() as { id: number };
@@ -778,10 +784,12 @@ describe("query reads", () => {
   test("session summaries separate actionable ingest failures from informational sensors", () => {
     const db = seeded();
     const sessionId = listSessions(db)[0]?.id ?? 0;
-    db.query(
-      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
-       VALUES ('/x.jsonl', 9, 'unknown record', NULL, 'unknown_record_type', datetime('now'))`,
-    ).run();
+    recordIngestIssueAsSyncDoes(db, {
+      sourcePath: "/x.jsonl",
+      lineNo: 9,
+      error: "unknown record",
+      code: "unknown_record_type",
+    });
 
     expect(getSession(db, sessionId)?.summary).toMatchObject({
       ingest_issue_count: 0,
@@ -1258,10 +1266,6 @@ describe("query reads", () => {
 });
 
 describe("search query plans", () => {
-  // Capture each statement searchPage prepares, then EXPLAIN it with the same
-  // parameters. The search tests above prove the results; these prove the
-  // statements read only what a page needs, which is what kept a common term
-  // from taking seconds on a cold archive.
   function searchPlans(filter: Parameters<typeof searchPage>[2] = {}): string[] {
     const db = seeded();
     const statements: string[] = [];
@@ -1298,8 +1302,6 @@ describe("search query plans", () => {
       const page = searchPlans(filter).find((plan) => plan.includes("CO-ROUTINE page")) ?? "";
       const outer = page.slice(page.indexOf("SCAN page"));
       expect(outer.startsWith("SCAN page")).toBe(true);
-      // The outer FTS step must be a rowid lookup for one page row, not
-      // another walk over every match.
       expect(outer).toMatch(/SCAN block_fts VIRTUAL TABLE INDEX \d+:=/);
       expect(outer).not.toContain("AUTOMATIC");
     }
@@ -1344,8 +1346,6 @@ describe("cost source", () => {
     const db = seeded();
     const ingest = (id: string, requests: Parameters<typeof syntheticOpenCodeSession>[1]) =>
       upsertSession(db, syntheticOpenCodeSession(id, requests), `/tmp/opencode.db#${id}`, 1, 0, id);
-    // Simulates rows stored while a model was unpriced: the model has a rate
-    // now, but the stored reported figure remains in the table.
     const stale = (sessionId: number, model: string) =>
       db
         .query(
@@ -1371,7 +1371,6 @@ describe("cost source", () => {
     expect(priced?.cost_source).toBe("decant");
     expect(priced?.estimated_cost_usd).toBe(listPrice?.estimated_cost_usd ?? Number.NaN);
     expect(listPrice?.estimated_cost_usd).toBeGreaterThan(0);
-    // One row is priced by Decant now and one still shows the recorded figure.
     expect(getSessionSummary(db, partlyNowPriced)?.cost_source).toBe("mixed");
     db.close();
   });

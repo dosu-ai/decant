@@ -52,11 +52,7 @@ function usage(
   };
 }
 
-// Synthetic session: growing context, a duplicate streamed line sharing a
-// requestId, one auto-compaction with metadata, and sidechain turns that must
-// stay out of the main-thread curve. Inline (not under fixtures/) so the
-// golden fixture inventory stays untouched.
-const CONTEXT_FIXTURE = [
+const FIRST_CALL_GROWS_CONTEXT = [
   record({
     type: "user",
     uuid: "u1",
@@ -81,8 +77,9 @@ const CONTEXT_FIXTURE = [
       ],
     },
   }),
-  // Streamed duplicate of the same API call: lower output, same requestId, so
-  // the parser keeps usage only on the line above.
+];
+
+const STREAMED_DUPLICATE_OF_FIRST_CALL = [
   record({
     type: "assistant",
     uuid: "a1b",
@@ -97,6 +94,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Scanning" }],
     },
   }),
+];
+
+const SECOND_CALL_AFTER_TOOL_RESULT = [
   record({
     type: "user",
     uuid: "u2",
@@ -121,6 +121,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Done reading; starting the refactor." }],
     },
   }),
+];
+
+const AUTO_COMPACTION_WITH_METADATA = [
   record({
     type: "system",
     uuid: "s1",
@@ -146,6 +149,9 @@ const CONTEXT_FIXTURE = [
         "This session is being continued from a previous conversation. Summary: refactor is underway.",
     },
   }),
+];
+
+const FIRST_CALL_AFTER_COMPACTION = [
   record({
     type: "user",
     uuid: "u3",
@@ -167,6 +173,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Continuing after compaction." }],
     },
   }),
+];
+
+const SIDECHAIN_OUTSIDE_MAIN_CURVE = [
   record({
     type: "user",
     uuid: "sc1",
@@ -190,6 +199,15 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Two flows found." }],
     },
   }),
+];
+
+const CONTEXT_FIXTURE = [
+  ...FIRST_CALL_GROWS_CONTEXT,
+  ...STREAMED_DUPLICATE_OF_FIRST_CALL,
+  ...SECOND_CALL_AFTER_TOOL_RESULT,
+  ...AUTO_COMPACTION_WITH_METADATA,
+  ...FIRST_CALL_AFTER_COMPACTION,
+  ...SIDECHAIN_OUTSIDE_MAIN_CURVE,
 ].join("\n");
 
 function seeded(): { db: Database; sessionId: number } {
@@ -245,7 +263,6 @@ describe("contextWindowForSession", () => {
 
     expect(timeline?.points.map((point) => point.context_tokens)).toEqual([40_020, 70_510, 12_005]);
     expect(timeline?.points.map((point) => point.seq)).toEqual([1, 4, 8]);
-    // Machine-generated compact summaries are continuations, not user turns.
     expect(timeline?.points.map((point) => point.turn)).toEqual([1, 1, 2]);
     expect(timeline?.turn_count).toBe(2);
     expect(timeline?.points[0]).toEqual({
@@ -291,11 +308,8 @@ describe("contextWindowForSession", () => {
       [1, 1000],
       [3, 1200],
     ]);
-    // Command wrappers and interruption markers are not turns (enrich parity).
     expect(timeline?.points.map((point) => point.turn)).toEqual([1, 1]);
     expect(timeline?.turn_count).toBe(1);
-    // Boundary carries no compactMetadata: pre falls back to the last point
-    // before it, and there is no non-sidechain call after it.
     expect(timeline?.compactions).toEqual([
       {
         seq: 7,
@@ -426,9 +440,6 @@ function codexTokenCount(
   });
 }
 
-// Codex rollout with per-request token_count readings (including one that must
-// walk back past a tool row), a compacted record, and the paired
-// context_compacted event that carries no data.
 const CODEX_FIXTURE = [
   codexLine({
     type: "session_meta",
@@ -740,9 +751,6 @@ describe("context-window rollups", () => {
   });
 
   test("plans ingest's block lookups by message on an archive without statistics", () => {
-    // A new archive has no sqlite_stat1 until the first sync ends. Without it
-    // SQLite once ran the has_text subquery through idx_block_type, scanning
-    // every text block per message and making the first sync quadratic.
     const db = freshDb();
     expect(db.query("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()).toBeNull();
     const statements = new Set<string>();
@@ -802,7 +810,6 @@ describe("getSession per-turn context fields", () => {
       is_compact_boundary: false,
       is_compact_summary: false,
     });
-    // Deduped streamed line: usage was nulled by the parser.
     expect(messages[2]).toMatchObject({ role: "assistant", context_tokens: null });
     expect(messages[5]).toMatchObject({
       role: "system",

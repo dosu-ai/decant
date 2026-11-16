@@ -14,7 +14,7 @@ import { dosuLink } from "./dosu-links.ts";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { useDisabledFocusRescue } from "./focus.ts";
 import { formatDay, formatInt, versionLabel } from "./format.ts";
-import { isFramed } from "./frame-guard.ts";
+import { isFramedOrUnknown } from "./frame-guard.ts";
 import { Icon } from "./icons.tsx";
 import { createLatestThrottle, type LatestThrottle } from "./latest-throttle.ts";
 import { Link, locationPath, visit } from "./link.tsx";
@@ -90,7 +90,6 @@ import { ToolsView } from "./views/tools.tsx";
 import "./styles.css";
 
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
-// Every other view renders its own <h1>; the topbar title is then a plain label.
 const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
 
@@ -117,7 +116,6 @@ function App() {
   const [syncError, setSyncError] = useState<unknown>(null);
   const [syncComplete, setSyncComplete] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  // Assumed synced until the server says otherwise, so nothing reads as a first sync by mistake.
   const [archiveSynced, setArchiveSynced] = useState(true);
   const [syncNoticeShown, setSyncNoticeShown] = useState(false);
   const [archiveUpdateAvailable, setArchiveUpdateAvailable] = useState(false);
@@ -133,10 +131,7 @@ function App() {
   const manualSyncPendingRef = useRef(false);
   const syncStatusReadRef = useRef(0);
   const syncStatusAppliedRef = useRef(0);
-  // An overtaken status answer saw a sync running that this tab has not shown.
   const sawSyncRef = useRef(false);
-  // Counts syncs seen starting or ending, so a status answer overtaken by one
-  // is read again.
   const syncEndedRef = useRef(0);
   const archiveSyncedRef = useRef(true);
   const awaitingStatsRef = useRef(false);
@@ -151,7 +146,6 @@ function App() {
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
   const activeView = resolveActiveRouteKey(path, navItems);
-  // The source filter scopes Analytics only; other pages keep date-only slices.
   const dashboardQuery =
     activeView === "analytics" ? sourceScopeQuery(dateQuery, sourceSelection) : dateQuery;
   const showsSessions = activeView === "sessions";
@@ -188,8 +182,6 @@ function App() {
   useDisabledFocusRescue();
 
   useEffect(() => {
-    // The SSE handlers live in a long-lived effect, so they read this ref
-    // rather than a stale closure over localSyncing.
     localSyncingRef.current = localSyncing;
   }, [localSyncing]);
 
@@ -197,7 +189,6 @@ function App() {
     archiveSyncedRef.current = archiveSynced;
   }, [archiveSynced]);
 
-  // Its timer would otherwise clear the counts of a sync that started inside the window.
   const dismissSyncComplete = useCallback(() => {
     if (syncCompleteTimerRef.current == null) {
       return;
@@ -208,8 +199,6 @@ function App() {
     setSyncProgress(null);
   }, []);
 
-  // EventSource does not replay events, so the server's status restores what a
-  // reload or a dropped stream missed. Resolves false when it could not be read.
   const readSyncStatus = useCallback(async (): Promise<boolean> => {
     let status: SyncStatus;
     for (;;) {
@@ -245,7 +234,6 @@ function App() {
     setArchiveSynced(restored.archiveSynced);
     if (restored.syncing) {
       setLocalSyncing(true);
-      // A running sync supersedes the failure an earlier one left on screen.
       setSyncError(null);
       dismissSyncComplete();
       if (restored.progress != null) {
@@ -257,7 +245,6 @@ function App() {
       setSyncProgress(null);
     }
     if (restored.ended) {
-      // Its terminal event was lost, so load what it wrote as that event would have.
       setArchiveUpdateAvailable(false);
       requestRefresh();
       if (restored.failure != null) {
@@ -268,7 +255,6 @@ function App() {
   }, [dismissSyncComplete, requestRefresh]);
 
   useEffect(() => {
-    // Declared before the slice loads so this request is not queued behind them.
     void readSyncStatus();
   }, [readSyncStatus]);
 
@@ -322,8 +308,6 @@ function App() {
 
   useEffect(() => {
     liveSessionsRef.current = liveSessions;
-    // Activity that lit Update while the list was filtered, paged, or covered
-    // loads once the unfiltered first page is back in view.
     if (liveSessions && archiveUpdateAvailable) {
       liveSessionsThrottleRef.current?.push(null);
     }
@@ -333,8 +317,6 @@ function App() {
     if (!liveSessions || !archiveUpdateAvailable) {
       return;
     }
-    // Activity held back while the reader was scrolled down or the tab was
-    // hidden loads once they are back at the top of a visible list.
     const resume = () => {
       const viewer = liveSessionsViewer();
       if (viewer.nearTop && viewer.visible) {
@@ -432,8 +414,6 @@ function App() {
   }, [activeView, dashboardQuery, reloadKey]);
 
   useEffect(() => {
-    // Incrementing this key intentionally replaces the EventSource when the
-    // user asks to reconnect immediately instead of waiting for its backoff.
     void liveConnectionKey;
     const events = new EventSource("/api/events");
     const progressThrottle = createLatestThrottle<SyncProgress>(
@@ -449,8 +429,6 @@ function App() {
         } else {
           setArchiveUpdateAvailable(true);
         }
-        // A sync seen only over this stream may have ended while disconnected.
-        // Ask the server, and drop the indicator if it cannot say.
         void readSyncStatus().then((read) => {
           if (read) {
             return;
@@ -480,34 +458,26 @@ function App() {
         }
         if (payload.progress != null) {
           if (!localSyncingRef.current) {
-            // A status answer from before this sync started would hide it.
             syncEndedRef.current += 1;
             dismissSyncComplete();
           }
           progressThrottle.push(payload.progress);
           setLocalSyncing(true);
         }
-      } catch {
-        // A malformed progress event must not interrupt the live channel.
-      }
+      } catch {}
     };
     const handleSync = (event: MessageEvent<string>) => {
       markConnected();
       let payload: ServerEventPayload = {};
       try {
         payload = JSON.parse(event.data) as ServerEventPayload;
-      } catch {
-        // Treat malformed events as background updates so a broken optional
-        // payload cannot cause an unexpected page refresh.
-      }
-      // Any completed sync ends the archive's first-sync state, foreground or not.
+      } catch {}
       const shown = showsSync(payload.reason, archiveSyncedRef.current);
       syncEndedRef.current += 1;
       setArchiveSynced(true);
       if (!shown) {
         return;
       }
-      // This tab's own pending sync keeps the indicator when another one ends.
       if (!isForegroundSync(payload.reason) && manualSyncPendingRef.current) {
         return;
       }
@@ -530,10 +500,7 @@ function App() {
       let payload: ServerEventPayload = {};
       try {
         payload = JSON.parse(event.data) as ServerEventPayload;
-      } catch {
-        // Unknown archive updates remain pending until the user asks to load
-        // them, preserving the current page while they scroll or inspect it.
-      }
+      } catch {}
       const plan = planArchiveUpdate(
         payload.reason,
         awaitingStatsRef.current,
@@ -557,7 +524,6 @@ function App() {
     const handleOpen = () => {
       const dropped = liveDroppedRef.current;
       markConnected();
-      // A sync can end between the first status read and this stream opening.
       if (!dropped) {
         void readSyncStatus();
       }
@@ -574,7 +540,6 @@ function App() {
           progressThrottle.cancel();
           setLocalSyncing(false);
           setSyncProgress(null);
-          // Matches what a failed POST /api/sync shows, so Retry runs a sync.
           setSyncError(new ApiError(500, "internal_error", failure.error));
         }
         return;
@@ -649,8 +614,6 @@ function App() {
     slicesForView(activeView).includes(slice),
   );
   const metrics = data.summary;
-  // The full timestamp, not the UTC day in `max`, so every page shows the same
-  // local day as the newest session row.
   const lastActivity = formatDay(data.dateBounds?.latest_started_at ?? null);
   const syncInProgress = localSyncing;
   const syncCompleteShown = showsSyncComplete(syncComplete, syncInProgress);
@@ -773,8 +736,6 @@ function App() {
         <nav aria-label="Primary">
           {navGroups.map((group) => (
             <div className="nav-group" key={group.label}>
-              {/* Labelled so the grouping is not purely visual: a screen reader
-                  announces which section each destination belongs to. */}
               <h2 className="nav-group-label" id={`nav-group-${group.label.toLowerCase()}`}>
                 {group.label}
               </h2>
@@ -798,7 +759,6 @@ function App() {
         </nav>
         <div className="sidebar-footer">
           {firstSync ? (
-            // Totals read mid-sync are partial, so they are not shown as the archive's.
             <div className="sidebar-stat">
               <span className="sidebar-stat-icon">
                 <Icon name="trend" />
@@ -812,7 +772,6 @@ function App() {
                   <Icon name="trend" />
                 </span>
                 <span>
-                  {/* An unloaded summary is unknown, not zero. */}
                   <strong>{metrics == null ? "-" : formatInt(metrics.sessions)}</strong> sessions
                 </span>
               </div>
@@ -1046,7 +1005,6 @@ function renderView(
   path: string,
   data: DashboardData,
   actions: {
-    /** The query the active page's slices load with (date range, plus source on Analytics). */
     dashboardQuery: string;
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
@@ -1056,7 +1014,6 @@ function renderView(
     reloadKey: number;
     runSync: () => void;
     failedSlices: DataSlice[];
-    /** A sync is filling an archive that has never completed one. */
     firstSync: boolean;
     loadedSlices: ReadonlyMap<DataSlice, string>;
     recommendationsLoading: boolean;
@@ -1183,9 +1140,6 @@ function NotFoundView({ pathname }: { pathname: string }) {
   );
 }
 
-/** Rendered instead of the app when decant is loaded inside a frame, so that no
- * part of the UI - including the Insights "Run" button, which launches a coding
- * agent on this machine - exists to be clicked through a hidden overlay. */
 function FramedNotice() {
   return (
     <EmptyState
@@ -1201,7 +1155,7 @@ if (root == null) {
   throw new Error("missing #root");
 }
 createRoot(root).render(
-  isFramed(window) ? (
+  isFramedOrUnknown(window) ? (
     <FramedNotice />
   ) : (
     <ErrorBoundary>

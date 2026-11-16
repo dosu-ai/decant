@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type FrameContext, isFramed } from "../src/ui/frame-guard.ts";
+import { type FrameContext, isFramedOrUnknown } from "../src/ui/frame-guard.ts";
 import { readUiSource, sourceFrom } from "./ui-source.ts";
 
 function fakeWindow(top?: FrameContext): FrameContext {
@@ -11,11 +11,11 @@ function fakeWindow(top?: FrameContext): FrameContext {
 
 describe("frame guard", () => {
   test("does not treat the top-level window as framed", () => {
-    expect(isFramed(fakeWindow())).toBe(false);
+    expect(isFramedOrUnknown(fakeWindow())).toBe(false);
   });
 
   test("treats a nested window as framed", () => {
-    expect(isFramed(fakeWindow(fakeWindow()))).toBe(true);
+    expect(isFramedOrUnknown(fakeWindow(fakeWindow()))).toBe(true);
   });
 
   test("treats an unreadable top window as framed", () => {
@@ -25,13 +25,13 @@ describe("frame guard", () => {
         throw new Error("cross-origin access blocked");
       },
     };
-    expect(isFramed(blocked)).toBe(true);
+    expect(isFramedOrUnknown(blocked)).toBe(true);
   });
 
   test("the SPA entry mounts the framed notice instead of the app", () => {
     const entry = readUiSource();
     const mount = sourceFrom(entry, "createRoot(root)");
-    expect(mount).toContain("isFramed(window)");
+    expect(mount).toContain("isFramedOrUnknown(window)");
     expect(mount).toContain("<FramedNotice />");
   });
 });

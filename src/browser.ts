@@ -1,13 +1,11 @@
 import { spawn } from "node:child_process";
 
-/** Environment values that affect browser auto-open behavior. */
 export interface OpenEnv {
   BROWSER?: string;
   DECANT_NO_OPEN?: string;
   CI?: string;
 }
 
-/** A pure decision describing whether and how Decant should open the UI. */
 export interface OpenDecision {
   open: boolean;
   command?: string;
@@ -39,7 +37,6 @@ export function browserCommand(platform: NodeJS.Platform): string | null {
   if (platform === "linux") {
     return "xdg-open";
   }
-  // No Decant binaries ship for other platforms; never guess an opener.
   return null;
 }
 
@@ -52,7 +49,6 @@ export function decideOpen(input: {
   if (!input.enabled) {
     return { open: false, reason: "--no-open" };
   }
-  // "Set to any value" disables, matching DECANT_NO_SYNC semantics.
   if (input.env.DECANT_NO_OPEN != null) {
     return { open: false, reason: "DECANT_NO_OPEN" };
   }
@@ -61,8 +57,6 @@ export function decideOpen(input: {
     return { open: false, reason: "BROWSER=none" };
   }
   if (browser != null && browser !== "") {
-    // Deliberate configuration wins over CI and TTY detection. This also gives
-    // the serve E2E tests an opener seam while their stdio is piped.
     return { open: true, command: browser, reason: "BROWSER" };
   }
   if (input.env.CI != null) {
@@ -85,7 +79,5 @@ export function openBrowser(url: string, command: string, spawner: SpawnLike = s
     // because the CLI always prints the authoritative URL.
     child.on?.("error", () => {});
     child.unref?.();
-  } catch {
-    // A synchronous spawn failure is also covered by the printed URL fallback.
-  }
+  } catch {}
 }

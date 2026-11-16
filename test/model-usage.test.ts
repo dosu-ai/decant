@@ -38,8 +38,6 @@ interface Request {
   speed?: string;
 }
 
-/** A hand-written Claude Code journal: one prompt, then one assistant record
- * per request, each with an API message id no other session shares. */
 function transcript(requests: Request[], session = "sess-usage"): string {
   const lines: object[] = [
     {
@@ -177,7 +175,6 @@ describe("per-model usage", () => {
       estimateCost("claude-opus-5-5", usageOf(OPUS_55_B), pricing) +
       estimateCost("claude-opus-5", usageOf(OPUS_5), pricing);
     expect(storedCost(db, id)).toBeCloseTo(expected, 12);
-    // The single-label estimate this replaces billed Opus 5 tokens at Opus 5.5 rates.
     const singleLabel = estimateCost(
       "claude-opus-5-5",
       {
@@ -292,7 +289,6 @@ describe("per-model usage", () => {
     const id = ingest(db, [OPUS_55_A, OPUS_5, OPUS_55_B]);
     const correct = storedCost(db, id);
     const economics = tokenEconomicsForSession(db, id)?.totals.estimated_cost_usd;
-    // Simulate an archive written by a build that priced the session label.
     db.exec("DELETE FROM session_model_usage");
     db.query("UPDATE session SET estimated_cost_usd = 1 WHERE id = ?1").run(id);
     db.query(
@@ -309,7 +305,6 @@ describe("per-model usage", () => {
     expect(tokenEconomicsForSession(db, id)?.totals.estimated_cost_usd).toBe(economics ?? -1);
     expect(storedRows(db, id)).toHaveLength(2);
 
-    // Rows from an older split rule are rebuilt once.
     db.exec("UPDATE session_model_usage SET format_version = 0");
     expect(materializeMissingModelUsage(db)).toBe(1);
     expect(materializeMissingModelUsage(db)).toBe(0);
@@ -354,7 +349,6 @@ describe("model-less usage rows", () => {
   test("count toward the session's model in the model breakdown", () => {
     const db = freshDb();
     const id = ingest(db, [OPUS_5], "sess-modelless");
-    // A Copilot checkpoint that names no model stores its usage under "".
     db.query("DELETE FROM session_model_usage WHERE session_id = ?1").run(id);
     db.query(
       `INSERT INTO session_model_usage (session_id, model, tier, requests, input_tokens,
@@ -418,16 +412,12 @@ describe("reported cost fallback", () => {
     expect(
       economics?.buckets.reduce((sum, bucket) => sum + bucket.estimated_cost_usd, 0),
     ).toBeCloseTo(0.75, 12);
-    // The fallback is part of what a repricing sync recomputes, so nothing is
-    // pending and the total cannot flap between syncs.
     expect(refreshSessionCosts(db)).toBe(0);
     closeDb(db);
   });
 
   test("a model that loses its rate recovers its recorded cost on the next sync", () => {
     const db = freshDb();
-    // v0.12.1 priced this ID through a loose Gemini 3 Flash match, so it
-    // stored the rows at format 1 without the recorded cost.
     const id = ingestOpenCode(db, "ses_lost_rate", [
       { model: "gemini-4.3-flash", cost: 0.4, input: 100, output: 10 },
     ]);
@@ -491,7 +481,6 @@ describe("reported cost fallback", () => {
     const id = ingestOpenCode(db, "ses_rated_later", [
       { model: "glm-5.3-flash", cost: 99, input: 1_000_000, output: 1_000_000 },
     ]);
-    // Simulate a row derived before Decant had a rate for the model.
     db.query("UPDATE session_model_usage SET reported_cost_usd = 5 WHERE session_id = ?1").run(id);
     db.query("UPDATE session SET estimated_cost_usd = 0 WHERE id = ?1").run(id);
     expect(refreshSessionCosts(db)).toBe(1);
@@ -507,8 +496,6 @@ describe("reported cost fallback", () => {
       { model: "example-unpriced", cost: 0.3, input: 100, output: 10 },
       { model: "glm-5.3-flash", cost: 99, input: 200, output: 20 },
     ]);
-    // Session totals below the per-request sum make the residual negative, so
-    // the session-level split is used.
     parsed.session.totals.input = 1;
     parsed.session.totals.output = 1;
     const id = upsertSession(db, parsed, "/tmp/opencode.db#ses_residual", 1, 0, "ses_residual");

@@ -21,12 +21,6 @@ export interface TranscriptHighlight {
   tokens: TranscriptHighlightToken[][];
 }
 
-/**
- * These are deliberately the only grammars and themes reachable from the UI
- * bundle. Do not replace this with `shiki`, `shiki/bundle/web`, or
- * `langs-precompiled`: the former include broad registries and the latter is
- * currently called out as unsafe for many grammars by Shiki upstream.
- */
 const bundledLanguages = {
   bash: () => import("@shikijs/langs/bash"),
   diff: () => import("@shikijs/langs/diff"),
@@ -97,7 +91,6 @@ export async function highlightTranscriptCode(
   };
 }
 
-/** Test/diagnostic seam proving every call shares one lazy highlighter. */
 export async function transcriptHighlighterIdentity(): Promise<object> {
   return await getSingletonHighlighter();
 }

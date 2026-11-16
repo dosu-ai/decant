@@ -20,7 +20,6 @@ export class ReadConnection {
     this.#path = path;
   }
 
-  /** Run `read` with the connection, counting it as in use until it settles. */
   async use<T>(read: (db: Database) => T | Promise<T>): Promise<T> {
     const db = this.#connection();
     this.#active += 1;
@@ -31,7 +30,6 @@ export class ReadConnection {
     }
   }
 
-  /** Pick up statistics another connection wrote, at the next idle moment. */
   reloadStatistics(): void {
     if (this.#db != null) {
       this.#reopenPending = true;
@@ -51,8 +49,6 @@ export class ReadConnection {
       this.close();
     }
     if (this.#db == null) {
-      // strict matches openDb, so bound parameters behave the same here as on
-      // the server's own connection.
       const db = new Database(this.#path, { readonly: true, strict: true });
       db.exec("PRAGMA busy_timeout = 5000;");
       db.exec("PRAGMA mmap_size = 1073741824;");

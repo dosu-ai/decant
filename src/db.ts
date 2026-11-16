@@ -17,11 +17,6 @@ import {
   type SchemaManifest,
 } from "./schema-manifest.ts";
 
-/**
- * Highest schema version this build understands. src/schema.sql is the
- * effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied, so a
- * fresh archive is created in one step and stamped with the full history.
- */
 export const LATEST_SCHEMA_VERSION = 31;
 
 const logger = getDecantLogger("db");
@@ -79,13 +74,8 @@ function assertSupportedSchemaVersion(version: number): void {
   }
 }
 
-/**
- * Owner-only mode for the archive and its SQLite sidecars: the aggregate of the
- * transcripts must not be readable by anyone the 0600 sources were not.
- */
 const ARCHIVE_FILE_MODE = 0o600;
 
-/** Applied when decant creates the archive directory; an existing one is left alone. */
 export const ARCHIVE_DIR_MODE = 0o700;
 
 /**
@@ -141,9 +131,7 @@ function createArchiveFile(path: string): void {
     closeSync(
       openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, ARCHIVE_FILE_MODE),
     );
-  } catch {
-    // Best effort; see the doc comment.
-  }
+  } catch {}
 }
 
 /**
@@ -182,7 +170,6 @@ export function restrictArchiveFile(path: string): void {
       fchmodSync(fd, ARCHIVE_FILE_MODE);
     }
   } catch {
-    // Best effort; see the doc comment.
   } finally {
     if (fd !== null) {
       try {
@@ -196,18 +183,10 @@ export function restrictArchiveFile(path: string): void {
   }
 }
 
-// A directory, device, FIFO, or symlink at an archive name is a plant, extra
-// hard links mean the inode answers to a name decant knows nothing about, and
-// another user's file is not decant's to change; chmod must reach none of them.
 function isOwnedRegularFile(stats: Stats, uid: number): boolean {
   return stats.isFile() && stats.uid === uid && stats.nlink === 1;
 }
 
-/**
- * Open (or create) a decant archive and guarantee it is at
- * LATEST_SCHEMA_VERSION. The connection comes back in WAL mode with foreign
- * keys enforced and a busy timeout set.
- */
 export function openDb(path: string): Database {
   // Own the file modes before SQLite touches the path: it creates a database at
   // 0644 and then copies the database file's mode onto every -wal/-shm sidecar
@@ -222,8 +201,6 @@ export function openDb(path: string): Database {
     db.exec("PRAGMA foreign_keys = ON;");
     db.exec("PRAGMA synchronous = NORMAL;");
     negotiateWalMode(db);
-    // Memory-map reads: archives grow to multiple GB and large scans (FTS, block
-    // aggregation) measure 2-7x faster via mmap than via pread on such files.
     db.exec("PRAGMA mmap_size = 1073741824;");
     ensureSchema(db);
   } catch (error) {
@@ -260,8 +237,6 @@ const UNANALYZED_ROW_ESTIMATE = 1_048_576;
 // plans that delete as a scan of block_fts_data; 1,000 leaves a wide margin.
 const FTS_DATA_MIN_RECORDED_ROWS = 1_000;
 
-// An archive analyzed while its FTS index was near empty would otherwise scan
-// the whole index on every segment merge until the next full analysis.
 function raiseTinyFtsDataEstimate(db: Database): void {
   if (db.query("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get() == null) {
     return;
@@ -295,8 +270,6 @@ export function reloadPlannerStatistics(db: Database): void {
   runAdvisoryStatistics(db, "ANALYZE sqlite_schema;");
 }
 
-// Statistics only steer the planner, so a read-only archive or a writer that
-// holds the lock past busy_timeout must not stop the connection from serving.
 function runAdvisoryStatistics(db: Database, statement: string): void {
   try {
     db.exec(statement);
@@ -323,10 +296,7 @@ function negotiateWalMode(db: Database): void {
     if (typeof current?.journal_mode === "string" && current.journal_mode.toLowerCase() === "wal") {
       return;
     }
-  } catch {
-    // Fall through to the write pragma, which retains the bounded contention
-    // retry and surfaces any persistent failure.
-  }
+  } catch {}
 
   const deadline = Date.now() + 5_000;
   while (true) {
@@ -363,10 +333,6 @@ function ensureSchema(db: Database): void {
   if (!hasMigrations) {
     db.exec("BEGIN IMMEDIATE;");
     try {
-      // A second opener can observe the same empty schema before either takes
-      // the write lock. Re-check under the lock so only one creates the
-      // baseline; the waiter validates what won the race instead of replaying
-      // CREATE TABLE statements over it.
       if (hasTable(db, "schema_migrations")) {
         const versions = readMigrationHistory(db);
         const current = versions.at(-1) ?? 0;
@@ -429,9 +395,6 @@ function ensureSchema(db: Database): void {
 function migrate(db: Database, current: number): void {
   db.exec("BEGIN IMMEDIATE;");
   try {
-    // Another process may have completed the migration while this connection
-    // waited for SQLite's write lock. Re-read under the lock so each version is
-    // applied and stamped at most once.
     const lockedVersions = readMigrationHistory(db);
     const lockedCurrent = lockedVersions.at(-1) ?? 0;
     assertSupportedSchemaVersion(lockedCurrent);

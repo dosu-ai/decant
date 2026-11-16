@@ -31,7 +31,6 @@ describe("displayPath", () => {
     expect(displayPath("/home/dev", "/home/dev")).toBe("~");
     expect(displayPath("/home/dev/.codex", "/home/dev")).toBe("~/.codex");
     expect(displayPath("/home/dev/", "/home/dev/")).toBe("~");
-    // A sibling that shares the home directory's name as a prefix is outside it.
     expect(displayPath("/home/dev/workspace/.codex", "/home/dev/work")).toBe(CUSTOM_PATH);
     expect(displayPath("/data/sessions", "/home/dev")).toBe(CUSTOM_PATH);
     expect(displayPath("/anything", "")).toBe(CUSTOM_PATH);
@@ -136,8 +135,6 @@ describe("collectDoctorReport", () => {
       found: 1,
     });
     expect(JSON.stringify(report)).not.toContain(home);
-    // The longest tool name and the two VS Code roots still leave a gap before
-    // the next column.
     const vscodeLine = renderDoctor(report)
       .split("\n")
       .find((line) => line.trimStart().startsWith("vscode_copilot"));

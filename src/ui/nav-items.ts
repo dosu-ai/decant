@@ -1,10 +1,5 @@
 import type { NavItem } from "./types.ts";
 
-/**
- * Two sections: what the archive adds up to, then the archive itself. Analytics
- * leads because it answers the question the tool exists for -- what the sessions
- * cost and where the context went -- and it is what `/` serves.
- */
 export const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: "Overview",

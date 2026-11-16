@@ -266,6 +266,10 @@ defaults to 200 when omitted or zero and has an effective maximum of 2000;
 by advancing `message_offset` until `has_more_messages` is false. The summary,
 subagents, and totals describe the whole session on every page.
 
+`GET /api/sessions/{id}/issues` lists the problems ingest recorded for the
+session's source file, oldest first. Each issue's `id` is its stable row
+identity, so a client can key or deduplicate issues by it.
+
 `GET /api/files`, `GET /api/tools/usage`, and `GET /api/tools/mcp-usage` return
 aggregate rows. Their `limit` has an effective maximum of 1000.
 

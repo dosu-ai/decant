@@ -81,7 +81,6 @@ describe("activity bucket classifier", () => {
     ]) {
       expect(toolBucket(action)).toBe("code");
     }
-    // Multi-action tools are judged by the actions they carry.
     const chrome = "mcp__claude-in-chrome__computer";
     expect(toolBucket(chrome, { action: "screenshot" })).toBe("context");
     expect(toolBucket(chrome, JSON.stringify({ action: "left_click" }))).toBe("code");
@@ -110,7 +109,6 @@ describe("activity bucket classifier", () => {
     expect(toolBucket(desktop, { actions: [{ action: "screenshot" }, { action: "scroll" }] })).toBe(
       "code",
     );
-    // Other MCP tools keep the context default, and no UI action is a file edit.
     expect(toolBucket("mcp__exa__web_search_exa")).toBe("context");
     expect(toolBucket("mcp__excalidraw__take_screenshot")).toBe("context");
     expect(isCodeEditTool("mcp__playwright__browser_click")).toBe(false);
@@ -141,7 +139,6 @@ describe("activity bucket classifier", () => {
     }
     expect(isUserQuestionTool("SendMessage")).toBe(false);
     expect(isUserQuestionTool("mcp__docs__ask")).toBe(false);
-    // A Codex exec program counts only when all it does is ask.
     const ask = JSON.stringify("await tools.request_user_input({questions:[]});");
     const askAndRead = JSON.stringify(
       'await tools.request_user_input({questions:[]}); text(await tools.exec_command({cmd:"ls"}));',
@@ -163,7 +160,6 @@ describe("activity bucket classifier", () => {
       "mcp__dosu__write_knowledge",
     ]) {
       expect(toolBucket(tool)).toBe("code");
-      // A note is the agent's memory, not the work product: no first edit.
       expect(isCodeEditTool(tool)).toBe(false);
     }
     expect(toolBucket("notes__read_file")).toBe("context");
@@ -179,7 +175,6 @@ describe("activity bucket classifier", () => {
   });
 
   test("classifies compound shell commands by every statement, not the first word", () => {
-    // Real read-only chains from a Claude Opus 5.5 session: all context.
     expect(bashBucket('cd $PWD; grep -n -i "sync\\|watch" src/cli.ts | head -80')).toBe("context");
     expect(bashBucket("cd $PWD; sed -n 160,190p src/cli.ts; sed -n 45,70p src/server.ts")).toBe(
       "context",
@@ -194,7 +189,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("git ls-files && git rev-parse HEAD")).toBe("context");
     expect(bashBucket("cd $PWD; git stash list; git status --short")).toBe("context");
     expect(bashBucket("git stash push src/cli.ts")).toBe("code");
-    // One mutating statement or stage makes the whole command code.
     expect(bashBucket("ls -la scripts/lib; cat README.md; ./scripts/install.sh")).toBe("code");
     expect(bashBucket("cd $PWD; git stash push src/cli.ts -q && bun test")).toBe("code");
     expect(bashBucket("cd $PWD; sed -i '' 's/a/b/' src/cli.ts; grep -n b src/cli.ts")).toBe("code");
@@ -230,7 +224,6 @@ describe("activity bucket classifier", () => {
 
     expect(bashBucket("gh pr view 12 --json state")).toBe("context");
     expect(bashBucket("gh pr checks 12")).toBe("context");
-    // Waiting on CI or a build is charged to the work being waited on.
     expect(bashBucket("gh pr checks 12 --watch")).toBe("code");
     expect(bashBucket("gh run view 99 --log | rg error")).toBe("context");
     expect(bashBucket("gh api repos/o/r/pulls --jq '.[].number'")).toBe("context");
@@ -258,7 +251,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("curl -sL https://example.com/a.tgz -o a.tgz")).toBe("code");
     expect(bashBucket("curl -fsSLO https://example.com/a.tgz")).toBe("code");
     expect(bashBucket("curl -X POST https://example.com/hook -d '{}'")).toBe("code");
-    // Probing a local dev server verifies the work, like running its tests.
     expect(bashBucket("curl -s http://localhost:3000/health")).toBe("code");
   });
 
@@ -304,7 +296,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("python3 - <<'EOF'\nprint(1)\nEOF")).toBe("code");
     expect(bashBucket("cat > notes.md <<'EOF'\nhello\nEOF")).toBe("code");
     expect(bashBucket("git commit -F - <<'EOF'\nfix: x\nEOF")).toBe("code");
-    // An unterminated heredoc keeps its lines, so a later write still counts.
     expect(bashBucket("cat <<EOF\nnotes\nrm -rf build")).toBe("code");
   });
 
@@ -314,7 +305,6 @@ describe("activity bucket classifier", () => {
     expect(toolBucket("shell", JSON.stringify({ command: ["bash", "-lc", "cat a.ts"] }))).toBe(
       "context",
     );
-    // Each wrapper is its own stage; a quoted script ends at its closing quote.
     expect(bashBucket('bash -lc "cat a"; bash -lc "rm b"')).toBe("code");
     expect(bashBucket("bash -c 'grep x f' | sh -c 'rm y'")).toBe("code");
     expect(bashBucket("bash -c 'rm -rf dist' --help")).toBe("code");
@@ -332,7 +322,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("echo x >1")).toBe("code");
     expect(bashBucket('n=$((x>5 ? x-5 : 1)); sed -n "$n,+5p" f')).toBe("context");
     expect(bashBucket('echo \\" > f \\"')).toBe("code");
-    // `&` ends a statement, so a job after a backgrounded read still decides.
     expect(bashBucket("tail -f app.log & npm start")).toBe("code");
     expect(bashBucket("cat a & rm -rf build")).toBe("code");
     expect(bashBucket("tail -f app.log &")).toBe("context");
@@ -381,7 +370,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket("tree -o tree.txt")).toBe("code");
     expect(bashBucket("uniq in.txt out.txt")).toBe("code");
     expect(bashBucket("uniq -c in.txt")).toBe("context");
-    // A bare `version` subcommand bumps versions in some tools.
     expect(bashBucket("changeset version")).toBe("code");
     expect(bashBucket("yarn version")).toBe("code");
   });
@@ -393,7 +381,6 @@ describe("activity bucket classifier", () => {
     expect(bashBucket(`echo ${"$(".repeat(50_000)}`)).toBe("code");
     expect(bashBucket(`diff ${"<(cat ".repeat(20_000)}${")".repeat(20_000)}`)).toBe("code");
     expect(bashBucket(`grep "${'a\\"'.repeat(100_000)}`)).toBe("context");
-    // Long unquoted text splits in linear time.
     expect(bashBucket(`echo ${"word ".repeat(100_000)}`)).toBe("context");
     expect(bashBucket(`cat ${"a".repeat(200_000)}`)).toBe("context");
     expect(countSearches("Bash", JSON.stringify({ command: `rg ${"x ".repeat(100_000)}` }))).toBe(
@@ -425,7 +412,7 @@ describe("activity bucket classifier", () => {
       expect(isCodeEditTool(t)).toBe(true);
     }
     expect(isCodeEditTool("Read")).toBe(false);
-    expect(isCodeEditTool("Bash")).toBe(false); // no command -> not an edit
+    expect(isCodeEditTool("Bash")).toBe(false);
   });
 
   test("isCodeEditTool: shell commands that mutate a file count as edits", () => {
@@ -452,7 +439,6 @@ describe("activity bucket classifier", () => {
       "echo hi > /dev/null",
       "yarn build > /tmp/build.log",
       "git diff --stat",
-      // Searches for edit markers are reads, not edits.
       "rg -n writeFileSync src",
       'grep -rn "git apply" docs',
       "sed -n 1,20p a.ts; grep -i todo a.ts",
@@ -492,7 +478,6 @@ describe("activity bucket classifier", () => {
       expect(count('cd repo && bash -lc "rg auth"')).toBe(1);
       expect(count("git -C ../repo grep -n auth")).toBe(1);
       expect(count("git --no-pager grep -n auth")).toBe(1);
-      // Separators inside quotes are part of the pattern, not new statements.
       expect(count("rg 'a;b' src")).toBe(1);
       expect(count('grep -n "x && y" f')).toBe(1);
       expect(count("cat <<'EOF'\nrg inside a heredoc\nEOF")).toBe(0);
@@ -504,19 +489,16 @@ describe("activity bucket classifier", () => {
     });
 
     test("countSearches: MCP tools named like shells do not count", () => {
-      // "exec" has no dot, so localToolName would leave it unchanged anyway --
-      // this line returns 0 with or without the mcp__ guard. The dotted case
-      // below is the one that actually exercises the guard: localToolName
-      // would flatten it to "shell" (a SHELL_TOOLS name) if the mcp__ check
-      // didn't short-circuit first. Don't drop the dotted case as redundant.
       expect(countSearches("mcp__posthog__exec", '{"command":"rg foo"}')).toBe(0);
+    });
+
+    test("countSearches: the mcp__ guard runs before a dotted name flattens to a shell tool", () => {
       expect(countSearches("mcp__codex_apps__x.shell", '{"command":"rg foo"}')).toBe(0);
     });
   });
 });
 
 describe("Codex exec programs", () => {
-  // Codex stores the custom tool's JavaScript program as a JSON-encoded string.
   const exec = (program: string) => JSON.stringify(program);
   test("serialized object inputs retain bucket, search, and edit attribution", () => {
     const program = 'await tools.exec_command({cmd:"rg a src"}); await tools.apply_patch(patch);';
@@ -548,8 +530,7 @@ describe("Codex exec programs", () => {
     expect(toolBucket("exec", program)).toBe("context");
     expect(isCodeEditTool("exec", program)).toBe(false);
     expect(countSearches("exec", program)).toBe(1);
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is source code for the parser.
-    expect(toolBucket("exec", exec("const output = `${await tools.apply_patch(patch)}`;"))).toBe(
+    expect(toolBucket("exec", exec(`const output = \`\${await tools.apply_patch(patch)}\`;`))).toBe(
       "code",
     );
   });
@@ -586,8 +567,7 @@ describe("Codex exec programs", () => {
       { name: "exec_command", command: "cat a.ts" },
     ]);
     for (const argument of [
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: this is source code for the parser.
-      "{cmd: `rg ${pattern} src`}",
+      `{cmd: \`rg \${pattern} src\`}`,
       '{cmd: "rg a", ...options}',
       '{cmd: "rg a", cmd: command}',
     ]) {

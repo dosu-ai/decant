@@ -74,7 +74,6 @@ describe("parseAtifDocument", () => {
       toolUseId: "call_1",
       toolResult: "$ echo hello > hello.txt",
     });
-    // A result with no call id is environment feedback, kept as text.
     expect(session.messages[7]?.blocks.map((b) => b.blockType)).toEqual(["tool_result", "text"]);
 
     // prompt_tokens includes cache reads, which Decant keeps apart.
@@ -86,7 +85,6 @@ describe("parseAtifDocument", () => {
       cacheCreation1h: 0,
       reasoning: 20,
     });
-    // Step sums, not final_metrics, which may count subagents.
     expect(session.totals).toEqual({
       input: 850,
       output: 162,
@@ -116,7 +114,6 @@ describe("parseAtifDocument", () => {
     expect(session.messages[0]?.blocks[0]?.text).toBe("Summarize the work so far.");
     expect(session.totals.input).toBe(400);
     expect((session.rawMeta as { copiedContextSteps: number }).copiedContextSteps).toBe(2);
-    // The recorded step cost stays in raw, where cost reconciliation reads it.
     expect(session.messages[1]?.raw).toMatchObject({ metrics: { cost_usd: 0.0042 } });
   });
 
@@ -132,7 +129,6 @@ describe("parseAtifDocument", () => {
     expect(parent.gitBranch).toBe("main");
     expect(parent.reasoningEffort).toBe("high");
     expect(parent.isSubagent).toBe(false);
-    // Input net of cache reads and of the cache writes kept in extra.
     expect(parent.messages[1]?.usage).toMatchObject({
       input: 500,
       cacheRead: 3000,
@@ -150,7 +146,6 @@ describe("parseAtifDocument", () => {
       agentId: "synthetic-embedded:helper",
       agentType: "general-purpose",
       spawnDepth: 1,
-      // It records no directory, so it worked where its root did.
       cwd: "/tmp/example",
       projectPath: "/tmp/example",
     });
@@ -161,7 +156,6 @@ describe("parseAtifDocument", () => {
       toolUseId: "toolu_bash",
       isError: false,
     });
-    // Neither session's raw metadata repeats the steps or the embedded array.
     expect(parent.rawMeta).not.toHaveProperty("steps");
     expect(parent.rawMeta).not.toHaveProperty("subagent_trajectories");
   });
@@ -264,7 +258,6 @@ describe("parseAtifDocument", () => {
       sourceSessionId: "example-run:b",
       spawnToolUseId: "spawn-b",
       spawnDepth: 2,
-      // Ingest checks this identity's tombstone, so it is the direct parent.
       rootSourceSessionId: "example-run:a",
     });
     expect((b?.rawMeta as { parentSessionId?: string } | undefined)?.parentSessionId).toBe(
@@ -281,7 +274,6 @@ describe("parseAtifDocument", () => {
     expect(id("/tmp/example/agent/trajectory.json", "first")).toBe("run");
     expect(id("/tmp/example/agent/trajectory.cont-1.json", "second")).toBe("run/trajectory.cont-1");
     expect(id("/tmp/example/run.atif.json", "copy")).toBe("run");
-    // A trajectory_id names one document, so it needs no file name.
     expect(
       parse({ ...(doc("x") as object), trajectory_id: "doc-1" }, "/tmp/example/a.json").sessions[0]
         ?.parsed.session.sourceSessionId,
@@ -360,7 +352,6 @@ describe("parseAtifDocument", () => {
       cacheRead: 400,
       cacheCreation: 100,
     });
-    // Rolled-up totals count subagents; the session's own share stands in.
     expect(
       totals(decant, {
         includes_subagents: true,
@@ -372,7 +363,6 @@ describe("parseAtifDocument", () => {
         },
       }),
     ).toMatchObject({ input: 600, output: 50 });
-    // Without that share, or from another producer, the steps are summed.
     expect(totals(decant, { includes_subagents: true })).toMatchObject({ input: 100 });
     expect(totals({ exporter: "other" })).toMatchObject({ input: 100 });
   });
@@ -413,7 +403,6 @@ describe("parseAtifDocument", () => {
         },
       ],
     });
-    // Those totals would also count the embedded subagent's own session.
     expect(root(parse(withSubagent)).totals.input).toBe(0);
   });
 
@@ -468,7 +457,6 @@ describe("parseAtifDocument", () => {
     const sentence = "a private sentence the user typed";
     const broken = parseAtifDocument("broken", `{"steps": [${sentence}]}`, {});
     expect(broken.sessions[0]?.parsed.issues[0]?.error).toBe("document is not valid JSON");
-    // An identifier-shaped value can be a secret too.
     for (const secret of [sentence, "privateToken123"]) {
       const document = parse({
         ...(trajectory([{ step_id: 1, source: secret, message: [{ type: secret }] }]) as object),

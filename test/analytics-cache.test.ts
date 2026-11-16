@@ -35,7 +35,6 @@ function seed(db: Database): void {
   `);
 }
 
-/** Every cached aggregate, read the way the routes read it. */
 function readAll(db: Database) {
   return {
     totals: totals(db),
@@ -58,7 +57,6 @@ describe("cached analytics aggregates", () => {
     expect(readAll(db)).toEqual(first);
     expect(first.totals.sessions).toBe(2);
 
-    // A write on the same connection moves total_changes().
     db.exec(`INSERT INTO session(id, tool, source_session_id, project_id, model, started_at)
              VALUES (3, 'gemini', 's3', 1, 'gemini-2.5-pro', '2026-05-03T08:00:00.000Z')`);
     const afterLocal = readAll(db);
@@ -67,7 +65,6 @@ describe("cached analytics aggregates", () => {
     expect(afterLocal.sources.map((row) => row.key)).toContain("gemini_cli");
     expect(afterLocal.bounds.max).toBe("2026-05-03");
 
-    // A commit on another connection moves data_version.
     const writer = openDb(path);
     writer.exec(`INSERT INTO session(id, tool, source_session_id, project_id, model, started_at)
                  VALUES (4, 'codex', 's4', 1, 'gpt-5', '2026-05-04T08:00:00.000Z')`);

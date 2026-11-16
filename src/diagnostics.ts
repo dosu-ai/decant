@@ -1,6 +1,3 @@
-// Cross-message linkage diagnostics over a parsed session. Pure and
-// print-free: parsers append the result to ParsedSession.issues so ingest
-// stores one complete diagnostic set per source file.
 import type { Issue, NormalizedSession } from "./model.ts";
 
 export function linkageIssues(session: NormalizedSession): Issue[] {

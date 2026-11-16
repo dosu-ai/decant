@@ -22,8 +22,6 @@ export function toMarkdown(detail: SessionDetail): string {
           out += `${block.text}\n\n`;
         }
       } else if (block.block_type === "thinking") {
-        // Hidden reasoning is stored as a blank thinking block; there is
-        // nothing to show for it.
         if (block.text != null && block.text.trim() !== "") {
           out += `> _thinking:_ ${block.text}\n\n`;
         }
@@ -58,8 +56,6 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   hermes: "hermes",
 };
 
-/** Stripped from user text so downstream trajectory pipelines see it cleaned.
- * The last entry has no closing ">" by design — it matches attribute forms. */
 const TRAJECTORY_NOISE_PREFIXES = [
   "<local-command-caveat>",
   "<command-name>",
@@ -83,12 +79,6 @@ const TRAJECTORY_RESULT_MAX = 2_500;
 const TRAJECTORY_SYNTH_BASE_MS = Date.UTC(2026, 0, 1);
 const TRAJECTORY_SYNTH_STEP_SECONDS = 15;
 
-/** decant roles with a trajectory wire equivalent. `system`/`other` messages
- * have none and are dropped whole. `tool` is in: decant files a result-only
- * message under role `tool` and a text+result message under `user`, so tool
- * results reach the wire only if both roles are walked. Both emission passes
- * filter on this so the calls registered in pass 1 are exactly what pass 2
- * emits. */
 function isTrajectoryWireRole(role: string): boolean {
   return role === "user" || role === "assistant" || role === "tool";
 }
@@ -123,7 +113,6 @@ function trajectoryTruncate(text: string, max: number): { text: string; truncate
     }
   }
   if (keep < 0) {
-    // Budgets too small for the descriptive marker degrade to a bare ellipsis.
     marker = [..."…"].slice(0, max).join("");
     keep = max - [...marker].length;
   }
@@ -140,8 +129,6 @@ interface TrajectoryLeaf {
   set: (value: string) => void;
 }
 
-/** Every string leaf reachable in the args object, arrays included, each with a
- * setter that writes back into its own container. */
 function trajectoryCollectLeaves(value: unknown, leaves: TrajectoryLeaf[]): void {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
@@ -179,15 +166,6 @@ function trajectoryCollectLeaves(value: unknown, leaves: TrajectoryLeaf[]): void
   }
 }
 
-/** Shrink an over-cap args object into the cap while keeping its field
- * structure, by truncating string leaves largest-first in place. Returns the
- * serialization once it fits, or null when the overage does not live in the
- * string leaves (many small fields, or bulk in the keys) and only a `_raw` wrap
- * can help. `parsed` is mutated either way.
- *
- * Termination is unconditional: a leaf no longer than the marker cannot shrink
- * usefully, so shrinking stops rather than retrying it, and an iteration that
- * shortens nothing gives up instead of looping. */
 function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
   const leaves: TrajectoryLeaf[] = [];
   trajectoryCollectLeaves(parsed, leaves);
@@ -206,14 +184,6 @@ function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
     if (largest == null || largestLen <= markerFloor) {
       return null;
     }
-    // Cut only as much of the biggest leaf as the overage needs, so an object
-    // barely over the cap keeps nearly all of its content. The overage is
-    // measured on the serialized form and the leaf in code points, and escaping
-    // makes those differ, so a gentle cut can fail to shrink the serialization
-    // at all; halving always shrinks it for a leaf longer than the marker, and
-    // is the fallback whenever the gentle cut does not land. Truncating from the
-    // leaf's original text keeps the marker's dropped-count honest across
-    // repeated passes over the same leaf.
     const before = [...serialized].length;
     const halved = Math.floor(largestLen / 2);
     const gentle = Math.max(halved, Math.min(largestLen - 1, largestLen - (before - limit) - 1));
@@ -235,11 +205,6 @@ function trajectoryShrinkLeaves(parsed: object, limit: number): string | null {
   return serialized;
 }
 
-/** Serialize tool args as a JSON object string within the cap. Non-object args
- * are reshaped to {"_raw": <string>} (their tool_arguments_reshaped move). An
- * over-cap object keeps its field structure by shrinking its string leaves, and
- * degrades to a truncated {"_raw": ...} wrap only if that cannot reach the
- * cap. */
 function trajectoryArgs(
   toolInput: string | null,
   report: TrajectoryReport,
@@ -281,10 +246,7 @@ function trajectoryArgs(
     }
   }
   report.tool_args_wrapped += 1;
-  // `serialized` predates any leaf shrinking, so the wrap carries the original.
   const raw = serialized ?? text ?? toolInput ?? "";
-  // Budget for {"_raw":""} scaffolding + escaping: truncate the payload, then
-  // shrink until the serialized wrapper fits (escaping can expand length).
   let budget = TRAJECTORY_ARGS_MAX - 12;
   let wrapped: string;
   do {
@@ -367,12 +329,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     report.dropped_blocks[kind] = (report.dropped_blocks[kind] ?? 0) + 1;
   };
 
-  // Pass 1: assign globally unique call ids in appearance order. A name already
-  // taken is renamed by probing `__dup<n>` upward until the candidate is unused:
-  // a fixed `__dup2` would collide when the source itself contains an id that
-  // already looks like one of our renames. Each original id
-  // keeps a queue of the names it was assigned, so pass 2 reads the strings back
-  // instead of recomputing a suffix it can no longer predict.
   const assignedByOriginal = new Map<string, string[]>();
   const usedIds = new Set<string>();
   let callSites = 0;
@@ -405,10 +361,9 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     }
   }
 
-  // Pass 2: emit records.
   const records: unknown[] = [];
-  const callTaken = new Map<string, number>(); // original id -> calls emitted
-  const resultTaken = new Map<string, number>(); // original id -> results consumed
+  const callsEmittedByOriginalId = new Map<string, number>();
+  const resultsEmittedByOriginalId = new Map<string, number>();
   let lastTimestamp: string | null = null;
   let synthIndex = 0;
   // Their library always emits Date#toISOString() output; normalize source
@@ -425,7 +380,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
     const date = new Date(withZone);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };
-  // Counts filled timestamps per emitted record: dropped blocks never ask.
   const timestampFor = (raw: string | null): string => {
     const normalized = toIsoZ(raw);
     if (normalized != null) {
@@ -481,8 +435,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
           records.push({ role: "assistant", content: text, timestamp: timestamp() });
           assistantCount += 1;
         } else {
-          // Prose on a `tool`-role message has no wire equivalent: speaking it
-          // as either party would misattribute it.
           drop(`${message.role}_text`);
         }
       } else if (block.block_type === "thinking" && hasText) {
@@ -490,8 +442,8 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_use") {
         callEmit += 1;
         const original = block.tool_use_id ?? `decant-${sessionId}-${callEmit}`;
-        const emitted = callTaken.get(original) ?? 0;
-        callTaken.set(original, emitted + 1);
+        const emitted = callsEmittedByOriginalId.get(original) ?? 0;
+        callsEmittedByOriginalId.set(original, emitted + 1);
         const assigned = assignedByOriginal.get(original)?.[emitted] ?? original;
         const name =
           block.tool_name != null && block.tool_name !== "" ? block.tool_name : "unknown_tool";
@@ -507,20 +459,18 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
         const queue = original == null ? undefined : assignedByOriginal.get(original);
-        const emitted = original == null ? 0 : (callTaken.get(original) ?? 0);
+        const emitted = original == null ? 0 : (callsEmittedByOriginalId.get(original) ?? 0);
         if (original == null || queue == null || emitted === 0) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
-        const taken = resultTaken.get(original) ?? 0;
-        // Only calls already emitted can receive a result. A surplus result
-        // must not consume the ID assigned to a future reuse of this call ID.
+        const taken = resultsEmittedByOriginalId.get(original) ?? 0;
         if (taken >= emitted) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }
         const assigned = queue[taken] ?? original;
-        resultTaken.set(original, taken + 1);
+        resultsEmittedByOriginalId.set(original, taken + 1);
         const { text: content, truncated } = trajectoryTruncate(
           block.tool_result ?? "",
           TRAJECTORY_RESULT_MAX,
@@ -537,8 +487,6 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
           timestamp: timestamp(),
         });
       } else {
-        // Empty text/thinking land here too: no wire content, so they are
-        // dropped and counted under their own block type.
         drop(block.block_type);
       }
     }

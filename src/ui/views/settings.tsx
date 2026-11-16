@@ -98,8 +98,6 @@ export function SettingsView({
 
       <section className="panel">
         <div className="settings-form">
-          {/* With DECANT_UPDATE_CHECK set, the switch shows what is in effect
-              and saving the setting would change nothing. */}
           <SettingSwitch
             checked={
               update?.envOverride === true ? update.enabled : (settings?.updateCheck ?? false)
@@ -155,8 +153,6 @@ export function SettingsView({
   );
 }
 
-// Polling during a handoff expects failed requests; the default retry policy
-// would stretch each poll across its backoff.
 const NO_RETRY: ApiRetryPolicy = { delaysMs: [], wait: async () => undefined };
 
 function BackgroundSetting() {
@@ -234,8 +230,6 @@ function updateNote(update: UpdateStatus | null, saved: boolean): string {
   if (update == null) {
     return "Loading update status...";
   }
-  // A failed save rolls the toggle back, so a mismatch without an override
-  // means the status reload after a save has not finished yet.
   if (!update.envOverride && update.enabled !== saved) {
     return saved ? "Checking for updates..." : "Saving...";
   }
@@ -314,7 +308,6 @@ export function SettingSwitch({
 }) {
   const id = useId();
   return (
-    // A label activates its button, so clicking the title or help text flips the switch too.
     <label className="setting-select setting-switch" htmlFor={id}>
       <span>
         <strong id={`${id}-label`}>{label}</strong>

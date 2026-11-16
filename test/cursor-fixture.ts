@@ -12,7 +12,6 @@ interface CursorFixture {
   records: Json[];
 }
 
-/** Fixture chats under fixtures/cursor/: each directory holding a `store.json`. */
 export function cursorFixtureNames(): string[] {
   return readdirSync(fixtureRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -20,9 +19,6 @@ export function cursorFixtureNames(): string[] {
     .sort();
 }
 
-/** Writes a Cursor CLI chat directory (`store.db` plus `meta.json`) from
- * fixtures/cursor/<name>/. SQLite files are not committed, so parser, ingest,
- * and golden tests build the store from the fixture's text on each run. */
 export function buildCursorChat(chatDir: string, name = "sample"): void {
   const fixtureDir = join(fixtureRoot, name);
   const fixture = JSON.parse(readFileSync(join(fixtureDir, "store.json"), "utf8")) as CursorFixture;
@@ -44,8 +40,6 @@ export function writeCursorStore(
     createHash("sha256").update(record).digest("hex"),
   );
   const root = Buffer.concat([
-    // An unknown varint field ahead of the message list exercises
-    // forward-compatible skipping, at the full 64-bit width real stores use.
     Buffer.from([0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]),
     ...messageIds.map((id) => Buffer.concat([Buffer.from([0x0a, 0x20]), Buffer.from(id, "hex")])),
   ]);

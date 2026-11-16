@@ -1,6 +1,3 @@
-// Normalized domain model shared by every source parser.
-// The const tuples are the wire strings stored in SQLite — never reworded.
-
 export const TOOLS = [
   "claude_code",
   "codex",
@@ -31,19 +28,12 @@ export type BlockType = (typeof BLOCK_TYPES)[number];
 export const TOOL_KINDS = ["builtin", "mcp", "custom", "web_search", "tool_search"] as const;
 export type ToolKind = (typeof TOOL_KINDS)[number];
 
-/** Provenance of a session's reasoning-token figure: exact (`reported`, Codex),
- * estimated by subtraction (`inferred`, Claude), or unavailable (`none`). */
 export const REASONING_SOURCES = ["reported", "inferred", "none"] as const;
 export type ReasoningSource = (typeof REASONING_SOURCES)[number];
 
-/** Where a session's `estimated_cost_usd` came from: Decant's rate table, the
- * source's own recorded cost (OpenCode, for models Decant cannot price), or a
- * mix of both across the session's model rows. */
 export const COST_SOURCES = ["decant", "reported", "mixed"] as const;
 export type CostSource = (typeof COST_SOURCES)[number];
 
-/** Any JSON value. `undefined` never appears inside; use `Json | undefined`
- * where absent and JSON null carry different meanings. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 export interface TokenUsage {
@@ -51,11 +41,7 @@ export interface TokenUsage {
   output: number;
   cacheRead: number;
   cacheCreation: number;
-  /** Portion of `cacheCreation` written with a 1-hour TTL. Billed at 2x the base
-   * input rate, where a 5-minute write bills at 1.25x. */
   cacheCreation1h: number;
-  /** Output tokens spent on internal reasoning — a sub-component of `output`,
-   * never priced separately. Codex reports it exactly; Claude reports none. */
   reasoning: number;
 }
 
@@ -63,8 +49,6 @@ export function emptyUsage(): TokenUsage {
   return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheCreation1h: 0, reasoning: 0 };
 }
 
-/** Provider-defined labels whose spelling is part of the current wire format.
- * `mixed` is Decant's own session summary value. */
 const KNOWN_REASONING_EFFORTS = new Set([
   "none",
   "minimal",
@@ -77,9 +61,6 @@ const KNOWN_REASONING_EFFORTS = new Set([
   "mixed",
 ]);
 
-/** Read a provider-recorded effort value. Named levels are strings; Claude's
- * Agent SDK also permits numeric per-agent token budgets. Keep both losslessly
- * representable in the archive's string-valued effort columns. */
 export function recordedReasoningEffort(value: Json | undefined): string | null {
   if (typeof value === "string") {
     return value;
@@ -87,9 +68,6 @@ export function recordedReasoningEffort(value: Json | undefined): string | null 
   return typeof value === "number" && Number.isFinite(value) ? String(value) : null;
 }
 
-/** Collapse provider effort labels to one session-level value. Sessions almost
- * always use one value, but settings can change between turns; preserve that
- * distinction instead of presenting the last turn as representative. */
 export function summarizeReasoningEfforts(values: Iterable<string>): string | null {
   const efforts = new Set(
     Array.from(values, normalizeReasoningEffort).filter((value): value is string => value != null),
@@ -103,8 +81,6 @@ export function summarizeReasoningEfforts(values: Iterable<string>): string | nu
   return "mixed";
 }
 
-/** Normalize known provider effort labels without changing their meaning.
- * Future custom values may be case-sensitive, so preserve their spelling. */
 export function normalizeReasoningEffort(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") {
@@ -114,8 +90,6 @@ export function normalizeReasoningEffort(value: string): string | null {
   return KNOWN_REASONING_EFFORTS.has(canonical) ? canonical : trimmed;
 }
 
-/** Unique normalized effort labels in first-seen order. This detail is kept
- * alongside the collapsed session value so `mixed` remains explainable. */
 export function reasoningEffortLevels(values: Iterable<string>): string[] {
   const levels = new Set<string>();
   for (const value of values) {
@@ -133,30 +107,17 @@ export interface NormalizedBlock {
   text: string | null;
   toolName: string | null;
   toolUseId: string | null;
-  /** `undefined` = field absent in the source (SQL NULL); a Json value
-   * (including JSON null) = present. */
   toolInput: Json | undefined;
   toolResult: string | null;
   isError: boolean | null;
-  /** Calls a code-execution tool made on the model's behalf, on its
-   * `tool_use` block. Ingest writes one `tool_call` row per inner call beside
-   * the wrapper's own; they add no transcript blocks, so the wrapper's code
-   * and result are the only text stored or indexed. */
   innerToolCalls?: NormalizedInnerToolCall[];
-  /** When a `tool_use` started to run, for a source that records it apart
-   * from its message's time. OpenCode dates a step when its generation ended,
-   * which can be after a tool started, so ingest dates and times the call
-   * from this instead. */
   calledAt?: string;
 }
 
 export interface NormalizedInnerToolCall {
-  /** Named like a direct call: `mcp__<server>__<tool>` for an MCP tool. */
   toolName: string;
-  /** Derived from the wrapper's id, so re-ingest reproduces it. */
   toolUseId: string | null;
   toolInput: Json | undefined;
-  /** From the inner call's own status; null while it has none. */
   isError: boolean | null;
 }
 
@@ -181,10 +142,7 @@ export interface NormalizedSession {
   cwd: string | null;
   gitBranch: string | null;
   model: string | null;
-  /** Provider-supplied reasoning effort, or `mixed` when turns differ. */
   reasoningEffort: string | null;
-  /** Unique normalized labels behind `reasoningEffort`, including every value
-   * represented when the session summary is `mixed`. */
   reasoningEffortLevels: string[];
   cliVersion: string | null;
   startedAt: string | null;
@@ -197,19 +155,12 @@ export interface NormalizedSession {
   agentType: string | null;
   spawnDepth: number | null;
   rawMeta: Json;
-  /** Session-level token totals (Codex sets these directly; Claude sums per-message). */
   totals: TokenUsage;
-  /** Estimated reasoning tokens when the tool reports no exact count (Claude);
-   * always ≤ totals.output; 0 with reasoningSource "none" or for Codex. */
   estReasoningTokens: number;
   reasoningSource: ReasoningSource;
   messages: NormalizedMessage[];
 }
 
-/** Wire strings stored in ingest_issue.code — never reworded (same contract
- * as the const tuples above). `unparsed_line` is the only data-loss code;
- * the rest are informational sensors. `unreachable_project_directory` reports
- * this machine's filesystem, not the transcript format. */
 export const INGEST_ISSUE_CODES = [
   "unparsed_line",
   "unknown_record_type",
@@ -222,11 +173,8 @@ export type IngestIssueCode = (typeof INGEST_ISSUE_CODES)[number];
 
 export interface Issue {
   code: IngestIssueCode;
-  /** 1-based source line, when the issue is tied to a specific line. */
   lineNo: number | null;
   error: string;
-  /** Verbatim source line for unparsed_line only. May contain transcript
-   * content: display-local, never logged (docs/logging.md). */
   rawLine: string | null;
 }
 

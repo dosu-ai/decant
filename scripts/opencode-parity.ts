@@ -1,21 +1,3 @@
-// Developer-only parity check between an OpenCode database (2.x tables, 1.x
-// tables, or both), a Decant archive synced from it, and optionally the JSON
-// the user produced by running `opencode stats --all --json` against their own
-// OpenCode 2.x. Prints aggregate counts and totals only, never transcript
-// text, tool input, or tool output.
-//
-// SAFETY: this script never starts the OpenCode CLI or service. Running
-// OpenCode against a copied database resumes in-progress sessions with the
-// stored credentials and makes real, billed model calls. Both databases are
-// opened read-only.
-//
-// `--letta` adds a structural cross-check of every session read from the 1.x
-// tables against Letta's `@letta-ai/trajectory` OpenCode adapter (a
-// devDependency, never imported from src/). The adapter reads the 1.x
-// `opencode export` layout, which this script assembles from the tables
-// itself; normalization is pure, with no filesystem or network access.
-//
-// Usage: bun run scripts/opencode-parity.ts <opencode.db> <decant.db> [stats.json] [--letta]
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import {
@@ -44,14 +26,11 @@ export interface ModelTotals {
   model: string;
   steps: number;
   input: number;
-  /** Decant stores reasoning inside output; OpenCode reports it beside output. */
   output: number;
   reasoning: number;
   cacheRead: number;
   cacheWrite: number;
   cost: number;
-  /** Decant side only: `reported` when Decant has no rate for the model and
-   * uses the cost OpenCode recorded, `list` when it prices the model. */
   costSource?: "list" | "reported";
   /** Reference side only: reasoning tokens counted inside output by a release
    * before 1.3.16, which also charged them again at the output rate, so the
@@ -77,11 +56,9 @@ export interface ParityLine {
   text: string;
 }
 
-/** Providers that record list prices, so Decant's rate should reproduce them. */
 const LIST_PRICE_PROVIDERS = new Set(["zai", "meta", "opencode", "opencode-go", "openrouter"]);
 const COST_TOLERANCE = 0.005;
-/** A reported cost is OpenCode's own figure summed in another order. */
-const REPORTED_COST_TOLERANCE = 1e-9;
+const FLOAT_SUMMATION_TOLERANCE = 1e-9;
 
 const modelKey = (row: { provider: string; model: string }): string =>
   `${row.provider}/${row.model}`;
@@ -90,8 +67,6 @@ function fmt(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(7);
 }
 
-/** Steps and the five token fields must match exactly. Decant's output is
- * compared with the reference output plus reasoning. */
 export function compareModelTotals(
   decant: ModelTotals[],
   reference: ModelTotals[],
@@ -141,11 +116,6 @@ export function compareModelTotals(
   return lines;
 }
 
-/** Decant's cost against the cost OpenCode recorded. A model Decant cannot
- * price carries the recorded cost, so it must equal it whatever the provider.
- * A priced model is compared at list price for list-price providers; other
- * providers, and recorded zeros (free or subscription routes), are
- * informational. */
 export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotals[]): ParityLine[] {
   const lines: ParityLine[] = [];
   const byKey = new Map(decant.map((row) => [modelKey(row), row]));
@@ -163,7 +133,7 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
         });
         continue;
       }
-      const equal = Math.abs(actual.cost - expected.cost) <= REPORTED_COST_TOLERANCE;
+      const equal = Math.abs(actual.cost - expected.cost) <= FLOAT_SUMMATION_TOLERANCE;
       lines.push({
         level: equal ? "ok" : "mismatch",
         text: `${key}: Decant reported ${fmt(actual.cost)} vs recorded ${fmt(expected.cost)} (no Decant rate)`,
@@ -198,10 +168,6 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
   return lines;
 }
 
-/** Per session, Decant's assistant-only totals must not exceed session_v2's.
- * A lower figure is expected: title generation is counted only there. A
- * session migrated from 1.x is informational: its aggregates hold each
- * migrated message's last step only, and Decant reads every step. */
 export function compareSessionTotals(
   decant: SessionTotals[],
   reference: SessionTotals[],
@@ -239,9 +205,6 @@ export function compareSessionTotals(
   return lines;
 }
 
-/** `opencode stats --all --json`: `models[]` with `model.{providerID,id,variant}`,
- * `steps`, `tokens.{input,output,reasoning,cache.{read,write}}`, `cost`.
- * Variants of one model are summed into one line. */
 export function parseStatsJson(text: string): ModelTotals[] {
   const parsed = JSON.parse(text) as { models?: unknown };
   if (!Array.isArray(parsed.models)) {
@@ -309,18 +272,12 @@ function hasLegacyTables(db: Database): boolean {
   return ["session", "message", "part"].every((table) => hasTable(db, table));
 }
 
-/** SQL that is true when a 1.x copy of `<alias>.id` was updated after the
- * session_v2 row, so Decant reads the session from the 1.x tables. A tie goes
- * to the 2.x copy. */
 function legacyNewerSql(db: Database, alias: string): string {
   return hasLegacyTables(db)
     ? `EXISTS (SELECT 1 FROM session l WHERE l.id = ${alias}.id AND l.time_updated > ${alias}.time_updated)`
     : "0";
 }
 
-/** SQL that is true when `<alias>.id` has a 1.x copy holding messages: a
- * session OpenCode migrated whose 1.x tables are intact, so Decant corrects
- * its migrated rows from them. */
 function migratedSql(db: Database, alias: string): string {
   return hasLegacyTables(db)
     ? `EXISTS (SELECT 1 FROM message l WHERE l.session_id = ${alias}.id)`
@@ -386,16 +343,12 @@ function accumulate(
   totals.set(modelKey(key), row);
 }
 
-/** Reasoning a tokens object holds inside output, by the 1.x release rule. */
 function reasoningInsideOutput(tokens: JsonObject, version: string | null): number {
   return reasoningOverlap(tokens, version) === "included"
     ? (openCodeUsage(tokens, "included")?.reasoning ?? 0)
     : 0;
 }
 
-/** A 1.x assistant message's usage (`legacyAssistantUsage`) and the reasoning
- * its steps held inside output, which a release before 1.3.16 also charged a
- * second time in the message's recorded cost. */
 export function legacyUsage(
   info: JsonObject,
   parts: readonly Json[],
@@ -416,7 +369,6 @@ export function legacyUsage(
   return { usage, doubleCharged };
 }
 
-/** Sums reference totals from several readers by provider/model. */
 export function mergeModelTotals(...lists: readonly ModelTotals[][]): ModelTotals[] {
   const merged = new Map<string, ModelTotals>();
   for (const row of lists.flat()) {
@@ -443,13 +395,10 @@ export function mergeModelTotals(...lists: readonly ModelTotals[][]): ModelTotal
   return [...merged.values()].sort((a, b) => modelKey(a).localeCompare(modelKey(b)));
 }
 
-/** Decant keeps reasoning per session, so per-model reasoning is not
- * comparable field by field; fold it into output for the per-model pass. */
 function withReasoningInOutput(rows: readonly ModelTotals[]): ModelTotals[] {
   return rows.map((row) => ({ ...row, output: row.output + row.reasoning, reasoning: 0 }));
 }
 
-/** One 2.x assistant row, with what each counting rule needs. */
 export interface OpenCodeAssistantRow {
   id: string;
   sessionId: string;
@@ -457,13 +406,10 @@ export interface OpenCodeAssistantRow {
   model: string;
   tokens: JsonObject;
   cost: number;
-  /** The release that created the session (`session_v2.version`). */
   version: string | null;
   /** Older than its session: history a fork copied from its parent. */
   inherited: boolean;
-  /** The session records the session it forked from (`fork_session_id`). */
   forkLinked: boolean;
-  /** A newer 1.x copy of the session exists, and Decant reads that one. */
   legacyPreferred: boolean;
   /** The session's 1.x copy holds messages: OpenCode migrated it. */
   migrated: boolean;
@@ -530,8 +476,6 @@ export function readOpenCodeAssistantRows(db: Database): OpenCodeAssistantRow[] 
   }));
 }
 
-/** Each 1.x assistant message's usage by id: the sum of its step-finish
- * parts under the 1.x release rule. */
 function legacyStepSums(
   db: Database,
   sessionId: string,
@@ -552,57 +496,42 @@ function legacyStepSums(
   return sums;
 }
 
-/** Per-model totals of 2.x assistant rows under one counting rule. Both keep
- * OpenCode's convention: `output` excludes reasoning, reported beside it.
- *
- * `decant` is what Decant ingests. It skips every row older than its session,
- * because a fork copies its parent's rows with their original times, and a
- * session OpenCode migrated from 1.x records no fork link. It classifies
- * reasoning with the 1.x rule, because a migrated row created before OpenCode
- * 1.3.16 already counts reasoning inside output. It skips sessions read from a
- * newer 1.x copy. In a session whose 1.x copy is intact, a migrated row's
- * usage is the sum of its 1.x step-finish parts (the migrator copied only the
- * last step's tokens), and a row without a 1.x message was written by 2.x
- * after the migration, so it is disjoint.
- *
- * `stats` is what `opencode stats` sums: it skips inherited rows only when the
- * session records `fork_session_id`, and adds reasoning to output as stored.
- * The two differ by design for migrated forks and migrated pre-1.3.16 rows. */
-export function openCodeModelTotals(
-  rows: readonly OpenCodeAssistantRow[],
-  rule: "decant" | "stats",
-): ModelTotals[] {
+export function decantRuleModelTotals(rows: readonly OpenCodeAssistantRow[]): ModelTotals[] {
   const totals = new Map<string, ModelTotals>();
   for (const row of rows) {
-    if (rule === "decant") {
-      if (row.legacyPreferred || row.inherited) {
-        continue;
-      }
-      const usage =
-        row.stepSum?.usage ??
-        openCodeUsage(
-          row.tokens,
-          row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
-        ) ??
-        emptyUsage();
-      const doubleCharged =
-        row.stepSum?.doubleCharged ??
-        (row.migrated ? 0 : reasoningInsideOutput(row.tokens, row.version));
-      accumulate(
-        totals,
-        row,
-        {
-          input: usage.input,
-          output: usage.output - usage.reasoning,
-          reasoning: usage.reasoning,
-          cacheRead: usage.cacheRead,
-          cacheWrite: usage.cacheCreation,
-        },
-        row.cost,
-        doubleCharged,
-      );
+    if (row.legacyPreferred || row.inherited) {
       continue;
     }
+    const usage =
+      row.stepSum?.usage ??
+      openCodeUsage(
+        row.tokens,
+        row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
+      ) ??
+      emptyUsage();
+    const doubleCharged =
+      row.stepSum?.doubleCharged ??
+      (row.migrated ? 0 : reasoningInsideOutput(row.tokens, row.version));
+    accumulate(
+      totals,
+      row,
+      {
+        input: usage.input,
+        output: usage.output - usage.reasoning,
+        reasoning: usage.reasoning,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheCreation,
+      },
+      row.cost,
+      doubleCharged,
+    );
+  }
+  return [...totals.values()];
+}
+
+export function statsRuleModelTotals(rows: readonly OpenCodeAssistantRow[]): ModelTotals[] {
+  const totals = new Map<string, ModelTotals>();
+  for (const row of rows) {
     if (row.inherited && row.forkLinked) {
       continue;
     }
@@ -623,7 +552,6 @@ export function openCodeModelTotals(
   return [...totals.values()];
 }
 
-/** Rows `opencode stats` counts differently from Decant, by reason. */
 export function openCodeRuleDifferences(rows: readonly OpenCodeAssistantRow[]): {
   inheritedWithoutForkLink: number;
   legacyPreferred: number;
@@ -710,9 +638,6 @@ const LEGACY_AGGREGATE_COLUMNS = [
   "tokens_cache_write",
 ] as const;
 
-/** Sessions in the 1.x tables that Decant reads from there: absent from
- * session_v2, or updated there later than in session_v2 (a 1.x binary kept
- * writing after OpenCode 2.x migrated the session). A tie goes to 2.x. */
 export function readLegacySessions(db: Database): LegacySession[] {
   if (!hasLegacyTables(db)) {
     return [];
@@ -791,13 +716,6 @@ function legacyMessages(
   return [...kept.values()];
 }
 
-/** Per-model totals of the 1.x sessions Decant reads, in OpenCode's
- * convention (`output` excludes reasoning, so `output + reasoning` is Decant's
- * output). One step per assistant message with recorded usage, summed from
- * its step-finish parts because 1.x keeps only the last step's tokens on the
- * message; reasoning is classified per tokens object by the 1.x release rule.
- * Compaction summaries are counted separately (`readLegacyCompaction`). Cost
- * is the message's recorded `cost`, which already sums its steps. */
 export function readLegacyModelTotals(db: Database): ModelTotals[] {
   const totals = new Map<string, ModelTotals>();
   for (const session of readLegacySessions(db)) {
@@ -832,8 +750,6 @@ export function readLegacyModelTotals(db: Database): ModelTotals[] {
   return [...totals.values()].sort((a, b) => modelKey(a).localeCompare(modelKey(b)));
 }
 
-/** 1.x compaction summaries (`summary: true` assistants): their own request's
- * usage, with output in Decant's convention (reasoning included). */
 export function readLegacyCompaction(db: Database): {
   rows: number;
   input: number;
@@ -854,7 +770,6 @@ export function readLegacyCompaction(db: Database): {
   return result;
 }
 
-/** The 1.x `session` aggregate columns, where the database has them. */
 export function readLegacySessionTotals(db: Database): SessionTotals[] {
   return readLegacySessions(db)
     .filter((session) => session.tokens_input != null)
@@ -910,17 +825,11 @@ export function compareLegacySessionTotals(
   return lines;
 }
 
-/** The 1.x `opencode export` layout Letta's OpenCode adapter reads. */
 export interface LegacyExport {
   info: JsonObject;
   messages: Array<{ info: JsonObject; parts: JsonObject[] }>;
 }
 
-/** Assembles what Decant reads of one 1.x session in the export layout:
- * user and assistant messages only, without inherited fork history, without a
- * compaction request and its summary (Decant folds the pair into one system
- * message), and without `synthetic` or `ignored` text, which Decant does not
- * show as user text (Letta's adapter would). */
 export function buildLegacyExport(
   session: Pick<LegacySession, "id" | "directory" | "time_created">,
   messages: readonly OpenCodeLegacyMessageRow[],
@@ -952,11 +861,8 @@ export function buildLegacyExport(
   };
 }
 
-export type ToolOutcome = "ok" | "error" | "none";
+export type ToolOutcome = "ok" | "error" | "no-result" | "result-without-status";
 
-/** What the structural cross-check compares: tool calls by id with their name
- * and result flag (`none` = no result, or no authoritative outcome), and
- * record counts. */
 export interface TranscriptStructure {
   toolCalls: Map<string, { name: string; outcome: ToolOutcome }>;
   user: number;
@@ -980,7 +886,7 @@ export function lettaStructure(records: readonly NormalizedRecord[]): Transcript
     } else if (record.role === "assistant") {
       if ("tool_calls" in record) {
         for (const call of record.tool_calls) {
-          structure.toolCalls.set(call.id, { name: call.name, outcome: "none" });
+          structure.toolCalls.set(call.id, { name: call.name, outcome: "no-result" });
         }
       } else {
         structure.assistantText += 1;
@@ -988,7 +894,7 @@ export function lettaStructure(records: readonly NormalizedRecord[]): Transcript
     } else if (record.role === "tool") {
       outcomes.set(
         record.tool_call_id,
-        record.ok === true ? "ok" : record.ok === false ? "error" : "none",
+        record.ok === true ? "ok" : record.ok === false ? "error" : "result-without-status",
       );
     }
   }
@@ -1020,9 +926,6 @@ export function toolNamesMatch(decantName: string, lettaName: string): boolean {
   return false;
 }
 
-/** Tool-call ids, names, and result flags must match exactly; record counts
- * are informational (Letta keeps empty text, and Decant's system messages for
- * subtasks have no Letta counterpart). */
 export function compareStructure(
   sessionId: string,
   decant: TranscriptStructure,
@@ -1117,7 +1020,7 @@ function readDecantStructure(db: Database, sessionId: string): TranscriptStructu
   for (const call of calls) {
     structure.toolCalls.set(call.tool_use_id, {
       name: call.tool_name ?? "",
-      outcome: call.has_result === 1 ? (call.is_error === 1 ? "error" : "ok") : "none",
+      outcome: call.has_result === 1 ? (call.is_error === 1 ? "error" : "ok") : "no-result",
     });
   }
   const blocks = db
@@ -1140,7 +1043,6 @@ function readDecantStructure(db: Database, sessionId: string): TranscriptStructu
   return structure;
 }
 
-/** The `--letta` pass over every session Decant reads from the 1.x tables. */
 function lettaCrossCheck(opencode: Database, decant: Database): ParityLine[] {
   const lines: ParityLine[] = [];
   for (const session of readLegacySessions(opencode)) {
@@ -1171,17 +1073,10 @@ function lettaCrossCheck(opencode: Database, decant: Database): ParityLine[] {
   return lines;
 }
 
-/** One Decant provider/model group before costing. `recorded` is the
- * positive cost OpenCode recorded on those messages, used only to share a
- * model's reported cost among providers that served it. */
 export interface DecantModelGroup extends Omit<ModelTotals, "reasoning" | "cost" | "costSource"> {
   recorded: number;
 }
 
-/** Costs each group as Decant does: a priced model at list price, and a
- * model Decant cannot price at the reported cost the archive stores for it
- * (`session_model_usage.reported_cost_usd`, keyed by model alone), shared by
- * recorded cost when several providers served the model. */
 export function costDecantModelGroups(
   groups: readonly DecantModelGroup[],
   reportedByModel: ReadonlyMap<string, number>,
@@ -1206,21 +1101,23 @@ export function costDecantModelGroups(
       };
       return { ...base, cost: estimateCost(group.model, usage, pricing), costSource: "list" };
     }
-    const reported = reportedByModel.get(group.model) ?? 0;
-    const share = recordedByModel.get(group.model) ?? { recorded: 0, groups: 1 };
-    const cost =
-      share.recorded > 0 ? (reported * recorded) / share.recorded : reported / share.groups;
+    const cost = shareOfReportedCost(
+      reportedByModel.get(group.model) ?? 0,
+      recorded,
+      recordedByModel.get(group.model) ?? { recorded: 0, groups: 1 },
+    );
     return { ...base, cost, costSource: "reported" };
   });
 }
 
-/** Decant assistant messages of OpenCode sessions grouped by the provider in
- * the message's raw record (`model.providerID` in 2.x, top-level `providerID`
- * in 1.x) and the model that served it. Reasoning is kept
- * only per session in the archive, so the per-model reasoning figure comes
- * from the reference side alone and Decant reports 0 here; the per-model
- * comparison therefore checks output (which contains reasoning), not the
- * reasoning field. */
+function shareOfReportedCost(
+  reported: number,
+  groupRecorded: number,
+  model: { recorded: number; groups: number },
+): number {
+  return model.recorded > 0 ? (reported * groupRecorded) / model.recorded : reported / model.groups;
+}
+
 function readDecantModelTotals(db: Database): ModelTotals[] {
   const groups = (
     db
@@ -1326,7 +1223,7 @@ function main(): void {
     const decantModels = readDecantModelTotals(decant);
     const v2Rows = readOpenCodeAssistantRows(opencode);
     const legacyModels = readLegacyModelTotals(opencode);
-    const reference = mergeModelTotals(openCodeModelTotals(v2Rows, "decant"), legacyModels);
+    const reference = mergeModelTotals(decantRuleModelTotals(v2Rows), legacyModels);
     let mismatches = 0;
     console.log(`== per provider/model: Decant vs ${opencodePath} (2.x and 1.x rows)`);
     mismatches += print(
@@ -1356,9 +1253,6 @@ function main(): void {
       mismatches += print(compareLegacySessionTotals(decantSessions, legacySessions));
     }
     if (statsPath != null) {
-      // 1.x `opencode stats` has no JSON output, so stats.json covers 2.x
-      // rows only. It is checked against the database read with its own
-      // rules; the line above quantifies how Decant's rules differ.
       const stats = parseStatsJson(readFileSync(statsPath, "utf8"));
       console.log(
         `== per provider/model: ${statsPath} vs opencode.db read with opencode stats' rules`,
@@ -1366,7 +1260,7 @@ function main(): void {
       mismatches += print(
         compareModelTotals(
           withReasoningInOutput(stats),
-          withReasoningInOutput(openCodeModelTotals(v2Rows, "stats")),
+          withReasoningInOutput(statsRuleModelTotals(v2Rows)),
           "opencode.db",
           "stats.json",
         ),

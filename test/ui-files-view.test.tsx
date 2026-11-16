@@ -19,8 +19,6 @@ describe("Files view requests", () => {
   });
 
   test("only the Files view requests file activity", () => {
-    // A page slice once loaded the default grouping too, so each visit sent
-    // the same request twice.
     const callers = uiSourceFiles().filter((file) => readUiFile(file).includes("`/api/files?"));
     expect(callers).toEqual(["views/files.tsx"]);
     expect(readUiFile("views/files.tsx").match(/`\/api\/files\?/g)).toHaveLength(1);

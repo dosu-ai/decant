@@ -2,15 +2,11 @@ import { emptyUsage, type NormalizedMessage, type ParsedSession } from "../src/m
 
 export interface SyntheticRequest {
   model: string;
-  /** Cost as OpenCode would record it on the assistant row. */
   cost: number;
   input: number;
   output: number;
 }
 
-/** An OpenCode session as the parser would emit it, built by hand so cost
- * tests do not depend on the parser: one prompt, one assistant row per
- * request with the recorded cost in `raw.cost`. */
 export function syntheticOpenCodeSession(id: string, requests: SyntheticRequest[]): ParsedSession {
   const text = (ordinal: number, value: string) => ({
     ordinal,

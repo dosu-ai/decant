@@ -14,8 +14,6 @@ export function rememberSearch(query: string): string[] {
   const values = normalizeRecentSearches(readRecentSearches(), query);
   try {
     localStorage.setItem("decant-recent-searches", JSON.stringify(values));
-  } catch {
-    // Search still works when storage is unavailable.
-  }
+  } catch {}
   return values;
 }

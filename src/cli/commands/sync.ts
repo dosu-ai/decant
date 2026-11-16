@@ -51,9 +51,6 @@ export function registerSyncCommands(ctx: CliContext): void {
           ...archive.config,
           sourcePaths: commandOptions.path,
         });
-        // `env` is only populated by tests, so read through to the real
-        // environment the way `shouldSync` and `resolveConfig` do -- otherwise
-        // the hint omits `--db` for anyone running with `DECANT_DB` set.
         const dbFlag = ctx.globals().db ?? (ctx.env ?? process.env).DECANT_DB;
         const issuesHint =
           report.issues > 0
@@ -81,9 +78,6 @@ export function registerSyncCommands(ctx: CliContext): void {
             io.writeErr(`  ${issuesHint}\n`);
           }
         }
-        // Exit 3 means decant dropped source content, which is what an unparsed
-        // line is. The other codes are sensors over content that did land, so
-        // they are reported without failing the command.
         return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
       },
       {
@@ -139,10 +133,6 @@ export function registerSyncCommands(ctx: CliContext): void {
       }) => ctx.run(() => runSync(commandOptions)),
     );
 
-  // Terminal rendering only. Under `serve`, server.ts's applyWatchEvent already
-  // publishes each event to SSE clients exactly once; publishing again here
-  // would double every /api/events frame. Under `watch`, there is no HTTP
-  // server or SSE client to publish to at all.
   const emitWatchEvent = (event: WatchEvent): void => {
     if (!ctx.globals().quiet) {
       logWatchEvent(watchLogger, event);
@@ -293,19 +283,12 @@ export function registerSyncCommands(ctx: CliContext): void {
             atifDir: commandOptions.atifDir,
             hermesDir: commandOptions.hermesDir,
           });
-          // --no-sync must stop the watcher, or serving a scratch archive would
-          // fill it from the real ~/.claude and ~/.codex. Omitting `watch` is how
-          // serve() knows; POST /api/sync stays available for explicit syncs.
           const syncEnabled = ctx.shouldSync();
-          // Loaded here so other commands skip the server's chart and report
-          // dependencies at startup.
           const { parsePeerList, serve: serveApp } = await import("../../server.ts");
           const environment = ctx.env ?? process.env;
           const supervised = isServiceProcess(environment);
           const host = commandOptions.host ?? DEFAULT_SERVE_HOST;
           const wanted = commandOptions.port ?? DEFAULT_SERVE_PORT;
-          // Taken before waiting for the port, so an upgrade that lands during
-          // that wait still restarts the service once it is serving.
           const binaryPath = supervised ? serviceBinary(ctx.serviceOptions).path : null;
           const binaryAtStart = binaryPath == null ? null : binaryFingerprint(binaryPath);
           let requestShutdown: () => void = () => undefined;
@@ -317,8 +300,6 @@ export function registerSyncCommands(ctx: CliContext): void {
               config,
               hostname: host,
               port: wanted,
-              // Omitted rather than [] so resolveTrustedPeers() can still fall
-              // through to DECANT_TRUSTED_PEERS and the gateway default.
               trustedPeers:
                 commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
                   ? commandOptions.trustedPeer.flatMap((value) => parsePeerList(value))
@@ -350,8 +331,6 @@ export function registerSyncCommands(ctx: CliContext): void {
               const url = displayUrl(host, wanted);
               const background = await serviceStatus(ctx.serviceOptions).catch(() => null);
               if (background?.running === true && background.url === `http://127.0.0.1:${wanted}`) {
-                // The background service already serves this port, so running
-                // `decant` just takes the user there.
                 const decision = openDecision(commandOptions.open !== false, environment);
                 io.writeErr(
                   `Decant is already running in the background at ${url}\n` +
@@ -370,8 +349,6 @@ export function registerSyncCommands(ctx: CliContext): void {
             }
             throw error;
           }
-          // Installed before anything is printed: a SIGTERM sent as soon as the
-          // URL appears must stop the server, not kill the process.
           const signal = waitForProcessSignal();
           let exitCode = 0;
           let stopBinaryWatch: (() => void) | null = null;
@@ -409,8 +386,6 @@ export function registerSyncCommands(ctx: CliContext): void {
                 : watchBinary(
                     binaryPath,
                     () => {
-                      // A failing exit is what makes launchd and systemd start the
-                      // new binary; a clean exit would leave the service stopped.
                       exitCode = SERVICE_RESTART_EXIT_CODE;
                       serverLogger.info("Decant was updated; restarting the background service.", {
                         "event.name": "decant.service.binary_changed",
@@ -427,10 +402,6 @@ export function registerSyncCommands(ctx: CliContext): void {
           } finally {
             signal.cancel();
             stopBinaryWatch?.();
-            // A sync worker stuck in a blocking file read never lets stop()
-            // finish, and launchd or systemd restart the service only once
-            // the process exits. SQLite's WAL keeps the archive consistent
-            // through a hard exit, as it does through the manager's SIGKILL.
             const forceExit = supervised
               ? setTimeout(() => {
                   serverLogger.warning("Shutdown is stuck; exiting so the service can restart.", {
@@ -443,8 +414,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             // Force-close: a graceful stop() never resolves while a browser
             // tab's /api/events SSE connection is open (Bun waits for active
             // connections to end on their own), which would hang shutdown
-            // indefinitely on Ctrl-C. This is a local dev server being
-            // intentionally torn down, so dropping open connections is fine.
+            // indefinitely on Ctrl-C.
             await server.stop(true);
             if (forceExit != null) {
               clearTimeout(forceExit);
@@ -464,16 +434,11 @@ export function registerSyncCommands(ctx: CliContext): void {
 
 const BINARY_CHECK_MS = 60_000;
 const BINARY_SETTLE_MS = 2_000;
-// Under launchd's default 20-second ExitTimeOut, after which it sends SIGKILL.
 const SERVICE_STOP_GRACE_MS = 10_000;
 const BIND_RETRY_FAST_MS = 250;
 const BIND_RETRY_SLOW_MS = 2_000;
 const BIND_FAST_WINDOW_MS = 30_000;
 
-// The background service waits for its port instead of exiting: during a
-// handoff the terminal copy releases it within a second, and while someone runs
-// `decant serve` in a terminal, exiting would only make the OS restart the
-// service every few seconds.
 async function bindWhenFree<T>(start: () => T, onFirstWait: () => void): Promise<T> {
   const startedAt = Date.now();
   let warned = false;

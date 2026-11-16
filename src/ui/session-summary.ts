@@ -29,8 +29,6 @@ export function sessionCardMetrics(
     (metrics, row) => ({
       sessions: metrics.sessions + 1,
       usage_sessions: metrics.usage_sessions + Number(sessionThreadUsageAvailable(row)),
-      // The table's "Msgs" column is the matching root row's own messages,
-      // while its cost cell is a recursive thread total.
       messages: metrics.messages + row.message_count,
       estimated_cost_usd: metrics.estimated_cost_usd + sessionThreadCost(row),
     }),

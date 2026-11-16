@@ -87,9 +87,6 @@ export function sessionSourcePredicate(
     case "codex_cli":
       return { sql: `${alias}.tool = 'codex' AND ${codexCliSql(alias)}`, params: [] };
     case "codex_other":
-      // Everything Codex that is neither the desktop app nor the CLI, such as
-      // SDK, exec, and third-party clients, so the Codex buckets add up to the
-      // Codex total.
       return {
         sql: `${alias}.tool = 'codex'
           AND NOT (${codexAppSql(alias)})
@@ -117,7 +114,6 @@ export function sessionSourcePredicate(
 
 export function availableSessionSources(db: Database): AvailableSessionSource[] {
   const userVisible = sessionUserStatePredicateForDatabase(db, "s");
-  // One scan with a conditional count per source, instead of a scan per source.
   const predicates = SESSION_SOURCES.map((key) => sessionSourcePredicate("s", key));
   const sql = `SELECT ${predicates
     .map(

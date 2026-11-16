@@ -12,14 +12,11 @@ import type { IconName, Recommendation, SettingsInfo } from "../types.ts";
 
 export type RecommendationAction = "launch" | "copy" | "mark";
 
-/** The action in flight on each row, by row key. */
 export type PendingActions = Readonly<Record<string, RecommendationAction>>;
 
 export type RecommendationHandlers = {
-  /** Display name of the agent "Run" opens, when launching is available. */
   agentLabel: string | null;
   canLaunch: boolean;
-  /** Key of the row whose prompt was just copied, so its button can say so. */
   copiedKey: string | null;
   onComplete: (row: Recommendation) => void;
   onCopy: (row: Recommendation) => void;
@@ -91,7 +88,6 @@ export function RecommendationRow({
   );
 }
 
-/** What a row adds below its title and summary line. */
 export function RecommendationDetail({
   facts,
   row,
@@ -124,10 +120,6 @@ export type RecommendationFacts = {
   evidence: string | null;
 };
 
-/**
- * The API repeats one sentence as detail and evidence, and some details only
- * restate the impact label, so each text is kept the first time it appears.
- */
 export function recommendationFacts(row: Recommendation): RecommendationFacts {
   const seen = new Set<string>();
   const sameText = (value: string) =>
@@ -233,7 +225,6 @@ export function RecommendationActions({
   );
 }
 
-// Plain wording for the API's memory layer names. Unknown layers show as sent.
 const MEMORY_LAYER_COPY: Record<string, string> = {
   hot: "Loaded in every session",
   procedural: "Loaded when a task calls for it",
@@ -301,7 +292,6 @@ export function isLongPrompt(prompt: string): boolean {
   return prompt.length > LONG_PROMPT_CHARS || prompt.split("\n").length > LONG_PROMPT_LINES;
 }
 
-/** The text "Run" or "Copy setup prompt" hands to an agent, readable first. */
 export function PromptPreview({
   agentLabel,
   canLaunch,
@@ -406,7 +396,6 @@ export function InsightsView({
   settingsInfo,
   onMarked,
 }: {
-  /** The first sync is still running; signals are generated when it ends. */
   firstSync?: boolean;
   loading: boolean;
   loadFailed: boolean;
@@ -445,8 +434,6 @@ export function InsightsView({
     setCopyFeedback(null);
     setPending((current) => ({ ...current, [row.key]: action }));
   };
-  // Each row keeps its own entry, so an action on one row cannot enable
-  // another row's buttons while that row's request is still running.
   const finishAction = (row: Recommendation, action: RecommendationAction) => {
     setPending((current) => {
       if (current[row.key] !== action) {
@@ -457,8 +444,6 @@ export function InsightsView({
     });
   };
   const copyPrompt = (row: Recommendation) => {
-    // Copying stays open during a launch, so a launch that never answers still
-    // leaves a way out. It must not replace the launch entry, or Run comes back.
     const tracked = pending[row.key] == null;
     if (tracked) {
       startAction(row, "copy");

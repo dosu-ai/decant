@@ -9,8 +9,6 @@ import {
 } from "../src/cost.ts";
 import { emptyUsage, type TokenUsage } from "../src/model.ts";
 
-// Ports cost.rs tests verbatim — these are the spec for model normalization
-// (Bedrock ARNs, date/[1m] suffixes, aliases) and estimate-at-ingest.
 function usage1m(): TokenUsage {
   return {
     input: 1_000_000,
@@ -31,13 +29,12 @@ describe("defaultPricing", () => {
 describe("estimateCost", () => {
   test("opus input+output costs add up", () => {
     const cost = estimateCost("claude-opus-4-7", usage1m(), defaultPricing());
-    expect(cost).toBeCloseTo(30.0, 6); // 1M @ $5 + 1M @ $25
+    expect(cost).toBeCloseTo(30.0, 6);
   });
 
   test("cache writes bill 1.25x input at 5m TTL and 2x at 1h TTL", () => {
     const pricing = defaultPricing();
     const base = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
-    // Opus input is $5/Mtok, so 5m writes are $6.25/Mtok and 1h writes $10/Mtok.
     expect(
       estimateCost(
         "claude-opus-5",
@@ -83,7 +80,6 @@ describe("estimateCost", () => {
 
   test("cache tokens are priced", () => {
     const usage: TokenUsage = { ...emptyUsage(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
-    // opus: cache read $0.50 + cache write $6.25.
     expect(estimateCost("claude-opus-4-8", usage, defaultPricing())).toBeCloseTo(6.75, 6);
   });
 
@@ -147,6 +143,24 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.4-pro", u, pricing)).toBeCloseTo(210.0, 6);
     expect(estimateCost("gpt-5.5", u, pricing)).toBeCloseTo(35.0, 6);
     expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
+  });
+
+  test("Cyber trusted-access models use their own rates, not the base model's", () => {
+    const pricing = defaultPricing();
+    const usage = { ...usage1m(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
+    expect(estimateCostParts("gpt-6-cyber", usage, pricing)).toEqual({
+      input: 20,
+      output: 100,
+      cacheRead: 2,
+      cacheCreation: 25,
+    });
+    expect(estimateCostParts("gpt-5.5-cyber-preview", usage, pricing)).toEqual({
+      input: 12.5,
+      output: 75,
+      cacheRead: 1.25,
+      cacheCreation: 12.5,
+    });
+    expect(estimateCost("openai/gpt-6-cyber", usage1m(), pricing)).toBeCloseTo(120, 6);
   });
 
   test("Astra prices input, output, cache reads, and cache writes separately", () => {
@@ -232,7 +246,6 @@ describe("estimateCost", () => {
         cacheCreation: 9,
       });
     }
-    // Sonnet 5 keeps the 0.1x cache-read multiplier.
     expect(estimateCostParts("claude-sonnet-5", usage, pricing).cacheRead).toBeCloseTo(0.4, 9);
   });
 
@@ -266,7 +279,6 @@ describe("estimateCost", () => {
       expect(parts.cacheRead).toBeCloseTo(0.02, 9);
       expect(parts.cacheCreation).toBeCloseTo(0.45, 9);
     }
-    // Neighboring Haiku versions keep their own tiers.
     expect(estimateCost("claude-haiku-4-5", usage1m(), pricing)).toBeCloseTo(6.0, 6);
     expect(estimateCost("claude-haiku-5-50", usage1m(), pricing)).toBeCloseTo(6.0, 6);
   });
@@ -279,7 +291,6 @@ describe("estimateCost", () => {
       cacheCreation: 3_000_000,
       cacheCreation1h: 1_000_000,
     };
-    // Fast mode: Opus 5.5 at $8/$40, cache multipliers on top.
     expect(estimateCostParts("claude-opus-5-5", usage, pricing, "fast")).toEqual({
       input: 8,
       output: 40,
@@ -287,14 +298,12 @@ describe("estimateCost", () => {
       cacheCreation: 36,
     });
     expect(estimateCost("claude-opus-5", usage1m(), pricing, "fast")).toBeCloseTo(60, 6);
-    // Fast mode: Fable 5.2 at $16/$80, cache multipliers on top.
     expect(estimateCostParts("claude-fable-5-2", usage, pricing, "fast")).toEqual({
       input: 16,
       output: 80,
       cacheRead: 0.8,
       cacheCreation: 72,
     });
-    // Haiku 5.5 long prompts: every rate is 5x.
     const long = estimateCostParts("claude-haiku-5-5", usage, pricing, "long_prompt");
     expect(long.input).toBeCloseTo(0.5, 9);
     expect(long.output).toBeCloseTo(2.5, 9);
@@ -546,7 +555,6 @@ describe("estimateCost", () => {
     ]) {
       expect(estimateCost(model, usage1m(), pricing)).toBeCloseTo(48.0, 6);
     }
-    // 5.20 is not 5.2, so it falls back to the Fable 5 rate.
     expect(estimateCost("claude-fable-5-20", usage1m(), pricing)).toBeCloseTo(60.0, 6);
   });
 
@@ -599,7 +607,6 @@ describe("isPriceable", () => {
   test("prices Gemini flash-lite variants at their own published rates", () => {
     const pricing = defaultPricing();
     const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
-    // Published: 3.5 at $0.30/$2.50, 3.1 at $0.25/$1.50, 2.5 at $0.10/$0.40.
     expect(estimateCost("gemini-3.5-flash-lite", u, pricing)).toBeCloseTo(2.8, 6);
     expect(estimateCost("gemini-3.1-flash-lite", u, pricing)).toBeCloseTo(1.75, 6);
     expect(estimateCost("gemini-2.5-flash-lite", u, pricing)).toBeCloseTo(0.5, 6);
@@ -654,17 +661,48 @@ describe("isPriceable", () => {
         cacheCreation: 0,
       });
     }
-    // Carbon and unannounced Argon variants have no public rate, so they stay
-    // unpriced rather than borrowing Argon's or an older flash rate.
     for (const model of [
-      "gemini-4-carbon",
       "gemini-4-argon-flash",
       "gemini-4-argon-lite",
+      "gemini-4-carbon-lite",
+      "gemini-4-hydrogen-lite",
+      "gemini-4-helium",
       "gemini-4.3-flash",
     ]) {
       expect(isPriceable(model)).toBe(false);
     }
     expect(isPriceable("models/gemini-3-flash-preview")).toBe(true);
+  });
+
+  test("prices Gemini 4 Carbon and Hydrogen at their published rates", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...emptyUsage(),
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheCreation: 1_000_000,
+    };
+    const cases: Array<[string, number, number, number]> = [
+      ["gemini-4-carbon", 4, 20, 0.2],
+      ["gemini-4-carbon-001", 4, 20, 0.2],
+      ["models/gemini-4-carbon", 4, 20, 0.2],
+      ["google/gemini-4-carbon:floor", 4, 20, 0.2],
+      ["gemini-4-hydrogen", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-latest", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-preview-11-2026", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-20261112", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen[1m]", 1.5, 7.5, 0.075],
+    ];
+    for (const [model, input, output, cacheRead] of cases) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input,
+        output,
+        cacheRead,
+        cacheCreation: input,
+      });
+    }
   });
 });
 
@@ -725,12 +763,12 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
 
   test("prices every published model at its first-party rate", () => {
     const pricing = defaultPricing();
-    // 1M input + 1M output, from docs.z.ai and dev.meta.ai checked 2026-10-12.
     const cases: Array<[string, number]> = [
       ["glm-5.3", 5.8],
       ["glm-5.2", 5.8],
       ["glm-5.1", 5.8],
       ["glm-5.3-flashx", 1.62],
+      ["glm-5.3-flashx-legal", 1.62],
       ["glm-5.3-flash", 0.65],
       ["glm-5", 4.2],
       ["glm-4.7", 2.8],
@@ -747,6 +785,7 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
       ["muse-spark-1.1", 5.5],
       ["muse-spark-1.3-contributor", 0.3],
       ["muse-spark-1.2-contributor", 0.3],
+      ["muse-ember-1.0", 0.6],
     ];
     for (const [model, expected] of cases) {
       expect(isPriceable(model)).toBe(true);
@@ -833,9 +872,6 @@ describe("Z.ai GLM and Meta Muse pricing", () => {
   });
 
   test("reproduces the cost OpenCode recorded for real requests", () => {
-    // Aggregate token totals from OpenCode's own `stats --json` on 2026-10-12,
-    // with reasoning folded into output as Decant stores it. No transcript
-    // content. OpenCode recorded $0.3449921 and $0.3569672 for these requests.
     const pricing = defaultPricing();
     const glm = {
       ...emptyUsage(),
@@ -863,8 +899,6 @@ describe("open-weight lab pricing", () => {
     const pricing = defaultPricing();
     const read = { ...emptyUsage(), cacheRead: 1_000_000 };
     const write = { ...emptyUsage(), cacheCreation: 1_000_000 };
-    // [model, 1M input + 1M output, 1M cache reads, 1M cache writes], from each
-    // lab's own pricing page checked 2026-10-26.
     const cases: Array<[string, number, number, number]> = [
       ["deepseek-flash", 1.5, 0.006, 0.3],
       ["deepseek-v4-flash", 1.5, 0.006, 0.3],
@@ -887,6 +921,23 @@ describe("open-weight lab pricing", () => {
       ["qwen3.6-35b-a3b", 2.625, 0.375, 0.375],
       ["step-5-preview", 3.7, 0.1, 1.0],
       ["hy3", 0.66, 0.033, 0.132],
+      ["minimax-m3.1-flash", 0.75, 0.015, 0.15],
+      ["qwen3.5-35b-a3b", 2.25, 0.25, 0.25],
+      ["qwen3.5-27b", 2.7, 0.3, 0.3],
+      ["qwen3.6-27b", 4.2, 0.6, 0.6],
+      ["step-3.7-flash", 1.35, 0.04, 0.2],
+      ["step-3.5-flash", 0.4, 0.02, 0.1],
+      ["hy4", 3.335, 0.042, 0.834],
+      ["hy4-preview", 3.335, 0.042, 0.834],
+      ["hy4-flash", 0.351, 0.003, 0.07],
+      ["grok-4.7", 8.0, 0.5, 2.0],
+      ["grok-4.6", 8.0, 0.5, 2.0],
+      ["grok-4.5", 8.0, 0.3, 2.0],
+      ["grok-4.3", 3.75, 0.2, 1.25],
+      ["grok-4.20-0309-reasoning", 3.75, 0.2, 1.25],
+      ["grok-4.20-0309-non-reasoning", 3.75, 0.2, 1.25],
+      ["grok-4.20-multi-agent-0309", 3.75, 0.2, 1.25],
+      ["grok-build-0.1", 3.0, 0.2, 1.0],
     ];
     for (const [model, inputOutput, cacheRead, cacheWrite] of cases) {
       expect(isPriceable(model)).toBe(true);
@@ -894,6 +945,21 @@ describe("open-weight lab pricing", () => {
       expect(estimateCost(model, read, pricing)).toBeCloseTo(cacheRead, 6);
       expect(estimateCost(model, write, pricing)).toBeCloseTo(cacheWrite, 6);
     }
+  });
+
+  test("prices Qwen4-Max cache reads and both explicit cache-write TTLs", () => {
+    const usage = {
+      ...usage1m(),
+      cacheRead: 1_000_000,
+      cacheCreation: 2_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    expect(estimateCostParts("qwen4-max", usage, defaultPricing())).toEqual({
+      input: 1.5,
+      output: 4.5,
+      cacheRead: 0.075,
+      cacheCreation: 4.875,
+    });
   });
 
   test("prices Reflection's free beta at zero while keeping it priceable", () => {
@@ -921,6 +987,13 @@ describe("open-weight lab pricing", () => {
       ["tencent/hy3", 0.66],
       ["deepseek-v4-pro-20260813", 5.28],
       ["tencent/hy3-20261001", 0.66],
+      ["tencent/hy4", 3.335],
+      ["Qwen4-Max", 6.0],
+      ["qwen/qwen4-max:nitro", 6.0],
+      ["minimax/minimax-m3.1-flash", 0.75],
+      ["stepfun/step-3.5-flash-2603", 0.4],
+      ["x-ai/grok-4.7", 8.0],
+      ["x-ai/grok-build-0.1:cloud", 3.0],
     ];
     for (const [model, expected] of cases) {
       expect(estimateCost(model, u, pricing)).toBeCloseTo(expected, 6);
@@ -929,11 +1002,9 @@ describe("open-weight lab pricing", () => {
 
   test("leaves local builds, retired IDs, and models without a first-party rate unpriced", () => {
     for (const model of [
-      // Local Ollama and LM Studio builds incur no API spend.
       "qwen3.8:27b",
       "qwen3.6:35b-a3b",
       "ollama/deepseek-v4-flash:q4_K_M",
-      // Retired or undocumented IDs with no current published rate.
       "deepseek-chat",
       "deepseek-reasoner",
       "deepseek-v4-flash-0731",
@@ -946,12 +1017,15 @@ describe("open-weight lab pricing", () => {
       "hunyuan-hy3",
       "step-5",
       "beam-501b-a23b",
-      // Proprietary siblings that are not open-weight and not yet verified.
+      "grok-code-fast-1",
+      "x-ai/grok-code-fast-1-0825",
+      "grok-4.7-fast",
+      "qwen4-max-preview",
+      "muse-ember",
       "kimi-k3.1",
       "qwen3.8-flash",
       "qwen3.8-flash-next",
       "qwen3-coder-flash",
-      // Open-weight models whose labs publish no USD per-token API rate.
       "ling-3.1-flash",
       "muse-spark-open",
       "nvidia/nemotron-3.5-super-vl-120b-a12b",

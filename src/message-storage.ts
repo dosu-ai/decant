@@ -7,14 +7,9 @@ import type { Json } from "./model.ts";
 const MIN_COMPRESS_BYTES = 1024;
 const COMPACT_BATCH_SIZE = 128;
 
-/** SQL reads use the small metadata projection without inflating the source record. */
 export const MESSAGE_METADATA_SQL = "COALESCE(m.raw_meta, m.raw)";
 
-// Keep this projection in sync with SQL readers of message source metadata.
-// The complete source record remains in raw, including every unknown field.
-// New paths also need a backfill from stored raw for existing compressed rows,
-// including sessions whose source files are gone. Compaction skips BLOB rows.
-const METADATA_PATHS = [
+export const METADATA_PATHS = [
   ["isSidechain"],
   ["subtype"],
   ["type"],
@@ -70,7 +65,6 @@ function rawMetadata(raw: Json): string {
   return canonicalJson(metadata);
 }
 
-/** Store standard zstd frames only when the frame plus metadata is smaller. */
 export function encodeMessageRaw(raw: string, parsed?: Json): StoredMessageRaw {
   const bytes = byteLength(raw);
   if (bytes < MIN_COMPRESS_BYTES) return { raw, rawMeta: null, rawBytes: null };
@@ -79,7 +73,6 @@ export function encodeMessageRaw(raw: string, parsed?: Json): StoredMessageRaw {
     try {
       value = JSON.parse(raw) as Json;
     } catch {
-      // Historic/manual non-JSON rows retain their original validity semantics.
       return { raw, rawMeta: null, rawBytes: null };
     }
   }
@@ -91,7 +84,6 @@ export function encodeMessageRaw(raw: string, parsed?: Json): StoredMessageRaw {
   return { raw: compressed, rawMeta, rawBytes: bytes };
 }
 
-/** Corrupt frames throw rather than silently losing the retained record. */
 export function decodeMessageRaw(raw: string | Uint8Array): string {
   if (typeof raw === "string") return raw;
   return zstdDecompressSync(raw).toString("utf8");
@@ -103,11 +95,6 @@ export interface CompactMessageStorageResult {
   saved_bytes: number;
 }
 
-/**
- * Each batch commits independently so interruption keeps completed work and a
- * retry skips its BLOB rows. Read one record at a time to avoid buffering a
- * batch of large tool results in memory. VACUUM belongs to the CLI caller.
- */
 export function compactMessageStorage(
   db: Database,
   onProgress?: (result: Readonly<CompactMessageStorageResult>) => void,
@@ -153,8 +140,6 @@ export function compactMessageStorage(
   return result;
 }
 
-/** Repair projections from retained source records, even when journals are gone.
- * A projected null marks a compaction that did not record its occupancy. */
 export function backfillCopilotCompactionMetadata(db: Database): number {
   const ids = db.prepare(`SELECT m.id FROM message m JOIN session s ON s.id = m.session_id
     WHERE s.tool = 'copilot' AND m.id > ?1 AND m.role = 'system'

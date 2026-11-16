@@ -8,7 +8,6 @@ import { inferredReasoningTokens } from "./sources/claude.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import { materializeSessionEconomics } from "./token-economics.ts";
 
-/** What one session's copy of an API request says about where it came from. */
 interface RequestClaim {
   sourceSessionId: string;
   startedAt: string | null;
@@ -33,7 +32,6 @@ interface OwnerRow {
   message_id: number;
 }
 
-/** The usage taken off one copy, as `unbilled_request` keeps it. */
 interface UnbilledCopy {
   messageId: number;
   requestId: string;
@@ -61,18 +59,15 @@ interface CopyRow {
   totals_reduced: number;
 }
 
-/** One session's stored reply to a request. */
 interface Holder {
   sessionId: number;
   messageId: number;
-  /** What was taken off the reply, while another session bills the request. */
   copy: CopyRow | null;
   claim: RequestClaim;
 }
 
 interface Changes {
   removed: Map<number, Removal>;
-  /** Sessions that bill a request again, with the usage their totals get back. */
   restored: Map<number, TokenUsage>;
 }
 
@@ -86,19 +81,15 @@ const BILLED = `(m.input_tokens IS NOT NULL OR m.output_tokens IS NOT NULL
 
 const NO_SESSIONS: ReadonlySet<number> = new Set();
 
-/** Bill each Claude Code API request in one session only. `/branch` and
- * `--fork-session` copy earlier turns into a new transcript with their usage,
- * so the same request can be stored under several sessions. The copy keeps its
- * transcript row and loses its usage. Works from stored rows, so it also
- * reaches sessions whose source files are gone. Runs inside the caller's
- * transaction; `refreshSelf` is false when the caller derives this session's
- * usage, cost, and context afterwards. `unsettled` names requests whose holders
- * changed when this session's previous rows were removed. */
+export interface ReconcileBilledRequestsOptions {
+  refreshReconciledSession: boolean;
+  unsettled?: Iterable<string>;
+}
+
 export function reconcileBilledRequests(
   db: Database,
   sessionId: number,
-  refreshSelf: boolean,
-  unsettled: Iterable<string> = [],
+  { refreshReconciledSession, unsettled = [] }: ReconcileBilledRequestsOptions,
 ): void {
   const session = queryRow<{ tool: string }>(db, "SELECT tool FROM session WHERE id = ?1", [
     sessionId,
@@ -150,11 +141,9 @@ export function reconcileBilledRequests(
   for (const requestId of pending) {
     settle(db, requestId, null, NO_SESSIONS, changes);
   }
-  applyChanges(db, changes, (affected) => affected !== sessionId || refreshSelf);
+  applyChanges(db, changes, (affected) => affected !== sessionId || refreshReconciledSession);
 }
 
-/** Before sessions are deleted, settle their requests among the sessions that
- * stay. An unchanged copy is never re-read, so it would stay unbilled. */
 export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): void {
   const gone = new Set(sessionIds);
   const requests = new Set<string>();
@@ -170,7 +159,6 @@ export function releaseBilledRequests(db: Database, sessionIds: readonly number[
   applyChanges(db, changes, () => true);
 }
 
-/** The requests whose holders change when this session's rows go. */
 export function unsettledRequests(db: Database, sessionId: number): string[] {
   return queryRows<{ request_id: string }>(
     db,
@@ -183,8 +171,6 @@ export function unsettledRequests(db: Database, sessionId: number): string[] {
   ).map((row) => row.request_id);
 }
 
-/** Bill a request in the first of the sessions that hold it, apart from `gone`.
- * `fresh` is a reply being written that neither table names yet. */
 function settle(
   db: Database,
   requestId: string,
@@ -244,8 +230,6 @@ function settle(
   );
 }
 
-/** Ranks within the holders only, so the owner depends on which sessions hold
- * the request and never on the order they were read in. */
 function firstHolder(holders: readonly Holder[]): Holder | null {
   const bySource = new Map(holders.map((holder) => [holder.claim.sourceSessionId, holder]));
   let best: { holder: Holder; copy: boolean; depth: number } | null = null;
@@ -262,7 +246,6 @@ function firstHolder(holders: readonly Holder[]): Holder | null {
   return best?.holder ?? null;
 }
 
-/** A cycle stops the count where it closes. */
 function lineageDepth(holder: Holder, bySource: ReadonlyMap<string, Holder>): number {
   const seen = new Set<Holder>([holder]);
   let current = holder;
@@ -290,7 +273,6 @@ function ranksBefore(
   const aStart = a.holder.claim.startedAt;
   const bStart = b.holder.claim.startedAt;
   if (aStart !== bStart) {
-    // A session with no start time ranks after any session that has one.
     return bStart == null || (aStart != null && aStart < bStart);
   }
   return a.holder.claim.sourceSessionId < b.holder.claim.sourceSessionId;
@@ -347,7 +329,6 @@ function restore(db: Database, copy: CopyRow, restored: Map<number, TokenUsage>)
     copy.message_id,
   ]);
   const usage = restored.get(copy.session_id) ?? emptyUsage();
-  // Totals a `result` record set for the new run alone never counted the copy.
   if (copy.totals_reduced !== 0) {
     usage.input += copy.input_tokens ?? 0;
     usage.output += copy.output_tokens ?? 0;
@@ -363,8 +344,6 @@ function applyChanges(
   changes: Changes,
   refreshDerived: (sessionId: number) => boolean,
 ): void {
-  // Restored usage goes back first, because the check for totals that cover
-  // every billed request counts the restored replies.
   for (const [sessionId, usage] of changes.restored) {
     runStatement(
       db,
@@ -462,16 +441,12 @@ function recordUnbilled(
        cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, totals_reduced)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
   );
-  // A restore puts back what the clamp took, which can differ from the replies'
-  // own one-hour writes. It also caps the one-hour total at the cache writes.
   let left = taken1h ?? 0;
   const ownShares = copies.map((copy) => {
     const share = Math.min(copy.cacheCreation1h, left);
     left -= share;
     return share;
   });
-  // The rest goes to copies with cache writes to spare. Anything still left is
-  // more than the copies wrote, and no restore could keep it.
   const shares = copies.map((copy, index) => {
     const own = ownShares[index] ?? 0;
     const extra = Math.min((copy.cacheCreation ?? 0) - own, left);
@@ -583,10 +558,6 @@ function subtractFromTotals(db: Database, sessionId: number, removed: TokenUsage
   return row.cache_creation_1h - cacheCreation1h;
 }
 
-/** Recompute the reasoning estimate from the session's stored replies, leaving
- * out the requests another session bills. A copied turn's thinking says nothing
- * about the turns that stay, so scaling the old estimate would misplace it.
- * Losing turns cannot raise an estimate of zero, so that case skips the read. */
 function refreshReasoningEstimate(db: Database, sessionId: number, lostTurns: boolean): void {
   const session = queryRow<{ output: number; estimate: number }>(
     db,
@@ -611,8 +582,6 @@ function refreshReasoningEstimate(db: Database, sessionId: number, lostTurns: bo
   );
   let estimate: number;
   try {
-    // Without a `result` record the total is the replies' own output, which
-    // the estimate never exceeds, so the cap only binds where the parser's does.
     estimate = inferredReasoningTokens(
       storedRecords(replies.iterate(sessionId), copied),
       session.output,

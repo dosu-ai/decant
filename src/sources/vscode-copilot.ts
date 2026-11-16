@@ -25,17 +25,10 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-/** What ingest reads beside a session file, so the parser stays pure. */
 export interface VscodeCopilotContext {
-  /** `workspace.json` from the session's workspace storage directory:
-   * `{ folder }` for a folder window, `{ workspace }` for a `.code-workspace`
-   * file. Null for an empty window, whose sessions have no workspace. */
   workspace?: Json | null;
 }
 
-/** Response part kinds VS Code persists that add nothing to the normalized
- * transcript. They stay in `message.raw`. Any other kind is reported as an
- * unknown record type, Decant's format-drift signal. */
 const IGNORED_PART_KINDS = new Set([
   "autoModeResolution",
   "clearToPreviousToolInvocation",
@@ -127,29 +120,6 @@ interface TurnMetadata {
   results: Map<string, string>;
 }
 
-/**
- * Copilot Chat in VS Code session format.
- *
- * VS Code stores each local chat session under the window's storage: a
- * workspace's `workspaceStorage/<id>/chatSessions/<session id>.jsonl`, or an
- * empty window's `globalStorage/emptyWindowChatSessions/`. VS Code 1.109 and
- * later write the `.jsonl` file as a mutation log: the first line is
- * `{ kind: 0, v: <session> }`, and each later line sets (`kind: 1`), pushes to
- * (`kind: 2`), or deletes (`kind: 3`) the value at path `k`. Replaying the log
- * rebuilds the same session object that older builds wrote whole to
- * `<session id>.json`, so both files parse the same way after loading.
- *
- * Each request is one turn: the user's message, then the response parts in
- * order. Markdown and thinking parts become text and thinking blocks, and each
- * serialized tool invocation becomes a `tool_use` block followed by a tool
- * message with its result. The Copilot extension's `result.metadata` adds the
- * arguments and result text of each tool call by ID.
- *
- * Usage is per request and partial. `completionTokens` sums the output of
- * every model call in the turn, but `promptTokens` is only the last call's
- * prompt, cache reads included, and no cache split is written. Requests from
- * builds that predate those fields carry no usage at all.
- */
 export function parseVscodeCopilotSession(
   fallbackId: string,
   content: string,
@@ -157,7 +127,6 @@ export function parseVscodeCopilotSession(
 ): ParsedSession {
   const issues: Issue[] = [];
   const unknownTypes: UnknownTypes = new Map();
-  // Parts are read after the log is replayed, so they have no line number.
   const unknownParts = new Map<string, number>();
   const { state, storage } = loadSession(content, issues, unknownTypes);
   let root: JsonObject = state ?? {};
@@ -217,8 +186,6 @@ export function parseVscodeCopilotSession(
     if (userText !== "") {
       firstUserText ??= userText;
     }
-    // A request VS Code sent on its own, such as a background terminal
-    // notice, is not something the user typed.
     push(
       request.isSystemInitiated === true ? "system" : "user",
       userRecord,
@@ -227,8 +194,6 @@ export function parseVscodeCopilotSession(
       { sourceUuid: requestId },
     );
 
-    // Each assistant message holds the parts read since the previous message,
-    // so the raw records of a turn's messages together hold its whole response.
     let blocks: NormalizedBlock[] = [];
     let consumed: Json[] = [];
     let text = "";
@@ -261,7 +226,6 @@ export function parseVscodeCopilotSession(
 
     for (const part of parts) {
       if (typeof part === "string") {
-        // The oldest builds stored a whole response as one string.
         text += part;
         consumed.push(part);
         continue;
@@ -271,7 +235,6 @@ export function parseVscodeCopilotSession(
       }
       const kind = asString(part.kind);
       if (kind == null) {
-        // A markdown part is stored as the bare markdown string object.
         const value = asString(part.value);
         if (value != null) {
           text += value;
@@ -424,8 +387,6 @@ export function parseVscodeCopilotSession(
 
 type Storage = "log" | "json";
 
-/** Read a session file in either storage format. A mutation log is told
- * apart by its entries' numeric `kind`; a flat file is one JSON object. */
 function loadSession(
   content: string,
   issues: Issue[],
@@ -445,15 +406,12 @@ function loadSession(
       return { state: null, storage: "json" };
     }
   } else if (!isLogEntry(filled[0] ?? "")) {
-    // VS Code writes a flat file on one line; a reformatted copy spans many.
     try {
       const whole = parseSourceJson(content) as Json;
       if (isObject(whole)) {
         return { state: whole, storage: "json" };
       }
-    } catch {
-      // Not one JSON document either: replay it and report the bad lines.
-    }
+    } catch {}
   }
   return { state: replayLog(lines, issues, unknownTypes), storage: "log" };
 }
@@ -467,10 +425,8 @@ function isLogEntry(line: string): boolean {
   }
 }
 
-/** Rebuild the session from VS Code's `ObjectMutationLog`
- * (`src/vs/workbench/contrib/chat/common/model/objectMutationLog.ts`). A
- * line that cannot be applied is reported and skipped, so one bad entry
- * never loses the rest of the session. */
+/** VS Code's `ObjectMutationLog`
+ * (`src/vs/workbench/contrib/chat/common/model/objectMutationLog.ts`). */
 function replayLog(
   lines: string[],
   issues: Issue[],
@@ -607,8 +563,6 @@ function responseParts(response: Json | undefined): Json[] {
   return typeof response === "string" ? [response] : [];
 }
 
-/** `message` is an `IParsedChatRequest` (`{ text, parts }`) or, in the oldest
- * files, a plain string. */
 function messageText(message: Json | undefined): string {
   if (typeof message === "string") {
     return message;
@@ -626,7 +580,6 @@ function thinkingText(value: Json | undefined): string {
   return "";
 }
 
-/** The name VS Code shows for a file or symbol link inside response text. */
 function inlineReferenceName(part: JsonObject): string {
   const name = asString(part.name);
   if (name != null && name !== "") {
@@ -641,8 +594,6 @@ function inlineReferenceName(part: JsonObject): string {
   return path == null ? "" : (path.split("/").filter(Boolean).at(-1) ?? path);
 }
 
-/** Where the request's response finished: the completion VS Code recorded,
- * else the request time plus the elapsed time it measured. */
 function responseEndTime(request: JsonObject): string | null {
   const completedAt = epochIso(get(request.modelState, "completedAt"));
   if (completedAt != null) {
@@ -666,7 +617,7 @@ function isCancelled(request: JsonObject): boolean {
 }
 
 /** VS Code names a model `<vendor>/<id>`, or `<vendor>/<group>/<id>` for some
- * providers. Pricing matches on the provider's own model ID. */
+ * providers. */
 export function vscodeModelId(identifier: string | null): string | null {
   if (identifier == null || identifier.trim() === "") {
     return null;
@@ -700,7 +651,7 @@ function turnModel(request: JsonObject, parts: Json[]): string | null {
 }
 
 /** Token counts VS Code wrote for the turn: output summed over every model
- * call, and the last call's prompt. Null when the build wrote neither. */
+ * call, and the last call's prompt. */
 function turnUsage(request: JsonObject): TokenUsage | null {
   const prompt = tokenCount(request.promptTokens);
   const completion = tokenCount(request.completionTokens);
@@ -767,8 +718,6 @@ function parseArguments(value: string): Json {
   }
 }
 
-/** Text a tool result holds. A `LanguageModelToolResult` has `content` parts
- * with a string `value`, and a prompt-tsx part nests `text` pieces in a tree. */
 function collectText(value: Json | undefined, out: string[] = []): string[] {
   if (typeof value === "string") {
     out.push(value);
@@ -792,8 +741,6 @@ function collectText(value: Json | undefined, out: string[] = []): string[] {
   return out;
 }
 
-/** MCP tools are renamed `mcp__<server>__<tool>` so `classifyTool` sees
- * them. Copilot's own tools take the name the model calls them by. */
 function toolName(part: JsonObject, recorded: RecordedToolCall | undefined): string | null {
   const toolId = asString(part.toolId);
   const source = part.source;
@@ -848,8 +795,6 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
 }
 
-/** VS Code's serialized invocation keeps no arguments, so they come from the
- * extension's record of the call, else from what the tool showed the user. */
 function toolInput(part: JsonObject, recorded: RecordedToolCall | undefined): Json | undefined {
   if (recorded?.arguments !== undefined) {
     return recorded.arguments;
@@ -882,8 +827,6 @@ function toolInput(part: JsonObject, recorded: RecordedToolCall | undefined): Js
   return detailInput == null ? undefined : parseArguments(detailInput);
 }
 
-/** The result as the model read it when the extension recorded it, else the
- * output VS Code kept for display. Null for a call that never finished. */
 function toolResult(
   part: JsonObject,
   recorded: string | undefined,
@@ -952,8 +895,6 @@ function markdownValue(value: Json | undefined): string | null {
   return text == null || text === "" ? null : text;
 }
 
-/** A file path from a serialized URI: `UriComponents` or a URI string. Remote
- * windows keep the remote path, which is the project's path on that host. */
 export function uriPath(value: Json | undefined): string | null {
   let path: string | null = null;
   if (typeof value === "string") {
@@ -984,8 +925,6 @@ function workspaceLocation(
   if (folder != null) {
     return { projectPath: folder, cwd: folder };
   }
-  // A multi-root workspace has no single working directory; the folder that
-  // holds its `.code-workspace` file stands in for the project.
   const file = uriPath(get(workspace ?? undefined, "workspace"));
   if (file != null) {
     const slash = file.lastIndexOf("/");
@@ -994,7 +933,6 @@ function workspaceLocation(
   return { projectPath: null, cwd: null };
 }
 
-/** The model that did the most work: most output tokens, else most replies. */
 function sessionModel(weights: Map<string, { output: number; messages: number }>): string | null {
   let best: { model: string; output: number; messages: number } | null = null;
   for (const [model, weight] of weights) {
@@ -1027,7 +965,6 @@ function rawMetaFrom(root: JsonObject, storage: Storage, workspace: Json | null)
   }
   const repoData = root.repoData;
   if (isObject(repoData)) {
-    // Working-tree diffs can be large and are not session metadata.
     const { diffs: _diffs, ...repo } = repoData;
     meta.repoData = repo;
   }
@@ -1046,7 +983,6 @@ function tokenCount(value: Json | undefined): number | null {
   return number == null || number < 0 ? null : Math.floor(number);
 }
 
-/** VS Code records times as epoch milliseconds. */
 function epochIso(value: Json | undefined): string | null {
   const ms = finiteNumber(value);
   if (ms == null || ms <= 0) {

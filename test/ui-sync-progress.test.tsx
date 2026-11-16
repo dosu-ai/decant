@@ -61,7 +61,6 @@ describe("sync progress in the shell", () => {
     expect(html).not.toContain("aria-live");
     expect(html).not.toContain('role="status"');
     expect(html).not.toContain('role="alert"');
-    // The notice's own bar is decorative: the topbar line is the one progress bar.
     expect(html.match(/role="progressbar"/g)).toHaveLength(1);
     expect(html).toContain('aria-hidden="true" class="sync-notice-bar"');
   });
@@ -121,7 +120,6 @@ describe("first-sync states", () => {
   test("Analytics marks partial numbers as still loading in", () => {
     const html = analytics(true);
     expect(html).toContain("These numbers are still loading in.");
-    // Panels read as loading, not as an archive with nothing in range.
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain("No sessions in range");
     const settled = analytics(false);

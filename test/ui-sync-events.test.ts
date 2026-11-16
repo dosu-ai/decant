@@ -21,8 +21,6 @@ import type { SyncProgress, SyncStatus } from "../src/ui/types.ts";
 
 test("manual and startup syncs run in the foreground", () => {
   expect(isForegroundSync("manual")).toBe(true);
-  // The startup sync fills a fresh archive while the page first opens, so the
-  // UI shows it and loads its results instead of waiting for an Update click.
   expect(isForegroundSync("startup")).toBe(true);
 });
 
@@ -63,8 +61,6 @@ test("stats rebuilds unrelated to a foreground sync stay deferred", () => {
     offerUpdate: true,
     awaitingStats: false,
   });
-  // A background sync between the foreground sync and its rebuild does not
-  // consume the pending stats refresh.
   expect(planArchiveUpdate("watch", true, false)).toEqual({
     refresh: false,
     offerUpdate: true,
@@ -73,8 +69,6 @@ test("stats rebuilds unrelated to a foreground sync stay deferred", () => {
 });
 
 test("background updates during a foreground sync wait for that sync's refresh", () => {
-  // On first launch the boot-time stats rebuild lands mid startup sync; it must
-  // not relabel the busy sync button as "Load new activity".
   expect(planArchiveUpdate("stats", false, true)).toEqual({
     refresh: false,
     offerUpdate: false,
@@ -127,17 +121,12 @@ describe("live Sessions refresh", () => {
   test("a due refresh reloads the list, falls back to Update, or defers to a foreground sync", () => {
     const reading = { nearTop: true, visible: true };
     expect(liveSessionsAction(true, false, reading)).toBe("refresh");
-    // The page stopped qualifying while the refresh waited, so the change is
-    // offered through Update instead of being dropped.
     expect(liveSessionsAction(false, false, reading)).toBe("offer_update");
-    // A running foreground sync refreshes the page when it finishes.
     expect(liveSessionsAction(true, true, reading)).toBe("none");
     expect(liveSessionsAction(false, true, reading)).toBe("none");
   });
 
   test("holds a refresh for a reader scrolled down the list or a hidden tab", () => {
-    // Rows inserted at the top would push a scrolled reader's place down the
-    // page, and a hidden tab has no one to keep current.
     expect(liveSessionsAction(true, false, { nearTop: false, visible: true })).toBe("offer_update");
     expect(liveSessionsAction(true, false, { nearTop: true, visible: false })).toBe("offer_update");
   });
@@ -237,7 +226,6 @@ describe("sync state restored from the status route", () => {
       ended: true,
       failure: "disk full",
     });
-    // An older failure is not blamed on a background sync that is running now.
     expect(
       restoreSync(
         status({ in_progress: true, reason: "watch", last_error: "disk full" }),
@@ -263,8 +251,6 @@ describe("sync state restored from the status route", () => {
   });
 
   test("a sync only an overtaken status answer saw running loads its results when it ends", () => {
-    // The mount read saw a startup sync, the stream-open read overtook it, and
-    // the sync finished before the stream connected.
     const running = status({ in_progress: true, reason: "startup", progress });
     const pendingNewer = { newerApplied: false, syncing: false };
     expect(supersededStatus(running, pendingNewer)).toEqual({ sawSync: true, readAgain: false });
@@ -273,7 +259,6 @@ describe("sync state restored from the status route", () => {
       ended: true,
       failure: null,
     });
-    // Still running when the newer answer lands: it shows, and its end refreshes later.
     expect(restoreSync(running, { ...idleTab, sawSync: true })).toMatchObject({
       syncing: true,
       ended: false,
@@ -286,7 +271,6 @@ describe("sync state restored from the status route", () => {
       sawSync: true,
       readAgain: true,
     });
-    // A sync the tab already shows reports its own end.
     expect(supersededStatus(running, { newerApplied: true, syncing: true }).readAgain).toBe(false);
   });
 
@@ -347,7 +331,6 @@ describe("sync progress copy", () => {
     expect(syncAnnouncement(at(100, 1254))).toBe("Syncing session logs");
     expect(syncAnnouncement(at(627, 1254))).toBe("Syncing session logs, 50% done");
     expect(syncAnnouncement(at(1253, 1254))).toBe("Syncing session logs, 90% done");
-    // The last file is not the end of the sync, so "Sync complete" says 100%.
     expect(syncAnnouncement(at(1254, 1254))).toBe("Syncing session logs, 90% done");
   });
 

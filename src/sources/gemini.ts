@@ -19,7 +19,6 @@ import {
 } from "./shared.ts";
 
 export interface GeminiParseOptions {
-  /** Source id of the parent chat when the file lives under `chats/<parent>/`. */
   parentSessionId?: string | null;
 }
 
@@ -33,20 +32,6 @@ interface Replay {
   messages: ReplayedRecord[];
 }
 
-/**
- * Gemini CLI session format (`.gemini/tmp/<project>/chats/session-<ts>-<hash>.jsonl`;
- * subagent chats live under `chats/<parent-session-id>/<session-id>.jsonl`).
- *
- * The file is an event log rather than a list of independent messages, so it
- * is replayed the way Gemini CLI's own loader replays it before normalizing:
- *  - Metadata (line 0): `{ sessionId, projectHash, startTime, lastUpdated, kind }`
- *  - Message: `{ id, timestamp, type: "user"|"gemini"|"info"|…, content, tokens?, model?, toolCalls?, thoughts? }`.
- *    A repeated `id` replaces the earlier record in place; Gemini re-appends a
- *    turn whenever usage or tool calls arrive after its text.
- *  - `{ $set: {…} }` merges metadata, and `$set.messages` replaces every message.
- *  - `{ $rewindTo: id }` removes that message and everything after it.
- *  - Tool results are user records whose content holds `{ functionResponse }`.
- */
 export function parseGeminiSession(
   fallbackId: string,
   content: string,
@@ -110,7 +95,6 @@ export function parseGeminiSession(
       const tokenRecord = value.tokens;
       sawReportedReasoning ||= isObject(tokenRecord) && hasKey(tokenRecord, "thoughts");
       const usage = usageFrom(tokenRecord);
-      // Gemini records usage for each model turn, so session totals are the sum.
       totals = addUsage(totals, usage);
 
       const contentBlocks = parseGeminiContent(value.content);
@@ -198,7 +182,6 @@ export function parseGeminiSession(
   return { session: normalized, issues };
 }
 
-/** Replay the event log into Gemini's in-memory conversation shape. */
 function replay(
   content: string,
   issues: ParsedSession["issues"],
@@ -257,7 +240,6 @@ function replay(
 }
 
 function rewind(messages: Map<string, ReplayedRecord>, id: string): void {
-  // Gemini clears the whole conversation when the rewind target is unknown.
   if (!messages.has(id)) {
     messages.clear();
     return;
@@ -287,7 +269,6 @@ function setCheckpoint(
 function rawMetaFrom(metadata: JsonObject, parentSessionId: string | null): Json {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(metadata)) {
-    // Messages are normalized separately and the scratchpad is transcript-derived.
     if (key !== "messages" && key !== "memoryScratchpad") {
       meta[key] = value;
     }
@@ -316,7 +297,6 @@ function parseUserContent(
   for (const item of content) {
     const text = asString(get(item, "text"));
     if (text != null) {
-      // Skip the boilerplate session-context injection Gemini prepends
       const trimmed = text.trimStart();
       if (!trimmed.startsWith("<session_context>") && !trimmed.startsWith("<hook_context>")) {
         blocks.push(textBlock(ordinal++, text));
@@ -331,7 +311,6 @@ function parseUserContent(
       const response = get(funcResponse, "response");
       if (callId != null && seenToolResultIds.has(callId)) {
         // Gemini may repeat a completed function response in a later record.
-        // Keep the source record without creating a second linked result.
         blocks.push(otherBlock(ordinal++, item));
         continue;
       }
@@ -380,8 +359,6 @@ function parseToolCalls(toolCalls: Json | undefined, startOrdinal: number): Norm
   const blocks: NormalizedBlock[] = [];
   let ordinal = startOrdinal;
   for (const call of toolCalls) {
-    // `result` is a UI snapshot. Gemini also writes the canonical
-    // functionResponse as its own user record, which supplies linkage and raw.
     const name = normalizedToolName(call);
     const args = get(call, "args") ?? get(call, "function_args") ?? get(call, "input");
     const callId = asString(get(call, "id")) ?? name;
@@ -436,7 +413,6 @@ function parseThoughts(thoughts: Json | undefined, startOrdinal: number): Normal
   return blocks;
 }
 
-/** Gemini records thought summaries as `{ subject, description }` pairs. */
 function thoughtText(thought: Json): string | null {
   const subject = asString(get(thought, "subject"))?.trim() ?? "";
   const description = asString(get(thought, "description"))?.trim() ?? "";
@@ -460,8 +436,7 @@ function usageFrom(tokens: Json | undefined): TokenUsage {
   }
   // Gemini's `input` (promptTokenCount) already contains `cached`
   // (cachedContentTokenCount), and `thoughts` (thoughtsTokenCount) is billed as
-  // output but reported outside `output` (candidatesTokenCount). Decant prices
-  // input and cache reads separately and treats reasoning as a subset of output.
+  // output but reported outside `output` (candidatesTokenCount).
   const cached = getInteger(tokens, "cached");
   const thoughts = getInteger(tokens, "thoughts");
   return {

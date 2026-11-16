@@ -29,7 +29,6 @@ function fixtureFiles(tool: string, extension = ".jsonl"): string[] {
     .sort();
 }
 
-/** Each Copilot fixture is a session directory holding its `events.jsonl`. */
 function copilotFixtureNames(): string[] {
   return readdirSync(join(import.meta.dir, "..", "fixtures", "copilot"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -100,7 +99,6 @@ function stageFixtures(caseDir: string): {
       join(copilotDir, session, "events.jsonl"),
     );
   }
-  // The VS Code fixtures are laid out as a `User` directory already.
   cpSync(join(import.meta.dir, "..", "fixtures", "vscode-copilot", "User"), vscodeCopilotDir, {
     recursive: true,
   });
@@ -124,8 +122,6 @@ function stageFixtures(caseDir: string): {
   };
 }
 
-/** Flat, as scripts/regen-goldens.ts stages them: Harbor's job layout would
- * make the temporary job directory a project. */
 function stageAtifFlat(atifDir: string): void {
   mkdirSync(atifDir, { recursive: true });
   const root = join(import.meta.dir, "..", "fixtures", "atif");
@@ -231,11 +227,8 @@ describe("CLI golden parity", () => {
         env: {
           ...process.env,
           DECANT_OPENCODE_CONFIG: opencodeConfigPath,
-          // OpenCode's own variables would add or relocate configs outside
-          // the fixtures.
           OPENCODE_CONFIG: undefined,
           OPENCODE_CONFIG_DIR: join(caseDir, "opencode-config"),
-          // Never the user's own models.dev cache.
           OPENCODE_MODELS_PATH: join(caseDir, "opencode-cache", "models.json"),
         },
       },

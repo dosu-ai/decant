@@ -33,11 +33,6 @@ import { DECANT_VERSION } from "./version.ts";
 
 export type { CliResult, CliRunOptions };
 
-/**
- * Bare `decant` is the fast entrypoint: it serves the UI. Only a completely
- * empty argv rewrites — flag-only invocations stay errors because token
- * splitting makes them ambiguous, and typos must never boot a server.
- */
 export function defaultArgv(argv: string[]): string[] {
   return argv.length === 0 ? ["serve"] : argv;
 }
@@ -126,8 +121,6 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       return;
     }
     noticeCommand = command;
-    // Started before the command runs so a slow registry overlaps its work.
-    // checkForUpdate does nothing over the network unless the user opted in.
     ctx.pendingUpdateNotice = checkForUpdate({
       env: options.env,
       homeDir: options.homeDir,
@@ -135,17 +128,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       current: deps.current,
       fetch: deps.fetch,
       now: deps.now,
-      // A short command exits only after this request settles, so it gets the
-      // notice's wait. serve stays up and shares this check with /api/update,
-      // so a slow registry there should not count as a failed check.
       timeoutMs: command === "serve" ? undefined : UPDATE_NOTICE_WAIT_MS,
     });
   });
 
   try {
     await program.parseAsync(defaultArgv(argv), { from: "user" });
-    // serve prints its own notice under the banner; it never gets here
-    // until the server stops.
     if (ctx.pendingUpdateNotice != null && noticeCommand !== "serve") {
       const notice = await settleWithin(
         ctx.pendingUpdateNotice.then(renderUpdateNotice, () => null),
@@ -156,13 +144,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       }
     }
   } catch (error) {
-    // The flags may not be parsed yet when the command line itself is wrong.
     const json = ctx.isJson() || argvRequestsJson(argv);
     if (error instanceof CliError || !isCommanderExit(error)) {
       setCode(ctx.fail(toCliError(error), json));
     } else if (HELP_EXITS.has(error.code ?? "")) {
       const exitCode = commanderExitCode(error);
-      // A command group run without a subcommand prints its help and fails.
       if (exitCode !== 0 && json) {
         ctx.fail(usageError("usage_error", "a subcommand is required; see the help above"), json);
       }
@@ -188,8 +174,6 @@ function isCommanderExit(error: unknown): error is CommanderExit {
   return typeof error === "object" && error !== null && "exitCode" in error;
 }
 
-// The entrypoint sets process.exitCode and lets the event loop drain, so a
-// timer left running would hold every command open for the full wait.
 async function settleWithin<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => {
@@ -210,7 +194,6 @@ function topLevelName(command: Command): string {
   return current.name();
 }
 
-/** The command's name under `decant`, such as "session show". */
 function commandPath(command: Command): string {
   const names: string[] = [];
   for (let current = command; current.parent != null; current = current.parent) {

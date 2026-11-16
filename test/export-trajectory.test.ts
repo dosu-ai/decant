@@ -313,7 +313,6 @@ describe("exportTrajectory", () => {
         tool_calls: { args: string }[];
       }
     ).tool_calls[0]?.args;
-    // The stored canonical JSON literal is unwrapped once: the raw text, not "\"not-an-object\"".
     expect(JSON.parse(args ?? "{}")).toEqual({ _raw: "not-an-object" });
     db.close();
   });
@@ -391,8 +390,6 @@ describe("exportTrajectory", () => {
     expect(out.report.tool_call_ids_renamed).toBe(1);
     expect(out.report.tool_call_ids_synthesized).toBe(1);
 
-    // Two calls, three results: each result pairs with the next unanswered call
-    // in appearance order, and the surplus is dropped rather than duplicated.
     const results = out.records.filter(
       (r): r is { tool_call_id: string; content: string } =>
         typeof r === "object" && r != null && (r as { role?: string }).role === "tool",
@@ -403,13 +400,17 @@ describe("exportTrajectory", () => {
     ]);
     expect(out.report.duplicate_tool_results_dropped).toBe(1);
 
-    // The empty text block and the image block carry no wire content.
     expect(out.report.dropped_blocks).toEqual({ text: 1, other: 1 });
     db.close();
   });
 
   test("probes past a source id that already looks like one of our renames", () => {
     const db = openDb(join(workDir, "collide.db"));
+    const repeatedId = "t1";
+    const renameOfTheRepeat = `${repeatedId}__dup2`;
+    const sourceIdEqualToThatRename = renameOfTheRepeat;
+    const renameProbedPastTheCollision = `${sourceIdEqualToThatRename}__dup2`;
+    expect(renameProbedPastTheCollision).toBe("t1__dup2__dup2");
     const lines = [
       JSON.stringify({
         type: "user",
@@ -422,10 +423,9 @@ describe("exportTrajectory", () => {
         message: {
           role: "assistant",
           content: [
-            { type: "tool_use", id: "t1", name: "Bash", input: { n: 1 } },
-            { type: "tool_use", id: "t1", name: "Bash", input: { n: 2 } },
-            // Renaming the line above to t1__dup2 would collide with this id.
-            { type: "tool_use", id: "t1__dup2", name: "Bash", input: { n: 3 } },
+            { type: "tool_use", id: repeatedId, name: "Bash", input: { n: 1 } },
+            { type: "tool_use", id: repeatedId, name: "Bash", input: { n: 2 } },
+            { type: "tool_use", id: sourceIdEqualToThatRename, name: "Bash", input: { n: 3 } },
           ],
         },
       }),
@@ -434,7 +434,7 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:02.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1", content: "first" }],
+          content: [{ type: "tool_result", tool_use_id: repeatedId, content: "first" }],
         },
       }),
       JSON.stringify({
@@ -442,7 +442,7 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:03.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1", content: "second" }],
+          content: [{ type: "tool_result", tool_use_id: repeatedId, content: "second" }],
         },
       }),
       JSON.stringify({
@@ -450,7 +450,9 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:04.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1__dup2", content: "third" }],
+          content: [
+            { type: "tool_result", tool_use_id: sourceIdEqualToThatRename, content: "third" },
+          ],
         },
       }),
       JSON.stringify({
@@ -476,20 +478,18 @@ describe("exportTrajectory", () => {
         return typeof r === "object" && r != null && "tool_calls" in r;
       })
       .map((r) => r.tool_calls[0]?.id);
-    expect(callIds).toEqual(["t1", "t1__dup2", "t1__dup2__dup2"]);
+    expect(callIds).toEqual([repeatedId, renameOfTheRepeat, renameProbedPastTheCollision]);
     expect(new Set(callIds).size).toBe(callIds.length);
     expect(out.report.tool_call_ids_renamed).toBe(2);
 
-    // Results stay keyed to the call that produced them: the third result names
-    // source id t1__dup2, whose own call was renamed to t1__dup2__dup2.
     const results = out.records.filter(
       (r): r is { tool_call_id: string; content: string } =>
         typeof r === "object" && r != null && (r as { role?: string }).role === "tool",
     );
     expect(results.map((r) => [r.tool_call_id, r.content])).toEqual([
-      ["t1", "first"],
-      ["t1__dup2", "second"],
-      ["t1__dup2__dup2", "third"],
+      [repeatedId, "first"],
+      [renameOfTheRepeat, "second"],
+      [renameProbedPastTheCollision, "third"],
     ]);
     expect(out.report.duplicate_tool_results_dropped).toBe(0);
     db.close();
@@ -553,7 +553,6 @@ describe("exportTrajectory", () => {
     expect([...(args ?? "")].length).toBeLessThanOrEqual(20000);
     const decoded = JSON.parse(args ?? "{}") as Record<string, string>;
     expect(Object.keys(decoded)).toEqual(["big", "keep"]);
-    // The small field survives untouched; only the oversized leaf is truncated.
     expect(decoded.keep).toBe("me");
     expect(decoded).not.toHaveProperty("_raw");
     expect(decoded.big?.startsWith("z")).toBe(true);
@@ -564,8 +563,6 @@ describe("exportTrajectory", () => {
 
   test("falls back to a _raw wrap when the overage is structural", () => {
     const db = openDb(join(workDir, "manykeys.db"));
-    // 1200 fields whose values are all shorter than the truncation marker, so no
-    // leaf can shrink usefully and the cap is only reachable by wrapping.
     const input: Record<string, string> = {};
     for (let index = 0; index < 1200; index += 1) {
       input[`key${String(index).padStart(4, "0")}`] = "v".repeat(20);
@@ -637,7 +634,6 @@ describe("exportTrajectory", () => {
   test("normalizes offset timestamps and never corrupts bare ±hh offsets", () => {
     const db = openDb(join(workDir, "offsets.db"));
     const lines = [
-      // No-colon four-digit offset: parseable, must normalize to the UTC instant.
       JSON.stringify({
         type: "user",
         timestamp: "2026-07-01T00:00:00+0530",
@@ -731,9 +727,6 @@ describe("exportTrajectory", () => {
     expect(records.filter((r) => r.role === "user").map((r) => r.content)).toEqual([
       "list the files",
     ]);
-    // The Codex parser now stores developer and injected-context messages as
-    // system, so none reach the export as user records. The export-side check
-    // still covers archives ingested before that parser change.
     expect(out.report.injected_context_dropped).toBe(0);
     expect(out.report.tool_args_wrapped).toBe(0);
     const calls = out.records.flatMap((r) =>

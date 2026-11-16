@@ -14,8 +14,6 @@ import {
   TOOLS,
 } from "../src/model.ts";
 
-// Ports model.rs `enum_strings_are_stable` / `all_enum_string_arms_are_stable`:
-// these are the wire strings stored in SQLite — they must never drift.
 describe("model wire strings", () => {
   test("every enum string is pinned", () => {
     expect(TOOLS).toEqual([

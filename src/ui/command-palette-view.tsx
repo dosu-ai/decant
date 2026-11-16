@@ -19,7 +19,7 @@ import {
   reduceCommandPaletteKey,
 } from "./command-palette.ts";
 import { fullDateTime } from "./date-time.ts";
-import { useDialogFocusTrap } from "./focus.ts";
+import { useBackdropDismiss, useDialogFocusTrap } from "./focus.ts";
 import {
   createSessionSearchIndex,
   fetchSessionSearchIndex,
@@ -100,8 +100,6 @@ export function CommandPalette({
 
   const fuzzyIndex: SessionSearchIndex = useMemo(() => createSessionSearchIndex(rows), [rows]);
 
-  // The index survives here across open and close; only the dialog body, which
-  // builds every item on each render, is unmounted while the palette is shut.
   return open ? (
     <CommandPaletteDialog
       {...dialogProps}
@@ -140,6 +138,7 @@ export function CommandPaletteDialog({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const activeItemIdRef = useRef<string | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef(onClose);
   const titleId = useId();
@@ -147,6 +146,7 @@ export function CommandPaletteDialog({
   closeRef.current = onClose;
   const requestClose = useCallback(() => closeRef.current(), []);
   useDialogFocusTrap(true, dialogRef, requestClose);
+  useBackdropDismiss(true, backdropRef, requestClose);
 
   const normalizedQuery = query.trim();
   const matches = useMemo(
@@ -297,15 +297,7 @@ export function CommandPaletteDialog({
     renderedActiveIndex == null ? undefined : `command-palette-item-${renderedActiveIndex}`;
   const quickMatchCount = sessionItems.length + pageItems.length + actionItems.length;
   return createPortal(
-    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
-    <div
-      className="command-palette-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          requestClose();
-        }
-      }}
-    >
+    <div className="command-palette-backdrop" ref={backdropRef}>
       <div
         aria-labelledby={titleId}
         aria-modal="true"
@@ -399,8 +391,7 @@ export function CommandPaletteDialog({
                 {group.items.map((item) => {
                   const index = items.indexOf(item);
                   return (
-                    // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard activation is owned by the combobox through aria-activedescendant.
-                    <div
+                    <button
                       aria-selected={index === activeIndex}
                       className={`command-palette-item is-${item.kind}${
                         index === activeIndex ? " is-active" : ""
@@ -417,6 +408,7 @@ export function CommandPaletteDialog({
                       }}
                       role="option"
                       tabIndex={-1}
+                      type="button"
                     >
                       <span className="command-palette-item-icon">
                         <Icon name={item.icon} />
@@ -448,7 +440,7 @@ export function CommandPaletteDialog({
                       ) : item.kind === "content-search" ? (
                         <kbd>↵</kbd>
                       ) : null}
-                    </div>
+                    </button>
                   );
                 })}
               </div>

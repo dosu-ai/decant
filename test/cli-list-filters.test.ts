@@ -8,8 +8,6 @@ import { closeDb, openDb } from "../src/db.ts";
 import { resolveProjectPath, resolveRepoRoots } from "../src/project-scope.ts";
 import { listSessions, search } from "../src/query.ts";
 
-// Every path, title, and remote here is invented. The directories exist only
-// so the typed-path cases have something real to resolve.
 const base = realpathSync(mkdtempSync(join(tmpdir(), "decant-list-filters-")));
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
@@ -21,7 +19,6 @@ const clone = join(base, "clone", "widget");
 const gadget = join(base, "gadget");
 const otherGadget = join(base, "other", "gadget");
 const orphan = "/synthetic/.t3/worktrees/orphan/t3-0002";
-// A repository with no remote, and sessions started in one of its packages.
 const local = join(base, "local");
 const fresh = join(base, "fresh");
 const link = join(base, "link");
@@ -34,7 +31,6 @@ writeFileSync(
   '[remote "origin"]\n\turl = https://example.test/acme/widget.git\n',
 );
 writeFileSync(join(widget, ".git", "worktrees", "fresh", "commondir"), "../..\n");
-// A linked worktree the archive has never seen a session in.
 mkdirSync(fresh, { recursive: true });
 writeFileSync(join(fresh, ".git"), `gitdir: ${join(widget, ".git", "worktrees", "fresh")}\n`);
 mkdirSync(join(local, ".git"), { recursive: true });
@@ -44,8 +40,6 @@ mkdirSync(join(home, "work"), { recursive: true });
 symlinkSync(widget, link);
 
 const dbPath = join(base, "archive.db");
-// The listing shows a session's first prompt as its title, so each prompt
-// doubles as the session's name. Three of them hold the search term.
 const SESSIONS: [project: number, day: string, prompt: string][] = [
   [1, "2026-03-01", "widget root one needle"],
   [1, "2026-03-05", "widget root two"],
@@ -128,8 +122,6 @@ const WIDGET_TITLES = [
   "widget root one needle",
 ];
 
-/** Run the real entry point from `cwd`, the one thing `runCli` cannot set. */
-/** The message of the JSON error object `--json` prints as stderr's last line. */
 function jsonError(stderr: string): { code: string; message: string } {
   return JSON.parse(stderr.trim().split("\n").at(-1) ?? "{}").error;
 }
@@ -179,7 +171,6 @@ describe("ls --project", () => {
       expect(resolveProjectPath(db, ".", { cwd: widget })).toEqual({ path: widget });
       expect(resolveProjectPath(db, "widget/", { cwd: base })).toEqual({ path: widget });
       expect(resolveProjectPath(db, "../gadget", { cwd: widget })).toEqual({ path: gadget });
-      // A stored path that is not on this machine still matches as typed.
       expect(resolveProjectPath(db, external, { cwd: base })).toEqual({ path: external });
     } finally {
       closeDb(db);
@@ -240,8 +231,6 @@ describe("ls --repo", () => {
 
   test("a directory inside a checkout also brings the checkout's own sessions", async () => {
     expect(await titles("--repo", join(local, "pkg"))).toEqual(["local package", "local root"]);
-    // The archive files a package directory as its own root, and without a
-    // remote nothing ties it back to the checkout around it.
     expect(await titles("--repo", local)).toEqual(["local root"]);
   });
 
@@ -260,7 +249,6 @@ describe("ls --repo", () => {
   });
 
   test("accepts a bare name when it names one repository", async () => {
-    // Two roots are named widget, and their shared remote makes them one.
     expect(await titles("--repo", "widget")).toEqual(WIDGET_TITLES);
   });
 
@@ -280,7 +268,6 @@ describe("ls --repo", () => {
     expect(bare.stdout).toBe("");
     expect(bare.stderr).toContain("names several repositories");
     expect(bare.stderr).toContain(otherGadget);
-    // Written as a path, the folder still means the checkout around it.
     const path = runFrom(widget, "--json", "ls", "--repo", "./gadget", "--fields", "title");
     expect(path.code).toBe(0);
     expect(JSON.parse(path.stdout)).toEqual(WIDGET_TITLES.map((title) => ({ title })));
@@ -298,7 +285,6 @@ describe("ls --repo", () => {
     try {
       const gone = join(home, "work", "removed");
       expect(resolveRepoRoots(db, gone, { cwd: base })).toEqual({ kind: "none", tried: [gone] });
-      // The same holds for a directory that exists but is in no working tree.
       mkdirSync(join(home, "work", "notes"), { recursive: true });
       expect(resolveRepoRoots(db, join(home, "work", "notes"), { cwd: base }).kind).toBe("none");
     } finally {
@@ -378,16 +364,14 @@ describe("ls --fields", () => {
     );
   });
 
-  test("a four-field listing is a small fraction of the default one", async () => {
+  test("a four-field listing has a machine-independent size under a fifth of the default one", async () => {
     const whole = await run("--json", "ls");
     const narrow = await run("--json", "ls", "--fields", "id,tool,started_at,title");
     const wholeBytes = Buffer.byteLength(whole.stdout);
     const narrowBytes = Buffer.byteLength(narrow.stdout);
     expect((JSON.parse(narrow.stdout) as unknown[]).length).toBe(SESSIONS.length);
-    // No field here holds a temp path, so the size is the same on any machine.
-    expect(narrowBytes).toBe(1666);
-    // The whole listing holds temp paths, so its size varies by machine: about
-    // 16,500 bytes on macOS and 14,700 on Linux for the same 13 rows.
+    const narrowBytesWithNoTempPath = 1666;
+    expect(narrowBytes).toBe(narrowBytesWithNoTempPath);
     expect(narrowBytes * 5).toBeLessThan(wholeBytes);
   });
 
@@ -465,7 +449,6 @@ describe("project ls", () => {
     expect(field.stderr).toContain("worktree_count");
     const limit = await run("project", "ls", "--limit", "0");
     expect(limit.code).toBe(2);
-    // The shared --limit check from parse.ts answers for every command.
     expect(limit.stderr).toContain("expected a positive integer");
   });
 });
@@ -586,7 +569,6 @@ describe("repository resolution from stored rows alone", () => {
     const rows: ProjectRow[] = [
       ["/synthetic/trees/cog-a", 1, cog, "git", "example.test/acme/cog"],
       ["/synthetic/cog-clone", 0, "/synthetic/cog-clone", "self", "example.test/acme/cog"],
-      // Grouped under the root by name only, so its remote says nothing about the root.
       ["/synthetic/trees/cog-b", 1, cog, "namematch", "example.test/other/cog"],
       ["/synthetic/other-cog", 0, "/synthetic/other-cog", "self", "example.test/other/cog"],
     ];
@@ -639,13 +621,12 @@ describe.skipIf(process.platform === "win32")("Windows paths stored from another
 
 describe("--since and --until across a UTC offset", () => {
   const offsetDb = join(base, "offsets.db");
-  // Each start is shown with its UTC day. The offset forms cross midnight.
   const STARTS: [title: string, startedAt: string][] = [
-    ["clock west late", "2026-03-01T23:30:00-08:00"], // 2026-03-02
-    ["clock west late no colon", "2026-03-01T23:45:00-0800"], // 2026-03-02
-    ["clock east early", "2026-03-02T02:00:00+09:00"], // 2026-03-01
-    ["clock utc first", "2026-03-01T12:00:00.000Z"], // 2026-03-01
-    ["clock utc second", "2026-03-02T12:00:00.000Z"], // 2026-03-02
+    ["clock west late", "2026-03-01T23:30:00-08:00"],
+    ["clock west late no colon", "2026-03-01T23:45:00-0800"],
+    ["clock east early", "2026-03-02T02:00:00+09:00"],
+    ["clock utc first", "2026-03-01T12:00:00.000Z"],
+    ["clock utc second", "2026-03-02T12:00:00.000Z"],
   ];
   {
     const db = openDb(offsetDb);
@@ -698,9 +679,7 @@ describe("--since and --until across a UTC offset", () => {
     );
   });
 
-  test("the first and last representable days keep every session", async () => {
-    // The day after 9999-12-31 is written +010000-01-01, which sorts before
-    // every stored timestamp, so a widened bound built from it matched nothing.
+  test("the first and last representable days keep every session, though the day after 9999-12-31 is +010000-01-01", async () => {
     const all = [...MARCH_1, ...MARCH_2].sort();
     expect(await named("title", "ls", "--until", "9999-12-31")).toEqual(all);
     expect(await named("title", "ls", "--since", "0000-01-01")).toEqual(all);

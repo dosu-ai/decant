@@ -104,9 +104,7 @@ describe("dashboard date ranges", () => {
   });
 
   test("opens the popover toward whichever side has room for it", () => {
-    // Trigger against the right gutter of a 1200px page: open leftward.
     expect(datePopoverAlign(1181, 304)).toBe("end");
-    // Heading wrapped the trigger to the left edge (Files at 1024px): open rightward.
     expect(datePopoverAlign(179, 304)).toBe("start");
     expect(datePopoverAlign(304, 304)).toBe("end");
   });
@@ -229,7 +227,6 @@ describe("Today across UTC midnight", () => {
     const fake = fakeWallClock("2026-10-29T23:59:00.000Z");
     let runs = 0;
     let firedEarly = false;
-    // Only the first timer fires 5ms early, as a clock adjustment might cause.
     const early: WallClock = {
       ...fake.clock,
       setTimer: (callback, delayMs) => {

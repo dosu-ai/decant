@@ -40,7 +40,6 @@ const TOOL_LABELS: Record<string, string> = {
   hermes: "Hermes",
 };
 
-/** The name a source tool's badge shows, so text filters can match it too. */
 export function toolLabel(tool: string): string {
   return TOOL_LABELS[tool] ?? tool;
 }
@@ -185,9 +184,6 @@ export function ThinkingBadge({ tokens, source }: { tokens: number; source: stri
   );
 }
 
-/** The Effort cell shows the recorded level when the source logs one. When
- * the source logs reasoning tokens but no level, as Gemini does, it shows the
- * derived thinking state instead of an empty dash. */
 export function ReasoningBadge({
   effort,
   levels,

@@ -23,10 +23,6 @@ export interface PublishDeps {
 export const NPM_DIST_TAGS = ["next", "latest", "previous"] as const;
 export type NpmDistTag = (typeof NPM_DIST_TAGS)[number];
 
-/**
- * Only the highest stable release moves `latest`, so `npx decant` never lands
- * on a prerelease or on a backport cut after a newer release.
- */
 export function npmDistTag(channel: ReleaseChannel): NpmDistTag {
   if (channel.isPrerelease) {
     return "next";
@@ -39,7 +35,6 @@ export function publishArgs(dir: string, distTag: NpmDistTag): string[] {
   return ["publish", `dist/npm/${dir}`, "--access", "public", "--tag", tag, "--provenance"];
 }
 
-/** Skips versions already on the registry so a re-run after a partial publish can finish. */
 export function publishPackages(version: string, distTag: NpmDistTag, deps: PublishDeps): void {
   for (const dir of NPM_PACKAGE_DIRS) {
     const pkg = deps.packageName(`dist/npm/${dir}`);

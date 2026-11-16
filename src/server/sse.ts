@@ -5,11 +5,8 @@ type ServerEvent = { type: string };
 /** One stream per tab; browsers allow six connections per origin. */
 export const MAX_EVENT_CLIENTS = 32;
 
-/** Kept small because a closed stream holds its queue until the client reads. */
 const EVENT_STREAM_HIGH_WATER_BYTES = 64 * 1024;
 
-/** Past this the stream ends rather than coalescing, so `sync` and `error` are
- * never dropped; EventSource reconnects and the UI refetches. */
 export const MAX_EVENT_BACKLOG_BYTES = 1024 * 1024;
 
 const eventClients = new Set<EventClient>();
@@ -24,7 +21,6 @@ export function publishServerEvent<T extends ServerEvent>(event: T): void {
   }
 }
 
-/** Open event streams, for tests. */
 export function eventClientCount(): number {
   return eventClients.size;
 }
@@ -70,7 +66,6 @@ export function eventStream(heartbeatMs = 5_000): Response {
           pending = [];
           pendingBytes = 0;
         };
-        // Slow readers drain `pending` in order through pull().
         const send = (event: ServerEvent): void => {
           const chunk = encoder.encode(formatSse(event));
           pending.push(chunk);

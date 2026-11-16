@@ -16,26 +16,13 @@ import { type CostSource, emptyUsage, type Json, type TokenUsage } from "./model
 import { compareCodePoints } from "./order.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
-/** Bump when the rules that split a session's usage change, such as a new
- * price tier, or when a model loses its rate, so the next sync rebuilds every
- * session's rows once. A row keeps a source-reported cost only for a model
- * that was unpriced when the row was derived. Version 2 narrowed the Gemini
- * 3 Flash match, so OpenCode rows for IDs it no longer prices recover their
- * reported cost. Version 3 stops billing Claude Code turns that another
- * session already bills. */
 export const MODEL_USAGE_FORMAT_VERSION = 3;
 
-/** One session's usage served by one model at one price tier. A session that
- * switches models, or sends some requests in fast mode or past a long-prompt
- * threshold, has one row per combination; most sessions have exactly one. */
 export interface ModelUsageRow {
-  /** The model that served the requests; "" when no model was recorded. */
   model: string;
   tier: PriceTier;
   requests: number;
   usage: TokenUsage;
-  /** Cost the source recorded for these requests, kept only when Decant has
-   * no rate for the model and the recorded sum is positive; otherwise null. */
   reportedCostUsd: number | null;
 }
 
@@ -60,10 +47,6 @@ interface BilledMessageRow {
   reported_cost: number | null;
 }
 
-/** Split a stored session's token totals by the model and tier of each billed
- * request. Messages carry the per-request usage the parser kept after
- * deduplicating journal records, so this needs no transcript reread and works
- * for sessions whose source files are gone. */
 export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow[] | null {
   const session = queryRow<SessionTotalsRow>(
     db,
@@ -87,9 +70,6 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
       return rows;
     }
   }
-  // Only Claude Code records the 1-hour cache split and fast-mode speed on the
-  // request, and only OpenCode and ATIF steps record a cost per request; other
-  // sources keep their usage in other shapes.
   const messages = queryRows<BilledMessageRow>(
     db,
     `SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
@@ -142,10 +122,6 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const residual = subtractUsage(totals, billed);
   const single =
     groups.size === 0 || (groups.size === 1 && groups.has(key(sessionModel, "standard")));
-  // Totals that per-request usage cannot account for, such as an SDK result
-  // record that disagrees with the journal, keep the session-level split. The
-  // recorded cost there counts only requests served by models Decant cannot
-  // price, because every other request is priced at list rates.
   if (single || !isNonNegative(residual)) {
     const runCost = session.tool === "atif" && !sawReported ? atifRunCost(session.raw_meta) : 0;
     return [
@@ -172,7 +148,6 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
     .sort(compareRows);
 }
 
-/** Replace a session's stored split. Runs inside the caller's transaction. */
 export function materializeModelUsage(db: Database, sessionId: number): ModelUsageRow[] {
   const rows = deriveModelUsage(db, sessionId) ?? [];
   runStatement(db, "DELETE FROM session_model_usage WHERE session_id = ?1", [sessionId]);
@@ -205,10 +180,6 @@ export function materializeModelUsage(db: Database, sessionId: number): ModelUsa
   return rows;
 }
 
-/** One-time upgrade/backfill path: sessions stored before this table existed,
- * or under an older split rule, get their rows rebuilt from stored messages.
- * `prepare` runs for every stale session before any row is rebuilt, because
- * correcting one session's stored usage can change another's. */
 export function materializeMissingModelUsage(
   db: Database,
   prepare?: (sessionId: number) => void,
@@ -241,8 +212,6 @@ export function materializeMissingModelUsage(
   });
 }
 
-/** Stored rows for every session in scope, keyed by session id. The scope CTE
- * must define `scoped_session(id)`. */
 export function modelUsageForScope(
   db: Database,
   scopeCte: string,
@@ -291,15 +260,10 @@ export function modelUsageForScope(
   return bySession;
 }
 
-/** Decant's four priced parts plus the source-reported remainder. */
 export interface SessionCostParts extends CostParts {
-  /** Cost taken from the source's own record (OpenCode) for rows Decant
-   * cannot price. Never split into input and output. */
   reported: number;
 }
 
-/** Price a session from its per-model rows. A session without rows (one
- * written before the backfill ran) is priced from its totals and label. */
 export function sessionCostParts(
   rows: ModelUsageRow[] | undefined,
   fallback: { model: string | null; usage: TokenUsage },
@@ -316,7 +280,6 @@ export function sessionCostParts(
     reported: 0,
   };
   for (const row of rows) {
-    // An unnamed source-reported cost must not also acquire a list-price charge.
     const parts = estimateCostParts(
       row.model === "" && row.reportedCostUsd == null ? fallback.model : row.model || null,
       row.usage,
@@ -327,9 +290,6 @@ export function sessionCostParts(
     total.output += parts.output;
     total.cacheRead += parts.cacheRead;
     total.cacheCreation += parts.cacheCreation;
-    // The stored figure was decided when the row was derived. A model that
-    // has since gained a rate is priced by Decant, so keeping the figure
-    // would count it twice.
     if (reportedCostApplies(row.model, row.reportedCostUsd)) {
       total.reported += row.reportedCostUsd;
     }
@@ -337,9 +297,6 @@ export function sessionCostParts(
   return total;
 }
 
-/** Whether a stored reported cost still stands at read time. A model that
- * gained a rate after the row was derived is priced by Decant instead, so the
- * dollars and the `cost_source` label must both follow this one rule. */
 export function reportedCostApplies(
   model: string,
   reportedCostUsd: number | null,
@@ -347,10 +304,6 @@ export function reportedCostApplies(
   return reportedCostUsd != null && !isPriceableModel(model);
 }
 
-/** Label a session's cost from its model-usage rows: `reportedModels` lists the
- * model of every row with a stored reported cost, `otherRows` counts the rest.
- * Rows without a stored figure are priced by Decant (or contribute nothing),
- * so they count on the Decant side. */
 export function costSourceFor(reportedModels: readonly string[], otherRows: number): CostSource {
   const reported = reportedModels.filter((model) => reportedCostApplies(model, 0)).length;
   const decant = otherRows + (reportedModels.length - reported);
@@ -418,11 +371,6 @@ function isRecordedModel(model: string | null): model is string {
   return model != null && model !== "" && !/^<.*>$/.test(model);
 }
 
-/** An ATIF trajectory whose steps record no cost can still record one for
- * the run. It is the session's own only when nothing else shares it: Decant's
- * export gives its own share in `session_metrics` when subagents are rolled
- * in, and another producer's total may include embedded or file-ref
- * subagents, which are sessions of their own. */
 function atifRunCost(rawMeta: string | null): number {
   let meta: unknown;
   try {

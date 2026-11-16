@@ -61,28 +61,13 @@ export interface ServeOptions {
   config: Config;
   port?: number;
   hostname?: string;
-  /** Peers allowed through the local API guard when bound to a non-loopback
-   * host. When set, it replaces every default; omit it to let
-   * `resolveTrustedPeers` consult the environment. */
   trustedPeers?: string[];
-  /** When set, serve() runs the source watcher itself with a worker-backed
-   * sync runner so ingests never block the request event loop, and republishes
-   * watcher events to SSE clients. */
   watch?: ServeWatchOptions;
-  /** Structured operational logger supplied by the CLI entry point. */
   logger?: StructuredLogger;
-  /** Called when the background service is taking over this server's port.
-   * Without it, the server never hands off and keeps running. */
   onShutdownRequested?: () => void;
-  /** Test seam: how the background service routes reach launchd or systemd. */
   service?: ServiceOptions;
-  /** Test seam: override how the economics cache computes vectors, e.g. to
-   * simulate a rebuild that is still in flight when the server is stopped. */
   economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
-  /** Test seam: override the physical sync worker while retaining the server's
-   * serialization and progress-coalescing behavior. */
   syncRunner?: SyncWorkerRunner;
-  /** Test seam: size the read pool or substitute its workers. */
   readPool?: Pick<ReadPoolOptions, "size" | "spawn" | "closeTimeoutMs">;
 }
 
@@ -96,16 +81,12 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let watchHandle: WatchHandle | null = null;
   let readerStatistics: ReaderStatistics | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
-    // The worker also analyzes the archive every few sessions. A first sync
-    // can run for minutes, so the readers load those statistics while it runs.
     onProgress: (progress) => readerStatistics?.onProgress(progress),
     // The worker ends each ingesting sync with PRAGMA optimize on its own
     // connection. This connection keeps the statistics it loaded until told to
     // reread them, so on a first run it would plan every request without any.
     onCompleted: (report) => {
       if (db != null && report.ingested > 0) {
-        // The reread takes no write lock, so a writer that is still busy cannot
-        // make it skip while the statistics are marked as loaded.
         rereadPlannerStatistics(db);
         readPool?.reloadStatistics();
         readerStatistics?.markLoaded();
@@ -127,9 +108,6 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   };
   const uiDocumentRoute = { GET: serveUiDocument, HEAD: serveUiDocument };
 
-  // Bind before touching the archive or starting background work. A second
-  // `decant serve` should fail with the truthful port-in-use error, not leave a
-  // DB-owning watcher behind and later surface a misleading SQLite lock.
   const server = Bun.serve({
     hostname,
     port,
@@ -146,8 +124,6 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       ),
     },
     fetch: async (request, bunServer) => {
-      // Bundled asset paths are only known once the UI is built, so they cannot
-      // be declared in `routes`. They are static files and need no archive.
       if (request.method === "GET" || request.method === "HEAD") {
         const asset = ui.asset(URL.parse(request.url)?.pathname ?? "");
         if (asset != null) {
@@ -261,10 +237,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
         }
         await server.stop(true);
       })
-      .catch(() => {
-        // Preserve the startup failure already being thrown; cleanup failures
-        // must not become a second unhandled rejection.
-      });
+      .catch(() => {});
     throw error;
   }
 

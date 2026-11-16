@@ -97,7 +97,6 @@ describe("parseCodexSession", () => {
         timestamp: "2026-06-01T09:00:03Z",
         payload: { type: "function_call_output", call_id: "c1", output: "ok" },
       }),
-      // Walks back past the tool row; the later reading wins for the message.
       JSON.stringify({
         type: "event_msg",
         timestamp: "2026-06-01T09:00:04Z",
@@ -362,7 +361,6 @@ describe("parseCodexSession", () => {
       '{"type":"unknown-top","timestamp":"2026-05-01T10:00:02Z"}',
     ].join("\n");
     const parsed = parseCodexSession("fallback", `${content}\n`, new Map());
-    // the malformed line and the trailing unknown-top record each land an issue
     expect(parsed.issues).toHaveLength(2);
     expect(parsed.issues[0]?.code).toBe("unparsed_line");
     expect(parsed.issues[0]?.lineNo).toBe(2);

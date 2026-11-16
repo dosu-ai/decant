@@ -1,11 +1,8 @@
 import { workerError, workerUrl } from "../worker-runtime.ts";
 import type { ReadOpArgs, ReadOpName, ReadOpOutput } from "./read-ops.ts";
 
-/** Two workers let the Tools page's three heavy requests overlap without
- * holding a connection, a cache, and a thread per CPU on a laptop. */
 export const DEFAULT_READ_POOL_SIZE = 2;
 
-/** The Worker surface the pool uses, so tests can substitute a fake. */
 export interface ReadWorkerLike {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
@@ -17,12 +14,8 @@ export interface ReadWorkerLike {
 export interface ReadPoolOptions {
   dbPath: string;
   size?: number;
-  /** Test seam: build the worker for a slot. */
   spawn?: () => ReadWorkerLike;
-  /** Longest wait for a worker to close its connection and exit before it is
-   * terminated. */
   closeTimeoutMs?: number;
-  /** Most reads that may wait for a worker; see DEFAULT_READ_QUEUE_LIMIT. */
   queueLimit?: number;
 }
 
@@ -41,25 +34,18 @@ interface Job {
   id: number;
   name: ReadOpName;
   args: unknown;
-  /** Index of the worker whose read cache most likely holds this result. */
   preferred: number;
   resolve: (output: ReadOpOutput | null) => void;
   reject: (error: Error) => void;
-  /** Detaches the caller's abort listener; set while the job is unsettled. */
   release: (() => void) | null;
 }
 
 interface Slot {
   worker: ReadWorkerLike | null;
-  /** The one read this worker is running. A worker gets its next read only
-   * after this one answers, so waiting reads stay in the pool's queue, where
-   * they can be cancelled and handed to whichever worker frees up first. */
   running: Job | null;
-  /** Settles when the slot's worker thread exits. */
   exited: PromiseWithResolvers<void> | null;
 }
 
-/** Reads waiting for a free worker; at this many, new reads are refused. */
 export const DEFAULT_READ_QUEUE_LIMIT = 256;
 
 export class ReadPoolClosedError extends Error {
@@ -69,7 +55,6 @@ export class ReadPoolClosedError extends Error {
   }
 }
 
-/** Every worker is busy and the queue is full. Retryable. */
 export class ReadPoolBusyError extends Error {
   constructor() {
     super("Decant is busy with other reads. Please try again.");
@@ -77,7 +62,6 @@ export class ReadPoolBusyError extends Error {
   }
 }
 
-/** The caller gave up on the read, for example because the client went away. */
 export class ReadCancelledError extends Error {
   constructor() {
     super("read cancelled");
@@ -85,18 +69,6 @@ export class ReadCancelledError extends Error {
   }
 }
 
-/**
- * Runs read-only archive operations on worker threads, each with its own
- * SQLite connection. SQLite in WAL mode lets these readers proceed alongside
- * the server's connection and the sync worker's writes, so a slow aggregate
- * no longer delays a fast request queued behind it on one connection.
- *
- * Each worker runs one read at a time; the rest wait in a bounded FIFO queue.
- * A read goes to the worker its operation and arguments hash to when that
- * worker is free, which keeps each worker's read cache (src/read-cache.ts)
- * useful, and otherwise to any free worker. A read whose caller aborts while
- * it waits leaves the queue without running.
- */
 export class ReadPool {
   readonly #options: ReadPoolOptions;
   readonly #slots: Slot[];
@@ -145,8 +117,6 @@ export class ReadPool {
     };
     if (signal != null) {
       const onAbort = (): void => {
-        // A queued read never reaches a worker. A running one cannot be
-        // interrupted mid-statement, so its answer is dropped when it lands.
         const queued = this.#queue.indexOf(job);
         if (queued !== -1) {
           this.#queue.splice(queued, 1);
@@ -163,8 +133,6 @@ export class ReadPool {
     return promise;
   }
 
-  /** Start every worker and open its connection now, so the first request
-   * after startup does not also pay for a thread, its modules, and the schema. */
   prewarm(): void {
     if (this.#closing) {
       return;
@@ -174,16 +142,12 @@ export class ReadPool {
     }
   }
 
-  /** Have every live worker reread planner statistics another connection wrote. */
   reloadStatistics(): void {
     for (const slot of this.#slots) {
       slot.worker?.postMessage({ type: "reload-statistics" });
     }
   }
 
-  /** Rejects queued and running reads, then has each worker close its
-   * connection and exit on its own, terminating any that has not exited within
-   * the timeout. Every call returns the same promise. */
   close(): Promise<void> {
     this.#closed ??= this.#closeWorkers();
     return this.#closed;
@@ -216,13 +180,10 @@ export class ReadPool {
             }),
           ]);
         } catch {
-          // A worker that cannot take the message is terminated below.
         } finally {
           if (timer != null) {
             clearTimeout(timer);
           }
-          // A worker that exited has already been retired; this only stops
-          // one that is still running past the timeout.
           if (slot.worker === worker) {
             slot.worker = null;
             worker.terminate();
@@ -240,7 +201,6 @@ export class ReadPool {
     return this.#slots.find((candidate) => candidate.running == null) ?? null;
   }
 
-  /** Hand queued reads, oldest first, to free workers. */
   #dispatch(): void {
     while (!this.#closing && this.#queue.length > 0) {
       const job = this.#queue[0];
@@ -258,18 +218,11 @@ export class ReadPool {
           args: job.args,
         });
       } catch (error) {
-        // A worker that cannot take a message would fail every later read
-        // too, so retire it now; the next read for this slot starts a fresh
-        // one rather than waiting for an error or close event that may not come.
         const worker = slot.worker;
         slot.running = null;
         slot.worker = null;
         if (worker != null) {
-          try {
-            worker.terminate();
-          } catch {
-            // Already gone.
-          }
+          terminateQuietly(worker);
         }
         this.#settle(job, error instanceof Error ? error : new Error(String(error)));
       }
@@ -308,8 +261,6 @@ export class ReadPool {
     this.#dispatch();
   }
 
-  /** Drop a failed worker. Its running read fails; queued reads move on to a
-   * fresh worker. */
   #retire(slot: Slot, worker: ReadWorkerLike, error: Error): void {
     if (slot.worker !== worker) {
       return;
@@ -320,15 +271,10 @@ export class ReadPool {
     if (job != null) {
       this.#settle(job, error);
     }
-    try {
-      worker.terminate();
-    } catch {
-      // Already gone.
-    }
+    terminateQuietly(worker);
     this.#dispatch();
   }
 
-  /** Resolve or reject a read once; later outcomes for it are ignored. */
   #settle(job: Job, outcome: ReadOpOutput | null | Error): void {
     if (job.release == null) {
       return;
@@ -343,8 +289,12 @@ export class ReadPool {
   }
 }
 
-/** Rebuild an Error the server's error mapping can classify: it reads `code`
- * to recognize a busy archive. */
+function terminateQuietly(worker: ReadWorkerLike): void {
+  try {
+    worker.terminate();
+  } catch {}
+}
+
 function reviveError(serialized: SerializedError): Error {
   const error = new Error(serialized.message) as Error & { code?: string };
   error.name = serialized.name;

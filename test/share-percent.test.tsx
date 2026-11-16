@@ -6,7 +6,6 @@ import { OutcomesPanel } from "../src/ui/views/analytics.tsx";
 
 describe("share percent labels", () => {
   test("rounds each share on its own instead of forcing a sum of 100", () => {
-    // Largest remainder showed these as 49%, 50%, 0%, 1%.
     const counts = [1462, 1465, 7, 19];
     const total = counts.reduce((sum, value) => sum + value, 0);
     expect(counts.map((count) => sharePercentLabel(count, total))).toEqual([
@@ -24,7 +23,6 @@ describe("share percent labels", () => {
   });
 
   test("rounds exact ties up despite floating-point error", () => {
-    // 0.15.toFixed(1) is "0.1" and 28.75.toFixed(1) is "28.7".
     expect(sharePercentLabel(3, 2000)).toBe("0.2%");
     expect(sharePercentLabel(23, 80)).toBe("28.8%");
     expect(sharePercentLabel(1, 16)).toBe("6.3%");

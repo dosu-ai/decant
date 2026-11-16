@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ApiError } from "./api.ts";
 import { ApiFailureState } from "./api-failure.tsx";
 import { EmptyState, PrivacyReviewLists } from "./common.tsx";
-import { useDialogFocusTrap } from "./focus.ts";
+import { useBackdropDismiss, useDialogFocusTrap } from "./focus.ts";
 import { errorMessage } from "./format.ts";
 import { Icon } from "./icons.tsx";
 import { Link } from "./link.tsx";
@@ -50,22 +50,16 @@ export function ExportReviewSheet({
   open: boolean;
   title: string;
 }) {
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   useDialogFocusTrap(open, dialogRef, onClose);
+  useBackdropDismiss(open, backdropRef, onClose);
   if (!open) {
     return null;
   }
   return createPortal(
-    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
-    <div
-      className="report-review-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
+    <div className="report-review-backdrop" ref={backdropRef}>
       <section
         aria-labelledby={titleId}
         aria-modal="true"
@@ -318,7 +312,6 @@ export function ReportRouteView({
           background: "#fff",
           borderBottom: "1px solid #dce1da",
           display: "flex",
-          // Wraps on phones so the export actions stay inside the viewport.
           flexWrap: "wrap",
           gap: "10px",
           minHeight: "58px",
@@ -401,9 +394,7 @@ export async function fetchReportHtml(path: string, signal: AbortSignal): Promis
   let payload: Record<string, unknown> = {};
   try {
     payload = (await response.json()) as Record<string, unknown>;
-  } catch {
-    // The recovery component has a status-based fallback for non-JSON errors.
-  }
+  } catch {}
   const code =
     typeof payload.code === "string" && payload.code !== "" ? payload.code : "request_failed";
   const message =

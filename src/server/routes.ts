@@ -108,22 +108,16 @@ type RouteMethod = "GET" | "POST";
 interface RouteSpec {
   GET?: RouteEndpoint;
   POST?: RouteEndpoint;
-  /** Methods for which a malformed `{id}` is a 400 rather than a 404, even
-   * when the path has no handler for that method. */
   validateId?: readonly RouteMethod[];
 }
 
 const SESSION_ID_METHODS = ["GET", "POST"] as const;
 
-/** Answer from a read operation (see read-ops.ts), which runs on the server's
- * read pool when there is one. A null result means the session is missing. */
 async function read<N extends ReadOpName>(
   { config, context, request }: RouteContext,
   name: N,
   args: ReadOpArgs<N>,
 ): Promise<Response> {
-  // The request's signal aborts when the client disconnects, so a read still
-  // waiting for a worker is dropped instead of computed for nobody.
   const output = await runRead(config, context, name, args, request.signal);
   return output == null ? withDb(config, context, sessionNotFound) : readOutputResponse(output);
 }
@@ -138,11 +132,8 @@ const sessionScoped =
     args: (ctx: RouteContext) => Record<string, unknown> = () => ({}),
   ): RouteHandler =>
   (ctx) =>
-    // biome-ignore lint/suspicious/noExplicitAny: each caller pairs a session operation with that operation's own extra arguments.
-    read(ctx, name, { ...args(ctx), id: Number(ctx.params.id) } as any);
+    read(ctx, name, { ...args(ctx), id: Number(ctx.params.id) } as ReadOpArgs<SessionReadOpName>);
 
-// Analytics routes share this guard so an unknown source value is rejected
-// before any archive read.
 const sourceScoped =
   (handle: (ctx: RouteContext, source: SessionSource | null) => RouteResult): RouteHandler =>
   (ctx) => {
@@ -272,8 +263,6 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   "/api/sessions/{id}": {
     validateId: SESSION_ID_METHODS,
     GET: sessionScoped("session", ({ url }) => {
-      // Zero or omitted used to mean the whole transcript, which made one
-      // response as large as the longest session. Now it means one page.
       const messageLimit = integerParam(url, "message_limit", 0, true);
       return {
         messageLimit: Math.min(
@@ -310,8 +299,6 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
   },
   "/api/analytics/token-economics": {
     GET: sourceScoped(async (ctx, source) => {
-      // The in-memory cache holds archive-wide vectors only; a source-scoped
-      // request reads persisted vectors so one source never answers for another.
       if (ctx.context.economics != null && source == null) {
         return json(await ctx.context.economics.get(ctx.dateFilter));
       }
@@ -386,8 +373,6 @@ function syncStatusResponse(): Response {
   return json(syncStatusBody());
 }
 
-// Long enough for the response to reach the browser before this process
-// releases its port or is stopped by the service manager.
 const BACKGROUND_HANDOFF_DELAY_MS = 250;
 
 async function backgroundRoute(
@@ -398,8 +383,6 @@ async function backgroundRoute(
   if (typeof enabled !== "boolean" || Object.keys(body).length !== 1) {
     return errorResponse("invalid_request", "send exactly { enabled: boolean }", {}, 400);
   }
-  // Registering a login item is persistence on this machine, so only a
-  // browser on this machine may do it, even when trusted peers can reach the API.
   if (context.remoteAddress != null && !isLoopbackPeer(context.remoteAddress)) {
     return errorResponse("forbidden_remote", "forbidden remote", {}, 403);
   }
@@ -408,7 +391,6 @@ async function backgroundRoute(
   if (!enabled) {
     await removeService(options);
     if (current) {
-      // Stopping the service stops this process, so answer first.
       setTimeout(() => void stopService(options), BACKGROUND_HANDOFF_DELAY_MS);
     } else {
       await stopService(options);
@@ -419,8 +401,6 @@ async function backgroundRoute(
   const port = context.boundPort ?? DEFAULT_SERVE_PORT;
   try {
     const status = await installService({ dbPath: config.dbPath, port }, options);
-    // The service binds this server's port, so this server steps aside. The
-    // service retries the bind until the port is free.
     const handoff =
       !current && context.requestShutdown != null && status.url === `http://127.0.0.1:${port}`;
     if (handoff) {
@@ -434,8 +414,6 @@ async function backgroundRoute(
     if (error instanceof ServiceCommandError) {
       return errorResponse("background_failed", error.message, {}, 500);
     }
-    // Anything else may carry paths or internals; the router logs it and
-    // answers with a generic internal_error.
     throw error;
   }
 }
@@ -466,7 +444,6 @@ async function launchAgentRoute(
   }
   const result = await launchAgent(agent, prompt, key ?? null, getSettings(), {
     platform: context.launchPlatform,
-    // The directory comes from the archive, never from the request body.
     dir: key == null || key === "" ? null : recommendationLaunchDir(config, context, key),
   });
   if (result.ok) {
@@ -493,7 +470,6 @@ function recommendationLaunchDir(
   try {
     return withDb(config, context, (db) => launchDir(db, key));
   } catch {
-    // An unreadable archive must not stop a launch. It starts where it used to.
     return null;
   }
 }

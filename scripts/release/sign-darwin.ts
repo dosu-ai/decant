@@ -15,7 +15,6 @@ export interface NotarizeOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Notary submissions can fail transiently, so each target gets three tries. */
 export async function notarizeWithRetry(options: NotarizeOptions): Promise<void> {
   const submitted = await retry({
     attempts: NOTARY_ATTEMPTS,
@@ -30,7 +29,6 @@ export async function notarizeWithRetry(options: NotarizeOptions): Promise<void>
   }
 }
 
-/** Holds key material in a private temp dir that is removed even when signing fails. */
 export async function withPrivateDir<T>(
   parent: string,
   body: (dir: string) => Promise<T>,
@@ -54,7 +52,6 @@ async function signDeveloperId(): Promise<void> {
   const keyId = ascKeyId("ASC_KEY_ID", requireEnv("ASC_KEY_ID"));
   const keyP8 = requireEnv("ASC_KEY_P8");
 
-  // Applies to every file this step creates, including rcodesign and zip output.
   process.umask(0o077);
   const runnerTemp = absolutePath("RUNNER_TEMP", requireEnv("RUNNER_TEMP"));
   await withPrivateDir(runnerTemp, async (keysDir) => {

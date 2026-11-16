@@ -10,7 +10,6 @@ function fontData(path: string): string {
 
 let cachedFontCss: string | undefined;
 
-/** Trusted, bundled font declarations for static report documents. */
 export function reportFontCss(): string {
   cachedFontCss ??= buildFontCss();
   return cachedFontCss;

@@ -17,11 +17,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// End-to-end coverage for install.sh that never touches the network: a fake
-// `curl` serves pre-built fixture files from a temp dir based on the requested
-// URL, and a fake `gh` stands in for the attestation check so it can't reach
-// out even if the real `gh` happens to be installed and earlier on PATH.
-
 const installShPath = join(import.meta.dir, "..", "install.sh");
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-install-sh-test-"));
@@ -52,7 +47,6 @@ interface Fixture {
   binaryContents: string;
 }
 
-/** Builds a real decant-<target>.tar.gz (decant + LICENSE + NOTICE) plus a matching SHA256SUMS. */
 function buildFixture(dir: string, binaryContents: string): Fixture {
   const payloadDir = join(dir, "payload");
   mkdirSync(payloadDir, { recursive: true });
@@ -88,14 +82,7 @@ function writeStub(path: string, contents: string): void {
   chmodSync(path, 0o755);
 }
 
-/**
- * A stub bin dir with a fake `curl` (serves fixture files by URL basename and
- * logs every requested URL to CURL_LOG) and a fake `gh`. The fake `gh` logs its
- * arguments to GH_LOG; `gh auth token` succeeds only when FAKE_GH_AUTH=ok and
- * `gh attestation verify` only when FAKE_GH_VERIFY=ok, so by default it acts
- * like a logged-out gh.
- */
-function buildStubBinDir(dir: string): { binDir: string; curlLog: string } {
+function buildFixtureCurlAndLoggedOutGhBinDir(dir: string): { binDir: string; curlLog: string } {
   const binDir = join(dir, "stub-bin");
   mkdirSync(binDir, { recursive: true });
   const curlLog = join(dir, "curl.log");
@@ -168,7 +155,6 @@ case "$1" in
 esac
 `;
 
-/** A stub bin dir with just a fake `uname`, for exercising the platform-detect abort paths. */
 function buildFakeUnameDir(dir: string, unameS: string, unameM: string): string {
   const binDir = join(dir, "uname-bin");
   mkdirSync(binDir, { recursive: true });
@@ -185,16 +171,9 @@ esac
   return binDir;
 }
 
-/**
- * An isolated bin dir holding symlinks to every host tool install.sh needs —
- * but no `curl` (and no `gh`) — so PATH can be pinned to exactly this dir to
- * exercise the wget-fallback and no-downloader paths hermetically. The fake
- * `wget` mirrors the fake `curl`: it serves fixture files by URL basename and
- * logs each requested URL to WGET_LOG.
- */
-function buildToolFarm(
+function buildHostToolsWithoutCurlOrGh(
   dir: string,
-  options: { wget: boolean },
+  options: { withFixtureWget: boolean },
 ): { binDir: string; wgetLog: string } {
   const binDir = join(dir, "tool-farm");
   mkdirSync(binDir, { recursive: true });
@@ -221,12 +200,12 @@ function buildToolFarm(
     const resolved = spawnSync("sh", ["-c", `command -v ${tool}`], { encoding: "utf8" });
     const toolPath = resolved.stdout.trim();
     if (resolved.status !== 0 || toolPath === "") {
-      throw new Error(`buildToolFarm: required host tool not found: ${tool}`);
+      throw new Error(`buildHostToolsWithoutCurlOrGh: required host tool not found: ${tool}`);
     }
     symlinkSync(toolPath, join(binDir, tool));
   }
 
-  if (options.wget) {
+  if (options.withFixtureWget) {
     writeStub(
       join(binDir, "wget"),
       `#!/bin/sh
@@ -264,8 +243,6 @@ fi
 cp "$src" "$out"
 `,
     );
-    // the fake wget itself shells out to basename/cp — cp isn't needed by
-    // install.sh, so link it just for the stub
     const cp = spawnSync("sh", ["-c", "command -v cp"], { encoding: "utf8" }).stdout.trim();
     symlinkSync(cp, join(binDir, "cp"));
   }
@@ -288,8 +265,6 @@ function runInstall(
 ): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync("sh", [installShPath, ...args], {
     encoding: "utf8",
-    // SHELL is pinned so rc-file detection is hermetic regardless of the
-    // developer's login shell; individual tests can still override it.
     env: {
       ...process.env,
       SHELL: "/bin/bash",
@@ -330,7 +305,7 @@ describe("install.sh", () => {
       dir,
       '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "decant 1.2.3-fixture"\nfi\n',
     );
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
     const tempBefore = decantTempEntries();
@@ -353,29 +328,24 @@ describe("install.sh", () => {
     expect(existsSync(join(installDir, "LICENSE"))).toBe(false);
     expect(existsSync(join(installDir, "NOTICE"))).toBe(false);
 
-    // final friendly message ran the freshly installed binary's --version
     expect(result.stdout).toContain("decant 1.2.3-fixture");
 
-    // DECANT_NO_MODIFY_PATH=1 prints the export line instead of editing any rc file
     expect(result.stdout).toContain(`export PATH="${installDir}:$PATH"`);
     expect(existsSync(join(home, ".zshrc"))).toBe(false);
     expect(existsSync(join(home, ".bashrc"))).toBe(false);
     expect(existsSync(join(home, ".bash_profile"))).toBe(false);
     expect(existsSync(join(home, ".profile"))).toBe(false);
 
-    // the stub `gh` is logged out, so the attestation check was skipped, not failed
     expect(result.stdout).toContain(
       "skipped the attestation check: gh is not installed or not logged in to github.com",
     );
 
-    // exact URLs requested, matching the pinned-version download shape
     const requestedUrls = readFileSync(curlLog, "utf8").trim().split("\n");
     expect(requestedUrls).toEqual([
       `https://github.com/dosu-ai/decant/releases/download/v1.2.3/${tarballName}`,
       "https://github.com/dosu-ai/decant/releases/download/v1.2.3/SHA256SUMS",
     ]);
 
-    // the mktemp working directory was cleaned up by the EXIT trap
     const tempAfter = decantTempEntries();
     expect([...tempAfter].filter((name) => !tempBefore.has(name))).toEqual([]);
   });
@@ -383,7 +353,7 @@ describe("install.sh", () => {
   test("accepts a version with a leading v and resolves the identical pinned URL", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -406,7 +376,7 @@ describe("install.sh", () => {
   test("defaults to the latest release when no version is given", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -430,7 +400,7 @@ describe("install.sh", () => {
   test("falls back to DECANT_VERSION when no positional version is given", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -454,7 +424,7 @@ describe("install.sh", () => {
   test("appends a single guarded PATH line to the shell rc file and stays idempotent on re-install", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
     const rcFile = join(home, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
@@ -486,11 +456,10 @@ describe("install.sh", () => {
   test("aborts with a non-zero exit and installs nothing when the tarball is corrupted", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    // Tamper the tarball bytes in place; SHA256SUMS still reflects the original.
     const goodBytes = readFileSync(fixture.tarballPath);
     writeFileSync(fixture.tarballPath, Buffer.concat([goodBytes, Buffer.from("corruption")]));
 
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
     const tempBefore = decantTempEntries();
@@ -516,7 +485,7 @@ describe("install.sh", () => {
     function installWithGh(env: Record<string, string>) {
       const dir = caseDir();
       const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-attested"\n');
-      const { binDir, curlLog } = buildStubBinDir(dir);
+      const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
       const installDir = join(dir, "install-target");
       const ghLog = join(dir, "gh.log");
       const tempBefore = decantTempEntries();
@@ -603,7 +572,7 @@ describe("install.sh", () => {
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
     writeFileSync(fixture.sumsPath, "deadbeef  some-other-file.tar.gz\n");
 
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -655,14 +624,12 @@ describe("install.sh", () => {
   test("honors DECANT_BASE_URL as the download base (file:// mirror, real curl)", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 9.9.9-mirror"\n');
-    // Lay the mirror out exactly like GitHub Releases: <base>/download/v<ver>/<asset>
     const mirrorRoot = join(dir, "mirror");
     const assetDir = join(mirrorRoot, "download", "v9.9.9");
     mkdirSync(assetDir, { recursive: true });
     copyFileSync(fixture.tarballPath, join(assetDir, tarballName));
     copyFileSync(fixture.sumsPath, join(assetDir, "SHA256SUMS"));
 
-    // Only `gh` is stubbed (attestation must stay offline); curl is the real one.
     const ghDir = join(dir, "gh-bin");
     mkdirSync(ghDir, { recursive: true });
     writeStub(join(ghDir, "gh"), FAKE_GH);
@@ -689,7 +656,7 @@ describe("install.sh", () => {
   test("falls back to wget when curl is absent", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
-    const farm = buildToolFarm(dir, { wget: true });
+    const farm = buildHostToolsWithoutCurlOrGh(dir, { withFixtureWget: true });
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -706,7 +673,6 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     const installedBinary = join(installDir, "decant");
     expect(readFileSync(installedBinary, "utf8")).toBe(fixture.binaryContents);
-    // no gh on this PATH at all
     expect(result.stdout).toContain("skipped the attestation check");
     const requestedUrls = readFileSync(farm.wgetLog, "utf8").trim().split("\n");
     expect(requestedUrls).toEqual([
@@ -718,7 +684,7 @@ describe("install.sh", () => {
   test("strips a trailing slash from DECANT_BASE_URL", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 
@@ -752,7 +718,7 @@ describe("install.sh", () => {
   ])("refuses the mirror %s before downloading", (baseUrl) => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const installDir = join(dir, "install-target");
 
     const result = runInstall(["1.2.3"], {
@@ -778,7 +744,7 @@ describe("install.sh", () => {
   ])("accepts the loopback HTTP mirror %s and limits redirects to HTTPS", (baseUrl) => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir, curlLog } = buildStubBinDir(dir);
+    const { binDir, curlLog } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const protoRedirLog = join(dir, "proto-redir.log");
     const installDir = join(dir, "install-target");
 
@@ -811,7 +777,7 @@ describe("install.sh", () => {
   ])("wget refuses a redirect away from HTTPS (%s)", (header) => {
     const dir = caseDir();
     const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
-    const farm = buildToolFarm(dir, { wget: true });
+    const farm = buildHostToolsWithoutCurlOrGh(dir, { withFixtureWget: true });
     const installDir = join(dir, "install-target");
 
     const result = runInstall(["1.2.3"], {
@@ -834,7 +800,7 @@ describe("install.sh", () => {
     (header) => {
       const dir = caseDir();
       const fixture = buildFixture(dir, '#!/bin/sh\necho "decant 1.2.3-wget"\n');
-      const farm = buildToolFarm(dir, { wget: true });
+      const farm = buildHostToolsWithoutCurlOrGh(dir, { withFixtureWget: true });
       const installDir = join(dir, "install-target");
 
       const result = runInstall(["1.2.3"], {
@@ -856,9 +822,8 @@ describe("install.sh", () => {
   test("re-running with a different DECANT_INSTALL_DIR appends a second PATH entry", () => {
     const dir = caseDir();
     const fixture = buildFixture(dir, "#!/bin/sh\necho fixture\n");
-    const { binDir } = buildStubBinDir(dir);
+    const { binDir } = buildFixtureCurlAndLoggedOutGhBinDir(dir);
     const home = freshHome(dir);
-    // install.sh picks .bash_profile for bash on Darwin, .bashrc elsewhere
     const rcFile = join(home, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
     writeFileSync(rcFile, "# existing content\n");
 
@@ -876,7 +841,6 @@ describe("install.sh", () => {
     const rc = readFileSync(rcFile, "utf8");
     expect(rc).toContain(`export PATH="${join(dir, "bin-a")}:$PATH"`);
     expect(rc).toContain(`export PATH="${join(dir, "bin-b")}:$PATH"`);
-    // and a same-dir re-run stays deduplicated
     const third = runInstall(["1.2.3"], { ...common, DECANT_INSTALL_DIR: join(dir, "bin-b") });
     expect(third.status).toBe(0);
     const rcAfter = readFileSync(rcFile, "utf8");
@@ -885,7 +849,7 @@ describe("install.sh", () => {
 
   test("errors clearly when neither curl nor wget is on PATH", () => {
     const dir = caseDir();
-    const farm = buildToolFarm(dir, { wget: false });
+    const farm = buildHostToolsWithoutCurlOrGh(dir, { withFixtureWget: false });
     const installDir = join(dir, "install-target");
     const home = freshHome(dir);
 

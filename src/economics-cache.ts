@@ -23,23 +23,15 @@ export interface EconomicsCacheOptions {
     options: ComputeVectorsOptions,
   ) => Promise<SessionEconomicsVector[]>;
   onRebuilt?: () => void;
-  /** Maximum shutdown wait for a provider that ignores cancellation. */
   settleTimeoutMs?: number;
 }
 
-/**
- * Serves /api/analytics/token-economics from the per-session vectors ingest
- * persists, summing them in memory for any date filter. `PRAGMA data_version`
- * detects writes from other connections (sync workers, CLI runs); a stale cache
- * answers from the previous model while a background refresh runs, and
- * onRebuilt lets the server nudge clients to refetch.
- */
 export class EconomicsCache {
   #vectors: SessionEconomicsVector[] | null = null;
   #builtDataVersion: number | null = null;
   #building: Promise<void> | null = null;
   #buildAbort: AbortController | null = null;
-  #pendingRebuild = false;
+  #rebuildRequestedMidBuild = false;
   #disposed = false;
   readonly #options: EconomicsCacheOptions;
 
@@ -51,8 +43,6 @@ export class EconomicsCache {
     if (this.#vectors == null) {
       await (this.#building ?? this.#rebuild());
     } else if (this.#dataVersion() !== this.#builtDataVersion) {
-      // Stale-while-revalidate: answer from the previous model immediately and
-      // refresh in the background; onRebuilt tells clients to refetch.
       void this.#rebuild();
     }
     const vectors = this.#vectors ?? [];
@@ -61,7 +51,6 @@ export class EconomicsCache {
     );
   }
 
-  /** Kick a background rebuild, e.g. right after a sync ingests new sessions. */
   invalidate(): void {
     void this.#rebuild();
   }
@@ -70,8 +59,6 @@ export class EconomicsCache {
     void this.#rebuild();
   }
 
-  /** Resolves once any in-flight rebuild (including chained follow-ups) has
-   * finished (success or failure). */
   async settled(): Promise<void> {
     while (this.#building != null) {
       const building = this.#building;
@@ -96,8 +83,6 @@ export class EconomicsCache {
     }
   }
 
-  /** Aborts any in-flight rebuild and stops scheduling new ones. The worker
-   * releases its own SQLite connection before closing its event loop. */
   dispose(): void {
     this.#disposed = true;
     this.#buildAbort?.abort();
@@ -122,12 +107,7 @@ export class EconomicsCache {
       return Promise.resolve();
     }
     if (this.#building != null) {
-      // A build is already in flight and may not reflect writes that land
-      // after it started (e.g. an ingest completing mid-prewarm-scan). Flag
-      // it so the in-flight build schedules an immediate follow-up instead of
-      // silently serving stale data until some unrelated future request
-      // happens to notice via #dataVersion().
-      this.#pendingRebuild = true;
+      this.#rebuildRequestedMidBuild = true;
       return this.#building;
     }
     const compute = this.#options.computeVectors ?? computeVectorsInWorker;
@@ -147,8 +127,6 @@ export class EconomicsCache {
         }
       })
       .catch((error) => {
-        // Keep serving whatever model (possibly none) is cached; only a genuine
-        // failure is worth a log line, not the abort dispose() causes.
         if (!abort.signal.aborted && !this.#disposed) {
           logger.warning("Token economics rebuild failed; keeping the previous model.", {
             "event.name": "decant.economics.rebuild_failed",
@@ -159,12 +137,16 @@ export class EconomicsCache {
       .finally(() => {
         this.#building = null;
         this.#buildAbort = null;
-        if (this.#pendingRebuild && !this.#disposed) {
-          this.#pendingRebuild = false;
-          void this.#rebuild();
-        }
+        this.#startFollowUpRebuildIfRequested();
       });
     return this.#building;
+  }
+
+  #startFollowUpRebuildIfRequested(): void {
+    if (this.#rebuildRequestedMidBuild && !this.#disposed) {
+      this.#rebuildRequestedMidBuild = false;
+      void this.#rebuild();
+    }
   }
 }
 

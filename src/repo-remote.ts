@@ -3,24 +3,20 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { boundedFs, type ProbeFs } from "./bounded-fs.ts";
 import { withImmediateTransaction } from "./db.ts";
 
-// A project's repository identity, read from the Git config on disk. Decant
-// never runs `git` and never contacts the remote: the URL is only a name that
-// stays the same across machines and worktrees, which a local path is not.
-
-/** Git's own files here are a few hundred bytes. The cap keeps a planted or
- * mistaken `.git` from being read whole. */
 const MAX_GIT_FILE_BYTES = 256 * 1024;
 
 const NETWORK_SCHEMES = new Set(["http:", "https:", "ssh:", "git:", "git+ssh:"]);
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: the control range is the point
-const UNSAFE_IDENTITY = /[\x00-\x20\x7f\u0085\u2028\u2029]/;
+function hasUnsafeIdentityChar(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x20 || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
+}
 
-/** `host/path` for a remote URL, without scheme, credentials, port, query, or
- * a trailing `.git`: `github.com/acme/widget` for both
- * `git@github.com:acme/widget.git` and `https://token@github.com/acme/widget`.
- * Null for a local path or `file:` remote, which names nothing off this
- * machine, and for anything that does not read as a host and a path. */
 export function normalizeRemoteUrl(url: string): string | null {
   const trimmed = url.trim();
   if (trimmed === "") {
@@ -55,15 +51,12 @@ export function normalizeRemoteUrl(url: string): string | null {
     .replace(/\.git$/i, "")
     .replace(/\/+$/, "");
   const identity = `${host.toLowerCase()}/${name}`;
-  if (host === "" || name === "" || UNSAFE_IDENTITY.test(identity)) {
+  if (host === "" || name === "" || hasUnsafeIdentityChar(identity)) {
     return null;
   }
   return identity;
 }
 
-/** The URL of `origin` in a Git config file, or of the only remote when there
- * is no `origin`. With several remotes and no `origin`, none is the obvious
- * identity, so the answer is null. */
 export function remoteUrlFromGitConfig(config: string): string | null {
   const urls = new Map<string, string>();
   let remote: string | null = null;
@@ -98,11 +91,8 @@ export function remoteUrlFromGitConfig(config: string): string | null {
   return urls.size === 1 ? ([...urls.values()][0] ?? null) : null;
 }
 
-/** Git's files in a project directory, read under a deadline. */
 type GitFs = Pick<ProbeFs, "readSmallFile" | "isDirectory">;
 
-/** The Git directory `dir` itself owns, if it is the top of a working tree. A
- * worktree or submodule has a `.git` file that points at it. */
 function gitDirOf(dir: string, fs: GitFs): string | null {
   const dotgit = join(dir, ".git");
   if (fs.isDirectory(dotgit)) {
@@ -118,11 +108,6 @@ function gitDirOf(dir: string, fs: GitFs): string | null {
   return target == null || target === "" ? null : resolve(dir, target);
 }
 
-/** The repository identity of the working tree that holds `dir`, or null when
- * `dir` is gone or does not answer in time, is not inside a working tree, or
- * its repository has no usable remote. A directory that no longer exists is
- * never looked up through its parents: they would answer for some other
- * repository. */
 export function resolveRepoRemote(dir: string, fs: GitFs = boundedFs): string | null {
   if (!isAbsolute(dir) || !fs.isDirectory(dir)) {
     return null;
@@ -131,8 +116,6 @@ export function resolveRepoRemote(dir: string, fs: GitFs = boundedFs): string | 
   for (;;) {
     const gitDir = gitDirOf(current, fs);
     if (gitDir != null) {
-      // A linked worktree keeps the shared config in the directory its
-      // `commondir` file names.
       const common = fs.readSmallFile(join(gitDir, "commondir"), MAX_GIT_FILE_BYTES)?.trim();
       const configDir = common == null || common === "" ? gitDir : resolve(gitDir, common);
       const config = fs.readSmallFile(join(configDir, "config"), MAX_GIT_FILE_BYTES);
@@ -154,12 +137,6 @@ interface ProjectRemoteRow {
   repoRemote: string | null;
 }
 
-/** Record each project's repository identity. A project whose own directory
- * is gone, as a removed worktree's is, takes the identity of the repository
- * root it resolved to. A lookup that finds nothing leaves the stored value
- * alone, so an identity outlives the checkout it was read from. Projects that
- * hold only imported ATIF trajectories are skipped: their path is a job
- * directory, and the repository around it did not produce the sessions. */
 export function resolveProjectRemotes(db: Database, fs: GitFs = boundedFs): void {
   const statement = db.prepare(
     `SELECT p.id, p.path, p.root_path AS rootPath, p.repo_remote AS repoRemote

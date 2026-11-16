@@ -72,23 +72,19 @@ import type {
   TokenEconomics,
 } from "../types.ts";
 
-/** Where a slice stands for the filter on screen. */
 export type SliceStatus = "ready" | "loading" | "failed";
 
 const ALWAYS_READY = (): SliceStatus => "ready";
 
-/** Repositories shown before the table stops; the cut keeps the costliest. */
 const REPO_ROW_LIMIT = 12;
 
 const NO_PROJECT_KEY = "(none)";
 
-/** An empty archive, not "No data in range": widening a date range cannot help someone with no sessions. */
 export function FirstRunPanel({
   firstSync = false,
   onSync,
   syncing,
 }: {
-  /** The first sync is running, so the archive is filling, not empty. */
   firstSync?: boolean;
   onSync: () => void;
   syncing: boolean;
@@ -153,12 +149,10 @@ export function AnalyticsView({
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
-  /** A sync is filling an archive that has never completed one. */
   firstSync?: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onSourceChange: (source: DashboardSource) => void;
   onSync: () => void;
-  /** Whether each slice matches the current filter. Defaults to ready. */
   sliceStatus?: (slice: DataSlice) => SliceStatus;
   source: DashboardSource;
   syncing: boolean;
@@ -184,7 +178,6 @@ export function AnalyticsView({
     () => sortRows(data.byModel, modelSort, modelSortValue),
     [data.byModel, modelSort],
   );
-  // Keep the costliest repositories, then apply the chosen order to those.
   const repoRows = useMemo(
     () =>
       sortRows(
@@ -202,7 +195,6 @@ export function AnalyticsView({
   );
   const totalModelCost = modelRows.reduce((sum, row) => sum + row.estimated_cost_usd, 0);
 
-  // What loaded during the first sync is partial, so it reads as still loading.
   const status = (slice: DataSlice): SliceStatus =>
     firstSync && sliceStatus(slice) === "ready" ? "loading" : sliceStatus(slice);
   const summary = data.summary;
@@ -215,8 +207,6 @@ export function AnalyticsView({
   const hitRate = summary == null ? null : cacheHitRate(summary);
   const summaryReady = summary != null && summaryStatus === "ready";
   const previous = previousRange(dateRange.from, dateRange.to);
-  // Compare only once both sides describe the selected range; while one is
-  // still loading, a delta would mix the old filter with the new one.
   const previousSummary =
     summaryReady && status("previousSummary") === "ready" ? data.previousSummary : null;
   const delta = (current: number, before: number | undefined) =>
@@ -231,11 +221,8 @@ export function AnalyticsView({
       : costPerCompletedSession(summary.estimated_cost_usd, data.byOutcome);
   const completed = data.byOutcome.find((row) => row.key === "completed")?.sessions ?? 0;
   const usageUnavailable = sessions > 0 && usageSessions === 0;
-  // A summary that failed to load is unknown, not zero.
   const tile = (text: string) => (summary == null ? "-" : text);
 
-  // Date bounds span the whole archive and ignore the active filter, so this
-  // separates "nothing ingested" from "nothing in the selected range".
   if (data.dateBounds != null && data.dateBounds.min == null && data.dateBounds.max == null) {
     return (
       <div className="view-stack">
@@ -522,8 +509,6 @@ export function AnalyticsView({
                     <Sparkline
                       tone={brandTone(row.key)}
                       values={
-                        // Sparklines from another range would be padded with
-                        // zeros to this one, so show none until they match.
                         data.modelSparklines == null || status("modelSparklines") !== "ready"
                           ? []
                           : alignToSeries(
@@ -641,7 +626,6 @@ export function AnalyticsView({
   );
 }
 
-/** A dense token cell: "-" when none of the row's sessions recorded usage. */
 function UsageTokens({ row, value }: { row: DimensionRow; value: number }) {
   return row.sessions > 0 && row.usage_sessions === 0 ? (
     <span className="faint" title={NO_USAGE_TITLE}>
@@ -652,7 +636,6 @@ function UsageTokens({ row, value }: { row: DimensionRow; value: number }) {
   );
 }
 
-/** Marks a panel whose rows are from the previous filter while new ones load. */
 function updatingProps(updating: boolean): {
   "aria-busy"?: true;
   "data-updating"?: "true";
@@ -844,11 +827,9 @@ export function TokenEconomicsPanel({
   title = "Activity breakdown",
 }: {
   compact?: boolean;
-  /** False when none of the sessions in scope recorded token usage. */
   costAvailable?: boolean;
   description?: string;
   economics: TokenEconomics | null;
-  /** True while the breakdown for the current filter is still loading. */
   loading?: boolean;
   subagentRuns?: number;
   title?: string;
@@ -1096,7 +1077,6 @@ export function DailyPanel({
   onShowAllTime: () => void;
   range?: Pick<DateRangeSelection, "from" | "to">;
   rows: DimensionRow[];
-  /** Whether `rows` belong to the selected range yet. */
   status?: SliceStatus;
 }) {
   const series: DaySeries = useMemo(
@@ -1118,8 +1098,6 @@ export function DailyPanel({
     [series, metric],
   );
   const missingUsage = metric === "cost" ? series.missingUsage : 0;
-  // A bounded range pads every day with zeros, so "has data" must come from
-  // the rows themselves, not from the number of points.
   const hasData = series.observedDays > 0 && series.points.length > 0;
   const costUnknown = metric === "cost" && hasData && values.every((value) => value === null);
   const shareSpan = shareRange(labels);

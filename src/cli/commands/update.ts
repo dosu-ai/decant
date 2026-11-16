@@ -21,7 +21,6 @@ export function registerUpdateCommand(ctx: CliContext): void {
         const deps = ctx.updateDeps;
         const env = ctx.env ?? process.env;
         const install = deps.install ?? detectInstall();
-        // The user asked, so this contacts the registry even with checks off.
         const status = await checkForUpdate({
           env: ctx.env,
           homeDir: ctx.homeDir,
@@ -31,8 +30,6 @@ export function registerUpdateCommand(ctx: CliContext): void {
           now: deps.now,
           force: true,
         });
-        // A failed check still returns the cached version, which is fine
-        // for a nudge but too stale to install.
         if (status.error != null || status.latest == null) {
           ctx.io.writeErr(
             `error: could not check for updates: ${status.error ?? "no version found"}\n`,
@@ -146,8 +143,6 @@ function installedOnPath(): { path: string; version: string | null } | null {
   return path == null ? null : { path, version: reportedVersion(path) };
 }
 
-// The package manager's progress goes to stderr so `--json` keeps stdout to
-// one JSON document.
 function runPackageManager(argv: string[]): number {
   const [bin, ...args] = argv;
   const result = spawnSync(bin ?? "", args, { stdio: ["inherit", 2, 2] });

@@ -33,8 +33,6 @@ export function renderDoctor(report: DoctorReport): string {
     archiveLine += `(${archive.size_bytes ?? 0} bytes${archiveSessions === "" ? "" : `; ${archiveSessions}`})`;
   }
 
-  // Size the source columns from the data. Fixed widths ran a long tool name
-  // or a two-root VS Code entry straight into the next column.
   const sourceRoots = report.sources.map((source) => source.roots.join(", "));
   const toolWidth = Math.max(0, ...report.sources.map((source) => source.tool.length)) + 2;
   const rootsWidth = Math.max(0, ...sourceRoots.map((roots) => roots.length)) + 2;

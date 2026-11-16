@@ -20,9 +20,9 @@ import { getSession } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import {
   type CopilotModelUsage,
-  chooseTotals,
   mergeSnapshots,
   parseCopilotSession,
+  recordsUnlessShortOfSnapshots,
   type UsageSnapshot,
 } from "../src/sources/copilot.ts";
 import { totals as statsTotals } from "../src/stats.ts";
@@ -50,7 +50,6 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-/** One event line in the shape Copilot CLI writes. */
 function event(
   type: string,
   data: Record<string, unknown>,
@@ -67,7 +66,6 @@ function event(
   });
 }
 
-/** A `session.usage_record` line, trimmed to the fields Decant reads. */
 function usageRecord(
   id: string,
   apiCallId: string,
@@ -179,7 +177,6 @@ describe("parseCopilotSession", () => {
       ["mcp__example__search", "call-mcp"],
       ["create", "call-create"],
     ]);
-    // The edit waited on a permission prompt, so it ran after its response.
     expect(uses[2]?.calledAt).toBe("2026-10-01T10:00:14.000Z");
 
     const results = session.messages.flatMap((message) =>
@@ -305,8 +302,6 @@ describe("parseCopilotSession", () => {
           { messageId: "m1", content: "pong", model: "claude-sonnet-4.5", apiCallId: "call-1" },
           "e4",
         ),
-        // The second call's record follows its message, and its two messages
-        // share one call; the usage goes on the first.
         event(
           "assistant.message",
           { messageId: "m2", content: "more", model: "claude-sonnet-4.5", apiCallId: "call-2" },
@@ -332,7 +327,6 @@ describe("parseCopilotSession", () => {
       { ...emptyUsage(), input: 7, output: 9, cacheRead: 27413, cacheCreation: 80, reasoning: 3 },
       null,
     ]);
-    // No snapshot was written, so the records are the totals.
     expect(session.totals).toEqual({
       ...emptyUsage(),
       input: 11,
@@ -365,7 +359,6 @@ describe("parseCopilotSession", () => {
         },
         "e4",
       ),
-      // The session stopped mid-turn: this call has a record but no snapshot.
       usageRecord("e5", "c2", "claude-haiku-4.5", { inputTokens: 1200, outputTokens: 20 }),
       event("assistant.message", { content: "b", apiCallId: "c2" }, "e6"),
     ];
@@ -410,7 +403,6 @@ describe("parseCopilotSession", () => {
       ].join("\n"),
     );
     expect(issues).toEqual([]);
-    // The last message names no model, so it takes the main agent's.
     expect(session.messages.at(-1)?.model).toBe("claude-haiku-4.5");
     expect(session.rawMeta).toMatchObject({ model_context_window: 200000 });
   });
@@ -420,7 +412,6 @@ describe("parseCopilotSession", () => {
     expect(issues).toEqual([]);
     expect(session.sourceSessionId).toBe("copilot-resumed-session");
     expect(session.gitBranch).toBe("feature");
-    // Run one: 3000 in (1000 cached). Run two restarted at zero: 2500 in (1500 cached).
     expect(session.totals).toEqual({
       input: 2000 + 1000,
       output: 12 + 37,
@@ -469,7 +460,6 @@ describe("parseCopilotSession", () => {
     ]);
     expect(issues[1]?.error).toContain('"session.future_feature" on 2 line(s)');
     expect(session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-    // No usage snapshot yet: only the response's output is known.
     expect(session.totals).toEqual({ ...emptyUsage(), output: 3 });
     expect(session.model).toBeNull();
   });
@@ -569,22 +559,24 @@ describe("parseCopilotSession", () => {
   });
 });
 
-describe("chooseTotals", () => {
+describe("recordsUnlessShortOfSnapshots", () => {
   test("takes the usage records when they cover the snapshots", () => {
     const ledger = snapshot({ m: { requests: 3, input: 30, output: 3 } });
-    expect(chooseTotals(ledger, snapshot({ m: { requests: 2, input: 20, output: 2 } }))).toBe(
-      ledger,
-    );
-    expect(chooseTotals(ledger, new Map())).toBe(ledger);
+    expect(
+      recordsUnlessShortOfSnapshots(ledger, snapshot({ m: { requests: 2, input: 20, output: 2 } })),
+    ).toBe(ledger);
+    expect(recordsUnlessShortOfSnapshots(ledger, new Map())).toBe(ledger);
   });
 
   test("keeps the snapshots when a call wrote no record or no records exist", () => {
     const merged = snapshot({ m: { requests: 3, input: 30, output: 3 } });
-    expect(chooseTotals(snapshot({ m: { requests: 2, input: 20, output: 2 } }), merged)).toBe(
-      merged,
-    );
-    expect(chooseTotals(snapshot({ other: { requests: 9, input: 90 } }), merged)).toBe(merged);
-    expect(chooseTotals(new Map(), merged)).toBe(merged);
+    expect(
+      recordsUnlessShortOfSnapshots(snapshot({ m: { requests: 2, input: 20, output: 2 } }), merged),
+    ).toBe(merged);
+    expect(
+      recordsUnlessShortOfSnapshots(snapshot({ other: { requests: 9, input: 90 } }), merged),
+    ).toBe(merged);
+    expect(recordsUnlessShortOfSnapshots(new Map(), merged)).toBe(merged);
   });
 });
 
@@ -643,8 +635,6 @@ describe("Copilot ingest", () => {
     expect(discover(config).map((file) => [file.tool, file.path])).toEqual([
       ["copilot", join(sessionDir, "events.jsonl")],
     ]);
-    // --path keeps the same rule, and never reads a session's own files as a
-    // Claude Code transcript.
     expect(
       discoverSourcePaths([config.copilotDir ?? ""]).map((file) => [
         file.tool,
@@ -683,7 +673,6 @@ describe("Copilot ingest", () => {
     const db = open(dir);
 
     expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, issues: 0, failed: 0 });
-    // Unchanged journals are skipped on the next sync.
     expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 0, skipped: 2 });
 
     const sample = db
@@ -961,7 +950,6 @@ describe("Copilot ingest", () => {
            FROM session`,
       )
       .get() as { id: number } & Record<string, number>;
-    // The subagent's 9000-token prompt is its own context, not the parent's.
     expect(row).toMatchObject({
       turn_count: 1,
       sidechain_message_count: 2,

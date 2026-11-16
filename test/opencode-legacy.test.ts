@@ -309,7 +309,6 @@ describe("parseOpenCodeLegacySession", () => {
       expect(estimateCost("glm-5.3-flash", usage, pricing)).toBeCloseTo(0.00004, 12);
       expect((message.raw as { cost: number }).cost).toBe(0.00005);
     }
-    // The old session records neither model nor agent on its row.
     expect(old.model).toBe("glm-5.3-flash");
     expect(old.agentType).toBe("build");
     expect(old.reasoningEffort).toBeNull();
@@ -406,7 +405,6 @@ describe("parseOpenCodeLegacySession", () => {
 
     const parent = fixture(["v1/subagent.sql"], "ses_v1_parent").session;
     const task = parent.messages.find((m) => m.role === "tool");
-    // Ingest links the child through the result row's raw call id and metadata.
     expect(task?.raw).toMatchObject({
       callID: "call_v1_task",
       tool: "task",
@@ -434,7 +432,6 @@ describe("parseOpenCodeLegacySession", () => {
     const unknown = issues.filter((i) => i.code === "unknown_record_type").map((i) => i.error);
     expect(unknown.some((e) => e.includes("part:hologram"))).toBe(true);
     expect(unknown.some((e) => e.includes("role:narrator"))).toBe(true);
-    // The readable user message survives with no blocks.
     expect(session.messages.map((m) => [m.role, m.blocks.length])).toEqual([["user", 0]]);
     expect(session.reasoningSource).toBe("none");
   });
@@ -499,7 +496,6 @@ describe("parseOpenCodeLegacySession", () => {
       messageID: "msg_t",
       type: "subtask",
     });
-    // Without a session agent the last user message's agent is used.
     expect(
       parse({ session: sessionRow({ agent: null }), messages: [], parts: [] }).session.agentType,
     ).toBeNull();
@@ -544,7 +540,6 @@ describe("parseOpenCodeLegacySession", () => {
     expect(issues).toEqual([]);
     expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     const call = session.messages[1];
-    // Empty reasoning stays: a provider that hides reasoning still bills it.
     expect(call?.blocks.map((b) => [b.blockType, b.toolName, b.toolUseId])).toEqual([
       ["tool_use", "mcp__my_server__lookup", "call_run"],
       ["tool_use", "bash", "call_pend"],
@@ -652,7 +647,6 @@ describe("OpenCode 1.x step timing", () => {
     const { session } = parse({
       session: sessionRow(),
       messages: [
-        // info.tokens holds only the last step's usage.
         messageRow(
           "msg_a",
           1000,
@@ -675,13 +669,11 @@ describe("OpenCode 1.x step timing", () => {
     const { session } = parse({
       session: sessionRow(),
       messages: [
-        // A text part without a time (older 1.x): completion ends the step.
         messageRow(
           "msg_a",
           1000,
           assistant({ time: { created: T0 + 1000, completed: T0 + 1900 } }),
         ),
-        // Only a start: nothing else to go on.
         messageRow("msg_b", 2000, assistant({ time: { created: T0 + 2000 } })),
       ],
       parts: [

@@ -34,7 +34,6 @@ const TOOLS: [string | null, string | null, string | null][] = [
   ["NoDurations", "builtin", null],
 ];
 
-/** Deterministic calls with repeated durations, nulls, and every tool shape. */
 function seed(db: Database): void {
   db.exec(`
     INSERT INTO project(id, path) VALUES (1, '/p');
@@ -81,8 +80,11 @@ interface Percentiles {
   p95_ms: number | null;
 }
 
-/** The window-function definition the routes used before the in-memory sort. */
-function windowPercentiles(db: Database, where: string, params: string[]): Percentiles {
+function legacyWindowFunctionPercentiles(
+  db: Database,
+  where: string,
+  params: string[],
+): Percentiles {
   return db
     .query(
       `WITH ranked AS (
@@ -134,7 +136,7 @@ describe("tool aggregates", () => {
             ? params
             : [row.tool_name, row.tool_kind, row.mcp_server, ...params.slice(2)];
         expect({ p50_ms: row.p50_ms, p95_ms: row.p95_ms }).toEqual(
-          windowPercentiles(db, where, orderedParams),
+          legacyWindowFunctionPercentiles(db, where, orderedParams),
         );
         const counts = db
           .query(
@@ -177,7 +179,10 @@ describe("tool aggregates", () => {
            FROM tool_call t JOIN session s ON s.id = t.session_id WHERE ${where}`,
         )
         .get(...params) as { calls: number; errors: number };
-      expect(page.summary).toEqual({ ...counts, ...windowPercentiles(db, where, [...params]) });
+      expect(page.summary).toEqual({
+        ...counts,
+        ...legacyWindowFunctionPercentiles(db, where, [...params]),
+      });
     }
     closeDb(db);
   });
@@ -234,8 +239,7 @@ describe("tool aggregates", () => {
       `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
-    // The SQL mcpUsage ran before it moved its percentiles to TypeScript.
-    const oracle = (limit: number) =>
+    const legacySqlMcpUsage = (limit: number) =>
       db
         .query(
           `WITH scoped AS (
@@ -293,7 +297,7 @@ describe("tool aggregates", () => {
               row.timestamp,
             );
           }
-          expect(mcpUsage(db, limit)).toEqual(oracle(limit) as never);
+          expect(mcpUsage(db, limit)).toEqual(legacySqlMcpUsage(limit) as never);
         },
       ),
       { numRuns: 150 },

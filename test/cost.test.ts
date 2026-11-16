@@ -702,10 +702,13 @@ describe("isPriceable", () => {
     const cases: Array<[string, number, number, number]> = [
       // Carbon's December 1 rate, like Argon's.
       ["gemini-4-carbon", 4, 20, 0.2],
+      ["gemini-4-carbon-001", 4, 20, 0.2],
       ["models/gemini-4-carbon", 4, 20, 0.2],
       ["google/gemini-4-carbon:floor", 4, 20, 0.2],
       ["gemini-4-hydrogen", 1.5, 7.5, 0.075],
       ["gemini-4-hydrogen-latest", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-preview-11-2026", 1.5, 7.5, 0.075],
+      ["gemini-4-hydrogen-20261112", 1.5, 7.5, 0.075],
       ["gemini-4-hydrogen[1m]", 1.5, 7.5, 0.075],
     ];
     for (const [model, input, output, cacheRead] of cases) {

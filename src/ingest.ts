@@ -147,7 +147,7 @@ export interface SourceFile {
   opencode?: OpenCodeSessionRef;
   hermes?: HermesSessionRef;
   hermesUnreadable?: ReadonlySet<string>;
-  hermesUnlistedProfiles?: string;
+  hermesPartialDiscovery?: { listed: ReadonlySet<string> };
 }
 
 interface Prepared {
@@ -283,8 +283,7 @@ function discoverHermes(
       "error.code": unlistedProfiles.errorCode,
     });
   }
-  const unlistedProfilesPath =
-    unlistedProfiles == null ? undefined : canonicalPath(unlistedProfiles.path);
+  const listed = new Set<string>();
   for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
     let store: HermesStore;
     try {
@@ -314,7 +313,9 @@ function discoverHermes(
       continue;
     }
     try {
-      for (const ref of store.listSessions()) {
+      const refs = store.listSessions();
+      listed.add(dbPath);
+      for (const ref of refs) {
         const prior = best.get(ref.sessionId);
         if (
           prior == null ||
@@ -346,7 +347,7 @@ function discoverHermes(
       archived: false,
       hermes: ref,
       hermesUnreadable: unreadable,
-      hermesUnlistedProfiles: unlistedProfilesPath,
+      hermesPartialDiscovery: unlistedProfiles == null ? undefined : { listed },
     }));
 }
 
@@ -1045,12 +1046,12 @@ function unreadableArchivedCopy(
   ref: HermesSessionRef,
   hermes: HermesRun,
 ): string | null {
-  const unlisted = file.hermesUnlistedProfiles;
+  const partial = file.hermesPartialDiscovery;
   const unreadable = [
     ...(file.hermesUnreadable ?? []),
-    ...(unlisted == null
+    ...(partial == null
       ? []
-      : [...hermes.sourceDatabases()].filter((database) => database.startsWith(unlisted + sep))),
+      : [...hermes.sourceDatabases()].filter((database) => !partial.listed.has(database))),
   ];
   for (const database of unreadable) {
     const candidate = `${database}#${ref.sessionId}`;

@@ -1,6 +1,14 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, openDb } from "../src/db.ts";
@@ -924,15 +932,23 @@ describe("Hermes discovery and ingest", () => {
     }
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "an older copy does not replace one from a profiles directory that cannot be listed",
-    () => {
+  test
+    .skipIf(process.platform === "win32" || process.getuid?.() === 0)
+    .each(["stored in", "symlinked into"])(
+    "an older copy does not replace one from a profile %s a profiles directory that cannot be listed",
+    (layout) => {
       const root = scratch();
       const home = join(root, "hermes");
       const main = join(home, "state.db");
       const profiles = join(home, "profiles");
-      const work = join(profiles, "work", "state.db");
-      mkdirSync(join(profiles, "work"), { recursive: true });
+      const workDir =
+        layout === "stored in" ? join(profiles, "work") : join(root, "elsewhere", "work");
+      const work = join(workDir, "state.db");
+      mkdirSync(workDir, { recursive: true });
+      if (layout === "symlinked into") {
+        mkdirSync(profiles, { recursive: true });
+        symlinkSync(workDir, join(profiles, "work"));
+      }
       buildHermesDb(main, [
         sessionSql("shared-1"),
         messageSql("shared-1", 1, "user", "hello from the default profile"),

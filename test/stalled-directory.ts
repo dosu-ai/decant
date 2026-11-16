@@ -10,10 +10,16 @@ export function makeFifo(path: string): string {
   return path;
 }
 
+const NO_READER_WAITING_ON_THE_FIFO = "ENXIO";
+
 export function releaseFifo(path: string): void {
   try {
     closeSync(openSync(path, constants.O_WRONLY | constants.O_NONBLOCK));
-  } catch {}
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== NO_READER_WAITING_ON_THE_FIFO) {
+      throw error;
+    }
+  }
 }
 
 export function runProbeChild(mode: string, args: readonly string[]): unknown {

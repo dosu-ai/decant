@@ -41,10 +41,12 @@ function httpStatus(ip: string, port: number, path: string): Promise<number> {
   });
 }
 
+const SERVE_STARTUP_DEADLINE_MS = 15_000;
+
 async function readServePort(
   proc: Bun.Subprocess<"ignore", "ignore", "pipe">,
 ): Promise<{ port: number; log: string }> {
-  const kill = setTimeout(() => proc.kill(), 15_000);
+  const endTheStreamIfServeHangsSilently = setTimeout(() => proc.kill(), SERVE_STARTUP_DEADLINE_MS);
   try {
     const reader = proc.stderr.getReader();
     const decoder = new TextDecoder();
@@ -60,7 +62,7 @@ async function readServePort(
     }
     throw new Error(`serve never reported its port; stderr so far: ${buffer.slice(0, 300)}`);
   } finally {
-    clearTimeout(kill);
+    clearTimeout(endTheStreamIfServeHangsSilently);
   }
 }
 
@@ -297,20 +299,20 @@ async function waitForToolCallCount(port: number, expected: number): Promise<Arc
   throw new Error(`watcher never reached ${expected} ingested tool calls`);
 }
 
-const NO_INGEST_GRACE_MS = 4000;
+const NO_INGEST_WAIT_LONGER_THAN_A_REAL_INGEST_MS = 4000;
 
 async function expectNoIngest(port: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, NO_INGEST_GRACE_MS));
+  await new Promise((resolve) => setTimeout(resolve, NO_INGEST_WAIT_LONGER_THAN_A_REAL_INGEST_MS));
   expect(await sessionCount(port)).toBe(0);
 }
 
 describe("serve sync opt-out (real CLI process)", () => {
-  test("baseline: the watcher ingests the source tree by default", async () => {
+  test("baseline: the watcher ingests the source tree by default, within the no-ingest wait", async () => {
     await withSeededServe({}, async (port, startupLog) => {
       expect(startupLog).toContain('"watch.enabled":true');
       const started = Date.now();
       expect(await waitForSessionCount(port, 2)).toBe(2);
-      expect(Date.now() - started).toBeLessThan(NO_INGEST_GRACE_MS);
+      expect(Date.now() - started).toBeLessThan(NO_INGEST_WAIT_LONGER_THAN_A_REAL_INGEST_MS);
     });
   }, 40_000);
 

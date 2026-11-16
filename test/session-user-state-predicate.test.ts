@@ -18,7 +18,7 @@ function freshDb(): Database {
   return openDb(join(workDir, `predicate-${dbCounter}.db`));
 }
 
-function oraclePredicate(alias: string, includeArchived: boolean): string {
+function legacyCorrelatedOracle(alias: string, includeArchived: boolean): string {
   const hiddenStates = includeArchived ? "'deleted'" : "'archived', 'deleted'";
   return `NOT EXISTS (
     WITH RECURSIVE visibility_lineage(id, tool, source_session_id, parent_session_id) AS (
@@ -39,7 +39,7 @@ function oraclePredicate(alias: string, includeArchived: boolean): string {
   )`;
 }
 
-function oracleArchivedExpression(alias: string): string {
+function legacyCorrelatedArchivedOracle(alias: string): string {
   return `EXISTS (
     WITH RECURSIVE archive_lineage(id, tool, source_session_id, parent_session_id) AS (
       SELECT ${alias}.id, ${alias}.tool, ${alias}.source_session_id, ${alias}.parent_session_id
@@ -130,11 +130,11 @@ describe("sessionUserStatePredicate", () => {
     setState(db, "codex", "a", "archived");
 
     expect(visibleIds(db, sessionUserStatePredicate("s"))).toEqual([4]);
-    expect(visibleIds(db, oraclePredicate("s", false))).toEqual([4]);
+    expect(visibleIds(db, legacyCorrelatedOracle("s", false))).toEqual([4]);
     db.close();
   });
 
-  test("selects the same rows and archive flags as the correlated oracle on random forests", () => {
+  test("selects the same rows and archive flags as the legacy correlated oracle on random forests", () => {
     for (let seed = 1; seed <= 6; seed += 1) {
       const db = freshDb();
       let state = seed * 2654435761;
@@ -166,11 +166,11 @@ describe("sessionUserStatePredicate", () => {
 
       for (const includeArchived of [false, true]) {
         expect(visibleIds(db, sessionUserStatePredicate("s", includeArchived))).toEqual(
-          visibleIds(db, oraclePredicate("s", includeArchived)),
+          visibleIds(db, legacyCorrelatedOracle("s", includeArchived)),
         );
       }
       expect(archivedIds(db, sessionIsUserArchivedExpression("s"))).toEqual(
-        archivedIds(db, oracleArchivedExpression("s")),
+        archivedIds(db, legacyCorrelatedArchivedOracle("s")),
       );
       const visible = visibleIds(db, sessionUserStatePredicate("s")).length;
       expect(visible).toBeGreaterThan(0);

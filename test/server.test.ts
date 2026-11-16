@@ -19,7 +19,7 @@ import {
 } from "../src/api-limits.ts";
 import type { Config } from "../src/config.ts";
 import { openDb, SchemaTooNewError, SchemaTooOldError } from "../src/db.ts";
-import { EconomicsCache } from "../src/economics-cache.ts";
+import { EconomicsCache, type EconomicsCacheOptions } from "../src/economics-cache.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { listSessions } from "../src/query.ts";
 import { regenerate } from "../src/recommendations.ts";
@@ -1853,9 +1853,9 @@ describe("server routes", () => {
         retryable: true,
       });
     } finally {
-      try {
+      if (lockDb.inTransaction) {
         lockDb.exec("ROLLBACK");
-      } catch {}
+      }
       lockDb.close();
       requestDb.close();
     }
@@ -1932,40 +1932,49 @@ describe("server routes", () => {
     }
   });
 
-  test("stop() resolves promptly even while a request awaits an in-flight economics rebuild", async () => {
+  test("stop() aborts an economics rebuild a request is awaiting before it waits for that request", async () => {
     const config = freshConfig();
-    const gate = Promise.withResolvers<void>();
+    const releaseRebuildAtCleanup = Promise.withResolvers<void>();
     let sawAbort = false;
+    const rebuildOnlyAbortOrCleanupSettles: EconomicsCacheOptions["computeVectors"] = (
+      _path,
+      { signal },
+    ) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          sawAbort = true;
+          reject(new Error("aborted"));
+        });
+        releaseRebuildAtCleanup.promise.then(() => reject(new Error("test cleanup")));
+      });
     const server = serve({
       config,
       port: 0,
-      economicsComputeVectors: (_path, { signal }) =>
-        new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () => {
-            sawAbort = true;
-            reject(new Error("aborted"));
-          });
-          gate.promise.then(() => reject(new Error("test cleanup")));
-        }),
+      economicsComputeVectors: rebuildOnlyAbortOrCleanupSettles,
     });
 
-    const pendingRequest = fetch(
+    const requestAwaitingTheRebuild = fetch(
       `http://127.0.0.1:${server.port}/api/analytics/token-economics`,
     ).catch((error: unknown) => error);
-    await Bun.sleep(50);
+    const timeForTheHandlerToReachTheRebuildMs = 50;
+    await Bun.sleep(timeForTheHandlerToReachTheRebuildMs);
 
+    const stopDeadlineMs = 2000;
     const t0 = performance.now();
     await Promise.race([
       server.stop(true),
       new Promise((_resolve, reject) =>
-        setTimeout(() => reject(new Error("server.stop() did not resolve within 2s")), 2000),
+        setTimeout(
+          () => reject(new Error("server.stop() did not resolve within 2s")),
+          stopDeadlineMs,
+        ),
       ),
     ]);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(stopDeadlineMs);
     expect(sawAbort).toBe(true);
 
-    gate.resolve();
-    await pendingRequest.catch(() => {});
+    releaseRebuildAtCleanup.resolve();
+    await requestAwaitingTheRebuild.catch(() => {});
   });
 
   test("stop() cancels and awaits a manual sync when no watcher is configured", async () => {
@@ -2224,11 +2233,24 @@ describe("write origin must match the Host header", () => {
 });
 
 describe("trusted peer resolution", () => {
-  const DEFAULT_ROUTE = "00000000";
+  function procNetRouteHex(ipv4: string): string {
+    return ipv4
+      .split(".")
+      .map((octet) => Number(octet).toString(16).toUpperCase().padStart(2, "0"))
+      .reverse()
+      .join("");
+  }
+
+  const DEFAULT_ROUTE = procNetRouteHex("0.0.0.0");
   const UP = "0001";
   const UP_GATEWAY = "0003";
-  const MASK_16 = "0000FFFF";
-  const MASK_24 = "00FFFFFF";
+  const MASK_16 = procNetRouteHex("255.255.0.0");
+  const MASK_24 = procNetRouteHex("255.255.255.0");
+
+  test("writes route addresses the way /proc/net/route prints them, as the little-endian reading of the network-order word", () => {
+    expect(procNetRouteHex("172.17.0.1")).toBe("010011AC");
+    expect([DEFAULT_ROUTE, MASK_16, MASK_24]).toEqual(["00000000", "0000FFFF", "00FFFFFF"]);
+  });
 
   function routeRow(
     iface: string,
@@ -2291,8 +2313,8 @@ describe("trusted peer resolution", () => {
   function bridgedContainer(): TrustedPeerSources {
     return namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("172.17.0.0"), DEFAULT_ROUTE, UP, MASK_16),
       ],
       { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
     );
@@ -2345,8 +2367,8 @@ describe("trusted peer resolution", () => {
   test("refuses a gateway outside the derivation bound", () => {
     const podman = namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "0100580A", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "0000580A", DEFAULT_ROUTE, UP, MASK_16),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("10.88.0.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("10.88.0.0"), DEFAULT_ROUTE, UP, MASK_16),
       ],
       { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
     );
@@ -2356,16 +2378,16 @@ describe("trusted peer resolution", () => {
   test("refuses the host's own network namespace", () => {
     const lan = namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "0101A8C0", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "0001A8C0", DEFAULT_ROUTE, UP, MASK_24),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("192.168.1.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("192.168.1.0"), DEFAULT_ROUTE, UP, MASK_24),
       ],
       { lo: loopback, eth0: { ifindex: 2, physical: true } },
     );
     expect(resolveTrustedPeers(undefined, optIn, lan)).toEqual([]);
     const inRangeLan = namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.16.5.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("172.16.5.0"), DEFAULT_ROUTE, UP, MASK_24),
       ],
       { lo: loopback, eth0: { ifindex: 2, physical: true } },
     );
@@ -2374,8 +2396,8 @@ describe("trusted peer resolution", () => {
 
   test("refuses links that are not a veth into another namespace", () => {
     const inRangeDefault = [
-      routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
-      routeRow("eth0", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+      routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.16.5.1"), UP_GATEWAY, DEFAULT_ROUTE),
+      routeRow("eth0", procNetRouteHex("172.16.5.0"), DEFAULT_ROUTE, UP, MASK_24),
     ];
     const macvlan = namespace(inRangeDefault, {
       lo: loopback,
@@ -2401,8 +2423,14 @@ describe("trusted peer resolution", () => {
     expect(resolveTrustedPeers(undefined, optIn, localPair)).toEqual([]);
     const traversal = namespace(
       [
-        routeRow("../../etc", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("../../etc", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+        routeRow(
+          "../../etc",
+          DEFAULT_ROUTE,
+          procNetRouteHex("172.16.5.1"),
+          UP_GATEWAY,
+          DEFAULT_ROUTE,
+        ),
+        routeRow("../../etc", procNetRouteHex("172.16.5.0"), DEFAULT_ROUTE, UP, MASK_24),
       ],
       { lo: loopback },
     );
@@ -2412,10 +2440,10 @@ describe("trusted peer resolution", () => {
   test("refuses a multi-homed host", () => {
     const multiHomed = namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16),
-        routeRow("eth1", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth1", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("172.17.0.0"), DEFAULT_ROUTE, UP, MASK_16),
+        routeRow("eth1", DEFAULT_ROUTE, procNetRouteHex("172.16.5.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth1", procNetRouteHex("172.16.5.0"), DEFAULT_ROUTE, UP, MASK_24),
       ],
       {
         lo: loopback,
@@ -2429,8 +2457,8 @@ describe("trusted peer resolution", () => {
   test("refuses a gateway that is not on-link", () => {
     const offLink = namespace(
       [
-        routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
-        routeRow("eth0", "000014AC", DEFAULT_ROUTE, UP, MASK_16),
+        routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), UP_GATEWAY, DEFAULT_ROUTE),
+        routeRow("eth0", procNetRouteHex("172.20.0.0"), DEFAULT_ROUTE, UP, MASK_16),
       ],
       { lo: loopback, eth0: { ifindex: 2, devtype: "veth" } },
     );
@@ -2444,21 +2472,24 @@ describe("trusted peer resolution", () => {
         sysClassNetPath: join(workDir, "no-such-sys-class-net"),
       }),
     ).toEqual([]);
-    const onLinkOnly = namespace([routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16)], {
-      lo: loopback,
-      eth0: { ifindex: 2, devtype: "veth" },
-    });
+    const onLinkOnly = namespace(
+      [routeRow("eth0", procNetRouteHex("172.17.0.0"), DEFAULT_ROUTE, UP, MASK_16)],
+      {
+        lo: loopback,
+        eth0: { ifindex: 2, devtype: "veth" },
+      },
+    );
     expect(resolveTrustedPeers(undefined, optIn, onLinkOnly)).toEqual([]);
     const malformedDefaults = [
       routeRow("eth0", DEFAULT_ROUTE, "ZZZZZZZZ", UP_GATEWAY, DEFAULT_ROUTE),
       routeRow("eth0", DEFAULT_ROUTE, DEFAULT_ROUTE, UP_GATEWAY, DEFAULT_ROUTE),
-      routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP, DEFAULT_ROUTE),
-      routeRow("eth0", DEFAULT_ROUTE, "010011AC", "0002", DEFAULT_ROUTE),
-      ["eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY].join("\t"),
+      routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), UP, DEFAULT_ROUTE),
+      routeRow("eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), "0002", DEFAULT_ROUTE),
+      ["eth0", DEFAULT_ROUTE, procNetRouteHex("172.17.0.1"), UP_GATEWAY].join("\t"),
     ];
     for (const malformed of malformedDefaults) {
       const sources = namespace(
-        [malformed, routeRow("eth0", "000011AC", DEFAULT_ROUTE, UP, MASK_16)],
+        [malformed, routeRow("eth0", procNetRouteHex("172.17.0.0"), DEFAULT_ROUTE, UP, MASK_16)],
         {
           lo: loopback,
           eth0: { ifindex: 2, devtype: "veth" },

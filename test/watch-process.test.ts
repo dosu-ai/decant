@@ -71,7 +71,11 @@ describe("decant watch process", () => {
         for (const line of lines) {
           try {
             events.push(JSON.parse(line) as SyncCompleted);
-          } catch {}
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) {
+              throw error;
+            }
+          }
         }
       }
     })();

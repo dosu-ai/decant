@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-test("a completed supervised serve does not later exit its host process", async () => {
+const SERVICE_STOP_GRACE_MS = 10_000;
+const HOST_LIFETIME_PAST_THE_STOP_GRACE_MS = SERVICE_STOP_GRACE_MS + 1_000;
+const SIGTERM_DELAY_AFTER_STARTUP_MS = 25;
+
+test("a completed supervised serve leaves no stop-grace force-exit timer behind to exit its library host", async () => {
   const root = mkdtempSync(join(tmpdir(), "decant-serve-process-"));
   const program = `
     import { runCli } from "./src/cli.ts";
@@ -14,7 +18,7 @@ test("a completed supervised serve does not later exit its host process", async 
     configureLogging({ write(line) {
       if (!stopSent && JSON.parse(line)["event.name"] === "decant.server.started") {
         stopSent = true;
-        setTimeout(() => process.kill(process.pid, "SIGTERM"), 25);
+        setTimeout(() => process.kill(process.pid, "SIGTERM"), ${SIGTERM_DELAY_AFTER_STARTUP_MS});
       }
     }});
     const result = await runCli(
@@ -26,7 +30,7 @@ test("a completed supervised serve does not later exit its host process", async 
     );
     if (result.code !== 0) throw new Error(result.stderr);
     console.log("serve-returned");
-    await Bun.sleep(11_000);
+    await Bun.sleep(${HOST_LIFETIME_PAST_THE_STOP_GRACE_MS});
     console.log("host-survived");
   `;
   const proc = Bun.spawn([process.execPath, "--eval", program], {

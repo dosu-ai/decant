@@ -1,11 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readUiFile, readUiSource, sourceFrom } from "./ui-source.ts";
+import { readUiFile, readUiSource } from "./ui-source.ts";
 
 const root = join(import.meta.dir, "..");
 const main = readUiSource();
 const styles = readFileSync(join(root, "src", "ui", "styles.css"), "utf8");
+
+function jsxElementWithClassName(source: string, className: string): string {
+  const opening = new RegExp(`<(\\w+)\\s+className="${className}"`).exec(source);
+  if (opening == null) {
+    throw new Error(`no element with className="${className}"`);
+  }
+  const tag = opening[1];
+  const tags = new RegExp(`<${tag}\\b[^>]*?(/?)>|</${tag}>`, "g");
+  tags.lastIndex = opening.index;
+  let depth = 0;
+  for (let match = tags.exec(source); match != null; match = tags.exec(source)) {
+    const closing = match[0].startsWith("</");
+    const selfClosing = match[1] === "/";
+    if (!closing && !selfClosing) {
+      depth += 1;
+    } else if (closing) {
+      depth -= 1;
+    }
+    if (depth === 0) {
+      return source.slice(opening.index, match.index + match[0].length);
+    }
+  }
+  throw new Error(`className="${className}" opens a <${tag}> that never closes`);
+}
 
 const RESTYLED_CLASSES = [
   "stat-grid",
@@ -30,8 +54,10 @@ describe("restyle contract", () => {
   });
 
   test("the analytics stat grid never strands a card on a short row", () => {
-    const markup = sourceFrom(readUiFile("views/analytics.tsx"), '"stat-grid analytics-stat-grid"');
-    const grid = markup.slice(0, markup.indexOf("\n      </div>"));
+    const grid = jsxElementWithClassName(
+      readUiFile("views/analytics.tsx"),
+      "stat-grid analytics-stat-grid",
+    );
     const cards = grid.match(/<StatCard/g)?.length ?? 0;
     expect(cards).toBe(8);
 

@@ -1,6 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { defaultPricing } from "./cost.ts";
-import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
+import {
+  type DateFilter,
+  type SqlFragment,
+  sessionDatePredicate,
+  whereClause,
+} from "./date-filter.ts";
 import type { Operation } from "./enrich.ts";
 import type { Tool } from "./model.ts";
 import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.ts";
@@ -701,11 +706,13 @@ export interface Activity {
   peak_weekday: number | null;
 }
 
+function localTimeStatementKey(name: string, scope: SqlFragment): string {
+  return statementKey(`${name}:${new Date().getTimezoneOffset()}:${scope.sql}`, [...scope.params]);
+}
+
 export function activity(db: Database, filter?: StatsFilter | null): Activity {
   const visible = statsScope(db, "s", filter);
-  const key = statementKey(`activity:${new Date().getTimezoneOffset()}:${visible.sql}`, [
-    ...visible.params,
-  ]);
+  const key = localTimeStatementKey("activity", visible);
   const result = cachedRead(db, key, () => {
     const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24, filter);
     const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7, filter);

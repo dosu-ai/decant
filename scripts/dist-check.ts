@@ -12,15 +12,19 @@ import {
   stageNpmPackages,
 } from "./distribution.ts";
 
+const MIN_UI_BUNDLE_CHARS = 250_000;
+
+function removeTemporaryRootBestEffort(root: string): void {
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {}
+}
+
 const version = process.env.DECANT_DISTCHECK_VERSION ?? "0.0.0-check";
 const isTemporaryRoot = process.env.DECANT_DISTCHECK_DIR == null;
 const outRoot = process.env.DECANT_DISTCHECK_DIR ?? mkdtempSync(join(tmpdir(), "decant-check-"));
 if (isTemporaryRoot) {
-  process.on("exit", () => {
-    try {
-      rmSync(outRoot, { recursive: true, force: true });
-    } catch {}
-  });
+  process.on("exit", () => removeTemporaryRootBestEffort(outRoot));
 }
 const binaryDir = join(outRoot, "bin");
 const npmDir = join(outRoot, "npm");
@@ -245,7 +249,7 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
     throw new Error(`compiled binary served ${scriptSrc} without x-content-type-options: nosniff`);
   }
   const code = await bundle.text();
-  if (code.length < 250_000) {
+  if (code.length < MIN_UI_BUNDLE_CHARS) {
     throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
   }
   // The dev-only key warning and the prod-only minified error text each pin

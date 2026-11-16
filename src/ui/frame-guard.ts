@@ -3,7 +3,7 @@ export type FrameContext = {
   readonly top: unknown;
 };
 
-export function isFramed(view: FrameContext): boolean {
+export function isFramedOrUnknown(view: FrameContext): boolean {
   try {
     return view.top !== view.self;
   } catch {

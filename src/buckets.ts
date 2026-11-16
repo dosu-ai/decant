@@ -397,15 +397,15 @@ function get(value: Json | undefined, key: string): Json | undefined {
     : undefined;
 }
 
-const SHELL_EDIT_PATTERNS: RegExp[] = [
-  /\bgit\s+apply\b(?![^\n]*--(?:check|stat|summary|numstat))/,
-  /\bsed\b[^\n|]*\s-i\b/,
-  /\bpatch\b[^\n|]*-p\d/,
-  /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/,
-  /\bopen\([^)]*['"][wa]\+?['"]/,
-  /\.write_(?:text|bytes)\(/,
-  /\bapplypatch\b/,
-];
+const SHELL_EDIT_PATTERNS = {
+  gitApplyThatWrites: /\bgit\s+apply\b(?![^\n]*--(?:check|stat|summary|numstat))/,
+  sedInPlace: /\bsed\b[^\n|]*\s-i\b/,
+  patchWithStripLevel: /\bpatch\b[^\n|]*-p\d/,
+  nodeFileWrite: /\bwriteFileSync\b|\bfs\.write\b|\.writeFile\b/,
+  pythonOpenForWrite: /\bopen\([^)]*['"][wa]\+?['"]/,
+  pythonPathWrite: /\.write_(?:text|bytes)\(/,
+  applypatch: /\bapplypatch\b/,
+} satisfies Record<string, RegExp>;
 
 export function isCodeEditTool(
   toolName: string | null | undefined,
@@ -423,7 +423,7 @@ export function isCodeEditTool(
     const command = commandFromInput(input);
     return (
       command != null &&
-      SHELL_EDIT_PATTERNS.some((re) => re.test(command)) &&
+      Object.values(SHELL_EDIT_PATTERNS).some((re) => re.test(command)) &&
       bashBucket(command) === "code"
     );
   }

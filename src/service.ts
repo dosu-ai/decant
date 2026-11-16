@@ -17,7 +17,8 @@ export type ServiceManager = "launchd" | "systemd";
 export const LAUNCHD_LABEL = "dev.dosu.decant";
 export const SYSTEMD_UNIT = "decant.service";
 export const SERVICE_ENV = "DECANT_SERVICE";
-export const SERVICE_RESTART_EXIT_CODE = 75;
+const EX_TEMPFAIL = 75;
+export const SERVICE_RESTART_EXIT_CODE = EX_TEMPFAIL;
 
 export interface ServiceStatus {
   supported: boolean;

@@ -750,10 +750,12 @@ export interface SessionRefMatches {
   bySourceId: SessionRefMatch[];
 }
 
+const DECIMAL_ID_ALLOWING_LEGACY_PLUS_SIGN = /^\+?\d+$/;
+
 export function findSessionsByRef(db: Database, ref: string): SessionRefMatches {
   const select = "SELECT id, tool, started_at FROM session";
   const trimmed = ref.trim();
-  const id = /^\+?\d+$/.test(trimmed) ? Number(trimmed) : null;
+  const id = DECIMAL_ID_ALLOWING_LEGACY_PLUS_SIGN.test(trimmed) ? Number(trimmed) : null;
   return {
     byId:
       id != null && Number.isSafeInteger(id)

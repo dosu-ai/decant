@@ -197,7 +197,11 @@ export function capBlocks(
 
 function cut(value: string, maxChars: number): string {
   const last = value.charCodeAt(maxChars - 1);
-  return value.slice(0, last >= 0xd800 && last <= 0xdbff ? maxChars - 1 : maxChars);
+  return value.slice(0, isHighSurrogate(last) ? maxChars - 1 : maxChars);
+}
+
+function isHighSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
 }
 
 function withTruncationMarkers(detail: SessionDetail): SessionDetail {

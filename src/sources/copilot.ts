@@ -396,7 +396,9 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
 
   issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
-  const modelUsage = toModelUsageRows(chooseTotals(ledger, mergeSnapshots(snapshots)));
+  const modelUsage = toModelUsageRows(
+    recordsUnlessShortOfSnapshots(ledger, mergeSnapshots(snapshots)),
+  );
   const totals = emptyUsage();
   if (modelUsage.length > 0) {
     for (const row of modelUsage) {
@@ -526,7 +528,7 @@ export function mergeSnapshots(snapshots: UsageSnapshot[]): UsageSnapshot {
   const banked: UsageSnapshot = new Map();
   let latest: UsageSnapshot | null = null;
   for (const snapshot of snapshots) {
-    if (latest != null && !covers(snapshot, latest)) {
+    if (latest != null && !coversEveryModel(snapshot, latest)) {
       addSnapshot(banked, latest);
     }
     latest = snapshot;
@@ -544,7 +546,7 @@ function addSnapshot(into: UsageSnapshot, snapshot: UsageSnapshot): void {
   }
 }
 
-function covers(later: UsageSnapshot, earlier: UsageSnapshot): boolean {
+function coversEveryModel(later: UsageSnapshot, earlier: UsageSnapshot): boolean {
   for (const [model, before] of earlier) {
     const after = later.get(model);
     if (
@@ -573,8 +575,11 @@ function sumCopilotUsage(a: CopilotModelUsage, b: CopilotModelUsage): CopilotMod
   };
 }
 
-export function chooseTotals(ledger: UsageSnapshot, merged: UsageSnapshot): UsageSnapshot {
-  return ledger.size > 0 && covers(ledger, merged) ? ledger : merged;
+export function recordsUnlessShortOfSnapshots(
+  ledger: UsageSnapshot,
+  merged: UsageSnapshot,
+): UsageSnapshot {
+  return ledger.size > 0 && coversEveryModel(ledger, merged) ? ledger : merged;
 }
 
 function toDecantUsage(usage: CopilotModelUsage): TokenUsage {

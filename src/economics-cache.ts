@@ -31,7 +31,7 @@ export class EconomicsCache {
   #builtDataVersion: number | null = null;
   #building: Promise<void> | null = null;
   #buildAbort: AbortController | null = null;
-  #pendingRebuild = false;
+  #rebuildRequestedMidBuild = false;
   #disposed = false;
   readonly #options: EconomicsCacheOptions;
 
@@ -107,7 +107,7 @@ export class EconomicsCache {
       return Promise.resolve();
     }
     if (this.#building != null) {
-      this.#pendingRebuild = true;
+      this.#rebuildRequestedMidBuild = true;
       return this.#building;
     }
     const compute = this.#options.computeVectors ?? computeVectorsInWorker;
@@ -137,12 +137,16 @@ export class EconomicsCache {
       .finally(() => {
         this.#building = null;
         this.#buildAbort = null;
-        if (this.#pendingRebuild && !this.#disposed) {
-          this.#pendingRebuild = false;
-          void this.#rebuild();
-        }
+        this.#startFollowUpRebuildIfRequested();
       });
     return this.#building;
+  }
+
+  #startFollowUpRebuildIfRequested(): void {
+    if (this.#rebuildRequestedMidBuild && !this.#disposed) {
+      this.#rebuildRequestedMidBuild = false;
+      void this.#rebuild();
+    }
   }
 }
 

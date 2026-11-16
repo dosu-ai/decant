@@ -15,7 +15,7 @@ export function dateFilterFromSearch(searchParams: URLSearchParams): DateFilter 
   };
 }
 
-export const DAY_END = "\u{10FFFF}";
+export const SORTS_AFTER_ANY_TIME_OF_DAY = "\u{10FFFF}";
 
 export function dayRangePredicate(
   column: string,
@@ -30,7 +30,7 @@ export function dayRangePredicate(
   }
   if (to != null) {
     clauses.push(`${column} < ?`);
-    params.push(`${to}${DAY_END}`);
+    params.push(`${to}${SORTS_AFTER_ANY_TIME_OF_DAY}`);
   }
   return { sql: clauses.join(" AND "), params };
 }
@@ -58,7 +58,7 @@ export function utcDayRangePredicate(
   if (to != null) {
     if (after != null && FOUR_DIGIT_DAY.test(after)) {
       clauses.push(`${column} < ?`);
-      params.push(`${after}${DAY_END}`);
+      params.push(`${after}${SORTS_AFTER_ANY_TIME_OF_DAY}`);
     }
     clauses.push(`${day} <= ?`);
     params.push(to);

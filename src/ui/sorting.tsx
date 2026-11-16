@@ -2,6 +2,10 @@ import { Icon } from "./icons.tsx";
 import { formatMcpServer } from "./mcp-server.ts";
 import type { DimensionRow, FileRow, McpRow, ToolRow } from "./types.ts";
 
+function serverSortKeyGroupingRegistrations(mcpServer: string | null | undefined): string {
+  return formatMcpServer(mcpServer);
+}
+
 export type SortDirection = "asc" | "desc";
 
 export type SortValue = number | string | null | undefined;
@@ -105,7 +109,7 @@ export function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return formatMcpServer(row.mcp_server);
+      return serverSortKeyGroupingRegistrations(row.mcp_server);
     case "tools":
       return row.tools;
   }
@@ -124,7 +128,7 @@ export function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return formatMcpServer(row.mcp_server);
+      return serverSortKeyGroupingRegistrations(row.mcp_server);
     case "tool":
       return row.tool_name;
   }

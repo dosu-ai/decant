@@ -222,9 +222,7 @@ export class ReadPool {
         slot.running = null;
         slot.worker = null;
         if (worker != null) {
-          try {
-            worker.terminate();
-          } catch {}
+          terminateQuietly(worker);
         }
         this.#settle(job, error instanceof Error ? error : new Error(String(error)));
       }
@@ -273,9 +271,7 @@ export class ReadPool {
     if (job != null) {
       this.#settle(job, error);
     }
-    try {
-      worker.terminate();
-    } catch {}
+    terminateQuietly(worker);
     this.#dispatch();
   }
 
@@ -291,6 +287,12 @@ export class ReadPool {
       job.resolve(outcome);
     }
   }
+}
+
+function terminateQuietly(worker: ReadWorkerLike): void {
+  try {
+    worker.terminate();
+  } catch {}
 }
 
 function reviveError(serialized: SerializedError): Error {

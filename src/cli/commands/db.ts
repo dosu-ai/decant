@@ -29,7 +29,7 @@ export function registerDbCommands(ctx: CliContext): void {
     .action((commandOptions: { full?: boolean }) =>
       ctx.run(() =>
         ctx.withArchive((archive) => {
-          const row = dbInfo(archive, { full: commandOptions.full === true });
+          const row = dbInfo(archive, { includeFullScanTotals: commandOptions.full === true });
           const fields: [string, string | number][] = [
             ["path", row.path],
             ["size_bytes", row.size_bytes],
@@ -113,7 +113,7 @@ export function registerDbCommands(ctx: CliContext): void {
     );
 }
 
-function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
+function dbInfo(archive: Archive, options: { includeFullScanTotals?: boolean } = {}): DbInfo {
   const version =
     (
       archive.db.query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get() as {
@@ -136,7 +136,7 @@ function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
     )
     .get() as { freelist: number; page_size: number };
   const scans =
-    options.full === true
+    options.includeFullScanTotals === true
       ? (archive.db
           .query(
             // OCTET_LENGTH, not LENGTH: LENGTH counts characters on a TEXT

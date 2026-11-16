@@ -31,8 +31,13 @@ export const MAX_TEXT_BYTES = 8 * 1024 * 1024;
 
 const SLOTS = 8;
 const PATH_BYTES = 4096;
+const LEDGER_VERSION_INDEX = 0;
+const LEDGER_SLOTS_START = 1;
+const SLOT_STATE_OFFSET = 0;
+const SLOT_PATH_LENGTH_OFFSET = 1;
+const SLOT_HOLDERS_OFFSET = 2;
 const SLOT_INTS = 3;
-const HEADER_INTS = 1 + SLOTS * SLOT_INTS;
+const HEADER_INTS = LEDGER_SLOTS_START + SLOTS * SLOT_INTS;
 const FREE = 0;
 const CLAIMED = 1;
 const BLOCKED = 2;
@@ -122,9 +127,9 @@ self.onmessage = ({ data }) => {
       // Only the last parked helper on the slot frees it, so a call that is
       // still blocked stays counted against the cap.
       const ledger = new Int32Array(data.ledger);
-      if (Atomics.sub(ledger, data.stateIndex + 2, 1) === 1) {
-        Atomics.store(ledger, data.stateIndex, 0);
-        Atomics.add(ledger, 0, 1);
+      if (Atomics.sub(ledger, data.stateIndex + ${SLOT_HOLDERS_OFFSET}, 1) === 1) {
+        Atomics.store(ledger, data.stateIndex + ${SLOT_STATE_OFFSET}, ${FREE});
+        Atomics.add(ledger, ${LEDGER_VERSION_INDEX}, 1);
       }
     }
     self.onmessage = null;
@@ -222,12 +227,17 @@ function slotBytes(ledger: SharedArrayBuffer, slot: number, length: number): Uin
   );
 }
 
+function slotStart(slot: number): number {
+  return LEDGER_SLOTS_START + slot * SLOT_INTS;
+}
+
 function blockedRoots(ledger: SharedArrayBuffer): string[] {
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const roots: string[] = [];
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    if (Atomics.load(ints, 1 + slot * SLOT_INTS) === BLOCKED) {
-      const length = Atomics.load(ints, 2 + slot * SLOT_INTS);
+    const start = slotStart(slot);
+    if (Atomics.load(ints, start + SLOT_STATE_OFFSET) === BLOCKED) {
+      const length = Atomics.load(ints, start + SLOT_PATH_LENGTH_OFFSET);
       roots.push(Buffer.from(slotBytes(ledger, slot, length)).toString("utf8"));
     }
   }
@@ -242,21 +252,22 @@ function holdSlot(
   const ints = new Int32Array(ledger, 0, HEADER_INTS);
   const bytes = Buffer.from(root, "utf8");
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    const stateIndex = 1 + slot * SLOT_INTS;
+    const stateIndex = slotStart(slot) + SLOT_STATE_OFFSET;
     if (Atomics.compareExchange(ints, stateIndex, FREE, CLAIMED) !== FREE) {
       continue;
     }
     slotBytes(ledger, slot, bytes.length).set(bytes);
-    Atomics.store(ints, stateIndex + 1, bytes.length);
-    Atomics.store(ints, stateIndex + 2, holders);
+    Atomics.store(ints, stateIndex + SLOT_PATH_LENGTH_OFFSET, bytes.length);
+    Atomics.store(ints, stateIndex + SLOT_HOLDERS_OFFSET, holders);
     Atomics.store(ints, stateIndex, BLOCKED);
-    Atomics.add(ints, 0, 1);
+    Atomics.add(ints, LEDGER_VERSION_INDEX, 1);
     return { stateIndex, claimed: true };
   }
   for (let slot = 0; slot < SLOTS; slot += 1) {
-    const stateIndex = 1 + slot * SLOT_INTS;
-    const held = Atomics.load(ints, stateIndex + 2);
-    if (held > 0 && Atomics.compareExchange(ints, stateIndex + 2, held, held + holders) === held) {
+    const stateIndex = slotStart(slot) + SLOT_STATE_OFFSET;
+    const holdersIndex = stateIndex + SLOT_HOLDERS_OFFSET;
+    const held = Atomics.load(ints, holdersIndex);
+    if (held > 0 && Atomics.compareExchange(ints, holdersIndex, held, held + holders) === held) {
       return { stateIndex, claimed: false };
     }
   }
@@ -280,7 +291,7 @@ function ancestors(path: string): string[] {
 export class BoundedFs implements ProbeFs {
   readonly #deadlineMs: number;
   readonly #ledger: SharedArrayBuffer;
-  readonly #version: Int32Array;
+  readonly #header: Int32Array;
   readonly #stall: BoundedFsOptions["stall"];
   #idle: ProbeHelper | null = null;
   #helperFailed = false;
@@ -291,7 +302,7 @@ export class BoundedFs implements ProbeFs {
   constructor(options: BoundedFsOptions = {}) {
     this.#deadlineMs = options.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS;
     this.#ledger = options.ledger ?? sharedLedger;
-    this.#version = new Int32Array(this.#ledger, 0, 1);
+    this.#header = new Int32Array(this.#ledger, 0, HEADER_INTS);
     this.#stall = options.stall;
   }
 
@@ -340,7 +351,7 @@ export class BoundedFs implements ProbeFs {
   }
 
   #isBlocked(path: string): boolean {
-    const version = Atomics.load(this.#version, 0);
+    const version = Atomics.load(this.#header, LEDGER_VERSION_INDEX);
     if (version !== this.#seenVersion) {
       this.#roots = blockedRoots(this.#ledger);
       this.#seenVersion = version;

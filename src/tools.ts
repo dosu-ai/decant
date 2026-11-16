@@ -66,7 +66,7 @@ export function previewHeadTail(s: string, max: number): string {
   return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
 }
 
-const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
+export const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
 
 export function previewOmittedCount(value: string | null | undefined): number | null {
   if (value == null) {

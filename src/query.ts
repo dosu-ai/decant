@@ -1314,7 +1314,7 @@ const HUMAN_TITLE_MESSAGE_SQL = `
   )
 `;
 
-const AGENT_CONTEXT_SQL = `
+export const AGENT_CONTEXT_SQL = `
   LTRIM(b.text) LIKE '<permissions instructions>%'
   OR LTRIM(b.text) LIKE '<local-command-caveat>%'
   OR LTRIM(b.text) LIKE '<local-command-stdout>%'
@@ -1329,7 +1329,7 @@ const AGENT_CONTEXT_SQL = `
   OR LTRIM(b.text) LIKE '<system\\_reminder>%' ESCAPE '\\'
 `;
 
-function isAgentContextText(text: string): boolean {
+export function isAgentContextText(text: string): boolean {
   const trimmed = text.trimStart();
   return (
     /^<permissions instructions>/i.test(trimmed) ||

@@ -80,7 +80,7 @@ const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
-const USAGE_SIGNAL_SCORE = 2;
+export const USAGE_SIGNAL_SCORE = 2;
 const WINDOW_DAYS = 30;
 const WINDOW = "s.started_at >= ?";
 

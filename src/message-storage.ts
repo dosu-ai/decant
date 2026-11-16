@@ -9,7 +9,7 @@ const COMPACT_BATCH_SIZE = 128;
 
 export const MESSAGE_METADATA_SQL = "COALESCE(m.raw_meta, m.raw)";
 
-const METADATA_PATHS = [
+export const METADATA_PATHS = [
   ["isSidechain"],
   ["subtype"],
   ["type"],

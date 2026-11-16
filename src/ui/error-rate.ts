@@ -7,10 +7,13 @@ function formatRate(rate: number): string {
   return `${rate.toFixed(1)}%`;
 }
 
+function roundsToZero(rate: number): boolean {
+  return formatRate(rate) === formatRate(0);
+}
+
 export function errorRateDisplay(totalCalls: number, errorRate: number): ErrorRateDisplay {
   if (totalCalls === 0) {
     return { label: "—", alert: false };
   }
-  const label = formatRate(errorRate);
-  return { label, alert: label !== formatRate(0) };
+  return { label: formatRate(errorRate), alert: !roundsToZero(errorRate) };
 }

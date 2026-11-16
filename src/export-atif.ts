@@ -29,22 +29,14 @@ export interface AtifSubagentRef {
   trajectory_path?: string;
 }
 
-/** A subagent session that is exported as a document of its own. */
 export interface AtifSubagentTarget {
-  /** The subagent's archive session id. */
   id: number;
   tool: string;
   source_session_id: string;
-  /** The `trajectory_id` its own export carries. */
   trajectory_id: string;
 }
 
 export interface AtifExportOptions {
-  /** Where each subagent's own document will live: a file path, a URL, or a
-   * key in another store. When set, subagents are left out of this document
-   * and each spawning call points at that location through ATIF's file-ref
-   * form (`trajectory_path`). `final_metrics` then cover this session alone,
-   * so a reader that stores every session separately counts nothing twice. */
   subagentPath?: (subagent: AtifSubagentTarget) => string;
 }
 
@@ -202,9 +194,7 @@ function toolArguments(toolInput: string | null): JsonObject {
       if (typeof inner === "object" && inner !== null && !Array.isArray(inner)) {
         return inner as JsonObject;
       }
-    } catch {
-      // Free text, not serialized JSON.
-    }
+    } catch {}
     return { input: parsed };
   }
   if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
@@ -246,8 +236,6 @@ function newBuildState(subagentPath?: AtifExportOptions["subagentPath"]): BuildS
 }
 
 interface BuiltTrajectory {
-  /** Null when the session has nothing to export. Its descendants are still
-   * embedded in the root and its totals still roll up. */
   trajectory: AtifTrajectory | null;
   totals: TreeTotals;
 }
@@ -255,7 +243,6 @@ interface BuiltTrajectory {
 interface CallSite {
   id: string;
   step: AtifStep;
-  /** When the calling message was recorded, used to tell reused ids apart. */
   at: string | undefined;
 }
 
@@ -390,9 +377,6 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     return full;
   };
 
-  // Call ids are unique across the document. A reused id is renamed by probing
-  // `__dup<n>` upward, as the trajectory-v1 export does, and its results are
-  // paired with calls in occurrence order.
   const usedCallIds = new Set<string>();
   const callsByOriginal = new Map<string, CallSite[]>();
   const resultsTaken = new Map<string, number>();
@@ -475,7 +459,6 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
         } else if (block.block_type === "tool_result") {
           drop("assistant_tool_result");
         } else {
-          // Empty text and hidden reasoning carry nothing to export.
           drop(block.block_type);
         }
       }
@@ -545,14 +528,11 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
         ...(Object.keys(extra).length === 0 ? {} : { extra }),
       });
     } else {
-      // `tool` and `other` prose has no ATIF speaker: attributing it to the
-      // user or the agent would misstate who said it.
       drop(`${message.role}_text`);
     }
   }
   closeAgent();
 
-  // Claimed before descendants so a child cannot take this session's id.
   const trajectoryId =
     steps.length === 0
       ? null
@@ -576,9 +556,6 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
       continue;
     }
     if (state.subagentPath != null) {
-      // Build the child exactly as its own export would, without its
-      // descendants: that decides whether there is a document to point at and
-      // which `trajectory_id` it carries. Its report belongs to that export.
       childDetail.subagents = [];
       const own = buildTrajectory(db, childDetail, newBuildState()).trajectory;
       if (own == null) {
@@ -601,8 +578,6 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
       }
       continue;
     }
-    // Keep the root read's subagent tree: it carries the depth limit and the
-    // cycle guard for the whole document, which a fresh read would restart.
     childDetail.subagents = child.subagents;
     const builtChild = buildTrajectory(db, childDetail, state);
     addUsage(totals.usage, builtChild.totals.usage);
@@ -635,14 +610,10 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     finalMetrics.total_cost_usd = totals.costUsd;
     finalMetrics.extra = {
       total_cache_write_tokens: totals.usage.cacheCreation,
-      // Decant prices with its own rate table at export time, unless the
-      // source recorded a cost for a model Decant cannot price.
       cost_source: summary.cost_source,
       ...(embeds && detail.subagents.length > 0 ? { includes_subagents: true } : {}),
     };
     if (embeds && detail.subagents.length > 0 && summary.usage_available) {
-      // The totals above include the subagents, so a reader that files each
-      // embedded trajectory as its own session needs this one's share.
       finalMetrics.extra.session_metrics = {
         total_prompt_tokens: ownUsage.input + ownUsage.cacheRead + ownUsage.cacheCreation,
         total_completion_tokens: ownUsage.output,
@@ -665,7 +636,6 @@ function buildTrajectory(db: Database, detail: SessionDetail, state: BuildState)
     ["title", summary.title],
     ["cwd", row?.cwd ?? null],
     ["git_branch", row?.git_branch ?? null],
-    // Unlike `cwd`, this names the repository the same way on every machine.
     ["repository", row?.repo_remote ?? null],
     ["reasoning_effort", summary.reasoning_effort],
     ["agent_type", summary.agent_type],
@@ -709,9 +679,6 @@ function agentName(tool: string, rawMeta: string | null): string {
   return ATIF_AGENT_NAMES[tool as keyof typeof ATIF_AGENT_NAMES] ?? tool;
 }
 
-/** A Claude-style compaction boundary, in the v1.7 `context_management`
- * convention. The summary that replaces the context follows as its own user
- * step, so the boundary carries no observation of its own. */
 function compactionStep(
   text: string,
   timestamp: string | undefined,
@@ -733,10 +700,6 @@ function compactionStep(
   };
 }
 
-/** The call that spawned a child. A reused spawn id is resolved by time: the
- * latest occurrence recorded at or before the child started. Without the
- * timestamps to decide, the child stays unlinked rather than pointing at a
- * call that may not be its own. */
 function spawningCall(child: SubagentDetail, calls: CallSite[] | undefined): CallSite | undefined {
   if (calls == null || calls.length === 0) {
     return undefined;
@@ -757,8 +720,6 @@ function spawningCall(child: SubagentDetail, calls: CallSite[] | undefined): Cal
   return match;
 }
 
-/** Point the spawning call's observation at the subagent's trajectory. Returns
- * false when no call in the parent can be identified as the spawner. */
 function linkSubagent(
   child: SubagentDetail,
   ref: AtifSubagentRef,

@@ -31,8 +31,6 @@ describe("sessionPageView", () => {
   });
 
   test("keeps the same page's rows on screen while a reload fetches it again", () => {
-    // A reload changes the request key, so the cache misses, but the rows
-    // already shown for this page and scope stay up instead of a skeleton.
     const settled = loadedPage(1);
     expect(
       sessionPageView({
@@ -110,8 +108,6 @@ describe("sessionPageFailure", () => {
   });
 
   test("shows the error screen when the failed page has no rows of its own", () => {
-    // Page 2 failed while page 1's rows were still up, so those rows are not
-    // what was asked for.
     expect(
       sessionPageFailure({ error: new Error("offline"), loadedPage: 1, sessions: rows }, 2),
     ).toBe("replace");

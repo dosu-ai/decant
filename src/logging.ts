@@ -24,11 +24,6 @@ export interface ConfigureLoggingOptions {
   write?: (line: string) => void;
 }
 
-/**
- * Configures the application logging boundary. Library-style modules only call
- * getDecantLogger(); the CLI entry point decides whether and where records are
- * emitted.
- */
 export function configureLogging(options: ConfigureLoggingOptions = {}): void {
   const configuredLevel = normalizeLogLevel(options.level);
   const formatter = getJsonLinesFormatter({ properties: "flatten" });

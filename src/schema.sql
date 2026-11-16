@@ -1,21 +1,4 @@
 -- decant:schema_version=31
--- Effective decant schema (migrations 1..31 applied), frozen as the current
--- baseline. v22 adds the ingest pipeline revision checkpoint so parser and
--- enrichment changes can reprocess existing sources automatically once. v23
--- indexes tool_call in the order the tool-call list pages through. v24 indexes
--- tool-use blocks by tool_use_id and drops two session indexes that duplicate
--- UNIQUE(tool, source_session_id). v25 splits each session's token usage by the
--- model and price tier that served it, so mixed-model sessions price correctly.
--- v26 keeps a source-reported cost per usage row for models Decant cannot price.
--- v27 keeps query metadata beside compressed source records and indexes tool usage.
--- v28 changes no schema. It clears stored context peaks for sessions with
--- compactions so the next sync recomputes them under the current rules.
--- v29 indexes block ids with their session so search can filter matches
--- without reading transcript rows. v30 records each project's repository
--- remote, a name for it that does not depend on a local path. v31 names the
--- session that bills each Claude Code API request, so a branched session's
--- copy of it is not billed again, and keeps the usage taken off each copy.
--- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -84,8 +67,6 @@ CREATE TABLE session (
   active_seconds INTEGER NOT NULL DEFAULT 0,
   outcome TEXT,
   work_type TEXT,
-  -- Context-window rollups materialized from per-message usage at ingest;
-  -- peak_context_tokens IS NULL marks a session that still needs the backfill.
   context_window_tokens INTEGER,
   peak_context_tokens INTEGER,
   UNIQUE(tool, source_session_id)
@@ -230,7 +211,7 @@ CREATE TABLE session_user_state (
 );
 CREATE TABLE recommendation (
   key            TEXT PRIMARY KEY,
-  kind           TEXT NOT NULL,      -- 'signal' | 'catalog'
+  kind           TEXT NOT NULL,
   category       TEXT,
   title          TEXT NOT NULL,
   detail         TEXT,
@@ -243,8 +224,8 @@ CREATE TABLE recommendation (
   impact_label   TEXT,
   impact_label_checked INTEGER NOT NULL DEFAULT 1,
   score          REAL,
-  status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
-  status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
+  status         TEXT NOT NULL DEFAULT 'open',
+  status_source  TEXT,
   note           TEXT,
   first_seen_at  TEXT,
   updated_at     TEXT,

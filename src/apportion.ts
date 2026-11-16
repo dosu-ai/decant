@@ -1,5 +1,3 @@
-/** Largest-remainder rounding of non-negative values to integers summing to
- * `total`, which must be within one unit per value of their floors' sum. */
 export function apportion(values: number[], total: number): number[] {
   const floors = values.map(Math.floor);
   let remaining = total - floors.reduce((sum, value) => sum + value, 0);

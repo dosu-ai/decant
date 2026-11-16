@@ -91,7 +91,6 @@ describe("cachedRead", () => {
     for (let index = 0; index < READ_CACHE_MAX_ENTRIES; index += 1) {
       cachedRead(db, `key-${index}`, () => index);
     }
-    // Touching the oldest entry makes key-1 the next eviction.
     expect(cachedRead(db, "key-0", () => -1)).toBe(0);
     cachedRead(db, "overflow", () => "overflow");
 

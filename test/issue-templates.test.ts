@@ -3,9 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TOOLS, type Tool } from "../src/model.ts";
 
-// A new source must show up in the bug form, or reports about it arrive
-// without saying which tool wrote the sessions. Record<Tool, ...> makes the
-// type check fail until a label is added here.
 const BUG_FORM_LABELS: Record<Tool, string> = {
   claude_code: "Claude Code",
   codex: "Codex",

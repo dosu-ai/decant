@@ -73,7 +73,6 @@ describe("decant service", () => {
       options,
     );
     expect(install.code).toBe(0);
-    // launchd starts the service elsewhere, so the unit must name this archive.
     expect(JSON.parse(install.stdout).command).toEqual([
       "/opt/test/decant",
       "--db",

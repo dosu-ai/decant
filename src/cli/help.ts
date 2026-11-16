@@ -36,8 +36,6 @@ Local API:
   document is at ${OPENAPI_URL}
 `;
 
-// Keyed by command path. A path with no command fails at startup, so a rename
-// cannot drop its examples without a test noticing.
 const EXAMPLES: Record<string, string[]> = {
   sync: [
     "decant sync                          index every source directory",
@@ -90,7 +88,6 @@ export function installHelp(program: Command): void {
   }
 }
 
-/** The command at `path`, plus `session <path>`, which aliases `ls` and `show`. */
 function commandsAt(program: Command, path: string): Command[] {
   const find = (parent: Command, name: string): Command | undefined =>
     parent.commands.find((command) => command.name() === name);

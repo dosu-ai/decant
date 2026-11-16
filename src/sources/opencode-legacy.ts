@@ -1,9 +1,3 @@
-import { diagnosticRawLine, jsonProblem, parseSourceJson } from "./shared.ts";
-// OpenCode 1.x storage: `session`, `message`, and `part` tables. OpenCodeStore
-// reads these rows read-only; they hold JSON text exactly as OpenCode wrote it,
-// so a malformed `data` value reaches the parser below unchanged and becomes a
-// diagnostic there.
-
 import { linkageIssues } from "../diagnostics.ts";
 import { asInteger, asString, canonicalJson, get, isObject, type JsonObject } from "../json.ts";
 import {
@@ -34,13 +28,13 @@ import {
   block,
   contentText,
   countUnknown,
+  diagnosticRawLine,
+  jsonProblem,
+  parseSourceJson,
   type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
 
-/** One 1.x `session` row. Columns added after v1.2.0 (`cost`, `tokens_*`,
- * `agent`, `model`) read as NULL on older databases, because OpenCodeStore
- * projects every column through `pragma_table_info`. */
 export interface OpenCodeLegacySessionRow {
   id: string;
   project_id: string | null;
@@ -55,17 +49,14 @@ export interface OpenCodeLegacySessionRow {
   tokens_reasoning: number | null;
   tokens_cache_read: number | null;
   tokens_cache_write: number | null;
-  /** JSON `{ messageID, partID?, snapshot?, diff? }`. */
   revert: string | null;
   agent: string | null;
-  /** JSON `{ id, providerID, variant? }`, 1.18+ only. */
   model: string | null;
   time_created: number;
   time_updated: number;
   time_archived: number | null;
 }
 
-/** `data` is the message info minus `id` and `sessionID`. */
 export interface OpenCodeLegacyMessageRow {
   id: string;
   session_id: string;
@@ -74,7 +65,6 @@ export interface OpenCodeLegacyMessageRow {
   data: string;
 }
 
-/** `data` is the part minus `id`, `sessionID`, and `messageID`. */
 export interface OpenCodeLegacyPartRow {
   id: string;
   message_id: string;
@@ -92,7 +82,6 @@ interface DecodedPart {
 interface Decoded {
   row: OpenCodeLegacyMessageRow;
   info: JsonObject;
-  /** 1-based position in OpenCode's message order, used as the issue line. */
   ordinal: number;
   timestamp: string | null;
   parts: DecodedPart[];
@@ -102,8 +91,6 @@ type MessageFields = Partial<
   Pick<NormalizedMessage, "sourceUuid" | "model" | "stopReason" | "timestamp" | "usage">
 >;
 
-// Transport and state parts: usage comes from step-finish via
-// legacyAssistantUsage; the rest add no transcript block.
 const SILENT_ASSISTANT_PARTS = new Set([
   "step-start",
   "step-finish",
@@ -116,13 +103,6 @@ const SILENT_ASSISTANT_PARTS = new Set([
 const ASSISTANT_PARTS = new Set([...SILENT_ASSISTANT_PARTS, "text", "reasoning", "tool"]);
 const USER_PARTS = new Set(["text", "file", "agent", "subtask", "compaction"]);
 
-/**
- * OpenCode 1.x session parser (`session` + `message` + `part`). Pure and
- * print-free. Emits the same shapes the 2.x parser emits for the same
- * concepts: a completed or failed tool part yields a `tool_use` on its
- * assistant message and a following `tool` message with the `tool_result`, and
- * a compaction request plus its summary become one `system` message.
- */
 export function parseOpenCodeLegacySession(
   row: OpenCodeLegacySessionRow,
   messageRows: readonly OpenCodeLegacyMessageRow[],
@@ -140,10 +120,8 @@ export function parseOpenCodeLegacySession(
   let lastUserAgent: string | null = null;
   let firstUserText: string | null = null;
 
-  // 1. Decode messages in OpenCode's order. A fork copies its parent's
-  //    messages with their original time.created; 1.x has no fork column, so
-  //    a message older than its session is inherited history and is skipped,
-  //    or it would be billed twice.
+  // A fork copies its parent's messages with their original time.created, and
+  // 1.x has no fork column.
   const decoded: Decoded[] = [];
   const byId = new Map<string, Decoded>();
   const dropped = new Set<string>();
@@ -171,9 +149,6 @@ export function parseOpenCodeLegacySession(
     byId.set(message.id, entry);
   });
 
-  // 2. Attach parts (already ordered by message_id, id). Parts of skipped or
-  //    unreadable messages go silently; a part with no message is reported
-  //    without its data, which is transcript content.
   for (const part of partRows) {
     const owner = byId.get(part.message_id);
     if (owner == null) {
@@ -193,8 +168,6 @@ export function parseOpenCodeLegacySession(
     }
   }
 
-  // 3. Pair each compaction request (a user message with a compaction part)
-  //    with its summary assistant, which answers it through parentID.
   const summaries = new Map<string, Decoded>();
   const pairedSummaries = new Set<string>();
   for (const entry of decoded) {
@@ -275,7 +248,6 @@ export function parseOpenCodeLegacySession(
     );
   };
 
-  // 4. Emit messages in order.
   for (const entry of decoded) {
     const role = asString(entry.info.role);
     const raw: JsonObject = { ...entry.info, id: entry.row.id, parts: rawParts(entry) };
@@ -330,14 +302,12 @@ export function parseOpenCodeLegacySession(
       if (modelId != null) {
         lastModel = { providerID: asString(entry.info.providerID), id: modelId, variant };
       }
-      // `default` is OpenCode's "no variant chosen", not a recorded effort.
       if (variant != null && variant !== "default") {
         efforts.push(variant);
       }
       const usage = legacyAssistantUsage(entry.info, partData(entry), row.version);
       addToTotals(usage);
       if (usage != null) {
-        // Token economics splits the message's time and output by this count.
         raw.reasoning_tokens = usage.reasoning;
       }
       const { blocks, results } = assistantContent(entry, servers);
@@ -362,7 +332,6 @@ export function parseOpenCodeLegacySession(
     }
   }
 
-  // 5. Session.
   issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
 
   const sessionModelJson = parseModelJson(row.model);
@@ -408,11 +377,9 @@ export function parseOpenCodeLegacySession(
     time_archived: row.time_archived,
   };
   if (row.parent_id != null) {
-    // Read by inferSubagent in ingest as the parent's source session id.
     rawMeta.parentSessionId = row.parent_id;
   }
   if (contextWindow != null) {
-    // src/context-window.ts treats this key as an explicit window for any tool.
     rawMeta.model_context_window = contextWindow;
   }
   if (forkRowsSkipped > 0) {
@@ -510,8 +477,6 @@ interface UserContent {
   synthetic: string[];
   syntheticParts: Json[];
   subtasks: DecodedPart[];
-  /** Every part is a subtask or synthetic text: OpenCode wrote the message,
-   * not the user, so only its system messages are emitted. */
   onlyDerived: boolean;
 }
 
@@ -586,21 +551,16 @@ function assistantContent(
       const id = asString(data.callID);
       const state = data.state;
       const status = asString(get(state, "status"));
-      // 1.x calls MCP tools directly as `<server>_<tool>`; there is no
-      // code-mode `execute` wrapper to unpack.
       const call = block(blocks.length, "tool_use", {
         toolName: normalizeOpenCodeToolName(asString(data.tool) ?? "unknown", servers),
         toolUseId: id,
         toolInput: get(state, "input"),
       });
-      // `state.time.start` is when the call started to run (its arguments
-      // had streamed); a pending call has none.
       const calledAt = isoFromMillis(asInteger(get(get(state, "time"), "start")));
       if (calledAt != null) {
         call.calledAt = calledAt;
       }
       blocks.push(call);
-      // Pending and running calls never finished, so they have no result.
       if (status === "completed" || status === "error") {
         const error = get(state, "error");
         results.push({
@@ -621,10 +581,8 @@ function assistantContent(
   return { blocks, results };
 }
 
-/** When a 1.x message finished generating, in epoch ms. 1.x has no
- * `streamed` time and `time.completed` waits for the message's tools, so the
- * latest part that finished streaming (a text or reasoning end, or a tool's
- * run start) marks the end, as `stepEnd` decides. */
+/** 1.x has no `streamed` time, and `time.completed` waits for the message's
+ * tools. */
 function messageGenerationEnd(entry: Decoded): number | null {
   const ends: number[] = [];
   let untimedText = false;

@@ -53,7 +53,6 @@ function workspace(): unknown {
   return JSON.parse(readFileSync(join(workspaceFixture, "workspace.json"), "utf8"));
 }
 
-/** A one-request mutation log built from parts, for focused cases. */
 function logWith(request: Record<string, unknown>, extra: unknown[] = []): string {
   const initial = {
     kind: 0,
@@ -98,7 +97,6 @@ describe("parseVscodeCopilotSession", () => {
       reasoningSource: "none",
       estReasoningTokens: 0,
     });
-    // Input is each turn's last prompt; output sums every call in the turn.
     expect(session.totals).toMatchObject({ input: 25000, output: 1020, cacheRead: 0 });
     expect(session.messages.map((message) => message.role)).toEqual([
       "user",
@@ -132,7 +130,6 @@ describe("parseVscodeCopilotSession", () => {
     );
     expect(uses.map((block) => [block.toolName, block.toolUseId])).toEqual([
       ["read_file", "toolu_read_1__vscode-1"],
-      // The extension recorded this call without its `__vscode-` suffix.
       ["replace_string_in_file", "toolu_edit_2__vscode-2"],
       ["run_in_terminal", "toolu_term_3__vscode-3"],
       ["mcp__docs__search_docs", "toolu_mcp_4__vscode-4"],
@@ -162,7 +159,6 @@ describe("parseVscodeCopilotSession", () => {
     expect(first?.raw).toMatchObject({ requestId: "request_aaaa1111" });
     const last = session.messages[9];
     expect(last?.blocks[0]?.text).toContain("I updated README.md to match.");
-    // The user message keeps the request record without its response.
     expect(session.messages[0]?.raw).toMatchObject({ requestId: "request_aaaa1111" });
     expect(session.messages[0]?.raw).not.toHaveProperty("response");
   });
@@ -337,8 +333,6 @@ describe("parseVscodeCopilotSession", () => {
   });
 
   test("keeps a request that never finished, using its last recorded usage", () => {
-    // VS Code quit mid-turn: no `result`, so no toolCallRounds to supply
-    // arguments, and the encrypted reasoning leaves the thinking text empty.
     const terminal = (pastTense: string) => ({
       kind: "toolInvocationSerialized",
       toolId: "run_in_terminal",
@@ -396,9 +390,7 @@ describe("parseVscodeCopilotSession", () => {
 describe("VS Code naming helpers", () => {
   test("strips VS Code's MCP prefix from tool names", () => {
     expect(mcpBaseName("mcp_github_create_issue", ["github", null])).toBe("create_issue");
-    // A second server with the same name gets a number.
     expect(mcpBaseName("mcp_github2_create_issue", ["github", null])).toBe("create_issue");
-    // Long names are cut to fit the prefix.
     expect(mcpBaseName("mcp_my-very-long-s_list_items", ["My Very Long Server", null])).toBe(
       "list_items",
     );
@@ -442,9 +434,7 @@ describe("VS Code Copilot discovery and ingest", () => {
     const root = freshDir();
     const userDir = stageUser(root);
     const chats = join(userDir, "workspaceStorage", "5f3e9c1a", "chatSessions");
-    // VS Code leaves the pre-log snapshot behind after switching to the log.
     write(join(chats, "vscode-sample-session.json"), '{"version":3,"requests":[]}');
-    // Unrelated files in workspace storage are not sessions.
     write(join(userDir, "workspaceStorage", "5f3e9c1a", "state.json"), "{}");
     write(join(userDir, "globalStorage", "transferredChatSessions", "moved.json"), "{}");
     const found = discover(config(root, { vscodeCopilotDir: userDir }));

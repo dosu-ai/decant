@@ -89,13 +89,6 @@ interface IndexInfoRow {
   key: number;
 }
 
-/**
- * Build a stable manifest of Decant-owned SQLite objects. sqlite_master DDL is
- * canonicalized so harmless whitespace, identifier quoting, IF NOT EXISTS,
- * and regular-table column order do not split otherwise equivalent lineages.
- * Column defaults/types, foreign keys, indexes, triggers, and FTS declarations
- * remain part of the fingerprint.
- */
 export function buildSchemaManifest(db: Database): SchemaManifest {
   const shadowTables = new Set(
     (
@@ -147,9 +140,6 @@ export function buildSchemaManifest(db: Database): SchemaManifest {
         ? (db.query("SELECT * FROM pragma_index_xinfo(?1)").all(row.name) as IndexInfoRow[])
             .map((key) => ({
               sequence: key.seqno,
-              // cid is the physical table-column ordinal and legitimately
-              // differs when an ALTER-based lineage appends the same named
-              // column that the fresh baseline groups semantically.
               column_id: key.name == null ? key.cid : null,
               name: key.name,
               descending: key.desc !== 0,

@@ -45,15 +45,9 @@ export interface SessionSummary {
   total_output_tokens: number;
   usage_available: boolean;
   estimated_cost_usd: number;
-  /** Where `estimated_cost_usd` came from; `reported` means the source's own
-   * recorded cost was used because Decant has no rate for the model. */
   cost_source: CostSource;
-  /** Provider route the session's model ran through (OpenCode records one);
-   * null for sources that do not record a provider. */
   model_provider: string | null;
-  /** Direct user override for this source identity. */
   user_state: SessionUserState | null;
-  /** Effective archive state inherited from this row or any current ancestor. */
   is_user_archived: boolean;
   is_archived: boolean;
   is_subagent: boolean;
@@ -67,14 +61,9 @@ export interface SessionSummary {
   compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
-  /** Actionable ingest diagnostics (currently only dropped/unparsed source lines).
-   * Kept under the established wire name so older clients show the safe count. */
   ingest_issue_count: number;
-  /** Informational parser/linkage sensors preserved in the archive. */
   informational_ingest_issue_count: number;
-  /** Verified Dosu MCP calls made by this session alone. */
   dosu_mcp_direct_calls: number;
-  /** Verified Dosu MCP calls made by this session and descendants, depth <= 5. */
   dosu_mcp_tree_calls: number;
   subagents?: SessionSummary[];
 }
@@ -83,8 +72,6 @@ export interface ListFilter {
   tool?: string | null;
   model?: string | null;
   project?: string | null;
-  /** A repository root: matches sessions in the root and in its worktrees.
-   * Several roots match the checkouts of one repository together. */
   repo?: string | readonly string[] | null;
   includeSubagents?: boolean;
   includeNestedSubagents?: boolean;
@@ -93,8 +80,6 @@ export interface ListFilter {
   offset?: number;
   from?: string | null;
   to?: string | null;
-  /** Compare `from` and `to` with each session's UTC start day rather than
-   * the stored date prefix, which keeps a source's UTC offset. */
   utcDays?: boolean;
 }
 
@@ -123,8 +108,6 @@ interface SessionSummaryRow
   is_subagent: number;
   usage_available: number;
   reasoning_effort_levels_json: string | null;
-  /** `{reported, other}` from the session's model-usage rows; mapped to
-   * `cost_source` in TypeScript so it follows the read-time pricing rule. */
   cost_usage_json: string;
 }
 
@@ -224,11 +207,6 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   return withDosuMcpEvidence(db, nested, includeArchived);
 }
 
-/**
- * Return a page of the client-side fuzzy-search haystack without loading
- * messages, tool calls, title fallbacks, or session rollups. Without a page,
- * every row comes back.
- */
 export function sessionSearchIndex(
   db: Database,
   page: { limit?: number | null; offset?: number | null } = {},
@@ -288,7 +266,6 @@ export function search(
     });
     if (total == null) {
       total = page.total;
-      // A capped total is a floor, so it cannot end a read that starts past it.
       totalIsCapped = page.total_is_capped;
     }
     results.push(...page.results);
@@ -308,7 +285,6 @@ export function search(
 export interface SearchFilter {
   tool?: string | null;
   project?: string | null;
-  /** Repository roots, matched the way `ListFilter.repo` matches them. */
   repo?: string | readonly string[] | null;
   includeSubagents?: boolean;
   includeTotal?: boolean;
@@ -316,7 +292,6 @@ export interface SearchFilter {
   offset?: number | null;
   from?: string | null;
   to?: string | null;
-  /** As `ListFilter.utcDays`. */
   utcDays?: boolean;
 }
 
@@ -368,11 +343,6 @@ export function searchPage(db: Database, query: string, filter: SearchFilter = {
     clauses.push(date.sql);
     params.push(...date.params);
   }
-  // Every match is filtered and ranked before a page is kept, so this part
-  // must not touch the block row itself: it holds transcript text, and on a
-  // cold archive reading one per match made a common term take seconds.
-  // idx_block_id_session answers block -> session from the index alone, and
-  // the project join is added only when a project or repo filter needs it.
   const matches = `
     FROM block_fts
     JOIN block b INDEXED BY idx_block_id_session ON b.id = block_fts.rowid
@@ -539,8 +509,6 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
     clauses.push("t.duration_ms >= ?");
     params.push(Math.max(0, filter.minMs));
   }
-  // The summary feeds the Tools page cards beside the usage tables, so it shares
-  // their session-start scope and skips row-only filters.
   const summaryDate = sessionDatePredicate("s", filter);
   const summaryClauses = [...scopeClauses, summaryDate.sql].filter((clause) => clause !== "");
   const summaryParams = [...scopeParams, ...summaryDate.params];
@@ -564,7 +532,6 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
           ),
         }
       : null;
-  // Without row-only filters the page and the summary count the same rows.
   const rowOnlyFilter = filter.errorsOnly === true || date.sql !== "" || filter.minMs != null;
   const total =
     summary != null && !rowOnlyFilter
@@ -607,7 +574,6 @@ export function listToolCalls(db: Database, filter: ToolCallFilter = {}): ToolCa
   };
 }
 
-/** One streaming pass yields the counts and the sorted durations together. */
 function toolCallSummary(
   db: Database,
   sql: string,
@@ -646,8 +612,6 @@ export interface MessageView {
   role: string;
   timestamp: string | null;
   model: string | null;
-  /** Window occupancy for this API call (input + cache_read + cache_creation);
-   * null on rows without usage (user/tool/system, deduped stream lines). */
   context_tokens: number | null;
   output_tokens: number | null;
   is_sidechain: boolean;
@@ -658,15 +622,8 @@ export interface MessageView {
   blocks: BlockView[];
 }
 
-/**
- * Whole-session counts that stay correct when `messages` holds only one page.
- * A reader counting the returned messages would undercount every paged
- * transcript, so these are aggregated across the session regardless of window.
- */
 export interface SessionTotals {
-  /** Assistant messages that have something to render. */
   reply_count: number;
-  /** `tool_use` blocks across the session. */
   tool_call_count: number;
 }
 
@@ -674,11 +631,6 @@ export interface SessionDetail {
   summary: SessionSummary;
   messages: MessageView[];
   subagents: SubagentDetail[];
-  /**
-   * Present on a real session read. Absent on the `subagents` stubs, which
-   * carry structure and a summary but no messages, exactly like the paging
-   * fields below.
-   */
   totals?: SessionTotals;
   message_offset?: number;
   message_limit?: number | null;
@@ -755,8 +707,6 @@ function sessionSummaryRow(db: Database, id: number): SessionSummaryRow | null {
     .get(id) as SessionSummaryRow | null;
 }
 
-// Titles for the root and its whole descendant tree resolve in one batch so a
-// session with many subagents costs two queries, not two per subagent.
 function sessionTreeSummaries(
   db: Database,
   id: number,
@@ -796,17 +746,13 @@ export interface SessionRefMatch {
 }
 
 export interface SessionRefMatches {
-  /** The session whose Decant id is `ref`, when `ref` is an integer. */
   byId: SessionRefMatch | null;
-  /** Sessions whose source tool calls them `ref`: at most one per tool. */
   bySourceId: SessionRefMatch[];
 }
 
-/** Look a session up by Decant id and by the id its source tool gave it. */
 export function findSessionsByRef(db: Database, ref: string): SessionRefMatches {
   const select = "SELECT id, tool, started_at FROM session";
   const trimmed = ref.trim();
-  // A leading + was accepted when ids went through parseInteger.
   const id = /^\+?\d+$/.test(trimmed) ? Number(trimmed) : null;
   return {
     byId:
@@ -819,7 +765,6 @@ export function findSessionsByRef(db: Database, ref: string): SessionRefMatches 
   };
 }
 
-/** A session's summary without reading its transcript. */
 export function getSessionSummary(db: Database, id: number): SessionSummary | null {
   const summaryRow = sessionSummaryRow(db, id);
   if (summaryRow == null) {
@@ -940,14 +885,6 @@ export function getSession(
   };
 }
 
-/**
- * Session-wide reply and tool-call counts.
- *
- * The renderable-block predicate mirrors the reader's own rule: a text or
- * thinking block counts only when it carries non-whitespace text, and tool
- * blocks always count. Keeping the two in step matters because these totals are
- * displayed next to a transcript the reader can also count by hand.
- */
 function getSessionTotals(db: Database, id: number): SessionTotals {
   const row = db
     .query(
@@ -972,12 +909,6 @@ function getSessionTotals(db: Database, id: number): SessionTotals {
   };
 }
 
-/**
- * Return the lightweight prompt and verified Dosu-call outline independently
- * from paged transcript bodies. This keeps every user turn and Dosu
- * optimization reachable from sticky navigation without loading every rich
- * block, tool result, and code sample up front.
- */
 export function getSessionOutline(db: Database, id: number): SessionOutlineItem[] | null {
   const session = db.query("SELECT 1 AS present FROM session WHERE id = ?1").get(id);
   if (session == null) {
@@ -1033,6 +964,7 @@ export function getSessionOutline(db: Database, id: number): SessionOutlineItem[
 }
 
 export interface SessionIngestIssue {
+  id: number;
   code: string;
   line_no: number | null;
   error: string;
@@ -1040,12 +972,6 @@ export interface SessionIngestIssue {
   created_at: string | null;
 }
 
-/**
- * Issues recorded when this session's source file was last ingested. Null means
- * no such session; an empty array means the file ingested cleanly.
- *
- * raw_line can contain transcript content: display-local, never logged.
- */
 export function sessionIngestIssues(db: Database, sessionId: number): SessionIngestIssue[] | null {
   const session = db.query("SELECT source_path FROM session WHERE id = ?1").get(sessionId) as {
     source_path: string | null;
@@ -1058,7 +984,7 @@ export function sessionIngestIssues(db: Database, sessionId: number): SessionIng
   }
   return db
     .query(
-      `SELECT code, line_no, error, raw_line, created_at
+      `SELECT id, code, line_no, error, raw_line, created_at
        FROM ingest_issue WHERE source_path = ?1 ORDER BY id`,
     )
     .all(session.source_path) as SessionIngestIssue[];
@@ -1098,7 +1024,6 @@ export interface ProjectSummary {
   path: string;
   name: string | null;
   sessions: number;
-  /** Top-level sessions whose source records token usage. */
   usage_sessions: number;
   estimated_cost_usd: number;
   last_seen_at: string | null;
@@ -1172,11 +1097,6 @@ interface DosuMcpEvidenceRow {
   tree_calls: number;
 }
 
-/**
- * Adds provenance counts in one bounded aggregate for the complete returned
- * batch. Exact MCP server IDs are the only accepted evidence; no transcript or
- * repository text participates.
- */
 function withDosuMcpEvidence(
   db: Database,
   sessions: SessionSummary[],
@@ -1272,10 +1192,6 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
   // Pass 1 takes only the first plausible candidate per session. CROSS JOIN +
   // INDEXED BY pin the plan to messages -> blocks; otherwise SQLite starts from
   // every text block in the archive.
-  //
-  // AGENT_CONTEXT_SQL must skip a subset (never a superset) of what
-  // isAgentContextText skips: a wrong pass-through is re-checked in JS by pass
-  // 2, but a wrong skip silently changes which prompt becomes the title.
   const firstCandidates = db
     .query(
       `SELECT s.id AS session_id, s.is_subagent,
@@ -1308,8 +1224,6 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
       needFullScan.push(row.session_id);
     }
   }
-  // Pass 2, only for sessions whose first candidate was agent context: walk all
-  // their user text blocks in order, exactly like the single-pass version did.
   if (needFullScan.length > 0) {
     const scanPlaceholders = needFullScan.map(() => "?").join(", ");
     const rows = db
@@ -1367,8 +1281,6 @@ function readableUserTitle(text: string | null | undefined, isSubagent: boolean)
   return prompt === "" ? null : preview(prompt.replace(/\s+/g, " "), 180);
 }
 
-/** The Cursor CLI sends each prompt as `<timestamp>...</timestamp>` followed by
- * the text in `<user_query>`; the title is the text alone. */
 const CURSOR_USER_QUERY =
   /^(?:<timestamp>[^<]*<\/timestamp>\s*)?<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
 
@@ -1402,13 +1314,7 @@ const HUMAN_TITLE_MESSAGE_SQL = `
   )
 `;
 
-// SQL twin of isAgentContextText for early-exiting title scans. Keep the two in
-// sync and this side conservative: LIKE mirrors the case-insensitive prefixes,
-// GLOB the case-sensitive ones, and stripAnsi/trimStart nuances fall through
-// to the JS check rather than being approximated. LIKE reads `_` as any one
-// character, so Cursor's <system_reminder> escapes it to leave Claude's
-// <system-reminder> alone, as the JS check does.
-const AGENT_CONTEXT_SQL = `
+export const AGENT_CONTEXT_SQL = `
   LTRIM(b.text) LIKE '<permissions instructions>%'
   OR LTRIM(b.text) LIKE '<local-command-caveat>%'
   OR LTRIM(b.text) LIKE '<local-command-stdout>%'
@@ -1423,7 +1329,7 @@ const AGENT_CONTEXT_SQL = `
   OR LTRIM(b.text) LIKE '<system\\_reminder>%' ESCAPE '\\'
 `;
 
-function isAgentContextText(text: string): boolean {
+export function isAgentContextText(text: string): boolean {
   const trimmed = text.trimStart();
   return (
     /^<permissions instructions>/i.test(trimmed) ||
@@ -1538,7 +1444,6 @@ function repoPredicate(repo: string | readonly string[]): { sql: string; params:
   if (typeof repo === "string") {
     return { sql: `${key} = ?`, params: [repo] };
   }
-  // An empty list matches nothing, where an absent filter matches everything.
   return repo.length === 0
     ? { sql: "0", params: [] }
     : { sql: `${key} IN (${repo.map(() => "?").join(", ")})`, params: [...repo] };

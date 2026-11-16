@@ -38,7 +38,6 @@ interface WorkerRun {
   messages: unknown[];
 }
 
-/** A completion message alone misses exceptions thrown while shutting down. */
 function runUntilClosed(
   file: "sync-worker.ts" | "stats-worker.ts",
   data: unknown,

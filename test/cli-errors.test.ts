@@ -18,8 +18,6 @@ import { SchemaTooNewError } from "../src/db.ts";
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-errors-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-// Every source directory points into the temp dir, so a sync that does run
-// reads the synthetic fixture and nothing else.
 const home = join(workDir, "home");
 const claudeDir = join(workDir, "sources", "claude");
 const emptyDir = join(workDir, "sources", "empty");
@@ -45,7 +43,6 @@ interface ErrorLine {
   error: { code: string; message: string; [key: string]: unknown };
 }
 
-/** The contract for a failing `--json` command: one JSON object, last on stderr. */
 function lastErrorLine(result: CliResult): ErrorLine {
   const lines = result.stderr.split("\n").filter((line) => line !== "");
   const parsed = JSON.parse(lines.at(-1) ?? "") as ErrorLine;
@@ -58,7 +55,6 @@ beforeAll(async () => {
   for (const dir of [home, claudeDir, emptyDir]) {
     mkdirSync(dir, { recursive: true });
   }
-  // distill.jsonl has shell commands, which `distill script` needs.
   for (const name of ["sample.jsonl", "distill.jsonl"]) {
     copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", name), join(claudeDir, name));
   }
@@ -89,7 +85,6 @@ describe("an explicit archive path that does not exist", () => {
     ["distill", "replay", "1"],
     ["distill", "skill"],
     ["db", "info"],
-    // These change an archive but have nothing to change in a new one.
     ["session", "rm", "1"],
     ["recommendations", "mark", "some-key"],
     ["db", "vacuum"],
@@ -152,7 +147,6 @@ describe("an explicit archive path that does not exist", () => {
     expect(migrated.code).toBe(0);
     expect(existsSync(join(dir, "b", "migrate.db"))).toBe(true);
 
-    // Once it exists, the same path reads normally.
     const list = await run(["--db", join(dir, "a", "sync.db"), "--json", "ls"]);
     expect(list.code).toBe(0);
     expect(JSON.parse(list.stdout)).toHaveLength(2);
@@ -251,7 +245,6 @@ describe("invalid flag values", () => {
       details: { option: "--port", value: "70000" },
     },
     {
-      // show also takes a source tool's id, so it no longer rejects "abc".
       argv: ["distill", "replay", "abc"],
       message: "command-argument value 'abc' is invalid for argument 'id'. expected an integer",
       details: { argument: "id", value: "abc" },
@@ -290,8 +283,6 @@ describe("invalid flag values", () => {
 });
 
 describe("errors under --json", () => {
-  // `stdout` is "result" for the two commands that report a failed operation
-  // as their JSON result, which predates the error object and stays as it was.
   const cases: { argv: string[]; exit: number; code: string; stdout?: "result" }[] = [
     { argv: ["frobnicate"], exit: 2, code: "unknown_command" },
     { argv: ["ls", "--definitely-not-real"], exit: 2, code: "unknown_option" },
@@ -420,7 +411,6 @@ describe("error helpers", () => {
       message: "no session with id 12",
       exitCode: 1,
     });
-    // A session id parses as any integer, so a negative one can be reported missing.
     expect(fromErrorLine("error: no session with id -1\n", 1).code).toBe("session_not_found");
     expect(fromErrorLine("error: --all requires --out <dir>\n", 2)).toMatchObject({
       code: "usage_error",

@@ -7,7 +7,6 @@ import { formatSha256Sums, sha256Hex } from "./checksums.ts";
 export const RELEASE_TARGETS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] as const;
 export const TARBALL_MEMBERS = ["decant", "LICENSE", "NOTICE"] as const;
 
-/** GNU tar flags that make the archive depend only on file contents and the commit time. */
 export function deterministicTarArgs(sourceDir: string, sourceDateEpoch: string): string[] {
   return [
     "--sort=name",

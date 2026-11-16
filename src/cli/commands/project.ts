@@ -23,8 +23,6 @@ export function registerProjectCommands(ctx: CliContext): void {
           (archive) => {
             const offset = commandOptions.offset ?? 0;
             const limit = commandOptions.limit;
-            // The query aggregates every project either way, so paging the
-            // result costs nothing more than paging the statement would.
             const rows = listProjects(archive.db).slice(
               offset,
               limit == null ? undefined : offset + limit,
@@ -47,8 +45,6 @@ export function registerProjectCommands(ctx: CliContext): void {
     );
 }
 
-/** "-" when no session recorded usage (Cursor CLI records none), and an
- * asterisk when the cost leaves some sessions out. */
 function projectCost(row: ProjectSummary): string {
   if (row.sessions > 0 && row.usage_sessions === 0) return "-";
   return `${row.estimated_cost_usd.toFixed(2)}${row.usage_sessions < row.sessions ? "*" : ""}`;

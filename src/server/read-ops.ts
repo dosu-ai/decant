@@ -33,24 +33,11 @@ import {
   tokenEconomicsForSession,
 } from "../token-economics.ts";
 
-/**
- * The archive reads heavy enough to hold up other requests. Each one is a
- * named, read-only function of a database and plain-data arguments, so the
- * server can run it on a worker thread's own connection (see read-pool.ts)
- * and tests or a pool-less caller can run the same code inline.
- *
- * A `json` operation returns the value to serialize, or null for a missing
- * session. Serializing where the value is computed keeps that work off the
- * request thread and hands back a single string instead of a cloned object
- * graph.
- */
 interface JsonReadOp<A> {
   kind: "json";
   run: (db: Database, args: A) => unknown;
 }
 
-/** Reports render HTML. They import the report renderer lazily so the charting
- * library loads only when someone exports a report. */
 interface HtmlReadOp<A> {
   kind: "html";
   run: (db: Database, args: A) => Promise<{ html: string; filename: string } | null>;
@@ -136,7 +123,6 @@ export function isReadOpName(value: unknown): value is ReadOpName {
   return typeof value === "string" && Object.hasOwn(READ_OPS, value);
 }
 
-/** Run one operation against `db`. Null means the session it names is gone. */
 export async function executeReadOp<N extends ReadOpName>(
   db: Database,
   name: N,

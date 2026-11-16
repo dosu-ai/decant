@@ -34,26 +34,17 @@ export interface CursorSource {
   records: CursorRecord[];
 }
 
-/** A message blob that could not be read as stored. Kept in place so the
- * parser reports it as a diagnostic without losing the rest of the chat. */
 export class CursorBlobProblem {
   constructor(
     readonly kind: "missing" | "text" | "invalid_json" | "limit",
-    /** Text awaiting parsing, or a fixed limit message. */
     readonly text: string | null = null,
   ) {}
 }
 
 export type CursorRecord = Json | CursorBlobProblem;
 
-/** A failure reading a Cursor store. Its message is fixed text that never
- * quotes the store, so it is safe to log. */
 export class CursorSourceError extends Error {}
 
-/** Read one Cursor CLI chat store without ever opening the source database for
- * writes. Active WAL stores need a normal read-only connection; older stores
- * that no longer have sidecars are safely readable through SQLite immutable
- * mode. */
 export function readCursorSource(storePath: string): CursorSource {
   const fileMeta = readCursorFileMeta(storePath);
   try {
@@ -62,8 +53,7 @@ export function readCursorSource(storePath: string): CursorSource {
     // A WAL store on a read-only mount cannot get the -shm file a normal
     // read-only open creates. Immutable mode reads store.db alone, ignoring
     // locks and the -wal, so it is a fallback only for a store with no writer
-    // holding it and nothing pending in its WAL. Anything else fails, and the
-    // next sync retries it.
+    // holding it and nothing pending in its WAL.
     if (error instanceof CursorSourceError || isLockError(error)) throw error;
     if (hasWalContent(storePath)) {
       throw new CursorSourceError(
@@ -97,7 +87,6 @@ function hasWalContent(storePath: string): boolean {
   try {
     return statSync(`${storePath}-wal`).size > 0;
   } catch (error) {
-    // No WAL file means every commit is already in store.db.
     if ((error as { code?: unknown }).code === "ENOENT") return false;
     throw error;
   }
@@ -155,8 +144,6 @@ function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): Curs
     try {
       records.push(parseSourceJson(text) as Json);
     } catch (error) {
-      // Keep the malformed blob in place so the pure parser reports an
-      // unparsed_line diagnostic while preserving the rest of the chat.
       records.push(
         diagnosticRawLine(error, text) === null
           ? new CursorBlobProblem("limit", jsonProblem(error))
@@ -201,7 +188,6 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
     if (Array.isArray(record.content)) {
       content = record.content;
     } else if (typeof record.content === "string") {
-      // The AI SDK message format Cursor stores allows plain-string content.
       content = [{ type: "text", text: record.content }];
     } else {
       issues.push({
@@ -293,8 +279,6 @@ export function parseCursorSession(fallbackId: string, source: CursorSource): Pa
   return { session, issues };
 }
 
-/** Resolves a stored record to its JSON value, or to undefined after
- * reporting a blob that holds none. */
 function readRecord(
   stored: CursorRecord,
   lineNo: number,
@@ -348,15 +332,11 @@ function readRecord(
   }
 }
 
-/** A diagnostic names a type or role only when it looks like an identifier,
- * so a malformed record cannot copy transcript text into the message. */
 function typeLabel(value: Json | undefined): string {
   if (typeof value !== "string") return "<non-string>";
   return /^[A-Za-z0-9_.:-]{1,40}$/.test(value) ? value : "<unrecognized>";
 }
 
-/** A deferred tool Cursor ran through `CallDynamicTool`, under the name the
- * rest of Decant knows it by. */
 interface DynamicCall {
   toolName: string;
   input: Json | undefined;
@@ -364,8 +344,7 @@ interface DynamicCall {
 
 /** `CallDynamicTool` dispatches by `namespace`: `cursor` holds Cursor's own
  * deferred tools, such as `Task` for a subagent, and any other namespace is an
- * MCP server. Unwrapping it lets spawn counts, MCP grouping, and tool stats
- * see the tool that actually ran. */
+ * MCP server. */
 function dynamicCall(item: JsonObject): DynamicCall | null {
   if (asString(item.toolName) !== "CallDynamicTool" || !isObject(item.args)) return null;
   const namespace = asString(item.args.namespace);
@@ -438,8 +417,7 @@ function cursorModel(value: Json | undefined): string | null {
 }
 
 // Context the Cursor CLI sends as a "user" message: the environment, rules,
-// skills, and tool lists, and reminders addressed to a subagent. The user never
-// typed it, so, as with Codex, it is a system row rather than a turn.
+// skills, and tool lists, and reminders addressed to a subagent.
 const INJECTED_CONTEXT = /^\s*<(?:user_info|system_reminder)>/;
 
 function isInjectedContext(role: Json | undefined, content: Json[]): boolean {
@@ -469,7 +447,6 @@ function firstUserText(messages: NormalizedMessage[]): string | null {
     for (const part of message.blocks) {
       if (part.blockType !== "text") continue;
       const text = part.text ?? "";
-      // A subagent's prompt follows a reminder in the same message.
       if (INJECTED_CONTEXT.test(text)) continue;
       const query = USER_QUERY.exec(text)?.[1] ?? text;
       if (query.trim()) return query.trim().slice(0, 200);
@@ -577,7 +554,6 @@ function timestamp(value: Json | undefined): string | null {
   return typeof value === "number" ? isoFromMillis(value) : null;
 }
 
-/** Cursor writes empty strings for unset fields, so "" reads as absent. */
 function asString(value: Json | undefined): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }

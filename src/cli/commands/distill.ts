@@ -182,8 +182,6 @@ function emitArtifact(
   artifactOptions: ArtifactOptions,
 ): number {
   if (artifactOptions.out != null) {
-    // "wx" makes the no-clobber check and the write one atomic open(O_EXCL)
-    // instead of exists-then-write.
     try {
       writeFileSync(artifactOptions.out, artifact, {
         flag: artifactOptions.force === true ? "w" : "wx",

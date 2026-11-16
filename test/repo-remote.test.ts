@@ -32,14 +32,12 @@ function origin(url: string): string {
   return `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`;
 }
 
-/** A repository at `dir` whose config is `config`. */
 function repo(dir: string, config: string): string {
   mkdirSync(join(dir, ".git"), { recursive: true });
   writeFileSync(join(dir, ".git", "config"), config);
   return dir;
 }
 
-/** A linked worktree of `root` at `dir`, laid out as `git worktree add` does. */
 function worktree(root: string, dir: string, name: string): string {
   const gitDir = join(root, ".git", "worktrees", name);
   mkdirSync(gitDir, { recursive: true });
@@ -144,7 +142,6 @@ describe("resolveRepoRemote", () => {
     repo(join(base, "widget"), origin("https://github.com/acme/widget.git"));
     const leaf = join(base, "sub");
     mkdirSync(leaf, { recursive: true });
-    // Submodules and `git worktree add --relative-paths` write the pointer this way.
     writeFileSync(join(leaf, ".git"), "gitdir: ../widget/.git\n");
     expect(process.cwd()).not.toBe(leaf);
     expect(resolveRepoRemote(leaf)).toBe("github.com/acme/widget");
@@ -222,7 +219,6 @@ describe("resolveProjectRemotes", () => {
       addProject(db, 1, root, root);
       addProject(db, 2, join(base, "trees", "removed"), root);
       addProject(db, 3, join(base, "not-a-repo"), join(base, "not-a-repo"));
-      // A removed worktree whose root is only a guessed name has nothing to borrow.
       addProject(db, 4, join(base, "trees", "orphan"), "widget");
       resolveProjectRemotes(db);
       expect(remotes(db)).toEqual({
@@ -275,7 +271,6 @@ describe("resolveProjectRemotes", () => {
     expect(remotes(db)).toEqual({ 1: "github.com/acme/live", 2: "github.com/acme/kept" });
     closeDb(db);
 
-    // Once the folder answers, the same lookup reads the repository.
     Atomics.store(new Int32Array(gate), 0, 1);
     Atomics.notify(new Int32Array(gate), 0);
   });

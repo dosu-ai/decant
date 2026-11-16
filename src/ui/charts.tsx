@@ -17,10 +17,6 @@ export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export const NO_VALUES: number[] = [];
 
-/**
- * The chart runtime is its own file in a release build. Resolves to null when
- * it cannot be fetched, as when Decant was updated or stopped under an open tab.
- */
 export async function loadChartRuntime(
   load: () => Promise<typeof ChartRuntime> = () => import("./chart-runtime.ts"),
 ): Promise<typeof ChartRuntime | null> {
@@ -60,7 +56,6 @@ export const AnalyticsChart = memo(function AnalyticsChart({
   values,
   variant,
 }: {
-  /** What the chart shows, read out by screen readers in place of the canvas. */
   description: string;
   labels: string[];
   metric: AnalyticsChartMetric;
@@ -114,8 +109,6 @@ export const AnalyticsChart = memo(function AnalyticsChart({
       const redrawForTheme = () => draw(true);
       window.addEventListener("decant:set-theme", redrawForTheme);
       media.addEventListener("change", redrawForTheme);
-      // Draws whatever chartStateRef holds now, so a state change that arrived
-      // while the import was in flight is not lost.
       draw();
       disposeChart = () => {
         observer.disconnect();
@@ -236,7 +229,6 @@ export function buildChartOption(
                 symbol: isolated[index] === true ? "circle" : "none",
               }))
             : values,
-        // Smoothing invents values between points; idle days are real zeros.
         smooth: false,
         connectNulls: false,
         showSymbol: seriesType === "line",
@@ -257,7 +249,6 @@ const utcDayFormatter = new Intl.DateTimeFormat(undefined, {
   timeZone: "UTC",
 });
 
-/** Tooltip heading for one category: a UTC day, the week it starts, or the label. */
 export function tooltipHeading(label: string, period: AnalyticsChartPeriod): string {
   if (period === "category" || !/^\d{4}-\d{2}-\d{2}$/.test(label)) {
     return label;
@@ -270,7 +261,6 @@ export function tooltipHeading(label: string, period: AnalyticsChartPeriod): str
   return period === "week" ? `Week of ${day} (UTC)` : `${day} (UTC)`;
 }
 
-/** A null point is unknown (no usage data), which is not the same as zero. */
 export function tooltipValue(value: unknown, moneyMetric: boolean): string {
   if (value == null || value === "-" || (typeof value === "number" && Number.isNaN(value))) {
     return "No usage data";

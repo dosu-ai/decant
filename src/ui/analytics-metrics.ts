@@ -1,10 +1,5 @@
 import type { DimensionRow, Summary } from "./types.ts";
 
-/**
- * Share of prompt-side tokens served from the provider's cache:
- * cache reads / (uncached input + cache reads + cache writes). Null when the
- * scope recorded no prompt tokens at all.
- */
 export function cacheHitRate(
   summary: Pick<Summary, "input_tokens" | "cache_read_tokens" | "cache_creation_tokens">,
 ): number | null {
@@ -14,8 +9,6 @@ export function cacheHitRate(
 
 const DAY_MS = 86_400_000;
 
-/** The range of the same length ending the day before `from`, for comparing a
- * bounded date range with the period just before it. Open ranges have none. */
 export function previousRange(
   from: string | null | undefined,
   to: string | null | undefined,
@@ -37,7 +30,6 @@ export function previousPeriodLabel(days: number): string {
   return days === 1 ? "previous day" : `previous ${days} days`;
 }
 
-/** "+12% vs previous 30 days". Null when there is nothing to compare with. */
 export function percentDelta(
   current: number,
   previous: number | null | undefined,
@@ -54,8 +46,6 @@ export function percentDelta(
   return `${change > 0 ? "+" : "−"}${Math.abs(change)}% vs ${label}`;
 }
 
-/** "+3 pts" for the change in a rate given as a 0..1 fraction; "flat" when it
- * rounds to zero. The caller names the comparison period. */
 export function pointDelta(
   current: number | null,
   previous: number | null | undefined,
@@ -70,7 +60,6 @@ export function pointDelta(
   return `${change > 0 ? "+" : "−"}${Math.abs(change)} ${Math.abs(change) === 1 ? "pt" : "pts"}`;
 }
 
-/** The cache tile's detail: the hit rate, with its change when there is one. */
 export function cacheDetail(hitRate: number | null, previousHitRate: number | null): string | null {
   if (hitRate == null) {
     return null;
@@ -112,7 +101,6 @@ export function outcomeDescription(key: string): string {
   }
 }
 
-/** Outcome rows in a fixed order, so the table does not reshuffle by count. */
 export function orderedOutcomes(rows: readonly DimensionRow[]): DimensionRow[] {
   const rank = (key: string) => {
     const index = (OUTCOME_ORDER as readonly string[]).indexOf(key);
@@ -121,10 +109,6 @@ export function orderedOutcomes(rows: readonly DimensionRow[]): DimensionRow[] {
   return [...rows].sort((left, right) => rank(left.key) - rank(right.key));
 }
 
-/**
- * All estimated cost in scope (abandoned and failed sessions included) divided
- * by the top-level sessions labelled completed. Null with no completions.
- */
 export function costPerCompletedSession(
   totalCost: number,
   outcomes: readonly DimensionRow[],

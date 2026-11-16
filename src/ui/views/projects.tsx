@@ -182,11 +182,6 @@ export function ProjectsView({
   );
 }
 
-/**
- * Rows that contain every word of the query, in any of the text a row shows:
- * its name, path, root, kind, worktree tool, and the tools with sessions there,
- * by id and by the name their badge shows.
- */
 export function filterProjects(projects: ProjectSummary[], query: string): ProjectSummary[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) {

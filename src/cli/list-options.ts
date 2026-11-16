@@ -6,10 +6,6 @@ import type { ProjectSummary, SessionSummary } from "../query.ts";
 import type { Archive, CliContext } from "./context.ts";
 import { parseInteger } from "./parse.ts";
 
-// Flags shared by the listing commands: scope, dates, paging, and fields.
-
-// A Record makes the compiler reject a field the row type lacks and report
-// one this list forgot. `subagents` is absent because no listing nests them.
 const SESSION_FIELD_MAP: Record<Exclude<keyof SessionSummary, "subagents">, true> = {
   id: true,
   tool: true,
@@ -70,7 +66,6 @@ const PROJECT_FIELD_MAP: Record<keyof ProjectSummary, true> = {
 export const SESSION_FIELDS: readonly string[] = Object.keys(SESSION_FIELD_MAP);
 export const PROJECT_FIELDS: readonly string[] = Object.keys(PROJECT_FIELD_MAP);
 
-/** A `--fields` parser that rejects names outside `valid` and lists them. */
 export function fieldsParser(valid: readonly string[]): (value: string) => string[] {
   return (value) => {
     const fields = [...new Set(value.split(",").map((field) => field.trim()))];
@@ -83,7 +78,6 @@ export function fieldsParser(valid: readonly string[]): (value: string) => strin
   };
 }
 
-/** A day as the API's `from` and `to` take it, so both read dates one way. */
 export function parseDay(value: string): string {
   const day = dateFilterFromSearch(new URLSearchParams({ from: value })).from;
   if (day == null) {
@@ -115,8 +109,6 @@ export interface ListScope {
   utcDays: true;
 }
 
-/** The query filter for the scope flags, or the exit code once an error is on
- * stderr. An unknown scope is an error so an empty list keeps one meaning. */
 export function resolveListScope(
   ctx: CliContext,
   archive: Archive,
@@ -126,7 +118,6 @@ export function resolveListScope(
     ctx.io.writeErr(`error: ${message}\n`);
     return code;
   };
-  // The help promises UTC days, and some sources keep their local offset.
   const scope: ListScope = { from: options.since, to: options.until, utcDays: true };
   if (options.since != null && options.until != null && options.since > options.until) {
     return fail(2, `--since ${options.since} is after --until ${options.until}`);
@@ -177,7 +168,6 @@ export function resolveListScope(
   return scope;
 }
 
-/** Print `rows` whole, or only `fields` of each when the flag was given. */
 export function outputRows<T extends object>(
   ctx: CliContext,
   rows: T[],
@@ -199,6 +189,5 @@ export function textCell(value: unknown): string {
   if (value == null) {
     return "";
   }
-  // One row per line and one cell per tab, whatever a title or a list holds.
   return (Array.isArray(value) ? value.join(",") : String(value)).replace(/[\t\r\n]+/g, " ");
 }

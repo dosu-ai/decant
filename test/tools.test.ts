@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { classifyTool, preview, previewHeadTail, previewOmittedCount } from "../src/tools.ts";
 
-// Ports tools.rs tests verbatim.
 describe("classifyTool", () => {
   test("builtin tool", () => {
     expect(classifyTool("Bash")).toEqual({ kind: "builtin", mcpServer: null, baseName: "Bash" });
@@ -39,8 +38,6 @@ describe("preview", () => {
   });
 
   test("counts Unicode scalars, not UTF-16 code units", () => {
-    // "🎉🎉🎉" is 6 UTF-16 code units but 3 scalars — must NOT truncate at max 3,
-    // and truncation at 2 must not split a surrogate pair.
     expect(preview("🎉🎉🎉", 3)).toBe("🎉🎉🎉");
     expect(preview("🎉🎉🎉", 2)).toBe("🎉🎉…");
   });

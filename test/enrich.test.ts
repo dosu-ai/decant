@@ -157,7 +157,6 @@ describe("fileRefs", () => {
       ["c.json", "write", "json"],
     ]);
     expect(refs("multiedit", { filePath: "/w/d.ts", edits: [] })).toEqual([["d.ts", "edit", "ts"]]);
-    // A 2.x input names `path`; it wins when both are present.
     expect(refs("read", { path: "/w/e.ts", filePath: "/w/f.ts" })).toEqual([
       ["e.ts", "read", "ts"],
     ]);
@@ -223,7 +222,6 @@ describe("facets", () => {
     expect(
       facets(parseClaudeSession("overlap", `${overlapping.join("\n")}\n`).session).activeSeconds,
     ).toBe(60);
-    // The five-minute cap still applies to the gap after a step back.
     const capped = [
       line("user", "10:00:00"),
       line("assistant", "10:00:30"),

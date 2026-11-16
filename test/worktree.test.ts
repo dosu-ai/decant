@@ -115,7 +115,6 @@ describe("worktree pure classifiers", () => {
       repo: "decant",
     });
     expect(externalContainer("/Users/dev/.t3/worktrees/decant")).toBeNull();
-    // A removed worktree no longer resolves through git, so the name decides.
     const known: KnownRoot[] = [
       { path: "/Users/dev/src/decant", basename: "decant", sessions: 3, lastSeen: "2026-06-01" },
     ];
@@ -130,7 +129,6 @@ describe("worktree pure classifiers", () => {
       rootPath: "decant",
       worktreeLabel: "t3-0cacd467",
     });
-    // The repository segment wins over a longer name that happens to prefix the leaf.
     const lookalike: KnownRoot[] = [
       ...known,
       {
@@ -331,7 +329,6 @@ describe("git worktree pointer resolution", () => {
       join(root, "actual", ".git"),
       "gitdir: /Users/dev/acme/app/.git/worktrees/actual\n",
     );
-    // `alias/..` is `actual` on disk, while its lexical parent has no `.git`.
     expect(resolveGitRoot(`${root}/alias/..`)).toMatchObject({
       rootPath: "/Users/dev/acme/app",
       worktreeLabel: "actual",

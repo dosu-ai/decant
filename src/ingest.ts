@@ -86,11 +86,6 @@ import { basename, resolveWorktreeRoots } from "./worktree.ts";
 
 const logger = getDecantLogger("ingest");
 
-/**
- * Receives discovery warnings. Ingest logs them; `decant doctor` keeps only the
- * event name, because the properties carry database paths and error messages
- * that do not belong in a report pasted into a public issue.
- */
 export type DiscoveryWarn = (message: string, properties: Record<string, unknown>) => void;
 
 const logDiscoveryWarning: DiscoveryWarn = (message, properties) =>
@@ -100,57 +95,33 @@ export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
   geminiDir?: string;
-  /** OpenCode data directory holding `opencode.db` and `opencode-<channel>.db`. */
   opencodeDir?: string;
-  /** Explicit OpenCode database file (`OPENCODE_DB`), read in addition to `opencodeDir`. */
   opencodeDb?: string;
-  /** OpenCode's global config directory; its `opencode.json` and
-   * `opencode.jsonc` name MCP servers, as do each session's project configs. */
   opencodeConfigDir?: string;
-  /** Read in place of the global directory's files (`DECANT_OPENCODE_CONFIG`). */
   opencodeConfigPath?: string;
-  /** Read in addition to the global and project configs (`OPENCODE_CONFIG`). */
   opencodeExtraConfigPath?: string;
-  /** OpenCode 1.x's models.dev cache file, read for context windows when a
-   * database holds no catalog (a database only 1.x opened). */
   opencodeModelsPath?: string;
-  /** Cursor CLI chats directory: `<workspace>/<chat>/store.db` plus `meta.json`. */
   cursorDir?: string;
-  /** GitHub Copilot CLI session-state directory: `<session id>/events.jsonl`. */
   copilotDir?: string;
-  /** VS Code's `User` directory, holding Copilot Chat sessions in workspace
-   * and global storage. */
   vscodeCopilotDir?: string;
-  /** VS Code Insiders' `User` directory, read beside `vscodeCopilotDir`. */
   vscodeCopilotInsidersDir?: string;
-  /** Directory of ATIF trajectory files, read recursively. */
   atifDir?: string;
   sourcePaths?: string[];
 }
 
-/**
- * Version of the source-to-archive derivation pipeline. Increment this when a
- * parser or ingest enrichment change must be applied to already-seen source
- * files. The next sync re-ingests each stale source transactionally once.
- */
 export const INGEST_PIPELINE_REVISION = 21;
 
 export interface SyncReport {
-  /** Present when stored cost estimates changed without requiring re-ingest. */
   repriced?: number;
   scanned: number;
   ingested: number;
   skipped: number;
   issues: number;
-  /** `issues` split by IngestIssueCode; only codes actually seen appear. Lets
-   * callers separate data loss (`unparsed_line`) from informational sensors. */
   issuesByCode: Partial<Record<IngestIssueCode, number>>;
   failed: number;
   cancelled: boolean;
 }
 
-/** A snapshot of a running sync. `scanned` is the number of discovered source
- * files inspected so far; `total` is the number discovered at startup. */
 export interface SyncProgress {
   scanned: number;
   ingested: number;
@@ -165,7 +136,6 @@ export interface SourceFile {
   tool: Tool;
   path: string;
   archived: boolean;
-  /** Set for OpenCode sessions, whose `path` is the virtual `<db>#<session id>`. */
   opencode?: OpenCodeSessionRef;
 }
 
@@ -174,7 +144,6 @@ interface Prepared {
   lineCount: number;
   mtime: number;
   size: number;
-  /** Per-session change key for database-backed sources; JSONL sources keep NULL. */
   hash?: string | null;
 }
 
@@ -235,8 +204,6 @@ export function discoverSourcePaths(
   return [...preferVscodeLogs(dedupeSourceFiles(out)), ...discoverOpenCode(databases, warn)];
 }
 
-/** `opencode.db` and channel variants under the data directory, plus the
- * explicit `OPENCODE_DB` file. The `-wal`/`-shm` sidecars never match. */
 function openCodeDatabasePaths(config: IngestConfig): string[] {
   const paths: string[] = [];
   if (config.opencodeDir != null && existsSync(config.opencodeDir)) {
@@ -268,15 +235,8 @@ export function openCodeSourcePath(ref: OpenCodeSessionRef): string {
   return `${ref.dbPath}#${ref.sessionId}`;
 }
 
-/** One virtual source per session, from either the 2.x tables or the 1.x
- * tables. A session present in several places (a channel build beside the
- * stable one, or both formats of one database once 2.x migrated it while a 1.x
- * binary still writes it) is read from the copy OpenCode updated last; see
- * `isNewerOpenCodeCopy`. Databases that cannot be opened are skipped. */
 function discoverOpenCode(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
   const best = new Map<string, OpenCodeSessionRef>();
-  // One database reached through a symlink, a relative path, or both the data
-  // directory and OPENCODE_DB is opened once and names one virtual path.
   for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
     if (!existsSync(dbPath)) {
       continue;
@@ -308,8 +268,6 @@ function discoverOpenCode(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] 
           best.set(ref.sessionId, ref);
         }
       };
-      // A failed 1.x listing still leaves this database's 2.x sessions
-      // discovered, keyed without their 1.x copies.
       let legacy: OpenCodeSessionRef[] = [];
       let legacyError: unknown = null;
       try {
@@ -408,8 +366,6 @@ export function sync(
     cancelled: false,
   };
   let inspected = 0;
-  // A tombstoned file writes no session but can delete lineage descendants and
-  // null their parent links, so it counts as a lineage change like an ingest.
   let lineageMayHaveChanged = false;
   let ingestedAtStatisticsRefresh = 0;
   const emitProgress = (): void =>
@@ -430,16 +386,12 @@ export function sync(
         break;
       }
       if (report.ingested - ingestedAtStatisticsRefresh >= PLANNER_STATISTICS_INTERVAL) {
-        // Each file commits its own transaction, so no write is open here.
         refreshPlannerStatistics(db);
         ingestedAtStatisticsRefresh = report.ingested;
       }
 
       try {
         if (file.opencode != null || file.tool === "cursor" || file.tool === "atif") {
-          // Virtual `<db>#<session>` paths never exist on disk, a Cursor store
-          // is a SQLite database with sidecars, and an ATIF document can hold
-          // several sessions; the one-session text read below fits none.
           const outcome =
             file.opencode != null
               ? syncOpenCodeSession(db, file, file.opencode, opencode, mcpServers)
@@ -460,12 +412,6 @@ export function sync(
           }
           continue;
         }
-        // One descriptor for everything: the skip decision, the recorded stat,
-        // and the content read all describe the same inode, so a path swapped
-        // mid-loop can neither skip wrongly nor record metadata for content that
-        // was never read. A file that vanished before open is a silent skip,
-        // matching the old stat-failure path; any other open error counts as
-        // failed, matching the old read-failure path.
         let fd: number;
         try {
           fd = openSync(file.path, "r");
@@ -493,9 +439,6 @@ export function sync(
             report.skipped += 1;
             continue;
           }
-          // fstat before read: a write landing mid-window records a smaller size
-          // than the content read, so the next sync re-ingests instead of
-          // silently skipping the tail.
           const limited = readSourceFile(fd);
           if (limited === null) {
             report.failed += 1;
@@ -582,17 +525,12 @@ export function sync(
   return report;
 }
 
-/** Work that follows the ingest loop, each step gated on the change that can invalidate it. */
 function refreshDerivedState(
   db: Database,
   report: SyncReport,
   repriced: number,
   lineageMayHaveChanged: boolean,
 ): void {
-  // Lineage depends only on session rows and blocks, which change only through
-  // ingest. An unchanged archive keeps the links the last ingest resolved, so
-  // skipping here saves an O(archive) pass on every watcher sweep. A change to
-  // the inference rules must bump INGEST_PIPELINE_REVISION to re-ingest.
   if (report.ingested > 0 || lineageMayHaveChanged) {
     resolveOpenCodeSpawnLinks(db);
     resolveSubagentParents(db);
@@ -603,7 +541,6 @@ function refreshDerivedState(
   const materializedEfforts = materializeMissingReasoningEfforts(db);
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
-    // After the roots: a project whose directory is gone borrows its root's.
     resolveProjectRemotes(db);
   }
   const uncheckedRecommendationImpactLabels =
@@ -624,17 +561,10 @@ function refreshDerivedState(
     materializedWindows > 0 ||
     materializedEfforts > 0
   ) {
-    // Refresh planner statistics after write bursts; without ANALYZE data the
-    // query planner picks pathological join orders on multi-GB archives.
     refreshPlannerStatistics(db);
   }
 }
 
-/**
- * Insert or replace one parsed session. Returns 0 when the source identity or
- * its provider-recorded parent has a durable deleted tombstone, leaving the
- * archive unchanged and extending that tombstone through the lineage.
- */
 export function upsertSession(
   db: Database,
   parsed: ParsedSession,
@@ -652,19 +582,10 @@ type SessionSyncOutcome =
   | { kind: "skipped" | "tombstoned" | "failed" }
   | { kind: "ingested"; issues: Issue[] };
 
-/** Appended to a session's change key in `ingest_source.hash` when it was
- * derived without its database's model catalog, so a later sync that can read
- * the catalog re-derives it once instead of skipping it on an unchanged key. */
 const WITHOUT_CATALOG = "|no-catalog";
 
-/** Appended to the change key of a session whose project directory did not
- * answer in time, so it is re-derived once the directory can be read. */
 const WITHOUT_PROJECT_CONFIG = "|no-project-config";
 
-/** A session's change key: its database fingerprint plus, when any MCP server
- * applies to it, a digest of those server names. MCP names decide how its
- * tool calls are classified, so a config edit that changes the set for its
- * directory re-derives the session once; other sessions keep their key. */
 export function openCodeChangeKey(fingerprint: string, mcpServers: readonly string[]): string {
   if (mcpServers.length === 0) {
     return fingerprint;
@@ -673,19 +594,11 @@ export function openCodeChangeKey(fingerprint: string, mcpServers: readonly stri
   return `${fingerprint}|mcp:${digest.slice(0, 12)}`;
 }
 
-/** A database's models.dev context windows, or an empty map when the catalog
- * read failed. */
 interface OpenCodeCatalog {
   windows: ReadonlyMap<string, number>;
   available: boolean;
 }
 
-/**
- * OpenCode state for one sync: one read-only connection and one catalog read
- * per database, and the database halves of the `<db>#<session>` paths already
- * in `ingest_source`. Connections are closed after the loop whether or not it
- * finished.
- */
 class OpenCodeRun {
   readonly #db: Database;
   readonly #modelsPath: string | null;
@@ -717,9 +630,6 @@ class OpenCodeRun {
     return store;
   }
 
-  /** Read once per database per sync. A failure warns once for the database
-   * and yields an empty catalog: sessions still ingest, without context
-   * windows, rather than each failing and warning on every sync. */
   catalog(store: OpenCodeStore): OpenCodeCatalog {
     let catalog = this.#catalogs.get(store.path);
     if (catalog == null) {
@@ -742,9 +652,6 @@ class OpenCodeRun {
     return catalog;
   }
 
-  /** Read once per sync, whichever databases need it. Without the file the
-   * catalog counts as unavailable, so sessions derived without it are
-   * re-derived once it can be read. */
   #readModelsCache(path: string): OpenCodeCatalog {
     if (this.#modelsCache == null) {
       const cache = readOpenCodeModelsCache(path);
@@ -769,12 +676,8 @@ class OpenCodeRun {
     return this.#modelsCache;
   }
 
-  /** Every `<db>` with an OpenCode source row, read on first use and then
-   * extended by each session this sync writes. */
   sourceDatabases(): Set<string> {
     if (this.#sourceDatabases == null) {
-      // rtrim with every non-'#' character of the path strips back to its last
-      // '#', the separator before the session ID.
       this.#sourceDatabases = new Set(
         queryRows<{ prefix: string }>(
           this.#db,
@@ -795,9 +698,6 @@ class OpenCodeRun {
   }
 }
 
-/** Skip when the stored change key and pipeline revision match; otherwise
- * read, parse, and write the session under its virtual path. A session last
- * derived without the model catalog stays skipped until the catalog reads. */
 function syncOpenCodeSession(
   db: Database,
   file: SourceFile,
@@ -835,14 +735,9 @@ function syncOpenCodeSession(
     return { kind: "failed" };
   }
   if (loaded == null) {
-    // Deleted between discovery and read. Nothing is written or removed: a
-    // session deleted from opencode.db simply stops being discovered, and the
-    // archive keeps the copy it last ingested.
     return { kind: "skipped" };
   }
   const catalog = opencode.catalog(store);
-  // The names behind the change key, so the stored key matches what the
-  // session was derived with.
   const context = { mcpServers: mcpServerNames, contextWindows: catalog.windows };
   const parsed =
     loaded.format === "v1"
@@ -879,7 +774,6 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
   try {
     signature = cursorStoreSignature(file.path);
   } catch (error) {
-    // Vanished since discovery: a silent skip, as for a JSONL file.
     return (error as { code?: string }).code === "ENOENT"
       ? { kind: "skipped" }
       : { kind: "failed" };
@@ -896,8 +790,6 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
   ) {
     return { kind: "skipped" };
   }
-  // Stat before read: a write landing in between records an older signature
-  // than the content read, so the next sync re-ingests instead of skipping.
   let source: CursorSource;
   try {
     source = readCursorSource(file.path);
@@ -906,8 +798,6 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
       "event.name": "decant.ingest.source_read_failed",
       "file.path": file.path,
       "error.type": "cursor_read",
-      // Only Decant's own fixed messages are logged. Anything else, a JSON or
-      // SQLite error, is reduced to its code so no store content can leak.
       "error.message":
         error instanceof CursorSourceError
           ? error.message
@@ -915,8 +805,6 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     });
     return { kind: "failed" };
   }
-  // Without `meta.json`, only a subagent's own link says the store holds a
-  // conversation.
   if (source.fileMeta == null && get(source.storeMeta, "subagentInfo") == null) {
     return { kind: "skipped" };
   }
@@ -935,11 +823,6 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     : { kind: "ingested", issues: parsed.issues };
 }
 
-/** An ATIF document holds a root trajectory and any embedded subagents, each
- * filed as its own session: the root under the file's path and a subagent
- * under `<file>#<trajectory_id>`. Only the root's source row is checked to
- * skip an unchanged file, so the subagents are written first: a sync stopped
- * part way re-reads the whole file next time. */
 function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   let fd: number;
   try {
@@ -954,8 +837,6 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   let changeKey: string;
   try {
     stats = fstatSync(fd);
-    // A document is rewritten whole, so a rewrite of the same size within one
-    // second is possible; the sub-second modification time tells it apart.
     changeKey = `mtime-ms:${stats.mtimeMs}`;
     const prior = queryRow<{
       size: number;
@@ -995,9 +876,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   } finally {
     try {
       closeSync(fd);
-    } catch {
-      // As for a JSONL source: a close failure cannot undo a completed read.
-    }
+    } catch {}
   }
 
   const document = parseAtifDocument(atifFallbackId(file.path), content, {
@@ -1010,9 +889,6 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   let root: ParsedSession | null = null;
   const rootId = document.sessions.find((session) => session.key == null)?.parsed.session
     .sourceSessionId;
-  // Another file holding the same document (a copy) was read before. Its root
-  // is about to be replaced, so its embedded subagents go too rather than
-  // hang off this file's root. Its source row stays, so it is not re-read.
   const superseded =
     rootId == null
       ? null
@@ -1059,8 +935,6 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   return { kind: "ingested", issues: [...root.issues, ...issues] };
 }
 
-/** A subagent the document no longer embeds would otherwise keep its session
- * and source rows under a virtual path nothing backs. */
 function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<string>): void {
   const prefix = `${path}#`;
   const escaped = prefix.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -1114,9 +988,7 @@ export function isAtifDocument(path: string): boolean {
   } finally {
     try {
       closeSync(fd);
-    } catch {
-      // Nothing was read that a close failure could invalidate.
-    }
+    } catch {}
   }
 }
 
@@ -1158,13 +1030,10 @@ interface CursorStoreSignature {
    * combined size or whole-second mtime can repeat across different
    * content. */
   key: string;
-  /** Combined size and latest whole-second mtime, kept in the size and mtime
-   * columns other sources use. */
   size: number;
   mtime: number;
 }
 
-/** Throws only when `store.db` itself cannot be stat'ed. */
 function cursorStoreSignature(path: string): CursorStoreSignature {
   const parts: string[] = [];
   let size = 0;
@@ -1178,7 +1047,6 @@ function cursorStoreSignature(path: string): CursorStoreSignature {
     try {
       stats = statSync(file, { bigint: true });
     } catch (error) {
-      // The WAL is optional, and so is meta.json: a subagent's store has none.
       if (name === "store") throw error;
       parts.push(`${name}=-`);
       continue;
@@ -1216,9 +1084,6 @@ type OpenCodeLoaded =
   | ({ format: "v2" } & OpenCodeLoadedSession)
   | ({ format: "v1" } & OpenCodeLegacyLoadedSession);
 
-/** Reads the session from the tables its ref names. A failed read fails the
- * one session rather than the whole sync. It writes no `ingest_source` row, so
- * the next sync retries it. */
 function readOpenCodeSession(
   store: OpenCodeStore,
   ref: OpenCodeSessionRef,
@@ -1292,8 +1157,6 @@ export function seedModelPricing(db: Database): void {
          FROM model_pricing`,
     ).map((row) => [row.model, row]),
   );
-  // Most syncs change nothing, so skip the write lock unless a seed row is
-  // missing or differs. The upsert below repeats the comparison under the lock.
   const pending = [...defaultPricing()].filter(([model, price]) => {
     const row = stored.get(model);
     return (
@@ -1399,9 +1262,6 @@ export function resolveSubagentParents(db: Database): void {
       continue;
     }
     const rootKey = info.rootKey;
-    // An ATIF parent is always another ATIF session. A re-imported export
-    // shares its session ID with the native session it came from, so the
-    // Claude lookup would claim that one instead.
     const rootId =
       (rootKey == null || row.tool === "atif" ? null : rootByClaudeSession.get(rootKey)) ??
       (rootKey == null ? null : sessionBySource.get(sourceKey(row.tool, rootKey))) ??
@@ -1419,9 +1279,6 @@ export function resolveSubagentParents(db: Database): void {
      ORDER BY s.is_subagent DESC, b.id DESC
      LIMIT 1`,
   );
-  // Driving from spawn_agent calls keeps the LIKE off every tool_result in the
-  // root session; the planner otherwise walks idx_block_session and reads each
-  // result's text.
   const findCodexSpawner = db.prepare(
     `SELECT call.tool_use_id AS tool_use_id
      FROM block call INDEXED BY idx_block_tool
@@ -1457,8 +1314,6 @@ export function resolveSubagentParents(db: Database): void {
       for (const row of rows) {
         const info = inferred.get(row.id);
         if (info == null || !info.isSubagent) {
-          // An ATIF session linked only by a file ref that its parent has
-          // since dropped. Other sources never unlink here.
           if (row.tool === "atif" && row.is_subagent !== 0) {
             clearAtif.run(row.id);
           }
@@ -1515,10 +1370,6 @@ export function resolveSubagentParents(db: Database): void {
   }
 }
 
-/** One-time schema-upgrade backfill. Effort lives only in source records, so
- * unchanged sessions cannot recover it from the archive itself. The checked
- * marker prevents source files that genuinely omit effort from being reparsed
- * on every sync, while normal re-ingest refreshes the value when a file grows. */
 export function materializeMissingReasoningEfforts(db: Database): number {
   const pendingStatement = db.prepare(
     `SELECT id, tool, source_session_id, source_path
@@ -1549,8 +1400,6 @@ export function materializeMissingReasoningEfforts(db: Database): number {
     try {
       efforts.push({ id: row.id, ...reasoningEffortFromSource(row.tool, row.source_path) });
     } catch (error) {
-      // Only a missing file is a stable answer; a permission or I/O failure
-      // leaves the row unchecked so a later sync retries it.
       if ((error as { code?: string }).code === "ENOENT") {
         efforts.push({ id: row.id, summary: null, levels: [] });
       }
@@ -1582,11 +1431,7 @@ interface ReasoningEffortSummary {
   levels: string[];
 }
 
-/** Narrow source scan for the one-time effort backfill. It avoids rebuilding
- * every message/block/tool object from a potentially multi-GB archive and
- * leaves the database write transaction for the small update batch only. */
 function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSummary {
-  // Neither is a JSONL log, and both record effort at ingest.
   if (tool === "cursor" || tool === "atif") {
     return { summary: null, levels: [] };
   }
@@ -1614,9 +1459,7 @@ function reasoningEffortFromSource(tool: Tool, path: string): ReasoningEffortSum
   } finally {
     try {
       closeSync(fd);
-    } catch {
-      // Best-effort cleanup: preserve the scan result or original read error.
-    }
+    } catch {}
   }
   const levels = reasoningEffortLevels(efforts);
   return { summary: summarizeReasoningEfforts(levels), levels };
@@ -1651,9 +1494,7 @@ function collectReasoningEffort(scan: EffortScan, line: string): void {
     if (effort != null && (scan.tool === "claude_code" || typ === "turn_context")) {
       scan.efforts.add(effort);
     }
-  } catch {
-    // Parser parity: malformed source rows do not hide valid effort labels.
-  }
+  } catch {}
 }
 
 function sourceKey(tool: Tool, sourceSessionId: string): string {
@@ -1766,9 +1607,6 @@ function atifFileRefParents(
   return parents;
 }
 
-/** The ATIF parser records an embedded subagent's direct parent in
- * `raw_meta.parentSessionId`; a file-ref subagent's parent comes from the
- * referencing session. */
 function inferAtifSubagent(
   row: SubagentRow,
   fileRefs: ReadonlyMap<string, { parent: string; spawnToolUseId: string | null }>,
@@ -1777,8 +1615,6 @@ function inferAtifSubagent(
   const parent = asString(get(meta, "parentSessionId"));
   const fileRef = row.source_path == null ? undefined : fileRefs.get(row.source_path);
   if (parent == null && fileRef == null) {
-    // Nothing names this session as a subagent any more, so a link an earlier
-    // pass made from a file ref no longer holds.
     return {
       isSubagent: false,
       rootKey: null,
@@ -1792,7 +1628,6 @@ function inferAtifSubagent(
     isSubagent: true,
     rootKey: parent ?? fileRef?.parent ?? null,
     spawnToolUseId: row.spawn_tool_use_id ?? fileRef?.spawnToolUseId ?? null,
-    // A file's identity can carry its name; the run ID reads better.
     agentId: row.agent_id ?? asString(get(meta, "session_id")) ?? row.source_session_id,
     agentType: row.agent_type ?? asString(get(get(meta, "agent"), "name")),
     spawnDepth: row.spawn_depth,
@@ -1848,9 +1683,6 @@ function writeIngestedFile(
   });
 }
 
-/** Earlier parsers filed a forked Codex subagent under the thread it forked
- * from. Re-reading the fork removes that row, because the parent's own rollout
- * may be gone and nothing else would ever replace it. */
 function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession): void {
   const parent = parsed.session.rootSourceSessionId;
   if (parsed.session.tool !== "codex" || parent == null) {
@@ -1866,13 +1698,6 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
   }
 }
 
-/** A Cursor store holds one chat, so when the agent ID it records changes,
- * the session filed under the old ID is the same transcript under a stale
- * identity and would otherwise count twice. The old ID comes from the store's
- * recorded change key rather than its session row, which a user delete
- * removes. The new ID takes over the old one's archive or delete state, so a
- * deleted chat stays deleted. Another store recorded under the old ID (a
- * copied chat directory) shared the removed row, so it is re-read next sync. */
 function releaseReplacedCursorIdentity(db: Database, path: string, parsed: ParsedSession): void {
   if (parsed.session.tool !== "cursor") {
     return;
@@ -1886,7 +1711,6 @@ function releaseReplacedCursorIdentity(db: Database, path: string, parsed: Parse
     [path],
   );
   const separator = prior?.hash?.indexOf("#") ?? -1;
-  // A key recorded before it carried the agent ID falls back to the row.
   const previous =
     separator < 0
       ? (prior?.source_session_id ?? null)
@@ -1919,20 +1743,12 @@ function releaseReplacedCursorIdentity(db: Database, path: string, parsed: Parse
   );
 }
 
-/** A session read from a newer copy in another database no longer belongs to
- * the old `<db>#<session>` path. Its source and issue rows go, so diagnostics
- * stop naming a path that backs nothing, and so the old copy is re-read rather
- * than skipped on a stale fingerprint if the newer database later disappears.
- * The candidates are one primary-key lookup per known database, not a scan of
- * every OpenCode source on each session write. */
 function releaseSupersededOpenCodeSources(
   db: Database,
   path: string,
   sessionId: string,
   databases: ReadonlySet<string>,
 ): void {
-  // The session ID follows the path's last '#', so an ID containing one never
-  // names a source.
   if (sessionId.includes("#")) {
     return;
   }
@@ -1951,8 +1767,6 @@ function releaseSupersededOpenCodeSources(
   }
 }
 
-/** `releaseClaims` is false only when the same session is written again in this
- * transaction and claims its requests back. */
 function deleteSessionRow(db: Database, id: number, releaseClaims = true): void {
   if (releaseClaims) {
     releaseBilledRequests(db, [id]);
@@ -2039,8 +1853,6 @@ function writeSession(
   );
   let unsettled: string[] = [];
   if (existing != null) {
-    // Handing its requests to copies would only take them back below, on every
-    // growth of a live session. The reconcile below settles the ones it dropped.
     unsettled = unsettledRequests(db, existing.id);
     deleteSessionRow(db, existing.id, false);
   }
@@ -2089,7 +1901,6 @@ function writeSession(
       s.totals.cacheRead,
       s.totals.cacheCreation,
       s.totals.reasoning,
-      // Priced below from per-request usage once the messages are stored.
       0,
       Number(s.isArchived),
       Number(s.isSubagent),
@@ -2221,13 +2032,9 @@ function writeSession(
     for (const call of toolUseBlocks) {
       const name = call.block.toolName ?? "";
       const classified = classifyTool(name);
-      // IDs can recur in retained logs. Pair occurrences one-to-one; reusing
-      // the last result for every call doubles volume and changes outcomes.
       const id = call.block.toolUseId;
       let taken = id == null ? 0 : (resultTaken.get(id) ?? 0);
       const queue = id == null ? undefined : results.get(id);
-      // Orphan and surplus results remain in the transcript but cannot answer
-      // a call that had not been emitted when those results were recorded.
       while (queue?.[taken] != null && (queue[taken]?.blockId ?? 0) < call.callBlockId) {
         taken += 1;
       }
@@ -2258,9 +2065,6 @@ function writeSession(
         call.block.ordinal,
         call.timestamp,
       );
-      // Inner calls share the wrapper's call block and record no result block
-      // of their own: the wrapper's result is one combined output, and linking
-      // it again would count its bytes once per inner call.
       for (const inner of call.block.innerToolCalls ?? []) {
         const innerClassified = classifyTool(inner.toolName);
         const innerInput = inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
@@ -2485,8 +2289,6 @@ function collectCopilot(copilotDir: string, out: SourceFile[]): void {
   }
 }
 
-/** Match the configured root or the standard `session-state` layout so an
- * unrelated `events.jsonl` is not claimed as a Copilot journal. */
 function isCopilotSessionLog(path: string, copilotDir?: string): boolean {
   return (
     pathBasename(path) === COPILOT_EVENTS_NAME &&
@@ -2593,8 +2395,6 @@ function newestVscodeCopies(candidates: VscodeChatCandidate[]): SourceFile[] {
     .sort((a, b) => compareCodePoints(a.path, b.path));
 }
 
-/** `--path` keeps every copy it is given, except a `.json` that sits beside
- * its own session's `.jsonl`. */
 function preferVscodeLogs(files: SourceFile[]): SourceFile[] {
   const logs = new Set(
     files
@@ -2609,7 +2409,6 @@ function preferVscodeLogs(files: SourceFile[]): SourceFile[] {
   );
 }
 
-/** Exclude extension state from broad imports, including relocated User roots. */
 function isInVscodeStorage(path: string, userDirs: readonly (string | undefined)[]): boolean {
   const segments = path.split(/[\\/]+/);
   if (
@@ -2630,8 +2429,6 @@ function isInVscodeStorage(path: string, userDirs: readonly (string | undefined)
   );
 }
 
-/** Requiring the storage layout around the file keeps `--path` from claiming
- * another tool's JSON. */
 function isVscodeChatSessionFile(path: string): boolean {
   if (!path.endsWith(".json") && !path.endsWith(".jsonl")) {
     return false;
@@ -2669,7 +2466,6 @@ function listDir(dir: string): string[] {
 
 interface GeminiSessionLayout {
   chatsDir: string;
-  /** Parent chat id when the file is a subagent transcript nested under it. */
   parentSessionId: string | null;
 }
 
@@ -2704,7 +2500,6 @@ function geminiSessionLayout(path: string): GeminiSessionLayout | null {
   return null;
 }
 
-/** Returns the absolute workspace root recorded beside the project's chats. */
 function geminiProjectPath(layout: GeminiSessionLayout | null): string | null {
   if (layout == null) {
     return null;
@@ -2715,9 +2510,7 @@ function geminiProjectPath(layout: GeminiSessionLayout | null): string | null {
     if (root !== "") {
       return root;
     }
-  } catch {
-    // The hash-named cache directory is not a usable project identity.
-  }
+  } catch {}
   return null;
 }
 
@@ -2783,9 +2576,7 @@ function codexTitles(config: IngestConfig): Map<string, string> {
       if (id != null && threadName != null) {
         titles.set(id, threadName);
       }
-    } catch {
-      // Corrupt session-index rows should not make session ingest fail.
-    }
+    } catch {}
   }
   return titles;
 }
@@ -2796,7 +2587,6 @@ function fileStem(path: string): string {
   return ext === "" ? base : base.slice(0, -ext.length);
 }
 
-/** Lines as `split(/\r?\n/)` counts them after dropping one trailing newline. */
 export function lineCount(content: string): number {
   if (content === "") {
     return 0;

@@ -33,7 +33,6 @@ function fresh(): { db: Database; dbPath: string; out: string } {
 
 const BASE = { cwd: "/synthetic/widget", gitBranch: "main", version: "2.1.0" };
 
-/** A Claude Code session: a question, a tool call, and an answer. */
 function claudeSession(sessionId: string, answer = "The parser keeps the last line."): string {
   const at = (second: number) => `2026-05-04T10:00:${String(second).padStart(2, "0")}.000Z`;
   return [
@@ -118,7 +117,6 @@ function read(path: string): AtifTrajectory {
   return JSON.parse(readFileSync(path, "utf8")) as AtifTrajectory;
 }
 
-/** Every file under a folder, relative to it. */
 function files(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
@@ -143,7 +141,6 @@ describe("mirrorAtif", () => {
       expect(readFileSync(join(out, "claude_code/first.atif.json"), "utf8")).not.toContain(
         BASE.cwd,
       );
-      // The documents hold transcripts, so only their owner can read them.
       expect(statSync(out).mode & 0o777).toBe(0o700);
       expect(statSync(join(out, "claude_code/first.atif.json")).mode & 0o777).toBe(0o600);
     } finally {
@@ -169,7 +166,6 @@ describe("mirrorAtif", () => {
       expect(JSON.stringify(read(join(out, "claude_code/second.atif.json")))).toContain(
         "including the last one",
       );
-      // No temporary files are left behind.
       expect(files(out)).toEqual(["claude_code/first.atif.json", "claude_code/second.atif.json"]);
     } finally {
       closeDb(db);
@@ -187,7 +183,6 @@ describe("mirrorAtif", () => {
       const parent = read(parentPath);
       const child = read(childPath);
 
-      // The parent points at the child's file instead of embedding it.
       expect(parent.subagent_trajectories).toBeUndefined();
       const refs = refsOf(parent);
       expect(parent.trajectory_id).toBe("claude_code:parent");
@@ -201,7 +196,6 @@ describe("mirrorAtif", () => {
       ]);
       expect(join(dirname(parentPath), refs[0]?.trajectory_path ?? "")).toBe(childPath);
 
-      // The child names its parent, which ATIF has no field for.
       expect(child.extra).toMatchObject({
         parent_session_id: "parent",
         parent_trajectory_path: "./parent.atif.json",
@@ -216,7 +210,6 @@ describe("mirrorAtif", () => {
     const { db, out } = fresh();
     nest(db, add(db, "parent"), add(db, "child"));
     mirror(db, out);
-    // The import names a subagent by its trajectory id, so compare by role.
     const totals = `SELECT is_subagent, total_input_tokens, total_output_tokens
                       FROM session ORDER BY is_subagent`;
     const original = db.query(totals).all();
@@ -285,7 +278,6 @@ describe("mirrorAtif", () => {
     const { db, out } = fresh();
     add(db, "same");
     add(db, "Same");
-    // The same id under another tool: copy the session row as Codex's.
     db.exec(`UPDATE session SET tool = 'codex' WHERE source_session_id = 'Same'`);
     db.exec(`UPDATE session SET source_session_id = 'same' WHERE source_session_id = 'Same'`);
     expect(mirror(db, out)).toMatchObject({ written: 2 });
@@ -359,7 +351,6 @@ describe("mirrorAtif", () => {
       expect(mirror(db, out)).toMatchObject({ written: 1 });
       expect(statSync(document).mode & 0o777).toBe(0o640);
 
-      // Write and execute access for others is not carried over.
       chmodSync(document, 0o777);
       add(db, "first", "The parser keeps every line again.");
       expect(mirror(db, out)).toMatchObject({ written: 1 });

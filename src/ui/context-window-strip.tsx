@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   contextCurveAreaPath,
   contextCurveLinePath,
@@ -23,8 +23,6 @@ export const STRIP_PAD_RIGHT = 16;
 
 export const STRIP_WINDOW_LABEL_Y = 13;
 
-/** Auto-compact fires near the top of the window; the exact threshold varies
- * by version, so the zone is a directional hint, not a promise. */
 export const STRIP_AUTO_COMPACT_ZONE = 0.8;
 
 export function ContextWindowPanel({
@@ -100,6 +98,7 @@ export function ContextWindowStrip({
 }) {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const scrubRef = useRef<HTMLAnchorElement | null>(null);
   const [width, setWidth] = useState(0);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [hoverCompactionGroup, setHoverCompactionGroup] = useState<number | null>(null);
@@ -118,8 +117,6 @@ export function ContextWindowStrip({
     return () => observer.disconnect();
   }, []);
 
-  // Fallback keeps the strip drawable even when measurement is delayed (e.g. a
-  // hot-reloaded page whose effects did not re-run); the observer corrects it.
   const stripWidth = width > 0 ? width : 960;
 
   const layout = useMemo(() => {
@@ -149,8 +146,6 @@ export function ContextWindowStrip({
     }));
     const compactionGroups = groupContextMarkers(compactionMarks.map(({ x }) => x));
 
-    // Regular turn axis: a boundary tick at each slot edge, labels centered in
-    // their slot for every labelStep-th turn.
     const labelStep = turnLabelStep(turnOrder.length);
     const turnMarks = turnOrder.map((turn, index) => ({
       turn,
@@ -177,8 +172,6 @@ export function ContextWindowStrip({
       compactions,
       endX: xOf(lastIndex),
       endY,
-      // The live readout sits inside the plot, above the line when there is
-      // room and below it when the session ended near the ceiling.
       endLabelAbove: endY > STRIP_PLOT_TOP + 30,
       lastIndex,
       lastPoint,
@@ -202,9 +195,6 @@ export function ContextWindowStrip({
   const { baseY, compactionGroups, compactions, lastPoint, peakLabel, points, xOf, xs, yAt } =
     layout;
 
-  // The static plot depends only on the layout; keeping its elements stable
-  // lets React skip them while the pointer moves and only the hover overlay
-  // and tooltip change. The handlers below only call state setters and onJump.
   const plot = useMemo(() => {
     const {
       baseY,
@@ -459,6 +449,24 @@ export function ContextWindowStrip({
     }
     void onJump(hovered.seq);
   };
+  const scrubIndex = hoverIndex ?? points.length - 1;
+  const scrubPoint = points[scrubIndex] ?? lastPoint;
+  const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
+    if (event.target !== scrubRef.current) {
+      return;
+    }
+    if (event.key === "Escape") {
+      setHoverIndex(null);
+      return;
+    }
+    const next = contextStripKeyIndex(event.key, hoverIndex, points.length);
+    if (next == null) {
+      return;
+    }
+    event.preventDefault();
+    setHoverCompactionGroup(null);
+    setHoverIndex(next);
+  };
 
   return (
     <section className="panel context-window-panel">
@@ -490,9 +498,6 @@ export function ContextWindowStrip({
         <div className="ctx-strip-frame" ref={frameRef}>
           {lastPoint != null ? (
             <>
-              {/* biome-ignore lint/a11y/useKeyWithClickEvents: click-to-jump is a
-                  pointer-only shortcut; keyboard users reach the same turns via the
-                  thread TOC and the compaction markers, which are real anchors. */}
               <svg
                 aria-label={`Context window usage across ${points.length} API calls and ${timeline.turn_count} turns; peak ${peakLabel} of ${compact(windowTokens)}`}
                 className="ctx-strip"
@@ -502,6 +507,7 @@ export function ContextWindowStrip({
                   handleJump();
                   event.currentTarget.focus();
                 }}
+                onKeyDown={handleKeyDown}
                 onMouseLeave={() => {
                   setHoverIndex(null);
                   setHoverCompactionGroup(null);
@@ -520,6 +526,29 @@ export function ContextWindowStrip({
                     />
                     <circle cx={xOf(hoverIndex)} cy={yAt(hovered.context_tokens)} r={3} />
                   </g>
+                ) : null}
+                {scrubPoint != null ? (
+                  <a
+                    aria-label={`Jump to call ${scrubIndex + 1} of ${points.length}, turn ${
+                      scrubPoint.turn
+                    }, ${Math.round((scrubPoint.context_tokens / windowTokens) * 100)}% of context`}
+                    className="ctx-strip-scrub"
+                    href={`#message-${scrubPoint.seq}`}
+                    onBlur={() => setHoverIndex(null)}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setSelectedCompactionGroup(null);
+                      void onJump(scrubPoint.seq);
+                    }}
+                    onFocus={() => {
+                      setHoverCompactionGroup(null);
+                      setHoverIndex(scrubIndex);
+                    }}
+                    ref={scrubRef}
+                  >
+                    <circle cx={xOf(scrubIndex)} cy={yAt(scrubPoint.context_tokens)} r={6} />
+                  </a>
                 ) : null}
               </svg>
               {hoveredCompactions != null ? (
@@ -598,9 +627,6 @@ export function ContextWindowStrip({
                     <span>{compact(hovered.cache_read_tokens)}</span>
                     <span>cache write</span>
                     <span>{compact(hovered.cache_creation_tokens)}</span>
-                    {/* Claude Code sometimes reports raw input_tokens as a
-                        small streaming placeholder; keeping it separate is
-                        still more honest than folding it into cache writes. */}
                     <span>uncached input</span>
                     <span>{compact(hovered.input_tokens)}</span>
                   </div>
@@ -621,6 +647,28 @@ export function ContextWindowStrip({
       </div>
     </section>
   );
+}
+
+export function contextStripKeyIndex(
+  key: string,
+  current: number | null,
+  count: number,
+): number | null {
+  if (count === 0) {
+    return null;
+  }
+  switch (key) {
+    case "ArrowRight":
+      return current == null ? 0 : Math.min(current + 1, count - 1);
+    case "ArrowLeft":
+      return current == null ? count - 1 : Math.max(current - 1, 0);
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return null;
+  }
 }
 
 export function turnLabelStep(turnCount: number): number {

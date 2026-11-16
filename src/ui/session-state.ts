@@ -5,7 +5,6 @@ export interface SessionArchiveView {
   is_user_archived: boolean;
 }
 
-/** Sits directly above DELETE_SESSION_EXPLANATION. */
 export const DELETE_SESSION_EYEBROW = "Removes the archive copy";
 
 export const DELETE_SESSION_EXPLANATION =

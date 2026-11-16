@@ -21,10 +21,6 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-/** Persisted event types that carry no transcript content or usage: session
- * settings, lifecycle markers, hooks, permissions, and subagent bookkeeping
- * whose work already appears as ordinary events in the same log. Anything
- * else is reported as an unknown record type, Decant's format-drift signal. */
 const IGNORED_TYPES = new Set([
   "session.journal_link",
   "session.remote_steerable_changed",
@@ -85,8 +81,6 @@ const IGNORED_TYPES = new Set([
   "human_response.recorded",
 ]);
 
-/** One model's cumulative usage in Copilot's own terms: `input` counts every
- * prompt token, cache reads and writes included. */
 export interface CopilotModelUsage {
   requests: number;
   input: number;
@@ -98,34 +92,12 @@ export interface CopilotModelUsage {
 
 export type UsageSnapshot = Map<string, CopilotModelUsage>;
 
-/** Per-model usage in Decant's terms, kept in `raw_meta.modelUsage` so the
- * cost split prices each model's own tokens. */
 export interface CopilotModelUsageRow {
-  /** "" for Copilot's legacy aggregate-only usage, which names no model. */
   model: string;
   requests: number;
   usage: TokenUsage;
 }
 
-/**
- * GitHub Copilot CLI session format (`~/.copilot/session-state/<id>/events.jsonl`).
- *
- * Each line is one event `{ type, data, id, parentId, timestamp, agentId?,
- * checkpoint? }`. Streaming deltas and `assistant.usage` are ephemeral and
- * never reach the file, so usage comes from three places:
- *  - `session.usage_record` (1.0.105 and later) holds each model call's full
- *    usage, joined to its `assistant.message` by `apiCallId`. Older builds
- *    record only `assistant.message.outputTokens`.
- *  - `session.shutdown.modelMetrics` and `session.usage_checkpoint` hold
- *    cumulative per-model totals, read as snapshots (see `mergeSnapshots`).
- *  - The usage records summed per model, which replace the snapshots when
- *    they cover them (see `chooseTotals`).
- *
- * Subagent events carry an `agentId` and stay in the parent's transcript,
- * because they share its file and its usage totals. When journal rotation
- * is on, the head file starts with `checkpoint: true` records that replay the
- * history moved to `events.N.jsonl`; reading only the head keeps that replay.
- */
 export function parseCopilotSession(fallbackId: string, content: string): ParsedSession {
   const issues: ParsedSession["issues"] = [];
   const unknownTypes: UnknownTypes = new Map();
@@ -136,8 +108,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
   const efforts: string[] = [];
   const snapshots: UsageSnapshot[] = [];
   const messageModels = new Map<string, number>();
-  // Each model call's usage keyed by `apiCallId`, and the per-model sum of
-  // every record in the file.
   const callUsage = new Map<string, TokenUsage>();
   const callMessages = new Map<string, NormalizedMessage>();
   const ledger: UsageSnapshot = new Map();
@@ -227,7 +197,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         break;
       }
       case "session.model_change": {
-        // A subagent announces its own model; the main agent's is unchanged.
         if (record.agentId != null) {
           break;
         }
@@ -287,7 +256,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
           }
         }
         const apiCallId = asString(data.apiCallId);
-        // One call can answer in several messages; its usage goes on the first.
         const claimed = apiCallId != null && callMessages.has(apiCallId);
         const recorded = apiCallId == null || claimed ? undefined : callUsage.get(apiCallId);
         const reportedOutput = asInteger(data.outputTokens);
@@ -328,8 +296,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
           }
           break;
         }
-        // A tool the user ran directly, or one requested in a record the log
-        // does not hold, still ran: keep it as its own call.
         const toolUse = toolUseBlock(0, { ...data, name: data.toolName ?? null });
         if (toolUse == null) {
           break;
@@ -362,9 +328,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         break;
       }
       case "session.compaction_complete": {
-        // A failed compaction left the context as it was, so it is not a
-        // boundary. A successful one without a summary still is, and its
-        // occupancy fields still count.
         if (data.success === false) {
           break;
         }
@@ -403,8 +366,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         }
         const recordUsage = { ...usageFromMetric(usage, undefined), requests: 1 };
         const model = asString(usage.model) ?? "";
-        // Copilot's prompt limit for the main agent's model. A subagent can run
-        // a model with a different limit.
         if (record.agentId == null) {
           contextWindow = asInteger(usage.maxPromptTokens) ?? contextWindow;
         }
@@ -415,7 +376,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
         }
         const converted = toDecantUsage(recordUsage);
         callUsage.set(apiCallId, converted);
-        // The record normally precedes its message; attach it if it follows.
         const message = callMessages.get(apiCallId);
         if (message != null) {
           message.usage = converted;
@@ -443,8 +403,6 @@ export function parseCopilotSession(fallbackId: string, content: string): Parsed
       addInto(totals, row.usage);
     }
   } else {
-    // No snapshot yet, as in a session that is still running on a build
-    // without usage checkpoints: only the per-response output is known.
     for (const message of messages) {
       if (message.usage != null) {
         addInto(totals, message.usage);
@@ -492,9 +450,6 @@ function collectEffort(efforts: string[], value: Json | undefined): void {
   }
 }
 
-/** A tool request from `assistant.message.toolRequests`, or a
- * `tool.execution_start` reshaped to match. MCP calls are renamed
- * `mcp__<server>__<tool>` so `classifyTool` recognizes them. */
 function toolUseBlock(ordinal: number, request: Json): NormalizedBlock | null {
   if (!isObject(request)) {
     return null;
@@ -514,7 +469,6 @@ function toolUseBlock(ordinal: number, request: Json): NormalizedBlock | null {
   });
 }
 
-/** The result as the model read it, or the error when the tool failed. */
 function toolResultText(data: JsonObject): string {
   const result = asString(get(data.result, "content"));
   if (result != null && result !== "") {
@@ -534,7 +488,6 @@ function usageFromMetric(metric: Json | undefined, requests: Json | undefined): 
   };
 }
 
-/** `session.shutdown.modelMetrics`: `{ <model>: { requests, usage } }`. */
 function shutdownSnapshot(metrics: Json | undefined): UsageSnapshot {
   const snapshot: UsageSnapshot = new Map();
   if (!isObject(metrics)) {
@@ -548,8 +501,6 @@ function shutdownSnapshot(metrics: Json | undefined): UsageSnapshot {
   return snapshot;
 }
 
-/** `session.usage_checkpoint.providerModelMetrics`: `[{ modelId, metrics }]`,
- * with a null `modelId` for legacy aggregate-only usage. */
 function checkpointSnapshot(metrics: Json | undefined): UsageSnapshot {
   const snapshot: UsageSnapshot = new Map();
   if (!Array.isArray(metrics)) {
@@ -569,17 +520,8 @@ function checkpointSnapshot(metrics: Json | undefined): UsageSnapshot {
   return snapshot;
 }
 
-/**
- * Combine the session's usage snapshots into its total usage per model.
- *
- * Current Copilot builds restore usage on resume, so each snapshot is
- * cumulative and the last one is the session total. Older builds started
- * every resumed run from zero, so a snapshot that falls below its
- * predecessor marks a new run, and the predecessor's usage is kept. A reset
- * run that outgrows the one before it cannot be told apart from a restored
- * one, so such a session undercounts; summing every run instead would double
- * count every session from a current build.
- */
+/** Current Copilot builds restore usage on resume, so each snapshot is
+ * cumulative. Older builds started every resumed run from zero. */
 export function mergeSnapshots(snapshots: UsageSnapshot[]): UsageSnapshot {
   const banked: UsageSnapshot = new Map();
   let latest: UsageSnapshot | null = null;
@@ -631,23 +573,10 @@ function sumCopilotUsage(a: CopilotModelUsage, b: CopilotModelUsage): CopilotMod
   };
 }
 
-/**
- * The session's per-model totals: the summed usage records when they cover
- * the merged snapshots, else the snapshots.
- *
- * On builds that write records, the records and the final snapshot agree, and
- * only the records count a call made after the last checkpoint, as in a
- * session that stopped mid-turn. A model call that wrote no record would leave
- * the records short of the snapshot, so the snapshot wins and nothing is
- * undercounted. Older builds write no records, which leaves the snapshots.
- */
 export function chooseTotals(ledger: UsageSnapshot, merged: UsageSnapshot): UsageSnapshot {
   return ledger.size > 0 && covers(ledger, merged) ? ledger : merged;
 }
 
-/** Copilot counts cache reads and writes inside `inputTokens`; Decant prices
- * them separately, so input is stored net of both. Reasoning is a part of
- * output in Decant's model and is capped there. */
 function toDecantUsage(usage: CopilotModelUsage): TokenUsage {
   return {
     input: Math.max(0, usage.input - usage.cacheRead - usage.cacheWrite),
@@ -674,8 +603,6 @@ function toModelUsageRows(snapshot: UsageSnapshot): CopilotModelUsageRow[] {
   return rows;
 }
 
-/** The model that did the most work: most output tokens by the usage totals,
- * else most responses in the transcript. */
 function sessionModel(
   modelUsage: CopilotModelUsageRow[],
   messageModels: Map<string, number>,
@@ -712,8 +639,6 @@ function rawMetaFrom(
   }
   if (shutdown != null) {
     const summary: JsonObject = {};
-    // The accounting snapshots and watermarks are Copilot-internal
-    // bookkeeping; the per-model split is kept below in Decant's terms.
     for (const key of [
       "shutdownType",
       "errorReason",

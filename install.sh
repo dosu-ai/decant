@@ -1,32 +1,6 @@
 #!/bin/sh
-# decant installer
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/dosu-ai/decant/main/install.sh | sh -s -- 0.1.0
-#
-# Downloads the prebuilt decant release tarball for this platform, verifies
-# its SHA256 checksum against the release's SHA256SUMS file, and installs the
-# decant binary. When the GitHub CLI is installed and logged in to github.com,
-# it also verifies the tarball's build provenance attestation and refuses to
-# install on failure. No sudo. No macOS quarantine/Gatekeeper handling: curl/wget
+# No macOS quarantine/Gatekeeper handling: curl/wget
 # and tar never set com.apple.quarantine, so there is nothing to work around.
-#
-# Environment variables:
-#   DECANT_VERSION          version to install, with or without a leading "v"
-#                           (default: latest). A positional argument overrides
-#                           this variable.
-#   DECANT_INSTALL_DIR      install directory (default: $HOME/.local/bin)
-#   DECANT_NO_MODIFY_PATH   set to "1" to skip editing shell rc files; the
-#                           PATH export line is printed instead
-#   DECANT_BASE_URL         release download base (default:
-#                           https://github.com/dosu-ai/decant/releases); point
-#                           it at a mirror that lays assets out the same way.
-#                           It must be https://, file://, or http:// to
-#                           localhost, 127.0.0.1, or [::1]
-#   DECANT_SKIP_ATTESTATION set to "1" to skip the attestation check even when
-#                           gh is logged in, for machines that cannot reach
-#                           GitHub's attestation API. The checksum still runs.
 
 set -eu
 
@@ -50,8 +24,6 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# --- 1. platform detect ------------------------------------------------------
-
 os_name=$(uname -s)
 case "$os_name" in
   Darwin) os="darwin" ;;
@@ -72,8 +44,6 @@ esac
 
 target="${binary_name}-${os}-${arch}"
 
-# --- 2. version resolution ----------------------------------------------------
-
 version_arg="${1:-}"
 if [ -n "$version_arg" ]; then
   version="$version_arg"
@@ -88,10 +58,6 @@ esac
 
 base_url="${DECANT_BASE_URL:-https://github.com/${repo}/releases}"
 base_url="${base_url%/}"
-# SHA256SUMS is only as trustworthy as the channel it arrives on, so a mirror
-# must be HTTPS. file:// and plain HTTP to this machine's own loopback address
-# (an SSH port forward, say) stay allowed because neither crosses a network.
-# src/update.ts accepts the same three forms and the same host names.
 mirror_ok=0
 case "$base_url" in
   https://* | file://*) mirror_ok=1 ;;
@@ -99,7 +65,7 @@ case "$base_url" in
     authority="${base_url#http://}"
     authority="${authority%%/*}"
     # Userinfo is rejected outright: http://127.0.0.1:80@example.com connects
-    # to example.com. A port must be all digits.
+    # to example.com.
     case "$authority" in
       *@*) ;;
       localhost | 127.0.0.1 | '[::1]') mirror_ok=1 ;;
@@ -122,11 +88,6 @@ tarball_name="${target}.tar.gz"
 tarball_url="${release_base}/${tarball_name}"
 sums_url="${release_base}/SHA256SUMS"
 
-# --- 3. download + checksum verify --------------------------------------------
-
-# GitHub redirects release assets to its CDN, so redirects are followed. A
-# redirect to plain HTTP would let an on-path attacker swap the tarball and
-# SHA256SUMS together, so both downloaders refuse one.
 if need_cmd curl; then
   download() {
     curl -fsSL --proto-redir '=https' -o "$1" "$2"
@@ -176,9 +137,6 @@ done < "$sums_path"
 
 [ -n "$expected_hash" ] || err "no SHA256SUMS entry found for $tarball_name"
 
-# `${var%% *}` keeps everything before the first space, which is the digest in
-# both tools' "<hash>  <filename>" output. Shell builtin rather than awk: one
-# less command this installer needs to exist on a stranger's machine.
 if need_cmd sha256sum; then
   actual_hash=$(sha256sum "$tarball_path")
   actual_hash=${actual_hash%% *}
@@ -192,10 +150,6 @@ fi
 [ "$expected_hash" = "$actual_hash" ] || err "checksum mismatch for $tarball_name: expected $expected_hash, got $actual_hash"
 info "checksum verified"
 
-# --- 4. attestation ------------------------------------------------------------
-
-# The checksum proves the download matches SHA256SUMS; the attestation proves
-# this repo's release workflow built it.
 if [ "${DECANT_SKIP_ATTESTATION:-}" = "1" ]; then
   warn "skipping the attestation check because DECANT_SKIP_ATTESTATION=1"
 # `gh auth token` needs no network; `gh auth status` fails on unrelated accounts.
@@ -213,20 +167,14 @@ else
   info "skipped the attestation check: gh is not installed or not logged in to github.com"
 fi
 
-# --- extract only the decant binary -------------------------------------------
-
 tar -xzf "$tarball_path" -C "$tmp_dir" "$binary_name" || err "failed to extract $binary_name from $tarball_name"
 [ -f "$tmp_dir/$binary_name" ] || err "$tarball_name did not contain a $binary_name binary"
-
-# --- 5. install ----------------------------------------------------------------
 
 install_dir="${DECANT_INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$install_dir" || err "failed to create install directory $install_dir"
 install -m 755 "$tmp_dir/$binary_name" "$install_dir/$binary_name" || err "failed to install $binary_name into $install_dir"
 dest="$install_dir/$binary_name"
 info "installed $binary_name to $dest"
-
-# --- 6. PATH handling ------------------------------------------------------------
 
 on_path=0
 case ":$PATH:" in
@@ -271,8 +219,6 @@ else
     fi
   fi
 fi
-
-# --- 7. friendly final message ----------------------------------------------------
 
 if installed_version=$("$dest" --version 2>/dev/null); then
   info "$installed_version"

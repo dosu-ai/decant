@@ -14,8 +14,6 @@ const message = (s: number, role: string, ...content: object[]) =>
   item(s, { type: "message", role, content });
 const text = (value: string) => ({ type: "input_text", text: value });
 
-// A synthetic rollout shaped like current Codex: developer instructions and the
-// AGENTS.md/environment block arrive as their own messages before each prompt.
 const lines = [
   `{"type":"session_meta","timestamp":"${at(0)}","payload":{"id":"sess-injected","cwd":"/w","originator":"codex_cli_rs","cli_version":"0.160.0","source":"cli","model_provider":"openai"}}`,
   `{"type":"turn_context","timestamp":"${at(0)}","payload":{"cwd":"/w","model":"gpt-6.1-sol","effort":"low"}}`,
@@ -34,7 +32,6 @@ const lines = [
     arguments: '{"cmd":"bun test"}',
   }),
   item(21, { type: "function_call_output", call_id: "c1", output: "1 pass" }),
-  // A hook injects guidance mid-turn; the model, not the user, closes this gap.
   message(50, "developer", text("<context_window>\n50% used\n</context_window>")),
   message(80, "assistant", { type: "output_text", text: "Fixed; the test passes." }),
   message(270, "user", text("<environment_context>\n  <cwd>/w</cwd>\n</environment_context>")),
@@ -62,7 +59,6 @@ describe("Codex injected context", () => {
       "assistant",
       "system",
       "user",
-      // An attached image makes the message the user's own, whatever else it holds.
       "user",
       "assistant",
     ]);
@@ -86,8 +82,6 @@ describe("Codex injected context", () => {
       };
       expect(turn_count).toBe(3);
       const economics = tokenEconomics(db);
-      // 80s -> 271s is the only wait the user caused; the injected rows at 50s
-      // and 270s neither claim time nor split the gaps around them.
       expect(economics.totals.waiting_on_user_ms).toBe(191_000);
       expect(economics.totals.active_ms).toBe(88_000);
       db.close();

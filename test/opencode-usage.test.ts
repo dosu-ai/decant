@@ -28,16 +28,12 @@ describe("reasoningOverlap", () => {
     expect(reasoningOverlap(t({ total: 999 }), "1.2.0")).toBe("included");
   });
   test("dates a preview build by the timestamp in its version", () => {
-    // Preview builds record 0.0.0-<channel>-<YYYYMMDDHHmm> (UTC); 1.3.16 was
-    // tagged 2026-04-06T03:44Z.
     expect(reasoningOverlap(t({}), "0.0.0-dev-202604060343")).toBe("included");
     expect(reasoningOverlap(t({}), "0.0.0-dev-202604060344")).toBe("disjoint");
     expect(reasoningOverlap(t({}), "0.0.0-beta-202609110000")).toBe("disjoint");
     expect(reasoningOverlap(t({}), "0.0.0-feat-some-branch-202603010000")).toBe("included");
-    // The recorded total still decides first.
     expect(reasoningOverlap(t({ total: 170 }), "0.0.0-dev-202603010000")).toBe("disjoint");
     expect(reasoningOverlap(t({ total: 150 }), "0.0.0-dev-202609010000")).toBe("included");
-    // A real 0.x release (JSON-storage era, imported by 1.2) stays included.
     expect(reasoningOverlap(t({}), "0.0.0")).toBe("included");
   });
   test("zero reasoning is always disjoint", () => {
@@ -96,8 +92,6 @@ describe("legacyAssistantUsage", () => {
     });
   });
   test("classifies each step on its own", () => {
-    // A step whose total says reasoning is inside output, next to one whose
-    // total says it is not; both written by the same session.
     const parts: Json[] = [
       { type: "step-finish", tokens: t({ total: 150 }) },
       { type: "step-finish", tokens: t({ total: 170 }) },
@@ -180,7 +174,6 @@ describe("migratedUsage", () => {
       cost: null,
       usage: { input: 7 },
     });
-    // No step-finish parts and nothing recorded: an unfinished request.
     expect(usage.assistants.get("msg_s2")?.usage).toBeNull();
   });
 });

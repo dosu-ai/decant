@@ -29,11 +29,6 @@ export type CustomRangeCheck =
   | { status: "incomplete"; field: "from" | "to" }
   | { status: "reversed" };
 
-/**
- * Decides whether the custom From and To inputs form a range worth applying.
- * `""` is a cleared, open-ended bound; `null` is a partly typed date the
- * browser reports as bad input.
- */
 export function checkCustomRange(from: string | null, to: string | null): CustomRangeCheck {
   const start = plausibleBound(from);
   if (start === undefined) {
@@ -47,7 +42,6 @@ export function checkCustomRange(from: string | null, to: string | null): Custom
     return { status: "reversed" };
   }
   if (start == null && end == null) {
-    // Clearing both fields means no bound at all, which the trigger should call All time.
     return { status: "valid", range: ALL_DATE_RANGE };
   }
   return { status: "valid", range: { preset: "custom", from: start, to: end } };
@@ -67,8 +61,6 @@ export function applyDatePreset(
   now = Date.now(),
 ): DateRangeSelection {
   const preset = RANGE_PRESETS.find((item) => item.key === key);
-  // Lookbacks end at the newest archived session so a stale archive still shows
-  // data. Today means the current date even when nothing has synced yet.
   const to = key === "today" ? todayIsoDate(now) : (validIsoDate(bounds?.max) ?? todayIsoDate(now));
   if (preset == null) {
     return ALL_DATE_RANGE;
@@ -123,8 +115,6 @@ export function dateRangePresetLabel(range: DateRangeSelection): string {
   return RANGE_PRESETS.find((preset) => preset.key === range.preset)?.label ?? "All time";
 }
 
-// The page heading wraps the range trigger to the left edge on narrower layouts,
-// where a right-anchored popover would open off-screen.
 export function datePopoverAlign(triggerRight: number, popoverWidth: number): "start" | "end" {
   return triggerRight - popoverWidth >= 0 ? "end" : "start";
 }
@@ -139,13 +129,11 @@ export function todayIsoDate(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
-/** Moves a Today selection onto the current UTC date, keeping any other range as is. */
 export function refreshTodayRange(range: DateRangeSelection, now = Date.now()): DateRangeSelection {
   if (range.preset !== "today") {
     return range;
   }
   const today = todayIsoDate(now);
-  // Returning the same object lets React skip the update when the day is unchanged.
   return range.from === today && range.to === today ? range : applyDatePreset("today", null, now);
 }
 
@@ -167,11 +155,6 @@ const browserWallClock: WallClock = {
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-/**
- * Calls `onRollover` at each UTC midnight until the returned function stops it.
- * One timer is pending at a time; each run re-arms from the clock, so a timer
- * that fires early lands on a no-op refresh and re-arms for the real boundary.
- */
 export function scheduleUtcDayRollover(
   onRollover: () => void,
   clock: WallClock = browserWallClock,

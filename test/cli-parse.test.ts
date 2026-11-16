@@ -24,7 +24,6 @@ describe("parseInteger", () => {
   });
 
   test("rejects values with a trailing non-digit part", () => {
-    // A source session id must not resolve to whatever archive id its digit prefix names.
     expect(() => parseInteger("0123abcd-0000-4000-8000-000000000000")).toThrow(
       "expected an integer",
     );

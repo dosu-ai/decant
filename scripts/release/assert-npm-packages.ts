@@ -27,7 +27,6 @@ function isFile(path: string): boolean {
   }
 }
 
-/** Lists staged package directories the way a shell directory glob does: sorted, slash-suffixed. */
 export function stagedPackageDirs(root: string): string[] {
   return readdirSync(root)
     .filter((name) => !name.startsWith(".") && statSync(join(root, name)).isDirectory())

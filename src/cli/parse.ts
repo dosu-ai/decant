@@ -5,7 +5,6 @@ import { type CliErrorDetails, usageError } from "./errors.ts";
 export const OUTPUT_FORMATS = ["table", "json", "md"] as const;
 export type OutputFormat = (typeof OUTPUT_FORMATS)[number];
 
-/** An invalid value that lists the accepted ones, so the JSON error can too. */
 export class InvalidChoiceError extends InvalidArgumentError {
   constructor(readonly expected: readonly string[]) {
     super(`expected: ${expected.join(" | ")}`);
@@ -21,7 +20,6 @@ export function parseChoice<const T extends string>(values: readonly T[]): (valu
   };
 }
 
-/** For a flag whose core parser also accepts aliases, such as `bash` for `sh`. */
 export function parseWith<T>(
   parse: (value: string) => T | null,
   expected: readonly string[],
@@ -50,10 +48,8 @@ export function parseInteger(value: string): number {
   return parsed;
 }
 
-/** Row limits: the queries fall back to their default for zero or less. */
 export function parsePositiveInteger(value: string): number {
   const parsed = Number.parseInt(value, 10);
-  // Past 2^53 the value is not exact, and past 2^63 SQLite refuses to bind it.
   if (!/^\s*\+?\d+\s*$/.test(value) || parsed < 1 || !Number.isSafeInteger(parsed)) {
     throw new InvalidArgumentError("expected a positive integer");
   }
@@ -80,9 +76,7 @@ export function parseFraction(value: string): number {
   let parsed = Number.NaN;
   try {
     parsed = parseNumber(value);
-  } catch {
-    // Reported below with the range.
-  }
+  } catch {}
   if (!(parsed >= 0 && parsed <= 1)) {
     throw new InvalidArgumentError("expected a number from 0.0 to 1.0");
   }
@@ -99,17 +93,11 @@ export function collectOption(value: string, previous: string[]): string[] {
 
 type ValueParser = (value: string, previous: unknown) => unknown;
 
-// Flags that mean the same on every command are validated here by name, so a
-// command that adds `--limit` or `--tool` gets the check without repeating it.
 const SHARED_FLAG_PARSERS: Record<string, ValueParser> = {
   "--limit": parsePositiveInteger,
   "--tool": parseChoice(TOOLS),
 };
 
-/**
- * Route every flag and argument parser of `command` and its subcommands
- * through one error shape. Call it after all commands are registered.
- */
 export function installValueValidation(command: Command): void {
   for (const option of command.options) {
     const parse = SHARED_FLAG_PARSERS[option.long ?? ""] ?? (option.parseArg as ValueParser);
@@ -152,10 +140,8 @@ function validated<T>(parse: () => T, context: { message: string; details: CliEr
   }
 }
 
-// Commands whose human-readable output is Markdown. The rest print rows.
 const MARKDOWN_COMMANDS = new Set(["show", "session show", "export", "distill skill"]);
 
-/** `--format` is global, so the command it lands on has to say whether it can render it. */
 export function assertFormatSupported(commandPath: string, format: OutputFormat | undefined): void {
   if (format !== "md" || MARKDOWN_COMMANDS.has(commandPath)) {
     return;

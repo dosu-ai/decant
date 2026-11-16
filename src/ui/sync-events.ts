@@ -8,41 +8,20 @@ import {
 } from "./navigation.ts";
 import type { SyncProgress, SyncStatus } from "./types.ts";
 
-/**
- * Whether the UI should show a sync's progress and load its results without
- * waiting for the user. Manual syncs were asked for, and the startup sync runs
- * while the page is first opening, so nobody is mid-read; on a fresh install it
- * is the sync that fills an empty archive. Watcher and sweep syncs stay
- * deferred so background activity never reshuffles a page someone is reading.
- * The unfiltered Sessions list is the one exception (see sessionsAutoRefresh).
- */
 export function isForegroundSync(reason: string | undefined): boolean {
   return reason === "manual" || reason === "startup";
 }
 
-/**
- * Whether the shell shows a sync as running. Until an archive has completed a
- * sync, whichever sync is filling it is the first one, whatever started it.
- */
 export function showsSync(reason: string | undefined, archiveSynced: boolean): boolean {
   return !archiveSynced || isForegroundSync(reason);
 }
 
 export interface ArchiveUpdatePlan {
   refresh: boolean;
-  /** Whether to light Update so the user can load the change when ready. */
   offerUpdate: boolean;
-  /** Whether the next `stats` update still belongs to a foreground sync. */
   awaitingStats: boolean;
 }
 
-/**
- * Decides whether an `archive_updated` event refreshes the page now. A sync
- * that changes the archive also rebuilds token economics in the background,
- * and that rebuild lands later as its own `stats` update; without following
- * it, the refreshed page keeps the pre-sync activity breakdown until the user
- * clicks Update.
- */
 export function planArchiveUpdate(
   reason: string | undefined,
   awaitingStats: boolean,
@@ -57,28 +36,11 @@ export function planArchiveUpdate(
   if (reason === "session_state") {
     return { refresh: true, offerUpdate: false, awaitingStats };
   }
-  // A running foreground sync refreshes the page when it finishes, which
-  // covers this update too. Lighting Update meanwhile would relabel the busy
-  // sync button "Load new activity" mid-sync, as the boot-time stats rebuild
-  // does during a first launch's startup sync.
   return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
 }
 
-/**
- * Minimum gap between automatic Sessions refreshes. An agent mid-run appends to
- * its log every few seconds, and each watcher sync is followed by a stats
- * rebuild, so without a floor the list would reload on nearly every event.
- */
 export const LIVE_SESSIONS_REFRESH_MS = 5_000;
 
-/**
- * Whether a background archive change reloads the Sessions list in place
- * instead of lighting Update. Only the unfiltered first page qualifies. It is
- * newest first, so new sessions land at the top of what is already on screen.
- * Later pages would shift rows between pages, and a project, archive, or text
- * filter is a narrowed view someone is working through. The command palette
- * covers the list and would reload its own index on every refresh.
- */
 export function sessionsAutoRefresh({
   path,
   textFilterActive,
@@ -101,28 +63,13 @@ export function sessionsAutoRefresh({
 
 export type LiveSessionsAction = "refresh" | "offer_update" | "none";
 
-/**
- * How far down the window can be scrolled and still take a live refresh. The
- * Sessions panel turns off scroll anchoring, so rows inserted at the top push
- * everything below them down, which only goes unnoticed near the top.
- */
 export const LIVE_SESSIONS_TOP_PX = 64;
 
 export interface LiveSessionsViewer {
-  /** Whether the window is scrolled within LIVE_SESSIONS_TOP_PX of the top. */
   nearTop: boolean;
-  /** Whether the tab is visible. A hidden tab has no reader to keep current. */
   visible: boolean;
 }
 
-/**
- * What a throttled Sessions refresh does when it comes due. The page may have
- * changed since the change was queued, so a view that no longer qualifies
- * gets Update instead and the change is not lost. The same goes for a reader
- * scrolled down the list and for a hidden tab, which load it once they are
- * back at the top. A running foreground sync refreshes the page itself when it
- * finishes.
- */
 export function liveSessionsAction(
   autoRefresh: boolean,
   foregroundSyncRunning: boolean,
@@ -160,14 +107,10 @@ export function parseSyncFailure(event: Event): SyncFailure | null {
 }
 
 export interface RestoredSync {
-  /** Whether the UI shows a sync as running. */
   syncing: boolean;
-  /** The running sync's latest counts, or null to keep what is on screen. */
   progress: SyncProgress | null;
   archiveSynced: boolean;
-  /** A sync this tab was showing, or an earlier status answer saw, ended unheard. */
   ended: boolean;
-  /** The error that ended sync failed with, if it failed. */
   failure: string | null;
 }
 
@@ -175,11 +118,6 @@ function runningShownSync(status: SyncStatus): boolean {
   return status.in_progress && showsSync(status.reason ?? undefined, status.archive_synced);
 }
 
-/**
- * What the shell shows after reading `/api/sync-status` on load or reconnect,
- * since EventSource does not replay events. A sync with no reason yet has not
- * reported progress, and shows only while it fills a new archive.
- */
 export function restoreSync(
   status: SyncStatus,
   shown: { syncing: boolean; manualPending: boolean; sawSync?: boolean },
@@ -195,10 +133,6 @@ export function restoreSync(
   };
 }
 
-/**
- * A status answer overtaken by a newer read may be the only one that saw a sync
- * running while the page loaded, so its end must not go unnoticed.
- */
 export function supersededStatus(
   status: SyncStatus,
   tab: { newerApplied: boolean; syncing: boolean },
@@ -207,12 +141,10 @@ export function supersededStatus(
   return { sawSync, readAgain: sawSync && tab.newerApplied && !tab.syncing };
 }
 
-/** A sync that starts inside the last one's completion window outranks it. */
 export function showsSyncComplete(complete: boolean, syncing: boolean): boolean {
   return complete && !syncing;
 }
 
-/** How far through its sources a sync is, or null before it has counted them. */
 export function syncFraction(progress: SyncProgress | null): number | null {
   if (progress == null || progress.total <= 0) {
     return null;
@@ -236,21 +168,12 @@ export function syncCompleteLabel(progress: SyncProgress | null): string {
   return `Sync complete, ${formatInt(progress.ingested)} ${files} ingested`;
 }
 
-/**
- * The live region's text, in ten-percent steps so a screen reader does not
- * read a long sync out file by file. It stops at 90% because work remains
- * after the last file, and "Sync complete" follows.
- */
 export function syncAnnouncement(progress: SyncProgress | null): string {
   const fraction = syncFraction(progress);
   const step = fraction == null ? 0 : Math.min(90, Math.floor(fraction * 10) * 10);
   return step === 0 ? "Syncing session logs" : `Syncing session logs, ${step}% done`;
 }
 
-/**
- * How long a sync runs before its notice takes room on the page. A startup
- * sync of a current archive ends first, so launches do not shift the layout.
- */
 export const SYNC_NOTICE_DELAY_MS = 700;
 
 export function syncNoticeDelay(sync: { firstSync: boolean; requested: boolean }): number {

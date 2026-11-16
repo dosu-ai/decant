@@ -34,7 +34,6 @@ describe("transcript keyboard navigation", () => {
 });
 
 describe("interactive target guard", () => {
-  /** A node that reports itself as sitting inside an anchor. */
   const insideAnchor = (extra: Record<string, unknown> = {}) => ({
     matches: () => false,
     closest: (selectors: string) => (selectors.includes("a,") ? {} : null),
@@ -42,11 +41,6 @@ describe("interactive target guard", () => {
   });
 
   test("guards focusable elements that are not HTMLElement", () => {
-    // The compaction markers in the context-window strip render as <a> inside
-    // the <svg>, so they are SVGAElement: focusable and tabbable, but carrying
-    // no isContentEditable. Narrowing on HTMLElement let arrow keys fall
-    // through and teleport the transcript while preventDefault() suppressed
-    // the scroll the user actually asked for.
     expect(isInteractiveTarget(insideAnchor())).toBe(true);
   });
 
@@ -84,7 +78,6 @@ describe("revealTranscriptMessage", () => {
     const { calls, target } = recordingTarget();
     expect(revealTranscriptMessage(target, false)).toBe(true);
     expect(calls.scrolled).toEqual(["smooth"]);
-    // Focus is what makes arrow-key navigation perceivable to a screen reader.
     expect(calls.focused).toEqual([true]);
   });
 
@@ -118,9 +111,6 @@ describe("hasOpenModal", () => {
   });
 
   test("requires a native dialog to be open", () => {
-    // A closed <dialog> stays in the DOM, so matching bare "dialog" would wedge
-    // navigation permanently once one is added. Asserted by checking that a
-    // root matching only the bare tag is not considered modal.
     expect(hasOpenModal(root((selectors) => /(^|[\s,])dialog([\s,]|$)/.test(selectors)))).toBe(
       false,
     );

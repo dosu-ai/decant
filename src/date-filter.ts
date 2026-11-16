@@ -15,15 +15,8 @@ export function dateFilterFromSearch(searchParams: URLSearchParams): DateFilter 
   };
 }
 
-// U+10FFFF sorts after every character that can follow a date, so
-// `column < date || DAY_END` keeps the whole day without date arithmetic.
 export const DAY_END = "\u{10FFFF}";
 
-/**
- * Bounds on the YYYY-MM-DD prefix of an ISO timestamp column, written as plain
- * comparisons so the column's index can serve them. Dates must be valid
- * YYYY-MM-DD strings.
- */
 export function dayRangePredicate(
   column: string,
   from: string | null | undefined,
@@ -42,18 +35,11 @@ export function dayRangePredicate(
   return { sql: clauses.join(" AND "), params };
 }
 
-/**
- * Bounds on the UTC day of an ISO timestamp column, so a value stored with an
- * offset counts on its UTC day. A value SQLite cannot read falls back to its
- * YYYY-MM-DD prefix. Dates must be valid YYYY-MM-DD strings.
- */
 export function utcDayRangePredicate(
   column: string,
   from: string | null | undefined,
   to: string | null | undefined,
 ): SqlFragment {
-  // An offset moves the UTC day at most one day from the prefix, so a prefix
-  // range one day wider can use the column's index before the exact check.
   const day = `COALESCE(strftime('%Y-%m-%d', ${utcReadable(column)}), substr(${column}, 1, 10))`;
   const clauses: string[] = [];
   const params: string[] = [];
@@ -80,8 +66,6 @@ export function utcDayRangePredicate(
   return { sql: clauses.join(" AND "), params };
 }
 
-/** `utcDays` compares UTC days; without it the stored prefix decides, which
- * is the documented analytics rule its per-day buckets share. */
 export function sessionDatePredicate(
   alias: string,
   filter?: (DateFilter & { utcDays?: boolean }) | null,

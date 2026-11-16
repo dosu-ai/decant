@@ -169,7 +169,6 @@ describe("meta CLI", () => {
     git(work, "tag", "-a", "v0.3.1", "-m", "v0.3.1");
     git(work, "push", "-q", "origin", "release/0.3");
 
-    // A pushed branch that is neither main nor release/* must not count.
     git(work, "switch", "-q", "-c", "feature/release/x", first);
     git(work, "commit", "-q", "--allow-empty", "-m", "unmerged");
     const unmerged = git(work, "rev-parse", "HEAD");
@@ -183,7 +182,6 @@ describe("meta CLI", () => {
     return { origin, work, head, first, backport, unmerged };
   }
 
-  /** What actions/checkout leaves behind: a depth-1 fetch of the run's commit. */
   function shallowCheckout(origin: string, sha: string): string {
     const root = mkdtempSync(join(tmpdir(), "decant-release-meta-checkout-"));
     dirs.push(root);

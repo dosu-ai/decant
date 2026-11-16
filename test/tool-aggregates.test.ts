@@ -34,7 +34,6 @@ const TOOLS: [string | null, string | null, string | null][] = [
   ["NoDurations", "builtin", null],
 ];
 
-/** Deterministic calls with repeated durations, nulls, and every tool shape. */
 function seed(db: Database): void {
   db.exec(`
     INSERT INTO project(id, path) VALUES (1, '/p');
@@ -81,7 +80,6 @@ interface Percentiles {
   p95_ms: number | null;
 }
 
-/** The window-function definition the routes used before the in-memory sort. */
 function windowPercentiles(db: Database, where: string, params: string[]): Percentiles {
   return db
     .query(
@@ -234,7 +232,6 @@ describe("tool aggregates", () => {
       `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error, duration_ms, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
-    // The SQL mcpUsage ran before it moved its percentiles to TypeScript.
     const oracle = (limit: number) =>
       db
         .query(

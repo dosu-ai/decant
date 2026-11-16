@@ -69,18 +69,29 @@ export function useDialogFocusTrap(
   }, [dialogRef, onClose, open]);
 }
 
-/**
- * One rescue for every button that disables itself while focused. React writes
- * `disabled` as an attribute, so a single observer sees all of them and the fix
- * does not have to be repeated at each `disabled={...ing}` call site.
- */
+export function useBackdropDismiss(
+  open: boolean,
+  backdropRef: { current: HTMLElement | null },
+  onDismiss: () => void,
+) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onMouseDown = (event: MouseEvent) => {
+      if (backdropRef.current != null && event.target === backdropRef.current) {
+        onDismiss();
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [backdropRef, onDismiss, open]);
+}
+
 export function useDisabledFocusRescue() {
   useEffect(() => {
     let lastFocused: HTMLElement | null = null;
     let pendingRescue: WeakRef<HTMLElement> | null = null;
-    // A busy control may come back, while a redundant control (for example,
-    // Next on the last page) may never re-enable. Keep both elements weak so a
-    // pending restore cannot retain a detached subtree for the life of the app.
     let pendingRestore: {
       control: WeakRef<HTMLElement>;
       landed: WeakRef<HTMLElement>;
@@ -103,8 +114,6 @@ export function useDisabledFocusRescue() {
       );
     };
     const rescueTarget = (control: HTMLElement) => {
-      // Landing outside the region the reader was working in, or outside an open
-      // dialog, is more disorienting than leaving focus where it fell.
       const boundary = control.closest('dialog, [role="dialog"], main, nav, form');
       for (let scope = control.parentElement; scope != null; scope = scope.parentElement) {
         const candidates = Array.from(
@@ -127,8 +136,6 @@ export function useDisabledFocusRescue() {
         pendingRescue = null;
         return;
       }
-      // If the original control re-enabled before the rest of its group offered
-      // a safe landing place, it is itself the least surprising destination.
       if (!control.matches(":disabled")) {
         pendingRescue = null;
         control.focus();
@@ -178,13 +185,8 @@ export function useDisabledFocusRescue() {
         pendingRescue = new WeakRef(control);
         break;
       }
-      // A pagination group can remain entirely disabled for longer than any
-      // safe timer. Every relevant control becoming usable changes its disabled
-      // attribute, so retry from that mutation instead of racing the request.
       retryPending();
     });
-    // Focus leaving a control that is still enabled means the reader moved on,
-    // so a later disable on that control is not ours to rescue.
     const forget = (event: FocusEvent) => {
       if (
         event.target === lastFocused &&

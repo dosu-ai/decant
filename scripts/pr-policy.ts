@@ -1,6 +1,3 @@
-// Checks AGENTS.md rules against the merge base with --base (default
-// origin/main): frozen migrations, docs for pricing and routes, and synthetic
-// fixtures. Usage: bun run scripts/pr-policy.ts [--base <ref>]
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -14,7 +11,6 @@ export interface Finding {
 
 export interface ChangedFile {
   path: string;
-  /** Unified diff of this file against the base. */
   diff: string;
   deleted?: boolean;
 }
@@ -25,10 +21,6 @@ const LATEST_VERSION = /^export const LATEST_SCHEMA_VERSION = (\d+);$/m;
 const GUARD = /function assertSupportedSchemaVersion\([^)]*\)[^{]*\{([\s\S]*?)\n\}/;
 const BASELINE_VERSION = /if \(version < (\d+)\) \{\s*throw new SchemaTooOldError/g;
 
-/**
- * Each `if (current < N) { ... }` block in migrate(), keyed by N, without
- * comments or trailing whitespace so rewording a comment is not a change.
- */
 export function extractMigrations(source: string): Map<number, string> {
   const blocks = new Map<number, string>();
   const lines = source.split("\n");
@@ -48,8 +40,6 @@ export function extractMigrations(source: string): Map<number, string> {
   return blocks;
 }
 
-// Read from the runtime guard only, without comments. The lowest bound wins, so
-// a stray match can only make the check stricter. NaN when the guard is gone.
 function oldestSupportedVersion(source: string): number {
   const guard = (GUARD.exec(source)?.[1] ?? "").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
   const bounds = [...guard.matchAll(BASELINE_VERSION)].map((match) => Number(match[1]));
@@ -68,12 +58,6 @@ export function latestSchemaVersion(source: string): number | null {
   return match == null ? null : Number(match[1]);
 }
 
-/**
- * Committed migrations may already have run on someone's archive. One may only
- * disappear when the oldest supported version moves past it, which is how old
- * archives become rebuild-only. Anything else, including an opening line that
- * no longer parses, counts as a change.
- */
 export function checkFrozenMigrations(baseSource: string, headSource: string): Finding[] {
   const file = "src/db.ts";
   const base = extractMigrations(baseSource);
@@ -94,7 +78,6 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
   for (const [version, block] of base) {
     const current = head.get(version);
     if (current == null) {
-      // A body still in the file means the block was kept under a reworded opening.
       const body = significantLines(block).slice(1, -1).join("\n");
       const kept = body !== "" && headLines.includes(body);
       if (kept || !(version <= baseline)) {
@@ -125,13 +108,11 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
 }
 
 export interface DocRule {
-  /** Why the docs matter, shown when the rule fires. */
   reason: string;
   triggeredBy(file: ChangedFile): boolean;
   docs: string[];
 }
 
-// Lines that set a rate. Other cost.ts changes do not affect docs/pricing.md.
 const RATE_LINE = /\b(?:claude|openAi|gemini)Price\(|^\s*\[\s*"[^"]+",|\b\w*PerMtok\s*:/;
 
 export function changedLines(diff: string): string[] {
@@ -185,9 +166,7 @@ export function checkDocs(
 
 export const PRIVATE_DATA_ROOTS = ["fixtures/", "test/golden/"];
 
-// Placeholder home directories that fixtures use on purpose.
 const SYNTHETIC_HOMES = new Set(["dev", "user", "example", "test", "runner"]);
-// Fake credentials that redaction tests depend on.
 const SYNTHETIC_SECRETS = new Set(["ghp_AAAAitsasecrettoken0000000000000000"]);
 const SYNTHETIC_EMAIL_DOMAINS =
   /@(?:example\.(?:com|org|net)|[a-z0-9-]+\.(?:test|invalid|example))$/i;
@@ -229,7 +208,6 @@ export function scanForPrivateData(path: string, content: string): Finding[] {
       }
     }
   }
-  // Never echo the matched value into CI logs.
   return findings.filter(
     (finding, index) => findings.findIndex((other) => other.message === finding.message) === index,
   );
@@ -290,7 +268,7 @@ export function runPolicy({ root, base, labels }: PolicyInput): Finding[] {
     try {
       content = readFileSync(join(root, path), "utf8");
     } catch {
-      continue; // Deleted in the working tree.
+      continue;
     }
     findings.push(...scanForPrivateData(path, content));
   }

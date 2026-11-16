@@ -20,7 +20,6 @@ export function queryRow<T>(db: Database, sql: string, params: SqlParam[] = []):
   }
 }
 
-/** Runs one statement and returns the inserted rowid (meaningful for INSERT only). */
 export function runStatement(db: Database, sql: string, params: SqlParam[] = []): number {
   const statement = db.prepare<unknown, SqlParam[]>(sql);
   try {

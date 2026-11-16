@@ -1,10 +1,5 @@
 import type { BackgroundStatus } from "./types.ts";
 
-/**
- * What the Settings switch is doing beyond showing the service's state.
- * `handoff` is the gap between this server exiting and the background service
- * answering on the same port; `stopped` means the page's own server is gone.
- */
 export type BackgroundPhase = "idle" | "saving" | "handoff" | "stopped";
 
 export const HANDOFF_POLL_MS = 500;
@@ -38,11 +33,6 @@ export function backgroundNote(status: BackgroundStatus | null, phase: Backgroun
   return "On, but the service is not running. Run decant service status for details.";
 }
 
-/**
- * Poll until the background service answers in place of the server that just
- * handed off. Requests fail while neither process holds the port, so every
- * error counts as not ready yet.
- */
 export async function waitForBackgroundService(
   fetchStatus: () => Promise<BackgroundStatus>,
   options: {
@@ -63,9 +53,7 @@ export async function waitForBackgroundService(
       if ((await fetchStatus()).current) {
         return true;
       }
-    } catch {
-      // Neither server is listening yet.
-    }
+    } catch {}
   }
   return false;
 }

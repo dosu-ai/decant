@@ -16,12 +16,6 @@ const browserClock: ThrottleClock = {
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-/**
- * Delivers the first value immediately, then at most one value per interval,
- * always ending on the most recent one so the final state is never dropped.
- * `cancel` discards a pending value so a stale update cannot land after the
- * caller has moved on; `flush` delivers it now.
- */
 export function createLatestThrottle<T>(
   deliver: (value: T) => void,
   intervalMs: number,

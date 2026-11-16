@@ -70,8 +70,6 @@ describe("launcher", () => {
         return { ok: true };
       },
     });
-    // The prompt now lives in a fresh mkdtemp dir embedded in the recorded
-    // command; recover it from there to clean up.
     const promptPath = calls[0]?.args.join(" ").match(/cat '([^']+)'/)?.[1];
     if (promptPath != null) {
       rmSync(dirname(promptPath), { recursive: true, force: true });
@@ -100,7 +98,6 @@ describe("launcher", () => {
       }
     });
 
-    /** Launch through the `run` seam and return the shell command and prompt. */
     async function launch(options: Parameters<typeof launchAgent>[4]) {
       const calls: string[][] = [];
       const result = await launchAgent("claude", "tidy the parser", "catalog:skills", settings, {
@@ -156,7 +153,6 @@ describe("launcher", () => {
         },
       });
       expect(relative.result.dir).toBe(home);
-      // A relative path would resolve against the server's own directory.
       expect(probed).toEqual([]);
     });
 
@@ -195,7 +191,6 @@ describe("launcher", () => {
         platform: "linux",
         dir: project,
       });
-      // Pasted elsewhere, the command still starts in the project.
       expect(result).toMatchObject({
         ok: false,
         dir: project,
@@ -209,8 +204,6 @@ describe("launcher", () => {
         run: () => ({ ok: false, error: "app missing" }),
       });
       expect(result.result).toMatchObject({ ok: false, error: "app missing", dir: project });
-      // The command carries the project and the mark instruction, which a bare
-      // agent command built from the request alone would drop.
       const pasted = result.result.command ?? "";
       expect(pasted).toStartWith(`cd '${project.replaceAll("'", "'\\''")}' && claude `);
       expect(pasted).toContain("decant recommendations mark catalog:skills");
@@ -296,7 +289,6 @@ describe("launcher", () => {
     expect(result).toEqual({
       ok: false,
       error: "open failed · open failed",
-      // The prepared command is the way out when no terminal opened.
       command: "cd '/tmp/skills' && claude 'ship it'",
       dir: "/tmp/skills",
     });

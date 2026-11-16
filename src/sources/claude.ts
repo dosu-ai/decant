@@ -36,8 +36,6 @@ import {
 
 const TITLE_META = new Set(["summary", "ai-title"]);
 
-// Operational journal records are neither conversation messages nor title
-// sources. Keep their payloads opaque until Claude documents stable semantics.
 const IGNORED_JOURNAL_META = new Set([
   "agent-name",
   "agent-setting",
@@ -62,7 +60,6 @@ const IGNORED_JOURNAL_META = new Set([
   "pr-link",
   "queue-operation",
   "relocated",
-  // Account and organization IDs for the session; not conversation content.
   "session-owner",
   "tools-used",
   "world_state",
@@ -80,8 +77,6 @@ interface TurnAcc {
   hasThinking: boolean;
 }
 
-/** Reasoning-estimate inputs per API request. A streamed reply spans several
- * records that share one request. */
 type ReasoningTurns = Map<string, TurnAcc>;
 
 export interface ClaudeParseOptions {
@@ -168,7 +163,6 @@ export function parseClaudeSession(
     } else if (typ === "result") {
       resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
     } else if (typ === "custom-title") {
-      // The user renamed the session; the latest rename wins over everything.
       const renamed = stringAt(value, "customTitle", "title");
       if (renamed != null && renamed.trim() !== "") {
         customTitle = truncate(renamed, 120);
@@ -233,9 +227,6 @@ export function parseClaudeSession(
     tool: "claude_code",
     sourceSessionId,
     projectPath: cwd,
-    // Claude emits ai-title after the first user record in normal sessions.
-    // Keep the human prompt as the display title and use its metadata only
-    // when the session has no usable prompt.
     title: customTitle ?? promptTitle ?? metadataTitle,
     cwd,
     gitBranch,
@@ -263,9 +254,8 @@ export function parseClaudeSession(
   return { session: normalized, issues };
 }
 
-/** The API request an assistant record bills. Journal content blocks can
- * repeat a message's full usage without a request id, and the API message id
- * still names the request. */
+/** Journal content blocks can repeat a message's full usage without a request
+ * id, and the API message id still names the request. */
 function assistantRequestId(value: Json): string | null {
   return stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
 }
@@ -279,8 +269,6 @@ function addReasoningRecord(turns: ReasoningTurns, key: string, message: Normali
   turns.set(key, acc);
 }
 
-/** Output a request spent beyond the text and tool input it shows, summed over
- * the requests that show thinking. */
 function reasoningEstimate(turns: ReasoningTurns): number {
   let tokens = 0;
   for (const turn of turns.values()) {
@@ -291,9 +279,6 @@ function reasoningEstimate(turns: ReasoningTurns): number {
   return tokens;
 }
 
-/** The parser's reasoning estimate for stored Claude Code assistant records,
- * so a session's estimate can be recomputed from archived rows. The parser
- * caps it at a `result` record's output, which `outputCap` stands for. */
 export function inferredReasoningTokens(records: Iterable<Json>, outputCap: number): number {
   const turns: ReasoningTurns = new Map();
   let index = 0;

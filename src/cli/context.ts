@@ -18,7 +18,6 @@ import {
 } from "./errors.ts";
 import type { OutputFormat } from "./parse.ts";
 
-/** How long a sync started by a read command runs before it says so. */
 export const SYNC_NOTICE_AFTER_MS = 1_000;
 
 export interface CliResult {
@@ -33,11 +32,8 @@ export interface CliRunOptions {
   liveOutput?: boolean;
   writeStdout?: (value: string) => void;
   writeStderr?: (value: string) => void;
-  /** Test seams for `decant update` and the update notice. */
   update?: UpdateDeps;
-  /** Test seam: how `decant service` and `serve` reach launchd or systemd. */
   service?: ServiceOptions;
-  /** Test seam: replaces `SYNC_NOTICE_AFTER_MS`. */
   syncNoticeAfterMs?: number;
 }
 
@@ -46,9 +42,7 @@ export interface UpdateDeps {
   install?: InstallInfo;
   current?: string;
   now?: () => Date;
-  /** Runs a package manager command and returns its exit code. */
   runCommand?: (argv: string[]) => number;
-  /** The `decant` on PATH and the version it reports, checked after a package manager runs. */
   installedOnPath?: () => { path: string; version: string | null } | null;
   stderrIsTTY?: boolean;
 }
@@ -79,12 +73,7 @@ export type CliAction = () => number | void | Promise<number | void>;
 
 export interface WithArchiveOptions {
   overrides?: Partial<ConfigOverrides>;
-  /** Sync the source directories first, unless `--no-sync` or `DECANT_NO_SYNC` say not to. */
   sync?: boolean;
-  /**
-   * Create the archive when `--db` or `DECANT_DB` names a path with no file.
-   * Only commands that fill an archive set it. The default path is always created.
-   */
   create?: boolean;
 }
 
@@ -102,9 +91,7 @@ export interface CliContext {
   writeJson(value: unknown): void;
   output(value: unknown, renderHuman: () => string): void;
   run(action: CliAction): Promise<void>;
-  /** Report a failure in the current output mode and return its exit code. */
   fail(error: unknown, json?: boolean): number;
-  /** Set before a command runs when it should print an update notice. */
   pendingUpdateNotice: Promise<UpdateStatus> | null;
   withArchive<T>(fn: (archive: Archive) => T, options?: WithArchiveOptions): T;
 }
@@ -134,8 +121,6 @@ export function createContext(
 ): CliContext {
   const globals = (): GlobalOptions => program.opts<GlobalOptions>();
   const environment = (): Record<string, string | undefined> => options.env ?? process.env;
-  // Most commands report a failure by writing an "error:" line and returning
-  // a code. Under --json those lines wait here until the code is known.
   let heldErrorLines: string[] | null = null;
   let wroteResult = false;
   let reportedFailure = false;
@@ -172,8 +157,6 @@ export function createContext(
     const wait = options.syncNoticeAfterMs ?? SYNC_NOTICE_AFTER_MS;
     const startedAt = Date.now();
     let announced = false;
-    // The sync blocks the event loop, so its progress callback is the only
-    // place a timer could fire.
     ingestSync(archive.db, archive.config, undefined, (progress) => {
       if (announced || Date.now() - startedAt < wait) {
         return;
@@ -209,8 +192,6 @@ export function createContext(
       if (ctx.isJson()) {
         ctx.writeJson(value);
       } else {
-        // Renderers join rows with "\n", so a final newline is added here
-        // rather than in each one. Without it the shell prompt joins the last row.
         const text = renderHuman();
         io.writeOut(text === "" || text.endsWith("\n") ? text : `${text}\n`);
       }
@@ -241,8 +222,6 @@ export function createContext(
           ctx.fail(fromErrorLine(held.join(""), code));
         }
       }
-      // A --json caller is owed an object even when a command fails without
-      // a result or an error line. Codes above 2 are reports, not failures.
       const silent = !reportedFailure && !wroteResult;
       if (ctx.isJson() && silent && (code === EXIT_FAILURE || code === EXIT_USAGE)) {
         ctx.fail(
@@ -272,7 +251,6 @@ export function createContext(
         archive = openArchive(config);
       } catch (error) {
         const failure = toCliError(error);
-        // SQLite's own text ("file is not a database") does not say which file.
         throw failure.code === "command_failed"
           ? new CliError(
               "archive_unreadable",

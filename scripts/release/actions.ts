@@ -8,10 +8,8 @@ export interface CommandOptions {
   env?: Env;
 }
 
-/** A release gate failed; reported as an `::error::` annotation. */
 export class ReleaseFailure extends Error {}
 
-/** A child command exited non-zero; its own output already explains why. */
 export class CommandFailure extends Error {
   constructor(
     message: string,
@@ -62,7 +60,6 @@ export function addPath(dir: string, file = process.env.GITHUB_PATH): void {
   appendCommandFile(file, dir);
 }
 
-// Outside Actions there is no command file, so local runs print what CI would record.
 function appendCommandFile(file: string | undefined, line: string): void {
   if (line.includes("\n") || line.includes("\r")) {
     throw new Error(`refusing to write a multi-line value to a command file: ${line}`);
@@ -152,11 +149,6 @@ export function capture(
   return result.stdout;
 }
 
-/**
- * Runs a command and returns its stdout followed by its stderr. The streams are
- * read from separate pipes, so unlike `2>&1` their relative order is lost;
- * callers may search the combined text but must not depend on line order.
- */
 export function captureMerged(
   command: string,
   args: readonly string[],
@@ -174,7 +166,6 @@ export function captureMerged(
   return { status: result.status ?? 1, output: result.stdout + result.stderr };
 }
 
-/** Strips trailing newlines the way shell command substitution does. */
 export function chomp(text: string): string {
   return text.replace(/\n+$/, "");
 }
@@ -195,7 +186,6 @@ export interface RetryOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Retries `attempt` and waits `delayMs` after every failure, including the last. */
 export async function retry(options: RetryOptions): Promise<boolean> {
   const wait = options.sleep ?? sleep;
   for (let index = 1; index <= options.attempts; index++) {

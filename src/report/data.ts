@@ -31,9 +31,7 @@ export interface AnalyticsReportData {
   totals: Totals;
   sessionsByDay: DimRow[];
   byModel: DimRow[];
-  /** Worktrees folded into the repository they came from. */
   byRepo: DimRow[];
-  /** Runs grouped by how their top-level session ended. */
   byOutcome: DimRow[];
   activity: Activity;
   economics: TokenEconomics;
@@ -68,11 +66,6 @@ export interface AnalyticsReportOptions {
   insightLimit?: number;
 }
 
-/**
- * Compose the report from the same read APIs that power Analytics. This stays
- * presentation-free so an HTTP route can build JSON, screen markup, or a
- * downloadable static document from one data shape.
- */
 export function assembleAnalyticsReport(
   db: Database,
   options: AnalyticsReportOptions = {},
@@ -103,7 +96,6 @@ export function assembleAnalyticsReport(
   };
 }
 
-/** Build a session report without loading its transcript. */
 export function assembleSessionReport(db: Database, sessionId: number): SessionReportData | null {
   const detail = getSession(db, sessionId, { messageLimit: 1 });
   if (detail == null) {
@@ -124,11 +116,6 @@ export function assembleSessionReport(db: Database, sessionId: number): SessionR
   };
 }
 
-/**
- * Aggregate the full session once in SQLite. Paging through listToolCalls would
- * recompute its global count and percentile window for every 100-row page,
- * turning large report exports into repeated synchronous scans.
- */
 function sessionToolSummary(db: Database, sessionId: number): SessionToolReportRow[] {
   type Row = {
     tool_name: string;
@@ -187,10 +174,6 @@ function sessionToolSummary(db: Database, sessionId: number): SessionToolReportR
   }));
 }
 
-/**
- * fileHotspots has date and operation filters but no session scope. Keep this
- * narrow query beside report assembly until the shared stats API gains one.
- */
 function sessionHotFiles(db: Database, sessionId: number): FileStatRow[] {
   return (
     db

@@ -32,30 +32,12 @@ export interface DeletedSessionLineageContext {
 }
 
 export interface SessionUserStateMutationOptions {
-  /**
-   * Authorize a deletion after the exact subtree has been read under the same
-   * write lock used for the mutation. Returning false leaves the archive
-   * unchanged. This keeps destructive CLI guards free of count/delete races
-   * with another ingesting process.
-   */
   confirmDelete?: (sessionIds: readonly number[]) => boolean;
-  /**
-   * Derived writes that must commit or roll back with the state mutation.
-   * The callback runs inside the same immediate transaction.
-   */
   afterApply?: () => void;
 }
 
-// A reserved tool namespace keeps lineage-boundary markers from matching real
-// session identities. The state table has no foreign key to session on purpose:
-// deleted transcripts retain stable identities after their rows are removed.
 const CLAUDE_SPAWN_TOMBSTONE_TOOL = "__decant_internal_claude_spawn__";
 
-/**
- * Ids of sessions in the given user states plus everything descended from them.
- * Uncorrelated, so SQLite materializes it once per statement instead of walking
- * each candidate row's ancestry.
- */
 function stateLineageIds(states: string): string {
   return `WITH RECURSIVE state_lineage(id) AS (
     SELECT state_session.id
@@ -72,20 +54,11 @@ function stateLineageIds(states: string): string {
   SELECT id FROM state_lineage`;
 }
 
-/**
- * SQL predicate for user-controlled visibility. Callers compose this with
- * source/session predicates and supply an internal, trusted table alias.
- */
 export function sessionUserStatePredicate(alias: string, includeArchived = false): string {
   const hiddenStates = includeArchived ? "'deleted'" : "'archived', 'deleted'";
   return `${alias}.id NOT IN (${stateLineageIds(hiddenStates)})`;
 }
 
-/**
- * Skip the hidden-set subquery when no hidden state of the requested kind
- * exists. The one-row probe runs once per statement build and returning `1`
- * leaves the session scan unfiltered.
- */
 export function sessionUserStatePredicateForDatabase(
   db: Database,
   alias: string,
@@ -102,12 +75,10 @@ export function sessionUserStatePredicateForDatabase(
   return relevantState ? sessionUserStatePredicate(alias, includeArchived) : "1";
 }
 
-/** SQL expression returning 1 when this row or any current ancestor is archived. */
 export function sessionIsUserArchivedExpression(alias: string): string {
   return `(${alias}.id IN (${stateLineageIds("'archived'")}))`;
 }
 
-/** SQL expression returning the direct persisted state for one session row. */
 export function directSessionUserStateExpression(alias: string): string {
   return `(SELECT direct_user_state.state
     FROM session_user_state direct_user_state
@@ -130,12 +101,6 @@ function isDeletedSessionIdentity(db: Database, tool: string, sourceSessionId: s
   );
 }
 
-/**
- * Preserve a deleted lineage when a child transcript appears after its parent
- * row was physically removed. Providers carry the parent's stable source
- * identity in subagent metadata, so a parent tombstone can be inherited
- * without retaining transcript content.
- */
 export function inheritDeletedSessionTombstone(
   db: Database,
   tool: string,
@@ -185,11 +150,6 @@ export function inheritDeletedSessionTombstone(
   return true;
 }
 
-/**
- * A session plus everything descended from it. Deletion applies to the whole
- * tree, so anything that reports the blast radius of a delete has to use the
- * same shape the delete does, or the two drift apart silently.
- */
 const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
    SELECT id FROM session WHERE id = ?1
    UNION
@@ -198,15 +158,6 @@ const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
    JOIN subtree parent ON child.parent_session_id = parent.id
  )`;
 
-/**
- * Apply direct user archive state, or delete a session's descendant tree.
- *
- * Deleted rows keep source-identity tombstones after the subtree is removed.
- * Archive and visible touch only the selected identity; effective archive state
- * derives from ancestry, so an independently archived child survives its parent
- * being archived and restored. session.is_archived is source-derived and stays
- * untouched.
- */
 export function setSessionUserState(
   db: Database,
   sessionId: number,
@@ -328,12 +279,6 @@ function deleteSessionIdentities(db: Database, identities: readonly SessionIdent
   ).run(sourcePaths);
 }
 
-/**
- * Find an already-ingested provider lineage without relying on resolved
- * session parent ids. This is used only on the rare tombstone path, where a
- * full provider-local scan is preferable to leaving an orphan because source
- * files happened to be discovered grandchild-first.
- */
 function providerLineageDescendants(
   db: Database,
   tool: string,
@@ -449,7 +394,6 @@ function providerParentSourceSessionId(row: ProviderLineageSessionIdentity): str
     return claudeRootSourceSessionId(meta);
   }
   if (row.tool === "atif") {
-    // The ATIF parser names an embedded subagent's direct parent.
     return stringValue(meta.parentSessionId);
   }
   const source = recordValue(meta.source);

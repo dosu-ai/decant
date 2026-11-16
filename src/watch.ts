@@ -20,9 +20,6 @@ import {
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
-/** An agent mid-run can append to its log faster than the debounce window, and
- * each event restarts the window, so without a cap its session stays out of
- * the archive until it pauses or the sweep runs. */
 export const DEFAULT_DEBOUNCE_MAX_WAIT_MS = 5_000;
 /** OpenCode's live appends raise no file event (see `openCodeEvents`), so its
  * databases are also checked by file signature on this interval. */
@@ -87,13 +84,11 @@ export type SyncRunner = (
 
 export interface SyncRunnerResult {
   report: SyncReport;
-  /** False when this watcher joined a run whose terminal events have another owner. */
   emitTerminal: boolean;
 }
 
 export interface SyncRunnerFailure {
   error: unknown;
-  /** False when this watcher joined a run whose terminal events have another owner. */
   emitTerminal: boolean;
 }
 
@@ -101,23 +96,13 @@ export interface WatchOptions {
   config: Config;
   intervalMs?: number;
   debounceMs?: number;
-  /** Longest a burst of events can hold off a sync. It is never shorter than
-   * debounceMs. */
   debounceMaxWaitMs?: number;
   signal?: AbortSignal;
   onEvent?: (event: WatchEvent) => void;
   open?: (path: string) => Database;
   enableWatch?: boolean;
-  /** How often to check OpenCode databases by file signature; 0 disables the
-   * poll. It runs whether or not native watching is enabled, and only when an
-   * OpenCode root exists. */
   openCodePollMs?: number;
   syncOnStart?: boolean;
-  /**
-   * How to execute one sync. Defaults to the in-process runSyncOnce; servers
-   * pass a worker-backed runner so multi-second ingests cannot stall the
-   * request event loop.
-   */
   runner?: SyncRunner;
 }
 
@@ -172,17 +157,10 @@ export class SyncStatusStore {
   }
 }
 
-/** A watched directory and the change events in it that warrant a sync. */
 export interface WatchRoot {
   dir: string;
-  /** Watch subdirectories too. Off for OpenCode-only roots, whose log/,
-   * snapshot/, and storage/ trees never hold a database Decant reads. */
   recursive: boolean;
-  /** `filename` is the event path relative to `dir`, or null when the
-   * platform does not report one. */
   accepts(filename: string | null): boolean;
-  /** Present on roots holding OpenCode databases: re-stats them against the
-   * same baseline `accepts` keeps, and reports whether any changed. */
   poll?: () => boolean;
 }
 
@@ -190,18 +168,11 @@ type EventFilter = (filename: string | null) => boolean;
 
 const anyEvent: EventFilter = () => true;
 
-/** A Copilot session directory also holds plans, checkpoints, and files the
- * agent wrote; only its event journal is a transcript. */
 const copilotEvents: EventFilter = (filename) =>
   filename == null || basename(filename) === "events.jsonl";
 
-/** Harbor writes logs, recordings, and test output beside each trajectory;
- * only JSON files can be ATIF documents. */
 const atifEvents: EventFilter = (filename) => filename == null || filename.endsWith(".json");
 
-/** Workspace storage also holds each window's state database and every
- * extension's files, which change constantly; only a workspace's chat session
- * files are transcripts. */
 const vscodeWorkspaceChatEvents: EventFilter = (filename) => {
   if (filename == null) {
     return true;
@@ -304,7 +275,6 @@ export function watchRoots(config: Config): WatchRoot[] {
   const candidates: {
     dir: string;
     recursive: boolean;
-    /** OpenCode databases, whose filter the watcher also polls. */
     polled?: boolean;
     accepts: () => EventFilter;
   }[] = [
@@ -361,8 +331,6 @@ export function watchRoots(config: Config): WatchRoot[] {
       ? [{ dir: config.atifDir, recursive: true, accepts: () => atifEvents }]
       : []),
   ];
-  // One watcher per directory: a directory named twice reacts to the events
-  // either source would, and recurses if either needs it.
   const roots = new Map<
     string,
     { recursive: boolean; filters: { polled: boolean; make: () => EventFilter }[] }
@@ -386,9 +354,7 @@ export function watchRoots(config: Config): WatchRoot[] {
       }
     })
     .map(([dir, { recursive, filters }]) => {
-      // Built only for existing directories, so the baseline stat runs once.
       const built = filters.map(({ polled, make }) => ({ polled, accept: make() }));
-      // Every filter sees every event so each keeps its baseline current.
       const anyOf = (accepts: EventFilter[], filename: string | null): boolean =>
         accepts.reduce((any, accept) => accept(filename) || any, false);
       const all = built.map(({ accept }) => accept);
@@ -397,15 +363,11 @@ export function watchRoots(config: Config): WatchRoot[] {
         dir,
         recursive,
         accepts: (filename: string | null) => anyOf(all, filename),
-        // A null filename re-checks every database the filter tracks.
         ...(polled.length > 0 ? { poll: () => anyOf(polled, null) } : {}),
       };
     });
 }
 
-/** OPENCODE_DB resolved through symlinks, so the watcher sits in the directory
- * the writer actually touches and matches the file names it reports. Falls
- * back to the configured path when it cannot be resolved (not created yet). */
 function explicitOpenCodeDb(config: Config): string | null {
   if (config.opencodeDb == null || config.opencodeDb === "") {
     return null;
@@ -614,9 +576,6 @@ export function startWatch(options: WatchOptions): WatchHandle {
     intervalTimer = setInterval(() => schedule("sweep", 0), intervalMs);
   }
 
-  // Stat-only: the poll never opens a database, so it cannot disturb -shm or
-  // trigger itself. It shares each root's baseline with the event filter, so
-  // a change either path sees first is synced once.
   const polls = roots.flatMap((root) => (root.poll != null ? [root.poll] : []));
   if (openCodePollMs > 0 && polls.length > 0) {
     pollTimer = setInterval(() => {

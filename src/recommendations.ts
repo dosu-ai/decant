@@ -24,9 +24,7 @@ export interface Recommendation {
   tone: string | null;
   impact_label: string | null;
   score: number;
-  /** Where "Run" starts for a row about one project. Null for setup-wide rows. */
   project_path: string | null;
-  /** The archive's repository key, as the `repo` filter and dimension use it. */
   project_root: string | null;
   project_label: string | null;
   project_remote: string | null;
@@ -68,10 +66,8 @@ const SKILLS_URL = "https://code.claude.com/docs/en/skills";
 const ERROR_MIN_CALLS = 20;
 const ERROR_MIN_ERRORS = 5;
 const ERROR_MIN_RATE = 0.12;
-// Tool errors would otherwise fill the list, so the rest fold into one row.
 const ERROR_HOTSPOT_MAX = 3;
 const ERROR_TAIL_NAMES = 5;
-// A remote connector cannot be fixed locally, so it ranks below tools that can.
 const CONNECTOR_SCORE_FACTOR = 0.5;
 const PROJECT_SIGNAL_MAX = 2;
 const SIGNAL_MAX = 12;
@@ -84,18 +80,10 @@ const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
-// Flat and low: volume alone isn't a problem, so usage signals (heavy server/tool)
-// must lose to every signal that flags an actual issue. Every issue-flagging
-// signal's minimum possible score must stay above this.
-const USAGE_SIGNAL_SCORE = 2;
+export const USAGE_SIGNAL_SCORE = 2;
 const WINDOW_DAYS = 30;
-// Bound to the cutoff recentWindowStart() computes, rather than SQLite's
-// date('now'), so every signal shares the JS clock that tests can freeze.
 const WINDOW = "s.started_at >= ?";
 
-// Session counts in the signals mean top-level sessions, as on the Analytics
-// tiles. Work a subagent does counts toward the top-level session that
-// spawned it, so one session fanning out to five subagents is one session.
 const SESSION_ROOT_CTE = `WITH RECURSIVE session_root(id, root_id) AS (
          SELECT id, id FROM session WHERE is_subagent = 0
          UNION ALL
@@ -104,7 +92,6 @@ const SESSION_ROOT_CTE = `WITH RECURSIVE session_root(id, root_id) AS (
          JOIN session_root ON child.parent_session_id = session_root.id
          WHERE child.is_subagent = 1
        )`;
-// A subagent whose parent is not in the archive stands in for its own root.
 const ROOT_ID = "COALESCE(r.root_id, s.id)";
 const ROOT_JOIN = "LEFT JOIN session_root r ON r.id = s.id";
 
@@ -136,22 +123,14 @@ export function parseStatusFilter(value: string): StatusFilter | null {
 
 interface Candidate {
   rec: Recommendation;
-  /** The key this row had before its identity changed, whose state it inherits. */
   legacy?: { key: string; detail?: string; server?: string | null };
 }
 
 interface SignalSet {
-  /** The ranked rows the list shows, after every cap. */
   shown: Recommendation[];
-  /** Every row that met its threshold, including the ones a cap left out. */
   eligible: Candidate[];
 }
 
-/**
- * `recentTools` is the uncapped recent-window tool ranking when the caller
- * already has it; the signals use its first 500 rows, exactly what the capped
- * query would return.
- */
 export function signals(
   db: Database,
   recentTools?: ReturnType<typeof toolUsage>,
@@ -334,8 +313,6 @@ export function regenerate(db: Database): void {
       first_seen_at: string | null;
       implemented_at: string | null;
     };
-    // Migration attribution reads every eligible row, not only the shown
-    // ones: a sibling under a cap still makes a legacy identity ambiguous.
     const candidatesByLegacy = new Map<string, Candidate[]>();
     for (const candidate of eligible) {
       const legacyKey = candidate.legacy?.key;
@@ -460,8 +437,6 @@ export function regenerate(db: Database): void {
           }
           removeLegacy.run(legacyKey);
         } else if (!durable) {
-          // Open and activity-derived aliases carry no operator-owned state.
-          // The stable current identities have already been opened/upserted.
           removeLegacy.run(legacyKey);
         }
       }
@@ -497,15 +472,11 @@ export function regenerate(db: Database): void {
   });
 }
 
-// A row that still meets its threshold but lost its place to a cap is not
-// resolved, and neither is a row measured before signals were per project.
 function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: string[]): void {
   const shown = new Set(shownKeys);
   const capped = new Set(
     eligible.map((candidate) => candidate.rec.key).filter((key) => !shown.has(key)),
   );
-  // A row that activity once resolved and that fails again under a cap goes
-  // too. Marks made by a person or an agent stay.
   const untouched = queryRows<{ key: string; status: string }>(
     db,
     `SELECT key, status FROM recommendation
@@ -525,15 +496,6 @@ function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: 
   }
 }
 
-/**
- * Refresh derived signals after a user archive-state mutation.
- *
- * Hiding evidence is not proof that a recommendation was implemented, so this
- * path removes stale, untouched open signals instead of applying regenerate's
- * activity-driven implemented transition. Manual and implemented history, plus
- * the catalog, remain intact. A later unarchive recreates a pruned signal as a
- * normal open row.
- */
 export function refreshForSessionStateChange(
   db: Database,
   options: { alreadyInTransaction?: boolean } = {},
@@ -674,11 +636,6 @@ export function list(db: Database, status: StatusFilter = "open"): StoredRecomme
   });
 }
 
-// Tool names, MCP server names, model ids, and file paths are archive text: they
-// come from session transcripts, which anything the agent talked to can shape.
-// Signal prompts are handed to `claude`/`codex` as an initial instruction, so
-// every archive value is rendered as a sanitized, double-quoted label instead of
-// free-floating prose, and each prompt says the quoted names are data.
 const LABEL_MAX = 120;
 const LABEL_STRIP = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}"`]/gu;
 const LABEL_SPACES = /\s+/g;
@@ -695,12 +652,6 @@ function quoted(value: string): string {
   return `"${label(value)}"`;
 }
 
-// Recommendation keys are both the upsert identity of a row and text spliced into
-// the `decant recommendations mark <key>` instruction, so they must stay inside a
-// narrow charset. Sanitizing alone is many-to-one, which would let one archive
-// value ("linear mcp") take over another's row ("linear-mcp"), so any value that
-// sanitizing or truncation actually changed carries a digest of the original.
-// Values already inside the charset keep their exact historical key.
 const KEY_MAX = 120;
 const KEY_UNSAFE = /[^A-Za-z0-9._:/-]+/g;
 const KEY_EDGE_DASHES = /^-+|-+$/g;
@@ -708,15 +659,11 @@ const KEY_DIGEST_SUFFIX = /\.h[0-9a-f]{16}$/;
 
 function keySegment(value: string): string {
   const cleaned = value.replace(KEY_UNSAFE, "-").slice(0, KEY_MAX).replace(KEY_EDGE_DASHES, "");
-  // The digest branch always ends in the reserved suffix and the verbatim branch
-  // never does, so the two branches cannot collide with each other either.
   return cleaned === value && !KEY_DIGEST_SUFFIX.test(value)
     ? cleaned
     : `${cleaned}.h${digest(value)}`;
 }
 
-// utf16le, not utf8: it round-trips unpaired surrogates, so distinct strings
-// always hash distinctly.
 function digest(value: string): string {
   return createHash("sha256").update(value, "utf16le").digest("hex").slice(0, 16);
 }
@@ -745,15 +692,11 @@ function count(value: number, noun: string): string {
   return `${fmtInt(value)} ${value === 1 ? noun : `${noun}s`}`;
 }
 
-// A setup-wide row starts outside any repository, so its prompt asks for
-// user-level configuration and never says "this repo".
 const USER_LEVEL =
   "This is about my whole coding-agent setup, not one repository. Put the result in user-level configuration, such as a personal Skill or my user-level CLAUDE.md or AGENTS.md, and leave project files alone.";
-// Catalog ideas are per repository, but nothing in the archive says which one.
 const PICK_REPO = "First ask me which repository this is for, then work in that repository.";
 
 interface ProjectRef {
-  /** `COALESCE(root_path, path)`, the key the repo filter and dimension use. */
   root: string;
   label: string;
   path: string | null;
@@ -778,7 +721,6 @@ function projectFields(
   };
 }
 
-/** Every repository in the archive, keyed by its root. No filesystem access. */
 function projectIndex(db: Database): Map<string, ProjectRef> {
   const rows = queryRows<{ path: string; root: string; remote: string | null }>(
     db,
@@ -803,10 +745,8 @@ function projectIndex(db: Database): Map<string, ProjectRef> {
     const name = basename(root);
     index.set(root, {
       root,
-      // Two repositories that share a folder name gain their parent folder.
       label:
         (nameUses.get(name) ?? 0) > 1 ? root.split("/").filter(Boolean).slice(-2).join("/") : name,
-      // A root known only by name has no directory, so its newest worktree stands in.
       path: isAbsolute(root) ? root : (group.find((row) => isAbsolute(row.path))?.path ?? null),
       remote:
         group.find((row) => row.path === root)?.remote ??
@@ -817,8 +757,6 @@ function projectIndex(db: Database): Map<string, ProjectRef> {
   return index;
 }
 
-// Project-scoped keys end in a digest of the repository root. The table has no
-// project column, so `list` resolves the project from this suffix.
 const PROJECT_KEY = /^signal:(?:hot-context:|churn:|search-heavy).*\.p([0-9a-f]{16})$/s;
 
 function isPreProjectKey(key: string): boolean {
@@ -855,13 +793,11 @@ function storedProject(
   return project == null ? NO_PROJECT : projectFields(project);
 }
 
-/** The directory "Run" should start in for this key, or null for a setup-wide row. */
 export function launchDir(db: Database, key: string): string | null {
   return storedProject(key, lazyProjectsByDigest(db)).project_path;
 }
 
 function projectLead(project: ProjectRef): string {
-  // A path the label sanitizer would alter is left out instead of misquoted.
   const at =
     project.path != null && label(project.path) === project.path
       ? ` at ${quoted(project.path)}`
@@ -883,8 +819,6 @@ function isErrorHotspot(tool: ReturnType<typeof toolUsage>[number]): boolean {
   );
 }
 
-/** `unranked` are tools past the ranking the list reads. They never get a row,
- * but they still count when a legacy key looks for its one owner. */
 function errorHotspots(
   tools: ReturnType<typeof toolUsage>,
   unranked: ReturnType<typeof toolUsage> = [],
@@ -892,15 +826,12 @@ function errorHotspots(
   shown: Recommendation[];
   eligible: Candidate[];
 } {
-  // Built from every server in view, so two registrations of one server stay
-  // apart the way they do in the Tools & MCP table.
   const serverLabels = mcpServerLabels(tools.map((tool) => tool.mcp_server));
   const hotspots = tools
     .filter(isErrorHotspot)
     .map((tool) => errorHotspot(tool, serverLabels))
     .sort((left, right) => byRank(left.rec, right.rec));
   const beyond = unranked.filter(isErrorHotspot).map((tool) => errorHotspot(tool, serverLabels));
-  // Folding a single tool into a row of its own would save nothing.
   if (hotspots.length <= ERROR_HOTSPOT_MAX + 1) {
     return {
       shown: hotspots.map((hotspot) => hotspot.rec),
@@ -923,7 +854,6 @@ function errorHotspot(
   const server = tool.mcp_server != null && tool.mcp_server !== "" ? tool.mcp_server : null;
   const connector = server != null && mcpServerOrigin(server) === "connector";
   const name = quoted(tool.tool_name);
-  // Titles read as tool and server. Prompts keep the raw ids an agent can grep.
   const display =
     server == null
       ? name
@@ -931,15 +861,10 @@ function errorHotspot(
   const suffix = serverSuffix(server);
   const counts = `${fmtInt(tool.errors)} errors in ${fmtInt(tool.calls)} calls over the last 30 days`;
   const baseKey = `signal:error:${keySegment(tool.tool_name)}`;
-  // A hotspot's identity cannot depend on which same-named siblings happen
-  // to cross the threshold today. Always include the complete stats grouping
-  // so state survives siblings appearing, resolving, or falling out of view.
   const key = `${baseKey}.h${digest(JSON.stringify([tool.tool_kind, tool.mcp_server]))}`;
-  // No backticks here: a label must not be able to pose as a command.
   const failing = `The ${name} tool is failing about ${pct}% of the time (${counts})${suffix}.`;
   return {
     summary: `${display} at ${pct}% (${fmtInt(tool.errors)} of ${fmtInt(tool.calls)} calls)`,
-    // The name-only key and detail this row had before keys carried the server.
     legacy: {
       key: baseKey,
       detail: `${tool.errors} errors across ${tool.calls} calls${suffix}.`,
@@ -988,7 +913,6 @@ function errorTail(rest: (Candidate & { summary: string })[]): Recommendation {
     icon: "hero-exclamation-triangle",
     tone: "warning",
     impact_label: `${fmtInt(rest.length)} tools`,
-    // Just under its worst member, so it never outranks a row of its own.
     score: (rest[0]?.rec.score ?? 0) * 0.99,
     ...NO_PROJECT,
   };
@@ -1000,8 +924,6 @@ function legacyMigrationTarget(
   candidates: Candidate[],
 ): Recommendation | null {
   if (!legacyKey.startsWith("signal:error:")) {
-    // A file or search row from before project scoping names no project, so
-    // it moves only when exactly one project could own it.
     return candidates.length === 1 ? (candidates[0]?.rec ?? null) : null;
   }
   if (legacyDetail == null) {
@@ -1030,14 +952,9 @@ function renderedErrorServerIdentity(detail: string): { serverLabel: string | nu
 }
 
 function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
-  // Labels come from the whole server set, so a card names a server the same
-  // way the Tools & MCP table does -- including the origin suffix when two
-  // registrations would otherwise both read "Dosu".
   const labels = mcpServerLabels(mcp.map((server) => server.mcp_server));
   return mcp.slice(0, 3).flatMap((server) => {
     const name = quoted(mcpServerLabel(labels, server.mcp_server));
-    // The prompt is pasted into an agent that has to find the server in a
-    // config file, so it keeps the raw slug the display name strips.
     const slug = quoted(server.mcp_server);
     const usage = `${count(server.calls, "call")} across ${count(server.tools, "tool")}`;
     return server.calls >= 50
@@ -1125,8 +1042,6 @@ function costConcentration(models: ReturnType<typeof byDimension>): Recommendati
   ];
 }
 
-// Equal relative paths in two repositories are two files, so file signals
-// group by repository as well as by path.
 const REPO_KEY = "COALESCE(p.root_path, p.path)";
 const PROJECT_JOIN = "JOIN project p ON p.id = s.project_id";
 
@@ -1233,11 +1148,6 @@ function churnFiles(
   });
 }
 
-// Candidate tool names worth scanning for search calls: structured Grep/Glob,
-// plus every shell surface (Claude's Bash, Codex's exec_command/local_shell,
-// and MCP-flattened variants like `functions.shell`). countSearches does the
-// actual counting -- this predicate only narrows the row set the query pulls
-// into TypeScript, so it stays permissive by design.
 const SEARCH_CANDIDATE_TOOLS = ["grep", "glob", "bash", "shell", "exec_command", "local_shell"];
 
 function searchHeavy(
@@ -1331,7 +1241,6 @@ function abandonedRate(
     return [];
   }
   const pct = Math.round(rate * 100);
-  // The rate is archive-wide. Naming where it concentrates gives a place to look.
   const where = queryRows<{ root: string; n: number }>(
     db,
     `SELECT ${REPO_KEY} AS root, COUNT(*) AS n
@@ -1370,8 +1279,6 @@ function abandonedRate(
 }
 
 function ingestHealth(db: Database, visibleSession: string, since: string): Recommendation[] {
-  // A session is affected when its own transcript or a subagent's has issues.
-  // An unreachable directory says nothing about the transcript format.
   const counts = queryOne<{ affected: number }>(
     db,
     `${SESSION_ROOT_CTE}

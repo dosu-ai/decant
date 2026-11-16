@@ -24,8 +24,6 @@ import { CursorBlobProblem, parseCursorSession, readCursorSource } from "../src/
 import { totals } from "../src/stats.ts";
 import { buildCursorChat, writeCursorStore } from "./cursor-fixture.ts";
 
-/** Commits one more message to a store the way Cursor does: a new message
- * blob, a new root listing every message, and the meta row pointing at it. */
 function appendCursorMessage(writer: Database, record: object): void {
   const meta = writer.query("SELECT key, value FROM meta LIMIT 1").get() as {
     key: string;
@@ -303,7 +301,6 @@ describe("Cursor source", () => {
           "Cursor store has unread WAL data that a read-only open cannot see; " +
           "mount the chats directory read-write or close the chat in Cursor",
       });
-      // Nothing is recorded, so the store is not mistaken for current.
       expect(db.query("SELECT count(*) AS n FROM ingest_source").get()).toEqual({ n: 0 });
       expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
       chmodSync(chatDir, 0o755);
@@ -325,15 +322,12 @@ describe("Cursor source", () => {
       at(join(chatDir, "store.db"), 1_800_000_000.1);
       at(metaPath, 1_800_000_000.1);
       expect(sync(db, config)).toMatchObject({ ingested: 1 });
-      // Same byte count, same whole-second mtime: only the sub-second mtime
-      // tells the two apart.
       const meta = readFileSync(metaPath, "utf8");
       writeFileSync(metaPath, meta.replace("cursor-demo", "cursor-DEMO"));
       at(metaPath, 1_800_000_000.6);
       expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0 });
       expect(db.query("SELECT cwd FROM session").get()).toEqual({ cwd: "/Users/dev/cursor-DEMO" });
       expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
-      // A row recorded before per-file signatures re-ingests once, then skips.
       db.exec("UPDATE ingest_source SET hash = NULL");
       expect(sync(db, config)).toMatchObject({ ingested: 1 });
       expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
@@ -345,7 +339,6 @@ describe("Cursor source", () => {
 
   test("read failures never quote store content in errors or logs", () => {
     const { root, chatDir, config } = cursorCase();
-    // An unquoted word is one a JSON syntax error quotes back.
     const secret = "zebrasecret4417";
     const store = join(chatDir, "store.db");
     rmSync(store);
@@ -365,7 +358,6 @@ describe("Cursor source", () => {
       expect(lines[0]).not.toContain(secret);
       expect(() => readCursorSource(store)).toThrow("Cursor store metadata is not valid JSON");
 
-      // meta.json can change between discovery and the read.
       writeFileSync(join(chatDir, "meta.json"), `{"title": ${secret}}`);
       let message = "";
       try {
@@ -398,7 +390,6 @@ describe("Cursor source", () => {
         { ...fixture.store, agentId: "cursor-renamed-session" },
         fixture.records,
       );
-      // Force the re-read regardless of how the change signature compares.
       db.exec("UPDATE ingest_source SET size = -1, hash = NULL");
       expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
       expect(db.query("SELECT source_session_id FROM session").all()).toEqual([
@@ -467,7 +458,6 @@ describe("Cursor source", () => {
     const { root, chatDir } = cursorCase();
     const store = join(chatDir, "store.db");
     const db = new Database(store);
-    // One message blob gone, another rewritten as TEXT.
     const ids = (db.query("SELECT id FROM blobs ORDER BY rowid").all() as { id: string }[]).map(
       (row) => row.id,
     );
@@ -652,7 +642,6 @@ describe("Cursor source", () => {
     const root = mkdtempSync(join(tmpdir(), "decant-cursor-test-"));
     const cursorDir = join(root, "cursor");
     buildCursorChat(join(cursorDir, "workspace", "chat"));
-    // This Codex fixture reports usage only as session totals, never per message.
     const codexSessions = join(root, "codex", "sessions");
     mkdirSync(codexSessions, { recursive: true });
     writeFileSync(
@@ -689,7 +678,6 @@ describe("Cursor source", () => {
     const db = openDb(join(root, "archive.db"));
     try {
       expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 1, failed: 1 });
-      // Nothing was recorded for the broken store, so the next sync retries it.
       expect(sync(db, config)).toMatchObject({ scanned: 2, skipped: 1, failed: 1 });
     } finally {
       closeDb(db);
@@ -774,7 +762,6 @@ describe("Cursor source", () => {
     const root = mkdtempSync(join(tmpdir(), "decant-cursor-test-"));
     const cursorDir = join(root, "cursor");
     writeCliShapedChats(join(cursorDir, "workspace"));
-    // A store with neither meta.json nor a parent link is not a chat.
     const stray = join(cursorDir, "workspace", "stray");
     mkdirSync(stray, { recursive: true });
     writeCursorStore(join(stray, "store.db"), { agentId: "stray" }, []);

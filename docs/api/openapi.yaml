@@ -2455,8 +2455,11 @@ components:
       additionalProperties: false
     SessionIngestIssue:
       type: object
-      required: [code, line_no, error, raw_line, created_at]
+      required: [id, code, line_no, error, raw_line, created_at]
       properties:
+        id:
+          type: integer
+          minimum: 1
         code:
           type: string
         line_no:

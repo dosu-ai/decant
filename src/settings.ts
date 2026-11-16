@@ -25,7 +25,6 @@ export interface UserSettings {
   agent: AgentKey;
   terminal: TerminalKey;
   ide: IdeKey;
-  /** Opt-in daily check for a newer release; the only outbound request Decant makes. */
   updateCheck: boolean;
 }
 
@@ -91,9 +90,6 @@ interface StoredSettings {
   unparseable: boolean;
 }
 
-// A missing file means defaults. An unparseable one also yields defaults, but
-// is flagged so a save moves it aside instead of overwriting the only copy.
-// Other read failures (permissions, a directory in the way) throw.
 function readStoredSettings(options: SettingsOptions): StoredSettings {
   let body: string;
   try {
@@ -122,9 +118,7 @@ export function getSettings(options: SettingsOptions = {}): UserSettings {
   let values: Partial<UserSettings> = {};
   try {
     values = readStoredSettings(options).values;
-  } catch {
-    // An unreadable file must not take the UI down; defaults apply until it is fixed.
-  }
+  } catch {}
   return { ...detectedSettings(options), ...values };
 }
 
@@ -139,8 +133,6 @@ export function saveSettings(
   if (stored.unparseable) {
     renameSync(path, `${path}.corrupt-${Date.now()}`);
   }
-  // Rename over the target so a crash mid-write cannot leave the truncated
-  // file that the unparseable branch above exists to protect.
   const temp = `${path}.${process.pid}.tmp`;
   try {
     writeFileSync(temp, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
@@ -152,8 +144,6 @@ export function saveSettings(
   return { ...detectedSettings(options), ...merged };
 }
 
-// Renaming over a symlink would replace it with a regular file, so a settings
-// file managed from a dotfiles checkout is written through to its target.
 function writeTarget(path: string): string {
   try {
     return realpathSync(path);

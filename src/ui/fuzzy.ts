@@ -12,7 +12,6 @@ export interface SessionSearchIndexRow {
 
 export type SessionSearchField = "title" | "project" | "tool" | "model" | "started_at";
 
-/** UTF-16 string offsets, matching JavaScript slice() and React text children. */
 export type SessionHighlightRange = readonly [start: number, end: number];
 
 export type SessionHighlights = Partial<
@@ -56,22 +55,14 @@ const matcher = new uFuzzy({
   intraBound: "\\p{L}\\d|\\d\\p{L}|\\p{Ll}\\p{Lu}",
   intraChars: "[\\p{L}\\d']",
   intraContr: "'\\p{L}{1,2}\\b",
-  // A command palette should survive one internal typo without turning every
-  // query into a broad subsequence match.
   intraMode: 1,
   intraIns: 1,
   intraSub: 1,
   intraTrn: 1,
   intraDel: 1,
-  // Preserve the endpoint's newest-first order when all match metrics tie.
   compare: () => 0,
 });
 
-/**
- * Reusable fuzzy index for the lightweight `/api/sessions/search-index` rows.
- * Each query filters the stable haystack afresh because typo-tolerant matches
- * are not monotonic as a needle grows.
- */
 export class SessionSearchIndex {
   readonly size: number;
   readonly #documents: readonly SearchDocument[];
@@ -151,11 +142,6 @@ export class SessionSearchIndex {
   }
 }
 
-/**
- * Intersect cheap single-term filters before any ranking work. The full
- * candidate set is then ordered by a linear-time relevance approximation so
- * exact, dense matches cannot disappear behind the browser-work cap.
- */
 function filterTerms(haystack: string[], terms: readonly string[]): number[] {
   let candidates: number[] | null = null;
   for (const term of [...terms].sort((left, right) => right.length - left.length)) {
@@ -454,19 +440,6 @@ function normalizeLimit(limit: number | undefined, size: number): number {
   return Math.min(size, Math.floor(limit));
 }
 
-/**
- * Read the whole search index one page at a time. The server caps each page,
- * so a final short page marks the end. A session added between two requests
- * pushes rows down, so rows already seen are dropped rather than shown twice.
- * One hidden between requests pulls rows up and skips the row at the page
- * boundary. Archiving or deleting a session refreshes the app, which reloads
- * the index, so the gap lasts until then. It needs more than one page of
- * sessions, so archives under SEARCH_INDEX_PAGE_MAX never see it.
- *
- * A server from before paging ignores `limit` and `offset` and returns every
- * row each time. A page longer than requested, or one that adds no new row,
- * ends the read, so such a server can't keep the loop requesting forever.
- */
 export async function fetchSessionSearchIndex(
   fetchPage: (offset: number, limit: number) => Promise<SessionSearchIndexRow[]>,
   pageSize: number = SEARCH_INDEX_PAGE_MAX,

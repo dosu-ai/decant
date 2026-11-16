@@ -103,9 +103,7 @@ export function toolCallInputLabel(value: string | null): string {
         }
       }
     }
-  } catch {
-    // Providers may store an abbreviated preview that is no longer valid JSON.
-  }
+  } catch {}
   return firstLine(value, 120);
 }
 
@@ -120,8 +118,6 @@ export function prettyToolValue(value: string | null): string {
   }
 }
 
-/** An elided value cannot parse as JSON, so Preview would silently render the
- * same raw text as Raw with nothing explaining why. */
 export function ToolValueElision({ value }: { value: string | null }) {
   const omitted = previewOmittedCount(value);
   if (omitted == null) {
@@ -364,11 +360,6 @@ export function ToolsView({
   );
   const toolFilterRows = toolsStatus === "ready" ? data.tools : [];
   const serverFilterRows = mcpStatus === "ready" ? data.mcp : [];
-  // Built from every server in view, so two registrations of the same server
-  // (`dosu` and `claude_ai_Dosu`) never render as two identical rows. Both
-  // tables and the filter share one map so a server reads the same everywhere.
-  // The two tables are limited independently, so the union is what is on
-  // screen -- a server in one but not the other still gets a stable label.
   const serverLabels = useMemo(
     () =>
       mcpServerLabels([

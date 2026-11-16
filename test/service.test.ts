@@ -50,12 +50,6 @@ function freshHome(): string {
 
 const spec = { binary: "/opt/test/decant", dbPath: "/Users/dev/.decant/decant.db", port: 3000 };
 
-/**
- * A fake launchctl/systemctl that tracks whether the job is loaded and running.
- * Like launchd, it caches the arguments it read at bootstrap, keeps a booted-out
- * job registered for `exitPrints` status reads while its process exits, and
- * refuses to bootstrap the label until then.
- */
 function fakeManager(
   initial: { loaded?: boolean; running?: boolean; systemd?: boolean; exitPrints?: number } = {},
 ) {
@@ -187,7 +181,6 @@ describe("unit files", () => {
   test("commands survive escaping in both formats", () => {
     expect(parseUnitCommand("launchd", launchdPlist(tricky))).toEqual(serviceArgs(tricky));
     expect(parseUnitCommand("systemd", systemdUnit(tricky))).toEqual(serviceArgs(tricky));
-    // systemd would expand an unescaped % or $ inside ExecStart.
     expect(systemdUnit(tricky)).toContain("100%% $$HOME");
   });
 
@@ -206,7 +199,6 @@ describe("unit files", () => {
   });
 
   test("control characters in either path are refused in both formats", () => {
-    // A newline would end ExecStart and start a directive of the path's choosing.
     const injected = "/data/a.db\nExecStartPre=/bin/touch /tmp/pwned";
     for (const bad of [
       injected,
@@ -321,7 +313,6 @@ describe("launchd install and uninstall", () => {
     fake.calls.length = 0;
     const inside = darwinOptions(home, fake.run, { DECANT_SERVICE: "1" });
     await installService({ dbPath: spec.dbPath, port: 4000 }, inside);
-    // Booting out its own job would kill the caller mid-request.
     expect(fake.calls.some((call) => call.startsWith("launchctl bootout"))).toBe(false);
     expect(readFileSync(unitPath("launchd", { homeDir: home }), "utf8")).toContain(
       "<string>4000</string>",
@@ -500,14 +491,12 @@ describe("binaryChanged", () => {
     if (first == null) throw new Error("fingerprint missing");
     expect(binaryChanged(first, binaryFingerprint(file))).toBe(false);
 
-    // The installer and `decant update`: write a sibling, rename it over.
     writeFileSync(join(dir, "decant.next"), "v2");
     renameSync(join(dir, "decant.next"), file);
     const renamed = binaryFingerprint(file);
     expect(renamed?.ino).not.toBe(first.ino);
     expect(binaryChanged(first, renamed)).toBe(true);
 
-    // Homebrew: the stable link moves to a new Cellar directory.
     for (const version of ["1", "2"]) {
       mkdirSync(join(dir, "Cellar", version), { recursive: true });
       writeFileSync(join(dir, "Cellar", version, "decant"), `brew ${version}`);
@@ -520,7 +509,6 @@ describe("binaryChanged", () => {
     symlinkSync(join(dir, "Cellar", "2", "decant"), link);
     expect(binaryChanged(linked, binaryFingerprint(link))).toBe(true);
 
-    // An in-place rewrite keeps the inode but changes size and mtime.
     const before = binaryFingerprint(file);
     if (before == null) throw new Error("fingerprint missing");
     appendFileSync(file, "-patched");
@@ -574,7 +562,6 @@ describe("watchBinary", () => {
     let changes = 0;
     const stop = watchBinary(file, () => changes++, timing);
     try {
-      // Move it away and back: the same inode, size, and mtime return.
       renameSync(file, `${file}.moved`);
       await Bun.sleep(100);
       renameSync(`${file}.moved`, file);
@@ -592,7 +579,6 @@ describe("watchBinary", () => {
     let changes = 0;
     const stop = watchBinary(file, () => changes++, { intervalMs: 20, settleMs: 120 });
     try {
-      // Each write lands inside the settle window, so no restart yet.
       for (let index = 0; index < 5; index += 1) {
         appendFileSync(file, `chunk-${index}`);
         await Bun.sleep(50);
@@ -608,7 +594,6 @@ describe("watchBinary", () => {
   test("compares against the fingerprint taken at startup, not when watching began", async () => {
     const file = binaryFile("replaced-while-waiting");
     const atStart = binaryFingerprint(file);
-    // An upgrade lands while the service is still waiting for its port.
     writeFileSync(`${file}.next`, "v2");
     renameSync(`${file}.next`, file);
     let changes = 0;
@@ -663,7 +648,6 @@ describe("launchd reconfiguration", () => {
     const fake = fakeManager();
     const options = darwinOptions(home, fake.run);
     await installService({ dbPath: spec.dbPath, port: 3000 }, options);
-    // Stopped cleanly with SIGTERM: still loaded, not running.
     fake.state.running = false;
     fake.calls.length = 0;
 
@@ -671,7 +655,6 @@ describe("launchd reconfiguration", () => {
     expect(fake.calls).toContain("launchctl bootout gui/501/dev.dosu.decant");
     expect(fake.calls.some((call) => call.startsWith("launchctl bootstrap"))).toBe(true);
     expect(fake.calls).not.toContain("launchctl kickstart gui/501/dev.dosu.decant");
-    // What status reports is what launchd runs.
     expect(status).toMatchObject({ running: true, url: "http://127.0.0.1:3001" });
     expect(fake.state.args).toEqual(status.command);
     expect(fake.state.args).toContain("/data/changed.db");
@@ -681,7 +664,6 @@ describe("launchd reconfiguration", () => {
     const home = freshHome();
     const fake = fakeManager();
     await installService({ dbPath: spec.dbPath, port: 3000 }, darwinOptions(home, fake.run));
-    // The service itself wrote a new port, which waits for the next load.
     await installService(
       { dbPath: spec.dbPath, port: 4000 },
       darwinOptions(home, fake.run, { DECANT_SERVICE: "1" }),
@@ -700,7 +682,6 @@ describe("launchd reconfiguration", () => {
 
   test("waits for the old process to exit before bootstrapping again", async () => {
     const home = freshHome();
-    // launchd keeps the label registered while the old server shuts down.
     const fake = fakeManager({ exitPrints: 3 });
     const options = darwinOptions(home, fake.run);
     await installService({ dbPath: spec.dbPath, port: 3000 }, options);
@@ -713,7 +694,6 @@ describe("launchd reconfiguration", () => {
     const waits = fake.calls
       .slice(bootout + 1, bootstrap)
       .filter((call) => call.startsWith("launchctl print"));
-    // Three reads while it exits, then one that finds it gone.
     expect(waits.length).toBe(4);
   });
 

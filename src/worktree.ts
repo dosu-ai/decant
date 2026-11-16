@@ -36,7 +36,6 @@ interface ProjectRow {
 interface ExternalContainer {
   tool: string;
   leaf: string;
-  /** The repository segment of a `<tool dir>/worktrees/<repo>/<name>` layout. */
   repo?: string;
 }
 
@@ -93,8 +92,7 @@ export function externalContainer(path: string): ExternalContainer | null {
               ? "conductor"
               : segment === "worktrees" && index > 0 && parts[index - 1] === ".warp"
                 ? "warp"
-                : // T3 Code keeps worktrees at ~/.t3/worktrees/<repo>/<t3-id>.
-                  segment === "worktrees" && index > 0 && parts[index - 1] === ".t3"
+                : segment === "worktrees" && index > 0 && parts[index - 1] === ".t3"
                   ? "t3"
                   : segment === "worktrees" && index > 0 && parts[index - 1] === ".codex"
                     ? "codex"
@@ -120,9 +118,6 @@ export function classifyExternal(
   knownRoots: readonly KnownRoot[],
   repo?: string,
 ): Resolution {
-  // A nested layout names its repository outright, so an exact match on that
-  // name wins over prefix matching: under worktrees/decant/, a known root
-  // named decant-t3 must not claim the leaf decant-t3-0cacd467.
   if (repo != null && repo !== "") {
     const label = leaf.startsWith(`${repo}-`) ? leaf.slice(repo.length + 1) : null;
     const exact = knownRoots
@@ -217,10 +212,6 @@ export function resolveGitRoot(
   fs: Pick<ProbeFs, "readText"> = boundedFs,
 ): Resolution | null {
   const dotgit = `${dir}/.git`;
-  // Read unconditionally instead of stat-then-read: a regular repo's `.git`
-  // directory fails with EISDIR and an absent one with ENOENT, both meaning
-  // "not a worktree leaf", with no window for the path to change between
-  // check and use. A directory that does not answer in time reads the same.
   const raw = fs.readText(dotgit);
   if (raw == null) {
     return null;

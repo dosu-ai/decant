@@ -12,39 +12,22 @@ import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SERVE_PORT } from "./serve-defaults.ts";
 import { detectInstall, type InstallInfo } from "./update.ts";
 
-/**
- * The background service: the OS starts `decant serve` at login and restarts
- * it if it fails. It is the same single process that owns the archive when
- * `decant serve` runs in a terminal, only supervised by launchd or systemd.
- */
-
 export type ServiceManager = "launchd" | "systemd";
 
 export const LAUNCHD_LABEL = "dev.dosu.decant";
 export const SYSTEMD_UNIT = "decant.service";
-/** Set in the service's environment so a process knows the OS supervises it. */
 export const SERVICE_ENV = "DECANT_SERVICE";
-/**
- * Exit code a supervised server uses to ask for a restart (EX_TEMPFAIL). Both
- * unit files restart only on a failing exit, so a clean stop stays stopped.
- */
 export const SERVICE_RESTART_EXIT_CODE = 75;
 
 export interface ServiceStatus {
   supported: boolean;
   manager: ServiceManager | null;
-  /** Why the service cannot be used here, when `supported` is false. */
   reason: string | null;
-  /** The unit file exists, so the OS starts Decant at login. */
   installed: boolean;
-  /** The OS reports the service as running now. */
   running: boolean;
   unitPath: string | null;
-  /** The command the unit file runs, when it can be read back. */
   command: string[] | null;
-  /** Where the service serves the UI, read from its command. */
   url: string | null;
-  /** True when the process answering is the service itself. */
   current: boolean;
 }
 
@@ -68,24 +51,15 @@ export interface ServiceOptions {
   homeDir?: string | null;
   uid?: number;
   run?: RunCommand;
-  /** Test seam: the install `serviceBinary` classifies. */
   install?: InstallInfo;
-  /** Test seam: the running binary's path. */
   execPath?: string;
-  /** Test seam: how long to wait for launchd to finish unloading the job. */
   unloadTimeoutMs?: number;
 }
 
 export class ServiceUnavailableError extends Error {}
 
-/**
- * A path the unit file would need cannot be written into it safely. It extends
- * ServiceUnavailableError so callers report it the same way: nothing was
- * written, and the user has to pick a different path.
- */
 export class UnsafeServicePathError extends ServiceUnavailableError {}
 
-/** launchd or systemd refused a step; its message is safe to show the user. */
 export class ServiceCommandError extends Error {}
 
 export function isServiceProcess(env: Record<string, string | undefined> = process.env): boolean {
@@ -221,7 +195,6 @@ WantedBy=default.target
 `;
 }
 
-/** Read the command back out of an installed unit file, or null if it is not ours. */
 export function parseUnitCommand(manager: ServiceManager, body: string): string[] | null {
   if (manager === "launchd") {
     const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(body);
@@ -275,8 +248,6 @@ export async function serviceStatus(options: ServiceOptions = {}): Promise<Servi
     const printed = await run(["launchctl", "print", launchdTarget(options)]);
     running = printed.code === 0 && /^\s*state = running\s*$/m.test(printed.stdout);
   } else {
-    // `show-environment` succeeds only when a systemd user manager is reachable,
-    // which rules out containers and WSL without systemd.
     const probe = await run(["systemctl", "--user", "show-environment"]);
     if (probe.code !== 0) {
       reason ??= "No systemd user session is available, so Decant cannot register a service.";
@@ -297,10 +268,6 @@ export async function serviceStatus(options: ServiceOptions = {}): Promise<Servi
   };
 }
 
-/**
- * Write the unit file and start the service. Idempotent: an installed service
- * with the same command is left alone.
- */
 export async function installService(
   spec: Omit<ServiceSpec, "binary"> & { binary?: string },
   options: ServiceOptions = {},
@@ -340,9 +307,6 @@ export async function installService(
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, { mode: 0o644 });
-  // Reloading means stopping the job first. When the caller is the running
-  // service, that would kill it mid-request, so the new unit file applies the
-  // next time the manager loads it instead.
   const reload = changed && !isServiceProcess(env);
   if (manager === "launchd") {
     mkdirSync(dirname(serviceLogPath(options)), { recursive: true });
@@ -355,29 +319,21 @@ export async function installService(
       }
       loaded = false;
     }
-    // A label the user once disabled stays disabled across bootstrap.
     await check(run, ["launchctl", "enable", target]);
     if (!loaded) {
-      // RunAtLoad starts the job as soon as it is bootstrapped.
       await check(run, ["launchctl", "bootstrap", launchdDomain(options), path]);
     } else if (!before.running) {
-      // Loaded with the current arguments but stopped, such as after a crash loop.
       await check(run, ["launchctl", "kickstart", target]);
     }
   } else {
     await check(run, ["systemctl", "--user", "daemon-reload"]);
     await check(run, ["systemctl", "--user", "enable", SYSTEMD_UNIT]);
-    // After daemon-reload, start runs the new unit; only a running one needs a restart.
     const restart = reload && before.running;
     await check(run, ["systemctl", "--user", restart ? "restart" : "start", SYSTEMD_UNIT]);
   }
   return serviceStatus(options);
 }
 
-/**
- * Unregister the service without stopping it, so the caller can answer a
- * request before `stopService` ends the process when the caller is the service.
- */
 export async function removeService(options: ServiceOptions = {}): Promise<void> {
   const manager = serviceManager(options.platform);
   if (manager == null) return;
@@ -397,8 +353,6 @@ export async function stopService(options: ServiceOptions = {}): Promise<void> {
   if (manager == null) return;
   const run = options.run ?? runCommand;
   if (manager === "launchd") {
-    // A job still exiting at the deadline is gone soon after, since launchd
-    // kills it at its ExitTimeOut; the caller's status read reports it meanwhile.
     await bootoutAndWait(run, launchdTarget(options), options);
   } else {
     await run(["systemctl", "--user", "stop", "--no-block", SYSTEMD_UNIT]);
@@ -428,26 +382,10 @@ export function binaryFingerprint(path: string): BinaryFingerprint | null {
   }
 }
 
-/**
- * Decide whether the binary the service runs has been replaced, so the running
- * server should exit and let the OS start the new version.
- *
- * How each install channel updates the file:
- * - Homebrew installs into a new Cellar directory, so the `opt` symlink
- *   resolves to a different `path`.
- * - The installer and `decant update` write a new file and rename it over the
- *   old one, so `ino` changes while `path` stays the same.
- * - npm replaces the platform package's directory contents.
- *
- * `next` is null while the file is missing, which happens for a moment in the
- * middle of an upgrade.
- */
 export function binaryChanged(
   previous: BinaryFingerprint,
   next: BinaryFingerprint | null,
 ): boolean {
-  // A missing file is the middle of an upgrade, not a new binary. The next
-  // check sees whatever lands there.
   if (next == null) return false;
   return (
     next.path !== previous.path ||
@@ -459,17 +397,10 @@ export function binaryChanged(
 
 export interface BinaryWatchOptions {
   intervalMs: number;
-  /** How long a changed file must stay the same before it counts as replaced. */
   settleMs: number;
-  /** The fingerprint the process started from, when taken before watching began. */
   initial?: BinaryFingerprint | null;
 }
 
-/**
- * Call `onChange` once the binary at `path` has been replaced and has stopped
- * changing, so a restart never runs a file an upgrade is still writing.
- * Returns a function that stops watching, or null if the binary is unreadable.
- */
 export function watchBinary(
   path: string,
   onChange: () => void,
@@ -510,7 +441,6 @@ export function watchBinary(
   };
 }
 
-/** The ProgramArguments launchd loaded, from `launchctl print`, or null if absent. */
 export function parseLaunchdArguments(printed: string): string[] | null {
   const block = /^\s*arguments = \{\n([\s\S]*?)\n\s*\}\s*$/m.exec(printed);
   if (block == null) return null;
@@ -525,7 +455,6 @@ function sameArgs(loaded: string[], wanted: string[]): boolean {
 }
 
 const UNLOAD_POLL_MS = 100;
-// launchd sends SIGKILL after the job's ExitTimeOut, 20 seconds by default.
 const UNLOAD_TIMEOUT_MS = 30_000;
 
 function unloadTimeout(options: ServiceOptions): number {
@@ -543,7 +472,6 @@ async function bootoutAndWait(
   target: string,
   options: ServiceOptions,
 ): Promise<boolean> {
-  // bootout fails when the job is not loaded, which is the state we want.
   await run(["launchctl", "bootout", target]);
   const deadline = Date.now() + unloadTimeout(options);
   for (;;) {
@@ -594,7 +522,6 @@ async function runCommand(argv: string[]): Promise<CommandResult> {
     ]);
     return { code, stdout, stderr };
   } catch (error) {
-    // A missing launchctl or systemctl reads as a failed command, not a crash.
     return {
       code: 127,
       stdout: "",

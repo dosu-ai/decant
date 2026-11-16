@@ -39,7 +39,6 @@ describe("buildDaySeries", () => {
     const series = buildDaySeries([
       row("2026-03-01", 2, 0, 0),
       row("2026-03-02", 3, 1, 5),
-      // Only subagent runs: no top-level session, but a real cost.
       row("2026-03-03", 0, 0, 4),
     ]);
     expect(series.points.map((point) => point.cost)).toEqual([null, 5, 4]);
@@ -52,7 +51,6 @@ describe("buildDaySeries", () => {
     expect(series.points[0]).toEqual({ key: "2025-12-29", sessions: 1, cost: 1 });
     expect(series.points.at(-1)).toEqual({ key: "2026-12-28", sessions: 2, cost: 2 });
     expect(series.points.reduce((sum, point) => sum + point.sessions, 0)).toBe(3);
-    // 2026-01-01 through 2026-04-02 is exactly WEEKLY_AFTER_DAYS days.
     expect(WEEKLY_AFTER_DAYS).toBe(92);
     const edge = buildDaySeries([row("2026-01-01", 1)], { from: "2026-01-01", to: "2026-04-02" });
     expect(edge.granularity).toBe("day");
@@ -65,14 +63,10 @@ describe("buildDaySeries", () => {
     const rows = [row("2026-01-05", 1, 0, 0), row("2026-01-12", 1, 0, 0), row("2026-01-13", 1)];
     const series = buildDaySeries(rows, { from: "2026-01-05", to: "2026-06-30" });
     expect(series.points.slice(0, 3)).toEqual([
-      // Idle days around a no-usage session do not make the week $0.
       { key: "2026-01-05", sessions: 1, cost: null },
-      // One known day makes the week known; the unknown day stays out of it.
       { key: "2026-01-12", sessions: 2, cost: 1 },
-      // A week with no sessions is a real zero.
       { key: "2026-01-19", sessions: 0, cost: 0 },
     ]);
-    // A day with only subagent runs has a real cost and makes its week known.
     const subagentOnly = buildDaySeries([row("2026-01-07", 0, 0, 4)], {
       from: "2026-01-05",
       to: "2026-06-30",
@@ -81,7 +75,6 @@ describe("buildDaySeries", () => {
   });
 
   test("rows outside the range count as neither data nor missing usage", () => {
-    // Rows left over from the previous range while the new one loads.
     const stale = [row("2026-02-01", 3, 1, 2), row("2026-02-02", 1)];
     const series = buildDaySeries(stale, { from: "2026-03-01", to: "2026-03-07" });
     expect(series.points).toHaveLength(7);

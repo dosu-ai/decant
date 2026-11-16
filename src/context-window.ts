@@ -3,9 +3,7 @@ import { withImmediateTransaction } from "./db.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 
-/** Baseline for Claude models whose published limit is still 200k. */
 const DEFAULT_WINDOW_TOKENS = 200_000;
-/** Current long-context Claude models use 1M as both the default and maximum. */
 const EXTENDED_WINDOW_TOKENS = 1_000_000;
 const ONE_MILLION_CLAUDE_FAMILIES = [
   /(?:^|-)opus-(?:5|4-(?:6|7|8))(?:-|$)/,
@@ -15,11 +13,9 @@ const ONE_MILLION_CLAUDE_FAMILIES = [
   /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
 ];
 
-/** Gemini CLI long-context defaults; flash-lite and image variants stay at 128k. */
 const GEMINI_LONG_CONTEXT_TOKENS = 1_000_000;
 const GEMINI_SMALL_CONTEXT_TOKENS = 128_000;
 
-/** Infer the missing window size from model limits and observed usage. */
 export function inferClaudeContextWindowTokens(model: string | null, maxSeen: number): number {
   if (maxSeen > DEFAULT_WINDOW_TOKENS) {
     return EXTENDED_WINDOW_TOKENS;
@@ -38,11 +34,6 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
     : DEFAULT_WINDOW_TOKENS;
 }
 
-/** Infer a Gemini window from the model id and observed usage, the way we do
- * for Claude. The 2.5/3.x line publishes 1M; flash-lite and image variants get
- * 128k unless a request already proved the window is larger. */
-/** An imported trajectory names its model but not the client that served
- * it, so the model family alone selects the window rules. */
 function isClaudeModel(model: string | null): boolean {
   return model != null && /claude/i.test(model);
 }
@@ -65,9 +56,7 @@ export function inferGeminiContextWindowTokens(model: string | null, maxSeen = 0
 export interface ContextWindowPoint {
   seq: number;
   timestamp: string | null;
-  /** 1-based user turn this API call belongs to (machine summaries excluded). */
   turn: number;
-  /** Window occupancy for this API call: input + cache_read + cache_creation. */
   context_tokens: number;
   input_tokens: number;
   cache_read_tokens: number;
@@ -78,31 +67,23 @@ export interface ContextWindowPoint {
 export interface ContextWindowCompaction {
   seq: number;
   timestamp: string | null;
-  /** "auto" | "manual" when compactMetadata is present in the source record. */
   trigger: string | null;
-  /** Tokens in the window when compaction fired; falls back to the last point before it. */
   pre_tokens: number | null;
-  /** Occupancy of the first API call after the boundary. */
   post_tokens: number | null;
 }
 
 export interface ContextWindowTimeline {
   session_id: number;
   tool: string;
-  /** Null when the session has no usable usage data. */
   window_tokens: number | null;
-  /** True when window_tokens comes from the model's published capacity rather
-   *  than the log. Claude and Gemini infer it; Codex logs an explicit window. */
   window_inferred: boolean;
   peak_tokens: number;
   peak_pct: number | null;
-  /** User turns counted with the same rule enrich uses for session.turn_count. */
   turn_count: number;
   points: ContextWindowPoint[];
   compactions: ContextWindowCompaction[];
 }
 
-/** Compaction/sidechain markers mined from a message's raw source record. */
 export interface MessageRawMeta {
   isSidechain: boolean;
   subtype: string | null;
@@ -112,15 +93,10 @@ export interface MessageRawMeta {
   compactPreTokens: number | null;
 }
 
-/** Single-parse extraction of every raw field the read path needs; expects the
- * message table aliased as `m`. Multi-path json_extract returns one JSON array
- * per row, so large raw payloads are parsed once, not once per field. */
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
   '$.agentId', '$.data.preCompactionTokens', '$.extra.context_management.type')`;
 
-/** Parses the MESSAGE_RAW_META_SQL array; malformed raw degrades to defaults.
- * `tool` names the session's source, whose sidechain marker may differ. */
 export function parseMessageRawMeta(value: string | null, tool?: string): MessageRawMeta {
   const none: MessageRawMeta = {
     isSidechain: false,
@@ -178,7 +154,6 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
   };
 }
 
-/** True for every source's compaction record shape. */
 export function isCompactBoundary(meta: MessageRawMeta): boolean {
   // Claude writes subtype compact_boundary, Codex a `compacted` record,
   // OpenCode a `compaction` row, and Copilot CLI a
@@ -197,7 +172,6 @@ interface UsageColumns {
   cache_creation_tokens: number | null;
 }
 
-/** Shared occupancy definition for the timeline and per-message transcript chips. */
 export function contextTokensFromUsage(row: UsageColumns): number | null {
   if (
     row.input_tokens == null &&
@@ -359,11 +333,6 @@ export function contextWindowForSession(
   };
 }
 
-/** Persist the session's context-window rollups while its rows are hot in the
- * ingest transaction. Turn count is written from the same main-thread rules so
- * migrated archives also stop treating compact summaries as user prompts.
- * peak_context_tokens doubles as the materialization marker: non-null means
- * computed (0 when the session has no usable usage). */
 export function materializeContextWindow(db: Database, sessionId: number): boolean {
   const timeline = contextWindowForSession(db, sessionId);
   if (timeline == null) {
@@ -386,8 +355,6 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
   return true;
 }
 
-/** One-time upgrade/backfill path, mirroring the economics materializer: sync
- * calls this so sessions ingested before v11 gain rollups without re-ingest. */
 export function materializeMissingContextWindows(db: Database): number {
   const rows = queryRows<{ id: number }>(
     db,

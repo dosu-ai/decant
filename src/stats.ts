@@ -27,7 +27,6 @@ export interface Totals {
 export interface StatsFilter extends DateFilter {
   includeArchived?: boolean;
   project?: string | null;
-  /** A repository root: matches sessions in the root and in its worktrees. */
   repo?: string | null;
   source?: SessionSource | null;
   tool?: string | null;
@@ -42,16 +41,10 @@ export const USAGE_OPTIONAL_TOOLS = [
   "atif",
 ] as const satisfies readonly Tool[];
 
-/** 1 unless the session comes from a source that may record no token usage
- * and none of its messages carries any. There a zero cost means "unknown",
- * not "free". Other sources always count: Codex can report usage only as
- * session totals, and a zero total there is a real zero. */
 export function sessionUsageAvailableSql(alias: string): string {
   const optional = USAGE_OPTIONAL_TOOLS.map((tool) => `'${tool}'`).join(", ");
   // An ATIF trajectory can record usage only as run totals (`final_metrics`),
   // zero included, or a cost only, with no per-step token counts.
-  // COALESCE: a JSON path the metadata lacks yields NULL, which a caller
-  // reading "not 0" as available would count as usage.
   return `COALESCE((${alias}.tool NOT IN (${optional}) OR EXISTS (
            SELECT 1 FROM message usage_message
            WHERE usage_message.session_id = ${alias}.id
@@ -117,7 +110,6 @@ export const DIMENSIONS = [
   "day",
 ] as const satisfies readonly Dimension[];
 
-/** Key for sessions with no project, or whose run has no outcome label. */
 export const NO_PROJECT_KEY = "(none)";
 export const UNCLASSIFIED_OUTCOME_KEY = "(unclassified)";
 
@@ -128,8 +120,6 @@ export function parseDimension(value: string): Dimension | null {
 export interface DimRow {
   key: string;
   sessions: number;
-  /** Top-level sessions in the row whose source records token usage. When
-   * this is below `sessions`, the row's tokens and cost cover only these. */
   usage_sessions: number;
   input_tokens: number;
   output_tokens: number;
@@ -197,11 +187,6 @@ function groupedRows(
   return rows.map((row) => ({ ...row, key: row.key ?? "" }));
 }
 
-/** Sessions count under the model that served most of their requests, but
- * tokens and cost follow the model behind each request, so a session that
- * switched models adds to every model it used. Each session's stored cost is
- * split in proportion to what its models cost at current rates, so the rows
- * still sum to the archive total. */
 function byModel(db: Database, visible: { sql: string; params: string[] }): DimRow[] {
   const sessions = db
     .query(
@@ -251,12 +236,8 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
     const label = row(session.model);
     label.sessions += session.is_subagent === 0 ? 1 : 0;
     label.usage_sessions += session.is_subagent === 0 && session.usage_available === 1 ? 1 : 0;
-    // Reasoning is recorded per session, not per request.
     label.reasoning_tokens += session.total_reasoning_tokens;
     label.est_reasoning_tokens += session.est_reasoning_tokens;
-    // A row with no model (Copilot's model-less usage checkpoints) is priced
-    // at the session's model when the session cost is stored, so it is
-    // priced and counted under that model here too.
     const served = (usage.get(session.id) ?? []).map((part) =>
       part.model === "" && part.reportedCostUsd == null && session.model
         ? { ...part, model: session.model }
@@ -288,10 +269,6 @@ function byModel(db: Database, visible: { sql: string; params: string[] }): DimR
   );
 }
 
-/** Each run counts under the outcome of the top-level session it belongs to,
- * so a subagent's tokens and cost land on the session that spawned it rather
- * than on the subagent's own label (usually none). Ancestors are read from the
- * whole archive because a date filter can keep a subagent and drop its parent. */
 function byOutcome(db: Database, visible: { sql: string; params: string[] }): DimRow[] {
   const sessions = db
     .query(
@@ -325,9 +302,6 @@ function byOutcome(db: Database, visible: { sql: string; params: string[] }): Di
         ).map((row) => [row.id, row]),
       )
     : null;
-  // A run takes its top-level session's label, even when that label is empty.
-  // Only a subagent whose chain never reaches a top-level session (its parent
-  // is not in the archive) keeps its own label.
   const rootOutcome = (session: (typeof sessions)[number]): string | null => {
     if (session.is_subagent === 0 || lineage == null) {
       return session.outcome;
@@ -426,10 +400,6 @@ function statsScope(
   };
 }
 
-/**
- * Select-list columns adding nearest-rank duration ordering, for a relation
- * of rows with a non-null duration_ms. Pair with NEAREST_RANK_PERCENTILES_SQL.
- */
 export function durationRankSql(partitionBy?: string): string {
   const partition = partitionBy == null ? "" : `PARTITION BY ${partitionBy}`;
   return `ROW_NUMBER() OVER (${partition} ORDER BY duration_ms) AS duration_rank,
@@ -437,7 +407,6 @@ export function durationRankSql(partitionBy?: string): string {
                   ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS duration_count`;
 }
 
-/** Aggregate columns picking p50 and p95 out of a durationRankSql relation. */
 export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
                   WHEN duration_rank = CAST((duration_count + 1) / 2 AS INTEGER)
                   THEN duration_ms
@@ -447,11 +416,6 @@ export const NEAREST_RANK_PERCENTILES_SQL = `MAX(CASE
                   THEN duration_ms
                 END) AS p95_ms`;
 
-/**
- * Nearest-rank p50 and p95 of durations sorted ascending, using the same ranks
- * as NEAREST_RANK_PERCENTILES_SQL. On 160k calls the SQL window pass took about
- * 150 ms, while sorting the same durations in memory takes about 20 ms.
- */
 export function nearestRankPercentiles(sorted: ArrayLike<number>): {
   p50_ms: number | null;
   p95_ms: number | null;
@@ -490,8 +454,6 @@ export function toolUsage(
     ON fs.id = t.session_id`;
   const from = `FROM tool_call t INDEXED BY idx_toolcall_usage
        ${scope}`;
-  // Grouping by session first follows idx_toolcall_usage order, so SQLite
-  // sorts only the per-session rows by tool, not every call.
   const aggregateSql = `WITH per_session AS (
          SELECT t.tool_name, t.tool_kind, t.mcp_server,
                 COUNT(*) AS calls,
@@ -522,7 +484,6 @@ export function toolUsage(
        ${from}
        WHERE t.duration_ms IS NOT NULL`;
   const params = [...visible.params, limit];
-  // Both scans run in one read transaction so they see the same snapshot.
   const rows = cachedRead(db, statementKey(aggregateSql, params), () =>
     db.transaction(() => {
       const aggregates = withStatement(
@@ -601,8 +562,6 @@ export interface McpStatRow {
 
 type McpAggregateDb = Omit<McpStatRow, "p50_ms" | "p95_ms">;
 
-/** Same approach as toolUsage: counts in one SQL pass, durations in another,
- * percentiles from a sorted array instead of a window row per call. */
 export function mcpUsage(db: Database, limitValue = 50, filter?: DateFilter | null): McpStatRow[] {
   const limit = normalizeLimit(limitValue, 50);
   const visible = statsScope(db, "s", filter);
@@ -744,8 +703,6 @@ export interface Activity {
 
 export function activity(db: Database, filter?: StatsFilter | null): Activity {
   const visible = statsScope(db, "s", filter);
-  // Buckets use the server's local time, which moves at a daylight-saving
-  // change without any write, so the offset is part of the key.
   const key = statementKey(`activity:${new Date().getTimezoneOffset()}:${visible.sql}`, [
     ...visible.params,
   ]);
@@ -817,8 +774,6 @@ function sparklineRows(db: Database, visible: { sql: string; params: string[] })
 export interface DateBounds {
   min: string | null;
   max: string | null;
-  // min and max are UTC days. The newest start instant lets a client name the
-  // latest day in its own time zone, which a UTC day alone cannot do.
   latest_started_at: string | null;
 }
 
@@ -848,7 +803,6 @@ export function dateBounds(db: Database): DateBounds {
   return { ...cachedRead(db, statementKey(sql, []), () => db.query(sql).get() as DateBounds) };
 }
 
-// started_at is UTC, so "today" is the local calendar day as a UTC range.
 export function todayTotals(db: Database, now: Date = new Date()): Totals {
   const visible = statsScope(db, "s");
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -896,8 +850,6 @@ function dimensionSql(dimension: Exclude<Dimension, "model" | "outcome">): {
         groupExpr: `COALESCE(p.path, '${NO_PROJECT_KEY}')`,
         join: "LEFT JOIN project p ON p.id = s.project_id",
       };
-    // Worktrees fold into the repository they were created from. A project that
-    // is not a worktree records itself as its own root.
     case "repo":
       return {
         groupExpr: `COALESCE(p.root_path, p.path, '${NO_PROJECT_KEY}')`,
@@ -960,8 +912,6 @@ function peak(counts: number[]): number | null {
   return bestIndex;
 }
 
-// Second precision compares correctly against stored timestamps with or
-// without fractional seconds.
 function utcSecond(date: Date): string {
   return date.toISOString().slice(0, 19);
 }

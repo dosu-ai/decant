@@ -50,8 +50,6 @@ export function cleanSessionTitle(value: string | null | undefined): string | nu
   return readableTagLabel(tag[1] ?? "");
 }
 
-/** The Cursor CLI sends each prompt as `<timestamp>...</timestamp>` followed by
- * the text in `<user_query>`. Returns that text, or null for any other shape. */
 export function cursorUserQuery(value: string): string | null {
   const match =
     /^\s*(?:<timestamp>[^<]*<\/timestamp>\s*)?<user_query>\s*([\s\S]*?)\s*<\/user_query>\s*$/.exec(

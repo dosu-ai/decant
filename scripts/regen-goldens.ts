@@ -73,9 +73,6 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     } else if (fixture.startsWith(`${VSCODE_FIXTURES}/`)) {
       stageVscodeSession(fixture, vscodeCopilotDir);
     } else if (fixture.startsWith(`${ATIF_FIXTURES}/`)) {
-      // Flat, because Harbor's job layout would make the temporary job
-      // directory a project. A trial's files stay side by side, so its
-      // trajectory_path refs still resolve.
       mkdirSync(atifDir, { recursive: true });
       copyFileSync(source, join(atifDir, name));
     } else {
@@ -86,7 +83,6 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     join(geminiDir, "synthetic-project", ".project_root"),
     "/synthetic/gemini-project\n",
   );
-  // All OpenCode sessions share one database, as they do on a real machine.
   buildOpenCodeFixtureDb(join(opencodeDir, "opencode.db"), opencodeFixtures);
   const opencodeConfigPath = join(opencodeDir, "opencode.json");
   writeFileSync(
@@ -109,8 +105,6 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
 const VSCODE_FIXTURES = "fixtures/vscode-copilot/User";
 const ATIF_FIXTURES = "fixtures/atif";
 
-/** Copies a VS Code session file to the same place under the staged `User`
- * directory, with its workspace's `workspace.json` when it has one. */
 function stageVscodeSession(fixture: string, userDir: string): void {
   const relative = fixture.slice(VSCODE_FIXTURES.length + 1);
   const target = join(userDir, relative);
@@ -168,7 +162,6 @@ async function regenerate(): Promise<void> {
   try {
     const db = openDb(dbPath);
     try {
-      // Pin the clock the golden test syncs under (see GOLDEN_NOW).
       setSystemTime(GOLDEN_NOW);
       let report: ReturnType<typeof sync>;
       try {

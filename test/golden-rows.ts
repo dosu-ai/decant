@@ -1,11 +1,7 @@
 import { decodeMessageRaw } from "../src/message-storage.ts";
 
-/** The clock golden rows are generated and checked under. Recommendation
- * signals look back 30 days from now, so without a fixed instant the
- * recommendations rows change as fixture sessions age out of the window. */
 export const GOLDEN_NOW = new Date("2026-11-04T22:00:00.000Z");
 
-/** Compare source records after decoding, independent of their storage codec. */
 export function decodeGoldenRows(rows: unknown[]): unknown[] {
   return rows.map((row) => {
     if (row != null && typeof row === "object" && "raw" in row && row.raw instanceof Uint8Array) {
@@ -15,7 +11,6 @@ export function decodeGoldenRows(rows: unknown[]): unknown[] {
   });
 }
 
-/** Natural-key row snapshots shared by the parity test and golden regenerator. */
 export const ROW_QUERIES = {
   sessions: `
     SELECT s.tool, s.source_session_id, p.path AS project_path, p.name AS project_name,

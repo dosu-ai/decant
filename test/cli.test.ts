@@ -173,7 +173,6 @@ describe("runCli", () => {
       { key: "gpt-5.4", sessions: 3 },
     ]);
 
-    // Plain rows end in a newline so the shell prompt starts on its own line.
     const plainStats = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "model"]);
     expect(plainStats.code).toBe(0);
     expect(plainStats.stdout).toBe("claude-opus-4-7\t4\ngpt-5.4\t3\n");
@@ -243,7 +242,6 @@ describe("runCli", () => {
 
     const db = openDb(dbPath);
     db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
-    // A stored row about one project: its key ends in a digest of the root.
     const projectRoot = (
       db.query("SELECT COALESCE(root_path, path) AS root FROM project LIMIT 1").get() as {
         root: string;
@@ -303,7 +301,6 @@ describe("runCli", () => {
       "catalog:agents-md",
     );
 
-    // --quiet drops the confirmation, not the reason a mark failed.
     const missing = await runCli([
       ...base.filter((arg) => arg !== "--json"),
       "--quiet",
@@ -327,11 +324,6 @@ describe("runCli", () => {
       throw new Error('expected the claude sample fixture session (source_session_id "sample")');
     }
 
-    // Globals after the subcommand: a regression guard for the exact shape
-    // AGENTS.md's "global flags on every command" contract, the justfile
-    // wrappers (`just ls {{ARGS}}`), and the bug-report template's repro
-    // commands all rely on — decant sync/ls --db ... --no-sync, not
-    // --db/--no-sync first.
     const result = await runCli([
       "export",
       String(sessionId),
@@ -376,10 +368,6 @@ describe("runCli", () => {
     ]);
     expect(result.code).toBe(0);
     expect(existsSync(join(outDir, `${sessionId}.trajectory.json`))).toBe(true);
-    // All 7 fixture sessions carry both roles, so none should be skipped here;
-    // the skip-tally path itself is covered separately below. Several fixtures
-    // do legitimately trigger repairs (wrapped args, dropped noise), so this
-    // only pins the final tally line, not the whole of stderr.
     expect(result.stderr).toContain(`exported 7 sessions to ${outDir}\n`);
     expect(result.stderr).not.toContain("skipped");
   });
@@ -540,8 +528,6 @@ describe("runCli", () => {
     expect(without.code).toBe(0);
     expect(existsSync(join(withoutDir, "1.trajectory.json"))).toBe(true);
     expect(existsSync(join(withoutDir, "2.trajectory.json"))).toBe(false);
-    // Every block above is missing a timestamp, so each visited session fills
-    // two of them — a deterministic, non-empty repairs line to assert against.
     expect(without.stderr).toContain("session 1: timestamps_filled=2");
     expect(without.stderr).not.toContain("session 2:");
 
@@ -629,8 +615,6 @@ describe("runCli", () => {
       "utf8",
     ).trimEnd();
 
-    // Informational only: an unknown record type keeps the line as role "other",
-    // so nothing is lost and the exit code must stay 0.
     const informational = join(targetDir, "informational.jsonl");
     writeFileSync(
       informational,
@@ -646,8 +630,6 @@ describe("runCli", () => {
       issues: 1,
       issues_by_code: { unknown_record_type: 1 },
     });
-    // The path is shell-quoted so the hint stays copy-pasteable when the
-    // archive lives under a directory with a space in it.
     expect(softReport.issues_hint).toContain(`--db '${fixtureCase.dbPath}' ls --json`);
     expect(softReport.issues_hint).toContain("informational_ingest_issue_count");
     expect(softReport.issues_hint).toContain("/api/sessions/:id/issues");
@@ -672,9 +654,6 @@ describe("runCli", () => {
     expect(softText.code).toBe(0);
     expect(softText.stderr).toContain(`--db '${textCase.dbPath}' ls --json`);
 
-    // An archive selected by DECANT_DB rather than --db still needs the flag,
-    // or a one-shot `DECANT_DB=... decant sync` sends the reader to the
-    // default archive instead of the one that reported the issue.
     const envCase = freshCase();
     const informationalEnv = join(targetDir, "informational-env.jsonl");
     writeFileSync(
@@ -688,8 +667,6 @@ describe("runCli", () => {
     expect(softEnv.code).toBe(0);
     expect(JSON.parse(softEnv.stdout).issues_hint).toContain(`--db '${envCase.dbPath}' ls --json`);
 
-    // No archive override at all: the bare command already reads the default,
-    // so the flag would be noise. This run lands on `homeDir`'s default path.
     const informationalDefault = join(targetDir, "informational-default.jsonl");
     writeFileSync(
       informationalDefault,
@@ -702,7 +679,6 @@ describe("runCli", () => {
     expect(softDefault.code).toBe(0);
     expect(JSON.parse(softDefault.stdout).issues_hint).toContain("decant ls --json");
 
-    // A line that cannot be parsed is content decant dropped: exit 3.
     const lossy = join(targetDir, "lossy.jsonl");
     writeFileSync(lossy, `${sample}\n{not json\n`);
     const hard = await runCli(["--db", fixtureCase.dbPath, "--json", "sync", "--path", lossy], {
@@ -746,7 +722,6 @@ describe("runCli", () => {
     const fixtureCase = freshCase();
     const dbPath = join(dirname(fixtureCase.dbPath), "archive", "decant.db");
 
-    // A read command must not create an archive at a path the user named.
     const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
     expect(list).toMatchObject({ code: 1, stdout: "" });
     expect(existsSync(dirname(dbPath))).toBe(false);
@@ -918,7 +893,6 @@ describe("db info discloses what the archive stores", () => {
   }
   type FullInfoJson = InfoJson & { fts_rows: number; text_bytes: number };
 
-  /** Bulky enough that removing it actually frees whole SQLite pages. */
   function seedBulkySession(dbPath: string): number {
     const db = openDb(dbPath);
     try {
@@ -963,8 +937,6 @@ describe("db info discloses what the archive stores", () => {
     expect(row.blocks).toBeGreaterThan(0);
     expect(row.file_refs).toBeGreaterThan(0);
     expect(row.freelist_bytes).toBe(0);
-    // A byte sum and an FTS row count are full scans; a multi-GB archive must
-    // not pay for them just to read its path and schema version.
     expect(row.fts_rows).toBeUndefined();
     expect(row.text_bytes).toBeUndefined();
 
@@ -1021,8 +993,6 @@ describe("db info discloses what the archive stores", () => {
       (await runCli([...base, "db", "info", "--full"])).stdout,
     ) as FullInfoJson;
     expect(afterDelete.text_bytes).toBeLessThan(before.text_bytes);
-    // The rows are gone but their bytes are still in the file: this is the
-    // number that tells a user a vacuum is owed.
     expect(afterDelete.freelist_bytes).toBeGreaterThan(0);
 
     expect((await runCli(["--db", dbPath, "--no-sync", "db", "vacuum"])).code).toBe(0);
@@ -1036,12 +1006,7 @@ describe("db info discloses what the archive stores", () => {
 
   test("text_bytes counts bytes, not characters", async () => {
     const dbPath = join(workDir, "db-info-utf8.db");
-    // SQLite's LENGTH() counts characters on a TEXT column. The field sits
-    // directly under size_bytes, which is real bytes from statSync, so it has
-    // to be measured the same way or the two disagree in the same output.
     const sample = "h\u00e9llo\u2192\ud83d\ude42";
-    // Code points, not UTF-16 units: SQLite's LENGTH() counts characters, and
-    // JS .length would count the emoji's surrogate pair twice.
     expect([...sample].length).toBe(7);
     expect(Buffer.byteLength(sample, "utf8")).toBe(13);
 
@@ -1055,10 +1020,6 @@ describe("db info discloses what the archive stores", () => {
         .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
         .run(sessionId, sample).lastInsertRowid,
     );
-    // Every column the sum touches gets the multibyte sample. Leaving
-    // tool_input and tool_result NULL would let COALESCE return 0 either way,
-    // so reverting those two call sites to LENGTH() would go unnoticed --
-    // and tool_result is the largest content column in a real archive.
     db.query(
       `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_input, tool_result)
        VALUES (?1, ?2, 0, 'tool_use', ?3, ?3, ?3)`,
@@ -1068,8 +1029,6 @@ describe("db info discloses what the archive stores", () => {
     const info = JSON.parse(
       (await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"])).stdout,
     ) as FullInfoJson;
-    // Four stored copies of the sample at 13 bytes each: message.raw, and
-    // block.text / tool_input / tool_result.
     expect(info.text_bytes).toBe(52);
   });
 
@@ -1093,7 +1052,6 @@ describe("db info discloses what the archive stores", () => {
       compressed_messages: number;
       raw_stored_bytes: number;
     };
-    // db compact always skips source sync, even without the global --no-sync.
     expect(row.sessions).toBe(1);
     expect(row.text_bytes).toBe(Buffer.byteLength(raw));
     expect(row.compressed_messages).toBe(1);
@@ -1166,8 +1124,6 @@ describe("session rm", () => {
     ]);
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(`deleted session ${rootId} (1 descendant)`);
-    // Deleted bytes may remain readable until a vacuum, so the hint is part of
-    // the contract, not a nicety.
     expect(removed.stdout).toContain("decant db vacuum");
 
     expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(0);
@@ -1250,7 +1206,6 @@ describe("session rm", () => {
     expect(refused.stderr).toContain("--yes");
     expect(refused.stdout).toBe("");
 
-    // Under --json the refusal is the result on stdout, still with exit 2.
     const json = await runCli([
       "--db",
       dbPath,
@@ -1269,8 +1224,6 @@ describe("session rm", () => {
       error: "refusing to delete a session tree without --yes",
     });
 
-    // There is no un-delete, so a refused guard has to leave the archive
-    // byte-for-byte as it found it.
     expect(sessionCount(dbPath)).toBe(2);
     expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(1);
     expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
@@ -1378,7 +1331,6 @@ describe("session rm", () => {
   });
 
   test("is offered by shell completion", async () => {
-    // A bare substring check passes on "--format"; match whole words only.
     const fish = await runCli(["completion", "fish"]);
     expect(fish.code).toBe(0);
     expect(fish.stdout).toContain("complete -c decant -f -a 'rm'");

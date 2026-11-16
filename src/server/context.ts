@@ -14,9 +14,6 @@ export type Db = ReturnType<typeof openDb>;
 export interface RequestContext {
   db?: Db;
   economics?: EconomicsCache;
-  /** Worker threads with their own read-only connections. When present, the
-   * heavy archive reads run there so they never queue behind each other on
-   * `db`, which stays free for fast routes and writes. */
   readPool?: ReadPool;
   runSync?: SyncWorkerRunner;
   syncCoordinator?: SyncCoordinator;
@@ -25,11 +22,8 @@ export interface RequestContext {
   remoteAddress?: string | null;
   trustedPeers?: string[];
   logger?: StructuredLogger;
-  /** The port this server is listening on, which the background service reuses. */
   boundPort?: number;
-  /** Test seam: how the background service routes reach launchd or systemd. */
   service?: ServiceOptions;
-  /** Stop this server so the background service can take over its port. */
   requestShutdown?: () => void;
 }
 

@@ -102,9 +102,6 @@ export function SessionsView({
   const listTotal = includeArchived ? null : visibleTotal;
   const pageCount =
     listTotal == null ? null : Math.max(1, Math.ceil(listTotal / SESSION_PAGE_SIZE));
-  // The page request asks for one row past the page, so a full response is the
-  // only signal a next page needs. Deriving it from a total instead would hide
-  // Next while a scoped summary is still in flight.
   const hasNextPage = !exhausted;
   const showPagination = displayedPage > 1 || page > 1 || hasNextPage;
   const waitingForSessions = shouldShowSessionSkeleton({
@@ -292,9 +289,6 @@ export function SessionsView({
             </tbody>
           </table>
         </div>
-        {/* Outside the table because a full-width row would have to span the
-         * columns that narrow panels hide, and those phantom columns would
-         * squeeze the visible header. */}
         {emptyMessage == null ? null : <p className="sessions-empty">{emptyMessage}</p>}
         <div className="panel-footer">
           <span>

@@ -103,8 +103,6 @@ export function registerStatsCommands(ctx: CliContext): void {
             const row = tokenEconomics(archive.db);
             const scope = totals(archive.db);
             const missingUsage = scope.sessions - scope.usage_sessions;
-            // Cursor CLI records no token usage: with no session in scope
-            // reporting any, cost is unknown rather than zero.
             const costUnavailable = scope.sessions > 0 && scope.usage_sessions === 0;
             if (!ctx.isJson() && missingUsage > 0) {
               io.writeErr(

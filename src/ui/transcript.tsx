@@ -45,9 +45,6 @@ import type {
   TranscriptBlockData,
 } from "./types.ts";
 
-// tabIndex={-1} lets arrow-key navigation move focus (and screen readers
-// announce the turn) without joining the tab order. Memoized because a
-// transcript can hold unbounded turns and each keypress changes `active` on two.
 export const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
@@ -758,7 +755,6 @@ export function renderableMessages(
 ): SessionDetailData["messages"] {
   return messages.filter(
     (message) =>
-      // Compaction boundaries carry no blocks but render as inline cards.
       message.is_compact_boundary ||
       message.blocks.some((block) => {
         if (block.block_type === "text" || block.block_type === "thinking") {

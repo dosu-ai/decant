@@ -46,8 +46,6 @@ function inProcessComputeVectors(path: string) {
   }
 }
 
-/** A computeVectors fake that counts calls and computes in-process (no real
- * Worker), for tests that only care about cache orchestration. */
 function countingComputeVectors(counter: { calls: number }) {
   return (path: string) => {
     counter.calls += 1;
@@ -96,7 +94,6 @@ describe("economics cache", () => {
     expect(counter.calls).toBe(1);
     expect(rebuilt).toBe(0);
 
-    // Simulate a sync worker: another connection ingests a session.
     const writer = openDb(dbPath);
     upsertSession(
       writer,
@@ -107,8 +104,6 @@ describe("economics cache", () => {
       "codex",
     );
     writer.close();
-    // The main connection has to touch the database once before data_version
-    // reflects the external commit.
     db.query("SELECT COUNT(*) FROM session").get();
 
     const stale = await cache.get();
@@ -144,9 +139,6 @@ describe("economics cache", () => {
     const db = openDb(dbPath);
     const counter = { calls: 0 };
     let rebuilt = 0;
-    // Captured before the ingest below, standing in for a worker whose read
-    // already happened by the time invalidate() fires mid-build — the case
-    // where naive coalescing would leave the cache pinned to a stale answer.
     const preIngestVectors = inProcessComputeVectors(dbPath);
     const gate = Promise.withResolvers<void>();
     const cache = new EconomicsCache({
@@ -165,7 +157,7 @@ describe("economics cache", () => {
       },
     });
 
-    cache.prewarm(); // build #1: blocked on gate, will resolve with stale data
+    cache.prewarm();
     upsertSession(
       db,
       parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
@@ -174,8 +166,6 @@ describe("economics cache", () => {
       2,
       "codex",
     );
-    // Must NOT be silently coalesced into build #1, which already committed
-    // to answering with the pre-ingest snapshot.
     cache.invalidate();
     gate.resolve();
     await cache.settled();

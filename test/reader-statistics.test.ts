@@ -32,8 +32,6 @@ function progress(ingested: number): SyncProgress {
 }
 
 describe("planner statistics helpers", () => {
-  // With no statistics SQLite guesses the low-cardinality `kind` index; once
-  // ANALYZE records that `grp` is nearly unique, it should switch to it.
   function plannedIndex(db: Database): string {
     return (
       db.query("EXPLAIN QUERY PLAN SELECT * FROM t WHERE kind = 1 AND grp = 5").get() as {
@@ -83,9 +81,7 @@ describe("planner statistics helpers", () => {
       expect(plannedIndex(server)).toContain("t_kind");
       expect(plannedIndex(reader)).toContain("t_kind");
       writer.exec("ANALYZE");
-      // A sync worker holds the write lock for most of a sync.
       writer.exec("BEGIN IMMEDIATE; INSERT INTO t VALUES (1, -1);");
-      // ANALYZE sqlite_schema needs that lock, so it reloads nothing here.
       reloadPlannerStatistics(server);
       expect(plannedIndex(server)).toContain("t_kind");
 
@@ -150,7 +146,6 @@ describe("reader statistics", () => {
     });
     stored = "first refresh";
     expect(() => statistics.onProgress(progress(26))).toThrow("worker unavailable");
-    // The sync can go on skipping files, so the count may not move.
     expect(() => statistics.onProgress(progress(26))).toThrow("worker unavailable");
     fail = false;
     statistics.onProgress(progress(26));
@@ -165,7 +160,6 @@ describe("reader statistics", () => {
     store("first refresh");
     statistics.onProgress(progress(26));
     expect(reloads).toEqual([26]);
-    // Unchanged statistics never reload, however far the sync gets.
     statistics.onProgress(progress(500));
     expect(reloads).toEqual([26]);
   });
@@ -200,7 +194,6 @@ describe("reader statistics", () => {
   test("reads the stored statistics only when the sync has ingested more", () => {
     const { statistics, reads } = tracker();
     const afterConstruction = reads();
-    // A sweep that skips every unchanged file reports progress but writes nothing.
     for (let scanned = 0; scanned <= 400; scanned += 25) {
       statistics.onProgress({ scanned, ingested: 0, skipped: scanned, failed: 0, total: 400 });
     }
@@ -215,7 +208,6 @@ describe("reader statistics", () => {
     store("first sync");
     statistics.onProgress(progress(400));
     expect(reloads).toEqual([400]);
-    // The first sync failed, so nothing marked the readers as loaded.
     statistics.onProgress(progress(0));
     store("second sync");
     statistics.onProgress(progress(5));
@@ -237,16 +229,11 @@ describe("reader statistics during a first sync", () => {
     "utf8",
   );
 
-  // An unpinned message-to-block join. Without statistics SQLite starts it
-  // from every text block in the archive. Product queries may pin their own
-  // plans, so the probe is written here and left free to follow statistics.
   const BLOCK_JOIN_PLAN = `EXPLAIN QUERY PLAN
     SELECT COUNT(*) FROM session s WHERE NOT EXISTS (
       SELECT 1 FROM message m JOIN block b ON b.message_id = m.id
       WHERE m.session_id = s.id AND m.role = 'user' AND b.type = 'text')`;
   function blockJoinPlan(db: Database): string {
-    // Finalized rather than cached: bun:sqlite keeps this EXPLAIN active in its
-    // statement cache, which pins the connection to the snapshot it first read.
     const statement = db.prepare(BLOCK_JOIN_PLAN);
     try {
       return (statement.all() as { detail: string }[]).map((row) => row.detail).join("\n");
@@ -269,7 +256,6 @@ describe("reader statistics during a first sync", () => {
       );
     }
     const dbPath = join(dir, "archive.db");
-    // Open the long-lived connections the way serve does, before any sync.
     const server = openDb(dbPath);
     optimizeLongLivedConnection(server);
     const reader = new ReadConnection(dbPath);
@@ -288,8 +274,6 @@ describe("reader statistics during a first sync", () => {
           reader.reloadStatistics();
           reloads.push({ scanned, server: blockJoinPlan(server) });
           if (reloads.length === 1) {
-            // sync() is synchronous, so this read is the only one that can
-            // reach the reader mid-sync: use() runs it before it first awaits.
             void reader.use((db) => {
               readerPlanAtFirstReload = blockJoinPlan(db);
             });
@@ -302,7 +286,6 @@ describe("reader statistics during a first sync", () => {
       });
       expect(report.ingested).toBe(total);
 
-      // The worker first analyzes once 25 sessions are in.
       expect(reloads[0]?.scanned).toBe(26);
       expect(readerPlanAtFirstReload).toContain("idx_block_message");
       expect(readerPlanAtFirstReload).not.toContain("idx_block_type");
@@ -311,7 +294,6 @@ describe("reader statistics during a first sync", () => {
         expect(reload.server).toContain("idx_block_message");
         expect(reload.server).not.toContain("idx_block_type");
       }
-      // 26, 52 and 104 are the only counts a 120-session sync may reload at.
       expect(reloads.length).toBeLessThanOrEqual(3);
     } finally {
       reader.close();

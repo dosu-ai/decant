@@ -148,7 +148,6 @@ describe("message source storage", () => {
         }
         upsertSession(db, parsed, `/synthetic/${source}.jsonl`, 1, 2);
       }
-      // Recreate existing uncompressed rows before taking the reference reads.
       for (const row of db.query("SELECT id, raw FROM message").all() as {
         id: number;
         raw: string | Uint8Array;
@@ -183,8 +182,6 @@ describe("message source storage", () => {
 
 describe("SQL readers of message source records", () => {
   test("read metadata through MESSAGE_METADATA_SQL instead of the raw column", async () => {
-    // Compacted rows hold a zstd BLOB in raw, where json_extract raises
-    // "malformed JSON" and json_valid returns 0. Only raw_meta is queryable.
     const root = join(import.meta.dir, "..");
     const offenders: string[] = [];
     for (const pattern of ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"]) {

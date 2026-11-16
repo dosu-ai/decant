@@ -1,18 +1,9 @@
-/**
- * Route resolution for the sidebar. Kept apart from the view layer so the
- * mapping can be tested directly: which destination a URL belongs to decides
- * what renders and which sidebar entry is marked current, and both are easy to
- * get subtly wrong when routes move.
- */
-
-/** The part of a nav item this module reads; the UI's own type adds an icon. */
 export interface NavDestination {
   key: string;
   href: string;
   label: string;
 }
 
-/** The landing route. Analytics answers the question the tool exists for. */
 const HOME_KEY = "analytics";
 const NOT_FOUND_LABEL = "Not found";
 const NOT_FOUND_KEY = "not-found";
@@ -21,7 +12,6 @@ const ANALYTICS_REPORT_KEY = "analytics-report";
 const SESSION_REPORT_LABEL = "Session report";
 const SESSION_REPORT_KEY = "session-report";
 
-// Keep `/analytics` as an explicit alias for existing links and bookmarks.
 const ALIASES: Record<string, string> = { "/analytics": HOME_KEY };
 
 export function isSessionDetailPath(pathname: string): boolean {
@@ -29,8 +19,6 @@ export function isSessionDetailPath(pathname: string): boolean {
 }
 
 export function pathOnly(path: string): string {
-  // `split` always yields at least one element, so the empty case needs an
-  // explicit check rather than a `??` fallback that can never fire.
   const pathname = path.split("?", 1)[0];
   return pathname == null || pathname === "" ? "/" : pathname;
 }
@@ -48,7 +36,6 @@ export function projectSessionsHref(project: string): string {
   return `/sessions?${params.toString()}`;
 }
 
-/** The repository root a sessions page is scoped to, worktrees included. */
 export function sessionRepoFilter(path: string): string | null {
   if (pathOnly(path) !== "/sessions") {
     return null;
@@ -98,8 +85,6 @@ export function sessionsArchivedHref(path: string, includeArchived: boolean): st
   return query === "" ? "/sessions" : `/sessions?${query}`;
 }
 
-/** Drop one scope filter from a sessions URL, keeping the others and the
- * archived toggle, and start again from the first page. */
 export function sessionsClearFilterHref(path: string, filter: "project" | "repo"): string {
   const params = pathOnly(path) === "/sessions" ? sessionParams(path) : new URLSearchParams();
   params.delete(filter);
@@ -113,11 +98,6 @@ function sessionParams(path: string): URLSearchParams {
   return new URLSearchParams(query);
 }
 
-/**
- * A session transcript resolves to Sessions rather than to itself. The reader
- * arrived from that list and returns to it, so leaving the sidebar on Sessions
- * keeps the trail visible while reading.
- */
 function resolve(path: string, items: readonly NavDestination[]): NavDestination | null {
   const pathname = pathOnly(path);
   if (pathname === "/sessions" || isSessionDetailPath(pathname)) {

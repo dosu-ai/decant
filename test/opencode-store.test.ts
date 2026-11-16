@@ -165,8 +165,6 @@ describe("OpenCodeStore", () => {
     const writer = new Database(path, { strict: true });
     try {
       writer.exec("PRAGMA journal_mode = WAL;");
-      // Auto-checkpoint is off so the insert stays in the -wal file, as it does
-      // while OpenCode is running; an immutable open would never see it.
       writer.exec("PRAGMA wal_autocheckpoint = 0;");
       writer.exec(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
                    VALUES ('ses_wal', 'prj', 'wal', '/decant-fixture/example', '2.0.27', 5, 9)`);
@@ -210,7 +208,6 @@ describe("OpenCodeStore", () => {
 
     expect(digest()).toBe(beforeDigest);
     expect(statSync(path).mtimeMs).toBe(beforeMtime);
-    // A read-only connection leaves no journal or WAL sidecar behind.
     expect(existsSync(`${path}-wal`)).toBe(false);
     expect(existsSync(`${path}-shm`)).toBe(false);
     expect(existsSync(`${path}-journal`)).toBe(false);
@@ -255,8 +252,6 @@ describe("OpenCodeStore 1.x tables", () => {
   });
 
   test("lists both copies of a migrated session, each with its own time_updated", () => {
-    // Which copy wins is ingest's decision (newest time_updated, across
-    // formats and databases), so the store reports every 1.x session.
     const path = freshPath();
     buildOpenCodeFixtureDb(path, ["v1/migrated.sql"]);
     const store = OpenCodeStore.open(path);
@@ -265,8 +260,6 @@ describe("OpenCodeStore 1.x tables", () => {
         "v1:1791797030000:4:11:1791797030000:1791797030000:7167188060000:19709767135000:b423cb6a1285";
       const sharedV1 =
         "v1:1791799999999:1:1:1791796000000:1791796000000:1791796000000:1791796000000:9812956cee22";
-      // A 2.x session with a 1.x copy carries that copy's key too, because
-      // the parser corrects its migrated rows from it.
       expect(store.listSessions()).toEqual([
         {
           dbPath: path,
@@ -315,8 +308,6 @@ describe("OpenCodeStore 1.x tables", () => {
       ]);
       expect(store.loadLegacySession("ses_shared")?.session.title).toBe("Legacy copy");
       expect(store.loadSession("ses_shared")?.session.title).toBe("Migrated copy");
-      // The 1.x copy a migrated session is corrected from: every message, and
-      // only the parts that can be step-finish parts.
       const legacy = store.loadSession("ses_migrated")?.legacy;
       expect(legacy?.version).toBe("1.3.10");
       expect(legacy?.messages.map((m) => m.id)).toEqual([
@@ -357,7 +348,6 @@ describe("OpenCodeStore 1.x tables", () => {
       expect(fingerprint()).toBe(SAMPLE_FINGERPRINT);
       const writer = new Database(path, { strict: true });
       try {
-        // A streamed part update moves only the part's time_updated.
         writer.exec("UPDATE part SET time_updated = 1791790020000 WHERE id = 'prt_v1s_16'");
         const afterPartUpdate = fingerprint();
         expect(afterPartUpdate).toBe(
@@ -383,8 +373,6 @@ describe("OpenCodeStore 1.x tables", () => {
   });
 
   test("changes the key when a session is renamed, archived, or re-totaled in place", () => {
-    // OpenCode 1.4+ writes time_updated back unchanged on setTitle and
-    // setArchived, and touches no message or part.
     const path = freshPath();
     buildOpenCodeV1FixtureDb(path, ["v1-sample.sql"]);
     const store = OpenCodeStore.open(path);
@@ -422,7 +410,6 @@ describe("OpenCodeStore 1.x tables", () => {
       const before = fingerprint();
       const writer = new Database(path, { strict: true });
       try {
-        // Both stay below their table's newest time_updated and keep the counts.
         writer.exec("UPDATE part SET time_updated = time_updated + 1 WHERE id = 'prt_v1s_01'");
         const afterPart = fingerprint();
         expect(afterPart).not.toBe(before);
@@ -555,7 +542,6 @@ describe("OpenCodeStore 1.x tables", () => {
       ]);
       const loaded = store.loadLegacySession("ses_v1_bad");
       expect(loaded?.messages.map((row) => row.data)[0]).toBe("not json");
-      // The orphan part is still the session's part; ordering puts it by message id.
       expect(loaded?.parts.map((row) => row.id)).toEqual(["prt_v1b_1", "prt_v1b_2", "prt_v1b_3"]);
     } finally {
       store.close();
@@ -579,8 +565,6 @@ describe("OpenCodeStore 1.x tables", () => {
   });
 
   test("never reads a pre-split 2.x database's sessions as 1.x sessions", () => {
-    // A pre-release 2.x database keeps its 2.x sessions in `session`, beside
-    // session_message, and has no session_v2.
     const path = freshPath("opencode-next.db");
     const writer = new Database(path, { create: true, strict: true });
     writer.exec(opencodeFixtureSql("next/pre-split.sql"));
@@ -645,7 +629,6 @@ describe("OpenCodeStore 1.x tables", () => {
     };
     const key = openCodeLegacyFingerprint(fields);
     expect(key).toMatch(/^v1:10:3:5:20:21:45:90:[0-9a-f]{12}$/);
-    // The title is hashed, never stored in the key.
     expect(key).not.toContain("Title");
     expect(
       openCodeLegacyFingerprint({
@@ -666,7 +649,6 @@ describe("OpenCodeStore 1.x tables", () => {
     ]) {
       expect(openCodeLegacyFingerprint({ ...fields, ...changed })).not.toBe(key);
     }
-    // Never equal to a 2.x key for the same virtual path.
     expect(key.startsWith("v1:")).toBe(true);
     expect(openCodeFingerprint(10, 0, null, null).startsWith("v1:")).toBe(false);
   });
@@ -746,11 +728,9 @@ describe("OpenCode config lookup", () => {
       "/g/opencode.json",
       "/g/opencode.jsonc",
     ]);
-    // DECANT_OPENCODE_CONFIG replaces the global directory's files.
     expect(openCodeGlobalConfigPaths({ globalDir: "/g", globalFile: "/d/custom.json" })).toEqual([
       "/d/custom.json",
     ]);
-    // OPENCODE_CONFIG is loaded in addition, as OpenCode does.
     expect(openCodeGlobalConfigPaths({ globalDir: "/g", extraFile: "/x/extra.json" })).toEqual([
       "/g/opencode.json",
       "/g/opencode.jsonc",
@@ -759,8 +739,6 @@ describe("OpenCode config lookup", () => {
     expect(openCodeGlobalConfigPaths({})).toEqual([]);
   });
 
-  /** An in-memory tree: `files` maps absolute paths to text, and `links`
-   * maps a symlink's absolute path to its target. Every read is recorded. */
   function memoryFs(
     files: Record<string, unknown>,
     links: Record<string, string> = {},
@@ -834,14 +812,12 @@ describe("OpenCode config lookup", () => {
       "github",
       "root-server",
     ]);
-    // A sibling shares every ancestor above it; those are not read again.
     expect(names.forDirectory("/work/repo/docs")).toEqual(["dosu", "exa", "github", "root-server"]);
     expect(names.forDirectory("/elsewhere")).toEqual(["dosu", "root-server"]);
     expect(fs.reads.filter((path) => path === "/work/opencode.jsonc")).toHaveLength(1);
     expect(fs.reads.filter((path) => path === "/opencode.json")).toHaveLength(1);
     expect(new Set(fs.reads).size).toBe(fs.reads.length);
 
-    // Cached for the instance: a later edit is seen by the next sync's lookup.
     const edited = memoryFs({
       "/cfg/opencode.json": servers("dosu"),
       "/work/opencode.jsonc": servers("exa", "probe-tools"),
@@ -860,7 +836,6 @@ describe("OpenCode config lookup", () => {
     };
     const global = "/home/dev/.config/opencode/opencode.json";
 
-    // A session below the global directory: its own files are global, not project.
     let fs = memoryFs(tree);
     let names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.config/opencode" }, fs);
     expect(names.forDirectory("/home/dev/.config/opencode/sub")).toEqual([
@@ -871,14 +846,11 @@ describe("OpenCode config lookup", () => {
     ]);
     expect(fs.reads.filter((path) => path === global)).toHaveLength(1);
 
-    // OPENCODE_CONFIG_DIR at a `.opencode` directory: the walk's `.opencode`
-    // at that level is the global directory and is skipped.
     fs = memoryFs(tree);
     names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.opencode" }, fs);
     expect(names.forDirectory("/home/dev/project")).toEqual(["exa", "home-server"]);
     expect(fs.reads.filter((path) => path === "/home/dev/.opencode/opencode.json")).toHaveLength(1);
 
-    // Reached through a symlink, the global directory is still recognized.
     fs = memoryFs(tree, { "/links/config": "/home/dev/.config/opencode" });
     names = new OpenCodeMcpServerNames({ globalDir: "/links/config" }, fs);
     expect(names.forDirectory("/home/dev/.config/opencode/sub")).toEqual([
@@ -889,14 +861,12 @@ describe("OpenCode config lookup", () => {
     ]);
     expect(fs.reads.filter((path) => fs.realPath(path) === global)).toHaveLength(1);
 
-    // A session run from the global directory itself reads no project configs.
     fs = memoryFs(tree);
     names = new OpenCodeMcpServerNames({ globalDir: "/home/dev/.config/opencode" }, fs);
     expect(names.forDirectory("/home/dev/.config/opencode")).toEqual(["dosu"]);
     expect(fs.reads).toEqual([global, "/home/dev/.config/opencode/opencode.jsonc"]);
   });
 
-  /** Outside `workDir`, whose own config files would join the walk. */
   function ownTempDir(): string {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "decant-opencode-stalled-")));
     ownTempDirs.push(dir);
@@ -920,19 +890,15 @@ describe("OpenCode config lookup", () => {
     });
     const names = new OpenCodeMcpServerNames({}, fs);
 
-    // Configs above the stalled folder still apply.
     expect(names.lookup(join(stalled, "one"))).toEqual({ names: ["above"], unreachable: true });
-    // A second directory in the same folder costs no further wait.
     const started = performance.now();
     expect(names.lookup(join(stalled, "two"))).toEqual({ names: ["above"], unreachable: true });
     expect(performance.now() - started).toBeLessThan(150);
-    // A readable directory reads exactly as it does without a deadline.
     expect(names.lookup(join(root, "code"))).toEqual({
       names: ["above", "github"],
       unreachable: false,
     });
 
-    // Let the two stalled helper threads end.
     Atomics.store(new Int32Array(gate), 0, 1);
     Atomics.notify(new Int32Array(gate), 0);
   });

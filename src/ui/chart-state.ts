@@ -1,6 +1,5 @@
 export type AnalyticsChartMetric = "int" | "money";
 export type AnalyticsChartVariant = "bar" | "line";
-/** What one category stands for, which sets the tooltip heading. */
 export type AnalyticsChartPeriod = "category" | "day" | "week";
 
 export type AnalyticsChartState = {
@@ -8,7 +7,6 @@ export type AnalyticsChartState = {
   labels: string[];
   metric: AnalyticsChartMetric;
   period: AnalyticsChartPeriod;
-  /** null is a gap: the value is unknown, not zero. */
   values: (number | null)[];
   variant: AnalyticsChartVariant;
 };

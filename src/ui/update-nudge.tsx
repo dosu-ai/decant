@@ -6,7 +6,6 @@ import type { UpdateStatus } from "./types.ts";
 
 const COPIED_RESET_MS = 1_800;
 
-/** Sidebar notice shown only when the opt-in release check found a newer version. */
 export function UpdateNudge({ status }: { status: UpdateStatus | null }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const copied = copyState === "copied";
@@ -37,8 +36,6 @@ export function UpdateNudge({ status }: { status: UpdateStatus | null }) {
         aria-label={`Copy the update command: ${status.command}`}
         className="update-nudge-command"
         onClick={() => {
-          // Both clipboard paths fail on a non-secure origin, such as serving
-          // to a trusted peer over plain HTTP.
           copyTextToClipboard(status.command).then(
             () => setCopyState("copied"),
             () => setCopyState("failed"),

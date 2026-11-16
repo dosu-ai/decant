@@ -44,14 +44,10 @@ export interface ContextCurveLayout {
 }
 
 export interface ContextCurveTopology {
-  /** Compaction positions in the same normalized 0..1 space as pointXs. */
   markerXs: number[];
-  /** Point indexes split at every compaction boundary. */
   segmentIndexes: number[][];
-  /** One horizontal slot per distinct turn, expressed as a fraction of width. */
   slotWidth: number;
   turnOrder: number[];
-  /** Call positions normalized to the plot width. */
   xs: number[];
 }
 
@@ -134,12 +130,6 @@ export function layoutContextCurve(
   return { markerXs, segments, slotWidth, turnOrder: topology.turnOrder, xs };
 }
 
-/**
- * Pure source-of-truth for the context strip's horizontal geometry. Renderers
- * can map this normalized topology to SVG pixels (the live view) or chart
- * coordinates (static reports) without independently deciding where calls and
- * compaction boundaries belong.
- */
 export function contextCurveTopology(
   points: readonly ContextCurvePoint[],
   compactions: readonly ContextCurveCompaction[],

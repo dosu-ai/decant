@@ -4,10 +4,6 @@ interface ErrorBoundaryState {
   failed: boolean;
 }
 
-/**
- * Without a boundary, one render error unmounts the whole app and leaves a
- * blank page. Local-only data means a reload is the right recovery.
- */
 export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
   override state: ErrorBoundaryState = { failed: false };
 

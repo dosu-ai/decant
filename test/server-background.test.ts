@@ -82,7 +82,6 @@ describe("/api/background", () => {
       handoff: true,
       stopping: false,
     });
-    // The server answers before it steps aside.
     expect(shutdowns).toBe(0);
     await settle();
     expect(shutdowns).toBe(1);
@@ -134,7 +133,6 @@ describe("/api/background", () => {
         remoteAddress: "192.168.1.20",
         trustedPeers: ["192.168.1.0/24"],
       },
-      // Passes the general write guard, so the route's own check decides.
       { "sec-fetch-site": "same-origin" },
     );
     expect(response.status).toBe(403);

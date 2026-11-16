@@ -1,20 +1,10 @@
-/** Private-use markers survive SQLite -> JSON -> React without making ordinary
- * bracketed transcript text look like an FTS match. */
 export const SEARCH_MATCH_START = "\uE000";
 export const SEARCH_MATCH_END = "\uE001";
 
-/** CLI output remains readable while the API keeps private markers for the UI. */
 export function bracketSearchMatches(snippet: string): string {
   return snippet.replaceAll(SEARCH_MATCH_START, "[").replaceAll(SEARCH_MATCH_END, "]");
 }
 
-/**
- * Turns plain user input into an FTS5 query without exposing FTS operators.
- *
- * Whitespace-delimited words become exact tokens, quoted input stays a phrase,
- * and only the final token is a prefix query for search-as-you-type behavior.
- * Embedded quotes are escaped with FTS5's doubled-quote syntax.
- */
 export function buildFtsQuery(input: string): string {
   const tokens = searchTokens(input.toWellFormed().replaceAll("\u0000", " "));
   if (tokens.length === 0) {

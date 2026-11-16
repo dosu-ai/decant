@@ -20,15 +20,6 @@ export function rememberSessionPage(
   }
 }
 
-/**
- * Chooses the rows to show for a page request. A reload of the same scope
- * (Update, a finished sync, or a live Sessions refresh) keeps the rows already
- * on screen until the new page arrives, so the table never drops back to a
- * skeleton while someone is reading it. Re-showing the requested page's own
- * rows is not loading, but another page's rows still are, so pagination stays
- * busy until the page asked for arrives. Rows from a different scope (date
- * range, project, archive toggle) are never shown.
- */
 export function sessionPageView({
   cached,
   currentError,
@@ -50,12 +41,6 @@ export function sessionPageView({
   return { loading: fetching && !revalidating, refreshing: fetching && revalidating, visible };
 }
 
-/**
- * How a failed page load shows. A failed reload of the page already on screen,
- * such as a live refresh that hit a transient error, keeps those rows under a
- * notice instead of replacing what someone is reading with an error screen.
- * Any other failure has no rows of its own to show.
- */
 export function sessionPageFailure(
   state: Pick<SessionPageState, "error" | "loadedPage" | "sessions">,
   page: number,
@@ -80,7 +65,6 @@ export function useSessionPage({
   includeArchived: boolean;
   page: number;
   project: string | null;
-  /** A repository root; its worktrees' sessions are included. */
   repo?: string | null;
   reloadKey: number;
 }): SessionPageState {

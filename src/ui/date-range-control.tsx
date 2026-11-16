@@ -30,7 +30,6 @@ export function focusLeftMenu(menu: Pick<Node, "contains">, next: EventTarget | 
   return next != null && "nodeType" in next && !menu.contains(next as Node);
 }
 
-/** Keeps a Today selection on the current UTC date in a tab left open past midnight. */
 export function useTodayRollover(
   todaySelected: boolean,
   setRange: Dispatch<SetStateAction<DateRangeSelection>>,
@@ -71,8 +70,6 @@ export function DateRangeControl({
 }) {
   const menuRef = useRef<HTMLDetailsElement | null>(null);
   const [align, setAlign] = useState<"start" | "end">("end");
-  // Holds From and To only while they don't form a range worth applying, so the
-  // inputs show what the user typed while every view keeps the last valid range.
   const [draft, setDraft] = useState<{ from: string | null; to: string | null } | null>(null);
   const errorId = useId();
   const bounded = range.from != null && range.to != null;
@@ -137,7 +134,6 @@ export function DateRangeControl({
           }}
           onToggle={(event) => {
             if (!event.currentTarget.open) {
-              // Reopening shows the applied range, not an abandoned invalid edit.
               setDraft(null);
             }
           }}

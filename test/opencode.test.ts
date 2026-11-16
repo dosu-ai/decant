@@ -22,7 +22,7 @@ import { STEP_TIMES, timingMessageRows, timingSessionRow } from "./opencode-timi
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-parser-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-const T0 = 1791786000000; // 2026-10-12T06:20:00.000Z
+const T0 = 1791786000000;
 const GLM = { providerID: "opencode-go", id: "glm-5.3-flash", variant: "max" };
 
 const context: OpenCodeParseContext = {
@@ -86,7 +86,6 @@ function assistant(seq: number, extra: Record<string, Json>): OpenCodeMessageRow
 let fixtureCount = 0;
 
 function fixtureSession(name: string, sessionId: string, mcpServers: string[] = []) {
-  // Each call builds a fresh database: the same fixture is parsed by several tests.
   fixtureCount += 1;
   const dir = join(workDir, `${fixtureCount}-${name}-${sessionId}`);
   mkdirSync(dir, { recursive: true });
@@ -153,7 +152,6 @@ describe("parseOpenCodeSession", () => {
     expect(session.messages[1]).toMatchObject({
       model: "glm-5.3-flash",
       stopReason: "tool-calls",
-      // The step's `time.streamed`: generation ended, the tool still running.
       timestamp: "2026-10-12T06:20:02.600Z",
       usage: { input: 120, output: 40, reasoning: 10, cacheRead: 40, cacheCreation: 16 },
     });
@@ -240,7 +238,6 @@ describe("parseOpenCodeSession", () => {
   });
 
   test("maps 2.x tokens exactly as the shared mapping does for disjoint rows", () => {
-    // One mapping serves both readers: a 2.x row is the 1.x "disjoint" case.
     const cases: Record<string, Json>[] = [
       { input: 10, output: 5, reasoning: 7, cache: { read: 3, write: 2 } },
       { input: 120, output: 30, reasoning: 0, cache: { read: 40, write: 16 } },
@@ -309,8 +306,6 @@ describe("parseOpenCodeSession", () => {
         isError: false,
       },
     ]);
-    // Inner calls add no blocks: the program and its one result are the only
-    // transcript text, so search and transcripts show nothing twice.
     expect(blocks.filter((b) => b.blockType === "tool_use")).toHaveLength(4);
     expect(blocks.filter((b) => b.blockType === "tool_result")).toHaveLength(4);
     expect(blocks.filter((b) => b.innerToolCalls != null).map((b) => b.toolUseId)).toEqual([
@@ -371,7 +366,6 @@ describe("parseOpenCodeSession", () => {
       .flatMap((m) => m.blocks)
       .filter((b) => b.blockType === "tool_use")
       .map((b) => [b.toolName, b.innerToolCalls?.map((c) => c.toolUseId) ?? null]);
-    // Only `execute` carries inner calls; a running one records those so far.
     expect(calls).toEqual([
       ["execute", ["call_execute#0"]],
       ["read", null],
@@ -431,7 +425,6 @@ describe("parseOpenCodeSession", () => {
   });
 
   test("keeps a native 2.x row that predates its session when there is no fork link", () => {
-    // A clock step backwards must not drop a native session's usage.
     const { session } = parseOpenCodeSession(
       sessionRow({ version: "2.0.27", time_created: T0 }),
       [
@@ -512,13 +505,10 @@ describe("parseOpenCodeSession", () => {
       ["msg_3", "assistant", "glm-5.3-flash", 60],
     ]);
     expect(corrected.messages[2]?.usage).toMatchObject({ output: 12, reasoning: 4 });
-    // The migrated row's own tokens say 0 reasoning; the 1.x steps say 5.
     expect(corrected.messages[0]?.raw).toMatchObject({ reasoning_tokens: 5 });
     expect(corrected.messages[1]?.raw).toMatchObject({ cost: 0.000065 });
     expect(corrected.rawMeta).toMatchObject({ migrated_rows_from_v1: 2 });
 
-    // A 1.x copy with no messages corrects nothing: every row is read by the
-    // session's version, as when the 1.x tables are gone.
     for (const copy of [null, { ...legacy, messages: [], parts: [] }]) {
       const plain = parseOpenCodeSession(
         sessionRow({ version: "1.3.10" }),
@@ -810,7 +800,6 @@ describe("OpenCode 2.x step timing", () => {
       ["user", iso(STEP_TIMES.prompt2)],
       ["assistant", iso(STEP_TIMES.step2Streamed)],
     ]);
-    // The call is dated when it started to run, so its duration is the run.
     expect(session.messages[1]?.blocks[1]).toMatchObject({
       blockType: "tool_use",
       calledAt: iso(STEP_TIMES.toolRan),
@@ -848,14 +837,10 @@ describe("OpenCode 2.x step timing", () => {
     const { session } = parseOpenCodeSession(
       sessionRow(),
       [
-        // No `streamed` and no tools: `completed` is the end of generation.
         step(1, [reasoning(T0 + 1200), { type: "text", text: "a" }], {
           created: T0 + 1000,
           completed: T0 + 1900,
         }),
-        // No `streamed` with a tool: `completed` waits for the tool, so the
-        // latest part that finished streaming marks the end. A row migrated
-        // from 1.x has no `ran`; its `created` is when the tool started.
         step(
           2,
           [reasoning(T0 + 2300), tool("call_mig", { created: T0 + 2400, completed: T0 + 2800 })],
@@ -864,12 +849,10 @@ describe("OpenCode 2.x step timing", () => {
             completed: T0 + 2900,
           },
         ),
-        // A tool with no completion time: the result takes the step's end.
         step(3, [tool("call_open", { created: T0 + 3100, ran: T0 + 3200 })], {
           created: T0 + 3000,
           streamed: T0 + 3300,
         }),
-        // Only a start: nothing else to go on.
         step(4, [{ type: "text", text: "b" }], { created: T0 + 4000 }),
       ],
       context,

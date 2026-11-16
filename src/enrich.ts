@@ -34,7 +34,6 @@ const COMMAND_MARKER = "<command-name>";
  * the tool `task`. Scoped to OpenCode so another source's lowercase tool of
  * the same name is not counted. */
 const OPENCODE_SPAWN_TOOLS = new Set(["subagent", "task"]);
-/** Copilot Chat in VS Code's general subagent and its built-in specialists. */
 const VSCODE_COPILOT_SPAWN_TOOLS = new Set([
   "runSubagent",
   "search_subagent",
@@ -55,10 +54,6 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
   return tool === "opencode" && toolName != null && OPENCODE_SPAWN_TOOLS.has(toolName);
 }
 
-/** An ATIF trajectory keeps the tool names of the agent that produced it, so
- * its calls are read with that source's rules. An agent Decant does not read
- * natively is read with Claude Code's names, the most common in Harbor's
- * converters, then Codex's shell and patch rules. */
 function namingTool(session: NormalizedSession): Tool {
   return session.tool === "atif" ? (atifNativeTool(session.rawMeta) ?? "atif") : session.tool;
 }
@@ -81,7 +76,6 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
           codexRefs(messageIdx, message, block, session.cwd, refs);
         }
       } else if (tool === "copilot") {
-        // An imported Copilot CLI trajectory has no `fileEdits` records.
         keyedRef(COPILOT_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "claude_code") {
         keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
@@ -101,7 +95,6 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
   return refs;
 }
 
-/** `fallbackKey` is read when `key` does not hold a string. */
 type FileToolTable = Record<string, { key: string; fallbackKey?: string; operation: Operation }>;
 
 const CLAUDE_FILE_TOOLS: FileToolTable = {
@@ -330,7 +323,6 @@ export function extension(path: string): string | null {
   return leaf.slice(index + 1).toLowerCase();
 }
 
-/** ATIF-v1.7's context-management convention on a system step. */
 function atifCompaction(raw: NormalizedMessage["raw"]): boolean {
   const extra = isObject(raw) ? raw.extra : undefined;
   const management = isObject(extra) ? extra.context_management : undefined;
@@ -426,7 +418,6 @@ export function facets(session: NormalizedSession): Facets {
           got.activeSeconds += Math.min(gap, ACTIVE_GAP_CAP_SECONDS);
         }
       }
-      // A backdated parallel call must not reopen time already counted.
       previousTimestamp =
         previousTimestamp == null ? timestamp : Math.max(previousTimestamp, timestamp);
     }

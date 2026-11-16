@@ -286,10 +286,22 @@ function discoverHermes(
   const unlistedProfilesPath =
     unlistedProfiles == null ? undefined : canonicalPath(unlistedProfiles.path);
   for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
-    if (!existsSync(dbPath)) {
+    let store: HermesStore;
+    try {
+      statSync(dbPath);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        continue;
+      }
+      unreadable.add(dbPath);
+      warn("Hermes database could not be opened.", {
+        "event.name": "decant.ingest.hermes_open_failed",
+        "file.path": dbPath,
+        "error.message": `Hermes database could not be read (${code})`,
+      });
       continue;
     }
-    let store: HermesStore;
     try {
       store = HermesStore.open(dbPath);
     } catch (error) {
@@ -1822,7 +1834,10 @@ function inferSubagent(row: {
     asString(get(meta, "parent_thread_id")) ??
     asString(get(threadSpawn, "parent_thread_id")) ??
     asString(get(meta, "parentSessionId"));
-  const fromPath = row.source_path != null && /(?:^|[/\\])subagents(?:[/\\])/.test(row.source_path);
+  const fromPath =
+    row.tool !== "hermes" &&
+    row.source_path != null &&
+    /(?:^|[/\\])subagents(?:[/\\])/.test(row.source_path);
   const isSubagent =
     row.is_subagent !== 0 ||
     fromPath ||

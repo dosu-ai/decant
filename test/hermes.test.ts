@@ -976,6 +976,78 @@ describe("Hermes discovery and ingest", () => {
     },
   );
 
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an older copy does not replace one from a profile directory that cannot be entered",
+    () => {
+      const root = scratch();
+      const home = join(root, "hermes");
+      const workDir = join(home, "profiles", "work");
+      const work = join(workDir, "state.db");
+      mkdirSync(workDir, { recursive: true });
+      buildHermesDb(join(home, "state.db"), [
+        sessionSql("shared-1"),
+        messageSql("shared-1", 1, "user", "hello from the default profile"),
+      ]);
+      buildHermesDb(work, [
+        sessionSql("shared-1"),
+        messageSql("shared-1", 50, "user", "[redacted]"),
+      ]);
+      const config: IngestConfig = {
+        claudeDir: join(root, "claude"),
+        codexDir: join(root, "codex"),
+        hermesDir: home,
+      };
+      const db = openDb(join(root, "archive.db"));
+      const stored = (): unknown =>
+        db
+          .query(
+            `SELECT s.source_path AS path, b.text FROM session s JOIN block b ON b.session_id = s.id
+              WHERE s.source_session_id = 'shared-1' ORDER BY b.id`,
+          )
+          .all();
+      try {
+        expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+        const fromWork = [{ path: `${work}#shared-1`, text: "[redacted]" }];
+        expect(stored()).toEqual(fromWork);
+        chmodSync(workDir, 0o000);
+        try {
+          const events: unknown[] = [];
+          discover(config, (_message, properties) => events.push(properties["event.name"]));
+          expect(events).toEqual(["decant.ingest.hermes_open_failed"]);
+          expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
+        } finally {
+          chmodSync(workDir, 0o755);
+        }
+        expect(stored()).toEqual(fromWork);
+      } finally {
+        closeDb(db);
+      }
+    },
+  );
+
+  test("a Hermes home under a subagents directory keeps its sessions' own lineage", () => {
+    const root = scratch();
+    const home = join(root, "subagents", "hermes");
+    mkdirSync(home, { recursive: true });
+    buildHermesFixtureDb(join(home, "state.db"), ["sample.sql", "subagent.sql"]);
+    const db = openDb(join(root, "archive.db"));
+    try {
+      sync(db, { claudeDir: join(root, "claude"), codexDir: join(root, "codex"), hermesDir: home });
+      expect(
+        db
+          .query(
+            "SELECT source_session_id AS id, is_subagent FROM session WHERE tool = 'hermes' ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { id: SAMPLE, is_subagent: 0 },
+        { id: SUBAGENT, is_subagent: 1 },
+      ]);
+    } finally {
+      closeDb(db);
+    }
+  });
+
   test("a session that recorded no usage reports it unavailable", () => {
     const root = scratch();
     const home = join(root, "hermes");

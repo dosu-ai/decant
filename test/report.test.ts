@@ -314,8 +314,9 @@ describe("report charts", () => {
       '<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[.chart{}]]></style><rect width="1" height="1"/></svg>';
     const sanitized = sanitizeReportSvg(svg);
     expect(sanitized).not.toContain("<style");
-    expect(sanitized).toHaveLength(svg.length);
-    expect(sanitized).toContain('<rect width="1" height="1"/>');
+    expect(sanitized).toBe(
+      '<svg xmlns="http://www.w3.org/2000/svg"> <rect width="1" height="1"/></svg>',
+    );
   });
 
   test("marks model and project costs that lack usage data", () => {
@@ -365,7 +366,9 @@ describe("report charts", () => {
 
   test("renders the same report bytes no matter how many charts the process drew before", () => {
     const first = renderAnalyticsReport(analytics);
-    renderSessionReport(session);
+    for (let render = 0; render < 120; render += 1) {
+      renderSessionReport(session);
+    }
     const second = renderAnalyticsReport(analytics);
     expect(second).toBe(first);
     expect(renderSessionReport(session)).toBe(renderSessionReport(session));

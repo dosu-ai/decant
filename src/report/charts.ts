@@ -106,7 +106,7 @@ export function sanitizeReportSvg(svg: string): string {
   const sanitized =
     styleElement?.index == null
       ? svg
-      : `${svg.slice(0, styleElement.index)}${" ".repeat(styleElement[0].length)}${svg.slice(styleElement.index + styleElement[0].length)}`;
+      : `${svg.slice(0, styleElement.index)} ${svg.slice(styleElement.index + styleElement[0].length)}`;
   assertSafeReportSvg(sanitized);
   return sanitized;
 }

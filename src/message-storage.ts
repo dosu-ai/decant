@@ -34,8 +34,6 @@ export const METADATA_PATHS = [
   ["sessionId"],
   ["agentId"],
   ["extra", "context_management", "type"],
-  // Hermes Agent's own row column. Only Hermes rows carry it, and none were
-  // stored before it was projected, so it needs no backfill.
   ["_compressed_summary"],
 ] as const;
 

@@ -20,9 +20,9 @@ import { getSession } from "../src/query.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import {
   type CopilotModelUsage,
-  chooseTotals,
   mergeSnapshots,
   parseCopilotSession,
+  recordsUnlessShortOfSnapshots,
   type UsageSnapshot,
 } from "../src/sources/copilot.ts";
 import { totals as statsTotals } from "../src/stats.ts";
@@ -559,22 +559,24 @@ describe("parseCopilotSession", () => {
   });
 });
 
-describe("chooseTotals", () => {
+describe("recordsUnlessShortOfSnapshots", () => {
   test("takes the usage records when they cover the snapshots", () => {
     const ledger = snapshot({ m: { requests: 3, input: 30, output: 3 } });
-    expect(chooseTotals(ledger, snapshot({ m: { requests: 2, input: 20, output: 2 } }))).toBe(
-      ledger,
-    );
-    expect(chooseTotals(ledger, new Map())).toBe(ledger);
+    expect(
+      recordsUnlessShortOfSnapshots(ledger, snapshot({ m: { requests: 2, input: 20, output: 2 } })),
+    ).toBe(ledger);
+    expect(recordsUnlessShortOfSnapshots(ledger, new Map())).toBe(ledger);
   });
 
   test("keeps the snapshots when a call wrote no record or no records exist", () => {
     const merged = snapshot({ m: { requests: 3, input: 30, output: 3 } });
-    expect(chooseTotals(snapshot({ m: { requests: 2, input: 20, output: 2 } }), merged)).toBe(
-      merged,
-    );
-    expect(chooseTotals(snapshot({ other: { requests: 9, input: 90 } }), merged)).toBe(merged);
-    expect(chooseTotals(new Map(), merged)).toBe(merged);
+    expect(
+      recordsUnlessShortOfSnapshots(snapshot({ m: { requests: 2, input: 20, output: 2 } }), merged),
+    ).toBe(merged);
+    expect(
+      recordsUnlessShortOfSnapshots(snapshot({ other: { requests: 9, input: 90 } }), merged),
+    ).toBe(merged);
+    expect(recordsUnlessShortOfSnapshots(new Map(), merged)).toBe(merged);
   });
 });
 

@@ -60,7 +60,12 @@ export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: nu
   unknownTypes.set(label, seen);
 }
 
-export function unknownTypeIssues(unknownTypes: UnknownTypes, handling: string): Issue[] {
+export type UnknownTypeHandling = "ignored" | 'kept as role "other"' | "read as ATIF-v1.8";
+
+export function unknownTypeIssues(
+  unknownTypes: UnknownTypes,
+  handling: UnknownTypeHandling,
+): Issue[] {
   const issues: Issue[] = [];
   for (const [typ, seen] of unknownTypes) {
     issues.push({

@@ -45,7 +45,7 @@ export function atifNativeTool(rawMeta: Json | undefined): Exclude<Tool, "atif">
   return null;
 }
 
-const DERIVED_META_KEYS = new Set([
+const PARSER_WRITTEN_META_KEYS = new Set([
   "parentSessionId",
   "subagentFileRefs",
   "copiedContextSteps",
@@ -616,6 +616,14 @@ function finalMetricsUsage(trajectory: JsonObject): TokenUsage | null {
   });
 }
 
+function copiesIntoRawMeta(trajectoryKey: string): boolean {
+  return (
+    trajectoryKey !== "steps" &&
+    trajectoryKey !== "subagent_trajectories" &&
+    !PARSER_WRITTEN_META_KEYS.has(trajectoryKey)
+  );
+}
+
 function rawMeta(
   trajectory: JsonObject,
   node: Node,
@@ -625,12 +633,7 @@ function rawMeta(
 ): Json {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(trajectory)) {
-    if (
-      key !== "steps" &&
-      key !== "subagent_trajectories" &&
-      !DERIVED_META_KEYS.has(key) &&
-      value !== undefined
-    ) {
+    if (copiesIntoRawMeta(key) && value !== undefined) {
       meta[key] = value as Json;
     }
   }

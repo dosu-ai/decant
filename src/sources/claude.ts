@@ -279,7 +279,10 @@ function reasoningEstimate(turns: ReasoningTurns): number {
   return tokens;
 }
 
-export function inferredReasoningTokens(records: Iterable<Json>, outputCap: number): number {
+export function inferredReasoningTokens(
+  records: Iterable<Json>,
+  resultRecordOutputTokens: number,
+): number {
   const turns: ReasoningTurns = new Map();
   let index = 0;
   for (const record of records) {
@@ -290,7 +293,7 @@ export function inferredReasoningTokens(records: Iterable<Json>, outputCap: numb
     );
     index += 1;
   }
-  return Math.min(reasoningEstimate(turns), outputCap);
+  return Math.min(reasoningEstimate(turns), resultRecordOutputTokens);
 }
 
 function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {

@@ -333,6 +333,8 @@ export function contextWindowForSession(
   };
 }
 
+const CONTEXT_WINDOW_NOT_MATERIALIZED_SQL = "peak_context_tokens IS NULL";
+
 export function materializeContextWindow(db: Database, sessionId: number): boolean {
   const timeline = contextWindowForSession(db, sessionId);
   if (timeline == null) {
@@ -358,7 +360,7 @@ export function materializeContextWindow(db: Database, sessionId: number): boole
 export function materializeMissingContextWindows(db: Database): number {
   const rows = queryRows<{ id: number }>(
     db,
-    "SELECT id FROM session WHERE peak_context_tokens IS NULL",
+    `SELECT id FROM session WHERE ${CONTEXT_WINDOW_NOT_MATERIALIZED_SQL}`,
   );
   if (rows.length === 0) {
     return 0;

@@ -52,7 +52,7 @@ export function parseVersion(value: string): Semver | null {
   };
 }
 
-function cleanVersion(value: unknown): string | null {
+function trimmedValidVersion(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -285,7 +285,7 @@ export async function fetchLatestVersion(
     throw new Error(`the npm registry returned HTTP ${response.status}`);
   }
   const body = (await response.json()) as { version?: unknown };
-  const version = cleanVersion(body.version);
+  const version = trimmedValidVersion(body.version);
   if (version == null) {
     throw new Error("the npm registry did not return a valid version");
   }
@@ -313,7 +313,7 @@ export function readUpdateCheck(options: SettingsOptions = {}): UpdateCheckRecor
     }
     return {
       checkedAt: parsed.checkedAt,
-      latest: cleanVersion(parsed.latest),
+      latest: trimmedValidVersion(parsed.latest),
       ...(parsed.failed === true ? { failed: true } : {}),
     };
   } catch {
@@ -559,7 +559,7 @@ function isRedirect(response: Response): boolean {
 }
 
 export async function replaceBinary(options: ReplaceBinaryOptions): Promise<void> {
-  const version = cleanVersion(options.version)?.replace(/^v/, "");
+  const version = trimmedValidVersion(options.version)?.replace(/^v/, "");
   if (version == null) {
     throw new Error(`not a release version: ${JSON.stringify(options.version)}`);
   }

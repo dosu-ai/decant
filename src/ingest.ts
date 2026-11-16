@@ -345,7 +345,9 @@ export function sync(
   onProgress?: SyncProgressListener,
 ): SyncReport {
   seedModelPricing(db);
-  materializeMissingModelUsage(db, (id) => reconcileBilledRequests(db, id, true));
+  materializeMissingModelUsage(db, (id) =>
+    reconcileBilledRequests(db, id, { refreshReconciledSession: true }),
+  );
   const repriced = refreshSessionCosts(db);
   const files = discover(config);
   const titles = codexTitles(config);
@@ -679,12 +681,12 @@ class OpenCodeRun {
   sourceDatabases(): Set<string> {
     if (this.#sourceDatabases == null) {
       this.#sourceDatabases = new Set(
-        queryRows<{ prefix: string }>(
+        queryRows<{ through_last_hash: string }>(
           this.#db,
-          `SELECT DISTINCT rtrim(path, replace(path, '#', '')) AS prefix
+          `SELECT DISTINCT ${throughLastHashSql("path")} AS through_last_hash
              FROM ingest_source
             WHERE tool = 'opencode' AND instr(path, '#') > 0`,
-        ).map((row) => row.prefix.slice(0, -1)),
+        ).map((row) => row.through_last_hash.slice(0, -1)),
       );
     }
     return this.#sourceDatabases;
@@ -696,6 +698,10 @@ class OpenCodeRun {
     }
     this.#stores.clear();
   }
+}
+
+function throughLastHashSql(column: string): string {
+  return `rtrim(${column}, replace(${column}, '#', ''))`;
 }
 
 function syncOpenCodeSession(
@@ -1767,10 +1773,12 @@ function releaseSupersededOpenCodeSources(
   }
 }
 
-function deleteSessionRow(db: Database, id: number, releaseClaims = true): void {
-  if (releaseClaims) {
-    releaseBilledRequests(db, [id]);
-  }
+function deleteSessionRow(db: Database, id: number): void {
+  releaseBilledRequests(db, [id]);
+  deleteSessionRowKeepingBilledClaims(db, id);
+}
+
+function deleteSessionRowKeepingBilledClaims(db: Database, id: number): void {
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
   ]);
@@ -1854,7 +1862,7 @@ function writeSession(
   let unsettled: string[] = [];
   if (existing != null) {
     unsettled = unsettledRequests(db, existing.id);
-    deleteSessionRow(db, existing.id, false);
+    deleteSessionRowKeepingBilledClaims(db, existing.id);
   }
 
   const refs = fileRefs(s);
@@ -2114,7 +2122,7 @@ function writeSession(
     insertFileRef.finalize();
   }
 
-  reconcileBilledRequests(db, sessionId, false, unsettled);
+  reconcileBilledRequests(db, sessionId, { refreshReconciledSession: false, unsettled });
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),

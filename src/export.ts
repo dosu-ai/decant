@@ -361,8 +361,8 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
   }
 
   const records: unknown[] = [];
-  const callTaken = new Map<string, number>();
-  const resultTaken = new Map<string, number>();
+  const callsEmittedByOriginalId = new Map<string, number>();
+  const resultsEmittedByOriginalId = new Map<string, number>();
   let lastTimestamp: string | null = null;
   let synthIndex = 0;
   // Their library always emits Date#toISOString() output; normalize source
@@ -441,8 +441,8 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_use") {
         callEmit += 1;
         const original = block.tool_use_id ?? `decant-${sessionId}-${callEmit}`;
-        const emitted = callTaken.get(original) ?? 0;
-        callTaken.set(original, emitted + 1);
+        const emitted = callsEmittedByOriginalId.get(original) ?? 0;
+        callsEmittedByOriginalId.set(original, emitted + 1);
         const assigned = assignedByOriginal.get(original)?.[emitted] ?? original;
         const name =
           block.tool_name != null && block.tool_name !== "" ? block.tool_name : "unknown_tool";
@@ -458,18 +458,18 @@ export function exportTrajectory(db: Database, sessionId: number): TrajectoryExp
       } else if (block.block_type === "tool_result") {
         const original = block.tool_use_id;
         const queue = original == null ? undefined : assignedByOriginal.get(original);
-        const emitted = original == null ? 0 : (callTaken.get(original) ?? 0);
+        const emitted = original == null ? 0 : (callsEmittedByOriginalId.get(original) ?? 0);
         if (original == null || queue == null || emitted === 0) {
           report.orphan_tool_results_dropped += 1;
           continue;
         }
-        const taken = resultTaken.get(original) ?? 0;
+        const taken = resultsEmittedByOriginalId.get(original) ?? 0;
         if (taken >= emitted) {
           report.duplicate_tool_results_dropped += 1;
           continue;
         }
         const assigned = queue[taken] ?? original;
-        resultTaken.set(original, taken + 1);
+        resultsEmittedByOriginalId.set(original, taken + 1);
         const { text: content, truncated } = trajectoryTruncate(
           block.tool_result ?? "",
           TRAJECTORY_RESULT_MAX,

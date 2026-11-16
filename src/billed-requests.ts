@@ -81,11 +81,15 @@ const BILLED = `(m.input_tokens IS NOT NULL OR m.output_tokens IS NOT NULL
 
 const NO_SESSIONS: ReadonlySet<number> = new Set();
 
+export interface ReconcileBilledRequestsOptions {
+  refreshReconciledSession: boolean;
+  unsettled?: Iterable<string>;
+}
+
 export function reconcileBilledRequests(
   db: Database,
   sessionId: number,
-  refreshSelf: boolean,
-  unsettled: Iterable<string> = [],
+  { refreshReconciledSession, unsettled = [] }: ReconcileBilledRequestsOptions,
 ): void {
   const session = queryRow<{ tool: string }>(db, "SELECT tool FROM session WHERE id = ?1", [
     sessionId,
@@ -137,7 +141,7 @@ export function reconcileBilledRequests(
   for (const requestId of pending) {
     settle(db, requestId, null, NO_SESSIONS, changes);
   }
-  applyChanges(db, changes, (affected) => affected !== sessionId || refreshSelf);
+  applyChanges(db, changes, (affected) => affected !== sessionId || refreshReconciledSession);
 }
 
 export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): void {

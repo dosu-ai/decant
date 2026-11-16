@@ -363,6 +363,21 @@ describe("report charts", () => {
     expect(sessionHtml).not.toContain("data-report-chart");
   });
 
+  test("renders the same report bytes no matter how many charts the process drew before", () => {
+    const first = renderAnalyticsReport(analytics);
+    renderSessionReport(session);
+    const second = renderAnalyticsReport(analytics);
+    expect(second).toBe(first);
+    expect(renderSessionReport(session)).toBe(renderSessionReport(session));
+  });
+
+  test("keeps every SVG id unique across the charts in one report", () => {
+    const html = renderAnalyticsReport(analytics);
+    const ids = [...html.matchAll(/\bid="(zr[^"]+)"/g)].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(html).not.toMatch(/class="zr\d+-cls-\d+"/);
+  });
+
   test("labels each outcome share with its own one-decimal rounding", () => {
     const outcome = (key: string, sessions: number) => ({
       ...firstDay,

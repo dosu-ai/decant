@@ -363,6 +363,15 @@ function ReportFigure({ caption, chart }: { caption: string; chart: number }) {
 }
 
 const REPORT_CHART_SLOT = /<div class="chart" data-report-chart="(\d+)"><\/div>/g;
+const ZRENDER_CLASS_ATTRIBUTE = / class="zr\d+-cls-\d+"/g;
+const ZRENDER_ID_REFERENCE = /(id="|url\(#|href="#)zr\d+-/g;
+
+// zrender numbers SVG ids and classes from process-wide counters.
+function renumberChartIds(svg: string, chart: number): string {
+  return svg
+    .replace(ZRENDER_CLASS_ATTRIBUTE, "")
+    .replace(ZRENDER_ID_REFERENCE, (_match, prefix: string) => `${prefix}zr${chart}-`);
+}
 
 function insertReportCharts(markup: string, charts: readonly string[]): string {
   return markup.replace(REPORT_CHART_SLOT, (_slot, index: string) => {
@@ -370,7 +379,7 @@ function insertReportCharts(markup: string, charts: readonly string[]): string {
     if (svg == null) {
       throw new Error(`report chart ${index} was not rendered`);
     }
-    return `<div class="chart">${svg}</div>`;
+    return `<div class="chart">${renumberChartIds(svg, Number(index))}</div>`;
   });
 }
 

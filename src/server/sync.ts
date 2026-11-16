@@ -261,13 +261,9 @@ export function createSyncCoordinator(
       pending = null;
       lastEmitted = progress;
       lastEmittedAt = now();
-      try {
-        options.onProgress?.(progress);
-      } catch {}
+      runIsolated(() => options.onProgress?.(progress));
       for (const listener of [...listeners]) {
-        try {
-          listener(progress);
-        } catch {}
+        runIsolated(() => listener(progress));
       }
     };
     const forward = (progress: SyncProgress): void => {
@@ -288,9 +284,7 @@ export function createSyncCoordinator(
       .then(
         (report) => {
           flush();
-          try {
-            options.onCompleted?.(report);
-          } catch {}
+          runIsolated(() => options.onCompleted?.(report));
           return report;
         },
         (error) => {
@@ -373,4 +367,10 @@ export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): v
       last_sync_at: syncStatus.last_sync_at,
     });
   }
+}
+
+function runIsolated(observer: () => void): void {
+  try {
+    observer();
+  } catch {}
 }

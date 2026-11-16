@@ -73,8 +73,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     } else if (fixture.startsWith(`${VSCODE_FIXTURES}/`)) {
       stageVscodeSession(fixture, vscodeCopilotDir);
     } else if (fixture.startsWith(`${ATIF_FIXTURES}/`)) {
-      mkdirSync(atifDir, { recursive: true });
-      copyFileSync(source, join(atifDir, name));
+      stageAtifFlatOutsideHarborJobLayout(source, atifDir);
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
@@ -104,6 +103,11 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
 
 const VSCODE_FIXTURES = "fixtures/vscode-copilot/User";
 const ATIF_FIXTURES = "fixtures/atif";
+
+function stageAtifFlatOutsideHarborJobLayout(source: string, atifDir: string): void {
+  mkdirSync(atifDir, { recursive: true });
+  copyFileSync(source, join(atifDir, basename(source)));
+}
 
 function stageVscodeSession(fixture: string, userDir: string): void {
   const relative = fixture.slice(VSCODE_FIXTURES.length + 1);

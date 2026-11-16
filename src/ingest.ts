@@ -113,7 +113,6 @@ export interface IngestConfig {
   vscodeCopilotDir?: string;
   vscodeCopilotInsidersDir?: string;
   atifDir?: string;
-  /** Hermes Agent home: `state.db` and `profiles/<name>/state.db`. */
   hermesDir?: string;
   sourcePaths?: string[];
 }
@@ -146,14 +145,8 @@ export interface SourceFile {
   path: string;
   archived: boolean;
   opencode?: OpenCodeSessionRef;
-  /** Set for Hermes Agent sessions, whose `path` is the virtual `<db>#<session id>`. */
   hermes?: HermesSessionRef;
-  /** Hermes databases that exist but could not be opened or listed during
-   * discovery. A session whose archived copy came from one of them is not
-   * replaced by another profile's copy until that database reads again. */
   hermesUnreadable?: ReadonlySet<string>;
-  /** A Hermes `profiles` directory that exists but could not be listed, so
-   * every archived copy from a database under it is kept the same way. */
   hermesUnlistedProfiles?: string;
 }
 
@@ -236,7 +229,7 @@ export function hermesDatabasePaths(hermesDir: string | undefined): string[] {
   return listHermesDatabases(hermesDir).paths;
 }
 
-export interface HermesDatabases {
+interface HermesDatabases {
   paths: string[];
   unlistedProfiles: UnlistedDirectory | null;
 }
@@ -246,7 +239,7 @@ interface UnlistedDirectory {
   errorCode: string;
 }
 
-export function listHermesDatabases(hermesDir: string | undefined): HermesDatabases {
+function listHermesDatabases(hermesDir: string | undefined): HermesDatabases {
   if (hermesDir == null || hermesDir === "") {
     return { paths: [], unlistedProfiles: null };
   }
@@ -276,11 +269,6 @@ export function hermesSourcePath(ref: HermesSessionRef): string {
   return `${ref.dbPath}#${ref.sessionId}`;
 }
 
-/** One virtual source per Hermes session. Profiles are separate databases, so
- * one session ID in two of them (a copied profile) is read from the copy with
- * the newest activity, a tie going to the code-point-smaller path. A missing
- * file is skipped; one that is unreadable or not a Hermes store is skipped with
- * a warning. */
 function discoverHermes(
   dbPaths: string[],
   warn: DiscoveryWarn,
@@ -350,8 +338,6 @@ function discoverHermes(
     }));
 }
 
-/** Only Decant's own messages and SQLite's are logged; neither carries
- * transcript content. */
 function hermesErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -923,8 +909,6 @@ function syncOpenCodeSession(
     : { kind: "ingested", issues: parsed.issues };
 }
 
-/** Every `<db>` with a source row of a database-backed tool, whose sources are
- * the virtual paths `<db>#<session id>`. */
 function knownSourceDatabases(db: Database, tool: "opencode" | "hermes"): Set<string> {
   return new Set(
     queryRows<{ through_last_hash: string }>(
@@ -937,14 +921,10 @@ function knownSourceDatabases(db: Database, tool: "opencode" | "hermes"): Set<st
   );
 }
 
-/** A sync's view of the databases that back a database-backed tool's sources. */
 interface SourceDatabaseRun {
   sourceDatabases(): Set<string>;
 }
 
-/** Hermes databases opened during one sync, each once. A database that
- * cannot be opened is remembered as null, so its sessions fail without
- * retrying the open for each one. */
 class HermesRun {
   readonly #db: Database;
   readonly #stores = new Map<string, HermesStore | null>();
@@ -971,8 +951,6 @@ class HermesRun {
     return this.#stores.get(dbPath) ?? null;
   }
 
-  /** Every profile database with a Hermes source row, read on first use and
-   * then extended by each session this sync writes. */
   sourceDatabases(): Set<string> {
     this.#sourceDatabases ??= knownSourceDatabases(this.#db, "hermes");
     return this.#sourceDatabases;
@@ -986,15 +964,6 @@ class HermesRun {
   }
 }
 
-/** Skip when the stored change key and pipeline revision match; otherwise
- * read, parse, and write the session under its virtual path. A session
- * deleted from `state.db` after discovery is skipped, and the archive keeps
- * the copy it last ingested, as for OpenCode. Writing a session releases its
- * copies' source rows in other profile databases, so a copy that wins again
- * after the newer one disappears is re-read. A copy that wins only because the
- * database holding the archived one could not be read is not written: that
- * database is still there, so its copy may hold edits (a redaction) the other
- * lacks. The session fails and is retried on the next sync. */
 function syncHermesSession(
   db: Database,
   file: SourceFile,
@@ -1058,8 +1027,6 @@ function syncHermesSession(
     : { kind: "ingested", issues: parsed.issues };
 }
 
-/** The source path of this session's archived copy when it was read from
- * another profile database that discovery could not read, or null. */
 function unreadableArchivedCopy(
   db: Database,
   file: SourceFile,

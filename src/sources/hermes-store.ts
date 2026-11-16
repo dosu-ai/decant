@@ -1,12 +1,10 @@
 // Read-only access to a Hermes Agent `state.db` (NousResearch/hermes-agent,
 // `hermes_state_common.py` SCHEMA_SQL). Hermes owns the file and keeps it in
-// WAL mode; this module only reads. The connection is opened read-only (never
-// `immutable`), so rows Hermes committed since the last checkpoint are seen.
-// Nothing here writes or checkpoints, and Hermes is never started.
+// WAL mode. The connection is opened read-only (never `immutable`), so rows
+// Hermes committed since the last checkpoint are seen.
 //
 // Hermes adds columns with ALTER TABLE as its schema moves, so an older
-// database can lack any column past the core ones. Each read selects a missing
-// column as NULL instead of failing on it.
+// database can lack any column past the core ones.
 import { Database } from "bun:sqlite";
 import { createHash, type Hash } from "node:crypto";
 import { queryRow, queryRows } from "../sqlite-statements.ts";
@@ -15,23 +13,16 @@ import type { HermesMessageRow, HermesModelUsageRow, HermesSessionRow } from "./
 export interface HermesSessionRef {
   dbPath: string;
   sessionId: string;
-  /** Per-session change key (see `hermesFingerprint`), stored in
-   * `ingest_source.hash` so an unchanged session is skipped. */
   fingerprint: string;
-  /** Newest of the session's start and its last message, in epoch seconds.
-   * Decides which copy wins when two databases hold one session ID. */
   activity: number;
 }
 
 export interface HermesLoadedSession {
   session: HermesSessionRow;
-  /** Every stored row in insertion order (`id`), archived and rewound rows
-   * included; the parser decides which rows form the transcript. */
   messages: HermesMessageRow[];
   modelUsage: HermesModelUsageRow[];
 }
 
-/** Columns read from `sessions`, beyond the required `id` and `started_at`. */
 const SESSION_COLUMNS = [
   "source",
   "session_key",
@@ -61,8 +52,6 @@ const SESSION_COLUMNS = [
   "archived",
 ] as const;
 
-/** Columns read from `messages`, beyond the required `id`, `session_id`,
- * `role`, and `timestamp`. */
 const MESSAGE_COLUMNS = [
   "content",
   "tool_call_id",
@@ -97,13 +86,9 @@ const MODEL_USAGE_COLUMNS = [
 
 const MODEL_USAGE_ORDER = ["model", "billing_provider", "task"] as const;
 
-/** Every session column `loadSession` reads, plus `transcript_revision`.
- * `last_activity_at` is a heartbeat and `last_read_at`, `pinned`, and
- * `hidden` are UI state, so none of them is in the key: a session left open
- * would otherwise re-ingest every minute without anything new to read. Hermes
- * bumps `transcript_revision` from a trigger whenever an existing message is
- * rewritten in place (a redaction or a prompt expansion), which moves neither
- * the row count nor the highest ID. */
+/** Hermes bumps `transcript_revision` from a trigger whenever an existing
+ * message is rewritten in place (a redaction or a prompt expansion), which
+ * moves neither the row count nor the highest ID. */
 const CHANGE_COLUMNS = [...SESSION_COLUMNS, "transcript_revision"] as const;
 
 /** Message columns whose in-place rewrite bumps `transcript_revision` (the
@@ -132,8 +117,6 @@ export class HermesStore {
     this.#db = db;
   }
 
-  /** Throws `HermesStoreError` when the file is not a Hermes session store, so
-   * a stray `state.db` from another program is reported and skipped. */
   static open(path: string): HermesStore {
     const db = new Database(path, { readonly: true, strict: true });
     db.exec("PRAGMA busy_timeout = 5000;");
@@ -148,7 +131,6 @@ export class HermesStore {
     return store;
   }
 
-  /** Every session with a per-session change key. */
   listSessions(): HermesSessionRef[] {
     const changeColumns = CHANGE_COLUMNS.map((column) => this.#column("sessions", "s", column));
     const messageColumns = ["active", "compacted"].map((column) =>
@@ -196,7 +178,6 @@ export class HermesStore {
     }));
   }
 
-  /** One session's rows, or null when it no longer exists. */
   loadSession(sessionId: string): HermesLoadedSession | null {
     const sessionColumns = SESSION_COLUMNS.map(
       (column) => `${this.#column("sessions", "s", column)} AS ${column}`,
@@ -251,9 +232,6 @@ export class HermesStore {
                 ORDER BY usage_row))`;
   }
 
-  /** Null when `transcript_revision` covers in-place rewrites. A database from
-   * before that column has no rewrite signal, so each session's rewritable
-   * message columns are hashed instead. */
   #rewrittenContentDigests(): Map<string, string> | null {
     if (this.#has("sessions", "transcript_revision")) {
       return null;
@@ -288,8 +266,6 @@ export class HermesStore {
     return this.#parentColumn("end_reason");
   }
 
-  /** A parent's column decides whether a child is a subagent or a
-   * compression, reset, or branch continuation. */
   #parentColumn(column: string): string {
     return this.#has("sessions", "parent_session_id") && this.#has("sessions", column)
       ? `(SELECT p.${column} FROM sessions p WHERE p.id = s.parent_session_id)`

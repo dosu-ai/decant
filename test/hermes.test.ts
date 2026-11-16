@@ -60,7 +60,6 @@ function parseFrom(dbPath: string, sessionId: string): ParsedSession {
   }
 }
 
-/** One invented session row with the given extra columns. */
 function sessionSql(id: string, columns: Record<string, string | number | null> = {}): string {
   const all: Record<string, string | number | null> = {
     id,
@@ -185,7 +184,6 @@ describe("parseHermesSession", () => {
       toolName: "read_file",
       toolResult: "hello from the example notes",
     });
-    // Stored as a user row, filed as the system row that marks the compaction.
     expect(summary?.role).toBe("system");
     expect(summary?.raw).toMatchObject({ role: "user", _compressed_summary: 1 });
     expect(plan?.stopReason).toBe("tool_calls");
@@ -390,7 +388,6 @@ describe("parseHermesSession", () => {
     const db = dbWith(
       sessionSql("p-idle", { session_key: key, ended_at: 1791790100, end_reason: "idle" }),
       sessionSql("c-unkeyed", { parent_session_id: "p-idle", started_at: 1791790050 }),
-      // A keyed delegate that captured its parent's route keeps its marker.
       sessionSql("c-keyed-delegate", {
         parent_session_id: "p-idle",
         session_key: key,
@@ -914,8 +911,6 @@ describe("Hermes discovery and ingest", () => {
       expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
       const fromWork = [{ path: `${work}#shared-1`, text: "[redacted]" }];
       expect(stored()).toEqual(fromWork);
-      // A read failure is not an absence: the work copy stays until its
-      // database reads again or is gone.
       writeFileSync(work, "not a database");
       expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
       expect(stored()).toEqual(fromWork);

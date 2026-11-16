@@ -334,8 +334,7 @@ export function watchRoots(config: Config): WatchRoot[] {
       : []),
     // A running Hermes keeps its connection open and appends to the `-wal`,
     // which is the same event gap OpenCode has, so each profile's directory
-    // is polled with the same database filter. A profile created while the
-    // watcher runs is picked up by the fallback sweep.
+    // is polled with the same database filter.
     ...hermesDatabasePaths(config.hermesDir).map((path) => ({
       dir: dirname(path),
       recursive: false,

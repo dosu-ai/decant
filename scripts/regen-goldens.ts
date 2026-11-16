@@ -93,7 +93,6 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     opencodeConfigPath,
     `${JSON.stringify({ mcp: { servers: { dosu: { type: "remote", url: "https://example.invalid/mcp" } } } })}\n`,
   );
-  // All Hermes sessions share one state.db, as they do in one Hermes profile.
   mkdirSync(hermesDir, { recursive: true });
   buildHermesFixtureDb(join(hermesDir, "state.db"), hermesFixtures);
   return {

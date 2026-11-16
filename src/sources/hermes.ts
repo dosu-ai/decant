@@ -1,8 +1,7 @@
 // Hermes Agent (NousResearch/hermes-agent) keeps every session in one SQLite
 // file, `<HERMES_HOME>/state.db`: a `sessions` row with session-level token
 // totals, `messages` rows in OpenAI chat shape, and per-model usage in
-// `session_model_usage`. `src/sources/hermes-store.ts` reads the rows; this
-// parser turns one session's rows into a `ParsedSession` and does no I/O.
+// `session_model_usage`.
 import { linkageIssues } from "../diagnostics.ts";
 import { asString, canonicalJson, get, isObject, type JsonObject } from "../json.ts";
 import {
@@ -28,8 +27,6 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-/** One `sessions` row as `HermesStore.loadSession` reads it. A column the
- * database predates reads as null. */
 export interface HermesSessionRow {
   id: string;
   /** Epoch seconds. */
@@ -64,8 +61,6 @@ export interface HermesSessionRow {
   cost_status: string | null;
   profile_name: string | null;
   archived: number | null;
-  /** The parent's `end_reason`, which tells a subagent from a compression,
-   * reset, or `/branch` continuation. */
   parent_end_reason: string | null;
   parent_ended_at: number | null;
   parent_session_key: string | null;
@@ -116,9 +111,7 @@ export interface HermesModelUsageRow {
   cost_status: string | null;
 }
 
-/** Per-model usage in Decant's terms, kept in `raw_meta.modelUsage` and read
- * by `deriveModelUsage`, because Hermes records usage per session and model,
- * never per message. */
+/** Hermes records usage per session and model, never per message. */
 interface ModelUsageEntry {
   model: string;
   requests: number;
@@ -167,10 +160,8 @@ export function parseHermesSession(
     if (!known) {
       countUnknown(unknownTypes, message.role, message.id);
     }
-    // A compaction summary is machine-written, whatever role Hermes stored it
-    // under, so it is a system row that marks the compaction, not a turn.
-    const summary = message._compressed_summary === 1;
-    const role: Role = summary ? "system" : known ? (message.role as Role) : "other";
+    const compactionSummary = message._compressed_summary === 1;
+    const role: Role = compactionSummary ? "system" : known ? (message.role as Role) : "other";
     const blocks: NormalizedBlock[] = [];
     if (role === "assistant") {
       const thinking = message.reasoning_content ?? message.reasoning;
@@ -227,7 +218,6 @@ export function parseHermesSession(
     rawMeta.modelUsage = usage.modelUsage.map((entry) => ({ ...entry }));
   }
   if (isSubagent && row.parent_session_id != null) {
-    // Read by inferSubagent in ingest as the parent's source session ID.
     rawMeta.parentSessionId = row.parent_session_id;
   }
   if (rewound > 0) {
@@ -330,7 +320,6 @@ function displayIdentity(row: HermesMessageRow): string {
   ]);
 }
 
-/** A live row beats an archived one, then the newer row wins. */
 function preferred(candidate: HermesMessageRow, current: HermesMessageRow): boolean {
   const candidateActive = candidate.active == null || candidate.active === 1;
   const currentActive = current.active == null || current.active === 1;
@@ -340,8 +329,6 @@ function preferred(candidate: HermesMessageRow, current: HermesMessageRow): bool
   return candidate.id > current.id;
 }
 
-/** The row as stored, with structured content decoded so the archive keeps
- * it as JSON rather than a sentinel-prefixed string. */
 function rawRecord(row: HermesMessageRow): JsonObject {
   const raw: JsonObject = {};
   for (const [key, value] of Object.entries(row)) {
@@ -350,9 +337,7 @@ function rawRecord(row: HermesMessageRow): JsonObject {
   if (typeof row.tool_calls === "string") {
     try {
       raw.tool_calls = parseSourceJson(row.tool_calls);
-    } catch {
-      // Kept as the stored string; toolUseBlocks reports it.
-    }
+    } catch {}
   }
   if (typeof row.content === "string" && row.content.startsWith(CONTENT_JSON_PREFIX)) {
     try {
@@ -558,11 +543,6 @@ interface SessionUsage {
   reported: boolean;
 }
 
-/** Session totals from the `sessions` row, split by model from
- * `session_model_usage`. Usage the per-model rows do not cover (a database
- * from before Hermes kept them) is charged to the session's model, so the
- * split always sums to the totals. If the rows add up to more than the
- * session row, the rows are taken as the totals. */
 function sessionUsage(
   row: HermesSessionRow,
   modelUsageRows: readonly HermesModelUsageRow[],
@@ -646,13 +626,12 @@ function sessionUsage(
   return { totals, modelUsage, dominantModel, reported };
 }
 
-/** The session row as Hermes stored it, with `model_config` parsed. The
- * system prompt is not read. The gateway routing keys are left out: they
- * name the platform chat or thread, and only subagent filing needs them. */
+const PRIVATE_ROUTING_KEYS = new Set(["session_key", "parent_session_key"]);
+
 function sessionMeta(row: HermesSessionRow): JsonObject {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(row)) {
-    if (key !== "session_key" && key !== "parent_session_key") {
+    if (!PRIVATE_ROUTING_KEYS.has(key)) {
       meta[key] = value as Json;
     }
   }

@@ -17,9 +17,6 @@ export interface Config {
   vscodeCopilotDir: string;
   vscodeCopilotInsidersDir?: string;
   atifDir?: string;
-  /** Hermes Agent home: `state.db` plus `profiles/<name>/state.db`, one per
-   * Hermes profile. Absent in a config built by hand, which then reads no
-   * Hermes data. */
   hermesDir?: string;
 }
 

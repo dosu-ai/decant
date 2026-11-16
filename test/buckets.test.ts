@@ -490,6 +490,9 @@ describe("activity bucket classifier", () => {
 
     test("countSearches: MCP tools named like shells do not count", () => {
       expect(countSearches("mcp__posthog__exec", '{"command":"rg foo"}')).toBe(0);
+    });
+
+    test("countSearches: the mcp__ guard runs before a dotted name flattens to a shell tool", () => {
       expect(countSearches("mcp__codex_apps__x.shell", '{"command":"rg foo"}')).toBe(0);
     });
   });

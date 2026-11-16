@@ -134,13 +134,14 @@ describe("economics cache", () => {
     db.close();
   });
 
-  test("invalidate() during an in-flight rebuild schedules an immediate follow-up", async () => {
+  test("invalidate() during an in-flight rebuild schedules a follow-up instead of trusting the build that read before the write", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
     const counter = { calls: 0 };
     let rebuilt = 0;
-    const preIngestVectors = inProcessComputeVectors(dbPath);
-    const gate = Promise.withResolvers<void>();
+    const vectorsReadBeforeIngest = inProcessComputeVectors(dbPath);
+    const releaseStaleBuild = Promise.withResolvers<void>();
+    const isStaleBuild = () => counter.calls === 1;
     const cache = new EconomicsCache({
       dbPath,
       db,
@@ -149,15 +150,16 @@ describe("economics cache", () => {
       },
       computeVectors: async (path) => {
         counter.calls += 1;
-        if (counter.calls === 1) {
-          await gate.promise;
-          return preIngestVectors;
+        if (isStaleBuild()) {
+          await releaseStaleBuild.promise;
+          return vectorsReadBeforeIngest;
         }
         return inProcessComputeVectors(path);
       },
     });
 
-    cache.prewarm();
+    const startStaleBuild = () => cache.prewarm();
+    startStaleBuild();
     upsertSession(
       db,
       parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
@@ -166,11 +168,13 @@ describe("economics cache", () => {
       2,
       "codex",
     );
-    cache.invalidate();
-    gate.resolve();
+    const requestFollowUpBuild = () => cache.invalidate();
+    requestFollowUpBuild();
+    releaseStaleBuild.resolve();
     await cache.settled();
 
-    expect(counter.calls).toBe(2);
+    const staleBuildPlusFollowUpBuild = 2;
+    expect(counter.calls).toBe(staleBuildPlusFollowUpBuild);
     expect(rebuilt).toBe(1);
     expect(await cache.get()).toEqual(tokenEconomics(db));
     cache.dispose();

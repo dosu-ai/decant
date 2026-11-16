@@ -364,13 +364,14 @@ describe("ls --fields", () => {
     );
   });
 
-  test("a four-field listing is a small fraction of the default one", async () => {
+  test("a four-field listing has a machine-independent size under a fifth of the default one", async () => {
     const whole = await run("--json", "ls");
     const narrow = await run("--json", "ls", "--fields", "id,tool,started_at,title");
     const wholeBytes = Buffer.byteLength(whole.stdout);
     const narrowBytes = Buffer.byteLength(narrow.stdout);
     expect((JSON.parse(narrow.stdout) as unknown[]).length).toBe(SESSIONS.length);
-    expect(narrowBytes).toBe(1666);
+    const narrowBytesWithNoTempPath = 1666;
+    expect(narrowBytes).toBe(narrowBytesWithNoTempPath);
     expect(narrowBytes * 5).toBeLessThan(wholeBytes);
   });
 
@@ -678,7 +679,7 @@ describe("--since and --until across a UTC offset", () => {
     );
   });
 
-  test("the first and last representable days keep every session", async () => {
+  test("the first and last representable days keep every session, though the day after 9999-12-31 is +010000-01-01", async () => {
     const all = [...MARCH_1, ...MARCH_2].sort();
     expect(await named("title", "ls", "--until", "9999-12-31")).toEqual(all);
     expect(await named("title", "ls", "--since", "0000-01-01")).toEqual(all);

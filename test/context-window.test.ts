@@ -52,7 +52,7 @@ function usage(
   };
 }
 
-const CONTEXT_FIXTURE = [
+const FIRST_CALL_GROWS_CONTEXT = [
   record({
     type: "user",
     uuid: "u1",
@@ -77,6 +77,9 @@ const CONTEXT_FIXTURE = [
       ],
     },
   }),
+];
+
+const STREAMED_DUPLICATE_OF_FIRST_CALL = [
   record({
     type: "assistant",
     uuid: "a1b",
@@ -91,6 +94,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Scanning" }],
     },
   }),
+];
+
+const SECOND_CALL_AFTER_TOOL_RESULT = [
   record({
     type: "user",
     uuid: "u2",
@@ -115,6 +121,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Done reading; starting the refactor." }],
     },
   }),
+];
+
+const AUTO_COMPACTION_WITH_METADATA = [
   record({
     type: "system",
     uuid: "s1",
@@ -140,6 +149,9 @@ const CONTEXT_FIXTURE = [
         "This session is being continued from a previous conversation. Summary: refactor is underway.",
     },
   }),
+];
+
+const FIRST_CALL_AFTER_COMPACTION = [
   record({
     type: "user",
     uuid: "u3",
@@ -161,6 +173,9 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Continuing after compaction." }],
     },
   }),
+];
+
+const SIDECHAIN_OUTSIDE_MAIN_CURVE = [
   record({
     type: "user",
     uuid: "sc1",
@@ -184,6 +199,15 @@ const CONTEXT_FIXTURE = [
       content: [{ type: "text", text: "Two flows found." }],
     },
   }),
+];
+
+const CONTEXT_FIXTURE = [
+  ...FIRST_CALL_GROWS_CONTEXT,
+  ...STREAMED_DUPLICATE_OF_FIRST_CALL,
+  ...SECOND_CALL_AFTER_TOOL_RESULT,
+  ...AUTO_COMPACTION_WITH_METADATA,
+  ...FIRST_CALL_AFTER_COMPACTION,
+  ...SIDECHAIN_OUTSIDE_MAIN_CURVE,
 ].join("\n");
 
 function seeded(): { db: Database; sessionId: number } {

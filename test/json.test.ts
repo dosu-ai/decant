@@ -11,7 +11,7 @@ import {
   isObject,
 } from "../src/json.ts";
 
-describe("canonicalJson", () => {
+describe("canonicalJson matches serde_json's default serialization byte for byte (sorted keys, compact separators)", () => {
   test("sorts object keys recursively, arrays keep order", () => {
     expect(canonicalJson({ b: 1, a: { d: 2, c: 3 }, e: [{ z: 1, y: 2 }] })).toBe(
       '{"a":{"c":3,"d":2},"b":1,"e":[{"y":2,"z":1}]}',

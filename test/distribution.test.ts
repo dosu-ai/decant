@@ -126,9 +126,13 @@ describe("distribution helpers", () => {
 
   test("ships the binary minified, since that halves what the browser parses", () => {
     for (const target of selectTargets("all")) {
-      const args = buildTargetArgs(target, "/tmp/decant");
-      expect(args).toContain("--minify");
-      expect(args).not.toContain("--sourcemap");
+      expect(buildTargetArgs(target, "/tmp/decant")).toContain("--minify");
+    }
+  });
+
+  test("builds without --sourcemap, which kills the compiled server after POST /api/sync", () => {
+    for (const target of selectTargets("all")) {
+      expect(buildTargetArgs(target, "/tmp/decant")).not.toContain("--sourcemap");
     }
   });
 
@@ -220,9 +224,13 @@ describe("distribution helpers", () => {
 });
 
 describe("docker image", () => {
-  test("bakes in no trusted peer allowlist", () => {
-    const dockerfile = readFileSync(join(import.meta.dir, "..", "Dockerfile"), "utf8");
-    expect(dockerfile).not.toMatch(/^\s*ENV\s+DECANT_TRUSTED_PEERS[\s=]/m);
-    expect(dockerfile).toMatch(/^ENV DECANT_TRUST_DEFAULT_GATEWAY=1$/m);
+  const dockerfile = () => readFileSync(join(import.meta.dir, "..", "Dockerfile"), "utf8");
+
+  test("bakes in no trusted peer allowlist in either ENV form, since the archive is served without credentials", () => {
+    expect(dockerfile()).not.toMatch(/^\s*ENV\s+DECANT_TRUSTED_PEERS[\s=]/m);
+  });
+
+  test("trusts one derived default-gateway address instead of a preset range", () => {
+    expect(dockerfile()).toMatch(/^ENV DECANT_TRUST_DEFAULT_GATEWAY=1$/m);
   });
 });

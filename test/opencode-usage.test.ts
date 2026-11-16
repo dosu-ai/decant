@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Json } from "../src/model.ts";
 import {
+  DISJOINT_SINCE_BUILD,
   legacyAssistantUsage,
   migratedUsage,
   openCodeUsage,
@@ -27,13 +28,19 @@ describe("reasoningOverlap", () => {
     expect(reasoningOverlap(t({}), null)).toBe("disjoint");
     expect(reasoningOverlap(t({ total: 999 }), "1.2.0")).toBe("included");
   });
-  test("dates a preview build by the timestamp in its version", () => {
-    expect(reasoningOverlap(t({}), "0.0.0-dev-202604060343")).toBe("included");
-    expect(reasoningOverlap(t({}), "0.0.0-dev-202604060344")).toBe("disjoint");
+  test("dates a 0.0.0-<channel>-<YYYYMMDDHHmm> preview build against the UTC minute 1.3.16 was tagged", () => {
+    expect(DISJOINT_SINCE_BUILD).toBe("202604060344");
+    const minuteBefore1316Tag = "202604060343";
+    expect(reasoningOverlap(t({}), `0.0.0-dev-${minuteBefore1316Tag}`)).toBe("included");
+    expect(reasoningOverlap(t({}), `0.0.0-dev-${DISJOINT_SINCE_BUILD}`)).toBe("disjoint");
     expect(reasoningOverlap(t({}), "0.0.0-beta-202609110000")).toBe("disjoint");
     expect(reasoningOverlap(t({}), "0.0.0-feat-some-branch-202603010000")).toBe("included");
+  });
+  test("lets a preview build's recorded total decide before its build timestamp", () => {
     expect(reasoningOverlap(t({ total: 170 }), "0.0.0-dev-202603010000")).toBe("disjoint");
     expect(reasoningOverlap(t({ total: 150 }), "0.0.0-dev-202609010000")).toBe("included");
+  });
+  test("keeps a real 0.0.0 release from the JSON-storage era included", () => {
     expect(reasoningOverlap(t({}), "0.0.0")).toBe("included");
   });
   test("zero reasoning is always disjoint", () => {

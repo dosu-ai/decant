@@ -738,6 +738,42 @@ describe("upsertSession", () => {
   });
 });
 
+function markSourcesIngestedByThePreviousPipeline(db: Database, path?: string): void {
+  if (path == null) {
+    db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+    return;
+  }
+  db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
+    INGEST_PIPELINE_REVISION - 1,
+    path,
+  );
+}
+
+function leaveEconomicsUnderivedAsAMigratedV9Archive(db: Database): void {
+  db.exec("DELETE FROM session_economics");
+}
+
+function storeTotalsAsTheParserThatBilledEverySplitBlock(db: Database): void {
+  const splitBlocksPerMessage = 3;
+  db.query(
+    `UPDATE session SET total_input_tokens = total_input_tokens * ?1,
+                        total_output_tokens = total_output_tokens * ?1,
+                        estimated_cost_usd = estimated_cost_usd * ?1`,
+  ).run(splitBlocksPerMessage);
+}
+
+function fileTheChildRowUnderItsParentAsTheOldCodexParserDid(db: Database): void {
+  db.exec("UPDATE session SET parent_session_id = NULL");
+  db.exec("DELETE FROM session WHERE source_session_id = 'parent-thread'");
+  db.exec(
+    "UPDATE session SET source_session_id = 'parent-thread' WHERE source_session_id = 'child-thread'",
+  );
+}
+
+function storeActiveSecondsThatCountTheParallelOverlapTwice(db: Database, sessionId: number): void {
+  db.query("UPDATE session SET active_seconds = 100 WHERE id = ?1").run(sessionId);
+}
+
 describe("sync", () => {
   afterEach(() => setSystemTime());
 
@@ -1469,7 +1505,7 @@ describe("sync", () => {
       ).cache_write_1h_per_mtok,
     ).toBe(5);
 
-    db.exec("DELETE FROM session_economics");
+    leaveEconomicsUnderivedAsAMigratedV9Archive(db);
     db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
     const second = sync(db, config);
     expect(second).toMatchObject({ scanned: 1, ingested: 0, skipped: 1, issues: 0, failed: 0 });
@@ -1536,10 +1572,8 @@ describe("sync", () => {
         10,
       );
       expect(setSessionUserState(db, original.id, "archived")).toBe(true);
-      db.exec(
-        "UPDATE session SET total_input_tokens = total_input_tokens * 3, total_output_tokens = total_output_tokens * 3, estimated_cost_usd = estimated_cost_usd * 3",
-      );
-      db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+      storeTotalsAsTheParserThatBilledEverySplitBlock(db);
+      markSourcesIngestedByThePreviousPipeline(db);
       expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
       expect(read()).toEqual(original);
       expect(db.query("SELECT state FROM session_user_state").get()).toEqual({ state: "archived" });
@@ -1577,10 +1611,7 @@ describe("sync", () => {
       `DELETE FROM tool_call
        WHERE session_id = ?1 AND tool_use_id = '11111111-2222-4333-8444-555555555555'`,
     ).run(original.id);
-    db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
-      INGEST_PIPELINE_REVISION - 1,
-      sourcePath,
-    );
+    markSourcesIngestedByThePreviousPipeline(db, sourcePath);
 
     expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
     expect(
@@ -1647,12 +1678,8 @@ describe("sync", () => {
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
 
-      db.exec("UPDATE session SET parent_session_id = NULL");
-      db.exec("DELETE FROM session WHERE source_session_id = 'parent-thread'");
-      db.exec(
-        "UPDATE session SET source_session_id = 'parent-thread' WHERE source_session_id = 'child-thread'",
-      );
-      db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+      fileTheChildRowUnderItsParentAsTheOldCodexParserDid(db);
+      markSourcesIngestedByThePreviousPipeline(db);
       if (parentGone) {
         rmSync(parentPath);
       }
@@ -1715,11 +1742,8 @@ describe("sync", () => {
     const economics = tokenEconomicsForSession(db, derived.id);
     expect(economics?.totals.attributed_ms).toBe(60_000);
 
-    db.query("UPDATE session SET active_seconds = 100 WHERE id = ?1").run(derived.id);
-    db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
-      INGEST_PIPELINE_REVISION - 1,
-      sourcePath,
-    );
+    storeActiveSecondsThatCountTheParallelOverlapTwice(db, derived.id);
+    markSourcesIngestedByThePreviousPipeline(db, sourcePath);
     expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 0, failed: 0 });
     expect(read()).toEqual(derived);
     expect(tokenEconomicsForSession(db, derived.id)).toEqual(economics);

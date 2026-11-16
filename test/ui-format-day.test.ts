@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 
 const formatModule = resolve(import.meta.dir, "../src/ui/format.ts");
 
-function formatDayIn(timeZone: string, value: string): { actual: string; expected: string } {
+function formatDayInAFreshProcessLoadedUnder(
+  timeZone: string,
+  value: string,
+): { actual: string; expected: string } {
   const script = `
     const { formatDay } = await import(${JSON.stringify(formatModule)});
     const local = new Intl.DateTimeFormat(undefined, { month: "short", day: "2-digit" });
@@ -23,17 +26,26 @@ function formatDayIn(timeZone: string, value: string): { actual: string; expecte
 
 describe("formatDay", () => {
   test("keeps a bare calendar day on that day west of UTC", () => {
-    const { actual, expected } = formatDayIn("America/Los_Angeles", "2026-10-12");
+    const { actual, expected } = formatDayInAFreshProcessLoadedUnder(
+      "America/Los_Angeles",
+      "2026-10-12",
+    );
     expect(actual).toBe(expected);
   });
 
   test("keeps a bare calendar day on that day east of UTC", () => {
-    const { actual, expected } = formatDayIn("Pacific/Kiritimati", "2026-10-12");
+    const { actual, expected } = formatDayInAFreshProcessLoadedUnder(
+      "Pacific/Kiritimati",
+      "2026-10-12",
+    );
     expect(actual).toBe(expected);
   });
 
   test("still converts a full timestamp to the local day", () => {
-    const { actual, expected } = formatDayIn("America/Los_Angeles", "2026-10-12T07:26:00Z");
+    const { actual, expected } = formatDayInAFreshProcessLoadedUnder(
+      "America/Los_Angeles",
+      "2026-10-12T07:26:00Z",
+    );
     expect(actual).toBe(expected);
   });
 });

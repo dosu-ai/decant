@@ -70,6 +70,18 @@ function freshCase(): {
   };
 }
 
+const SYNCED_CASE_SESSIONS = 7;
+
+async function claudeSampleSessionId(dbPath: string): Promise<number> {
+  const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
+  const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
+  const sessionId = sessions.find((session) => session.source_session_id === "sample")?.id;
+  if (sessionId == null) {
+    throw new Error('expected the claude sample fixture session (source_session_id "sample")');
+  }
+  return sessionId;
+}
+
 async function syncedCase(): Promise<{ dbPath: string }> {
   const fixtureCase = freshCase();
   const result = await runCli([
@@ -317,12 +329,25 @@ describe("runCli", () => {
 
   test("export --as trajectory writes a validating JSON array", async () => {
     const { dbPath } = await syncedCase();
-    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
-    const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
-    const sessionId = sessions.find((session) => session.source_session_id === "sample")?.id;
-    if (sessionId == null) {
-      throw new Error('expected the claude sample fixture session (source_session_id "sample")');
-    }
+    const sessionId = await claudeSampleSessionId(dbPath);
+
+    const result = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "export",
+      String(sessionId),
+      "--as",
+      "trajectory",
+    ]);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const records = JSON.parse(result.stdout) as { role: string; source?: string }[];
+    expect(records[0]).toMatchObject({ role: "meta", source: "claude-code" });
+  });
+
+  test("global flags after a subcommand's own arguments still parse (export <id> --as trajectory --db X --no-sync)", async () => {
+    const { dbPath } = await syncedCase();
+    const sessionId = await claudeSampleSessionId(dbPath);
 
     const result = await runCli([
       "export",
@@ -345,14 +370,9 @@ describe("runCli", () => {
     expect((JSON.parse(result.stdout) as unknown[]).length).toBeGreaterThan(0);
   });
 
-  test("export --all --as trajectory names files <id>.trajectory.json", async () => {
+  test("export --all --as trajectory names files <id>.trajectory.json and skips no fixture session", async () => {
     const { dbPath } = await syncedCase();
-    const list = await runCli(["--db", dbPath, "--json", "--no-sync", "ls"]);
-    const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
-    const sessionId = sessions.find((session) => session.source_session_id === "sample")?.id;
-    if (sessionId == null) {
-      throw new Error('expected the claude sample fixture session (source_session_id "sample")');
-    }
+    const sessionId = await claudeSampleSessionId(dbPath);
 
     const outDir = join(workDir, `traj-out-${caseCounter}`);
     const result = await runCli([
@@ -368,7 +388,8 @@ describe("runCli", () => {
     ]);
     expect(result.code).toBe(0);
     expect(existsSync(join(outDir, `${sessionId}.trajectory.json`))).toBe(true);
-    expect(result.stderr).toContain(`exported 7 sessions to ${outDir}\n`);
+    const tallyLineAmidRepairLines = `exported ${SYNCED_CASE_SESSIONS} sessions to ${outDir}\n`;
+    expect(result.stderr).toContain(tallyLineAmidRepairLines);
     expect(result.stderr).not.toContain("skipped");
   });
 
@@ -606,7 +627,7 @@ describe("runCli", () => {
     expect(jsonDefault.stdout.startsWith("#")).toBe(false);
   });
 
-  test("sync exits 3 only for data loss and reports every issue code", async () => {
+  test("sync exits 3 only for data loss, reports every issue code, and shell-quotes the --db hint", async () => {
     const fixtureCase = freshCase();
     const targetDir = join(workDir, `case-${caseCounter}-codes`);
     mkdirSync(targetDir, { recursive: true });
@@ -654,31 +675,6 @@ describe("runCli", () => {
     expect(softText.code).toBe(0);
     expect(softText.stderr).toContain(`--db '${textCase.dbPath}' ls --json`);
 
-    const envCase = freshCase();
-    const informationalEnv = join(targetDir, "informational-env.jsonl");
-    writeFileSync(
-      informationalEnv,
-      `${sample}\n{"type":"mystery","uuid":"m3","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
-    );
-    const softEnv = await runCli(["--json", "sync", "--path", informationalEnv], {
-      env: { DECANT_DB: envCase.dbPath },
-      homeDir: targetDir,
-    });
-    expect(softEnv.code).toBe(0);
-    expect(JSON.parse(softEnv.stdout).issues_hint).toContain(`--db '${envCase.dbPath}' ls --json`);
-
-    const informationalDefault = join(targetDir, "informational-default.jsonl");
-    writeFileSync(
-      informationalDefault,
-      `${sample}\n{"type":"mystery","uuid":"m4","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
-    );
-    const softDefault = await runCli(["--json", "sync", "--path", informationalDefault], {
-      env: {},
-      homeDir: targetDir,
-    });
-    expect(softDefault.code).toBe(0);
-    expect(JSON.parse(softDefault.stdout).issues_hint).toContain("decant ls --json");
-
     const lossy = join(targetDir, "lossy.jsonl");
     writeFileSync(lossy, `${sample}\n{not json\n`);
     const hard = await runCli(["--db", fixtureCase.dbPath, "--json", "sync", "--path", lossy], {
@@ -689,6 +685,42 @@ describe("runCli", () => {
       issues: 1,
       issues_by_code: { unparsed_line: 1 },
     });
+  });
+
+  function claudeSampleWithUnknownRecord(dir: string, uuid: string): string {
+    const sample = readFileSync(
+      join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"),
+      "utf8",
+    ).trimEnd();
+    const path = join(dir, `informational-${uuid}.jsonl`);
+    writeFileSync(
+      path,
+      `${sample}\n{"type":"mystery","uuid":"${uuid}","timestamp":"2026-05-01T10:01:00.000Z"}\n`,
+    );
+    return path;
+  }
+
+  test("sync issues hint names --db for an archive chosen by DECANT_DB", async () => {
+    const envCase = freshCase();
+    const targetDir = mkdtempSync(join(workDir, "issues-hint-env-"));
+    const informationalEnv = claudeSampleWithUnknownRecord(targetDir, "m3");
+    const softEnv = await runCli(["--json", "sync", "--path", informationalEnv], {
+      env: { DECANT_DB: envCase.dbPath },
+      homeDir: targetDir,
+    });
+    expect(softEnv.code).toBe(0);
+    expect(JSON.parse(softEnv.stdout).issues_hint).toContain(`--db '${envCase.dbPath}' ls --json`);
+  });
+
+  test("sync issues hint is the bare decant command when no archive override is set", async () => {
+    const targetDir = mkdtempSync(join(workDir, "issues-hint-default-"));
+    const informationalDefault = claudeSampleWithUnknownRecord(targetDir, "m4");
+    const softDefault = await runCli(["--json", "sync", "--path", informationalDefault], {
+      env: {},
+      homeDir: targetDir,
+    });
+    expect(softDefault.code).toBe(0);
+    expect(JSON.parse(softDefault.stdout).issues_hint).toContain("decant ls --json");
   });
 
   test("sync --path ingests only the requested source files", async () => {
@@ -927,7 +959,7 @@ describe("db info discloses what the archive stores", () => {
     }
   }
 
-  test("reports blocks and file refs, and keeps the full-scan totals opt-in", async () => {
+  test("reports blocks and file refs, and runs the full-table scans for fts_rows and text_bytes only under --full", async () => {
     const { dbPath } = await syncedCase();
     const base = ["--db", dbPath, "--json", "--no-sync"];
 
@@ -1004,31 +1036,44 @@ describe("db info discloses what the archive stores", () => {
     expect(afterVacuum.size_bytes).toBeLessThan(afterDelete.size_bytes);
   });
 
-  test("text_bytes counts bytes, not characters", async () => {
-    const dbPath = join(workDir, "db-info-utf8.db");
-    const sample = "h\u00e9llo\u2192\ud83d\ude42";
-    expect([...sample].length).toBe(7);
-    expect(Buffer.byteLength(sample, "utf8")).toBe(13);
+  const MULTIBYTE_SAMPLE = "h\u00e9llo\u2192\ud83d\ude42";
+  const MULTIBYTE_SAMPLE_CODE_POINTS = 7;
+  const MULTIBYTE_SAMPLE_UTF8_BYTES = 13;
 
+  function seedMultibyteInEveryCountedColumn(dbPath: string): { copies: number } {
     const db = openDb(dbPath);
-    const sessionId = Number(
-      db.query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'utf8')").run()
-        .lastInsertRowid,
-    );
-    const messageId = Number(
-      db
-        .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
-        .run(sessionId, sample).lastInsertRowid,
-    );
-    db.query(
-      `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_input, tool_result)
-       VALUES (?1, ?2, 0, 'tool_use', ?3, ?3, ?3)`,
-    ).run(messageId, sessionId, sample);
-    closeDb(db);
+    try {
+      const sessionId = Number(
+        db
+          .query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'utf8')")
+          .run().lastInsertRowid,
+      );
+      const messageId = Number(
+        db
+          .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
+          .run(sessionId, MULTIBYTE_SAMPLE).lastInsertRowid,
+      );
+      db.query(
+        `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_input, tool_result)
+         VALUES (?1, ?2, 0, 'tool_use', ?3, ?3, ?3)`,
+      ).run(messageId, sessionId, MULTIBYTE_SAMPLE);
+      return { copies: 4 };
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("text_bytes counts UTF-8 bytes, not code points, in raw, text, tool_input, and tool_result", async () => {
+    const dbPath = join(workDir, "db-info-utf8.db");
+    expect([...MULTIBYTE_SAMPLE].length).toBe(MULTIBYTE_SAMPLE_CODE_POINTS);
+    expect(Buffer.byteLength(MULTIBYTE_SAMPLE, "utf8")).toBe(MULTIBYTE_SAMPLE_UTF8_BYTES);
+
+    const { copies } = seedMultibyteInEveryCountedColumn(dbPath);
 
     const info = JSON.parse(
       (await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"])).stdout,
     ) as FullInfoJson;
+    expect(copies * MULTIBYTE_SAMPLE_UTF8_BYTES).toBe(52);
     expect(info.text_bytes).toBe(52);
   });
 

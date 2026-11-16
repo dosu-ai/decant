@@ -1,7 +1,7 @@
 import type { Json } from "../src/model.ts";
 import type { OpenCodeMessageRow, OpenCodeSessionRow } from "../src/sources/opencode.ts";
 
-const T0 = 1791786000000;
+const T0 = Date.parse("2026-10-12T06:20:00.000Z");
 
 export const STEP_TIMES = {
   session: T0,

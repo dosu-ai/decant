@@ -406,6 +406,11 @@ describe("exportTrajectory", () => {
 
   test("probes past a source id that already looks like one of our renames", () => {
     const db = openDb(join(workDir, "collide.db"));
+    const repeatedId = "t1";
+    const renameOfTheRepeat = `${repeatedId}__dup2`;
+    const sourceIdEqualToThatRename = renameOfTheRepeat;
+    const renameProbedPastTheCollision = `${sourceIdEqualToThatRename}__dup2`;
+    expect(renameProbedPastTheCollision).toBe("t1__dup2__dup2");
     const lines = [
       JSON.stringify({
         type: "user",
@@ -418,9 +423,9 @@ describe("exportTrajectory", () => {
         message: {
           role: "assistant",
           content: [
-            { type: "tool_use", id: "t1", name: "Bash", input: { n: 1 } },
-            { type: "tool_use", id: "t1", name: "Bash", input: { n: 2 } },
-            { type: "tool_use", id: "t1__dup2", name: "Bash", input: { n: 3 } },
+            { type: "tool_use", id: repeatedId, name: "Bash", input: { n: 1 } },
+            { type: "tool_use", id: repeatedId, name: "Bash", input: { n: 2 } },
+            { type: "tool_use", id: sourceIdEqualToThatRename, name: "Bash", input: { n: 3 } },
           ],
         },
       }),
@@ -429,7 +434,7 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:02.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1", content: "first" }],
+          content: [{ type: "tool_result", tool_use_id: repeatedId, content: "first" }],
         },
       }),
       JSON.stringify({
@@ -437,7 +442,7 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:03.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1", content: "second" }],
+          content: [{ type: "tool_result", tool_use_id: repeatedId, content: "second" }],
         },
       }),
       JSON.stringify({
@@ -445,7 +450,9 @@ describe("exportTrajectory", () => {
         timestamp: "2026-07-01T00:00:04.000Z",
         message: {
           role: "user",
-          content: [{ type: "tool_result", tool_use_id: "t1__dup2", content: "third" }],
+          content: [
+            { type: "tool_result", tool_use_id: sourceIdEqualToThatRename, content: "third" },
+          ],
         },
       }),
       JSON.stringify({
@@ -471,7 +478,7 @@ describe("exportTrajectory", () => {
         return typeof r === "object" && r != null && "tool_calls" in r;
       })
       .map((r) => r.tool_calls[0]?.id);
-    expect(callIds).toEqual(["t1", "t1__dup2", "t1__dup2__dup2"]);
+    expect(callIds).toEqual([repeatedId, renameOfTheRepeat, renameProbedPastTheCollision]);
     expect(new Set(callIds).size).toBe(callIds.length);
     expect(out.report.tool_call_ids_renamed).toBe(2);
 
@@ -480,9 +487,9 @@ describe("exportTrajectory", () => {
         typeof r === "object" && r != null && (r as { role?: string }).role === "tool",
     );
     expect(results.map((r) => [r.tool_call_id, r.content])).toEqual([
-      ["t1", "first"],
-      ["t1__dup2", "second"],
-      ["t1__dup2__dup2", "third"],
+      [repeatedId, "first"],
+      [renameOfTheRepeat, "second"],
+      [renameProbedPastTheCollision, "third"],
     ]);
     expect(out.report.duplicate_tool_results_dropped).toBe(0);
     db.close();

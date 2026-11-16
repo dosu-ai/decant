@@ -29,9 +29,9 @@ const MODEL = "claude-sonnet-5";
 const ORIGINAL = "aaaaaaaa-0000-4000-8000-000000000001";
 const BRANCH = "bbbbbbbb-0000-4000-8000-000000000002";
 const SECOND_BRANCH = "cccccccc-0000-4000-8000-000000000003";
-const LEAF = "dddddddd-0000-4000-8000-000000000004";
-const MIDDLE = "eeeeeeee-0000-4000-8000-000000000005";
-const ROOT = "ffffffff-0000-4000-8000-000000000006";
+const COPY_OF_SECOND_COPY = "dddddddd-0000-4000-8000-000000000004";
+const COPY_OF_FIRST_COPY = "eeeeeeee-0000-4000-8000-000000000005";
+const FIRST_COPY_OF_MISSING_ORIGINAL = "ffffffff-0000-4000-8000-000000000006";
 const SECOND_ORIGINAL = "99999999-0000-4000-8000-000000000007";
 
 interface Turn {
@@ -249,6 +249,21 @@ function estimate(db: Database, session: string): number {
       .query("SELECT est_reasoning_tokens AS n FROM session WHERE source_session_id = ?1")
       .get(session) as { n: number }
   ).n;
+}
+
+function storeAsAReleaseThatBilledTheCopiedTurnTwice(db: Database): void {
+  db.exec(`
+    DELETE FROM billed_request;
+    DELETE FROM unbilled_request;
+    UPDATE message
+       SET input_tokens = json_extract(raw, '$.message.usage.input_tokens'),
+           output_tokens = json_extract(raw, '$.message.usage.output_tokens')
+     WHERE role = 'assistant';
+    UPDATE session
+       SET total_input_tokens = 2000, total_output_tokens = 2500
+     WHERE source_session_id = '${BRANCH}';
+    UPDATE session_model_usage SET format_version = 2;
+  `);
 }
 
 function remove(db: Database, session: string): void {
@@ -478,18 +493,7 @@ describe("requests copied into a branched Claude Code session", () => {
     write(sourcePath(config, BRANCH), forkSessionTranscript([FIRST], [SECOND]));
     sync(db, config);
 
-    db.exec(`
-      DELETE FROM billed_request;
-      DELETE FROM unbilled_request;
-      UPDATE message
-         SET input_tokens = json_extract(raw, '$.message.usage.input_tokens'),
-             output_tokens = json_extract(raw, '$.message.usage.output_tokens')
-       WHERE role = 'assistant';
-      UPDATE session
-         SET total_input_tokens = 2000, total_output_tokens = 2500
-       WHERE source_session_id = '${BRANCH}';
-      UPDATE session_model_usage SET format_version = 2;
-    `);
+    storeAsAReleaseThatBilledTheCopiedTurnTwice(db);
     rmSync(join(dir, "claude"), { recursive: true });
 
     expect(sync(db, config).ingested).toBe(0);
@@ -667,28 +671,37 @@ describe("requests copied into a branched Claude Code session", () => {
     }
   });
 
-  test("a chain of /branch copies bills a turn in its root in every read order", () => {
-    const leaf: [string, string] = [LEAF, branchTranscript([FIRST], [FOURTH], LEAF, MIDDLE)];
-    const middle: [string, string] = [MIDDLE, branchTranscript([FIRST], [THIRD], MIDDLE, ROOT)];
-    const root: [string, string] = [ROOT, branchTranscript([FIRST], [SECOND], ROOT, ORIGINAL)];
-    const orders = permutations([leaf, middle, root]);
+  test("a chain of /branch copies bills a turn in its first copy in every read order", () => {
+    const thirdCopy: [string, string] = [
+      COPY_OF_SECOND_COPY,
+      branchTranscript([FIRST], [FOURTH], COPY_OF_SECOND_COPY, COPY_OF_FIRST_COPY),
+    ];
+    const secondCopy: [string, string] = [
+      COPY_OF_FIRST_COPY,
+      branchTranscript([FIRST], [THIRD], COPY_OF_FIRST_COPY, FIRST_COPY_OF_MISSING_ORIGINAL),
+    ];
+    const firstCopy: [string, string] = [
+      FIRST_COPY_OF_MISSING_ORIGINAL,
+      branchTranscript([FIRST], [SECOND], FIRST_COPY_OF_MISSING_ORIGINAL, ORIGINAL),
+    ];
+    const orders = permutations([thirdCopy, secondCopy, firstCopy]);
     expect(orders).toHaveLength(6);
-    const settled = stateOf(root, middle, leaf);
-    const withoutRoot = stateOf(middle, leaf);
+    const settled = stateOf(firstCopy, secondCopy, thirdCopy);
+    const withoutFirstCopy = stateOf(secondCopy, thirdCopy);
     for (const order of orders) {
       const { db } = freshCase();
       for (const [session, content] of order) {
         ingest(db, session, content);
       }
-      expectBilled(db, ROOT, 4, FIRST, SECOND);
-      expectBilled(db, MIDDLE, 4, THIRD);
-      expectBilled(db, LEAF, 4, FOURTH);
+      expectBilled(db, FIRST_COPY_OF_MISSING_ORIGINAL, 4, FIRST, SECOND);
+      expectBilled(db, COPY_OF_FIRST_COPY, 4, THIRD);
+      expectBilled(db, COPY_OF_SECOND_COPY, 4, FOURTH);
       expect(archiveState(db)).toEqual(settled);
 
-      remove(db, ROOT);
-      expectBilled(db, MIDDLE, 4, FIRST, THIRD);
-      expectBilled(db, LEAF, 4, FOURTH);
-      expect(archiveState(db)).toEqual(withoutRoot);
+      remove(db, FIRST_COPY_OF_MISSING_ORIGINAL);
+      expectBilled(db, COPY_OF_FIRST_COPY, 4, FIRST, THIRD);
+      expectBilled(db, COPY_OF_SECOND_COPY, 4, FOURTH);
+      expect(archiveState(db)).toEqual(withoutFirstCopy);
       closeDb(db);
     }
   });

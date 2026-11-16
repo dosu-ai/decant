@@ -230,7 +230,7 @@ describe("openDb", () => {
     migrated.close();
   });
 
-  test("adds the tool-call paging index when upgrading a v22 archive", () => {
+  test("adds the (timestamp DESC, id DESC) index listToolCalls pages by when upgrading a v22 archive", () => {
     const path = freshPath();
     const legacy = openDb(path);
     legacy.exec("DROP INDEX IF EXISTS idx_toolcall_timestamp");
@@ -249,7 +249,7 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
-  test("serves the tool-call page order from an index rather than a sort", () => {
+  test("serves the unfiltered tool-call page order from an index rather than a sort", () => {
     const db = openDb(freshPath());
     const where = [
       visibleSessionPredicate("s"),
@@ -466,13 +466,21 @@ describe("openDb", () => {
     closeDb(db);
   });
 
-  test("keeps the message parent index that backs the foreign key", () => {
+  test("keeps the message parent index so each deleted message finds its children without a table scan", () => {
     const db = openDb(freshPath());
     expect(
       db
         .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_message_parent'")
         .get(),
     ).not.toBeNull();
+    const childLookupPlan = (
+      db.query("EXPLAIN QUERY PLAN SELECT id FROM message WHERE parent_id = 1").all() as {
+        detail: string;
+      }[]
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(childLookupPlan).toContain("idx_message_parent");
     closeDb(db);
   });
 
@@ -1543,7 +1551,7 @@ describe("deleting a session", () => {
       }
     ).n;
 
-  function seedSession(
+  function seedSessionThroughRealTables(
     db: Database,
     spec: { sourceSessionId: string; parentId?: number; text?: string; toolInput?: string },
   ): number {
@@ -1578,7 +1586,7 @@ describe("deleting a session", () => {
 
   test("clears its rows and its full-text index entries", () => {
     const db = openDb(freshPath());
-    const sessionId = seedSession(db, {
+    const sessionId = seedSessionThroughRealTables(db, {
       sourceSessionId: "root",
       text: "CANARYBLOCKTEXT",
       toolInput: "CANARYTOOLINPUT",
@@ -1599,13 +1607,20 @@ describe("deleting a session", () => {
 
   test("removes the whole descendant tree, not just the named session", () => {
     const db = openDb(freshPath());
-    const rootId = seedSession(db, { sourceSessionId: "root", text: "ROOTCANARY" });
-    const childId = seedSession(db, {
+    const rootId = seedSessionThroughRealTables(db, {
+      sourceSessionId: "root",
+      text: "ROOTCANARY",
+    });
+    const childId = seedSessionThroughRealTables(db, {
       sourceSessionId: "child",
       parentId: rootId,
       text: "CHILDCANARY",
     });
-    seedSession(db, { sourceSessionId: "grandchild", parentId: childId, text: "GRANDCANARY" });
+    seedSessionThroughRealTables(db, {
+      sourceSessionId: "grandchild",
+      parentId: childId,
+      text: "GRANDCANARY",
+    });
 
     expect(setSessionUserState(db, rootId, "deleted")).toBe(true);
 
@@ -1617,8 +1632,11 @@ describe("deleting a session", () => {
 
   test("authorizes the exact descendant tree before mutating it", () => {
     const db = openDb(freshPath());
-    const rootId = seedSession(db, { sourceSessionId: "root" });
-    const childId = seedSession(db, { sourceSessionId: "child", parentId: rootId });
+    const rootId = seedSessionThroughRealTables(db, { sourceSessionId: "root" });
+    const childId = seedSessionThroughRealTables(db, {
+      sourceSessionId: "child",
+      parentId: rootId,
+    });
     let guardedIds: readonly number[] = [];
 
     expect(
@@ -1644,7 +1662,7 @@ describe("deleting a session", () => {
 
   test("keeps the ingest_source tombstone so a later sync cannot resurrect it", () => {
     const db = openDb(freshPath());
-    const sessionId = seedSession(db, { sourceSessionId: "root" });
+    const sessionId = seedSessionThroughRealTables(db, { sourceSessionId: "root" });
     const sourcePath = "/home/u/.claude/projects/p/root.jsonl";
 
     expect(setSessionUserState(db, sessionId, "deleted")).toBe(true);
@@ -1777,7 +1795,7 @@ describe("archive permissions", () => {
     db.close();
   });
 
-  test("never changes the mode through a symlink planted at an archive name", () => {
+  test("never chmods the target of a symlink planted at an archive or sidecar name", () => {
     for (const suffix of ["", "-wal", "-shm"]) {
       const path = freshPath();
       const victim = `${path}.victim`;

@@ -29,6 +29,22 @@ const workDir = mkdtempSync(join(tmpdir(), "decant-query-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 let dbCounter = 0;
+function recordIngestIssueAsSyncDoes(
+  db: Database,
+  issue: {
+    sourcePath: string | null;
+    error: string;
+    code: string;
+    lineNo?: number;
+    rawLine?: string;
+  },
+): void {
+  db.query(
+    `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+  ).run(issue.sourcePath, issue.lineNo ?? null, issue.error, issue.rawLine ?? null, issue.code);
+}
+
 function freshDb(): Database {
   dbCounter += 1;
   return openDb(join(workDir, `query-${dbCounter}.db`));
@@ -733,10 +749,13 @@ describe("query reads", () => {
       2,
       "h",
     );
-    db.query(
-      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
-       VALUES ('/issues.jsonl', 99, 'x', 'not json', 'unparsed_line', datetime('now'))`,
-    ).run();
+    recordIngestIssueAsSyncDoes(db, {
+      sourcePath: "/issues.jsonl",
+      lineNo: 99,
+      error: "x",
+      rawLine: "not json",
+      code: "unparsed_line",
+    });
     const issues = sessionIngestIssues(db, sessionId);
     expect(issues).toEqual([
       {
@@ -754,7 +773,7 @@ describe("query reads", () => {
     expect(listSessions(db)[0]?.ingest_issue_count).toBe(1);
 
     db.exec("INSERT INTO session(tool, source_session_id) VALUES ('claude_code', 'no-source')");
-    db.query("INSERT INTO ingest_issue (source_path, error, code) VALUES (NULL, 'y', 'x')").run();
+    recordIngestIssueAsSyncDoes(db, { sourcePath: null, error: "y", code: "x" });
     const pathless = db
       .query("SELECT id FROM session WHERE source_session_id = 'no-source'")
       .get() as { id: number };
@@ -765,10 +784,12 @@ describe("query reads", () => {
   test("session summaries separate actionable ingest failures from informational sensors", () => {
     const db = seeded();
     const sessionId = listSessions(db)[0]?.id ?? 0;
-    db.query(
-      `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
-       VALUES ('/x.jsonl', 9, 'unknown record', NULL, 'unknown_record_type', datetime('now'))`,
-    ).run();
+    recordIngestIssueAsSyncDoes(db, {
+      sourcePath: "/x.jsonl",
+      lineNo: 9,
+      error: "unknown record",
+      code: "unknown_record_type",
+    });
 
     expect(getSession(db, sessionId)?.summary).toMatchObject({
       ingest_issue_count: 0,

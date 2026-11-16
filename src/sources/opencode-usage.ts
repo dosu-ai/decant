@@ -20,7 +20,7 @@ const DISJOINT_SINCE: Version = [1, 3, 16];
 const PREVIEW_VERSION = /^0\.0\.0-.+-(\d{12})$/;
 
 /** When 1.3.16 was tagged (2026-04-06T03:44Z), in the preview stamp's format. */
-const DISJOINT_SINCE_BUILD = "202604060344";
+export const DISJOINT_SINCE_BUILD = "202604060344";
 
 export function parseOpenCodeVersion(version: string | null): [number, number, number] | null {
   const match = version == null ? null : /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);

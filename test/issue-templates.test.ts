@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TOOLS, type Tool } from "../src/model.ts";
 
-const BUG_FORM_LABELS: Record<Tool, string> = {
+const BUG_FORM_LABEL_FOR_EVERY_TOOL: Record<Tool, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
   gemini: "Gemini CLI",
@@ -29,7 +29,7 @@ describe("bug report form", () => {
   test("offers every source tool", () => {
     const field = bugForm().find((item) => item.id === "source-tool");
     expect(field?.attributes.options).toEqual([
-      ...TOOLS.map((tool) => BUG_FORM_LABELS[tool]),
+      ...TOOLS.map((tool) => BUG_FORM_LABEL_FOR_EVERY_TOOL[tool]),
       "Not applicable",
     ]);
   });
@@ -38,7 +38,7 @@ describe("bug report form", () => {
     const intro = bugForm().find((item) => item.type === "markdown")?.attributes.value ?? "";
     const prose = intro.replace(/\s+/g, " ");
     for (const tool of TOOLS) {
-      expect(prose).toContain(BUG_FORM_LABELS[tool]);
+      expect(prose).toContain(BUG_FORM_LABEL_FOR_EVERY_TOOL[tool]);
     }
   });
 });

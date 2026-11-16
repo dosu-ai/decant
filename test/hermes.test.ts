@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, openDb } from "../src/db.ts";
@@ -844,6 +844,58 @@ describe("Hermes discovery and ingest", () => {
       closeDb(db);
     }
   });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an older copy does not replace one from a profiles directory that cannot be listed",
+    () => {
+      const root = scratch();
+      const home = join(root, "hermes");
+      const main = join(home, "state.db");
+      const profiles = join(home, "profiles");
+      const work = join(profiles, "work", "state.db");
+      mkdirSync(join(profiles, "work"), { recursive: true });
+      buildHermesDb(main, [
+        sessionSql("shared-1"),
+        messageSql("shared-1", 1, "user", "hello from the default profile"),
+      ]);
+      buildHermesDb(work, [
+        sessionSql("shared-1"),
+        messageSql("shared-1", 50, "user", "[redacted]"),
+      ]);
+      const config: IngestConfig = {
+        claudeDir: join(root, "claude"),
+        codexDir: join(root, "codex"),
+        hermesDir: home,
+      };
+      const db = openDb(join(root, "archive.db"));
+      const stored = (): unknown =>
+        db
+          .query(
+            `SELECT s.source_path AS path, b.text FROM session s JOIN block b ON b.session_id = s.id
+              WHERE s.source_session_id = 'shared-1' ORDER BY b.id`,
+          )
+          .all();
+      try {
+        expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+        const fromWork = [{ path: `${work}#shared-1`, text: "[redacted]" }];
+        expect(stored()).toEqual(fromWork);
+        chmodSync(profiles, 0o000);
+        try {
+          const events: unknown[] = [];
+          discover(config, (_message, properties) => events.push(properties["event.name"]));
+          expect(events).toEqual(["decant.ingest.hermes_profiles_unlisted"]);
+          expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 1 });
+        } finally {
+          chmodSync(profiles, 0o755);
+        }
+        expect(stored()).toEqual(fromWork);
+        expect(sync(db, config)).toMatchObject({ ingested: 0, failed: 0 });
+        expect(stored()).toEqual(fromWork);
+      } finally {
+        closeDb(db);
+      }
+    },
+  );
 
   test("a session that recorded no usage reports it unavailable", () => {
     const root = scratch();

@@ -124,7 +124,8 @@ By default Decant discovers:
   newer copy later disappears, the older one is read again. A database that
   is still there but cannot be opened has not lost its copy, so while it
   fails, its sessions keep their archived copies and count as failed rather
-  than being replaced from another profile. A
+  than being replaced from another profile. The same holds for every profile
+  database when the `profiles` directory exists but cannot be listed. A
   session's transcript is the rows Hermes shows: live rows plus history an
   in-place compaction archived (`active = 0, compacted = 1`), with each row a
   compaction copied forward read once, and without rows a rewind or edit

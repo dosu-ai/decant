@@ -152,6 +152,9 @@ export interface SourceFile {
    * discovery. A session whose archived copy came from one of them is not
    * replaced by another profile's copy until that database reads again. */
   hermesUnreadable?: ReadonlySet<string>;
+  /** A Hermes `profiles` directory that exists but could not be listed, so
+   * every archived copy from a database under it is kept the same way. */
+  hermesUnlistedProfiles?: string;
 }
 
 interface Prepared {
@@ -188,7 +191,8 @@ export function discover(
     collectGemini(config.geminiDir, out);
   }
   out.push(...discoverOpenCode(openCodeDatabasePaths(config), warn));
-  out.push(...discoverHermes(hermesDatabasePaths(config.hermesDir), warn));
+  const hermes = listHermesDatabases(config.hermesDir);
+  out.push(...discoverHermes(hermes.paths, warn, hermes.unlistedProfiles));
   if (config.cursorDir != null) {
     collect(config.cursorDir, "cursor", false, (name) => name === CURSOR_STORE_NAME, out);
   }
@@ -229,23 +233,41 @@ export function discoverSourcePaths(
  * directory and each named profile's under `profiles/<name>/`. A name starting
  * with `.` is Hermes's own bookkeeping (`profiles/.deleted`), not a profile. */
 export function hermesDatabasePaths(hermesDir: string | undefined): string[] {
+  return listHermesDatabases(hermesDir).paths;
+}
+
+export interface HermesDatabases {
+  paths: string[];
+  unlistedProfiles: UnlistedDirectory | null;
+}
+
+interface UnlistedDirectory {
+  path: string;
+  errorCode: string;
+}
+
+export function listHermesDatabases(hermesDir: string | undefined): HermesDatabases {
   if (hermesDir == null || hermesDir === "") {
-    return [];
+    return { paths: [], unlistedProfiles: null };
   }
   const paths = [join(hermesDir, HERMES_DATABASE_NAME)];
   const profilesDir = join(hermesDir, "profiles");
-  let profiles: string[] = [];
+  let profiles: string[];
   try {
     profiles = readdirSync(profilesDir);
-  } catch {
-    // No named profiles.
+  } catch (error) {
+    const code = errorCode(error);
+    return {
+      paths,
+      unlistedProfiles: code === "ENOENT" ? null : { path: profilesDir, errorCode: code },
+    };
   }
   for (const name of profiles.sort(compareCodePoints)) {
     if (!name.startsWith(".")) {
       paths.push(join(profilesDir, name, HERMES_DATABASE_NAME));
     }
   }
-  return paths;
+  return { paths, unlistedProfiles: null };
 }
 
 export const HERMES_DATABASE_NAME = "state.db";
@@ -259,9 +281,22 @@ export function hermesSourcePath(ref: HermesSessionRef): string {
  * the newest activity, a tie going to the code-point-smaller path. A missing
  * file is skipped; one that is unreadable or not a Hermes store is skipped with
  * a warning. */
-function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
+function discoverHermes(
+  dbPaths: string[],
+  warn: DiscoveryWarn,
+  unlistedProfiles: UnlistedDirectory | null = null,
+): SourceFile[] {
   const best = new Map<string, HermesSessionRef>();
   const unreadable = new Set<string>();
+  if (unlistedProfiles != null) {
+    warn("Hermes profiles could not be listed.", {
+      "event.name": "decant.ingest.hermes_profiles_unlisted",
+      "file.path": unlistedProfiles.path,
+      "error.code": unlistedProfiles.errorCode,
+    });
+  }
+  const unlistedProfilesPath =
+    unlistedProfiles == null ? undefined : canonicalPath(unlistedProfiles.path);
   for (const dbPath of new Set(dbPaths.map(canonicalPath))) {
     if (!existsSync(dbPath)) {
       continue;
@@ -311,6 +346,7 @@ function discoverHermes(dbPaths: string[], warn: DiscoveryWarn): SourceFile[] {
       archived: false,
       hermes: ref,
       hermesUnreadable: unreadable,
+      hermesUnlistedProfiles: unlistedProfilesPath,
     }));
 }
 
@@ -977,7 +1013,7 @@ function syncHermesSession(
   ) {
     return { kind: "skipped" };
   }
-  const holder = unreadableArchivedCopy(db, file, ref);
+  const holder = unreadableArchivedCopy(db, file, ref, hermes);
   if (holder != null) {
     logger.warning("Hermes session kept from a profile database that could not be read.", {
       "event.name": "decant.ingest.hermes_copy_unreadable",
@@ -1028,8 +1064,16 @@ function unreadableArchivedCopy(
   db: Database,
   file: SourceFile,
   ref: HermesSessionRef,
+  hermes: HermesRun,
 ): string | null {
-  for (const database of file.hermesUnreadable ?? []) {
+  const unlisted = file.hermesUnlistedProfiles;
+  const unreadable = [
+    ...(file.hermesUnreadable ?? []),
+    ...(unlisted == null
+      ? []
+      : [...hermes.sourceDatabases()].filter((database) => database.startsWith(unlisted + sep))),
+  ];
+  for (const database of unreadable) {
     const candidate = `${database}#${ref.sessionId}`;
     if (
       candidate !== file.path &&

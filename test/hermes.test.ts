@@ -465,6 +465,31 @@ describe("HermesStore", () => {
     }
   });
 
+  test("reads per-model usage from a table that lacks later columns", () => {
+    const path = join(scratch(), "state.db");
+    const db = new Database(path, { create: true });
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT,
+        started_at REAL NOT NULL);
+      CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL);
+      CREATE TABLE session_model_usage (session_id TEXT NOT NULL, model TEXT NOT NULL,
+        input_tokens INTEGER, output_tokens INTEGER);
+      INSERT INTO sessions VALUES ('old', 'cli', 'gpt-5.4', 1791790000);
+      INSERT INTO session_model_usage VALUES ('old', 'gpt-5.4', 30, 5);
+    `);
+    db.close();
+    const store = HermesStore.open(path);
+    try {
+      expect(store.listSessions().map((ref) => ref.sessionId)).toEqual(["old"]);
+      expect(store.loadSession("old")?.modelUsage).toEqual([
+        expect.objectContaining({ model: "gpt-5.4", billing_provider: null, task: null }),
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("refuses a database that is not a Hermes session store", () => {
     const path = join(scratch(), "state.db");
     const db = new Database(path, { create: true });
@@ -505,12 +530,23 @@ describe("HermesStore", () => {
 });
 
 describe("Hermes change key and in-place rewrites", () => {
-  function keyOf(path: string): string {
+  function keyOf(path: string, sessionId?: string): string {
     const store = HermesStore.open(path);
     try {
-      return store.listSessions()[0]?.fingerprint ?? "";
+      const refs = store.listSessions();
+      const ref = sessionId == null ? refs[0] : refs.find((r) => r.sessionId === sessionId);
+      return ref?.fingerprint ?? "";
     } finally {
       store.close();
+    }
+  }
+
+  function write(path: string, sql: string): void {
+    const writer = new Database(path);
+    try {
+      writer.exec(sql);
+    } finally {
+      writer.close();
     }
   }
 
@@ -541,6 +577,54 @@ describe("Hermes change key and in-place rewrites", () => {
     db.exec("UPDATE messages SET content = '[redacted]'");
     db.close();
     expect(keyOf(path)).not.toBe(initial);
+  });
+
+  test("without a transcript revision, a same-length rewrite changes the key", () => {
+    const path = join(scratch(), "state.db");
+    const db = new Database(path, { create: true });
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);
+      CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL);
+      INSERT INTO sessions VALUES ('old', 'cli', 1791790000), ('other', 'cli', 1791790000);
+      INSERT INTO messages (session_id, role, content, timestamp) VALUES
+        ('old', 'user', 'hello', 1791790001), ('other', 'user', 'untouched', 1791790002);
+    `);
+    const initial = keyOf(path, "old");
+    const other = keyOf(path, "other");
+    db.exec("UPDATE messages SET content = 'world' WHERE session_id = 'old'");
+    db.close();
+    expect(keyOf(path, "old")).not.toBe(initial);
+    expect(keyOf(path, "other")).toBe(other);
+  });
+
+  test("a per-model usage row or a session cost change changes the key", () => {
+    const path = dbWith(
+      sessionSql("costed", { model: "gpt-5.4", input_tokens: 10, output_tokens: 2 }),
+      `INSERT INTO session_model_usage (session_id, model, input_tokens, output_tokens)
+         VALUES ('costed', 'gpt-5.4', 10, 2);`,
+    );
+    const initial = keyOf(path);
+    write(path, "UPDATE session_model_usage SET output_tokens = 5");
+    const usage = keyOf(path);
+    expect(usage).not.toBe(initial);
+    write(path, "UPDATE sessions SET actual_cost_usd = 0.5, cost_status = 'actual'");
+    const cost = keyOf(path);
+    expect(cost).not.toBe(usage);
+    write(path, "UPDATE sessions SET billing_mode = 'subscription'");
+    expect(keyOf(path)).not.toBe(cost);
+  });
+
+  test("a branched parent's end time moving past the child's start changes the child's key", () => {
+    const path = dbWith(
+      sessionSql("p-branched", { ended_at: 1791790100, end_reason: "branched" }),
+      sessionSql("c-child", { parent_session_id: "p-branched", started_at: 1791790101 }),
+    );
+    const initial = keyOf(path, "c-child");
+    expect(parseFrom(path, "c-child").session.isSubagent).toBe(false);
+    write(path, "UPDATE sessions SET ended_at = 1791790200 WHERE id = 'p-branched'");
+    expect(keyOf(path, "c-child")).not.toBe(initial);
+    expect(parseFrom(path, "c-child").session.isSubagent).toBe(true);
   });
 });
 

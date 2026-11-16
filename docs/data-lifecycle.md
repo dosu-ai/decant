@@ -156,16 +156,17 @@ never coincide, so a session whose copy moves to the other layout is always
 re-ingested. An OpenCode
 session's change key also covers the MCP server names from the OpenCode
 configs that apply to its directory, so editing those names re-derives the
-affected sessions once. A Hermes session's change key is a digest of its
-title, model, source, routing key, model config, parent, end time and reason,
-working directory, branch, usage columns, archive flag, and transcript
-revision, plus its parent's end reason and routing key and its message count,
-highest row ID, and live and archived row counts, so a rewind or compaction
-that only flips existing rows still re-derives it. Hermes raises the
-transcript revision when it rewrites a stored message in place, as a
-redaction does; in a database from before that column, the summed lengths of
-the message columns Hermes rewrites stand in for it. Hermes's activity
-heartbeat and read state are not in the key. After a parser correction, the next
+affected sessions once. A Hermes session's change key is a digest of every
+session column Decant reads (title, model, source, routing key, model config,
+parent, end time and reason, working directory, branch, usage, cost, and
+billing columns, profile, and archive flag) and its transcript revision, plus
+its per-model usage rows, its parent's end time, end reason, and routing key,
+and its message count, highest row ID, and live and archived row counts, so a
+rewind or compaction that only flips existing rows still re-derives it. Hermes
+raises the transcript revision when it rewrites a stored message in place, as
+a redaction does. In a database from before that column, a hash of the
+message columns Hermes rewrites stands in for it. Hermes's activity heartbeat
+and read state are not in the key. After a parser correction, the next
 sync re-ingests sources with an older pipeline revision once, refreshing tokens,
 cost estimates, and derived analytics while preserving session IDs and local
 archive state. This requires the source files to remain available. Sync also

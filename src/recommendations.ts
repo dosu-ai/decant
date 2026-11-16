@@ -5,6 +5,7 @@ import { countSearches } from "./buckets.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { mcpServerLabel, mcpServerLabels, mcpServerOrigin } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
+import { RECOMMENDATION_KEY_CHARS } from "./recommendation-key.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
@@ -653,7 +654,7 @@ function quoted(value: string): string {
 }
 
 const KEY_MAX = 120;
-const KEY_UNSAFE = /[^A-Za-z0-9._:/-]+/g;
+const KEY_UNSAFE = new RegExp(`[^${RECOMMENDATION_KEY_CHARS}]+`, "g");
 const KEY_EDGE_DASHES = /^-+|-+$/g;
 const KEY_DIGEST_SUFFIX = /\.h[0-9a-f]{16}$/;
 

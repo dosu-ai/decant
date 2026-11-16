@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { RECOMMENDATION_KEY_CHARS } from "./recommendation-key.ts";
 import type { AgentKey, IdeKey, TerminalKey, UserSettings } from "./settings.ts";
 
 export const agents: Record<AgentKey, { bin: string; label: string }> = {
@@ -36,7 +37,7 @@ export interface LaunchOptions {
   warpConsumed?: (configDir: string) => boolean | Promise<boolean>;
 }
 
-const RECOMMENDATION_KEY_PATTERN = /^[A-Za-z0-9._:/-]{1,256}$/;
+const RECOMMENDATION_KEY_PATTERN = new RegExp(`^[${RECOMMENDATION_KEY_CHARS}]{1,256}$`);
 
 const STALE_LAUNCH_AGE_MS = 24 * 60 * 60 * 1000;
 const WARP_CONSUME_TIMEOUT_MS = 1_500;

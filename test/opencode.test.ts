@@ -22,7 +22,7 @@ import { STEP_TIMES, timingMessageRows, timingSessionRow } from "./opencode-timi
 const workDir = mkdtempSync(join(tmpdir(), "decant-opencode-parser-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-const T0 = 1791786000000;
+const T0 = Date.parse("2026-10-12T06:20:00.000Z");
 const GLM = { providerID: "opencode-go", id: "glm-5.3-flash", variant: "max" };
 
 const context: OpenCodeParseContext = {

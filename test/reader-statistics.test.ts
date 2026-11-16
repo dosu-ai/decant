@@ -166,18 +166,22 @@ describe("reader statistics", () => {
 
   test("waits for the ingested count to double before the next reload", () => {
     const { statistics, reloads, store } = tracker();
+    const firstReload = 26;
+    const secondReload = firstReload * 2;
+    const thirdReload = secondReload * 2;
+    expect([firstReload, secondReload, thirdReload]).toEqual([26, 52, 104]);
     store("at 26");
-    statistics.onProgress(progress(26));
+    statistics.onProgress(progress(firstReload));
     store("at 50");
-    statistics.onProgress(progress(51));
-    expect(reloads).toEqual([26]);
-    statistics.onProgress(progress(52));
-    expect(reloads).toEqual([26, 52]);
+    statistics.onProgress(progress(secondReload - 1));
+    expect(reloads).toEqual([firstReload]);
+    statistics.onProgress(progress(secondReload));
+    expect(reloads).toEqual([firstReload, secondReload]);
     store("at 75");
-    statistics.onProgress(progress(103));
-    expect(reloads).toEqual([26, 52]);
-    statistics.onProgress(progress(104));
-    expect(reloads).toEqual([26, 52, 104]);
+    statistics.onProgress(progress(thirdReload - 1));
+    expect(reloads).toEqual([firstReload, secondReload]);
+    statistics.onProgress(progress(thirdReload));
+    expect(reloads).toEqual([firstReload, secondReload, thirdReload]);
   });
 
   test("keeps a minimum gap after a reload early in a sync", () => {
@@ -229,11 +233,21 @@ describe("reader statistics during a first sync", () => {
     "utf8",
   );
 
+  const SESSIONS_PER_WORKER_ANALYZE = 25;
+  const FIRST_RELOAD_AT = SESSIONS_PER_WORKER_ANALYZE + 1;
+  function doublingReloadPoints(first: number, total: number): number[] {
+    const points: number[] = [];
+    for (let at = first; at < total; at *= 2) {
+      points.push(at);
+    }
+    return points;
+  }
+
   const BLOCK_JOIN_PLAN = `EXPLAIN QUERY PLAN
     SELECT COUNT(*) FROM session s WHERE NOT EXISTS (
       SELECT 1 FROM message m JOIN block b ON b.message_id = m.id
       WHERE m.session_id = s.id AND m.role = 'user' AND b.type = 'text')`;
-  function blockJoinPlan(db: Database): string {
+  function blockJoinPlanWithoutPinningASnapshot(db: Database): string {
     const statement = db.prepare(BLOCK_JOIN_PLAN);
     try {
       return (statement.all() as { detail: string }[]).map((row) => row.detail).join("\n");
@@ -261,8 +275,8 @@ describe("reader statistics during a first sync", () => {
     const reader = new ReadConnection(dbPath);
     const worker = openDb(dbPath);
     try {
-      expect(blockJoinPlan(server)).toContain("idx_block_type");
-      expect(await reader.use(blockJoinPlan)).toContain("idx_block_type");
+      expect(blockJoinPlanWithoutPinningASnapshot(server)).toContain("idx_block_type");
+      expect(await reader.use(blockJoinPlanWithoutPinningASnapshot)).toContain("idx_block_type");
 
       const reloads: { scanned: number; server: string }[] = [];
       let readerPlanAtFirstReload = "";
@@ -272,10 +286,10 @@ describe("reader statistics during a first sync", () => {
         reload: () => {
           rereadPlannerStatistics(server);
           reader.reloadStatistics();
-          reloads.push({ scanned, server: blockJoinPlan(server) });
+          reloads.push({ scanned, server: blockJoinPlanWithoutPinningASnapshot(server) });
           if (reloads.length === 1) {
             void reader.use((db) => {
-              readerPlanAtFirstReload = blockJoinPlan(db);
+              readerPlanAtFirstReload = blockJoinPlanWithoutPinningASnapshot(db);
             });
           }
         },
@@ -286,7 +300,7 @@ describe("reader statistics during a first sync", () => {
       });
       expect(report.ingested).toBe(total);
 
-      expect(reloads[0]?.scanned).toBe(26);
+      expect(reloads[0]?.scanned).toBe(FIRST_RELOAD_AT);
       expect(readerPlanAtFirstReload).toContain("idx_block_message");
       expect(readerPlanAtFirstReload).not.toContain("idx_block_type");
       for (const reload of reloads) {
@@ -294,7 +308,9 @@ describe("reader statistics during a first sync", () => {
         expect(reload.server).toContain("idx_block_message");
         expect(reload.server).not.toContain("idx_block_type");
       }
-      expect(reloads.length).toBeLessThanOrEqual(3);
+      const possibleReloadPoints = doublingReloadPoints(FIRST_RELOAD_AT, total);
+      expect(possibleReloadPoints).toEqual([26, 52, 104]);
+      expect(reloads.length).toBeLessThanOrEqual(possibleReloadPoints.length);
     } finally {
       reader.close();
       closeDb(worker);

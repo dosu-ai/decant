@@ -62,6 +62,7 @@ const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
   ["glm-5.2", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.1", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.3-flashx", openAiPrice(0.37, 0.075, 1.25)],
+  ["glm-5.3-flashx-legal", openAiPrice(0.37, 0.075, 1.25)],
   ["glm-5.3-flash", openAiPrice(0.15, 0.03, 0.5)],
   ["glm-5", openAiPrice(1.0, 0.2, 3.2)],
   ["glm-4.7", openAiPrice(0.6, 0.11, 2.2)],
@@ -80,6 +81,9 @@ const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
   ["muse-spark-1.1", openAiPrice(1.25, 0.15, 4.25)],
   ["muse-spark-1.3-contributor", openAiPrice(0.1, 0.002, 0.2)],
   ["muse-spark-1.2-contributor", openAiPrice(0.1, 0.002, 0.2)],
+  // Muse Ember bills prompts above 200K tokens at 3x; Decant applies the
+  // standard tier only.
+  ["muse-ember-1.0", openAiPrice(0.1, 0.004, 0.5)],
   // DeepSeek bills these peak-hour rates on weekday mornings and afternoons
   // (Beijing time) and half of them otherwise. Decant prices every request at
   // the peak rate. `deepseek-v4-flash` and its vision alias now serve and bill
@@ -107,6 +111,7 @@ const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
   // MiniMax's standard tier for prompts up to 512K tokens, at the "permanent"
   // 50% discount it actually charges.
   ["minimax-m3", openAiPrice(0.3, 0.06, 1.2)],
+  ["minimax-m3.1-flash", openAiPrice(0.15, 0.015, 0.6)],
   // Xiaomi lists MiMo cache writes as free for a limited time.
   ["mimo-v2.6-pro", openAiPrice(0.435, 0.0036, 0.87, 0)],
   ["mimo-v2.6-flash", openAiPrice(0.14, 0.0028, 0.28, 0)],
@@ -114,20 +119,51 @@ const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
   // Alibaba Cloud Model Studio, international (Singapore) rates. Implicit cache
   // hits bill at the cached rate below; only explicit caching creates a cache
   // entry, at 125% of input. The Qwen3.5 and Qwen3.6 open models have no cache.
+  // Qwen4-Max bills explicit cache writes by TTL like Claude.
+  [
+    "qwen4-max",
+    {
+      inputPerMtok: 1.5,
+      outputPerMtok: 4.5,
+      cacheReadPerMtok: 0.075,
+      cacheWritePerMtok: 1.875,
+      cacheWrite1hPerMtok: 3,
+    },
+  ],
   ["qwen3.8-2.4t-a95b", openAiPrice(2.0, 0.25, 6.0, 1.25)],
   ["qwen3.8-27b", openAiPrice(0.5, 0.1, 3.0, 1.25)],
   ["qwen3.5-397b-a17b", openAiPrice(0.6, null, 3.6)],
   ["qwen3.5-122b-a10b", openAiPrice(0.4, null, 3.2)],
+  ["qwen3.5-35b-a3b", openAiPrice(0.25, null, 2.0)],
+  ["qwen3.5-27b", openAiPrice(0.3, null, 2.4)],
   ["qwen3.6-35b-a3b", openAiPrice(0.375, null, 2.25)],
+  ["qwen3.6-27b", openAiPrice(0.6, null, 3.6)],
   ["step-5-preview", openAiPrice(1.0, 0.1, 2.7)],
+  ["step-3.7-flash", openAiPrice(0.2, 0.04, 1.15)],
+  ["step-3.5-flash", openAiPrice(0.1, 0.02, 0.3)],
   ["hy3", openAiPrice(0.132, 0.033, 0.528)],
+  // Tencent's list rates; it charges half of them for Hy4 through 2026-12-31
+  // and Hy4 flash through 2026-11-30.
+  ["hy4", openAiPrice(0.834, 0.042, 2.501)],
+  ["hy4-preview", openAiPrice(0.834, 0.042, 2.501)],
+  ["hy4-flash", openAiPrice(0.07, 0.003, 0.281)],
+  // xAI's rates below 200K prompt tokens; longer prompts bill 2x on every
+  // token. xAI lists no cache-write fee.
+  ["grok-4.7", openAiPrice(2.0, 0.5, 6.0)],
+  ["grok-4.6", openAiPrice(2.0, 0.5, 6.0)],
+  ["grok-4.5", openAiPrice(2.0, 0.3, 6.0)],
+  ["grok-4.3", openAiPrice(1.25, 0.2, 2.5)],
+  ["grok-4.20-0309-reasoning", openAiPrice(1.25, 0.2, 2.5)],
+  ["grok-4.20-0309-non-reasoning", openAiPrice(1.25, 0.2, 2.5)],
+  ["grok-4.20-multi-agent-0309", openAiPrice(1.25, 0.2, 2.5)],
+  ["grok-build-0.1", openAiPrice(1.0, 0.2, 2.0)],
   // Reflection's API is free during its beta, subject to daily limits.
   ["beam-1.0-501b-a23b", openAiPrice(0, 0, 0)],
 ];
 const EXACT_ID_KEYS: ReadonlySet<string> = new Set(EXACT_ID_PRICES.map(([model]) => model));
 
 // These IDs arrive through router prefixes (`z-ai/`, `meta/`, `deepseek/`,
-// `moonshotai/`), hosted routing variants (OpenRouter's `:free` or `:nitro`,
+// `moonshotai/`, `x-ai/`), hosted routing variants (OpenRouter's `:free` or `:nitro`,
 // Ollama's `:cloud`), Claude Code's `[1m]` marker, dated snapshots, and
 // promotional `-free` copies that Decant prices at list rate like any route.
 // Other `:tags` name a local Ollama or LM Studio build, which incurs no API
@@ -135,7 +171,8 @@ const EXACT_ID_KEYS: ReadonlySet<string> = new Set(EXACT_ID_PRICES.map(([model])
 // prefix keeps `-highspeed`, `-turbo`, and `muse-wonder-full` from inheriting a
 // neighbor's rate. Only the last path segment names the model, so a proxy
 // prefix such as `kimi-proxy/claude-opus-5-5` still reaches the Claude rates.
-const EXACT_ID_FAMILY = /^(?:glm-|muse-|deepseek-|kimi-|minimax-|mimo-|qwen\d|step-\d|hy\d|beam-)/;
+const EXACT_ID_FAMILY =
+  /^(?:glm-|muse-|deepseek-|kimi-|minimax-|mimo-|qwen\d|step-\d|hy\d|beam-|grok-)/;
 const HOSTED_ROUTE_SUFFIX = /:(?:free|nitro|floor|online|extended|beta|thinking|exacto|cloud)$/;
 // OpenRouter's unversioned `meta/muse-wonder` bills exactly at Muse Wonder
 // 1.0's rates (verified against recorded costs on 2026-10-12).
@@ -146,6 +183,7 @@ const EXACT_ID_ALIASES: ReadonlyMap<string, string> = new Map([
   ["deepseek-v4.1-flash", "deepseek-flash"],
   ["deepseek-v4.1-flash-1017", "deepseek-flash"],
   ["deepseek-v4-pro-0813", "deepseek-v4-pro"],
+  ["step-3.5-flash-2603", "step-3.5-flash"],
 ]);
 
 function exactIdModel(model: string): string | null {
@@ -187,6 +225,7 @@ function buildDefaultPricing(): Map<string, Price> {
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
     ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
+    ["gpt-6-cyber", openAiPrice(20.0, 2.0, 100.0, 1.25)],
     ["gpt-6-sol", openAiPrice(2.0, 0.2, 10.0, 1.25)],
     ["gpt-6.1-sol", openAiPrice(2.0, 0.1, 10.0, 1.25)],
     ["gpt-6.1-terra", openAiPrice(1.0, 0.05, 5.0, 1.25)],
@@ -196,6 +235,7 @@ function buildDefaultPricing(): Map<string, Price> {
     ["gpt-5.6-luna", openAiPrice(0.2, 0.02, 1.2, 1.25)],
     ["gpt-5.6-cyber", openAiPrice(12.5, 1.25, 75.0, 1.25)],
     ["gpt-5.5", openAiPrice(5.0, 0.5, 30.0)],
+    ["gpt-5.5-cyber-preview", openAiPrice(12.5, 1.25, 75.0)],
     ["gpt-5.5-pro", openAiPrice(30.0, null, 180.0)],
     ["gpt-5.4", openAiPrice(2.5, 0.25, 15.0)],
     ["gpt-5.4-mini", openAiPrice(0.75, 0.075, 4.5)],
@@ -245,8 +285,11 @@ function buildDefaultPricing(): Map<string, Price> {
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
     // Gemini text rates (standard paid tier, per 1M tokens, ≤200k prompt).
-    // 4-argon's launch price ended on 2026-11-30. It has implicit caching only.
+    // Argon's and Carbon's launch prices end on 2026-11-30; these are their
+    // December 1 rates. The Gemini 4 models have implicit caching only.
     ["gemini-4-argon", geminiPrice(4.0, 0.2, 20.0)],
+    ["gemini-4-carbon", geminiPrice(4.0, 0.2, 20.0)],
+    ["gemini-4-hydrogen", geminiPrice(1.5, 0.075, 7.5)],
     // 3.8-flash, 3.7-flash, and 3.6-flash carry a promo price through 2026-12-31.
     ["gemini-3.8-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],
@@ -363,6 +406,7 @@ function canonicalModel(raw: string): string | null {
 
   if (
     model === "gpt-6-astra" ||
+    model === "gpt-6-cyber" ||
     model === "gpt-6-sol" ||
     model === "gpt-6.1-sol" ||
     model === "gpt-6.1-terra" ||
@@ -377,6 +421,7 @@ function canonicalModel(raw: string): string | null {
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5-pro",
+    "gpt-5.5-cyber-preview",
     "gpt-5.5",
     "gpt-5.4-nano",
     "gpt-5.4-mini",
@@ -446,12 +491,16 @@ function canonicalModel(raw: string): string | null {
     ) {
       return null;
     }
-    // Anchored so a future Argon variant such as -flash or -lite stays
+    // Anchored so a future Gemini 4 variant such as -flash or -lite stays
     // unpriced instead of borrowing this rate. Routing suffixes such as
     // `:floor` and `[1m]` bill at list rate, so they are stripped first.
     const routed = model.replace(/\[[^\]]*\]$/, "").replace(HOSTED_ROUTE_SUFFIX, "");
-    if (/(?:^|\/)gemini-4-argon(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.test(routed)) {
-      return "gemini-4-argon";
+    const gemini4 =
+      /(?:^|\/)gemini-4-(argon|carbon|hydrogen)(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.exec(
+        routed,
+      );
+    if (gemini4 != null) {
+      return `gemini-4-${gemini4[1]}`;
     }
     if (model.includes("flash-lite")) {
       if (model.includes("3.5")) {

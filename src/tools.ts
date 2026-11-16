@@ -68,7 +68,7 @@ export function previewHeadTail(s: string, max: number): string {
 
 const ELISION_BEFORE_COUNT = "\n[… ";
 const ELISION_AFTER_COUNT = " chars omitted …]\n";
-export const PREVIEW_ELISION = new RegExp(
+const PREVIEW_ELISION = new RegExp(
   `${regExpLiteral(ELISION_BEFORE_COUNT)}(\\d+)${regExpLiteral(ELISION_AFTER_COUNT)}`,
 );
 

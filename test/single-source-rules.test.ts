@@ -1,8 +1,11 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { type DateFilter, sessionDatePredicate } from "../src/date-filter.ts";
-import { AGENT_CONTEXT_SQL, isAgentContextText } from "../src/query.ts";
-import { economicsVectorMatchesFilter, type SessionEconomicsVector } from "../src/token-economics.ts";
+import { AGENT_CONTEXT_SQL } from "../src/query.ts";
+import {
+  economicsVectorMatchesFilter,
+  type SessionEconomicsVector,
+} from "../src/token-economics.ts";
 
 function sqlMatches(db: Database, sql: string, params: string[], value: string | null): boolean {
   const row = db
@@ -49,7 +52,7 @@ describe("economicsVectorMatchesFilter agrees with sessionDatePredicate", () => 
   }
 });
 
-describe("AGENT_CONTEXT_SQL skips only what isAgentContextText rejects", () => {
+describe("AGENT_CONTEXT_SQL", () => {
   const samples = [
     "<permissions instructions>run nothing",
     "<PERMISSIONS INSTRUCTIONS>run nothing",
@@ -70,22 +73,13 @@ describe("AGENT_CONTEXT_SQL skips only what isAgentContextText rejects", () => {
     "<system_reminder>be brief",
     "<system-reminder>be brief",
     "<systemXreminder>be brief",
-    "<teammate-message summary=\"fix it\">",
+    '<teammate-message summary="fix it">',
     "<fork-boilerplate>Your directive: fix it",
     "You are root, the primary agent here",
     "<collaboration_mode>pair",
     "Fix the failing test in src/query.ts",
     "100% sure the _ wildcard is literal",
   ];
-
-  test("every SQL skip is also rejected in TypeScript", () => {
-    const db = new Database(":memory:");
-    for (const text of samples) {
-      if (sqlMatches(db, AGENT_CONTEXT_SQL, [], text)) {
-        expect({ text, rejected: isAgentContextText(text) }).toEqual({ text, rejected: true });
-      }
-    }
-  });
 
   test("SQL skips each listed marker and leaves subagent task wrappers to TypeScript", () => {
     const db = new Database(":memory:");

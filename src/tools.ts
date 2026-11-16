@@ -63,10 +63,18 @@ export function previewHeadTail(s: string, max: number): string {
     taken += 1;
   }
   const tail = tailLen === 0 ? "" : [...s.slice(-tailLen * 2)].slice(-tailLen).join("");
-  return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
+  return `${head}${ELISION_BEFORE_COUNT}${omitted}${ELISION_AFTER_COUNT}${tail}`;
 }
 
-export const PREVIEW_ELISION = /\n\[… (\d+) chars omitted …\]\n/;
+const ELISION_BEFORE_COUNT = "\n[… ";
+const ELISION_AFTER_COUNT = " chars omitted …]\n";
+const PREVIEW_ELISION = new RegExp(
+  `${regExpLiteral(ELISION_BEFORE_COUNT)}(\\d+)${regExpLiteral(ELISION_AFTER_COUNT)}`,
+);
+
+export function regExpLiteral(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 export function previewOmittedCount(value: string | null | undefined): number | null {
   if (value == null) {

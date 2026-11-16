@@ -27,7 +27,7 @@ export interface Facets {
   activeSeconds: number;
 }
 
-const ACTIVE_GAP_CAP_SECONDS = 300;
+export const ACTIVE_GAP_CAP_SECONDS = 300;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
 /** OpenCode 2.x starts a child session with `subagent`; older builds named

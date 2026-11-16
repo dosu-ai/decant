@@ -25,7 +25,7 @@ import {
 } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { nearestRankPercentiles, sessionUsageAvailableSql } from "./stats.ts";
-import { preview, previewHeadTail } from "./tools.ts";
+import { preview, previewHeadTail, regExpLiteral } from "./tools.ts";
 
 export interface SessionSummary {
   id: number;
@@ -1314,41 +1314,74 @@ const HUMAN_TITLE_MESSAGE_SQL = `
   )
 `;
 
-export const AGENT_CONTEXT_SQL = `
-  LTRIM(b.text) LIKE '<permissions instructions>%'
-  OR LTRIM(b.text) LIKE '<local-command-caveat>%'
-  OR LTRIM(b.text) LIKE '<local-command-stdout>%'
-  OR LTRIM(b.text) LIKE '<local-command-stderr>%'
-  OR LTRIM(b.text) LIKE '<local-command-output>%'
-  OR LTRIM(b.text) LIKE '<command-name>%'
-  OR b.text GLOB '*<environment_context>*'
-  OR LTRIM(b.text) GLOB '# AGENTS.md instructions*'
-  OR b.text GLOB '*<INSTRUCTIONS>*'
-  OR LTRIM(b.text) LIKE 'The following is the Codex agent history%'
-  OR LTRIM(b.text) LIKE 'Use prior reviews as context%'
-  OR LTRIM(b.text) LIKE '<system\\_reminder>%' ESCAPE '\\'
-`;
+type AgentContextMarker =
+  | { match: "prefix"; text: string }
+  | { match: "casePrefix"; text: string }
+  | { match: "contains"; text: string };
+
+const AGENT_CONTEXT_MARKERS: readonly AgentContextMarker[] = [
+  { match: "prefix", text: "<permissions instructions>" },
+  { match: "prefix", text: "<local-command-caveat>" },
+  { match: "prefix", text: "<local-command-stdout>" },
+  { match: "prefix", text: "<local-command-stderr>" },
+  { match: "prefix", text: "<local-command-output>" },
+  { match: "prefix", text: "<command-name>" },
+  { match: "contains", text: "<environment_context>" },
+  { match: "casePrefix", text: "# AGENTS.md instructions" },
+  { match: "contains", text: "<INSTRUCTIONS>" },
+  { match: "prefix", text: "The following is the Codex agent history" },
+  { match: "prefix", text: "Use prior reviews as context" },
+  { match: "prefix", text: "<system_reminder>" },
+];
+
+const AGENT_CONTEXT_PATTERNS_NOT_SKIPPED_IN_SQL: readonly RegExp[] = [
+  /^<teammate-message\b/i,
+  /^<fork-boilerplate>/i,
+  /^You are\s+[`'"]?\/?root[`'"]?,\s+the primary agent\b/i,
+  /^<(?:multi_agent_mode|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|recommended_plugins)>/i,
+];
+
+export const AGENT_CONTEXT_SQL = AGENT_CONTEXT_MARKERS.map(agentContextMarkerSql).join(" OR ");
+
+function agentContextMarkerSql(marker: AgentContextMarker): string {
+  switch (marker.match) {
+    case "prefix":
+      return `LTRIM(b.text) LIKE '${sqlLikeLiteral(marker.text)}%' ESCAPE '\\'`;
+    case "casePrefix":
+      return `LTRIM(b.text) GLOB '${sqlGlobLiteral(marker.text)}*'`;
+    case "contains":
+      return `b.text GLOB '*${sqlGlobLiteral(marker.text)}*'`;
+  }
+}
+
+function sqlLikeLiteral(text: string): string {
+  return text.replace(/'/g, "''").replace(/[\\%_]/g, "\\$&");
+}
+
+function sqlGlobLiteral(text: string): string {
+  return text.replace(/'/g, "''").replace(/[*?[]/g, "[$&]");
+}
+
+const agentContextMarkerMatchers = AGENT_CONTEXT_MARKERS.map(agentContextMarkerMatcher);
+
+function agentContextMarkerMatcher(marker: AgentContextMarker): (text: string) => boolean {
+  switch (marker.match) {
+    case "prefix": {
+      const pattern = new RegExp(`^${regExpLiteral(marker.text)}`, "i");
+      return (text) => pattern.test(text);
+    }
+    case "casePrefix":
+      return (text) => text.startsWith(marker.text);
+    case "contains":
+      return (text) => text.includes(marker.text);
+  }
+}
 
 export function isAgentContextText(text: string): boolean {
   const trimmed = text.trimStart();
   return (
-    /^<permissions instructions>/i.test(trimmed) ||
-    /^<local-command-caveat>/i.test(trimmed) ||
-    /^<local-command-std(?:out|err)>/i.test(trimmed) ||
-    /^<local-command-output>/i.test(trimmed) ||
-    /^<command-name>/i.test(trimmed) ||
-    /^<teammate-message\b/i.test(trimmed) ||
-    /^<fork-boilerplate>/i.test(trimmed) ||
-    /^You are\s+[`'"]?\/?root[`'"]?,\s+the primary agent\b/i.test(trimmed) ||
-    /^<(?:multi_agent_mode|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|recommended_plugins)>/i.test(
-      trimmed,
-    ) ||
-    trimmed.includes("<environment_context>") ||
-    trimmed.startsWith("# AGENTS.md instructions") ||
-    trimmed.includes("<INSTRUCTIONS>") ||
-    /^The following is the Codex agent history/i.test(trimmed) ||
-    /^Use prior reviews as context/i.test(trimmed) ||
-    /^<system_reminder>/i.test(trimmed)
+    agentContextMarkerMatchers.some((matches) => matches(trimmed)) ||
+    AGENT_CONTEXT_PATTERNS_NOT_SKIPPED_IN_SQL.some((pattern) => pattern.test(trimmed))
   );
 }
 

@@ -21,12 +21,12 @@ import {
   compareSessionTotals,
   compareStructure,
   costDecantModelGroups,
+  decantRuleModelTotals,
   type LegacySession,
   lettaStructure,
   type ModelTotals,
   mergeModelTotals,
   type OpenCodeAssistantRow,
-  openCodeModelTotals,
   openCodeRuleDifferences,
   parseStatsJson,
   readLegacyCompaction,
@@ -35,6 +35,7 @@ import {
   readLegacySessionTotals,
   readOpenCodeAssistantRows,
   type SessionTotals,
+  statsRuleModelTotals,
   type TranscriptStructure,
   toolNamesMatch,
 } from "../scripts/opencode-parity.ts";
@@ -111,13 +112,18 @@ const V1_SESSIONS = [
   "v1/malformed.sql",
 ];
 
-const MIXED = [
-  "v1-sample.sql",
-  "v1/fork.sql",
-  "v1/compaction.sql",
-  "v1/tokens.sql",
-  "v1/migrated.sql",
-];
+const MIXED_COUNTED_USAGE: Record<string, { steps: number; input: number; output: number }> = {
+  "v1-sample.sql": { steps: 2, input: 370, output: 57 },
+  "v1/fork.sql": { steps: 1, input: 90, output: 10 },
+  "v1/compaction.sql": { steps: 1, input: 100, output: 40 },
+  "v1/tokens.sql": { steps: 3, input: 300, output: 150 },
+  "v1/migrated.sql": { steps: 1, input: 40, output: 6 },
+};
+const MIXED = Object.keys(MIXED_COUNTED_USAGE);
+
+function sumMixed(field: "steps" | "input" | "output"): number {
+  return Object.values(MIXED_COUNTED_USAGE).reduce((sum, usage) => sum + usage[field], 0);
+}
 
 function model(overrides: Partial<ModelTotals>): ModelTotals {
   return {
@@ -329,6 +335,21 @@ describe("opencode parity comparisons", () => {
 });
 
 describe("opencode parity: 1.x reference totals", () => {
+  for (const [fixture, usage] of Object.entries(MIXED_COUNTED_USAGE)) {
+    test(`${fixture} alone counts its row of the mixed usage table`, () => {
+      const path = freshPath();
+      buildOpenCodeFixtureDb(path, [fixture]);
+      const totals = withDb(path, readLegacyModelTotals);
+      expect(
+        totals.map((row) => ({
+          steps: row.steps,
+          input: row.input,
+          output: row.output + row.reasoning,
+        })),
+      ).toEqual([usage]);
+    });
+  }
+
   test("sums step-finish usage per model under Decant's 1.x rules", () => {
     const path = freshPath();
     buildOpenCodeFixtureDb(path, MIXED);
@@ -337,13 +358,13 @@ describe("opencode parity: 1.x reference totals", () => {
     expect(totals[0]).toMatchObject({
       provider: "opencode-go",
       model: "glm-5.3-flash",
-      steps: 8,
-      input: 900,
+      steps: sumMixed("steps"),
+      input: sumMixed("input"),
       reasoning: 70,
       cacheRead: 100,
       cacheWrite: 16,
     });
-    expect((totals[0]?.output ?? 0) + (totals[0]?.reasoning ?? 0)).toBe(263);
+    expect((totals[0]?.output ?? 0) + (totals[0]?.reasoning ?? 0)).toBe(sumMixed("output"));
     expect(totals[0]?.cost).toBeCloseTo(0.0002919, 12);
   });
 
@@ -390,8 +411,8 @@ describe("opencode parity: 1.x reference totals", () => {
       expect(readLegacySessions(db).map((row) => row.id)).toEqual(["ses_shared", "ses_v1_only"]);
       const rows = shared(db);
       expect(rows.map((row) => row.legacyPreferred)).toEqual([true]);
-      expect(openCodeModelTotals(rows, "decant")).toEqual([]);
-      expect(openCodeModelTotals(rows, "stats")[0]?.steps).toBe(1);
+      expect(decantRuleModelTotals(rows)).toEqual([]);
+      expect(statsRuleModelTotals(rows)[0]?.steps).toBe(1);
     });
     const writable = new Database(path, { strict: true });
     writable.exec("UPDATE session SET time_updated = 1791796000000 WHERE id = 'ses_shared'");
@@ -463,8 +484,8 @@ describe("opencode parity: 2.x counting rules", () => {
       row({ inherited: true }),
       row({ inherited: true, forkLinked: true }),
     ];
-    const decant = openCodeModelTotals(rows, "decant")[0];
-    const stats = openCodeModelTotals(rows, "stats")[0];
+    const decant = decantRuleModelTotals(rows)[0];
+    const stats = statsRuleModelTotals(rows)[0];
     expect(decant).toMatchObject({ steps: 2, input: 200, reasoning: 40 });
     expect((decant?.output ?? 0) + (decant?.reasoning ?? 0)).toBe(120);
     expect(stats).toMatchObject({ steps: 3, input: 300, output: 150, reasoning: 60 });
@@ -486,7 +507,7 @@ describe("opencode parity: 2.x counting rules", () => {
       ["msg_mg_2", true, 250],
       ["msg_mg_6", true, null],
     ]);
-    expect(openCodeModelTotals(rows, "decant")).toEqual([
+    expect(decantRuleModelTotals(rows)).toEqual([
       model({
         steps: 2,
         input: 310,
@@ -497,7 +518,7 @@ describe("opencode parity: 2.x counting rules", () => {
         cost: 0.0000805,
       }),
     ]);
-    expect(openCodeModelTotals(rows, "stats")[0]).toMatchObject({ input: 210, output: 38 });
+    expect(statsRuleModelTotals(rows)[0]).toMatchObject({ input: 210, output: 38 });
     expect(openCodeRuleDifferences(rows)).toMatchObject({ stepSums: 1, reasoningIncluded: 0 });
   });
 
@@ -608,7 +629,7 @@ describe("opencode parity: Letta structural cross-check", () => {
       call_v1_read: { name: "read", outcome: "ok" },
       call_v1_mcp: { name: "dosu_search", outcome: "ok" },
       call_v1_bash: { name: "bash", outcome: "error" },
-      call_v1_pending: { name: "read", outcome: "none" },
+      call_v1_pending: { name: "read", outcome: "no-result" },
     });
     expect([letta.user, letta.assistantText, letta.reasoning]).toEqual([1, 1, 1]);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
@@ -616,12 +637,45 @@ describe("opencode parity: Letta structural cross-check", () => {
     ]);
   });
 
+  test("keeps a result without a status apart from a call with no result", () => {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const letta = lettaStructure([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "call_unanswered", name: "read", args: "{}" },
+          { id: "call_unflagged", name: "read", args: "{}" },
+        ],
+        timestamp,
+      },
+      { role: "tool", tool_call_id: "call_unflagged", content: "", timestamp },
+    ]);
+    expect(Object.fromEntries(letta.toolCalls)).toEqual({
+      call_unanswered: { name: "read", outcome: "no-result" },
+      call_unflagged: { name: "read", outcome: "result-without-status" },
+    });
+    const decant: TranscriptStructure = {
+      toolCalls: new Map([
+        ["call_unanswered", { name: "read", outcome: "no-result" as const }],
+        ["call_unflagged", { name: "read", outcome: "no-result" as const }],
+      ]),
+      user: 0,
+      assistantText: 0,
+      reasoning: 0,
+    };
+    expect(compareStructure("ses_x", decant, letta)[0]).toEqual({
+      level: "mismatch",
+      text: "ses_x: 1 tool result flag(s) differ from Letta",
+    });
+  });
+
   const decantSample = (): TranscriptStructure => ({
     toolCalls: new Map([
       ["call_v1_read", { name: "read", outcome: "ok" as const }],
       ["call_v1_mcp", { name: "mcp__dosu__search", outcome: "ok" as const }],
       ["call_v1_bash", { name: "bash", outcome: "error" as const }],
-      ["call_v1_pending", { name: "read", outcome: "none" as const }],
+      ["call_v1_pending", { name: "read", outcome: "no-result" as const }],
     ]),
     user: 1,
     assistantText: 1,

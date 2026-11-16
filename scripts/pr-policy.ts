@@ -29,21 +29,23 @@ export function extractMigrations(source: string): Map<number, string> {
     if (start == null) continue;
     const end = lines.findIndex((line, j) => j > i && MIGRATION_END.test(line));
     if (end === -1) break;
-    const code = lines
-      .slice(i, end + 1)
-      .filter((line) => !line.trimStart().startsWith("//"))
-      .map((line) => line.trimEnd())
-      .filter((line) => line !== "");
-    blocks.set(Number(start[1]), code.join("\n"));
+    blocks.set(Number(start[1]), withoutCommentsOrBlankLines(lines.slice(i, end + 1)).join("\n"));
     i = end;
   }
   return blocks;
 }
 
-function oldestSupportedVersion(source: string): number {
+function withoutCommentsOrBlankLines(lines: string[]): string[] {
+  return lines
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "");
+}
+
+function oldestSupportedVersion(source: string): number | null {
   const guard = (GUARD.exec(source)?.[1] ?? "").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
   const bounds = [...guard.matchAll(BASELINE_VERSION)].map((match) => Number(match[1]));
-  return bounds.length === 0 ? Number.NaN : Math.min(...bounds);
+  return bounds.length === 0 ? null : Math.min(...bounds);
 }
 
 function significantLines(source: string): string[] {
@@ -79,8 +81,9 @@ export function checkFrozenMigrations(baseSource: string, headSource: string): F
     const current = head.get(version);
     if (current == null) {
       const body = significantLines(block).slice(1, -1).join("\n");
-      const kept = body !== "" && headLines.includes(body);
-      if (kept || !(version <= baseline)) {
+      const keptUnderNewOpening = body !== "" && headLines.includes(body);
+      const droppable = baseline != null && version <= baseline;
+      if (keptUnderNewOpening || !droppable) {
         findings.push({
           rule: "frozen-migration",
           file,
@@ -264,13 +267,8 @@ export function runPolicy({ root, base, labels }: PolicyInput): Finding[] {
     ...untracked.filter((path) => PRIVATE_DATA_ROOTS.some((prefix) => path.startsWith(prefix))),
   ].filter(Boolean);
   for (const path of new Set(files)) {
-    let content: string;
-    try {
-      content = readFileSync(join(root, path), "utf8");
-    } catch {
-      continue;
-    }
-    findings.push(...scanForPrivateData(path, content));
+    if (!existsSync(join(root, path))) continue;
+    findings.push(...scanForPrivateData(path, readFileSync(join(root, path), "utf8")));
   }
   return findings;
 }

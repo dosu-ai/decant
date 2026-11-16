@@ -43,7 +43,24 @@ export class CursorBlobProblem {
 
 export type CursorRecord = Json | CursorBlobProblem;
 
-export class CursorSourceError extends Error {}
+type CursorSourceErrorMessage =
+  | "Cursor store has unread WAL data that a read-only open cannot see; mount the chats directory read-write or close the chat in Cursor"
+  | "Cursor store metadata is missing"
+  | "Cursor store metadata is not valid JSON"
+  | "Cursor store metadata is not an object"
+  | "Cursor store metadata has no latestRootBlobId"
+  | "Cursor root blob is missing"
+  | "Cursor meta.json is not valid JSON"
+  | "Cursor meta.json is not an object"
+  | "Cursor root protobuf is truncated"
+  | `Cursor root protobuf uses unsupported wire type ${number}`
+  | "Cursor root protobuf contains an invalid varint";
+
+export class CursorSourceError extends Error {
+  constructor(message: CursorSourceErrorMessage) {
+    super(message);
+  }
+}
 
 export function readCursorSource(storePath: string): CursorSource {
   const fileMeta = readCursorFileMeta(storePath);
@@ -57,8 +74,7 @@ export function readCursorSource(storePath: string): CursorSource {
     if (error instanceof CursorSourceError || isLockError(error)) throw error;
     if (hasWalContent(storePath)) {
       throw new CursorSourceError(
-        "Cursor store has unread WAL data that a read-only open cannot see; " +
-          "mount the chats directory read-write or close the chat in Cursor",
+        "Cursor store has unread WAL data that a read-only open cannot see; mount the chats directory read-write or close the chat in Cursor",
       );
     }
     // Immutable mode needs a URI filename, and the SQLite in Bun's Linux
@@ -104,7 +120,7 @@ function readCursorDatabase(fileMeta: CursorFileMeta | null, db: Database): Curs
   if (typeof metaRow?.value !== "string") {
     throw new CursorSourceError("Cursor store metadata is missing");
   }
-  const storeMeta = parseHexJson(metaRow.value, "Cursor store metadata");
+  const storeMeta = parseStoreMetadata(metaRow.value);
   if (!isObject(storeMeta)) {
     throw new CursorSourceError("Cursor store metadata is not an object");
   }
@@ -488,11 +504,11 @@ function readCursorFileMeta(storePath: string): CursorFileMeta | null {
   return value;
 }
 
-function parseHexJson(value: string, label: string): Json {
+function parseStoreMetadata(hex: string): Json {
   try {
-    return parseSourceJson(Buffer.from(value, "hex").toString("utf8")) as Json;
+    return parseSourceJson(Buffer.from(hex, "hex").toString("utf8")) as Json;
   } catch {
-    throw new CursorSourceError(`${label} is not valid JSON`);
+    throw new CursorSourceError("Cursor store metadata is not valid JSON");
   }
 }
 

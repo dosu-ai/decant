@@ -63,20 +63,22 @@ export function parsePort(value: string): number {
   return parseInteger(value);
 }
 
-export function parseNumber(value: string): number {
+function finiteNumberOrNaN(value: string): number {
   // Number.parseFloat reads a leading number and ignores the rest.
   const parsed = value.trim() === "" ? Number.NaN : Number(value);
-  if (!Number.isFinite(parsed)) {
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+export function parseNumber(value: string): number {
+  const parsed = finiteNumberOrNaN(value);
+  if (Number.isNaN(parsed)) {
     throw new InvalidArgumentError("expected a number");
   }
   return parsed;
 }
 
 export function parseFraction(value: string): number {
-  let parsed = Number.NaN;
-  try {
-    parsed = parseNumber(value);
-  } catch {}
+  const parsed = finiteNumberOrNaN(value);
   if (!(parsed >= 0 && parsed <= 1)) {
     throw new InvalidArgumentError("expected a number from 0.0 to 1.0");
   }

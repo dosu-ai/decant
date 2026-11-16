@@ -11,6 +11,7 @@ import {
 import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { ACTIVE_GAP_CAP_SECONDS } from "./enrich.ts";
 import { byteLength } from "./json.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { TokenUsage } from "./model.ts";
@@ -22,7 +23,9 @@ import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 const CHARS_PER_TOKEN = 4;
 export const SESSION_ECONOMICS_FORMAT_VERSION = 12;
 
-const ACTIVE_GAP_CAP_MS = 300_000;
+const ACTIVE_GAP_CAP_MS = ACTIVE_GAP_CAP_SECONDS * 1000;
+
+const TOOLS_STAMPING_OUTPUT_ON_TOOL_CALL_ROWS: ReadonlySet<string> = new Set(["codex"]);
 
 export type Phase = "orientation" | "implementation";
 
@@ -792,7 +795,7 @@ function allocateGeneration(
         messageOutput.set(key, Math.max(messageOutput.get(key) ?? 0, block.output_tokens));
       }
     }
-    if (messageOutput.size > 0 && session.tool !== "codex") {
+    if (messageOutput.size > 0 && !TOOLS_STAMPING_OUTPUT_ON_TOOL_CALL_ROWS.has(session.tool)) {
       for (const [messageId, outputTokens] of messageOutput) {
         const rows = messageBlocks.get(messageId) ?? [];
         const phase = phaseOf(boundaries, session.id, rows[0]?.seq);

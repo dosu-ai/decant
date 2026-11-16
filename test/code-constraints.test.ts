@@ -9,7 +9,6 @@ import { openDb } from "../src/db.ts";
 import { METADATA_PATHS } from "../src/message-storage.ts";
 import { AGENT_CONTEXT_SQL, isAgentContextText } from "../src/query.ts";
 import { signals, USAGE_SIGNAL_SCORE } from "../src/recommendations.ts";
-import { PREVIEW_ELISION, previewHeadTail } from "../src/tools.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-code-constraints-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -252,16 +251,6 @@ describe("rules the code depends on", () => {
     sqlite.close();
     expect(unmatchedSamples).toEqual([]);
     expect(missedByJs).toEqual([]);
-  });
-
-  test("PREVIEW_ELISION matches the marker previewHeadTail writes and nothing in an unshortened preview", () => {
-    const shortened = previewHeadTail("x".repeat(1200), 500);
-    expect(shortened).toMatch(PREVIEW_ELISION);
-    expect(PREVIEW_ELISION.exec(shortened)?.[1]).toBe("700");
-
-    const unshortened = previewHeadTail("short tool output", 500);
-    expect(unshortened).toBe("short tool output");
-    expect(unshortened).not.toMatch(PREVIEW_ELISION);
   });
 
   test("a release validation error names the secret's variable but never prints its value", () => {

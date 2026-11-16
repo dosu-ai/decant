@@ -58,7 +58,7 @@ export interface ParityLine {
 
 const LIST_PRICE_PROVIDERS = new Set(["zai", "meta", "opencode", "opencode-go", "openrouter"]);
 const COST_TOLERANCE = 0.005;
-const REPORTED_COST_TOLERANCE = 1e-9;
+const FLOAT_SUMMATION_TOLERANCE = 1e-9;
 
 const modelKey = (row: { provider: string; model: string }): string =>
   `${row.provider}/${row.model}`;
@@ -133,7 +133,7 @@ export function compareRecordedCost(decant: ModelTotals[], reference: ModelTotal
         });
         continue;
       }
-      const equal = Math.abs(actual.cost - expected.cost) <= REPORTED_COST_TOLERANCE;
+      const equal = Math.abs(actual.cost - expected.cost) <= FLOAT_SUMMATION_TOLERANCE;
       lines.push({
         level: equal ? "ok" : "mismatch",
         text: `${key}: Decant reported ${fmt(actual.cost)} vs recorded ${fmt(expected.cost)} (no Decant rate)`,
@@ -496,41 +496,42 @@ function legacyStepSums(
   return sums;
 }
 
-export function openCodeModelTotals(
-  rows: readonly OpenCodeAssistantRow[],
-  rule: "decant" | "stats",
-): ModelTotals[] {
+export function decantRuleModelTotals(rows: readonly OpenCodeAssistantRow[]): ModelTotals[] {
   const totals = new Map<string, ModelTotals>();
   for (const row of rows) {
-    if (rule === "decant") {
-      if (row.legacyPreferred || row.inherited) {
-        continue;
-      }
-      const usage =
-        row.stepSum?.usage ??
-        openCodeUsage(
-          row.tokens,
-          row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
-        ) ??
-        emptyUsage();
-      const doubleCharged =
-        row.stepSum?.doubleCharged ??
-        (row.migrated ? 0 : reasoningInsideOutput(row.tokens, row.version));
-      accumulate(
-        totals,
-        row,
-        {
-          input: usage.input,
-          output: usage.output - usage.reasoning,
-          reasoning: usage.reasoning,
-          cacheRead: usage.cacheRead,
-          cacheWrite: usage.cacheCreation,
-        },
-        row.cost,
-        doubleCharged,
-      );
+    if (row.legacyPreferred || row.inherited) {
       continue;
     }
+    const usage =
+      row.stepSum?.usage ??
+      openCodeUsage(
+        row.tokens,
+        row.migrated ? "disjoint" : reasoningOverlap(row.tokens, row.version),
+      ) ??
+      emptyUsage();
+    const doubleCharged =
+      row.stepSum?.doubleCharged ??
+      (row.migrated ? 0 : reasoningInsideOutput(row.tokens, row.version));
+    accumulate(
+      totals,
+      row,
+      {
+        input: usage.input,
+        output: usage.output - usage.reasoning,
+        reasoning: usage.reasoning,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheCreation,
+      },
+      row.cost,
+      doubleCharged,
+    );
+  }
+  return [...totals.values()];
+}
+
+export function statsRuleModelTotals(rows: readonly OpenCodeAssistantRow[]): ModelTotals[] {
+  const totals = new Map<string, ModelTotals>();
+  for (const row of rows) {
     if (row.inherited && row.forkLinked) {
       continue;
     }
@@ -860,7 +861,7 @@ export function buildLegacyExport(
   };
 }
 
-export type ToolOutcome = "ok" | "error" | "none";
+export type ToolOutcome = "ok" | "error" | "no-result" | "result-without-status";
 
 export interface TranscriptStructure {
   toolCalls: Map<string, { name: string; outcome: ToolOutcome }>;
@@ -885,7 +886,7 @@ export function lettaStructure(records: readonly NormalizedRecord[]): Transcript
     } else if (record.role === "assistant") {
       if ("tool_calls" in record) {
         for (const call of record.tool_calls) {
-          structure.toolCalls.set(call.id, { name: call.name, outcome: "none" });
+          structure.toolCalls.set(call.id, { name: call.name, outcome: "no-result" });
         }
       } else {
         structure.assistantText += 1;
@@ -893,7 +894,7 @@ export function lettaStructure(records: readonly NormalizedRecord[]): Transcript
     } else if (record.role === "tool") {
       outcomes.set(
         record.tool_call_id,
-        record.ok === true ? "ok" : record.ok === false ? "error" : "none",
+        record.ok === true ? "ok" : record.ok === false ? "error" : "result-without-status",
       );
     }
   }
@@ -1019,7 +1020,7 @@ function readDecantStructure(db: Database, sessionId: string): TranscriptStructu
   for (const call of calls) {
     structure.toolCalls.set(call.tool_use_id, {
       name: call.tool_name ?? "",
-      outcome: call.has_result === 1 ? (call.is_error === 1 ? "error" : "ok") : "none",
+      outcome: call.has_result === 1 ? (call.is_error === 1 ? "error" : "ok") : "no-result",
     });
   }
   const blocks = db
@@ -1100,12 +1101,21 @@ export function costDecantModelGroups(
       };
       return { ...base, cost: estimateCost(group.model, usage, pricing), costSource: "list" };
     }
-    const reported = reportedByModel.get(group.model) ?? 0;
-    const share = recordedByModel.get(group.model) ?? { recorded: 0, groups: 1 };
-    const cost =
-      share.recorded > 0 ? (reported * recorded) / share.recorded : reported / share.groups;
+    const cost = shareOfReportedCost(
+      reportedByModel.get(group.model) ?? 0,
+      recorded,
+      recordedByModel.get(group.model) ?? { recorded: 0, groups: 1 },
+    );
     return { ...base, cost, costSource: "reported" };
   });
+}
+
+function shareOfReportedCost(
+  reported: number,
+  groupRecorded: number,
+  model: { recorded: number; groups: number },
+): number {
+  return model.recorded > 0 ? (reported * groupRecorded) / model.recorded : reported / model.groups;
 }
 
 function readDecantModelTotals(db: Database): ModelTotals[] {
@@ -1213,7 +1223,7 @@ function main(): void {
     const decantModels = readDecantModelTotals(decant);
     const v2Rows = readOpenCodeAssistantRows(opencode);
     const legacyModels = readLegacyModelTotals(opencode);
-    const reference = mergeModelTotals(openCodeModelTotals(v2Rows, "decant"), legacyModels);
+    const reference = mergeModelTotals(decantRuleModelTotals(v2Rows), legacyModels);
     let mismatches = 0;
     console.log(`== per provider/model: Decant vs ${opencodePath} (2.x and 1.x rows)`);
     mismatches += print(
@@ -1250,7 +1260,7 @@ function main(): void {
       mismatches += print(
         compareModelTotals(
           withReasoningInOutput(stats),
-          withReasoningInOutput(openCodeModelTotals(v2Rows, "stats")),
+          withReasoningInOutput(statsRuleModelTotals(v2Rows)),
           "opencode.db",
           "stats.json",
         ),

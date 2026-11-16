@@ -76,8 +76,6 @@ function firstSessionId(db: Database): number {
   return (db.query("SELECT MIN(id) AS id FROM session").get() as { id: number }).id;
 }
 
-// Synthetic transcript whose title and Edit file_path try to break out of the
-// replay script's `#` comments with an embedded newline plus a command.
 function hostileClaudeTranscript(titlePayload: string, editPayload: string): string {
   return [
     {

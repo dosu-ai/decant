@@ -25,15 +25,6 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-// ATIF (Agent Trajectory Interchange Format) documents, as Harbor's
-// rfcs/0001-trajectory-format.md defines them. One file holds a root
-// trajectory and, since v1.7, any number of embedded subagent trajectories.
-// Each trajectory becomes its own session: the root under the file's path, an
-// embedded subagent under the virtual path `<file>#<trajectory_id>`.
-
-/** Harbor's agent names (`AgentName` in harbor/models/agent/name.py) for the
- * sources Decant also reads natively. Harbor has no VS Code agent, so Copilot
- * Chat uses the trajectory-v1 export's label. */
 export const ATIF_AGENT_NAMES = {
   claude_code: "claude-code",
   codex: "codex",
@@ -44,8 +35,6 @@ export const ATIF_AGENT_NAMES = {
   vscode_copilot: "vscode-copilot-chat",
 } as const satisfies Record<Exclude<Tool, "atif">, string>;
 
-/** The native source whose tool names a trajectory's calls use, from the
- * `agent.name` its session keeps in `raw_meta`. Null for any other agent. */
 export function atifNativeTool(rawMeta: Json | undefined): Exclude<Tool, "atif"> | null {
   const name = asString(get(get(rawMeta, "agent"), "name"));
   for (const [tool, agentName] of Object.entries(ATIF_AGENT_NAMES)) {
@@ -56,7 +45,6 @@ export function atifNativeTool(rawMeta: Json | undefined): Exclude<Tool, "atif">
   return null;
 }
 
-/** `raw_meta` keys the parser writes from what it read, which ingest trusts. */
 const DERIVED_META_KEYS = new Set([
   "parentSessionId",
   "subagentFileRefs",
@@ -64,8 +52,6 @@ const DERIVED_META_KEYS = new Set([
   "embeddedSubagents",
 ]);
 
-/** Every version Harbor has published. A newer one is still read, and the
- * mismatch is reported as format drift. */
 const KNOWN_SCHEMA_VERSIONS = new Set([
   "ATIF-v1.0",
   "ATIF-v1.1",
@@ -95,28 +81,19 @@ const FINAL_CACHE_WRITE_KEYS = [
 const REASONING_KEYS = ["reasoning_tokens", "thoughts_tokens"] as const;
 
 export interface AtifParseOptions {
-  /** The document's path, used to resolve subagent `trajectory_path` refs.
-   * Path arithmetic only: the parser never reads another file. */
   sourcePath?: string;
-  /** Project to file every session in the document under. */
   projectPath?: string | null;
 }
 
 export interface AtifDocumentSession {
-  /** Null for the root trajectory, the embedded subagent's unique
-   * `trajectory_id` otherwise. Ingest appends it to the file's path. */
   key: string | null;
   parsed: ParsedSession;
 }
 
 export interface ParsedAtifDocument {
-  /** The root first, then embedded subagents in document order. */
   sessions: AtifDocumentSession[];
 }
 
-/** A `trajectory_path` ref to a subagent stored in another file, resolved
- * against the referencing document's directory. Ingest links the session read
- * from that file to this one once both are in the archive. */
 export interface AtifFileRef {
   path: string;
   spawnToolUseId: string | null;
@@ -124,7 +101,6 @@ export interface AtifFileRef {
 
 interface Node {
   trajectory: JsonObject;
-  /** Null for the root. */
   key: string | null;
   depth: number;
   parentKey: string | null;
@@ -162,9 +138,6 @@ export function parseAtifDocument(
   const usedIds = new Set([rootId]);
   for (const node of nodes) {
     if (node.key != null) {
-      // Decant's own exports already prefix a subagent's id with the root's.
-      // Two keys can still land on one id ("x" and "root:x" under "root"), so
-      // a repeat gets a suffix, as a repeated trajectory_id does.
       const base = node.key.startsWith(`${rootId}:`) ? node.key : `${rootId}:${node.key}`;
       let id = base;
       for (let suffix = 2; usedIds.has(id); suffix += 1) {
@@ -214,7 +187,6 @@ export function parseAtifDocument(
       });
     }
   }
-  // An embedded subagent with no directory worked where its root did.
   const root = sessions[0]?.parsed.session;
   for (const { parsed } of sessions.slice(1)) {
     parsed.session.cwd ??= root?.cwd ?? null;
@@ -233,17 +205,14 @@ function unreadable(
     sessions: [
       {
         key: null,
-        // The whole document is one record, so there is no line to quote.
         parsed: { session, issues: [{ code: "unparsed_line", lineNo: 1, error, rawLine: null }] },
       },
     ],
   };
 }
 
-// Real runs have only a few agent generations; 128 still bounds stack use.
 export const MAX_ATIF_EMBEDDED_DEPTH = 128;
 
-/** The root and bounded descendants, with unique virtual path keys. */
 function flatten(root: JsonObject): Node[] {
   const nodes: Node[] = [
     { trajectory: root, key: null, depth: 0, parentKey: null, spawnToolUseId: null },
@@ -269,7 +238,6 @@ function flatten(root: JsonObject): Node[] {
         trajectory: child,
         key,
         depth: parent.depth + 1,
-        // Until a ref names a spawner, the trajectory that embeds it is its parent.
         parentKey: parent.key,
         spawnToolUseId: null,
       };
@@ -281,9 +249,6 @@ function flatten(root: JsonObject): Node[] {
   return nodes;
 }
 
-/** An embedded ref resolves by `trajectory_id` against the root document, so
- * the trajectory whose observation holds the ref is the subagent's parent and
- * the result's `source_call_id` is the call that spawned it. */
 function linkEmbedded(nodes: Node[]): void {
   const byTrajectoryId = new Map<string, Node>();
   for (const node of nodes) {
@@ -315,18 +280,11 @@ function linkEmbedded(nodes: Node[]): void {
 
 interface TrajectoryIdentity {
   sourceSessionId: string;
-  /** The trajectory whose call spawned this one, or that embeds it. */
   parentSourceSessionId: string | null;
-  /** Every `trajectory_id` embedded in the document, to tell an embedded ref
-   * from one that names another file. */
   embeddedIds: ReadonlySet<string>;
   options: AtifParseOptions;
 }
 
-/** A document's archive identity. `trajectory_id` names one document. A
- * `session_id` names a run, which ATIF lets several documents share (a
- * trajectory and its continuation files), so the file name joins it unless it
- * is Harbor's plain `trajectory.json` or repeats the run ID. */
 function documentId(root: JsonObject, fallbackId: string, sourcePath: string | undefined): string {
   const trajectoryId = nonEmpty(asString(root.trajectory_id));
   if (trajectoryId != null) {
@@ -391,9 +349,6 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
   for (const [index, step] of steps(trajectory).entries()) {
     const lineNo = index + 1;
     if (isCopiedContext(step)) {
-      // Copied from a prior trajectory for context: the turn already belongs
-      // to the document it was copied from, so it adds no transcript, usage,
-      // or tool calls here.
       copied += 1;
       continue;
     }
@@ -462,8 +417,6 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
       push("other", { timestamp, raw: stepRecord, blocks });
     }
 
-    // Environment feedback follows the turn that asked for it, the way the
-    // native sources record a tool result after its call.
     const results = observationResults(step);
     if (results.length > 0) {
       const blocks: NormalizedBlock[] = [];
@@ -473,8 +426,6 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
         for (const ref of subagentRefs(result)) {
           const path = asString(get(ref, "trajectory_path"));
           const id = asString(get(ref, "trajectory_id"));
-          // A ref may carry both fields; the path counts when the id names no
-          // trajectory embedded in this document.
           if (path != null && path !== "" && (id == null || !identity.embeddedIds.has(id))) {
             fileRefs.push({
               path: resolveRef(path, identity.options.sourcePath),
@@ -533,8 +484,6 @@ function parseTrajectory(node: Node, identity: TrajectoryIdentity): ParsedSessio
   }
   if (node.key != null) {
     session.isSubagent = true;
-    // Ingest checks this identity's tombstone, so a deleted subagent keeps
-    // any descendant added to the document later deleted too.
     session.rootSourceSessionId = identity.parentSourceSessionId;
     session.spawnToolUseId = node.spawnToolUseId;
     session.agentId = node.key;
@@ -574,12 +523,8 @@ function baseSession(sourceSessionId: string, projectPath: string | null): Norma
   };
 }
 
-/** Reverse of the export mapping. ATIF's `prompt_tokens` counts all input,
- * cached and written included, where Decant keeps input net of both; the
- * write share only appears in `metrics.extra`. A producer that leaves writes
- * out of `prompt_tokens` (against the spec) would drive the net input below
- * zero, so the subtraction falls back to cache reads alone there. Null when
- * the step reports no token counts at all. */
+/** ATIF's `prompt_tokens` counts all input, cached and written included; the
+ * write share only appears in `metrics.extra`. */
 export function usageFromMetrics(metrics: unknown): TokenUsage | null {
   if (!isObject(metrics)) {
     return null;
@@ -607,10 +552,6 @@ export function usageFromMetrics(metrics: unknown): TokenUsage | null {
   };
 }
 
-/** Decant's own totals when the document is its export, else the step sums,
- * else `final_metrics` for a document that records usage only per run. The
- * export carries reasoning only when the source reported it, so steps that
- * name reasoning fill that in. */
 function sessionTotals(trajectory: JsonObject, stepSums: TokenUsage | null): TokenUsage {
   const decant = decantSessionUsage(trajectory);
   if (decant != null) {
@@ -622,12 +563,6 @@ function sessionTotals(trajectory: JsonObject, stepSums: TokenUsage | null): Tok
   return stepSums ?? finalMetricsUsage(trajectory) ?? emptyUsage();
 }
 
-/** The session's own totals from Decant's export, which per-step metrics can
- * undercount: Codex stamps usage on a turn's last request only. The export's
- * `final_metrics` are those totals unless the trajectory embeds subagents,
- * whose totals they then include; the export also writes the session's own
- * share in `final_metrics.extra.session_metrics`. Null for another producer,
- * or an older Decant export that rolled subagents in without that share. */
 function decantSessionUsage(trajectory: JsonObject): TokenUsage | null {
   if (get(trajectory.extra as Json | undefined, "exporter") !== "decant") {
     return null;
@@ -659,10 +594,6 @@ function decantSessionUsage(trajectory: JsonObject): TokenUsage | null {
   });
 }
 
-/** Session totals when no step carries metrics, the case for a producer that
- * records usage once per run. A root's `final_metrics` may also count its
- * subagents (Decant's export and Harbor's agents both do), so it is a
- * fallback only; per-step metrics are preferred whenever they exist. */
 function finalMetricsUsage(trajectory: JsonObject): TokenUsage | null {
   const final = trajectory.final_metrics;
   if (!isObject(final)) {
@@ -672,7 +603,6 @@ function finalMetricsUsage(trajectory: JsonObject): TokenUsage | null {
     ? trajectory.subagent_trajectories.length
     : 0;
   if (embedded > 0) {
-    // Its totals include the embedded subagents, which are their own sessions.
     return null;
   }
   return usageFromMetrics({
@@ -695,9 +625,6 @@ function rawMeta(
 ): Json {
   const meta: JsonObject = {};
   for (const [key, value] of Object.entries(trajectory)) {
-    // Steps are normalized into messages and embedded subagents into their
-    // own sessions. A document field named like a key the parser derives is
-    // dropped, so it cannot pose as lineage or cost facts ingest relies on.
     if (
       key !== "steps" &&
       key !== "subagent_trajectories" &&
@@ -721,13 +648,11 @@ function rawMeta(
   }
   const embedded = trajectory.subagent_trajectories;
   if (Array.isArray(embedded) && embedded.length > 0) {
-    // Cost reconciliation must know `final_metrics` may count these too.
     meta.embeddedSubagents = embedded.length;
   }
   return meta;
 }
 
-/** Text and media parts of a step's `message`, appended to `blocks`. */
 function messageBlocks(
   message: unknown,
   blocks: NormalizedBlock[],
@@ -822,9 +747,6 @@ function firstCount(extra: unknown, keys: readonly string[]): number | null {
   return null;
 }
 
-/** ATIF requires ISO 8601. Stored the way the other sources store theirs, so
- * timestamps from different sources compare as strings; one without a zone is
- * read as UTC, as Decant's export writes it, rather than in local time. */
 function isoTimestamp(raw: string | null): string | null {
   if (raw == null) {
     return null;
@@ -834,9 +756,6 @@ function isoTimestamp(raw: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-/** An unknown value for a diagnostic, which never quotes document content:
- * even an identifier-shaped value can be a secret. A short digest still tells
- * distinct values apart, so each gets its own count. */
 function valueLabel(value: string | null): string {
   if (value == null) {
     return "(missing)";
@@ -844,8 +763,6 @@ function valueLabel(value: string | null): string {
   return `(value ${createHash("sha256").update(value).digest("hex").slice(0, 8)})`;
 }
 
-/** An ATIF version string can hold only the spec's own format, so a newer
- * version is named; anything else is labeled like any other unknown value. */
 function versionLabel(value: string): string {
   return /^ATIF-v\d{1,3}(?:\.\d{1,3}){0,2}$/.test(value) ? value : valueLabel(value);
 }

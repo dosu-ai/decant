@@ -13,8 +13,6 @@ const thinking = (text: string): TranscriptBlockData => ({
   tool_result: null,
 });
 
-// Hidden reasoning (Claude Code's signature-only thinking, OpenCode reasoning
-// a provider withheld) is stored as an empty thinking block.
 describe("blank thinking blocks", () => {
   test("render nothing", () => {
     expect(renderToStaticMarkup(<TranscriptBlock block={thinking("")} />)).toBe("");

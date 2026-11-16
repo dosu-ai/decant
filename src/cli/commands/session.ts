@@ -92,9 +92,6 @@ export function registerSessionCommands(ctx: CliContext): void {
       .option("--yes", "confirm deleting a session that has descendants")
       .option("--dry-run", "report what would be deleted, and delete nothing")
       .action((id: number, commandOptions: { yes?: boolean; dryRun?: boolean }) =>
-        // Deliberately not a syncing archive: deleting must not first re-ingest
-        // the source directories, and the id came from a read that already
-        // synced.
         ctx.run(() =>
           ctx.withArchive((archive) => {
             const json = ctx.isJson();
@@ -110,9 +107,6 @@ export function registerSessionCommands(ctx: CliContext): void {
             let outcome: "missing" | "dry_run" | "confirmation_required" | "deleted" = "missing";
             let descendants = 0;
             const deleted = setSessionUserState(archive.db, id, "deleted", {
-              // The callback runs after BEGIN IMMEDIATE and before any write,
-              // so another ingest cannot add a descendant between this guard
-              // and the deletion.
               confirmDelete: (sessionIds) => {
                 descendants = sessionIds.length - 1;
                 if (commandOptions.dryRun === true) {
@@ -144,10 +138,6 @@ export function registerSessionCommands(ctx: CliContext): void {
               return 0;
             }
 
-            // Deletion has no un-delete. The rows go, tombstones stop every
-            // later sync from re-ingesting the source, and the only way back is
-            // editing two tables by hand. A mistyped id must not silently take
-            // a whole tree with it.
             if (outcome === "confirmation_required") {
               if (json) {
                 ctx.writeJson({
@@ -167,8 +157,6 @@ export function registerSessionCommands(ctx: CliContext): void {
             }
 
             if (!deleted) {
-              // The deletion callback authorized the write, so false here is
-              // defensive rather than an expected state.
               return reportMiss();
             }
             if (json) {
@@ -176,8 +164,6 @@ export function registerSessionCommands(ctx: CliContext): void {
             } else if (!ctx.globals().quiet) {
               io.writeOut(
                 `deleted session ${id} (${descendants} descendant${plural})\n` +
-                  // SQLite may leave deleted transcript bytes readable in
-                  // freed pages until a vacuum rewrites the archive.
                   "run `decant db vacuum` to release the freed pages\n",
               );
             }

@@ -73,8 +73,6 @@ function seededEnriched(): Database {
 }
 
 describe("stats query plans", () => {
-  // Capture the statement totals() prepares, then EXPLAIN it. An archive has
-  // no planner statistics until its first sync has ingested some sessions.
   function childCountPlan(analyzed: boolean): string {
     const db = seededEnriched();
     if (analyzed) {
@@ -101,8 +99,6 @@ describe("stats query plans", () => {
     const archive = analyzed ? "an analyzed archive" : "an archive with no statistics";
     test(`totals count messages and tool calls per session on ${archive}`, () => {
       const plan = childCountPlan(analyzed);
-      // Scanning the child table instead reruns the session scope, with its
-      // visibility subqueries, once per message or tool call.
       expect(plan).toContain("SEARCH m USING COVERING INDEX idx_message_session (session_id=?)");
       expect(plan).toMatch(/SEARCH t USING COVERING INDEX idx_toolcall_\w+ \(session_id=\?\)/);
       expect(plan).not.toMatch(/SCAN [mt]\b/);
@@ -132,8 +128,6 @@ describe("stats rollups", () => {
       [11, "copilot", "copilot-cli", JSON.stringify({ producer: "copilot-agent" })],
       [12, "vscode_copilot", "vscode-copilot-chat", JSON.stringify({ storage: "log" })],
     ] as const;
-    // A model keeps the Codex rows out of the never-prompted thread rule in
-    // visibleSessionPredicate, which would otherwise hide them.
     const insert = db.prepare(
       `INSERT INTO session(id, tool, source_session_id, raw_meta, started_at, model)
        VALUES (?1, ?2, ?3, ?4, '2026-08-26T12:00:00Z', 'test-model')`,
@@ -146,7 +140,6 @@ describe("stats rollups", () => {
     expect(totals(db, { source: "claude_code" }).sessions).toBe(1);
     expect(totals(db, { source: "codex_app" }).sessions).toBe(2);
     expect(totals(db, { source: "codex_cli" }).sessions).toBe(1);
-    // Malformed metadata, T3 Code, and exec runs are neither app nor CLI.
     expect(totals(db, { source: "codex_other" }).sessions).toBe(3);
     expect(
       ["codex_app", "codex_cli", "codex_other"].reduce(
@@ -486,7 +479,6 @@ describe("stats rollups", () => {
     process.env.TZ = "Pacific/Kiritimati";
     try {
       const db = freshDb();
-      // 01:00 on Jan 16 in UTC+14 is still Jan 15 in UTC.
       const now = new Date("2030-01-15T11:00:00.000Z");
       db.exec(`
         INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, model)
@@ -880,8 +872,6 @@ describe("stats rollups", () => {
 
   test("date bounds keep the newest start time for local-day display", () => {
     const db = freshDb();
-    // 00:30 UTC on May 4 is still May 3 west of UTC, so the UTC day in max
-    // cannot name the local day by itself.
     db.exec(`
       INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
       VALUES
@@ -898,8 +888,6 @@ describe("stats rollups", () => {
 
   test("date bounds pick the latest start by instant and return it in UTC", () => {
     const db = freshDb();
-    // 09:00+14:00 is 19:00 UTC the day before, so it sorts last as text but is
-    // the oldest instant here. The unparseable value must not win either.
     db.exec(`
       INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
       VALUES
@@ -913,8 +901,6 @@ describe("stats rollups", () => {
 
   test("date bounds read compact ±HHMM offsets as instants", () => {
     const db = freshDb();
-    // 03:00-0700 is 10:00 UTC, the newest start here. Without the compact
-    // offset, julianday returns NULL and the older UTC start would win.
     db.exec(`
       INSERT INTO session(id, tool, source_session_id, model, started_at, is_subagent)
       VALUES

@@ -174,10 +174,7 @@ export function SearchView({ dateRange, path }: { dateRange: DateRangeSelection;
             }),
           );
         })
-        .catch(() => {
-          // A count is supplementary; keep the fast ranked results usable when
-          // the slower total request is interrupted or unavailable.
-        });
+        .catch(() => {});
     }, 500);
     return () => {
       window.clearTimeout(timer);

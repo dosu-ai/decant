@@ -15,7 +15,6 @@ afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 const SOURCE_ID = "5b0c7d6e-0000-4000-8000-00000000abcd";
 const BUILD_LOG = Array.from({ length: 300 }, (_, step) => `build step ${step} ok`).join("\n");
-// The cut for --max-chars 40 lands between the two halves of the emoji.
 const EMOJI_TEXT = `${"a".repeat(39)}\u{1F600}${"b".repeat(60)}`;
 
 function line(type: "user" | "assistant", second: number, content: unknown): string {
@@ -28,7 +27,6 @@ function line(type: "user" | "assistant", second: number, content: unknown): str
   });
 }
 
-/** Six messages: two prompts, a tool call with long output, and three replies. */
 const TRANSCRIPT = [
   line("user", 0, "Summarize the build log"),
   line("assistant", 1, [
@@ -50,7 +48,6 @@ function seed(): { dbPath: string; id: number; base: string[] } {
   const dbPath = join(dir, "archive.db");
   const db = openDb(dbPath);
   try {
-    // A second session keeps the archive id and the source id from lining up by accident.
     upsertSession(
       db,
       parseClaudeSession(
@@ -152,7 +149,6 @@ describe("show --outline", () => {
     const dir = join(workDir, "preview-emoji");
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, "archive.db");
-    // The 80-character cut lands between the two halves of the emoji.
     const prompt = `${"a".repeat(79)}\u{1F600} and more`;
     const db = openDb(dbPath);
     let id: number;
@@ -201,7 +197,6 @@ describe("show --outline", () => {
         { type: "tool_use", chars: 27, tool_name: "Bash" },
       ],
     });
-    // The same function backs GET /api/sessions/{id}/outline.
     expect(view.outline).toEqual(read(dbPath, (db) => getSessionOutline(db, id)));
     expect(view.outline.map((item: { seq: number }) => item.seq)).toEqual([0, 4]);
     expect(result.stdout).not.toContain("build step 1 ok");
@@ -234,7 +229,6 @@ describe("show --outline", () => {
       partial: true,
     });
     expect(view.messages.map((message: { index: number }) => message.index)).toEqual([3, 4]);
-    // Only the prompt inside the page is listed.
     expect(view.outline.map((item: { seq: number }) => item.seq)).toEqual([4]);
   });
 
@@ -353,11 +347,9 @@ describe("show --max-chars", () => {
         "Raise --max-chars to read more.]",
     );
     expect(result.stdout).not.toContain("build step 299 ok");
-    // The emoji straddles the cut, so the whole of it is dropped.
     expect(result.stdout).toContain(
       `${"a".repeat(39)}\n[truncated: ${EMOJI_TEXT.length - 39} of ${EMOJI_TEXT.length} chars omitted.`,
     );
-    // Short blocks pass through whole and unmarked.
     expect(result.stdout).toContain("Reading the log.\n\n");
     expect(result.stdout).toContain('{"command":"cat build.log"}');
     expect(result.stdout.match(/\[truncated: /g)).toHaveLength(2);
@@ -439,7 +431,6 @@ describe("follow-up commands", () => {
       `[read messages: decant --db ${dbPath} --no-sync show ${id} --offset <index>`,
     );
 
-    // A default run keeps the plain form, which reads the default archive.
     expect(readInvocation({})).toBe("decant");
     expect(readInvocation({ db: "/tmp/it's here/a.db", sync: true })).toBe(
       "decant --db '/tmp/it'\\''s here/a.db'",
@@ -461,7 +452,6 @@ describe("session lookup by source session id", () => {
   test("show and export accept the id the source tool uses", async () => {
     const { id, base } = seed();
     const byDecantId = await runCli([...base, "show", String(id)]);
-    // A leading + was accepted before source ids were, and still is.
     expect(await runCli([...base, "show", `+${id}`])).toMatchObject(byDecantId);
     expect((await runCli([...base, "export", `+${id}`])).code).toBe(0);
     const bySourceId = await runCli([...base, "show", SOURCE_ID]);
@@ -478,7 +468,6 @@ describe("session lookup by source session id", () => {
     const outDir = join(workDir, `export-${caseCounter}`);
     const written = await runCli([...base, "export", SOURCE_ID, "--as", "json", "--out", outDir]);
     expect(written.code).toBe(0);
-    // Files stay named by the Decant id, whichever id the caller typed.
     expect(written.stderr).toBe(`wrote ${join(outDir, `${id}.json`)}\n`);
   });
 
@@ -509,7 +498,6 @@ describe("session lookup by source session id", () => {
       );
     }
 
-    // Decant's own id still names exactly one of them.
     const byId = await runCli([...base, "--json", "show", String(otherId), "--outline"]);
     expect(JSON.parse(byId.stdout).session).toMatchObject({ id: otherId, tool: "codex" });
   });
@@ -535,7 +523,6 @@ describe("session lookup by source session id", () => {
   test("an integer names the Decant id first and a source id only as a fallback", async () => {
     const { dbPath, id, base } = seed();
     const numeric = read(dbPath, (db) => ({
-      // Its source id is another session's Decant id.
       clash: upsertSession(
         db,
         parseClaudeSession(String(id), line("user", 0, "clashing numeric id")),
@@ -544,7 +531,6 @@ describe("session lookup by source session id", () => {
         2,
         "hash-clash",
       ),
-      // Its source id is an integer no Decant id uses.
       free: upsertSession(
         db,
         parseClaudeSession("424242", line("user", 0, "free numeric id")),

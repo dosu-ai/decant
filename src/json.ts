@@ -7,8 +7,6 @@
 import type { Json } from "./model.ts";
 import { compareCodePoints } from "./order.ts";
 
-// Real tool payloads are shallow. This leaves ample room while keeping recursive
-// consumers below the runtime stack limit, including JSON.stringify callers.
 export const MAX_JSON_DEPTH = 512;
 
 export class JsonDepthError extends Error {
@@ -31,7 +29,6 @@ export function assertJsonDepth(value: unknown): void {
   }
 }
 
-/** Serialize JSON with sorted keys, rejecting containers beyond MAX_JSON_DEPTH. */
 export function canonicalJson(value: Json): string {
   assertJsonDepth(value);
   return serialize(value);
@@ -75,7 +72,6 @@ export function asBoolean(value: Json | undefined): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-/** Rejects floats rather than truncating them. */
 export function asInteger(value: Json | undefined): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
 }

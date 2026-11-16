@@ -36,7 +36,6 @@ import {
   unknownTypeIssues,
 } from "./shared.ts";
 
-/** One `session_v2` row as `OpenCodeStore.loadSession` reads it. */
 export interface OpenCodeSessionRow {
   id: string;
   project_id: string;
@@ -54,14 +53,12 @@ export interface OpenCodeSessionRow {
   tokens_cache_read: number;
   tokens_cache_write: number;
   agent: string | null;
-  /** JSON `{ providerID, id, variant? }` for the session's current model. */
   model: string | null;
   time_created: number;
   time_updated: number;
   time_archived: number | null;
 }
 
-/** One `session_message` row; `data` is the message JSON minus `id` and `type`. */
 export interface OpenCodeMessageRow {
   id: string;
   session_id: string;
@@ -72,14 +69,9 @@ export interface OpenCodeMessageRow {
   data: string;
 }
 
-/** The 1.x copy of a session, from the same database, when the session is
- * also in `session_v2`: OpenCode 2.x migrated it and keeps the 1.x tables. */
 export interface OpenCodeLegacyCounterpart {
-  /** The 1.x `session.version`. */
   version: string | null;
-  /** In OpenCode's order (`time_created, id`). */
   messages: readonly OpenCodeLegacyMessageRow[];
-  /** Step-finish parts are the only ones read; others may be left out. */
   parts: readonly OpenCodeLegacyPartRow[];
 }
 
@@ -90,14 +82,10 @@ export interface OpenCodeModelRef {
 }
 
 export interface OpenCodeParseContext {
-  /** MCP server names from the global and project OpenCode configs, as
-   * written there (unsanitized). */
   mcpServers: readonly string[];
-  /** models.dev context limits keyed `<providerID>/<modelID>`. */
   contextWindows: ReadonlyMap<string, number>;
 }
 
-/** Sanitized server names, longest first, so `a_b` wins over `a` for `a_b_tool`. */
 export function mcpServerPrefixes(servers: readonly string[]): string[] {
   const unique = new Set(servers.map(sanitizeMcpName).filter((name) => name !== ""));
   return [...unique].sort((a, b) => b.length - a.length || compareCodePoints(a, b));
@@ -130,17 +118,6 @@ interface ToolResult {
   block: NormalizedBlock;
 }
 
-/**
- * OpenCode 2.x session parser (`session_v2` + `session_message`). Pure and
- * print-free. Each `session_message` row is one record; assistant rows carry
- * their parts inline in `content[]`, so a completed or failed tool item yields
- * a `tool_use` on the assistant message and a separate `tool` message holding
- * the `tool_result` (writeSession pairs a result only with an earlier call).
- *
- * `legacy` is the session's 1.x copy when OpenCode migrated it. The migrator
- * keeps only each message's last-step tokens, so a migrated row takes its
- * usage from the 1.x step-finish parts instead (`migratedUsage`).
- */
 export function parseOpenCodeSession(
   row: OpenCodeSessionRow,
   rows: readonly OpenCodeMessageRow[],
@@ -164,11 +141,6 @@ export function parseOpenCodeSession(
     legacy != null && legacy.messages.length > 0
       ? migratedUsage(legacy.version, legacy.messages, legacy.parts)
       : null;
-  // 2.x writes disjoint tokens. A row OpenCode migrated from 1.x keeps the
-  // semantics of the release that wrote it, and the migration drops `total`.
-  // With the 1.x copy at hand, migrated rows are corrected from it and any
-  // other row was written by 2.x since; without it, the session's version
-  // decides for every row (a 2.x-created session is always disjoint).
   const rowUsage = (tokens: Json | undefined): TokenUsage | null =>
     openCodeUsage(
       tokens,
@@ -192,13 +164,9 @@ export function parseOpenCodeSession(
     seq += 1;
   };
 
-  // A fork copies the parent's settled rows with their original timestamps,
-  // so a row older than its session is inherited history and would be billed
-  // twice. `opencode stats` skips it only when `fork_session_id` is set; a
-  // fork OpenCode migrated from 1.x has no such link, so Decant also skips by
-  // time for sessions migrated from 1.x (a 1.x copy or a pre-2 version). A
-  // native 2.x session without the link keeps every row, so a clock step
-  // backwards can never drop its usage.
+  // A fork copies the parent's settled rows with their original timestamps.
+  // `opencode stats` skips them only when `fork_session_id` is set; a fork
+  // OpenCode migrated from 1.x has no such link.
   const majorVersion = parseOpenCodeVersion(row.version)?.[0];
   const skipInherited =
     row.fork_session_id != null || legacy != null || (majorVersion != null && majorVersion < 2);
@@ -226,7 +194,6 @@ export function parseOpenCodeSession(
       if (model.id != null) {
         lastModel = model;
       }
-      // `default` is OpenCode's "no variant chosen", not a recorded effort.
       if (model.variant != null && model.variant !== "default") {
         efforts.push(model.variant);
       }
@@ -238,9 +205,6 @@ export function parseOpenCodeSession(
       if (usage != null) {
         totals = addTokenUsage(totals, usage);
         sawUsage = true;
-        // Token economics splits the step's time and output by this count.
-        // Read from the mapped usage, it is right for every reasoning
-        // convention and for migrated rows, where `tokens` is the last step's.
         raw.reasoning_tokens = usage.reasoning;
       }
       const { blocks, results } = assistantContent(data.content, servers);
@@ -262,8 +226,6 @@ export function parseOpenCodeSession(
       }
     } else if (typ === "compaction") {
       const model = modelRef(data.model);
-      // A migrated compaction row has no usage of its own; the summary
-      // request's usage and recorded cost are in the 1.x tables.
       const answer = migrated?.compactions.get(message.id);
       if (answer != null) {
         migratedRows += 1;
@@ -293,8 +255,6 @@ export function parseOpenCodeSession(
         [block(0, "text", { text })],
       );
     } else if (typ === "shell") {
-      // A shell row is the user running a command, not a model tool call, so
-      // it is user text and never a tool_use.
       const command = asString(data.command) ?? "";
       const output = contentText(data.output);
       const text = output === "" ? `$ ${command}` : `$ ${command}\n${output}`;
@@ -369,11 +329,9 @@ export function parseOpenCodeSession(
     time_archived: row.time_archived,
   };
   if (row.parent_id != null) {
-    // Read by inferSubagent in ingest as the parent's source session id.
     rawMeta.parentSessionId = row.parent_id;
   }
   if (contextWindow != null) {
-    // src/context-window.ts treats this key as an explicit window for any tool.
     rawMeta.model_context_window = contextWindow;
   }
   if (switches.length > 0) {
@@ -524,12 +482,8 @@ function assistantContent(
   return { blocks, results };
 }
 
-/** When a 2.x step finished generating, in epoch ms. OpenCode stamps a step
- * `created` when it starts, `streamed` when the provider response ends, and
- * `completed` after its tools settle, so `streamed` is the end of generation
- * and a tool's `completed` the end of its run. Rows without `streamed` (older
- * or failed steps, and rows migrated from 1.x) fall back through
- * `stepEnd`. */
+/** OpenCode stamps a step `created` when it starts, `streamed` when the
+ * provider response ends, and `completed` after its tools settle. */
 function stepGenerationEnd(data: JsonObject): number | null {
   const ends: number[] = [];
   let untimedText = false;
@@ -539,8 +493,6 @@ function stepGenerationEnd(data: JsonObject): number | null {
     const time = get(item, "time");
     if (type === "tool") {
       hasTools = true;
-      // A row migrated from 1.x has no `ran`; its `created` is the 1.x start
-      // of the run, as in OpenCode's own stats.
       pushTime(ends, get(time, "ran") ?? get(time, "created"));
     } else if (type === "reasoning" || type === "text") {
       const end = asInteger(get(time, "completed")) ?? asInteger(get(time, "end"));
@@ -569,24 +521,14 @@ function pushTime(into: number[], value: Json | undefined): void {
 }
 
 export interface StepTimes {
-  /** End of the provider response (2.x only). */
   streamed: number | null;
-  /** End of the step, after its tools settled. */
   completed: number | null;
   created: number | null;
-  /** When each reasoning or text part closed, and when each tool started to
-   * run (its arguments had streamed). */
   partEnds: readonly number[];
-  /** A text or reasoning part without an end, so `partEnds` may miss the
-   * answer. */
   untimedText: boolean;
   hasTools: boolean;
 }
 
-/** End of a step's generation from what OpenCode recorded, never the step's
- * start while an end exists. Without `streamed`, the step's completion waits
- * for its tools, so a step with tools ends at its latest streamed part; one
- * without tools ends at completion unless every part was timed. */
 export function stepEnd(times: StepTimes): number | null {
   if (times.streamed != null) {
     return times.streamed;
@@ -603,15 +545,8 @@ export function stepEnd(times: StepTimes): number | null {
  * `state.metadata.toolCalls`. */
 const CODE_EXECUTION_TOOL = "execute";
 
-/** Namespace of OpenCode's own tools inside an `execute` program. */
 const OPENCODE_NAMESPACE = "opencode";
 
-/** One inner call per `metadata.toolCalls` entry, in recorded order. An entry
- * names `<server>.<tool>` for an MCP tool, where `<server>` is already
- * sanitized by OpenCode (`McpTool.namespace`, the same replacement as
- * `sanitizeMcpName`), so the namespace alone decides MCP and no config lookup
- * is needed; `opencode.<tool>` and un-namespaced names (`search`) are OpenCode
- * built-ins and keep their recorded name. Any other namespace counts as MCP. */
 export function innerToolCalls(
   entries: Json | undefined,
   wrapperId: string | null,
@@ -645,8 +580,6 @@ export function innerToolName(tool: string): string {
   if (namespace === OPENCODE_NAMESPACE) {
     return tool;
   }
-  // Sanitized like OpenCode's direct registrations, so one server's direct
-  // and code-mode calls share an `mcp_server`.
   return `mcp__${sanitizeMcpName(namespace)}__${sanitizeMcpName(tool.slice(dot + 1))}`;
 }
 

@@ -29,15 +29,12 @@ const MODEL = "claude-sonnet-5";
 const ORIGINAL = "aaaaaaaa-0000-4000-8000-000000000001";
 const BRANCH = "bbbbbbbb-0000-4000-8000-000000000002";
 const SECOND_BRANCH = "cccccccc-0000-4000-8000-000000000003";
-// A /branch chain whose original is not archived: ROOT copied a turn from it,
-// MIDDLE from ROOT, and LEAF from MIDDLE. The root has the highest session ID.
 const LEAF = "dddddddd-0000-4000-8000-000000000004";
 const MIDDLE = "eeeeeeee-0000-4000-8000-000000000005";
 const ROOT = "ffffffff-0000-4000-8000-000000000006";
 const SECOND_ORIGINAL = "99999999-0000-4000-8000-000000000007";
 
 interface Turn {
-  /** Suffix shared by the record uuids, `requestId`, and `message.id`. */
   id: string;
   prompt: string;
   at: string;
@@ -254,7 +251,6 @@ function estimate(db: Database, session: string): number {
   ).n;
 }
 
-/** What a user delete does: the session and its rows leave the archive. */
 function remove(db: Database, session: string): void {
   const row = db.query("SELECT id FROM session WHERE source_session_id = ?1").get(session) as {
     id: number;
@@ -262,8 +258,6 @@ function remove(db: Database, session: string): void {
   expect(setSessionUserState(db, row.id, "deleted")).toBe(true);
 }
 
-/** Every stored number that billing changes, keyed by session ID instead of
- * row ID so archives built in different orders compare equal. */
 function archiveState(db: Database): Record<string, unknown[]> {
   return {
     sessions: db
@@ -310,7 +304,6 @@ function archiveState(db: Database): Record<string, unknown[]> {
   };
 }
 
-/** The state of an archive that only ever read these transcripts, in order. */
 function stateOf(...sources: [string, string][]): Record<string, unknown[]> {
   const { db } = freshCase();
   for (const [session, content] of sources) {
@@ -333,7 +326,6 @@ function permutations<T>(items: readonly T[]): T[][] {
   );
 }
 
-/** The branch as an archive that never held its original stores it. */
 function branchAlone(session: string, content: string): Stored & { estimate: number } {
   const { db } = freshCase();
   ingest(db, session, content);
@@ -351,13 +343,11 @@ describe("requests copied into a branched Claude Code session", () => {
     sync(db, config);
 
     expectBilled(db, ORIGINAL, 2, FIRST);
-    // The copied turn stays in the branch's transcript without its usage.
     expectBilled(db, BRANCH, 4, SECOND);
     const totals = archiveTotals(db);
     expect(totals).toMatchObject({ input: 2_000, output: 2_500 });
     expect(totals.cost).toBeCloseTo(cost(FIRST, SECOND), 12);
 
-    // An unchanged archive stays as it is.
     expect(sync(db, config).ingested).toBe(0);
     expectBilled(db, ORIGINAL, 2, FIRST);
     expectBilled(db, BRANCH, 4, SECOND);
@@ -413,8 +403,6 @@ describe("requests copied into a branched Claude Code session", () => {
     closeDb(db);
   });
 
-  // With the original gone, both sessions hold a copy. The same one has to
-  // keep the turn whichever is read first.
   test("the earlier of two --fork-session copies keeps a turn in either order", () => {
     const sources: [string, string][] = [
       [BRANCH, forkSessionTranscript([FIRST], [SECOND])],
@@ -490,9 +478,6 @@ describe("requests copied into a branched Claude Code session", () => {
     write(sourcePath(config, BRANCH), forkSessionTranscript([FIRST], [SECOND]));
     sync(db, config);
 
-    // Put the archive back the way an older release stored it: the copied turn
-    // billed in both sessions, no owners recorded, usage split under the old
-    // rule. The transcripts are gone, so only stored rows can correct it.
     db.exec(`
       DELETE FROM billed_request;
       DELETE FROM unbilled_request;
@@ -512,7 +497,6 @@ describe("requests copied into a branched Claude Code session", () => {
     expectBilled(db, BRANCH, 4, SECOND);
     expect(sync(db, config).repriced).toBeUndefined();
 
-    // The correction kept what it took off the copy, so the copy can bill it again.
     remove(db, ORIGINAL);
     expectBilled(db, BRANCH, 4, FIRST, SECOND);
     closeDb(db);
@@ -552,16 +536,12 @@ describe("requests copied into a branched Claude Code session", () => {
     ingest(db, ORIGINAL, originalTranscript([thinking]));
     ingest(db, BRANCH, forkSessionTranscript([thinking], [{ ...SECOND, thinking: true }]));
 
-    // Both turns show a few characters of text, so nearly all output is
-    // inferred reasoning: about 2,000 tokens in the original, 500 in the branch.
     expect(estimate(db, ORIGINAL)).toBeGreaterThan(1_900);
     expect(estimate(db, BRANCH)).toBeGreaterThan(400);
     expect(estimate(db, BRANCH)).toBeLessThanOrEqual(500);
     closeDb(db);
   });
 
-  // Each reply shows "Reply N." (8 characters, 2 tokens), so the rest of its
-  // output is inferred reasoning when the turn shows thinking.
   test("a copied turn's thinking leaves the branch with it", () => {
     const { db } = freshCase();
     const thinking: Turn = { ...FIRST, thinking: true };
@@ -584,7 +564,6 @@ describe("requests copied into a branched Claude Code session", () => {
   });
 
   test("two /branch copies of a missing original keep a turn in the same one in either order", () => {
-    // Both start at the copied turn's timestamp and neither names the other.
     const sources: [string, string][] = [
       [SECOND_BRANCH, branchTranscript([FIRST], [THIRD], SECOND_BRANCH, ORIGINAL)],
       [BRANCH, branchTranscript([FIRST], [SECOND], BRANCH, ORIGINAL)],
@@ -609,15 +588,12 @@ describe("requests copied into a branched Claude Code session", () => {
 
     remove(db, ORIGINAL);
     expectBilled(db, BRANCH, 4, FIRST, SECOND);
-    // The branch is unchanged, so nothing re-reads it, and the delete holds.
     expect(sync(db, config).ingested).toBe(0);
     expectBilled(db, BRANCH, 4, FIRST, SECOND);
     expect(db.query("SELECT COUNT(*) AS n FROM unbilled_request").get()).toEqual({ n: 0 });
     closeDb(db);
   });
 
-  // With the sources gone only stored rows can put the usage back, and the
-  // branch has to match an archive that never held its original.
   const branches: [string, string][] = [
     ["--fork-session", forkSessionTranscript([FIRST], [{ ...SECOND, thinking: true }])],
     ["/branch", branchTranscript([{ ...FIRST, thinking: true }], [SECOND])],
@@ -698,7 +674,6 @@ describe("requests copied into a branched Claude Code session", () => {
     const orders = permutations([leaf, middle, root]);
     expect(orders).toHaveLength(6);
     const settled = stateOf(root, middle, leaf);
-    // With the root gone, the middle copy is the one the other was made from.
     const withoutRoot = stateOf(middle, leaf);
     for (const order of orders) {
       const { db } = freshCase();
@@ -720,8 +695,6 @@ describe("requests copied into a branched Claude Code session", () => {
 
   test("a restored copy gets back only the one-hour cache writes its totals lost", () => {
     const cached: Turn = { ...FIRST, cacheCreation: 100, cacheCreation1h: 100 };
-    // The result record reports cache writes without the one-hour breakdown,
-    // so the branch's one-hour total is 0 while the copied reply shows 100.
     const branch: [string, string] = [
       BRANCH,
       forkSessionTranscript([cached], [SECOND]) +
@@ -753,7 +726,6 @@ describe("requests copied into a branched Claude Code session", () => {
     }
   });
 
-  // A --fork-session branch that copied one turn from each of two originals.
   const fromOriginal: Turn = {
     id: "5",
     prompt: "Check the build.",
@@ -783,8 +755,6 @@ describe("requests copied into a branched Claude Code session", () => {
   }
 
   test("totals that never covered every reply stay as recorded in every read order", () => {
-    // The result record covers two of the three replies, so neither copy comes
-    // off the totals, whether the copies leave together or one at a time.
     const branch: [string, string] = [
       BRANCH,
       forkSessionTranscript([fromOriginal, fromSecondOriginal], [branchOwn]) +
@@ -812,8 +782,6 @@ describe("requests copied into a branched Claude Code session", () => {
   });
 
   test("restoring copies in either order gives back the one-hour writes their totals lost", () => {
-    // Only the first copy wrote cache, and only the result record reports the
-    // one-hour writes, so none of them can be saved on the second copy.
     const cached: Turn = { ...fromOriginal, cacheCreation: 100 };
     const branch: [string, string] = [
       BRANCH,
@@ -854,8 +822,6 @@ describe("requests copied into a branched Claude Code session", () => {
     }
   });
 
-  // Re-reading the original rewrites its rows. A turn it no longer holds has
-  // to go to the copy, or the copy stays unbilled with nothing to bill it.
   for (const branchSource of ["kept", "removed"]) {
     test(`an original rewritten without a shared turn hands it to the copy (branch source ${branchSource})`, () => {
       const { db, config } = freshCase();

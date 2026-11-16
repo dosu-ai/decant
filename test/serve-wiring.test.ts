@@ -4,13 +4,6 @@ import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 
-// End-to-end coverage for the CLI→serve() trusted-peer wiring: spawn the real
-// CLI, bind 0.0.0.0, and connect via a non-loopback interface so the request's
-// source address actually exercises the peer guard — the exact shape of the
-// documented Docker deployment (loopback Host header, non-loopback remote
-// address). The precedence logic itself is unit-tested in server.test.ts; this
-// file proves argv/env reach serve() unmangled.
-
 const repoRoot = join(import.meta.dir, "..");
 
 function nonLoopbackIPv4(): string | null {
@@ -27,7 +20,6 @@ if (lanIP == null) {
   console.warn("serve-wiring test: no non-loopback IPv4 interface; skipping wiring tests");
 }
 
-/** Raw HTTP GET so the Host header stays loopback while the socket source is the LAN address. */
 function httpStatus(ip: string, port: number, path: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -49,14 +41,6 @@ function httpStatus(ip: string, port: number, path: string): Promise<number> {
   });
 }
 
-/**
- * Read serve's JSON Lines startup log until it reports its port.
- *
- * The kill timer matters: without it a `read()` that never resolves -- a child
- * that hangs before writing anything -- blocks until the per-test timeout
- * instead of failing here with the output collected so far. Killing the process
- * makes the stream end, so the loop exits and reports what it saw.
- */
 async function readServePort(
   proc: Bun.Subprocess<"ignore", "ignore", "pipe">,
 ): Promise<{ port: number; log: string }> {
@@ -166,7 +150,6 @@ describe.skipIf(lanIP == null)("serve trusted-peer wiring (real CLI process)", (
     });
   }, 30_000);
 
-  // Flags replace the environment so operators can narrow trust.
   test("flags replace the env var rather than merging with it", async () => {
     await withServe(
       { env: { DECANT_TRUSTED_PEERS: "203.0.113.0/24" }, flags: ["--trusted-peer", ip] },
@@ -186,7 +169,6 @@ describe.skipIf(lanIP == null)("serve trusted-peer wiring (real CLI process)", (
   }, 30_000);
 });
 
-// Exercise argv-to-serve wiring against synthetic sources.
 interface SyncCase {
   env?: Record<string, string>;
   flags?: string[];
@@ -222,7 +204,6 @@ async function withSeededServe<T>(
   mkdirSync(cursorDir, { recursive: true });
   mkdirSync(copilotDir, { recursive: true });
   mkdirSync(vscodeCopilotDir, { recursive: true });
-  // Real, ingestible sessions. If the watcher runs, both land in the archive.
   copyFileSync(join(repoRoot, "fixtures", "claude", "sample.jsonl"), claudeSessionPath);
   copyFileSync(join(repoRoot, "fixtures", "codex", "sample.jsonl"), codexSessionPath);
 
@@ -292,7 +273,6 @@ async function sessionCount(port: number): Promise<number> {
   return (await archiveSummary(port)).sessions;
 }
 
-/** Poll until the expected sessions land, rather than sleeping a fixed guess. */
 async function waitForSessionCount(port: number, expected: number): Promise<number> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -317,16 +297,6 @@ async function waitForToolCallCount(port: number, expected: number): Promise<Arc
   throw new Error(`watcher never reached ${expected} ingested tool calls`);
 }
 
-/**
- * How long to give a watcher that should NOT be running.
- *
- * Proving a negative needs a real wait; there is no event to poll for when the
- * intended behaviour is that nothing happens. This cannot be shortened to a
- * token delay: against the unfixed CLI the ingest lands around the 2.5s mark,
- * so a 100ms wait would let these tests pass on the very bug they exist to
- * catch. It is deliberately longer than `waitForSessionCount` needs when the watcher
- * IS running, which the baseline test measures.
- */
 const NO_INGEST_GRACE_MS = 4000;
 
 async function expectNoIngest(port: number): Promise<void> {
@@ -335,12 +305,9 @@ async function expectNoIngest(port: number): Promise<void> {
 }
 
 describe("serve sync opt-out (real CLI process)", () => {
-  // Without this the suite would pass vacuously: an unloadable fixture, or a
-  // watcher that never starts, makes every "stayed empty" assertion trivial.
   test("baseline: the watcher ingests the source tree by default", async () => {
     await withSeededServe({}, async (port, startupLog) => {
       expect(startupLog).toContain('"watch.enabled":true');
-      // Also establishes that the grace period below outlasts a real ingest.
       const started = Date.now();
       expect(await waitForSessionCount(port, 2)).toBe(2);
       expect(Date.now() - started).toBeLessThan(NO_INGEST_GRACE_MS);
@@ -398,8 +365,6 @@ describe("serve sync opt-out (real CLI process)", () => {
   }, 40_000);
 
   test("the UI still serves the archive it was pointed at", async () => {
-    // Opting out of ingestion must not degrade reads; that is the whole point
-    // of the mode.
     await withSeededServe({ flags: ["--no-sync"] }, async (port) => {
       expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200);
       expect((await fetch(`http://127.0.0.1:${port}/api/sessions`)).status).toBe(200);

@@ -147,7 +147,6 @@ describe("Insights facts", () => {
       evidence: null,
     });
     const html = renderToStaticMarkup(<RecommendationHero row={signal()} {...handlers} />);
-    // The prompt is shown verbatim, and it quotes the detail as its evidence.
     const outsidePrompt = html.replace(/<pre[^>]*>[\s\S]*?<\/pre>/g, "");
     expect(count(html, "<pre")).toBe(1);
     expect(count(outsidePrompt, DETAIL)).toBe(1);
@@ -286,15 +285,12 @@ describe("Insights row actions", () => {
     expect(actions(signal(), { copiedKey: key })).toContain("Copied");
     expect(actions(signal(), { pending: { [key]: "copy" } })).toContain('disabled=""');
     expect(actions(signal(), { pending: { other: "copy" } })).not.toContain('disabled=""');
-    // A second row's action leaves this row's launch in flight.
     const both = actions(signal(), { pending: { [key]: "launch", other: "copy" } });
     expect(both).toContain("Opening");
     expect(both).toContain('disabled=""');
   });
 
   test("keeps the prompt copyable while a launch is still running", () => {
-    // A launch request that never answers must not lock the only other way to
-    // hand the prompt to an agent.
     const key = signal().key;
     const launching = actions(signal(), { pending: { [key]: "launch" } });
     const buttons = launching.match(/<button[^>]*>/g) ?? [];
@@ -347,7 +343,6 @@ describe("Insights page sections", () => {
       signal({ key: `signal:synthetic:${index}`, score: index }),
     );
     const html = render([...rows, catalogRow()]);
-    // The separator follows the process locale, so ask the formatter for it.
     expect(html).toContain(`${formatInt(1200)} active`);
     expect(html).toContain("1 idea<");
   });

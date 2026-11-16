@@ -29,14 +29,12 @@ export function FilesView({
   dateBounds: DateBounds | null;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
-  /** Bumped when the archive changes, so the table reloads in place. */
   reloadKey: number;
 }) {
   const [group, setGroup] = useState<"path" | "ext">("path");
   const [op, setOp] = useState<"read" | "edit" | "write" | "delete" | null>(null);
   const [fileRows, setFileRows] = useState<FileRow[]>([]);
   const [fileError, setFileError] = useState<unknown>(null);
-  // True from the first render, so the page never opens on the empty state.
   const [filesLoading, setFilesLoading] = useState(true);
   const [filesRetryKey, setFilesRetryKey] = useState(0);
   const [fileSort, setFileSort] = useState<SortState<FileSortKey>>({
@@ -48,8 +46,6 @@ export function FilesView({
     [fileRows, fileSort],
   );
 
-  // This view alone requests file activity. Loading the default grouping in
-  // a page slice as well would fetch it twice on every visit.
   useEffect(() => {
     void filesRetryKey;
     void reloadKey;

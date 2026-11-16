@@ -18,7 +18,6 @@ import {
   titleFor,
 } from "../src/ui/navigation.ts";
 
-// Mirrors the sidebar's own order: Overview first, then Browse.
 const ITEMS: NavDestination[] = [
   { key: "analytics", href: "/", label: "Analytics" },
   { key: "insights", href: "/insights", label: "Insights" },
@@ -36,8 +35,6 @@ describe("route resolution", () => {
   });
 
   test("/analytics stays a working alias for the canonical /", () => {
-    // The sidebar links to "/", so nothing generates "/analytics" any more.
-    // Older links and bookmarks still have to land somewhere sensible.
     expect(activeRouteKey("/analytics", ITEMS)).toBe("analytics");
     expect(activeRoute("/analytics", ITEMS)).toBe("Analytics");
     expect(activeRouteKey("/analytics", ITEMS)).toBe(activeRouteKey("/", ITEMS));
@@ -54,8 +51,6 @@ describe("route resolution", () => {
   });
 
   test("a transcript stays on Sessions rather than falling home", () => {
-    // Regression guard: with "/" no longer meaning Sessions, a detail route that
-    // missed its prefix check would light up Analytics while reading a session.
     expect(activeRoute("/sessions/42", ITEMS)).toBe("Sessions");
     expect(activeRouteKey("/sessions/42", ITEMS)).toBe("sessions");
   });

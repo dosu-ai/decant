@@ -20,7 +20,6 @@ import { buildCursorChat } from "./cursor-fixture.ts";
 const root = mkdtempSync(join(tmpdir(), "decant-cursor-cost-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-/** A Cursor chat (no usage) beside a Codex session (usage as session totals). */
 function mixedArchive(): string {
   const dir = mkdtempSync(join(root, "case-"));
   const cursorDir = join(dir, "cursor");
@@ -100,7 +99,6 @@ describe("cost for sessions without recorded usage", () => {
       title: `1 session lacks usage data and is not in this cost. ${NO_USAGE_TITLE}`,
     });
     expect(costDisplay(1.5, 3, 3)).toEqual({ text: "$1.50", title: undefined });
-    // An empty scope is a real zero.
     expect(costDisplay(0, 0, 0)).toEqual({ text: "$0.00", title: undefined });
     expect(
       renderToStaticMarkup(<CostValue cost={0} dense sessions={1} usageSessions={0} />),

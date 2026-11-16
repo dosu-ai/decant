@@ -5,7 +5,6 @@ const sum = (values: number[]) => values.reduce((total, value) => total + value,
 
 describe("rounded share percents", () => {
   test("never totals 101 when several parts round up", () => {
-    // Independent Math.round gives 35+35+31 = 101 here.
     const percents = roundedPercents([34.5, 34.5, 31]);
     expect(sum(percents)).toBe(100);
     expect(percents).toEqual([35, 34, 31]);

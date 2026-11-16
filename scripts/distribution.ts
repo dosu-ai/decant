@@ -114,16 +114,6 @@ export function buildTargetArgs(
   outPath: string,
   version?: string,
 ): string[] {
-  // --minify roughly halves the UI bundle the embedded server hands the browser.
-  // --splitting keeps the chart runtime and the syntax highlighter in their own
-  // files, fetched on first use, so the first script is about a third the size.
-  // Source runs stay unminified for fast, legible dev rebuilds. Mangled names
-  // weaken `exception.stacktrace`, but every custom error class sets `this.name`
-  // from a literal, so `exception.type` survives.
-  //
-  // Do not add --sourcemap to recover those names: the compiled server dies
-  // after its first few requests with it, which scripts/dist-check.ts catches.
-  //
   // --compile does not set NODE_ENV for the embedded HTML bundle, so without the
   // define the browser receives React's development build.
   const args = [

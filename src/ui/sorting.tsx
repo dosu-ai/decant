@@ -105,9 +105,6 @@ export function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      // The short name on purpose, not the disambiguated label: two
-      // registrations of one server sort adjacently, which is where a reader
-      // expects to find them.
       return formatMcpServer(row.mcp_server);
     case "tools":
       return row.tools;
@@ -127,9 +124,6 @@ export function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      // The short name on purpose, not the disambiguated label: two
-      // registrations of one server sort adjacently, which is where a reader
-      // expects to find them.
       return formatMcpServer(row.mcp_server);
     case "tool":
       return row.tool_name;

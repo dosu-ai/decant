@@ -58,9 +58,7 @@ export async function getJson<T>(
     let payload: Record<string, unknown> = {};
     try {
       payload = (await response.json()) as Record<string, unknown>;
-    } catch {
-      // Non-JSON failures still retain the status fallback below.
-    }
+    } catch {}
     const message =
       typeof payload.error === "string" && payload.error !== ""
         ? payload.error
@@ -76,7 +74,6 @@ export async function getJson<T>(
   }
 }
 
-/** The server's view of the running sync, for state the event stream cannot replay. */
 export function getSyncStatus(fetcher: FetchJson = fetch): Promise<SyncStatus> {
   return getJson<SyncStatus>("/api/sync-status", undefined, fetcher);
 }

@@ -1,10 +1,3 @@
-/**
- * Print-first report styling.
- *
- * Bundled report fonts are injected as data-URI @font-face declarations by
- * render.tsx, preserving a single self-contained document with no runtime
- * font fetch. System families remain as glyph fallbacks.
- */
 export const REPORT_CSS = `
 :root {
   color-scheme: light;

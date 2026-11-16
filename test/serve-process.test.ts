@@ -5,8 +5,6 @@ import { join } from "node:path";
 
 test("a completed supervised serve does not later exit its host process", async () => {
   const root = mkdtempSync(join(tmpdir(), "decant-serve-process-"));
-  // runCli is also used as a library. Keep its host alive past the emergency
-  // stop deadline so a timer left behind after a clean stop is observable.
   const program = `
     import { runCli } from "./src/cli.ts";
     import { configureLogging } from "./src/logging.ts";

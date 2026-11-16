@@ -75,8 +75,6 @@ function seededConfig(): Config {
   return config;
 }
 
-/** In-process stand-in for a read worker: records what it is sent and lets the
- * test decide when and how each request is answered. */
 class FakeWorker implements ReadWorkerLike {
   readonly sent: ({ type: string; id?: number; name?: string } & Record<string, unknown>)[] = [];
   terminated = false;
@@ -95,7 +93,6 @@ class FakeWorker implements ReadWorkerLike {
     const typed = message as FakeWorker["sent"][number];
     this.sent.push(typed);
     if (typed.type === "close" && this.answerClose) {
-      // A real worker closes its connection and its thread exits.
       queueMicrotask(() => this.exit());
     }
   }
@@ -152,7 +149,6 @@ function request(path: string): Request {
   return new Request(`http://127.0.0.1:3000${path}`);
 }
 
-/** Search reports how long it took, which differs between any two runs. */
 function withoutTiming<T extends { body: string } | null>(output: T): T {
   return output == null
     ? output
@@ -160,7 +156,6 @@ function withoutTiming<T extends { body: string } | null>(output: T): T {
 }
 
 describe("read operations on a worker", () => {
-  // One call per operation, with arguments that reach real rows in the fixture.
   const calls: { [N in ReadOpName]: ReadOpArgs<N> } = {
     sessions: { limit: 50 },
     sessionSearchIndex: { limit: 5000, offset: 0 },
@@ -200,7 +195,6 @@ describe("read operations on a worker", () => {
         expect({ name, output: pooled }).toEqual({ name, output: inline });
         expect(pooled).not.toBeNull();
       }
-      // A missing session is null, not an error, on both paths.
       expect(await pool.run("session", { id: 999, messageLimit: null, messageOffset: 0 })).toBe(
         null,
       );
@@ -255,7 +249,6 @@ describe("read pool scheduling", () => {
       await tick();
       expect(workers[0]?.runs().map((run) => run.name)).toEqual(["toolUsage"]);
 
-      // Fast routes keep answering on the server connection meanwhile.
       const health = await handleRequest(request("/api/health"), config, context);
       expect(health.status).toBe(200);
       const bounds = await handleRequest(request("/api/date-bounds"), config, context);
@@ -284,12 +277,10 @@ describe("read pool scheduling", () => {
       owner?.answer(owner.runs()[0]?.id ?? 0, {});
       await first;
 
-      // Idle again: the repeat goes back to the worker that holds its cache.
       const repeat = pool.run("statsSummary", { from: "2026-01-01" });
       await tick();
       expect(owner?.runs()).toHaveLength(2);
 
-      // Busy now: a second copy goes to the idle worker rather than queueing.
       const spill = pool.run("statsSummary", { from: "2026-01-01" });
       await tick();
       expect(owner?.runs()).toHaveLength(2);
@@ -346,8 +337,6 @@ describe("read pool scheduling", () => {
       await tick();
       const busy = workers.map((worker) => worker.runs().length);
       expect(busy).toEqual([1, 1]);
-      // Whichever worker answers first takes the waiting read, even if the
-      // read hashes to the other one.
       const fast = workers[1];
       fast?.answer(fast.runs()[0]?.id ?? 0, {});
       await tick();
@@ -378,7 +367,6 @@ describe("read pool scheduling", () => {
       await running;
       await tick();
       expect(worker?.runs().map((run) => run.name)).toEqual(["projects"]);
-      // An already-aborted signal is refused up front.
       await expect(pool.run("activity", {}, { signal: abort.signal })).rejects.toBeInstanceOf(
         ReadCancelledError,
       );
@@ -398,7 +386,6 @@ describe("read pool scheduling", () => {
       abort.abort();
       expect(await running).toBeInstanceOf(ReadCancelledError);
       const worker = workers[0];
-      // The worker is still busy until its answer lands, which is then dropped.
       expect(worker?.runs().map((run) => run.name)).toEqual(["projects"]);
       worker?.answer(worker.runs()[0]?.id ?? 0, ["late"]);
       await tick();
@@ -415,7 +402,6 @@ describe("read pool scheduling", () => {
     const spawn = (): ReadWorkerLike => {
       const worker = new FakeWorker();
       if (workers.length === 0) {
-        // The first worker accepts init but fails every run message.
         const post = worker.postMessage.bind(worker);
         worker.postMessage = (message: unknown) => {
           if ((message as { type?: string }).type === "run") {
@@ -580,7 +566,6 @@ describe("read pool scheduling", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
     expect(await pending).toBeInstanceOf(ReadPoolClosedError);
     expect(worker.sent.at(-1)).toEqual({ type: "close" });
-    // It never confirmed, so the timeout terminated it.
     expect(worker.terminated).toBe(true);
     await expect(pool.run("projects", {})).rejects.toBeInstanceOf(ReadPoolClosedError);
   });
@@ -605,8 +590,6 @@ describe("read pool scheduling", () => {
     await pool.run("projects", {});
     const started = performance.now();
     await pool.close();
-    // The thread exited before close() returned, and well inside the timeout,
-    // so it was not terminated mid-query.
     expect(exited).toBe(true);
     expect(performance.now() - started).toBeLessThan(2_000);
   });
@@ -708,7 +691,6 @@ describe("serve() with the read pool", () => {
       worker?.answer(worker.runs()[0]?.id ?? 0, []);
       expect((await held).status).toBe(200);
       await Bun.sleep(20);
-      // The abandoned summary never ran.
       expect(worker?.runs().map((run) => run.name)).toEqual(["toolUsage"]);
     } finally {
       await server.stop(true);
@@ -758,8 +740,6 @@ describe("serve() with the read pool", () => {
       port: 0,
       readPool: { spawn, size: 2 },
       syncRunner: async (workerConfig, _cancel, onProgress) => {
-        // Stand in for the sync worker: write a session, then analyze the
-        // archive on its own connection as the worker does mid-sync.
         const db = openDb(workerConfig.dbPath);
         upsertSession(
           db,
@@ -796,7 +776,6 @@ describe("serve() with the read pool", () => {
         workers.map(
           (worker) => worker.sent.filter((message) => message.type === "reload-statistics").length,
         );
-      // The sync is still running: only its progress can have caused these.
       expect(reloads()).toEqual([1, 1]);
       release.resolve();
       expect((await sync).status).toBe(200);
@@ -829,8 +808,6 @@ describe("serve() with the read pool", () => {
 });
 
 describe("read connection statistics", () => {
-  // With no statistics SQLite guesses the low-cardinality `kind` index; once
-  // ANALYZE records that `grp` is nearly unique, it should switch to it.
   function plannedIndex(db: Database): string {
     return (
       db.query("EXPLAIN QUERY PLAN SELECT * FROM t WHERE kind = 1 AND grp = 5").get() as {
@@ -861,7 +838,6 @@ describe("read connection statistics", () => {
     try {
       expect(await connection.use(plannedIndex)).toContain("t_kind");
       writer.exec("ANALYZE");
-      // A read-only connection keeps the plans it chose until it reopens.
       expect(await connection.use(plannedIndex)).toContain("t_kind");
       connection.reloadStatistics();
       expect(await connection.use(plannedIndex)).toContain("t_grp");
@@ -877,15 +853,12 @@ describe("read connection statistics", () => {
     try {
       const gate = Promise.withResolvers<void>();
       const slow = connection.use(async (db) => {
-        // Plan once first: a connection loads statistics with the schema, on
-        // its first statement.
         const before = plannedIndex(db);
         await gate.promise;
         return [before, plannedIndex(db)];
       });
       writer.exec("ANALYZE");
       connection.reloadStatistics();
-      // The slow read still holds the old connection, so this one shares it.
       expect(await connection.use(plannedIndex)).toContain("t_kind");
       gate.resolve();
       expect(await slow).toEqual([

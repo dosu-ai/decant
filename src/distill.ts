@@ -21,7 +21,6 @@ export interface Op {
   is_error: boolean;
   redacted: boolean;
   sessions_seen: number;
-  /** Share of calls with a recorded result that succeeded; null when none recorded one. */
   success_rate: number | null;
 }
 
@@ -697,7 +696,6 @@ function shLine(line: SelectedLine, sessionCount: number): string {
   if (line.destructive != null) {
     return `# REVIEW: destructive (${line.destructive}), seen in ${line.sessionsSeen} session(s) — left commented\n# ${line.cmd}\n`;
   }
-  // Floor so a command that ever failed never prints as 100% ok.
   const ok = line.successRate == null ? "" : `, ${Math.floor(line.successRate * 100)}% ok`;
   const prefix = sessionCount > 1 ? `# seen ${line.sessionsSeen}/${sessionCount}${ok}\n` : "";
   return `${prefix}${line.cmd}\n`;
@@ -848,11 +846,6 @@ function relToRoot(path: string, cwd: string | null): string {
 const REPLAY_EOF = "DECANT_EOF";
 const COMMENT_UNSAFE = /[\p{Cc}\u2028\u2029]/gu;
 
-/**
- * Escapes anything that could end a `#` comment line — transcript-supplied text
- * (paths, titles, commands) is interpolated into comments of a generated bash
- * script, so a raw newline there would emit an executable line.
- */
 export function commentSafe(value: string): string {
   return value.replace(
     COMMENT_UNSAFE,

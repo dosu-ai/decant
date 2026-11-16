@@ -133,10 +133,6 @@ describe("transcript window clamping", () => {
   });
 
   test("never returns a non-finite offset", () => {
-    // NaN survives Math.trunc/max/min untouched, so an unguarded input reaches
-    // the request as `message_offset=NaN`. Every degenerate input starts the
-    // window at the beginning, which is the same place the "Start at the
-    // beginning" recovery button goes.
     for (const offset of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
       expect(clampTranscriptWindowOffset(offset, 2000, 160)).toBe(0);
     }
@@ -173,12 +169,10 @@ describe("prependTranscriptPage", () => {
 
 describe("previousTranscriptPageRequest", () => {
   test("asks only for the gap in front of the window", () => {
-    // A window starting at 160 with a page size of 160 has a full page missing.
     expect(previousTranscriptPageRequest(160, 160)).toEqual({ offset: 0, limit: 160 });
   });
 
   test("does not re-fetch rows already held when the gap is short", () => {
-    // 40 rows missing, so ask for 40 -- not a full page that would overlap.
     expect(previousTranscriptPageRequest(40, 160)).toEqual({ offset: 0, limit: 40 });
   });
 

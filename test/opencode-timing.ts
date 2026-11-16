@@ -1,12 +1,8 @@
 import type { Json } from "../src/model.ts";
 import type { OpenCodeMessageRow, OpenCodeSessionRow } from "../src/sources/opencode.ts";
 
-const T0 = 1791786000000; // 2026-10-12T06:20:00.000Z
+const T0 = 1791786000000;
 
-/** Epoch milliseconds for the synthetic two-turn session below. The step
- * shapes follow OpenCode 2.0.27: parts open when the stream starts and close
- * when it ends, a text part has no time, and `time.streamed` marks the end of
- * the provider response, before tool settlement. */
 export const STEP_TIMES = {
   session: T0,
   prompt1: T0 + 100,
@@ -66,9 +62,6 @@ function row(seq: number, type: string, created: number, data: Json): OpenCodeMe
   };
 }
 
-/** Prompt, a step that reasons then reads a file, a second prompt, and a
- * step that reasons (hidden: empty text) then answers. Step 1 reports 150 of
- * its 200 output tokens as reasoning; step 2 reports 240 of 300. */
 export function timingMessageRows(): OpenCodeMessageRow[] {
   return [
     row(1, "user", T.prompt1, { text: "Read the notes.", files: [], time: { created: T.prompt1 } }),

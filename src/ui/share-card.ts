@@ -31,11 +31,9 @@ export interface ShareCardCopyInput {
   end: string;
   kind: ShareCardKind;
   labels: string[];
-  /** Top-level sessions left out of a cost card because they lack usage data. */
   missingUsage?: number;
   start: string;
   timezone: string;
-  /** null is an unknown value (no usage data), drawn as a gap. */
   values: (number | null)[];
 }
 
@@ -54,8 +52,6 @@ const TITLES: Record<ShareCardKind, string> = {
   sessions_per_week: "Sessions per week",
 };
 
-// Decant re-prices every session at current rates on each sync, so the card
-// names current list prices rather than the prices in effect at the time.
 const COST_QUALIFIER = "Estimate at current API list prices, not a bill";
 
 const QUALIFIERS: Record<ShareCardKind, string> = {
@@ -184,7 +180,6 @@ function knownValues(values: readonly (number | null)[]): number[] {
   return values.filter((value): value is number => value != null);
 }
 
-// Unknown (null) points never win the peak or the low.
 function maxIndex(values: readonly (number | null)[]): number | null {
   let best: number | null = null;
   for (const [index, value] of values.entries()) {

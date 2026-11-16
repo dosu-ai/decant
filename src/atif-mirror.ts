@@ -17,21 +17,14 @@ import type { AtifTrajectory } from "./export-atif.ts";
 import { exportAtif } from "./export-atif.ts";
 import { listSessions } from "./query.ts";
 
-// One standalone ATIF document per session, for other tools to read. Subagents
-// are separate files, so summing every document counts nothing twice.
-
 export interface AtifMirrorOptions {
-  /** The folder to write. Created owner-only when it does not exist. */
   out: string;
 }
 
 export interface AtifMirrorReport {
   out: string;
-  /** Files created or rewritten because the session changed. */
   written: number;
-  /** Files already holding the current document. */
   unchanged: number;
-  /** Sessions with no steps to export. */
   skipped: number;
 }
 
@@ -51,8 +44,6 @@ interface SessionRow {
 /** Windows reserves these names whatever extension follows them. */
 const RESERVED_NAMES = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
 
-/** A session's file within the folder. Tool and source session id are unique
- * together, and neither changes when the archive is rebuilt. */
 export function atifMirrorPath(tool: string, sourceSessionId: string): string {
   return `${tool}/${fileName(sourceSessionId)}.atif.json`;
 }
@@ -72,20 +63,15 @@ function fileName(id: string): string {
   return `${readable}~${digest}`;
 }
 
-/** The path from one document's folder to another document. */
 function relativeTo(from: string, to: string): string {
   const path = posix.relative(posix.dirname(from), to);
   return path.startsWith(".") ? path : `./${path}`;
 }
 
-/** The import files every document under one tool and keys it by
- * `trajectory_id`, so ids from two tools must not meet in one folder. */
 function qualified(tool: string, trajectoryId: string): string {
   return `${tool}:${trajectoryId}`;
 }
 
-/** The folder may leave the machine, and `extra.repository` names the project
- * without a local path. */
 function withoutCwd(trajectory: AtifTrajectory): AtifTrajectory {
   const { cwd: _cwd, ...extra } = trajectory.extra;
   return { ...trajectory, extra };
@@ -99,7 +85,6 @@ function isSymlink(path: string): boolean {
   }
 }
 
-/** Null for a link, so the write replaces it instead of following it. */
 function currentContent(path: string): string | null {
   if (isSymlink(path)) {
     return null;
@@ -111,13 +96,11 @@ function currentContent(path: string): string | null {
   }
 }
 
-/** One rename, so a reader never sees half a document; `wx` never follows a link. */
 function writeAtomically(path: string, content: string): void {
   const temporary = join(path, "..", `.${randomUUID()}.tmp`);
   const fd = openSync(temporary, "wx", DOCUMENT_FILE_MODE);
   let failure: unknown = null;
   try {
-    // A document someone opened up to others keeps its mode when rewritten.
     const mode = existingFileMode(path);
     if (mode != null) {
       fchmodSync(fd, mode);
@@ -137,13 +120,10 @@ function writeAtomically(path: string, content: string): void {
   }
   try {
     rmSync(temporary, { force: true });
-  } catch {
-    // The write's own error is the one worth reporting.
-  }
+  } catch {}
   throw failure;
 }
 
-/** Read access others were given survives; write and execute never do. */
 function existingFileMode(path: string): number | null {
   try {
     const stat = lstatSync(path);
@@ -153,8 +133,6 @@ function existingFileMode(path: string): number | null {
   }
 }
 
-/** Parents before children. Archived subagents of a written parent are kept,
- * because the parent's document points at them. */
 function sessionsInOrder(db: Database): SessionRow[] {
   const rows = db
     .query("SELECT id, tool, source_session_id, parent_session_id FROM session ORDER BY id")
@@ -192,7 +170,6 @@ function sessionsInOrder(db: Database): SessionRow[] {
 }
 
 export function mirrorAtif(db: Database, options: AtifMirrorOptions): AtifMirrorResult {
-  // Documents hold transcripts, so a folder Decant creates is owner-only.
   mkdirSync(options.out, { recursive: true, mode: ARCHIVE_DIR_MODE });
   const report: AtifMirrorReport = { out: options.out, written: 0, unchanged: 0, skipped: 0 };
   const rows = sessionsInOrder(db);
@@ -202,7 +179,6 @@ export function mirrorAtif(db: Database, options: AtifMirrorOptions): AtifMirror
 
   for (const row of rows) {
     const path = atifMirrorPath(row.tool, row.source_session_id);
-    // A tool folder that is a link would send documents outside the mirror.
     if (!checkedFolders.has(row.tool)) {
       const folder = join(options.out, row.tool);
       if (isSymlink(folder)) {

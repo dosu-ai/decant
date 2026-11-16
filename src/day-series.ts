@@ -1,16 +1,3 @@
-/**
- * Continuous daily (or weekly) series for the "per day" charts.
- *
- * `/api/stats/by-dimension?dim=day` returns only days that had sessions.
- * Plotted as-is on a category axis, a month with no sessions shrinks to
- * nothing and two bars months apart sit side by side. The series here covers
- * every UTC day from the start of the range to its end.
- *
- * A day with no sessions has a real zero. A day whose sessions all lack usage
- * data (Cursor CLI) has an unknown cost, so its cost is null and charts leave
- * a gap there.
- */
-
 export interface DayRow {
   key: string;
   sessions: number;
@@ -21,28 +8,20 @@ export interface DayRow {
 export type SeriesGranularity = "day" | "week";
 
 export interface SeriesPoint {
-  /** First UTC day the point covers (YYYY-MM-DD). */
   key: string;
   sessions: number;
-  /** Estimated cost; null when every session in the point lacks usage data. */
   cost: number | null;
 }
 
 export interface DaySeries {
   granularity: SeriesGranularity;
   points: SeriesPoint[];
-  /** Top-level sessions left out of the cost because they lack usage data. */
   missingUsage: number;
-  /** Days in the input that had data. Zero means every point is padding, so a
-   * chart should say "no data" rather than draw a flat line. */
   observedDays: number;
 }
 
-/** Past this many days one bar per day is too thin to read, so points become
- * weeks. Ninety days, the longest preset, still draws daily. */
 export const WEEKLY_AFTER_DAYS = 92;
 
-/** A range longer than this (about thirty years) is treated as malformed. */
 const MAX_SPAN_DAYS = 11_000;
 
 const DAY_MS = 86_400_000;
@@ -66,8 +45,6 @@ export function buildDaySeries(
   if (start == null || span < 1 || span > MAX_SPAN_DAYS) {
     return { granularity: "day", points: [], missingUsage: 0, observedDays: 0 };
   }
-  // Rows can outlive a range change, so only days inside the range count as
-  // data or toward the missing-usage note.
   let missingUsage = 0;
   let observedDays = 0;
   const days: SeriesPoint[] = [];
@@ -91,7 +68,6 @@ export function buildDaySeries(
   };
 }
 
-/** The Monday (UTC) that starts the ISO week holding `key`. */
 export function weekStart(key: string): string {
   const time = parseDay(key);
   if (time == null) {
@@ -101,8 +77,6 @@ export function weekStart(key: string): string {
   return formatDay(time - weekday * DAY_MS);
 }
 
-/** Fill a per-day value array (aligned to `days`) across the same range a
- * DaySeries covers, then sum it into the series' points. */
 export function alignToSeries(
   series: DaySeries,
   days: readonly string[],
@@ -123,11 +97,6 @@ export function alignToSeries(
   return series.points.map((point) => byWeek.get(point.key) ?? 0);
 }
 
-/**
- * Points a line chart cannot draw: a known value with no known neighbour has
- * no segment to sit on once gaps are left unconnected, so it needs a marker.
- * A one-point series is the simplest case.
- */
 export function isolatedPoints(values: readonly (number | null)[]): boolean[] {
   return values.map(
     (value, index) => value != null && values[index - 1] == null && values[index + 1] == null,
@@ -138,17 +107,9 @@ function dayCost(row: DayRow | undefined): number | null {
   if (row == null) {
     return 0;
   }
-  // Rows count top-level sessions only; a day holding just subagent runs has
-  // sessions === 0 and a real cost.
   return row.sessions === 0 || row.usage_sessions > 0 ? row.estimated_cost_usd : null;
 }
 
-/**
- * A week sums the known cost of its days that had sessions. It is unknown when
- * it had sessions and none of them recorded usage: the idle days around them
- * must not turn that unknown into $0. A week with no sessions at all is a
- * real zero.
- */
 function groupWeeks(
   days: readonly SeriesPoint[],
   observed: ReadonlyMap<string, DayRow>,

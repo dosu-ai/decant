@@ -123,7 +123,6 @@ describe("token economics", () => {
     expect(bucket("context")?.tool_calls).toBe(1);
     expect(bucket("code")?.tool_calls).toBe(2);
     expect(bucket("code")?.active_ms).toBeGreaterThan(0);
-    // The patch is the first edit, so the session is not all orientation.
     expect(bucket("code")?.phases?.implementation.estimated_cost_usd).toBeGreaterThan(0);
     db.close();
   });
@@ -140,7 +139,6 @@ describe("token economics", () => {
     );
 
     const economics = tokenEconomics(db);
-    // Every bucket carries a phase split whose parts sum back to the bucket total.
     for (const row of economics.buckets) {
       expect(row.phases).toBeDefined();
       const { orientation, implementation } = row.phases as NonNullable<typeof row.phases>;
@@ -157,18 +155,14 @@ describe("token economics", () => {
       expect(orientation.estimated_cost_usd).toBeGreaterThanOrEqual(0);
       expect(implementation.estimated_cost_usd).toBeGreaterThanOrEqual(0);
     }
-    // Totals phase split sums to the run total.
     const phases = economics.totals.phases as NonNullable<typeof economics.totals.phases>;
     expect(phases).toBeDefined();
     expect(
       phases.orientation.estimated_cost_usd + phases.implementation.estimated_cost_usd,
     ).toBeCloseTo(economics.totals.estimated_cost_usd, 12);
-    // The fixture reads before it edits, so some context is gathered in orientation.
     const context = economics.buckets.find((row) => row.bucket === "context");
     expect(context?.phases?.orientation.context_window_tokens).toBeGreaterThan(0);
 
-    // The per-session path uses the same ordered allocator while retaining its
-    // billed-input Window total.
     const scoped = tokenEconomicsForSession(db, sessionId);
     expect(scoped?.totals.generation_tokens).toBe(economics.totals.generation_tokens);
     const billedInput = (
@@ -199,9 +193,6 @@ describe("token economics", () => {
     );
 
     const economics = tokenEconomics(db);
-    // This synthetic fixture has one blockless system message. The four agent
-    // buckets plus explicit user wait approximately reconcile to the broader
-    // active_seconds chain, within rounding.
     const activeSeconds = (
       db.query("SELECT active_seconds FROM session WHERE id = ?1").get(sessionId) as {
         active_seconds: number;
@@ -211,12 +202,8 @@ describe("token economics", () => {
     expect(economics.totals.active_ms).toBeGreaterThan(0);
     expect(economics.totals.waiting_on_user_ms).toBe(330_000);
     expect(economics.totals.attributed_ms).toBeCloseTo(activeSeconds * 1000, -2);
-    // The fixture spends 30s generating mutating tool calls and 30s executing
-    // an Edit result; both portions belong to code.
     expect(economics.buckets.find((row) => row.bucket === "code")?.active_ms).toBe(60_000);
 
-    // Buckets' time sums to the total, and each bucket's phase split sums back
-    // to the bucket.
     const bucketSum = economics.buckets.reduce((sum, row) => sum + row.active_ms, 0);
     expect(bucketSum).toBe(economics.totals.active_ms);
     for (const row of economics.buckets) {
@@ -229,12 +216,9 @@ describe("token economics", () => {
     expect(phases.orientation.active_ms + phases.implementation.active_ms).toBe(
       economics.totals.active_ms,
     );
-    // The fixture edits only after orienting, so edit time lands in implementation.
     expect(
       economics.buckets.find((row) => row.bucket === "code")?.phases?.orientation.active_ms,
     ).toBe(0);
-    // The scoped result uses the same block-level allocation for generated
-    // messages and time, while allocating the full billed input window.
     const scoped = tokenEconomicsForSession(db, sessionId);
     expect(scoped?.totals.active_ms).toBe(economics.totals.active_ms);
     expect(scoped?.totals.waiting_on_user_ms).toBe(economics.totals.waiting_on_user_ms);
@@ -279,8 +263,6 @@ describe("token economics", () => {
 
   test("splits a response journaled as one record per block across all of its blocks", () => {
     const db = freshDb();
-    // Claude Code writes thinking, text, and the tool call as separate records that
-    // share the API message id; the 1000 output tokens cover all three.
     const usage = '"usage":{"input_tokens":10,"output_tokens":1000}';
     const content = [
       '{"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00.000Z","message":{"role":"user","content":"fix it"}}',
@@ -299,7 +281,6 @@ describe("token economics", () => {
     const gen = (bucket: string) =>
       economics?.buckets.find((row) => row.bucket === bucket)?.generation_tokens ?? 0;
     expect(economics?.totals.generation_tokens).toBe(1000);
-    // The text and the edit keep their visible size; only the rest is planning.
     expect(gen("communicating")).toBeCloseTo(100, 6);
     expect(gen("code")).toBeGreaterThan(50);
     expect(gen("planning")).toBeCloseTo(1000 - gen("communicating") - gen("code"), 6);
@@ -464,8 +445,6 @@ describe("token economics", () => {
 
   test("caps waiting on the user and keeps it out of agent activity", () => {
     const db = freshDb();
-    // A blockless system message splits the raw 3600s gap for active_seconds,
-    // while block-based attribution sees one gap capped at 300s.
     const content = [
       JSON.stringify({
         type: "assistant",
@@ -527,7 +506,6 @@ describe("token economics", () => {
         timestamp: at(3),
         payload: { type: "function_call_output", call_id: "s1", output: toolOutput },
       }),
-      // A record type the parser keeps as role "other" but the model never sees.
       JSON.stringify({
         type: "response_item",
         timestamp: at(30),
@@ -556,15 +534,11 @@ describe("token economics", () => {
       2,
       "codex",
     );
-    // Archive totals, which keep window volume in content bytes.
     const economics = tokenEconomics(db);
     const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
-    // The 60s wait for the reviewer's report is delegated work, read as input;
-    // the harness record in the middle neither takes time nor splits the gap.
     expect(bucket("context")?.active_ms).toBe(63_000);
     expect(bucket("communicating")?.active_ms).toBe(2_000);
     expect(economics?.totals.waiting_on_user_ms).toBe(0);
-    // The report's text, not its routing metadata, joins the tool output as input.
     const context = bucket("context");
     expect((context?.context_window_tokens ?? 0) - (context?.generation_tokens ?? 0)).toBeCloseTo(
       (toolOutput.length + report.length) / 4,
@@ -662,9 +636,7 @@ describe("token economics", () => {
     const db = freshDb();
     upsertSession(db, parseClaudeSession("sess-ask", `${content}\n`), "/x/ask.jsonl", 1, 2, "ask");
     const economics = tokenEconomics(db);
-    // 90s from the question to the answer is the user deciding.
     expect(economics.totals.waiting_on_user_ms).toBe(90_000);
-    // The question (2s) and the reply (3s) are the agent communicating.
     expect(economics.totals.active_ms).toBe(5_000);
     expect(economics.buckets.find((row) => row.bucket === "communicating")?.active_ms).toBe(5_000);
     db.close();
@@ -894,13 +866,9 @@ describe("token economics", () => {
     const aggregateCode = tokenEconomics(db).buckets.find((row) => row.bucket === "code");
     expect(aggregateCode).toMatchObject({ tool_calls: 1, sessions: 1 });
     expect(aggregateCode?.generation_tokens).toBeGreaterThan(0);
-    // Persisting Codex's last_token_usage powers context-window tooltips, but
-    // must not move its reported reasoning output out of planning economics.
     expect(
       tokenEconomics(db).buckets.find((row) => row.bucket === "planning")?.generation_tokens,
     ).toBe(20);
-    // One second generated the call and one second executed it. The latter is
-    // resolved through tool_call.result_block_id rather than defaulting to context.
     expect(aggregateCode?.active_ms).toBe(2_000);
 
     const scopedEconomics = tokenEconomicsForSession(db, sessionId);
@@ -1077,8 +1045,6 @@ describe("token economics", () => {
       2,
       "codex",
     );
-    // Split the sessions across days, and leave one session dateless to pin
-    // the SQL NULL semantics: excluded whenever a bound is set.
     db.exec(`
       UPDATE session SET started_at = '2026-01-01T09:00:00Z' WHERE id = 1;
       UPDATE session SET started_at = NULL WHERE id = 2;
@@ -1123,23 +1089,17 @@ describe("OpenCode step apportionment", () => {
     const economics = tokenEconomicsForSession(db, ingestTiming(db));
     const bucket = (name: string) => economics?.buckets.find((row) => row.bucket === name);
     const T = STEP_TIMES;
-    // Step 1 closes 2000 ms after the prompt (latency, reasoning, and the
-    // read call's arguments); 150 of its 200 output tokens are reasoning.
     const step1 = T.step1Streamed - T.prompt1;
-    // Step 2 closes 1050 ms after the prompt; 240 of 300 tokens are reasoning.
     const step2 = T.step2Streamed - T.prompt2;
     expect(bucket("planning")?.active_ms).toBeCloseTo(step1 * 0.75 + step2 * 0.8, 0);
-    // The read call gets its share of step 1 plus its own run, nothing more.
     expect(bucket("context")?.active_ms).toBeCloseTo(
       step1 * 0.25 + (T.toolCompleted - T.step1Streamed),
       0,
     );
-    // The final answer gets the visible share of its step's generation.
     expect(bucket("communicating")?.active_ms).toBeCloseTo(step2 * 0.2, 0);
     expect(bucket("code")?.active_ms).toBe(0);
     expect(economics?.totals.waiting_on_user_ms).toBe(T.prompt2 - T.toolCompleted);
 
-    // Reported reasoning is planning; the rest follows the visible blocks.
     expect(bucket("planning")?.generation_tokens).toBeCloseTo(150 + 240, 6);
     expect(bucket("context")?.generation_tokens).toBeCloseTo(50, 6);
     expect(bucket("communicating")?.generation_tokens).toBeCloseTo(60, 6);
@@ -1148,8 +1108,6 @@ describe("OpenCode step apportionment", () => {
 
   test("estimates planning when a step streams reasoning text but reports zero", () => {
     const db = freshDb();
-    // Some providers stream reasoning text and still report 0 reasoning
-    // tokens; that zero must not erase the step's planning.
     const rows = timingMessageRows();
     const step1 = rows[1] as OpenCodeMessageRow;
     const data = JSON.parse(step1.data) as { tokens: { output: number; reasoning: number } };
@@ -1157,7 +1115,6 @@ describe("OpenCode step apportionment", () => {
     rows[1] = { ...step1, data: JSON.stringify(data) };
     const economics = tokenEconomicsForSession(db, ingestTiming(db, rows));
     const planning = economics?.buckets.find((row) => row.bucket === "planning");
-    // Step 1's 200 tokens minus its read call's bytes / 4, plus step 2's 240.
     expect(planning?.generation_tokens ?? 0).toBeGreaterThan(240 + 150);
     expect(planning?.active_ms ?? 0).toBeGreaterThan(
       (STEP_TIMES.step2Streamed - STEP_TIMES.prompt2) * 0.8,
@@ -1210,7 +1167,6 @@ describe("OpenCode step apportionment", () => {
   test("gives output with no visible block to communicating, not to nothing", () => {
     const db = freshDb();
     const rows = timingMessageRows();
-    // Step 2 without its answer text: only hidden reasoning is left.
     const step2 = rows[3];
     if (step2 == null) throw new Error("fixture lacks step 2");
     const data = JSON.parse(step2.data) as { content: unknown[] };
@@ -1287,8 +1243,6 @@ describe("refreshSessionCosts", () => {
   });
 
   test("reprices an archived GLM session that was stored before GLM had a rate", () => {
-    // Claude Code pointed at Z.ai's Anthropic-compatible endpoint records GLM
-    // model IDs. Archives synced before GLM was priced hold a $0 estimate.
     const db = freshDb();
     const glmTranscript = fixture("claude", "enriched.jsonl").replaceAll(
       '"model":"claude-opus-4-7"',
@@ -1342,8 +1296,6 @@ describe("archive aggregation", () => {
   });
 
   test("splits each session's cost by its own activity before summing", () => {
-    // A $9 session that is all context and a $1 session that is all code, with
-    // the cheap one carrying most of the window volume.
     const expensive = vector(1, 9, 100, 0);
     const cheap = vector(2, 1, 0, 900);
     const total = aggregateEconomicsVectors([expensive, cheap]);
@@ -1362,7 +1314,6 @@ describe("archive aggregation", () => {
   });
 
   test("charges cost with no activity weight so buckets reconcile to the session", () => {
-    // Input and output priced, but nothing recorded to weight them by.
     const idle = { ...vector(1, 0.3, 0, 0), output_cost: 0.3 };
     for (const bucket of ["context", "planning", "code", "communicating"] as const) {
       idle.buckets[bucket] = { ...part(0, 0), tool_calls: 0, active_ms: 0 };
@@ -1373,11 +1324,9 @@ describe("archive aggregation", () => {
     expect(row("context")?.estimated_cost_usd).toBeCloseTo(0.3, 12);
     expect(row("communicating")?.estimated_cost_usd).toBeCloseTo(0.3, 12);
     expect(row("context")?.sessions).toBe(1);
-    // With no recorded edit, the whole run is orientation.
     expect(economics.totals.phases?.orientation.estimated_cost_usd).toBeCloseTo(0.6, 12);
     expect(economics.totals.phases?.implementation.estimated_cost_usd).toBe(0);
 
-    // Output with no generation follows the window's phase split.
     const windowOnly = vector(2, 0, 30, 0);
     windowOnly.output_cost = 0.4;
     windowOnly.buckets.context.context_window_orientation = 10;
@@ -1426,9 +1375,7 @@ describe("archive aggregation", () => {
     }
     const economics = aggregateEconomicsVectors([halves]);
     const { totals } = economics;
-    // Four rows of 1.5 are 6 in all; rounding each row first would report 8.
     expect(totals.generation_tokens).toBe(6);
-    // Window is context volume plus the generation folded into it: 4 x 3.
     expect(totals.context_window_tokens).toBe(12);
     expect(totals.active_ms).toBe(6);
     for (const key of ["generation_tokens", "context_window_tokens", "active_ms"] as const) {
@@ -1442,7 +1389,6 @@ describe("archive aggregation", () => {
     }
     expect(economics.buckets.map((row) => row.generation_tokens)).toEqual([2, 2, 1, 1]);
 
-    // One token split evenly across phases shows as one token, not one per phase.
     const single = vector(2, 1, 0, 0);
     single.buckets.context = even(1, 0.5);
     const context = aggregateEconomicsVectors([single]).buckets.find(

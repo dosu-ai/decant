@@ -23,12 +23,6 @@ export interface TranscriptCodeBlockProps {
   language?: string | null;
 }
 
-/**
- * Markdown is parsed to React elements only. HTML and images are disabled:
- * transcript rendering itself must not execute markup or fetch remote assets.
- * Existing special transcript cards should be checked before this component is
- * called; this renderer is the ordinary-text fallback.
- */
 const REMARK_PLUGINS = [remarkGfm];
 
 function transformMarkdownUrl(url: string, key: string): string | null {
@@ -121,8 +115,6 @@ export function TranscriptCodeBlock({
         }
       })
       .catch(() => {
-        // Highlighting is progressive enhancement. A grammar/engine failure
-        // leaves the exact plaintext visible instead of breaking the turn.
         if (active) {
           setHighlight(null);
         }
@@ -172,8 +164,6 @@ function currentTranscriptTheme(): TranscriptTheme {
     : "light";
 }
 
-// One shared subscription for every code block on the page, instead of a
-// window listener and a matchMedia listener per block.
 const themeListeners = new Set<() => void>();
 let detachThemeListeners: (() => void) | null = null;
 

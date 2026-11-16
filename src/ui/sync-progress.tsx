@@ -5,7 +5,6 @@ function percentText(fraction: number): string {
   return `${Math.floor(fraction * 100)}%`;
 }
 
-/** The filled part of a bar. Indeterminate until the sync has counted its sources. */
 function SyncFill({ fraction }: { fraction: number | null }) {
   return (
     <span
@@ -16,10 +15,6 @@ function SyncFill({ fraction }: { fraction: number | null }) {
   );
 }
 
-/**
- * Progress along the topbar's bottom edge, in view on every page. It is the
- * one progress bar exposed to assistive tech, and it is not a live region.
- */
 export function SyncProgressLine({
   complete,
   progress,
@@ -44,7 +39,6 @@ export function SyncProgressLine({
   );
 }
 
-/** The counts behind the topbar line, shown at the top of every page. */
 export function SyncProgressNotice({
   complete,
   firstSync,
@@ -70,7 +64,6 @@ export function SyncProgressNotice({
           <span className="sync-notice-percent">{percentText(fraction)}</span>
         ) : null}
       </div>
-      {/* The topbar line is the one progress bar exposed to assistive tech. */}
       <div aria-hidden="true" className="sync-notice-bar">
         <SyncFill fraction={fraction} />
       </div>

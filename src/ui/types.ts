@@ -2,15 +2,12 @@ import type { AvailableSessionSource } from "../source-filter.ts";
 
 export type Summary = {
   sessions: number;
-  /** Top-level sessions whose source records token usage. */
   usage_sessions: number;
   messages: number;
   tool_calls: number;
   input_tokens: number;
   output_tokens: number;
-  /** Prompt tokens read from the provider's cache. */
   cache_read_tokens: number;
-  /** Prompt tokens written to the provider's cache. */
   cache_creation_tokens: number;
   estimated_cost_usd: number;
 };
@@ -30,7 +27,6 @@ export type SessionSummary = {
   message_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
-  /** False for a source that records no token usage (Cursor CLI). */
   usage_available: boolean;
   estimated_cost_usd: number;
   cost_source: "decant" | "reported" | "mixed";
@@ -48,7 +44,6 @@ export type SessionSummary = {
   compaction_count: number;
   subagent_count: number;
   subagent_estimated_cost_usd: number;
-  /** Ingest diagnostics recorded against this session's source file. */
   ingest_issue_count: number;
   informational_ingest_issue_count: number;
   dosu_mcp_direct_calls: number;
@@ -89,13 +84,11 @@ export type ServerEventPayload = {
   reason?: string;
 };
 
-/** `GET /api/sync-status`, read on load and reconnect because SSE is not replayed. */
 export type SyncStatus = {
   in_progress: boolean;
   last_error: string | null;
   reason: string | null;
   progress: SyncProgress | null;
-  /** False while a new archive waits for its first completed sync. */
   archive_synced: boolean;
 };
 
@@ -147,7 +140,6 @@ export type TokenEconomics = {
 export type DimensionRow = {
   key: string;
   sessions: number;
-  /** Top-level sessions in the row whose source records token usage. */
   usage_sessions: number;
   input_tokens: number;
   output_tokens: number;
@@ -161,7 +153,6 @@ export type ProjectSummary = {
   path: string;
   name: string | null;
   sessions: number;
-  /** Top-level sessions whose source records token usage. */
   usage_sessions: number;
   estimated_cost_usd: number;
   last_seen_at: string | null;
@@ -317,12 +308,9 @@ export type SettingsInfo = {
 export type DashboardData = {
   summary: Summary | null;
   byModel: DimensionRow[];
-  /** Usage per repository, with worktrees folded into their root. */
   byRepo: DimensionRow[];
-  /** Usage per outcome label of each run's top-level session. */
   byOutcome: DimensionRow[];
   byDay: DimensionRow[];
-  /** Summary for the same-length period just before a bounded range. */
   previousSummary: Summary | null;
   projects: ProjectSummary[];
   tools: ToolRow[];
@@ -370,7 +358,6 @@ export type SessionPageState = {
   exhausted: boolean;
   loadedPage: number | null;
   loading: boolean;
-  /** Whether the page on screen is being fetched again behind its rows. */
   refreshing: boolean;
   sessions: SessionSummary[];
 };
@@ -475,10 +462,8 @@ export type SessionOutlineItemData = {
   ordinal: number;
 };
 
-/** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
- * this panel never renders the raw transcript line (see docs/logging.md and
- * the sessionIngestIssues docstring in src/query.ts). */
 export type SessionIngestIssue = {
+  id: number;
   code: string;
   line_no: number | null;
   error: string;

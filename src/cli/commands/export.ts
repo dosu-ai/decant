@@ -73,8 +73,6 @@ export function registerExportCommand(ctx: CliContext): void {
               { sync: true },
             );
           }
-          // Checked before the archive is opened, so a wrong command line exits 2
-          // whether or not the archive exists.
           if (commandOptions.all === true && commandOptions.out == null) {
             io.writeErr("error: --all requires --out <dir>\n");
             return 2;

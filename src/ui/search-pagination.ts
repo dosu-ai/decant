@@ -6,11 +6,6 @@ export interface SearchPageAvailability {
   totalIsCapped?: boolean;
 }
 
-/**
- * A total is supplementary to ranked search results. When it is unavailable,
- * a full page is sufficient evidence to offer another page; an exact multiple
- * may require one final empty probe to establish the end.
- */
 export function searchPageMayHaveMore(input: SearchPageAvailability): boolean {
   if (input.total != null && input.loaded < input.total) {
     return true;
@@ -21,7 +16,6 @@ export function searchPageMayHaveMore(input: SearchPageAvailability): boolean {
   return input.lastPageSize === input.pageSize;
 }
 
-/** Return an exact remaining count only when the server supplied an exact total. */
 export function exactSearchRemaining(
   total: number | null,
   loaded: number,

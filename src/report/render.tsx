@@ -18,10 +18,6 @@ import { REPORT_CSS } from "./styles.ts";
 export interface ReportRenderOptions {
   generatedAt?: Date;
   version?: string;
-  /**
-   * Trusted, inline-only @font-face CSS. The current fallback is system fonts;
-   * route integration can pass bundled WOFF2 data URIs without a network fetch.
-   */
   fontCss?: string;
 }
 
@@ -46,7 +42,6 @@ export function renderAnalyticsReport(
   const promptTokens =
     data.totals.input_tokens + data.totals.cache_read_tokens + data.totals.cache_creation_tokens;
   const completed = data.byOutcome.find((row) => row.key === "completed")?.sessions ?? 0;
-  // An empty scope, or one holding only subagents, has real token counts.
   const usageUnavailable = data.totals.sessions > 0 && data.totals.usage_sessions === 0;
   const body = (
     <main className="report">
@@ -137,10 +132,10 @@ export function renderAnalyticsReport(
             <p className="empty">No sessions in this range.</p>
           ) : (
             <>
-              <ReportFigure caption={`Sessions per ${period}`} svg={sessionsSvg} />
+              <ReportFigure caption={`Sessions per ${period}`} chart={0} />
               <ReportFigure
                 caption={`Estimated cost per ${period}, for sessions with usage data`}
-                svg={costSvg}
+                chart={1}
               />
             </>
           )}
@@ -192,7 +187,10 @@ export function renderAnalyticsReport(
       <ReportFooter options={normalized} />
     </main>
   );
-  return staticDocument("Agent activity report · Decant", body, normalized.fontCss);
+  return staticDocument("Agent activity report · Decant", body, normalized.fontCss, [
+    sessionsSvg,
+    costSvg,
+  ]);
 }
 
 export function renderSessionReport(
@@ -251,7 +249,7 @@ export function renderSessionReport(
           <p className="empty">No context-window telemetry is available for this session.</p>
         ) : (
           <>
-            <ReportFigure caption="Context occupancy across calls" svg={contextSvg} />
+            <ReportFigure caption="Context occupancy across calls" chart={0} />
             <dl className="activity-note">
               <div>
                 <dt>Peak occupancy</dt>
@@ -305,7 +303,12 @@ export function renderSessionReport(
       <ReportFooter options={normalized} />
     </main>
   );
-  return staticDocument("Session report · Decant", body, normalized.fontCss);
+  return staticDocument(
+    "Session report · Decant",
+    body,
+    normalized.fontCss,
+    contextSvg == null ? [] : [contextSvg],
+  );
 }
 
 function ReportHeader({
@@ -350,14 +353,25 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReportFigure({ caption, svg }: { caption: string; svg: string }) {
+function ReportFigure({ caption, chart }: { caption: string; chart: number }) {
   return (
     <figure>
       <figcaption>{caption}</figcaption>
-      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderChartSvg rejects active markup and event-handler attributes before this fixed local SVG reaches the report. */}
-      <div className="chart" dangerouslySetInnerHTML={{ __html: svg }} />
+      <div className="chart" data-report-chart={chart} />
     </figure>
   );
+}
+
+const REPORT_CHART_SLOT = /<div class="chart" data-report-chart="(\d+)"><\/div>/g;
+
+function insertReportCharts(markup: string, charts: readonly string[]): string {
+  return markup.replace(REPORT_CHART_SLOT, (_slot, index: string) => {
+    const svg = charts[Number(index)];
+    if (svg == null) {
+      throw new Error(`report chart ${index} was not rendered`);
+    }
+    return `<div class="chart">${svg}</div>`;
+  });
 }
 
 function DimensionTable({
@@ -456,8 +470,6 @@ function EconomicsRow({
 }
 
 function ToolTable({ rows }: { rows: SessionToolReportRow[] }) {
-  // Same naming as the Tools & MCP view, disambiguated across the whole table
-  // so two registrations of one server do not read as one duplicated row.
   const serverLabels = mcpServerLabels(rows.map((row) => row.mcpServer));
   if (rows.length === 0) {
     return <p className="empty">No tool calls were captured.</p>;
@@ -514,7 +526,12 @@ function ReportFooter({ options }: { options: NormalizedRenderOptions }) {
   );
 }
 
-function staticDocument(title: string, body: React.ReactNode, fontCss: string): string {
+function staticDocument(
+  title: string,
+  body: React.ReactNode,
+  fontCss: string,
+  charts: readonly string[],
+): string {
   const markup = renderToStaticMarkup(
     <html lang="en">
       <head>
@@ -527,7 +544,7 @@ function staticDocument(title: string, body: React.ReactNode, fontCss: string): 
       <body>{body}</body>
     </html>,
   );
-  return `<!doctype html>${markup}`;
+  return `<!doctype html>${insertReportCharts(markup, charts)}`;
 }
 
 function normalizeOptions(options: ReportRenderOptions): NormalizedRenderOptions {
@@ -579,8 +596,6 @@ function formatCompact(value: number): string {
 const NO_USAGE_NOTE =
   "Cursor CLI records no token usage, so Decant cannot estimate cost for its sessions.";
 
-/** A cost over sessions of which only `usageSessions` recorded usage: the
- * `unavailable` text with none, and an asterisk when some are missing. */
 function reportCost(
   cost: number,
   sessions: number,

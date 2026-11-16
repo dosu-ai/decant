@@ -50,7 +50,6 @@ export function formatInt(value: number): string {
 
 export function compact(value: number): string {
   const abs = Math.abs(value);
-  // Cache reads pass a billion within weeks of agent use.
   if (abs >= 1_000_000_000) {
     return `${(value / 1_000_000_000).toFixed(1)}B`;
   }
@@ -63,8 +62,6 @@ export function compact(value: number): string {
   return formatInt(value);
 }
 
-// Rounding each share on its own lets a column total 99% or 101%. Largest
-// remainder keeps the visible labels summing to exactly 100.
 export function roundedPercents(values: number[]): number[] {
   const weights = values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
   const total = weights.reduce((sum, value) => sum + value, 0);
@@ -86,8 +83,6 @@ export function money(value: number): string {
   return `$${moneyFormatter.format(value)}`;
 }
 
-/** Token and cost totals over sessions that all lack recorded usage are
- * unknown, not zero. */
 export function usageMetric(sessions: number, usageSessions: number, value: string): string {
   return sessions > 0 && usageSessions === 0 ? "Unavailable" : value;
 }
@@ -95,9 +90,6 @@ export function usageMetric(sessions: number, usageSessions: number, value: stri
 export const NO_USAGE_TITLE =
   "Cursor CLI records no token usage, so Decant cannot estimate cost for its sessions.";
 
-/** A cost over `sessions`, of which only `usageSessions` recorded usage. With
- * none it is unavailable ("-" when `dense`); with some missing it is the
- * known part, marked with an asterisk and a title counting the rest. */
 export function costDisplay(
   cost: number,
   sessions: number,

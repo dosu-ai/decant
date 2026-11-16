@@ -1,4 +1,3 @@
-/* Bundled by Bun. Keep font URLs relative and license texts beside the files. */
 @font-face {
   font-family: "Northrup Serif Large";
   font-style: normal;
@@ -25,7 +24,6 @@
 
 /* Chart tokens must stay as zrender-compatible colour literals. */
 
-/* Primitives */
 :root {
   --alpha-light-00: #ffffff;
   --alpha-light-100: #1a1a1a17;
@@ -97,7 +95,6 @@
   --amber-600: #d97706;
 }
 
-/* Typography */
 :root {
   --font-primary:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -137,14 +134,14 @@
   --text-mono-sm-medium-size: 13px;
   --text-mono-sm-medium-line-height: 20px;
   --text-mono-sm-medium-weight: 500;
-  --text-mono-sm-medium-letter-spacing: 0.26px; /* 2% of 13px */
+  --text-mono-sm-medium-letter-spacing: 0.26px;
   --text-mono-sm-medium-text-transform: uppercase;
   --text-mono-sm-medium: 500 13px / 20px var(--font-mono);
 
   --text-mono-xs-medium-size: 12px;
   --text-mono-xs-medium-line-height: 16px;
   --text-mono-xs-medium-weight: 500;
-  --text-mono-xs-medium-letter-spacing: 0.48px; /* 4% of 12px */
+  --text-mono-xs-medium-letter-spacing: 0.48px;
   --text-mono-xs-medium-text-transform: uppercase;
   --text-mono-xs-medium: 500 12px / 16px var(--font-mono);
 
@@ -160,7 +157,6 @@
   --font-weight-strong: 650;
 }
 
-/* Radius and spacing */
 :root {
   --radius-none: 0px;
   --radius-2xs: 2px;
@@ -210,7 +206,6 @@
   --space-none: 0px;
 }
 
-/* Motion */
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -225,7 +220,6 @@
   --press-scale: 0.97;
 }
 
-/* Effect styles */
 :root {
   --shadow-components-primary-default:
     inset 0 -1px 0 0 var(--effects-primary-inner-shadow-2),
@@ -265,7 +259,6 @@
 :root,
 .report-route-theme {
   color-scheme: light;
-  /* Light semantic tokens */
   --bg-primary: #e6e3d7;
   --bg-secondary: #e1dfd6;
   --bg-card: var(--alpha-dark-500);
@@ -325,7 +318,6 @@
   --effects-primary-inner-shadow-2: var(--zinc-800);
   --effects-secondary-inner-shadow: var(--alpha-dark-500);
   --effects-ghost-inner-shadow: var(--alpha-light-00);
-  /* sky/700 keeps the light focus ring above 3:1; dark uses sky/400. */
   --effects-focus-ring: var(--sky-700);
   --fg-primary: var(--alpha-dark-00);
   --fg-secondary: var(--alpha-light-700);
@@ -339,7 +331,6 @@
   --fg-status-warning: var(--amber-600);
   --fg-status-destructive: var(--red-600);
 
-  /* App aliases; chart colours stay as zrender-compatible literals. */
   --canvas: var(--bg-primary);
   --surface: #f2f0ea;
   --elevated: var(--bg-secondary);
@@ -368,7 +359,6 @@
   --dosu: #b4bb91;
   --dosu-mid: #899364;
   --dosu-strong: #65704b;
-  /* Text variants maintain 4.5:1 contrast on both page themes. */
   --accent-text: color-mix(in oklab, var(--accent) 60%, var(--fg));
   --success-text: color-mix(in oklab, var(--success) 65%, var(--fg));
   --warning-text: color-mix(in oklab, var(--warning) 65%, var(--fg));
@@ -383,7 +373,6 @@
   --btn-ink-hover: var(--bg-components-primary-primary-hover);
   --shade-rgb: 20, 20, 20;
 
-  /* Ambient shadow layers */
   --shadow-hairline: #0000001a;
   --shadow-drop: #0000000f;
   --shadow-inset-hairline: #0000000d;
@@ -395,11 +384,9 @@
   font-family: var(--font-primary);
 }
 
-/* Keep the system and explicit dark blocks identical. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    /* Dark semantic tokens */
     --bg-primary: var(--alpha-dark-00);
     --bg-secondary: var(--alpha-dark-50);
     --bg-card: var(--alpha-dark-50);
@@ -472,7 +459,6 @@
     --fg-status-warning: var(--amber-300);
     --fg-status-destructive: var(--red-400);
 
-    /* Chart colours */
     --surface: #222222;
     --line: rgba(255, 255, 255, 0.059);
     --fg: #ffffff;
@@ -488,7 +474,6 @@
     --accent-soft: rgba(238, 103, 209, 0.16);
     --shade-rgb: 0, 0, 0;
 
-    /* Ambient shadow layers */
     --shadow-hairline: #ffffff1a;
     --shadow-drop: #00000059;
     --shadow-inset-hairline: #ffffff0d;
@@ -501,7 +486,6 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  /* Dark semantic tokens */
   --bg-primary: var(--alpha-dark-00);
   --bg-secondary: var(--alpha-dark-50);
   --bg-card: var(--alpha-dark-50);
@@ -574,7 +558,6 @@
   --fg-status-warning: var(--amber-300);
   --fg-status-destructive: var(--red-400);
 
-  /* Chart colours */
   --surface: #222222;
   --line: rgba(255, 255, 255, 0.059);
   --fg: #ffffff;
@@ -590,7 +573,6 @@
   --accent-soft: rgba(238, 103, 209, 0.16);
   --shade-rgb: 0, 0, 0;
 
-  /* Ambient shadow layers */
   --shadow-hairline: #ffffff1a;
   --shadow-drop: #00000059;
   --shadow-inset-hairline: #ffffff0d;
@@ -604,9 +586,6 @@
   color-scheme: light;
 }
 
-/* ===========================================================================
- * Reset and base elements
- * =========================================================================== */
 * {
   box-sizing: border-box;
 }
@@ -684,9 +663,6 @@ svg {
   background: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
-/* ===========================================================================
- * Shell: sidebar, topbar, workspace
- * =========================================================================== */
 .app-shell {
   min-height: 100vh;
   background: var(--canvas);
@@ -755,8 +731,6 @@ nav {
   gap: 1px;
 }
 
-/* Sets the section apart without competing with the destinations themselves:
-   small, wide-tracked, and one step further back than the inactive links. */
 .nav-group-label {
   margin: 0 0 7px;
   padding: 0 10px;
@@ -982,9 +956,6 @@ nav a[aria-current="page"] svg {
   display: none;
 }
 
-/* ===========================================================================
- * Command palette
- * =========================================================================== */
 .command-palette-backdrop {
   position: fixed;
   inset: 0;
@@ -1085,14 +1056,19 @@ nav a[aria-current="page"] svg {
 
 .command-palette-item {
   display: grid;
+  width: 100%;
   align-items: center;
   gap: 10px;
   min-height: 52px;
+  margin: 0;
+  border: 0;
   border-radius: var(--radius-md);
+  background: transparent;
   color: var(--fg);
   cursor: default;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   padding: 7px 10px;
+  text-align: start;
   user-select: none;
 }
 
@@ -1190,9 +1166,6 @@ nav a[aria-current="page"] svg {
   gap: 4px;
 }
 
-/* ===========================================================================
- * Controls: icon buttons, toggles, date range
- * =========================================================================== */
 .icon-button {
   display: inline-grid;
   width: 34px;
@@ -1351,8 +1324,6 @@ nav a[aria-current="page"] svg {
   animation: menu-in var(--duration-menu) var(--ease-out);
   position: absolute;
   top: calc(100% + 7px);
-  /* The trigger sits against the 16px page gutter, so any negative offset runs
-   * the popover past the viewport edge. */
   right: 0;
   z-index: 20;
   width: 19rem;
@@ -1462,7 +1433,6 @@ nav a[aria-current="page"] svg {
   font-size: 12px;
 }
 
-/* Scoped under the popover to outrank `.page-heading p`, which the control sits inside. */
 .custom-date-range .custom-date-range-error {
   margin: 0;
   color: var(--danger-text);
@@ -1491,9 +1461,6 @@ nav a[aria-current="page"] svg {
   height: 14px;
 }
 
-/* ===========================================================================
- * Content shell and page headings
- * =========================================================================== */
 .content {
   flex: 1;
   min-width: 0;
@@ -1532,9 +1499,6 @@ nav a[aria-current="page"] svg {
   letter-spacing: 0;
 }
 
-/* Analytics, Sessions, Tools and Files wrap the title and subtitle in a div next
- * to their actions, so the baseline row goes on that wrapper. Insights keeps a
- * stacked heading: its eyebrow is a sibling of the h1, not a child of a wrapper. */
 .inline-heading > div:first-child {
   display: flex;
   align-items: baseline;
@@ -1644,9 +1608,6 @@ nav a[aria-current="page"] svg {
   white-space: nowrap;
 }
 
-/* ===========================================================================
- * Panels, cards and stat grids
- * =========================================================================== */
 .panel,
 .signal-hero,
 .signal-list,
@@ -1773,17 +1734,10 @@ nav a[aria-current="page"] svg {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-/* Eight cards, so every column count below divides eight exactly. auto-fit
- * would pick whatever fits -- three columns somewhere mid-width -- and strand
- * the last cards alone against an empty row. */
 .analytics-stat-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-/* Just above 1200px the sidebar returns and each card is at its narrowest, so
- * "Per completed session" wrapped (measured up to 1216px) and made its row
- * taller than the next. The icons repeat the labels, so they give up their
- * 30px there instead. */
 @media (min-width: 1201px) and (max-width: 1279px) {
   .analytics-stat-grid .stat-icon {
     display: none;
@@ -1818,8 +1772,6 @@ nav a[aria-current="page"] svg {
   line-height: 1.1;
 }
 
-/* A change against the previous period, or what the value is made of. Plain
- * muted text: more sessions or more cost is not good or bad by itself. */
 .stat-card .stat-detail {
   display: block;
   margin-top: 6px;
@@ -1834,8 +1786,6 @@ nav a[aria-current="page"] svg {
   height: 20px;
 }
 
-/* The previous filter's numbers stay visible while the new ones load, dimmed
- * so they do not read as the answer for the new filter. */
 .stat-card[data-updating] strong,
 .stat-card[data-updating] .stat-detail,
 .panel[data-updating] > :not(.panel-heading) {
@@ -1861,29 +1811,15 @@ nav a[aria-current="page"] svg {
   height: 15px;
 }
 
-/* Two classes, so this outranks the single-class .tone-* colour without
- * needing to sit after it in the file. */
 .stat-card .stat-icon {
   color: var(--muted);
 }
 
-/* One semantic state is allowed through that muting: a non-zero error rate.
- * The `.stat-grid` prefix is load-bearing, not decoration -- without it the
- * `strong` rule ties with `.tool-stat-grid .stat-card strong` below, which sits
- * later and would win. That rule sets no colour today, but it governs the one
- * grid this alert actually appears in, so a colour added there later would
- * silently mute the value and leave a red icon beside it.
- * The value already states the problem, so the colour is redundant emphasis
- * rather than the only carrier of meaning -- it survives forced-colors mode,
- * where the hue is dropped and "3.2%" still reads differently from "0.0%". */
 .stat-grid .stat-card[data-alert] .stat-icon,
 .stat-grid .stat-card[data-alert] strong {
   color: var(--danger-text);
 }
 
-/* ===========================================================================
- * Tables
- * =========================================================================== */
 .table-scroll {
   overflow-x: auto;
 }
@@ -2205,8 +2141,6 @@ table {
   min-width: 1080px;
 }
 
-/* The fixed columns at the narrowest tier (804px) plus the 280px title floor.
- * Below this the table scrolls instead of squeezing the title. */
 .sessions-table {
   min-width: 1084px;
 }
@@ -2220,14 +2154,6 @@ table {
   container: sessions-table / inline-size;
 }
 
-/* The data-table layout is fixed, so column widths come from measured content
- * instead of fixed percentages. Title is the only auto column and takes the
- * slack, badges and numbers keep their natural width, and percent widths stop
- * squeezing badges into clipped mid-character states like "la-hig" and
- * "claude-opus-4-…". Widths come from rendered audits of the widest archived
- * value plus 20px of cell padding ("Copilot Chat" with the disclosure,
- * claude-sonnet-5-5, "thinking on", "226 +$927.50", "47,662", "$1,124.88",
- * "May 28, 12:08 AM"); widen with the audit, not by eye. */
 .sessions-table .col-session-tool {
   width: 156px;
 }
@@ -2273,11 +2199,6 @@ table {
   width: 144px;
 }
 
-/* Every column fits only on wide screens, so narrower panels drop the
- * per-session detail columns before the title falls below 280px. Each
- * breakpoint is the visible fixed width plus that floor. The session detail
- * page still shows effort, context, compactions, and subagents. The class sits
- * on the col, th, and td so one rule removes the whole column. */
 @container sessions-table (width < 1448px) {
   .sessions-table .col-session-effort,
   .sessions-table .col-session-context,
@@ -2632,9 +2553,6 @@ td a:hover {
   gap: 8px;
 }
 
-/* The title link shares the line with fixed-width badges; the archived and
- * Dosu provenance badges are also anchors. Without flex-grow it absorbed
- * every shrinkage and collapsed to a few pixels next to a full-width badge. */
 .session-title-line > a:first-child {
   flex: 1 1 auto;
   min-width: 0;
@@ -2865,10 +2783,6 @@ select {
   -webkit-appearance: none;
 }
 
-/* ===========================================================================
- * Buttons
- * =========================================================================== */
-
 :where(
   .primary-button,
   .secondary-button,
@@ -3050,9 +2964,6 @@ select {
   }
 }
 
-/* ===========================================================================
- * Badges and tones
- * =========================================================================== */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -3193,7 +3104,6 @@ select {
   background: var(--elevated);
 }
 
-/* Quiet full-surface effects sit behind the model name. */
 .badge.model-astra,
 .badge.model-sol,
 .badge.model-luna {
@@ -3329,7 +3239,6 @@ select {
   animation: model-luna-pulse 5.2s ease-in-out -1.1s infinite alternate;
 }
 
-/* Light mode uses clear, quiet chips; the ambient artwork belongs to dark mode. */
 :root:not([data-theme="dark"]) .badge:is(.model-astra, .model-sol, .model-luna) {
   background-color: color-mix(in oklab, var(--elevated) 96%, currentColor);
   background-image: none;
@@ -3530,9 +3439,6 @@ select {
   width: min(100%, 42rem);
 }
 
-/* ===========================================================================
- * Search
- * =========================================================================== */
 .search-form {
   position: relative;
 }
@@ -3661,11 +3567,6 @@ select {
   margin-bottom: 12px;
 }
 
-/* ===========================================================================
- * Sync progress and first-sync states
- * =========================================================================== */
-
-/* Sits on the sticky topbar's bottom border, so it adds no height. */
 .sync-line {
   position: absolute;
   inset: auto 0 -1px;
@@ -3731,7 +3632,6 @@ select {
   background: var(--success);
 }
 
-/* Before the sync has counted its sources there is no fraction to draw. */
 .sync-fill[data-indeterminate] {
   width: 100%;
   opacity: 0.45;
@@ -4486,9 +4386,6 @@ mark {
   font-weight: var(--font-weight-strong);
 }
 
-/* ===========================================================================
- * Insights and signals
- * =========================================================================== */
 .insights-stack {
   gap: 36px;
 }
@@ -4671,7 +4568,6 @@ mark {
   flex: 1 1 auto;
 }
 
-/* --faint is under 4.5:1 on these surfaces, so small labels use --muted. */
 .signal-kicker,
 .signal-label,
 .catalog-group h3 {
@@ -4847,7 +4743,6 @@ button.signal-row-summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* A closed row previews its detail. Opening the row shows all of it. */
 .signal-row:not(.is-expanded) > button .signal-row-rationale {
   display: -webkit-box;
   overflow: hidden;
@@ -4951,7 +4846,6 @@ button.signal-row-summary:hover .signal-row-expand {
   min-width: 0;
 }
 
-/* The row's own divider already separates the first block from the summary. */
 .signal-detail > :first-child {
   border-top: 0;
   padding-top: 0;
@@ -5141,7 +5035,6 @@ button.signal-row-summary:hover .signal-row-expand {
   font-variant-numeric: tabular-nums;
 }
 
-/* Setup ideas are not measured, so they sit apart and off the card surface. */
 .insights-catalog {
   border-top: 1px solid var(--line);
   padding-top: 28px;
@@ -5234,7 +5127,6 @@ button.signal-row-summary:hover .signal-row-expand {
   padding-top: 16px;
 }
 
-/* The list does not clip, so end rows carry its corner for hover and focus. */
 .signal-row:first-child > .signal-row-summary {
   border-top-left-radius: var(--radius-xl);
   border-top-right-radius: var(--radius-xl);
@@ -5246,7 +5138,6 @@ button.signal-row-summary:hover .signal-row-expand {
   border-bottom-left-radius: var(--radius-xl);
 }
 
-/* A finger needs 44px. Pointer rows keep the denser controls used elsewhere. */
 @media (any-pointer: coarse), (max-width: 767px) {
   .recommendation-actions :is(.primary-button, .secondary-button),
   .signal-prompt-toggle,
@@ -5260,9 +5151,6 @@ button.signal-row-summary:hover .signal-row-expand {
   }
 }
 
-/* ===========================================================================
- * Settings
- * =========================================================================== */
 .settings-form {
   display: grid;
   padding: 8px 0;
@@ -5333,8 +5221,6 @@ button.signal-row-summary:hover .signal-row-expand {
   width: 9.5rem;
 }
 
-/* Sits beside the date-range control in the Analytics toolbar, so it takes
-   that control's type rather than the larger form-field default. */
 .source-filter-control .select-shell select {
   height: 34px;
   font-size: 13px;
@@ -5383,9 +5269,6 @@ button.signal-row-summary:hover .signal-row-expand {
   padding-left: 12px;
 }
 
-/* ===========================================================================
- * Session detail and transcript
- * =========================================================================== */
 .session-detail {
   display: grid;
   width: 100%;
@@ -6520,10 +6403,6 @@ pre {
   word-break: break-word;
 }
 
-/* ===========================================================================
- * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
- * =========================================================================== */
-
 @media (max-width: 1200px) {
   .mobile-only {
     display: inline-grid;
@@ -6878,14 +6757,8 @@ pre {
   overflow: hidden;
 }
 
-/* ===========================================================================
- * Context window strip
- * =========================================================================== */
 .ctx-strip {
   display: block;
-  /* The base stylesheet sizes every svg at 1em for icons. The intrinsic
-   * chart dimensions still drive its aspect ratio, while max-width keeps the
-   * first measured frame from escaping a narrower viewport. */
   width: auto;
   max-width: 100%;
   height: auto;
@@ -7003,6 +6876,16 @@ a:focus-visible .ctx-strip-compaction-marker rect {
   fill: var(--info);
   stroke: var(--surface);
   stroke-width: 1.5;
+}
+
+.ctx-strip-scrub circle {
+  fill: none;
+  pointer-events: none;
+}
+
+.ctx-strip-scrub:focus-visible circle {
+  stroke: var(--accent-hover);
+  stroke-width: 1.75;
 }
 
 .ctx-tooltip {
@@ -7209,10 +7092,6 @@ a:focus-visible .ctx-strip-compaction-marker rect {
   color: var(--danger-text);
 }
 
-/* ===========================================================================
-   Updates
-   =========================================================================== */
-
 .update-nudge {
   display: grid;
   gap: 6px;
@@ -7272,8 +7151,6 @@ a:focus-visible .ctx-strip-compaction-marker rect {
   font-size: var(--text-micro-size);
 }
 
-/* Declared after the narrow-screen .setting-select rule so the switch stays
-   beside its label instead of dropping under it. */
 .setting-switch {
   grid-template-columns: minmax(0, 1fr) auto;
   cursor: pointer;

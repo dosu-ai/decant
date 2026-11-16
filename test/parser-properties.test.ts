@@ -6,18 +6,8 @@ import { buildFtsQuery } from "../src/search-query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
-// Property-based coverage for the parser totality invariant (AGENTS.md:
-// core modules return data and Result-style errors): arbitrary bytes on
-// disk must never make a parser throw, malformed JSONL lines must be
-// reported exactly as unparsed_line issues without derailing neighboring
-// lines, and every issue must obey the typed-diagnostics contract in
-// src/model.ts (known code, in-bounds lineNo, rawLine only on
-// unparsed_line).
-
 const jsonLine = fc.json({ maxDepth: 3, stringUnit: "binary" });
 const blankLine = fc.constantFrom("", " ", "\t", " \t ");
-// A complete JSON value with a trailing brace is always a syntax error,
-// never blank, and never spans lines.
 const brokenLine = jsonLine.map((line) => `${line}}`);
 
 interface TaggedLine {

@@ -125,12 +125,10 @@ describe("install detection", () => {
       channel: "installer",
       binaryPath: "/opt/tools/decant",
     });
-    // The default directory still counts when DECANT_INSTALL_DIR names another.
     expect(compiled("/Users/me/.local/bin/decant", { DECANT_INSTALL_DIR: "/opt/tools" })).toEqual({
       channel: "installer",
       binaryPath: "/Users/me/.local/bin/decant",
     });
-    // Copies other tools manage, or that were placed by hand, are not Decant's to rename over.
     for (const path of [
       "/Users/me/.local/share/mise/installs/decant/0.12.1/decant",
       "/Users/me/.local/share/aquaproj-aqua/pkgs/github_release/decant",
@@ -140,7 +138,6 @@ describe("install detection", () => {
     ]) {
       expect(compiled(path)).toEqual({ channel: "standalone", binaryPath: null });
     }
-    // A symlinked install directory still matches the binary's real path.
     expect(
       detectInstall({
         compiled: true,
@@ -157,8 +154,6 @@ describe("install detection", () => {
       kind: "run",
       commands: [{ argv: ["npm", "install", "--global", "@dosu/decant@0.12.0"] }],
     });
-    // `brew upgrade` alone can miss a tap pushed within the last day, and an
-    // unrelated broken tap fails `brew update` without making the upgrade unsafe.
     expect(planUpdate({ channel: "homebrew", binaryPath: null }, "0.12.0")).toEqual({
       kind: "run",
       commands: [
@@ -176,8 +171,6 @@ describe("install detection", () => {
     expect(planUpdate({ channel: "standalone", binaryPath: null }, "0.12.0")).toMatchObject({
       instructions: expect.stringContaining("install.sh | sh"),
     });
-    // The nudge points at `decant update`, which explains the options, instead
-    // of an installer command that would add a second copy in ~/.local/bin.
     expect(updateCommandFor("standalone")).toBe("decant update");
   });
 });
@@ -261,7 +254,6 @@ describe("checkForUpdate", () => {
     await checkForUpdate({ ...base, fetch: registry("0.13.0", calls), now: () => soon });
     expect(calls).toEqual([]);
 
-    // One timed-out short check must not hide a release for a whole day.
     const hourLater = new Date(nextDay.getTime() + FAILED_CHECK_RETRY_MS);
     const retried = await checkForUpdate({
       ...base,
@@ -270,7 +262,6 @@ describe("checkForUpdate", () => {
     });
     expect(calls).toEqual([LATEST_VERSION_URL]);
     expect(retried).toMatchObject({ latest: "0.13.0", error: null });
-    // A success clears the flag, so the next check waits the full day again.
     expect(readUpdateCheck({ env })).toEqual({
       checkedAt: hourLater.toISOString(),
       latest: "0.13.0",
@@ -315,8 +306,6 @@ describe("checkForUpdate", () => {
     const env = configEnv({ DECANT_UPDATE_CHECK: "1" });
     const dir = env.DECANT_CONFIG_DIR ?? "";
     mkdirSync(dir, { recursive: true });
-    // A day-old answer the process can read but never replace, as under a
-    // read-only bind mount.
     const stale = new Date(now.getTime() - 2 * UPDATE_CHECK_INTERVAL_MS).toISOString();
     writeFileSync(updateCheckPath({ env }), JSON.stringify({ checkedAt: stale, latest: "0.11.5" }));
     chmodSync(dir, 0o500);
@@ -576,7 +565,6 @@ describe("replaceBinary", () => {
     expect(spawnSync(binaryPath, [], { encoding: "utf8" }).stdout.trim()).toBe("0.12.0");
   });
 
-  /** Answers every request under `from` with a redirect to the same path under `to`. */
   function redirectingTo(from: string, to: string, inner: FetchLike, calls: string[]): FetchLike {
     return async (url, init) => {
       if (url.startsWith(from)) {
@@ -734,7 +722,6 @@ describe("decant update", () => {
     );
     expect(result.stdout).toContain("Updated Decant to v0.12.0.");
 
-    // The tap trails npm, so brew can exit 0 without installing anything.
     const behind = await brew("0.11.0");
     expect(behind.code).toBe(1);
     expect(behind.stdout).not.toContain("Updated Decant");
@@ -742,7 +729,6 @@ describe("decant update", () => {
       "error: brew finished, but /opt/homebrew/bin/decant reports 0.11.0, not 0.12.0. New releases reach the Homebrew tap",
     );
 
-    // A broken unrelated tap fails `brew update`, and the upgrade still runs.
     const brewCalls: string[][] = [];
     const tapFailed = await cli(["update"], {
       install: { channel: "homebrew", binaryPath: null },
@@ -760,7 +746,6 @@ describe("decant update", () => {
       ["brew", "upgrade", "dosu-ai/dosu/decant"],
     ]);
 
-    // A failed upgrade is an error.
     const upgradeFailed = await cli(["update"], {
       install: { channel: "homebrew", binaryPath: null },
       fetch: registry("0.12.0"),
@@ -781,7 +766,6 @@ describe("decant update", () => {
       "error: npm install --global @dosu/decant@0.12.0 exited with code 243\n",
     );
 
-    // npm exits 0 after skipping a platform package it could not fetch.
     const launcherOnly = await cli(["update"], {
       install: { channel: "npm", binaryPath: null },
       fetch: registry("0.12.0"),

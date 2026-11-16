@@ -275,7 +275,6 @@ describe("run", () => {
       "",
     ]);
 
-    // A command that already printed a JSON result reports through it.
     const result = harness(["--json"]);
     await result.ctx.run(() => {
       result.ctx.writeJson({ deleted: false, error: "session not found" });
@@ -283,7 +282,6 @@ describe("run", () => {
     });
     expect(result.io.stderr).toBe("");
 
-    // Exit 3 and above are reports, such as sync's count of dropped lines.
     const report = harness(["--json"]);
     await report.ctx.run(() => 3);
     expect(report.io.stderr).toBe("");

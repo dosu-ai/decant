@@ -18,8 +18,6 @@ function freshDb(): Database {
   return openDb(join(workDir, `predicate-${dbCounter}.db`));
 }
 
-// The per-row correlated form this module used before the hidden set was
-// precomputed. It stays here as the semantic oracle.
 function oraclePredicate(alias: string, includeArchived: boolean): string {
   const hiddenStates = includeArchived ? "'deleted'" : "'archived', 'deleted'";
   return `NOT EXISTS (
@@ -102,8 +100,6 @@ function archivedIds(db: Database, expression: string): number[] {
 describe("sessionUserStatePredicate", () => {
   test("inherits hidden states down subagent lineage and matches identity by tool", () => {
     const db = freshDb();
-    // 1 archived root -> 2 -> 3 (grandchild); 4 unrelated root with a deleted child 5;
-    // 6 shares 1's source id under another tool, so the state must not reach it.
     addSession(db, 1, "claude_code", "root");
     addSession(db, 2, "claude_code", "child");
     addSession(db, 3, "claude_code", "grandchild");
@@ -147,7 +143,6 @@ describe("sessionUserStatePredicate", () => {
         return state / 4294967296;
       };
       const count = 80;
-      // Ids i and i + 40 share a source id under different tools.
       const toolOf = (id: number): string =>
         Math.floor(id / 40) % 2 === 0 ? "claude_code" : "codex";
       const sourceOf = (id: number): string => `src-${id % 40}`;

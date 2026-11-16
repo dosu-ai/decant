@@ -10,8 +10,6 @@ afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 describe("visibleSessionPredicate", () => {
   test("reads blocks by message on an archive without statistics", () => {
-    // Until the first sync ends there is no sqlite_stat1. SQLite then started
-    // the check from idx_block_type, reading every text block per session.
     const db = openDb(join(workDir, "plan.db"));
     try {
       expect(db.query("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()).toBeNull();

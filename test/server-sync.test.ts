@@ -66,7 +66,6 @@ describe("server sync coordination", () => {
     const coordinator = createSyncCoordinator(runner, {
       onCompleted: (finished) => {
         completed.push(finished.ingested);
-        // A failing hook must not turn a committed sync into an error.
         throw new Error("statistics reload failed");
       },
     });
@@ -159,7 +158,6 @@ describe("server sync coordination", () => {
       now: () => 0,
       onProgress: (progress) => {
         order.push(`hook ${progress.ingested}`);
-        // A failing hook must not fail the sync or starve its listeners.
         throw new Error("statistics reload failed");
       },
       onCompleted: () => order.push("completed"),
@@ -324,8 +322,6 @@ describe("server sync coordination", () => {
       };
     };
     const coordinator = createSyncCoordinator(runner);
-    // An undefined external cancel source is the manual POST /api/sync case
-    // when serve runs with --no-sync and therefore has no watcher.
     const manual = coordinator.run(config);
     await entered.promise;
 
@@ -443,7 +439,6 @@ describe("sync status", () => {
       () => {},
       () => ({ promise: release.promise, owned: true }),
     );
-    // No progress event yet: the server knows a sync runs, not what started it.
     expect(await readStatus(config)).toMatchObject({
       in_progress: true,
       reason: null,
@@ -493,7 +488,6 @@ describe("sync status", () => {
       noteArchiveOpened(db);
       expect(await readStatus(config)).toMatchObject({ archive_synced: false });
 
-      // A failed sync and a cancelled one both leave the archive unfilled.
       applyWatchEvent(
         { type: "error", reason: "startup", error: "disk full", status: idle },
         economics,

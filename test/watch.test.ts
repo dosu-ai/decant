@@ -123,7 +123,6 @@ describe("watch mode", () => {
       [join(config.vscodeCopilotDir, "globalStorage", "emptyWindowChatSessions"), false],
     ]);
     const [claude, , , data, other] = roots;
-    // Only OpenCode roots are polled.
     expect(roots.map((root) => root.poll != null)).toEqual([
       false,
       false,
@@ -138,7 +137,6 @@ describe("watch mode", () => {
     expect(claude?.accepts(null)).toBe(true);
     expect(claude?.accepts("Users-dev-proj/sample.jsonl")).toBe(true);
 
-    // Nothing changed since the watcher started: reads touch only -shm.
     for (const name of [null, "opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
       expect(data?.accepts(name)).toBe(false);
     }
@@ -151,7 +149,6 @@ describe("watch mode", () => {
     for (const name of ["log/opencode.log", "opencode.db-journal", "notes.db", "custom.db-shm"]) {
       expect(data?.accepts(name)).toBe(false);
     }
-    // A sidecar event is a hint; the database's own change is reported once.
     expect(data?.accepts("opencode.db-shm")).toBe(true);
     expect(data?.accepts("opencode.db-wal")).toBe(false);
     expect(data?.accepts(null)).toBe(false);
@@ -164,8 +161,6 @@ describe("watch mode", () => {
     expect(other?.accepts("custom.db-wal")).toBe(true);
     expect(other?.accepts("custom.db")).toBe(false);
 
-    // The poll and the event filter share one baseline, whichever sees the
-    // change first, so a write is reported once.
     write(main);
     expect(data?.poll?.()).toBe(true);
     expect(data?.accepts("opencode.db-wal")).toBe(false);
@@ -219,7 +214,6 @@ describe("watch mode", () => {
     expect(empty?.recursive).toBe(false);
     expect(empty?.accepts("abc.jsonl")).toBe(true);
     expect(empty?.accepts("abc.tmp")).toBe(false);
-    // An Insiders directory that exists is watched beside the stable one.
     const insiders = join(dirname(config.dbPath), "insiders", "User");
     mkdirSync(join(insiders, "workspaceStorage"), { recursive: true });
     expect(
@@ -249,7 +243,6 @@ describe("watch mode", () => {
     const writer = new Database(real, { strict: true });
     writer.exec("UPDATE session_v2 SET title = title || '.' WHERE id = 'ses_sample'");
     writer.close();
-    // Events name the real file; the link's name never appears in this directory.
     expect(other?.accepts("linked.db-wal")).toBe(false);
     expect(other?.accepts("store.db-wal")).toBe(true);
   });
@@ -469,12 +462,8 @@ describe("watch mode", () => {
     const watchSyncs = (): number =>
       events.filter((event) => event.type === "sync" && event.reason === "watch").length;
     try {
-      // Let the native watcher settle; FSEvents can still deliver the seed
-      // write, so count only the syncs that follow.
       await Bun.sleep(600);
       const baseline = watchSyncs();
-      // Each write lands well inside the debounce window, so only the max
-      // wait can start a sync before the writes stop.
       const writesEnd = Date.now() + 1_600;
       let syncedWhileWriting = false;
       while (Date.now() < writesEnd && !syncedWhileWriting) {
@@ -492,16 +481,11 @@ describe("watch mode", () => {
     const config = freshConfig();
     const main = join(config.opencodeDir, "opencode.db");
     buildOpenCodeFixtureDb(main, ["sample.sql"]);
-    // OpenCode keeps its database in WAL mode. With no other connection open,
-    // Decant's read-only connection is the first one and rebuilds the -shm
-    // index, which the watcher sees as a change beside the database.
     const setup = new Database(main, { strict: true });
     setup.exec("PRAGMA journal_mode = WAL;");
     setup.close();
-    // OpenCode leaves its sidecars behind; a read-only connection needs them.
     writeFileSync(`${main}-wal`, "");
     writeFileSync(`${main}-shm`, "");
-    // OpenCode also writes logs and snapshots under its data directory.
     mkdirSync(join(config.opencodeDir, "log"), { recursive: true });
 
     const events: WatchEvent[] = [];
@@ -515,8 +499,6 @@ describe("watch mode", () => {
     const syncs = (): SyncEvent[] =>
       events.filter((event): event is SyncEvent => event.type === "sync");
     try {
-      // Let the native watcher settle; FSEvents can still deliver the setup
-      // writes above, so count only the syncs that follow.
       await Bun.sleep(300);
       const baseline = syncs().length;
       handle.trigger("manual");
@@ -531,10 +513,8 @@ describe("watch mode", () => {
       writeFileSync(join(config.opencodeDir, "log", "opencode.log"), "synthetic log line\n");
       writeFileSync(join(config.opencodeDir, "opencode.db-journal"), "");
       await Bun.sleep(1_000);
-      // The manual sync, plus at most one straggler.
       expect(syncs().length - baseline).toBeLessThanOrEqual(2);
 
-      // A committed write lands in opencode.db-wal and still triggers a sync.
       const before = syncs().length;
       const writer = new Database(main, { strict: true });
       writer.exec(
@@ -560,12 +540,8 @@ describe("watch mode", () => {
     const config = freshConfig();
     const main = join(config.opencodeDir, "opencode.db");
     buildOpenCodeFixtureDb(main, ["sample.sql"]);
-    // A running OpenCode holds one WAL connection open for its whole life. On
-    // macOS its later commits raise no file event, so native watching is off
-    // here and only the stat poll can notice them.
     const writer = new Database(main, { strict: true });
     writer.exec("PRAGMA journal_mode = WAL;");
-    // Its first read creates the -wal and -shm sidecars a read-only open needs.
     writer.query("SELECT COUNT(*) FROM session_v2").get();
     const events: WatchEvent[] = [];
     const handle = startWatch({
@@ -624,7 +600,6 @@ describe("watch mode", () => {
     } finally {
       await handle.stop();
     }
-    // Stopping clears the poll: a later commit starts no sync.
     const stoppedAt = syncs().length;
     commit(7);
     await Bun.sleep(300);
@@ -653,8 +628,6 @@ describe("watch mode", () => {
     const syncs = (): SyncEvent[] =>
       events.filter((event): event is SyncEvent => event.type === "sync");
     try {
-      // Each sync opens the database read-only and rewrites -shm; the poll
-      // must not mistake that for a write.
       for (let attempt = 0; attempt < 200 && syncs().length === 0; attempt += 1) {
         await Bun.sleep(10);
       }

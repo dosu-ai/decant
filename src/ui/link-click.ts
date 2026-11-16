@@ -13,11 +13,6 @@ export interface LinkTarget {
   download?: boolean;
 }
 
-/**
- * Only a plain primary-button click on a same-tab, same-origin path may be
- * routed in-app. Everything else (new tab, save-as, external URL) must keep
- * the browser's native behaviour.
- */
 export function shouldInterceptLinkClick(click: LinkClick, link: LinkTarget): boolean {
   if (click.defaultPrevented || click.button !== 0) {
     return false;

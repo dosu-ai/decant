@@ -56,7 +56,6 @@ export function errorResponse(
   return json({ error: message, code, ...extras }, status);
 }
 
-/** Stable startup response shared by the live guard and contract tests. */
 export function serviceStartingResponse(): Response {
   return errorResponse(
     "service_starting",
@@ -72,8 +71,6 @@ export function responseForError(error: unknown): Response {
 }
 
 function classifyError(error: unknown): ApiError {
-  // Only Decant's own error classes echo their message to the client. Any
-  // other value, including its string form, stays out of the response.
   if (error instanceof RequestBodyError) {
     return { code: "malformed_body", message: error.message, status: 400 };
   }

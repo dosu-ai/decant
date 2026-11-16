@@ -124,7 +124,12 @@ A change is ready when:
 - Use surrounding code style, narrow changes, and focused tests.
 - Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`,
   and `chore:`. Sign commits when the environment supports it.
-- Comments explain why a constraint exists, not what the code already says.
+- Code comments are for things the code cannot say and we cannot change: a
+  license header, behavior forced by an external tool, platform, or vendor
+  format, a public API contract, or an issue or RFC link for a constraint the
+  code cannot express. Say everything else with names, types, and tests, and
+  enforce a "keep in sync" or "do not change" rule with a test instead of a
+  comment.
 - Branch from `main`, open a pull request, and keep CI green.
 - Do not edit unrelated user changes in a dirty worktree.
 

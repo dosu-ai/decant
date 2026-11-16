@@ -39,7 +39,5 @@ self.addEventListener("message", function onMessage(event) {
       closeDb(db);
     }
   }
-  // Completion is emitted only after the native connection is closed. Natural
-  // event-loop exit avoids a parent-thread teardown racing SQLite finalization.
   self.postMessage(result);
 });

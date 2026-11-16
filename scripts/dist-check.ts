@@ -19,9 +19,7 @@ if (isTemporaryRoot) {
   process.on("exit", () => {
     try {
       rmSync(outRoot, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup must not mask the distribution check result.
-    }
+    } catch {}
   });
 }
 const binaryDir = join(outRoot, "bin");
@@ -221,17 +219,11 @@ async function assertCompiledServe(binary: string, expectedVersion: string): Pro
   }
 }
 
-// --minify rewrites only the UI bundle, so API checks alone could pass against
-// a bundle that fails to parse. Parsing it as an ES module proves the served
-// bytes are syntactically whole (the bundle uses import.meta, so `new Function`
-// cannot); it cannot catch a render-time throw, which would need a real DOM.
 async function assertCompiledUiBundle(port: number): Promise<void> {
   const page = await fetch(`http://127.0.0.1:${port}/`);
   if (!page.ok) {
     throw new Error(`compiled binary returned ${page.status} for /`);
   }
-  // A compiled binary serves prebuilt files, a different path from source runs,
-  // so only this check proves the shipped UI refuses to be framed.
   for (const [name, value] of Object.entries(UI_DOCUMENT_HEADERS)) {
     if (page.headers.get(name) !== value) {
       throw new Error(
@@ -253,8 +245,6 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
     throw new Error(`compiled binary served ${scriptSrc} without x-content-type-options: nosniff`);
   }
   const code = await bundle.text();
-  // Well under the entry script's size and well over an empty or stub
-  // response, so this only trips on real truncation.
   if (code.length < 250_000) {
     throw new Error(`compiled UI bundle at ${scriptSrc} looks truncated: ${code.length} bytes`);
   }
@@ -273,9 +263,6 @@ async function assertCompiledUiBundle(port: number): Promise<void> {
   await assertCompiledUiChunks(port, scriptSrc, code);
 }
 
-// --splitting moves dynamically imported modules into their own files, which
-// the page requests on first use. A chunk missing from the binary would only
-// show up as a chart or a transcript that never renders, so fetch them all.
 async function assertCompiledUiChunks(
   port: number,
   entry: string,
@@ -314,7 +301,6 @@ async function assertCompiledUiChunks(
   }
 }
 
-/** Root-relative scripts a bundled module imports, statically or on demand. */
 function importedScripts(code: string): string[] {
   return [...code.matchAll(/(?:from|import\()\s*["'](\/[^"']+\.js)["']/g)].flatMap((match) =>
     match[1] == null ? [] : [match[1]],
@@ -346,9 +332,6 @@ async function assertCompiledEconomics(port: number): Promise<void> {
   throw new Error(`compiled token economics stayed empty: ${JSON.stringify(latest)}`);
 }
 
-// Session lists and search run on read-worker threads. Bun embeds a worker in
-// a standalone binary only when it is listed as an entrypoint, so a missing
-// entry would fail here and not in source-mode tests.
 async function assertCompiledReadWorker(port: number): Promise<void> {
   const response = await fetch(`http://127.0.0.1:${port}/api/sessions?limit=5`);
   if (!response.ok) {
@@ -360,8 +343,6 @@ async function assertCompiledReadWorker(port: number): Promise<void> {
   if (!Array.isArray(sessions) || sessions.length !== 1) {
     throw new Error(`compiled session list was not the one synced: ${JSON.stringify(sessions)}`);
   }
-  // Reports import the renderer lazily inside the worker, so check that this
-  // path also resolves inside the standalone module graph.
   const report = await fetch(
     `http://127.0.0.1:${port}/api/reports/session/${sessions[0]?.id}.html`,
   );

@@ -9,7 +9,7 @@ import {
 } from "./chart-state.ts";
 import { buildChartOption, type ChartColors } from "./charts.tsx";
 import { PrivacyReviewLists } from "./common.tsx";
-import { useDialogFocusTrap } from "./focus.ts";
+import { useBackdropDismiss, useDialogFocusTrap } from "./focus.ts";
 import { errorMessage } from "./format.ts";
 import { Icon } from "./icons.tsx";
 import {
@@ -47,6 +47,7 @@ export function ShareChartButton({
   const [status, setStatus] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const renderVersionRef = useRef(0);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeShareReview = useCallback(() => setOpen(false), []);
   const title = shareCardTitle(input.kind);
@@ -98,6 +99,7 @@ export function ShareChartButton({
   );
 
   useDialogFocusTrap(open, dialogRef, closeShareReview);
+  useBackdropDismiss(open, backdropRef, closeShareReview);
 
   const copyText = async (value: string, success: string) => {
     try {
@@ -171,15 +173,7 @@ export function ShareChartButton({
       </button>
       {open
         ? createPortal(
-            // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal supplements Escape and the explicit close button.
-            <div
-              className="share-review-backdrop"
-              onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                  closeShareReview();
-                }
-              }}
-            >
+            <div className="share-review-backdrop" ref={backdropRef}>
               <section
                 aria-labelledby={`share-title-${input.kind}`}
                 aria-modal="true"
@@ -288,7 +282,6 @@ export function ShareChartButton({
 
 const SHARE_CARD_PANEL = "#11151f";
 
-/** The app's dark theme tokens, fixed so a light-mode export stays legible. */
 export const SHARE_CHART_COLORS: ChartColors = {
   fg: "#e7eaf0",
   hover: "rgba(255, 255, 255, 0.05)",
@@ -342,8 +335,6 @@ export async function renderShareCardPng(
     });
     chart.setOption(
       {
-        // The card is always dark, so the chart takes the dark palette even
-        // when the app is in light mode.
         ...buildChartOption(state, SHARE_CHART_COLORS),
         animation: false,
         backgroundColor: SHARE_CARD_PANEL,

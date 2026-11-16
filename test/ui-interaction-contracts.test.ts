@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { contextStripKeyIndex } from "../src/ui/context-window-strip.tsx";
 import { ALL_DATE_RANGE } from "../src/ui/date-range.ts";
 import { DateRangeControl, focusLeftMenu } from "../src/ui/date-range-control.tsx";
 import { readUiFile, readUiSource, sourceBetween, sourceFrom } from "./ui-source.ts";
@@ -46,7 +47,12 @@ describe("UI interaction contracts", () => {
     expect(search).toContain("setTotal(response.total)");
     expect(fastRequest).not.toContain("setTotal(response.total)");
     expect(fastRequest).not.toContain("setTotalIsCapped(response.total_is_capped)");
-    expect(search).toContain("A count is supplementary");
+    const totalRequest = search.slice(
+      search.indexOf("include_total: true"),
+      search.indexOf("}, 500);"),
+    );
+    expect(totalRequest).toContain(".catch(() => {})");
+    expect(totalRequest).not.toContain("setError");
     expect(search).toContain("searchPageMayHaveMore");
     expect(search).toContain("total: totalRef.current");
     expect(search).toContain("exactSearchRemaining(total, hits.length, totalIsCapped)");
@@ -129,14 +135,18 @@ describe("UI interaction contracts", () => {
       "async function renderShareCardPng(",
     );
 
-    expect(reportReview).toContain('className="report-review-backdrop"');
-    expect(reportReview).toMatch(
-      /onMouseDown=\{\(event\) => \{\s*if \(event\.target === event\.currentTarget\) \{\s*onClose\(\);/,
+    const backdropDismiss = sourceBetween(
+      main,
+      "function useBackdropDismiss(",
+      "function useDisabledFocusRescue(",
     );
-    expect(shareReview).toContain('className="share-review-backdrop"');
-    expect(shareReview).toMatch(
-      /onMouseDown=\{\(event\) => \{\s*if \(event\.target === event\.currentTarget\) \{\s*closeShareReview\(\);/,
-    );
+
+    expect(backdropDismiss).toContain("event.target === backdropRef.current");
+    expect(reportReview).toContain('<div className="report-review-backdrop" ref={backdropRef}>');
+    expect(reportReview).toContain("useBackdropDismiss(open, backdropRef, onClose)");
+    expect(shareReview).toContain('<div className="share-review-backdrop" ref={backdropRef}>');
+    expect(shareReview).toContain("useBackdropDismiss(open, backdropRef, closeShareReview)");
+    expect(main).toContain("useBackdropDismiss(true, backdropRef, requestClose)");
   });
 
   test("keeps compaction anchors exposed in the accessibility tree", () => {
@@ -150,6 +160,27 @@ describe("UI interaction contracts", () => {
     expect(chart).toContain("Compactions ");
     expect(chart).toContain(" through ");
     expect(chart).toContain("href={`#message-");
+  });
+
+  test("gives keyboard users the context strip's click-to-jump", () => {
+    const chart = sourceBetween(
+      main,
+      "function ContextWindowStrip(",
+      "function compactionTokenRange(",
+    );
+
+    expect(chart).toContain('className="ctx-strip-scrub"');
+    expect(chart).toContain("void onJump(scrubPoint.seq)");
+    expect(chart).toContain("onKeyDown={handleKeyDown}");
+    expect(contextStripKeyIndex("ArrowRight", null, 4)).toBe(0);
+    expect(contextStripKeyIndex("ArrowRight", 2, 4)).toBe(3);
+    expect(contextStripKeyIndex("ArrowRight", 3, 4)).toBe(3);
+    expect(contextStripKeyIndex("ArrowLeft", null, 4)).toBe(3);
+    expect(contextStripKeyIndex("ArrowLeft", 0, 4)).toBe(0);
+    expect(contextStripKeyIndex("Home", 2, 4)).toBe(0);
+    expect(contextStripKeyIndex("End", 0, 4)).toBe(3);
+    expect(contextStripKeyIndex("Enter", 1, 4)).toBeNull();
+    expect(contextStripKeyIndex("ArrowRight", null, 0)).toBeNull();
   });
 
   test("keeps archive visibility in session pagination and navigation state", () => {
@@ -212,8 +243,6 @@ describe("UI interaction contracts", () => {
   });
 
   test("keeps the date-range menu open while Safari presses a preset", () => {
-    // Safari doesn't focus a clicked button, so the summary blurs with a null
-    // relatedTarget. Closing on that dropped every preset click in WebKit.
     const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
     const onBlur = control.slice(control.indexOf("onBlur="), control.indexOf("onKeyDown="));
     expect(onBlur).toContain("focusLeftMenu(event.currentTarget, event.relatedTarget)");
@@ -222,8 +251,6 @@ describe("UI interaction contracts", () => {
   });
 
   test("aligns the date-range popover before it first paints", () => {
-    // Chromium fires toggle a frame after a details element opens. Measuring
-    // there painted the popover off the left edge at phone widths for a frame.
     const control = sourceFrom(readUiFile("date-range-control.tsx"), "function DateRangeControl(");
     const onToggle = control.slice(control.indexOf("onToggle="), control.indexOf("<summary"));
     expect(onToggle).not.toContain("datePopoverAlign");
@@ -235,9 +262,6 @@ describe("UI interaction contracts", () => {
   });
 
   test("clicking the From or To label focuses its date input inside the open menu", () => {
-    // A label click blurs the summary with a null relatedTarget before the label
-    // focuses its input. Closing the menu then removed the label mid-click and
-    // crashed Chromium, so each input must sit inside its label in the popover.
     const markup = renderToStaticMarkup(
       createElement(DateRangeControl, {
         bounds: null,
@@ -349,7 +373,7 @@ describe("UI interaction contracts", () => {
     expect(dialog).toContain('role="alertdialog"');
     expect(dialog).toContain("aria-labelledby={titleId}");
     expect(dialog).toContain("aria-describedby={descriptionId}");
-    expect(dialog).toContain("event.target === event.currentTarget && !pending");
+    expect(dialog).toContain("useBackdropDismiss(open && !pending, backdropRef, requestClose)");
     expect(dialog).toContain("DELETE_SESSION_EXPLANATION");
     expect(dialog).toContain("DELETE_SESSION_EYEBROW");
     expect(dialog).toContain("Delete from Decant");

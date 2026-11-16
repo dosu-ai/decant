@@ -25,12 +25,10 @@ export function provenanceFileName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.intoto.jsonl`;
 }
 
-/** Not in SHA256SUMS (written after packaging); its attestation covers it. */
 export function sbomFileName(tag: string): string {
   return `decant-${tag.replace(/^v/, "")}.cdx.json`;
 }
 
-/** Files the build job must have staged next to the tarballs. */
 export function requiredReleaseFiles(tag: string): string[] {
   return [attestationBundleName(tag), provenanceFileName(tag), sbomFileName(tag)];
 }

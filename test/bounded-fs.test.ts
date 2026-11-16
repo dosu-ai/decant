@@ -14,13 +14,11 @@ import { BoundedFs, createProbeLedger, MAX_TEXT_BYTES } from "../src/bounded-fs.
 import { makeFifo, releaseFifo } from "./stalled-directory.ts";
 
 const DEADLINE_MS = 300;
-// Never waited out, so a slow machine cannot turn a readable path into a timeout.
 const READABLE_DEADLINE_MS = 5000;
 const tempRoots: string[] = [];
 const fifos: string[] = [];
 
 afterEach(() => {
-  // Blocked helper threads end once their read returns.
   for (const fifo of fifos.splice(0)) {
     releaseFifo(fifo);
   }
@@ -40,7 +38,6 @@ function fifo(path: string): string {
   return makeFifo(path);
 }
 
-/** Its own ledger, so a stalled root here is invisible to other tests. */
 function bounded(options: ConstructorParameters<typeof BoundedFs>[0] = {}): BoundedFs {
   return new BoundedFs({ deadlineMs: DEADLINE_MS, ledger: createProbeLedger(), ...options });
 }
@@ -61,8 +58,6 @@ async function eventually(check: () => boolean): Promise<boolean> {
   return false;
 }
 
-/** A gate the helper waits on for every path under `prefix`, standing in for
- * a folder whose calls never return. */
 function stalled(prefix: string): { stall: { prefix: string; gate: SharedArrayBuffer } } {
   return { stall: { prefix, gate: new SharedArrayBuffer(4) } };
 }
@@ -79,7 +74,6 @@ describe("BoundedFs on readable paths", () => {
     const fs = bounded({ deadlineMs: READABLE_DEADLINE_MS });
     mkdirSync(join(dir, "real"));
     symlinkSync(join(dir, "real"), join(dir, "link"));
-    // A BOM, bytes that are not UTF-8, and more than the first reply buffer.
     const text = Buffer.concat([
       Buffer.from("﻿{}\n"),
       Buffer.from([0xff, 0xfe]),
@@ -137,7 +131,6 @@ describe("BoundedFs on readable paths", () => {
     expect(fs.readSmallFile(join(dir, "large"), 65)).toBe("x".repeat(65));
     expect(fs.readSmallFile(dir, 64)).toBeNull();
     expect(fs.readSmallFile(join(dir, "gone"), 64)).toBeNull();
-    // Opened without blocking, so the FIFO is refused at once.
     expect(fs.readSmallFile(join(dir, "pipe"), 64)).toBeNull();
     expect(fs.unanswered).toBe(0);
   });
@@ -165,7 +158,6 @@ describe("BoundedFs on a path that never answers", () => {
     expect(first).toBeLessThan(DEADLINE_MS * 4);
     expect(fs.unanswered).toBe(1);
 
-    // The same path answers at once now, and its neighbours still read.
     expect(elapsed(() => fs.readText(pipe))).toBeLessThan(DEADLINE_MS / 2);
     expect(fs.realPath(pipe)).toBe(pipe);
     expect(fs.unanswered).toBe(3);
@@ -180,7 +172,6 @@ describe("BoundedFs on a path that never answers", () => {
     expect(fs.readText(pipe)).toBeNull();
     expect(fs.isDirectory(pipe)).toBe(false);
 
-    // Answered again means the call ran instead of being skipped.
     const answered = (): boolean => {
       const before = fs.unanswered;
       fs.isDirectory(pipe);
@@ -203,7 +194,6 @@ describe("BoundedFs on a path that never answers", () => {
     const ledger = createProbeLedger();
     const fs = bounded({ ...options, ledger });
 
-    // One wait for the path and one for the folder above it that also stalls.
     const first = elapsed(() => {
       expect(fs.realPath(join(protectedDir, "one", "deep"))).toBe(
         join(protectedDir, "one", "deep"),
@@ -212,7 +202,6 @@ describe("BoundedFs on a path that never answers", () => {
     expect(first).toBeGreaterThanOrEqual(DEADLINE_MS * 2 - 40);
     expect(first).toBeLessThan(DEADLINE_MS * 6);
 
-    // Siblings and the folder itself are skipped without a wait.
     const rest = elapsed(() => {
       expect(fs.readText(join(protectedDir, "two", "opencode.json"))).toBeNull();
       expect(fs.isDirectory(join(protectedDir, "one"))).toBe(false);
@@ -221,11 +210,9 @@ describe("BoundedFs on a path that never answers", () => {
     expect(rest).toBeLessThan(DEADLINE_MS / 2);
     expect(fs.unanswered).toBe(4);
 
-    // Everything outside it answers as before.
     expect(fs.readText(join(dir, "code", "opencode.json"))).toBe("{}");
     expect(fs.isDirectory(dir)).toBe(true);
 
-    // Another thread's instance shares the ledger and does not wait at all.
     const next = bounded({ ...options, ledger });
     expect(
       elapsed(() => {
@@ -246,17 +233,14 @@ describe("BoundedFs on a path that never answers", () => {
     mkdirSync(join(protectedDir, "one"), { recursive: true });
     mkdirSync(join(protectedDir, "two"), { recursive: true });
     writeFileSync(join(protectedDir, "two", "opencode.json"), "{}");
-    // Past the gate, this read still blocks on the FIFO.
     const pipe = fifo(join(protectedDir, "one", "opencode.json"));
     const options = stalled(protectedDir);
     const fs = bounded(options);
 
     expect(fs.readText(pipe)).toBeNull();
-    // The folder answers again, and its helper returns, while the read does not.
     open(options.stall.gate);
     await Bun.sleep(250);
 
-    // A freed slot would let this read park a third helper the ledger does not count.
     expect(elapsed(() => expect(fs.readText(pipe)).toBeNull())).toBeLessThan(DEADLINE_MS / 2);
     const sibling = join(protectedDir, "two", "opencode.json");
     expect(fs.readText(sibling)).toBeNull();
@@ -273,7 +257,6 @@ describe("BoundedFs on a path that never answers", () => {
       expect(fs.readText(fifo(join(dir, `pipe-${index}`)))).toBeNull();
     }
     expect(fs.unanswered).toBe(8);
-    // A ninth stalled path could not be remembered, so nothing is tried.
     expect(fs.readText(join(dir, "readable"))).toBeNull();
     expect(fs.unanswered).toBe(9);
   });

@@ -6,11 +6,6 @@ import { type Db, ensureDerivedMetadata, type RequestContext } from "./context.t
 import { executeReadOp, type ReadOpArgs, type ReadOpName, type ReadOpOutput } from "./read-ops.ts";
 import { ReadPoolClosedError } from "./read-pool.ts";
 
-/**
- * Run a read operation for a request: on the server's read pool when there is
- * one, otherwise inline on the request's connection. Null means the session
- * the operation names does not exist.
- */
 export async function runRead<N extends ReadOpName>(
   config: Config,
   context: RequestContext,
@@ -19,16 +14,10 @@ export async function runRead<N extends ReadOpName>(
   signal?: AbortSignal,
 ): Promise<ReadOpOutput | null> {
   if (context.readPool != null && context.db != null) {
-    // Derived metadata is written through the server's connection; the
-    // workers' read-only connections only ever read it.
     ensureDerivedMetadata(context.db);
     try {
       return await context.readPool.run(name, args, { signal });
     } catch (error) {
-      // While the server stops, the pool closes before the listener does.
-      // Requests that arrive or are in flight in that window still get an
-      // answer from the server's connection, which stays open until the
-      // listener has stopped, as they did before the pool existed.
       if (!(error instanceof ReadPoolClosedError)) {
         throw error;
       }
@@ -38,8 +27,6 @@ export async function runRead<N extends ReadOpName>(
   return await withDbAsync(config, context, (db) => executeReadOp(db, name, args));
 }
 
-/** Like withDb, but keeps a connection it opened alive until `callback`
- * settles, since report operations await a lazy import mid-read. */
 async function withDbAsync<T>(
   config: Config,
   context: RequestContext,

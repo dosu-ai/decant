@@ -134,7 +134,6 @@ function stageFixtures(dir: string): IngestConfig {
     );
   }
   cpSync(join(fixtureRoot, "vscode-copilot", "User"), vscodeCopilotDir, { recursive: true });
-  // Flat, as scripts/regen-goldens.ts stages them.
   const atifDir = join(dir, "sources", "atif");
   mkdirSync(atifDir, { recursive: true });
   for (const file of readdirSync(join(fixtureRoot, "atif"), {
@@ -300,15 +299,12 @@ describe("upsertSession", () => {
       const context = economics?.buckets.find((b) => b.bucket === "context");
       const code = economics?.buckets.find((b) => b.bucket === "code");
       expect(context?.generation_tokens).toBe(10);
-      // Session Window includes the 600 billed input tokens, allocated over
-      // the 11 context and 52 code tokens of generation + result volume.
       expect(context?.context_window_tokens).toBe(116);
       expect(context?.tool_calls).toBe(1);
       expect(code?.generation_tokens).toBe(50);
       expect(code?.context_window_tokens).toBe(547);
       expect(code?.tool_calls).toBe(2);
       expect(economics?.totals.context_window_tokens).toBe(663);
-      // Replacing the session retains the same ID and derived totals.
       expect(upsertSession(db, parsed, "/synthetic/reused.jsonl", 2, 3)).toBe(id);
       expect(tokenEconomicsForSession(db, id)).toEqual(economics);
     } finally {
@@ -654,7 +650,6 @@ describe("upsertSession", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);
 
-    // Create a synthetic session with a tool call that has >500 char output
     const headText = "Starting output";
     const middleText = "x".repeat(2000);
     const tailText = "Error: something failed";
@@ -1474,7 +1469,6 @@ describe("sync", () => {
       ).cache_write_1h_per_mtok,
     ).toBe(5);
 
-    // Simulate opening a migrated v9 archive whose transcripts are unchanged.
     db.exec("DELETE FROM session_economics");
     db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
     const second = sync(db, config);
@@ -1537,14 +1531,11 @@ describe("sync", () => {
       const original = read();
       expect(original.total_input_tokens).toBe(100);
       expect(original.total_output_tokens).toBe(200);
-      // Sonnet rates: input 3, output 15, cache read 0.3, 5m write 3.75,
-      // and 1h write 6 dollars per million tokens.
       expect(original.estimated_cost_usd).toBeCloseTo(
         (100 * 3 + 200 * 15 + 30 * 0.3 + 15 * 3.75 + 5 * 6) / 1_000_000,
         10,
       );
       expect(setSessionUserState(db, original.id, "archived")).toBe(true);
-      // Simulate stored totals from the parser that billed all three blocks.
       db.exec(
         "UPDATE session SET total_input_tokens = total_input_tokens * 3, total_output_tokens = total_output_tokens * 3, estimated_cost_usd = estimated_cost_usd * 3",
       );
@@ -1656,8 +1647,6 @@ describe("sync", () => {
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
 
-      // Recreate what the previous parser left: the child file's row filed under
-      // the parent's identity, replacing the parent's own row.
       db.exec("UPDATE session SET parent_session_id = NULL");
       db.exec("DELETE FROM session WHERE source_session_id = 'parent-thread'");
       db.exec(
@@ -1726,7 +1715,6 @@ describe("sync", () => {
     const economics = tokenEconomicsForSession(db, derived.id);
     expect(economics?.totals.attributed_ms).toBe(60_000);
 
-    // Simulate the previous pipeline, which counted the overlap twice.
     db.query("UPDATE session SET active_seconds = 100 WHERE id = ?1").run(derived.id);
     db.query("UPDATE ingest_source SET ingest_revision = ?1 WHERE path = ?2").run(
       INGEST_PIPELINE_REVISION - 1,
@@ -1794,7 +1782,6 @@ describe("sync", () => {
 
     const report = sync(db, config);
     expect(report).toMatchObject({ scanned: 1, ingested: 1, issues: 2, failed: 0 });
-    // Two mystery lines collapse into one unknown_record_type issue.
     expect(report.issuesByCode).toEqual({ unparsed_line: 1, unknown_record_type: 1 });
     expect(
       db
@@ -1805,7 +1792,6 @@ describe("sync", () => {
       { code: "unparsed_line", n: 1 },
     ]);
 
-    // A clean source reports no codes at all.
     write(sourcePath, fixture("claude", "sample.jsonl"));
     const clean = sync(db, config);
     expect(clean).toMatchObject({ ingested: 1, issues: 0 });
@@ -1830,7 +1816,6 @@ describe("sync", () => {
       estimated_cost_usd: number;
     };
     expect(session.model).toBe("gpt-6-astra");
-    // 500 uncached input, 400 cached input, and 150 output tokens.
     expect(session.estimated_cost_usd).toBeCloseTo(0.0129, 8);
     expect(
       db
@@ -1941,7 +1926,6 @@ describe("sync", () => {
     expect(economics?.totals.input_cost_usd).toBeCloseTo(0.0054, 8);
     expect(economics?.totals.output_cost_usd).toBeCloseTo(0.0075, 8);
 
-    // A component-only error must be repaired even when the session total is correct.
     db.exec(
       "UPDATE session_economics SET vector_json = json_set(vector_json, '$.input_cost', 0.0129, '$.output_cost', 0)",
     );
@@ -2455,8 +2439,6 @@ describe("sync", () => {
   });
 
   test("fixture sync matches frozen natural-key golden rows", async () => {
-    // Every sync regenerates recommendation signals, which read a 30-day
-    // window ending now. afterEach restores the real clock.
     setSystemTime(GOLDEN_NOW);
     const dir = freshCase();
     const config = stageFixtures(dir);
@@ -2543,7 +2525,6 @@ describe("sync lineage gating", () => {
     const db = openFreshDb(dir);
     db.exec(LEGACY_LINEAGE_ROWS);
 
-    // An unchanged archive keeps the links its last ingest resolved.
     expect(sync(db, config)).toMatchObject({ scanned: 0, ingested: 0 });
     expect(alphaLineage(db)).toEqual({ is_subagent: 0, agent_id: null, parent_key: null });
 
@@ -2747,7 +2728,6 @@ describe("sync bookkeeping", () => {
     const state = (): unknown =>
       db.query("SELECT reasoning_effort, reasoning_effort_checked FROM session").get();
 
-    // Reading a directory fails with EISDIR rather than ENOENT.
     reset(dirname(sourcePath));
     expect(materializeMissingReasoningEfforts(db)).toBe(0);
     expect(state()).toEqual({ reasoning_effort: null, reasoning_effort_checked: 0 });
@@ -2981,8 +2961,6 @@ describe("OpenCode ingest", () => {
     const db = openFreshDb(dir);
     sync(db, config);
 
-    // A streamed assistant row is rewritten in place: same row count, newer
-    // time_updated.
     let writer = new Database(main, { strict: true });
     writer.exec(`UPDATE session_message SET time_updated = time_updated + 1,
                    data = json_set(data, '$.content[0].text', 'The file says hello, again.')
@@ -2994,7 +2972,6 @@ describe("OpenCode ingest", () => {
       db.query("SELECT text FROM block WHERE type = 'text' ORDER BY id DESC LIMIT 1").get(),
     ).toEqual({ text: "The file says hello, again." });
 
-    // A revert deletes rows past the revert point: the count goes down.
     writer = new Database(main, { strict: true });
     writer.exec("DELETE FROM session_message WHERE id IN ('msg_sample_3', 'msg_sample_4')");
     writer.exec("UPDATE session_v2 SET time_updated = time_updated + 1 WHERE id = 'ses_sample'");
@@ -3017,7 +2994,6 @@ describe("OpenCode ingest", () => {
     const source = new Database(opencodeDb);
     source.query("UPDATE session_v2 SET directory = ?1").run(project);
     source.close();
-    // Neither file ever answers a plain read.
     makeFifo(join(project, "opencode.json"));
     makeFifo(join(project, ".git"));
     const archive = join(dir, "archive.db");
@@ -3039,13 +3015,11 @@ describe("OpenCode ingest", () => {
       failed: 0,
       issuesByCode: { unreachable_project_directory: 1 },
     });
-    // Unchanged and still unreachable: skipped, not derived again.
     expect(blocked?.result.second).toMatchObject({ ingested: 0, skipped: 1 });
     expect(blocked?.result.issues).toEqual([{ code: "unreachable_project_directory" }]);
     expect(blocked?.result.hashes[0]?.hash).toEndWith("|no-project-config");
     expect(blocked?.result.projects).toEqual([{ root_source: "self", repo_remote: null }]);
 
-    // Once the directory reads, the session is derived again with its config.
     rmSync(join(project, "opencode.json"));
     rmSync(join(project, ".git"));
     writeFileSync(
@@ -3056,7 +3030,6 @@ describe("OpenCode ingest", () => {
     expect(readable?.result.first).toMatchObject({ ingested: 1, issues: 0 });
     expect(readable?.result.issues).toEqual([]);
     expect(readable?.result.hashes[0]?.hash).not.toContain("|no-project-config");
-    // The project's servers are recognized now.
     expect(readable?.result.mcpCalls.n).toBeGreaterThan(blocked?.result.mcpCalls.n ?? 0);
   }, 90_000);
 
@@ -3139,7 +3112,6 @@ describe("OpenCode ingest", () => {
         is_error: 1,
       },
     ]);
-    // The error facet counts failed result blocks; an inner call has none.
     expect(db.query("SELECT error_count FROM session").get()).toEqual({ error_count: 1 });
     closeDb(db);
   });
@@ -3273,11 +3245,9 @@ describe("OpenCode ingest", () => {
       { hash: expect.stringMatching(/^\d+:1:1:\d+\|mcp:[0-9a-f]{12}$/) },
     ]);
 
-    // Rewriting a config without changing its server names re-derives nothing.
     writeFileSync(join(alpha, "opencode.json"), `// same servers\n${servers("dosu")}\n`);
     expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 2 });
 
-    // Adding a server re-derives the sessions in that directory only.
     writeFileSync(join(alpha, "opencode.json"), servers("dosu", "exa"));
     expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
     expect(toolNames()).toEqual([
@@ -3286,7 +3256,6 @@ describe("OpenCode ingest", () => {
     ]);
     expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 2 });
 
-    // Removing every server returns the key to the bare fingerprint.
     rmSync(join(alpha, "opencode.json"));
     expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 1 });
     expect(toolNames()).toEqual([
@@ -3334,7 +3303,6 @@ describe("OpenCode ingest", () => {
          ('msg_2', 'ses_code', 'assistant', 2, ${T0 + 1000}, ${T0 + 2000}, '${data.replaceAll("'", "''")}');`,
     ]);
     const db = openFreshDb(dir);
-    // No opencode.json names `dosu`: the namespace alone marks it MCP.
     expect(sync(db, config)).toMatchObject({ ingested: 1, issues: 0, failed: 0 });
     const [session] = listSessions(db);
     expect(session).toMatchObject({ dosu_mcp_direct_calls: 2, dosu_mcp_tree_calls: 2 });
@@ -3384,8 +3352,6 @@ describe("OpenCode ingest", () => {
         call_block_tool_use_id: "call_exec_b",
       },
     ]);
-    // Totals count the execute calls and their inner calls alike, while the
-    // transcript keeps one block per execute call and its result.
     expect(totals(db).tool_calls).toBe(5);
     expect(db.query("SELECT COUNT(*) AS n FROM block WHERE type = 'tool_use'").get()).toEqual({
       n: 2,
@@ -3467,8 +3433,6 @@ describe("OpenCode ingest", () => {
   test("ingests without an unreadable model catalog and re-derives once it reads", () => {
     const { dir, opencodeDir, config } = opencodeCase();
     const main = join(opencodeDir, "opencode.db");
-    // A second session in the same database shows the catalog is read, and
-    // its failure reported, once per database rather than once per session.
     const copy = `
       CREATE TEMP TABLE s AS SELECT * FROM session_v2;
       UPDATE s SET id = 'ses_copy';
@@ -3477,7 +3441,6 @@ describe("OpenCode ingest", () => {
       UPDATE m SET id = 'copy_' || id, session_id = 'ses_copy';
       INSERT INTO session_message SELECT * FROM m;
     `;
-    // The session tables read fine; the model catalog query then fails.
     buildOpenCodeDb(main, [
       "DROP TABLE kv; CREATE TABLE kv (key TEXT PRIMARY KEY, other TEXT);",
       opencodeFixtureSql("sample.sql"),
@@ -3500,7 +3463,6 @@ describe("OpenCode ingest", () => {
       "error.message": expect.stringContaining("no such column"),
     };
 
-    // The stored key marks the copy as derived without the catalog.
     const withoutCatalog = "1791786060000:4:4:1791786008000|no-catalog";
 
     const first = captureWarnings(() => sync(db, config));
@@ -3512,12 +3474,10 @@ describe("OpenCode ingest", () => {
       { source_session_id: "ses_sample", context_window_tokens: null, hash: withoutCatalog },
     ]);
 
-    // Still unreadable: nothing is re-derived, and the database warns once.
     const second = captureWarnings(() => sync(db, config));
     expect(second.result).toMatchObject({ ingested: 0, skipped: 3, failed: 0 });
     expect(second.lines).toEqual([expect.objectContaining(catalogWarning)]);
 
-    // Same sessions, readable catalog: each is re-derived once with its window.
     rmSync(main);
     buildOpenCodeDb(main, [opencodeFixtureSql("sample.sql"), copy]);
     const third = captureWarnings(() => sync(db, config));
@@ -3606,7 +3566,6 @@ describe("OpenCode ingest", () => {
     const beta = join(opencodeDir, "opencode-beta.db");
     buildOpenCodeFixtureDb(main, ["sample.sql"]);
     buildOpenCodeFixtureDb(beta, ["sample.sql"]);
-    // "opencode-beta.db" sorts before "opencode.db" ('-' < '.').
     const expected = [`${beta}#ses_sample`];
     expect(discoverSourcePaths([main, beta]).map((file) => file.path)).toEqual(expected);
     expect(discoverSourcePaths([beta, main]).map((file) => file.path)).toEqual(expected);
@@ -3681,7 +3640,6 @@ describe("OpenCode ingest", () => {
   });
 
   describe("1.x sessions", () => {
-    /** A one-message session in the 1.x tables. */
     function v1Session(id: string, timeUpdated: number, title: string): string {
       return `
         INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
@@ -3693,7 +3651,6 @@ describe("OpenCode ingest", () => {
           ('prt_${id}_1', 'msg_${id}_1', '${id}', ${T0}, ${T0}, '{"type":"text","text":"hello"}');`;
     }
 
-    /** The same session in the 2.x tables. */
     function v2Session(id: string, timeUpdated: number, title: string): string {
       return `
         INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated)
@@ -3808,7 +3765,6 @@ describe("OpenCode ingest", () => {
       };
       expect((titles(db) as unknown[])[1]).toEqual(migrated);
 
-      // A 2.x build continues the session.
       exec(main, "UPDATE session_v2 SET time_updated = 1791799999999 WHERE id = 'ses_shared'");
       expect(sync(db, config)).toMatchObject({ ingested: 1, skipped: 2 });
       expect((titles(db) as unknown[])[1]).toEqual(migrated);
@@ -3830,8 +3786,6 @@ describe("OpenCode ingest", () => {
           )
           .get();
 
-      // No cache file: the window stays absent, one line says why, and the
-      // key records that the session was derived without a catalog.
       const missing = captureWarnings(() => sync(db, withCache));
       expect(missing.result).toMatchObject({ ingested: 1, failed: 0 });
       expect(missing.lines).toEqual([
@@ -3844,7 +3798,6 @@ describe("OpenCode ingest", () => {
       expect(window()).toEqual({ window: null, hash: expect.stringMatching(/\|no-catalog$/) });
       expect(sync(db, withCache)).toMatchObject({ ingested: 0, skipped: 1 });
 
-      // A malformed file warns and still never fails the sync.
       mkdirSync(dirname(modelsPath), { recursive: true });
       writeFileSync(modelsPath, "{not json");
       const malformed = captureWarnings(() => sync(db, withCache));
@@ -3857,7 +3810,6 @@ describe("OpenCode ingest", () => {
         }),
       ]);
 
-      // Once the cache reads, the session is re-derived with its window.
       writeFileSync(
         modelsPath,
         JSON.stringify({
@@ -3910,9 +3862,6 @@ describe("OpenCode ingest", () => {
               ORDER BY m.seq`,
           )
           .all();
-      // msg_mg_2's 2.x row holds only its last step (150 in / 30 out); the
-      // compaction row holds none; msg_mg_6 was written by 2.x and keeps its
-      // own disjoint tokens even though the session predates 1.3.16.
       expect(usage()).toEqual([
         {
           id: "msg_mg_2",
@@ -3948,11 +3897,8 @@ describe("OpenCode ingest", () => {
         )
         .get() as { input: number; output: number; reasoning: number; cost: number };
       expect(session).toMatchObject({ input: 610, output: 102, reasoning: 4, corrected: 2 });
-      // 65.5e-6 + 65e-6 + 15e-6, each the list price of the corrected usage.
       expect(session.cost).toBeCloseTo(0.0001455, 10);
 
-      // An edit to the 1.x copy (OpenCode moves the row's time_updated with
-      // it) re-derives the 2.x session, though no 2.x row changed.
       expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 3 });
       exec(
         main,
@@ -3972,8 +3918,6 @@ describe("OpenCode ingest", () => {
       exec(main, "DELETE FROM part; DELETE FROM message; DELETE FROM session;");
       const db = openFreshDb(dir);
       expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
-      // Last-step tokens only, and msg_mg_6's reasoning is read as included
-      // because nothing tells it apart from a migrated 1.3.10 row.
       expect(
         db
           .query(
@@ -4000,8 +3944,6 @@ describe("OpenCode ingest", () => {
       expect(pick()).toEqual([`${main}#ses_shared`]);
       exec(beta, `UPDATE session_v2 SET time_updated = ${T0 + 3000}`);
       expect(pick()).toEqual([`${beta}#ses_shared`]);
-      // Across databases a tie goes to the smaller path ('-' < '.'), whatever
-      // the formats.
       exec(beta, `UPDATE session_v2 SET time_updated = ${T0 + 2000}`);
       expect(pick()).toEqual([`${beta}#ses_shared`]);
       rmSync(main);
@@ -4057,8 +3999,6 @@ describe("OpenCode ingest", () => {
       });
       const path = `${main}#ses_v1_sample`;
 
-      // A 2.x build opens the file and migrates the session, copying
-      // time_updated verbatim.
       exec(main, opencodeFixtureSql("schema.sql"));
       exec(
         main,
@@ -4076,7 +4016,6 @@ describe("OpenCode ingest", () => {
       });
       expect(sync(db, config)).toMatchObject({ ingested: 0, skipped: 1 });
 
-      // A 1.x binary sharing the file keeps writing the session.
       exec(main, "UPDATE session SET time_updated = time_updated + 1000");
       expect(sync(db, config)).toMatchObject({ ingested: 1 });
       expect(current()).toEqual({
@@ -4242,7 +4181,6 @@ describe("ATIF ingest", () => {
   test("reads every trajectory in the directory and links subagents across files", () => {
     const { dir, atifDir, config } = atifCase();
     const db = openFreshDb(dir);
-    // The README beside the fixtures is not a trajectory.
     expect(sync(db, config)).toMatchObject({ scanned: 3, ingested: 3, failed: 0 });
     const rows = atifRows(db);
     expect(
@@ -4276,7 +4214,6 @@ describe("ATIF ingest", () => {
         spawn_depth: null,
       },
       {
-        // Stored in its own file and named only by the parent's trajectory_path.
         source_session_id:
           "synthetic-trial-1-summarization-1-summary/trajectory.summarization-1-summary",
         is_subagent: 1,
@@ -4287,10 +4224,8 @@ describe("ATIF ingest", () => {
     ]);
 
     const byId = new Map(rows.map((row) => [row.source_session_id, row]));
-    // A Harbor trial is filed under its job directory.
     expect(byId.get("synthetic-trial-1")?.project).toBe(join(atifDir, "jobs", "synthetic-job"));
     expect(byId.get("synthetic-embedded")?.project).toBe("/tmp/example");
-    // Claude Code tool names keep their meaning in an imported trajectory.
     expect(byId.get("synthetic-embedded")?.agent_spawn_count).toBe(1);
     expect(byId.get("synthetic-embedded")?.compaction_count).toBe(1);
     expect(
@@ -4299,7 +4234,6 @@ describe("ATIF ingest", () => {
         .all(byId.get("synthetic-embedded")?.id ?? 0),
     ).toEqual([{ path: "/tmp/example/config.toml", operation: "read" }]);
 
-    // A model Decant prices is priced; one it cannot keeps the recorded cost.
     expect(byId.get("synthetic-trial-1")?.estimated_cost_usd).toBeGreaterThan(0);
     const summary = getSession(
       db,
@@ -4596,7 +4530,6 @@ describe("ATIF ingest", () => {
           .get(sourceId) as { estimated_cost_usd: number }
       ).estimated_cost_usd;
     expect(cost("alone")).toBeCloseTo(0.5, 10);
-    // That total may include the embedded subagent, a session of its own.
     expect(cost("shared")).toBe(0);
     closeDb(db);
   });
@@ -4735,7 +4668,6 @@ describe("sync planner statistics", () => {
     write(path, `${lines.join("\n")}\n`);
   }
 
-  // The per-message text lookup in contextWindowForSession, reduced to its join.
   const HAS_TEXT_PLAN = `EXPLAIN QUERY PLAN
     SELECT EXISTS(SELECT 1 FROM block b WHERE b.message_id = m.id AND b.type = 'text')
       FROM message m WHERE m.session_id = 1`;
@@ -4757,7 +4689,6 @@ describe("sync planner statistics", () => {
     }
     const db = openFreshDb(dir);
     try {
-      // sqlite_stat1 does not exist until the first ANALYZE creates it.
       const blockStatRows = (): number =>
         db.query("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").get() == null
           ? 0
@@ -4773,13 +4704,10 @@ describe("sync planner statistics", () => {
         lastStatRows?: number;
         lastPlan?: string;
       } = {};
-      // Progress fires after each file and before the end-of-sync optimize,
-      // so the last callback shows what the loop itself left behind.
       const report = sync(db, config, undefined, (progress) => {
         if (progress.scanned === 1) {
           seen.firstStatRows = blockStatRows();
         }
-        // The first refresh runs once 25 sessions are in, before file 26.
         if (progress.scanned === 25) {
           seen.beforeRefreshStatRows = blockStatRows();
         }

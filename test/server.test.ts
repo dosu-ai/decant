@@ -164,7 +164,6 @@ describe("server routes", () => {
         expect(body).toContain('<div id="root"></div>');
         expect(body).toContain('rel="icon"');
         expect(body).toContain('name="description"');
-        // A framed UI turns a hostile page's clicks into same-origin API writes.
         expect(response.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
         expect(response.headers.get("x-frame-options")).toBe("DENY");
         expect(response.headers.get("x-content-type-options")).toBe("nosniff");
@@ -191,7 +190,6 @@ describe("server routes", () => {
       expect(health.status).toBe(200);
       expect(health.headers.get("x-content-type-options")).toBe("nosniff");
 
-      // Read routes answer through readOutputResponse, not json().
       const summary = await fetch(`${base}/api/stats/summary`);
       expect(summary.status).toBe(200);
       expect(summary.headers.get("content-type")).toBe("application/json; charset=utf-8");
@@ -294,7 +292,6 @@ describe("server routes", () => {
       SEARCH_INDEX_PAGE_MAX,
     );
 
-    // Small pages abut in the same newest-first order as one large page.
     const first = (await route(config, "/api/sessions/search-index?limit=3")).body as {
       id: number;
     }[];
@@ -547,7 +544,6 @@ describe("server routes", () => {
       await response.body?.cancel();
     }
 
-    // Other GET routes keep their existing behavior: only the stream holds a slot.
     const crossSiteRead = await handleRequest(
       new Request("http://127.0.0.1:3000/api/health", {
         headers: { "sec-fetch-site": "cross-site" },
@@ -844,7 +840,6 @@ describe("server routes", () => {
           agent: "codex",
           terminal: "wezterm",
           ide: "zed",
-          // Older clients may still send this removed preference.
           dosuSuggestions: "hide",
           extra: "no",
         }),
@@ -1020,8 +1015,6 @@ describe("server routes", () => {
         code: "launch_unsupported_platform",
         dir: projectDir,
       });
-      // The directory is gone, so the launch starts where it always did and
-      // the prompt it would run says so.
       const fallback = (await (
         await post({ agent: "codex", prompt: "go", key: gone?.key })
       ).json()) as { dir: string; command: string };
@@ -1032,7 +1025,6 @@ describe("server routes", () => {
       const noKey = await post({ agent: "codex", prompt: "go" });
       expect(await noKey.json()).toMatchObject({ dir: home });
 
-      // A directory in the request body is not read.
       const steered = await post({ agent: "codex", prompt: "go", dir: projectDir });
       expect(await steered.json()).toMatchObject({ dir: home });
     } finally {
@@ -1093,9 +1085,6 @@ describe("server routes", () => {
       message_limit: 2,
       has_more_messages: false,
     });
-    // Backward paging: the client holds a window starting at offset 2 and asks
-    // for the gap in front of it. The two pages must abut exactly -- an overlap
-    // would duplicate rows, a hole would make messages unreachable by keyboard.
     const laterWindow = await route(config, `/api/sessions/${id}?message_limit=2&message_offset=2`);
     const earlierGap = await route(config, `/api/sessions/${id}?message_limit=2&message_offset=0`);
     const seqOf = (result: { body: unknown }) =>
@@ -1557,7 +1546,6 @@ describe("server routes", () => {
     seed(config);
     const db = openDb(config.dbPath);
     let builds = 0;
-    // An empty cached model makes any answer that came from the cache obvious.
     const economics = new EconomicsCache({
       db,
       dbPath: config.dbPath,
@@ -1867,9 +1855,7 @@ describe("server routes", () => {
     } finally {
       try {
         lockDb.exec("ROLLBACK");
-      } catch {
-        // The assertion can fail before the transaction starts.
-      }
+      } catch {}
       lockDb.close();
       requestDb.close();
     }
@@ -1959,24 +1945,13 @@ describe("server routes", () => {
             sawAbort = true;
             reject(new Error("aborted"));
           });
-          // Never resolves on its own; only the abort (from server.stop()'s
-          // dispose) or the test's gate settles this.
           gate.promise.then(() => reject(new Error("test cleanup")));
         }),
     });
 
-    // Start a real request that will hang awaiting the gated rebuild — this
-    // reproduces the exact scenario where naive ordering (disposing the
-    // economics cache only *after* awaiting Bun's native stop()) deadlocks:
-    // native stop() waits for this in-flight handler, which waits for the
-    // rebuild, which is never told to abort until stop() already returned.
     const pendingRequest = fetch(
       `http://127.0.0.1:${server.port}/api/analytics/token-economics`,
     ).catch((error: unknown) => error);
-    // Let the connection actually get accepted and the handler reach its
-    // await on the rebuild; racing stop() immediately after fetch() can
-    // force-close the connection before the server ever processes it, which
-    // would make this test pass regardless of the dispose ordering.
     await Bun.sleep(50);
 
     const t0 = performance.now();
@@ -2249,8 +2224,6 @@ describe("write origin must match the Host header", () => {
 });
 
 describe("trusted peer resolution", () => {
-  // Addresses appear the way `/proc/net/route` prints them: the little-endian
-  // reading of the network-byte-order word, so 172.17.0.1 is "010011AC".
   const DEFAULT_ROUTE = "00000000";
   const UP = "0001";
   const UP_GATEWAY = "0003";
@@ -2269,13 +2242,9 @@ describe("trusted peer resolution", () => {
 
   interface FakeInterface {
     ifindex: number;
-    /** Defaults to a peer index that exists in no other namespace entry, which
-     * is what a container-side veth looks like. */
     iflink?: number;
     devtype?: string;
-    /** A backing bus device, so a real NIC in the host's own namespace. */
     physical?: boolean;
-    /** Stacked on this parent in the same namespace (vlan and friends). */
     lowerOf?: string;
   }
 
@@ -2319,8 +2288,6 @@ describe("trusted peer resolution", () => {
   const loopback: FakeInterface = { ifindex: 1, iflink: 1 };
   const optIn = { DECANT_TRUST_DEFAULT_GATEWAY: "1" };
 
-  /** A container on the default Docker bridge: default route via 172.17.0.1
-   * over a veth, plus the on-link 172.17.0.0/16 route. */
   function bridgedContainer(): TrustedPeerSources {
     return namespace(
       [
@@ -2338,7 +2305,6 @@ describe("trusted peer resolution", () => {
   test("stays closed until an operator opts in", () => {
     const container = bridgedContainer();
     expect(resolveTrustedPeers(undefined, {}, container)).toEqual([]);
-    // The documented off switch, plus anything that is not exactly "1".
     expect(
       resolveTrustedPeers(undefined, { DECANT_TRUST_DEFAULT_GATEWAY: "0" }, container),
     ).toEqual([]);
@@ -2349,15 +2315,12 @@ describe("trusted peer resolution", () => {
 
   test("explicit peers replace the derived gateway instead of adding to it", () => {
     const container = bridgedContainer();
-    // An operator narrowing the allowlist gets exactly what they asked for.
     expect(
       resolveTrustedPeers(undefined, { ...optIn, DECANT_TRUSTED_PEERS: "192.168.1.50" }, container),
     ).toEqual(["192.168.1.50"]);
-    // Setting the variable at all counts, so an empty value trusts nobody.
     expect(
       resolveTrustedPeers(undefined, { ...optIn, DECANT_TRUSTED_PEERS: "" }, container),
     ).toEqual([]);
-    // --trusted-peer outranks both environment variables.
     expect(
       resolveTrustedPeers(
         ["10.9.9.9"],
@@ -2380,9 +2343,6 @@ describe("trusted peer resolution", () => {
   });
 
   test("refuses a gateway outside the derivation bound", () => {
-    // Podman's default bridge is a real container bridge, but 10.88.0.1 sits
-    // outside the range this derivation is bounded to, so it needs an explicit
-    // peer exactly as it did before.
     const podman = namespace(
       [
         routeRow("eth0", DEFAULT_ROUTE, "0100580A", UP_GATEWAY, DEFAULT_ROUTE),
@@ -2394,7 +2354,6 @@ describe("trusted peer resolution", () => {
   });
 
   test("refuses the host's own network namespace", () => {
-    // --network host on a laptop: the "default gateway" is the LAN router.
     const lan = namespace(
       [
         routeRow("eth0", DEFAULT_ROUTE, "0101A8C0", UP_GATEWAY, DEFAULT_ROUTE),
@@ -2403,8 +2362,6 @@ describe("trusted peer resolution", () => {
       { lo: loopback, eth0: { ifindex: 2, physical: true } },
     );
     expect(resolveTrustedPeers(undefined, optIn, lan)).toEqual([]);
-    // Same shape on a network that happens to fall inside the bound: the
-    // physical NIC still gives it away.
     const inRangeLan = namespace(
       [
         routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
@@ -2420,33 +2377,28 @@ describe("trusted peer resolution", () => {
       routeRow("eth0", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
       routeRow("eth0", "000510AC", DEFAULT_ROUTE, UP, MASK_24),
     ];
-    // A macvlan/ipvlan container sits directly on the LAN and publishes its kind.
     const macvlan = namespace(inRangeDefault, {
       lo: loopback,
       eth0: { ifindex: 2, devtype: "macvlan" },
     });
     expect(resolveTrustedPeers(undefined, optIn, macvlan)).toEqual([]);
-    // A host bridge, tunnel or bond links to no peer at all.
     const standalone = namespace(inRangeDefault, {
       lo: loopback,
       eth0: { ifindex: 2, iflink: 2 },
     });
     expect(resolveTrustedPeers(undefined, optIn, standalone)).toEqual([]);
-    // A device stacked on a parent in this same namespace.
     const stacked = namespace(inRangeDefault, {
       lo: loopback,
       eth0: { ifindex: 2, lowerOf: "eth1" },
       eth1: { ifindex: 3, physical: true },
     });
     expect(resolveTrustedPeers(undefined, optIn, stacked)).toEqual([]);
-    // A veth pair with both ends in this namespace is not a container boundary.
     const localPair = namespace(inRangeDefault, {
       lo: loopback,
       eth0: { ifindex: 2, iflink: 3, devtype: "veth" },
       veth1: { ifindex: 3, iflink: 2, devtype: "veth" },
     });
     expect(resolveTrustedPeers(undefined, optIn, localPair)).toEqual([]);
-    // An interface name that is not a plain device name never becomes a path.
     const traversal = namespace(
       [
         routeRow("../../etc", DEFAULT_ROUTE, "010510AC", UP_GATEWAY, DEFAULT_ROUTE),
@@ -2458,7 +2410,6 @@ describe("trusted peer resolution", () => {
   });
 
   test("refuses a multi-homed host", () => {
-    // Wi-Fi and Ethernet both up: no single gateway stands for "the host".
     const multiHomed = namespace(
       [
         routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY, DEFAULT_ROUTE),
@@ -2499,15 +2450,10 @@ describe("trusted peer resolution", () => {
     });
     expect(resolveTrustedPeers(undefined, optIn, onLinkOnly)).toEqual([]);
     const malformedDefaults = [
-      // Not hex.
       routeRow("eth0", DEFAULT_ROUTE, "ZZZZZZZZ", UP_GATEWAY, DEFAULT_ROUTE),
-      // Flagged as a gateway route with no gateway.
       routeRow("eth0", DEFAULT_ROUTE, DEFAULT_ROUTE, UP_GATEWAY, DEFAULT_ROUTE),
-      // On-link default route: RTF_GATEWAY is not set.
       routeRow("eth0", DEFAULT_ROUTE, "010011AC", UP, DEFAULT_ROUTE),
-      // Down interface: RTF_UP is not set.
       routeRow("eth0", DEFAULT_ROUTE, "010011AC", "0002", DEFAULT_ROUTE),
-      // Truncated row.
       ["eth0", DEFAULT_ROUTE, "010011AC", UP_GATEWAY].join("\t"),
     ];
     for (const malformed of malformedDefaults) {
@@ -2526,7 +2472,6 @@ describe("trusted peer resolution", () => {
     const config = freshConfig();
     const trustedPeers = resolveTrustedPeers(undefined, optIn, bridgedContainer());
 
-    // Forged Host header, source address of a co-located container.
     const sibling = await handleRequest(new Request("http://localhost:3000/api/config"), config, {
       boundHostname: "0.0.0.0",
       remoteAddress: "172.17.0.5",
@@ -2538,8 +2483,6 @@ describe("trusted peer resolution", () => {
       code: "forbidden_remote",
     });
 
-    // The browser on the host reaches the published port, and Docker forwards
-    // it from the container's gateway.
     const published = await handleRequest(new Request("http://127.0.0.1:3000/api/config"), config, {
       boundHostname: "0.0.0.0",
       remoteAddress: "172.17.0.1",

@@ -23,7 +23,6 @@ function columnWidth(column: string): number {
   return Number(rule?.[1]);
 }
 
-/** Container-query tiers in source order, each with the columns it drops. */
 const tiers = [
   ...styles.matchAll(/@container sessions-table \(width < (\d+)px\) \{([\s\S]*?)\n\}/g),
 ].map((match) => ({
@@ -95,7 +94,6 @@ describe("sessions table layout", () => {
       expect(tier.hides.length).toBeGreaterThan(0);
       visible = visible.filter((column) => !tier.hides.includes(column));
     }
-    // Below the last tier the table scrolls rather than squeezing the title.
     const tableRule = /\.sessions-table \{\s*min-width: (\d+)px;/.exec(styles);
     expect(Number(tableRule?.[1])).toBe(fixedWidth() + TITLE_FLOOR_PX);
   });
@@ -108,8 +106,6 @@ describe("sessions table layout", () => {
   });
 
   test("keeps the empty message out of the column grid", () => {
-    // A colSpan row would add back the columns a narrow panel hides, and the
-    // phantom columns squeeze the visible header.
     expect(view).not.toContain("colSpan");
     expect(view).toContain('<p className="sessions-empty">{emptyMessage}</p>');
   });

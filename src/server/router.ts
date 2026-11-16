@@ -60,9 +60,6 @@ export async function handleRequest(
     return await dispatch({ request, url, config, context, dateFilter });
   } catch (error) {
     if (error instanceof ReadCancelledError) {
-      // The client disconnected before its read ran. Nobody receives this
-      // response, so it is not a server error; 499 is the conventional
-      // "client closed request" status in access logs.
       return new Response(null, { status: 499 });
     }
     const response = responseForError(error);

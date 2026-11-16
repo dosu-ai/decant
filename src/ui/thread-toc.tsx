@@ -15,7 +15,6 @@ import type {
 export function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   return messages.flatMap((message) => {
     const items: ThreadTocItem[] = [];
-    // Compact summaries are machine-generated continuations, not prompts.
     if (message.role === "user" && !message.is_compact_summary) {
       const label =
         message.blocks.find((block) => block.block_type === "text" && isPresent(block.text))
@@ -46,8 +45,6 @@ export function threadToc(messages: SessionDetailData["messages"]): ThreadTocIte
 }
 
 export function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[] {
-  // One block can carry several Dosu calls (an OpenCode `execute` program
-  // runs them inside a single tool call), so repeats of a key get a suffix.
   const seen = new Map<string, number>();
   const uniqueKey = (key: string): string => {
     const count = seen.get(key) ?? 0;
@@ -125,11 +122,6 @@ export function tocPresentation(text: string): { label: string; icon: IconName }
   return { label: firstLine(cleanSessionTitle(text) ?? text, 70), icon: "messages" };
 }
 
-/**
- * Header stats are whole-session figures, so `totals` (server-aggregated) is
- * used; counting the loaded window would shrink as a transcript paginates. The
- * window fallback only covers payloads that predate `totals`.
- */
 export function threadStats(
   summary: SessionSummary,
   messages: SessionDetailData["messages"],

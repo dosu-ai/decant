@@ -1,10 +1,6 @@
-// Read-only access to an OpenCode database: the 2.x tables (`session_v2`,
-// `session_message`) and the 1.x tables (`session`, `message`, `part`), which
-// one file may hold side by side. OpenCode owns the file and
-// keeps it in WAL mode; this module only reads. The connection is opened
-// read-only (never `immutable`), so the -wal and -shm files stay visible and
-// rows OpenCode committed since the last checkpoint are seen. Nothing here
-// writes or checkpoints, and the OpenCode CLI is never started.
+// OpenCode keeps its database in WAL mode. The connection is opened read-only,
+// never `immutable`, so the -wal and -shm files stay visible and rows OpenCode
+// committed since the last checkpoint are seen.
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -28,30 +24,21 @@ import type {
 export interface OpenCodeSessionRef {
   dbPath: string;
   sessionId: string;
-  /** `v2` = session_v2/session_message; `v1` = session/message/part. */
   format: "v1" | "v2";
-  /** Per-session database fingerprint (see `openCodeFingerprint` and
-   * `openCodeLegacyFingerprint`). Ingest adds the session's MCP server names
-   * to it to form the change key stored in `ingest_source.hash`, so an
-   * unchanged session is skipped. */
   fingerprint: string;
   timeUpdated: number;
-  /** The session's working directory, which decides its project MCP configs. */
   directory: string | null;
 }
 
 export interface OpenCodeLoadedSession {
   session: OpenCodeSessionRow;
   messages: OpenCodeMessageRow[];
-  /** The session's 1.x copy in the same database, when OpenCode migrated it. */
   legacy: OpenCodeLegacyCounterpart | null;
 }
 
 export interface OpenCodeLegacyLoadedSession {
   session: OpenCodeLegacySessionRow;
-  /** Ordered by `time_created, id`, as OpenCode 1.x reads them. */
   messages: OpenCodeLegacyMessageRow[];
-  /** Ordered by `message_id, id`, as OpenCode 1.x reads them. */
   parts: OpenCodeLegacyPartRow[];
 }
 
@@ -64,10 +51,6 @@ interface FingerprintRow {
   max_message_updated: number | null;
 }
 
-/** The whole file's mtime moves on every write to any session, so change
- * detection is per session: the row's own update time plus the message set's
- * count, highest seq, and newest update. A revert lowers the count and a
- * streamed assistant row raises the update time; both change the key. */
 export function openCodeFingerprint(
   timeUpdated: number,
   messageCount: number,
@@ -90,35 +73,21 @@ interface LegacyFingerprintRow {
   [stateColumn: `state_${string}`]: string | number | null;
 }
 
-/** What a 1.x session's change key is built from. */
 export interface OpenCodeLegacyChangeFields {
   timeUpdated: number;
   messageCount: number;
   partCount: number;
   maxMessageUpdated: number | null;
   maxPartUpdated: number | null;
-  /** `SUM(time_updated)` per table (an exact integer sum), so an edit to a row that is not the
-   * newest still changes the key. */
   messageUpdatedTotal: number;
   partUpdatedTotal: number;
-  /** Session columns OpenCode writes without moving `time_updated`
-   * (`LEGACY_STATE_COLUMNS`), in that order; a missing column is null. */
   sessionState: readonly (string | number | null)[];
 }
 
-/** A migrated session's 2.x key plus its 1.x copy's key. */
 function withCounterpart(fingerprint: string, legacy: string | undefined): string {
   return legacy == null ? fingerprint : `${fingerprint}|${legacy}`;
 }
 
-/** 1.x keeps parts in their own table and rewrites them while streaming, and
- * `session.time_updated` does not move when a message is appended, so the key
- * covers both tables. Renaming or archiving a session (1.4+) writes
- * `time_updated` back unchanged and touches no message or part, so the
- * session's own state goes into the key as a digest, which also keeps the
- * title out of it. The `v1:` prefix keeps it distinct from a 2.x key for the
- * same virtual path, so switching which format a session is read from always
- * re-ingests it. */
 export function openCodeLegacyFingerprint(fields: OpenCodeLegacyChangeFields): string {
   const state = createHash("sha256")
     .update(JSON.stringify(fields.sessionState))
@@ -137,9 +106,6 @@ export function openCodeLegacyFingerprint(fields: OpenCodeLegacyChangeFields): s
   ].join(":");
 }
 
-/** Session columns that change without `time_updated` moving: `setTitle` and
- * `setArchived` write it back unchanged, and the 1.15+ projector updates the
- * usage aggregates from parts. `cost` and `tokens_*` exist only from 1.14.49. */
 const LEGACY_STATE_COLUMNS = [
   "title",
   "time_archived",
@@ -151,9 +117,6 @@ const LEGACY_STATE_COLUMNS = [
   "tokens_cache_write",
 ] as const satisfies readonly (keyof OpenCodeLegacySessionRow)[];
 
-/** Every column `OpenCodeLegacySessionRow` reads. Later 1.x releases added
- * `cost`, `tokens_*`, `agent`, and `model` one migration at a time, so each
- * column is selected only if the table has it and reads as NULL otherwise. */
 const LEGACY_SESSION_COLUMNS = [
   "id",
   "project_id",
@@ -192,17 +155,10 @@ export class OpenCodeStore {
     return new OpenCodeStore(path, db);
   }
 
-  /** The 2.x tables. A database written only by OpenCode 1.x lacks them; see
-   * `listLegacySessions` for its sessions. */
   hasSessionTables(): boolean {
     return hasTable(this.#db, "session_v2") && hasTable(this.#db, "session_message");
   }
 
-  /** Every 2.x session. A session whose 1.x copy is in this database (one
-   * OpenCode migrated) has that copy's fingerprint appended, because the parser
-   * corrects migrated rows from it, so an edit there re-derives the session.
-   * `legacy` is this database's `listLegacySessions()`, when the caller already
-   * has it. */
   listSessions(legacy?: readonly OpenCodeSessionRef[]): OpenCodeSessionRef[] {
     if (!this.hasSessionTables()) {
       return [];
@@ -239,8 +195,6 @@ export class OpenCodeStore {
       .sort((a, b) => compareCodePoints(a.sessionId, b.sessionId));
   }
 
-  /** One 2.x session, its messages, and its 1.x copy if this database has
-   * one, read in one transaction so they share a WAL snapshot. */
   loadSession(sessionId: string): OpenCodeLoadedSession | null {
     if (!this.hasSessionTables()) {
       return null;
@@ -270,9 +224,6 @@ export class OpenCodeStore {
       .deferred();
   }
 
-  /** What the parser needs of a migrated session's 1.x copy: the version, the
-   * messages, and the parts that may be step-finish parts (text and tool
-   * output are left in the database). */
   #legacyCounterpart(sessionId: string): OpenCodeLegacyCounterpart | null {
     if (!this.hasLegacyTables()) {
       return null;
@@ -305,15 +256,11 @@ export class OpenCodeStore {
    * (`opencode-next.db`): 2.x sessions in a table still named `session`, beside
    * `session_message`, and no `session_v2`. OpenCode tells it apart by
    * `session_message` the same way (v1-migration.bun.ts `isNextDatabase`), and
-   * renames its `session` to `session_v2` when a 2.x release opens it. Neither
-   * reader applies to it. */
+   * renames its `session` to `session_v2` when a 2.x release opens it. */
   isPreSplitDatabase(): boolean {
     return hasTable(this.#db, "session_message") && !hasTable(this.#db, "session_v2");
   }
 
-  /** The 1.x tables: `session`, `message`, and `part` all present, in a
-   * database that is not pre-split 2.x. 2.x releases that replay the 1.x
-   * migrations carry them too, usually empty. */
   hasLegacyTables(): boolean {
     return (
       !this.isPreSplitDatabase() &&
@@ -321,16 +268,10 @@ export class OpenCodeStore {
     );
   }
 
-  /** Every session the 1.x tables hold, including ids this database's
-   * `session_v2` also holds: a 1.x binary can keep writing a session after 2.x
-   * migrated it, so which copy is current is decided by ingest from
-   * `timeUpdated`, not here. */
   listLegacySessions(): OpenCodeSessionRef[] {
     if (!this.hasLegacyTables()) {
       return [];
     }
-    // One read transaction, so the session row and its message and part counts
-    // come from the same WAL snapshot while OpenCode writes.
     const rows = this.#db
       .transaction(() => {
         const columns = legacySessionColumns(this.#db);
@@ -377,17 +318,12 @@ export class OpenCodeStore {
       .sort((a, b) => compareCodePoints(a.sessionId, b.sessionId));
   }
 
-  /** One 1.x session with its message and part rows, read in one transaction
-   * so all three see the same WAL snapshot even while OpenCode writes. Row
-   * `data` is returned as stored; the parser reports what it cannot read. */
   loadLegacySession(sessionId: string): OpenCodeLegacyLoadedSession | null {
     if (!this.hasLegacyTables()) {
       return null;
     }
     return this.#db
       .transaction((): OpenCodeLegacyLoadedSession | null => {
-        // Inside the transaction, so the projection matches the table the
-        // reads below see.
         const columns = legacySessionColumns(this.#db);
         const projection = LEGACY_SESSION_COLUMNS.map((column) =>
           columns.has(column) ? `"${column}"` : `NULL AS "${column}"`,
@@ -417,10 +353,6 @@ export class OpenCodeStore {
       .deferred();
   }
 
-  /** `limit.context` per `<providerID>/<modelID>` from OpenCode's cached
-   * models.dev catalog (`kv` key `models-dev:catalog`, or
-   * `models-dev:catalog:<hash>` for a custom catalog source). Parsed once per
-   * store; an unreadable catalog yields an empty map, never a guess. */
   contextWindows(): ReadonlyMap<string, number> {
     if (this.#contextWindows != null) {
       return this.#contextWindows;
@@ -448,8 +380,6 @@ function collectContextWindows(value: string, windows: Map<string, number>): voi
   collectCatalogWindows(parseJson(get(parseJson(value), "body")), windows);
 }
 
-/** `limit.context` per `<providerID>/<modelID>` from a models.dev catalog body
- * (`{ <provider>: { models: { <model>: { limit: { context } } } } }`). */
 function collectCatalogWindows(body: Json | undefined, windows: Map<string, number>): void {
   if (!isObject(body)) {
     return;
@@ -473,10 +403,6 @@ export type OpenCodeModelsCache =
   | { status: "missing" }
   | { status: "failed"; error: string };
 
-/** Context windows from OpenCode 1.x's models.dev cache file, which 1.x keeps
- * on disk instead of in the database (`models.json` in its cache directory,
- * the raw catalog body; packages/core/src/models-dev.ts). Read-only, and never
- * fetched: a missing or unreadable file means no windows. */
 export function readOpenCodeModelsCache(path: string): OpenCodeModelsCache {
   let text: string;
   try {
@@ -496,7 +422,6 @@ export function readOpenCodeModelsCache(path: string): OpenCodeModelsCache {
   return { status: "ok", windows };
 }
 
-/** The catalog envelope is JSON whose `body` is itself a JSON string. */
 function parseJson(value: Json | undefined): Json | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -526,31 +451,19 @@ function hasTable(db: Database, table: string): boolean {
   );
 }
 
-/** File access for config lookup, so tests can substitute an in-memory tree. */
 export interface OpenCodeConfigFs {
-  /** The file's text, or null when it is missing or unreadable. */
   readText(path: string): string | null;
-  /** The absolute path with symlinks resolved, or just made absolute when it
-   * does not exist (OpenCode's `FSUtil.resolve`). */
   realPath(path: string): string;
-  /** Calls so far that got no answer because their location stalls. */
   readonly unanswered?: number;
 }
 
-// A session's directory comes from its log, so every call has a deadline.
 export const nodeOpenCodeConfigFs: OpenCodeConfigFs = boundedFs;
 
-/** The MCP server names for one session directory. */
 export interface OpenCodeMcpLookup {
   names: readonly string[];
-  /** True when a location on the way stalled, so project configs there were
-   * not read and `names` may be short. */
   unreachable: boolean;
 }
 
-/** MCP server names from one OpenCode config file (`opencode.json` or the
- * JSONC `opencode.jsonc`): `mcp.servers.<name>` plus the legacy `mcp.<name>`
- * object layout. A missing, unreadable, or malformed file names no servers. */
 export function readOpenCodeMcpServers(
   configPath: string,
   fs: OpenCodeConfigFs = nodeOpenCodeConfigFs,
@@ -584,21 +497,12 @@ export function readOpenCodeMcpServers(
   return [...names].sort(compareCodePoints);
 }
 
-/** Where OpenCode's MCP server names come from, besides project configs. */
 export interface OpenCodeConfigSources {
-  /** OpenCode's global config directory (`OPENCODE_CONFIG_DIR`, else
-   * `$XDG_CONFIG_HOME/opencode`). Its `opencode.json` and `opencode.jsonc`
-   * are read unless `globalFile` replaces them. */
   globalDir?: string;
-  /** Decant's `DECANT_OPENCODE_CONFIG`: read alone in place of the global
-   * directory's two files. */
   globalFile?: string;
-  /** OpenCode's `OPENCODE_CONFIG`: one more file that OpenCode loads in
-   * addition to the global and project configs. */
   extraFile?: string;
 }
 
-/** Config files read for every session, in OpenCode's file-name order. */
 export function openCodeGlobalConfigPaths({
   globalDir,
   globalFile,
@@ -613,19 +517,8 @@ export function openCodeGlobalConfigPaths({
   return extraFile == null ? paths : [...paths, extraFile];
 }
 
-/** File names OpenCode reads from a config directory. */
 const OPENCODE_CONFIG_NAMES = ["opencode.json", "opencode.jsonc"] as const;
 
-/** MCP server names that apply to a session, found the way OpenCode 2.x
- * discovers configs (`ConfigDiscovery.discover`): the global configs, plus
- * `opencode.json`, `opencode.jsonc`, and `.opencode/opencode.json[c]` in the
- * session's directory and in every ancestor up to the filesystem root. A
- * project file that resolves to a global file, and a `.opencode` that resolves
- * to the global directory, are skipped as OpenCode skips them. Names are a
- * union, so OpenCode's precedence order does not matter here.
- *
- * Each ancestor is read once per instance, and ingest makes one instance per
- * sync, so a config edit is seen by the next sync. */
 export class OpenCodeMcpServerNames {
   readonly #fs: OpenCodeConfigFs;
   readonly #global: readonly string[];
@@ -651,7 +544,6 @@ export class OpenCodeMcpServerNames {
   }
 
   lookup(directory: string | null): OpenCodeMcpLookup {
-    // A relative directory would resolve against Decant's own cwd.
     if (directory == null || !isAbsolute(directory)) {
       return { names: this.#global, unreachable: false };
     }
@@ -667,8 +559,6 @@ export class OpenCodeMcpServerNames {
     const before = this.#fs.unanswered ?? 0;
     const real = this.#fs.realPath(directory);
     let unreachable = (this.#fs.unanswered ?? 0) !== before;
-    // OpenCode reads no project configs for a session run from inside its
-    // global config directory.
     if (this.#globalDir != null && real === this.#globalDir) {
       return { names: this.#global, unreachable };
     }
@@ -717,13 +607,10 @@ function mergeNames(lists: readonly (readonly string[])[]): string[] {
   return [...new Set(lists.flat())].sort(compareCodePoints);
 }
 
-/** Parses JSONC as OpenCode accepts it: JSON plus `//` and block comments and
- * trailing commas. Anything else that is not JSON throws. */
 export function parseJsonc(text: string): Json {
   return JSON.parse(withoutTrailingCommas(withoutComments(text.replace(/^\uFEFF/, "")))) as Json;
 }
 
-/** Index just past the string literal that opens at `start`. */
 function stringEnd(text: string, start: number): number {
   let i = start + 1;
   while (i < text.length && text[i] !== '"') {

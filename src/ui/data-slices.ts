@@ -42,10 +42,6 @@ export const emptyData: DashboardData = {
   sessionSources: [],
 };
 
-// Each page fetches only the slices it renders; fetching everything for every
-// page made first paint wait on the slowest analytics endpoint. Slices are
-// cached per (date filter, reload generation), so navigating back is free and
-// SSE-triggered refreshes only refetch what the active page shows.
 export const SLICE_LOADERS: Record<
   DataSlice,
   { dateScoped: boolean; load: (dateQuery: string) => Promise<Partial<DashboardData>> }
@@ -78,7 +74,6 @@ export const SLICE_LOADERS: Record<
   },
   previousSummary: {
     dateScoped: true,
-    // Open-ended ranges (All time, "since", "through") have no previous period.
     load: async (q) => {
       const params = new URLSearchParams(q);
       const previous = previousRange(params.get("from"), params.get("to"));
@@ -119,8 +114,6 @@ export const SLICE_LOADERS: Record<
     }),
   },
   recommendations: {
-    // Recommendations are archive-wide. If they become date-scoped, the
-    // recommendations loading key and layout effect must include dateQuery too.
     dateScoped: false,
     load: async () => ({
       recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),
@@ -172,7 +165,6 @@ export const SLICE_LOADERS: Record<
   },
 };
 
-// Slices the app shell itself renders (sidebar stats, sync button, pickers).
 export const SHELL_SLICES: DataSlice[] = ["summary", "dateBounds", "config", "update"];
 
 export const ROUTE_SLICES: Record<string, DataSlice[]> = {

@@ -11,13 +11,7 @@ interface DbInfo {
   blocks: number;
   tool_calls: number;
   file_refs: number;
-  /**
-   * Pages SQLite has freed but not returned to the filesystem. Deleted rows
-   * can leave readable bytes in those pages until `decant db vacuum` runs, so
-   * this is the number that says a vacuum is owed.
-   */
   freelist_bytes: number;
-  /** Full-scan totals, present only under `--full`. */
   fts_rows?: number;
   text_bytes?: number;
   compressed_messages?: number;
@@ -119,13 +113,6 @@ export function registerDbCommands(ctx: CliContext): void {
     );
 }
 
-/**
- * `full` adds the two totals that cost a full scan of the archive. Measured on
- * a 2.5 GB archive: the row counts and the freelist pragma finish in under
- * 10 ms, while the byte sum takes 5-13 s and the FTS row count 0.6-2 s. A
- * command whose job is to report a path and a schema version must not pay
- * that, so those two are opt-in.
- */
 function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
   const version =
     (
@@ -156,9 +143,6 @@ function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
             // column, which understates a non-ASCII archive by a third to a
             // half. text_bytes is printed beside size_bytes, which is real
             // bytes from statSync, so the two have to be the same unit.
-            //
-            // block.tool_result and message.raw are stored but not indexed, so
-            // this total is deliberately wider than what search can reach.
             `SELECT (SELECT COUNT(*) FROM block_fts) AS fts_rows,
                     (SELECT COALESCE(SUM(COALESCE(raw_bytes, OCTET_LENGTH(raw))), 0) FROM message)
                     + (SELECT COALESCE(SUM(OCTET_LENGTH(COALESCE(text, ''))

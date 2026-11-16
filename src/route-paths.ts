@@ -1,7 +1,3 @@
-/**
- * Every served path, in match order. Kept free of imports so logging can
- * derive `http.route` from it without loading the server.
- */
 export const API_ROUTE_PATHS = [
   "/api/health",
   "/api/openapi.json",
@@ -76,7 +72,6 @@ export function compileRoutePath(template: string): RouteMatcher {
 
 const MATCHERS = [...API_ROUTE_PATHS, ...UI_ROUTE_PATHS].map(compileRoutePath);
 
-/** Low-cardinality template for a request path, e.g. `/api/sessions/{id}`. */
 export function routeTemplate(pathname: string): string {
   for (const matcher of MATCHERS) {
     if (matcher.pattern.test(pathname)) {

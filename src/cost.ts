@@ -5,7 +5,6 @@ export interface Price {
   outputPerMtok: number;
   cacheReadPerMtok: number;
   cacheWritePerMtok: number;
-  /** Rate for cache writes made with a 1-hour TTL. */
   cacheWrite1hPerMtok: number;
 }
 
@@ -57,7 +56,6 @@ function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMt
 // so `openAiPrice` bills cache writes as ordinary input. Published-free models
 // are a price of zero, not an unknown price.
 const EXACT_ID_PRICES: ReadonlyArray<readonly [string, Price]> = [
-  // Z.ai (docs.z.ai) and Meta Model API (dev.meta.ai).
   ["glm-5.3", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.2", openAiPrice(1.4, 0.26, 4.4)],
   ["glm-5.1", openAiPrice(1.4, 0.26, 4.4)],
@@ -199,7 +197,6 @@ function exactIdModel(model: string): string | null {
 
 let pricingTable: ReadonlyMap<string, Price> | null = null;
 
-/** Built once; sync and every ingested session read it, so callers share one table. */
 export function defaultPricing(): ReadonlyMap<string, Price> {
   pricingTable ??= buildDefaultPricing();
   return pricingTable;
@@ -367,8 +364,6 @@ function canonicalModel(raw: string): string | null {
       return "claude-sonnet";
     }
     if (model.includes("haiku")) {
-      // Requests above Haiku 5.5's long-prompt threshold carry the
-      // long_prompt tier; see requestPriceTier.
       if (/haiku-5(?:-|\.)5(?:$|-|\[|@)/.test(model)) {
         return "claude-haiku-5-5";
       }
@@ -491,9 +486,6 @@ function canonicalModel(raw: string): string | null {
     ) {
       return null;
     }
-    // Anchored so a future Gemini 4 variant such as -flash or -lite stays
-    // unpriced instead of borrowing this rate. Routing suffixes such as
-    // `:floor` and `[1m]` bill at list rate, so they are stripped first.
     const routed = model.replace(/\[[^\]]*\]$/, "").replace(HOSTED_ROUTE_SUFFIX, "");
     const gemini4 =
       /(?:^|\/)gemini-4-(argon|carbon|hydrogen)(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.exec(
@@ -535,7 +527,6 @@ function canonicalModel(raw: string): string | null {
     if (model.includes("3.5")) {
       return "gemini-3.5-flash";
     }
-    // "gemini-3-flash", not "3-flash", which also matches gemini-4.3-flash.
     if (model.includes("gemini-3-flash")) {
       return "gemini-3-flash-preview";
     }
@@ -553,8 +544,6 @@ export function isPriceable(model: string): boolean {
   return canonicalModel(model) !== null;
 }
 
-/** Request-level rate modifiers. `fast` is Anthropic's fast mode; `long_prompt`
- * is a model's surcharge for prompts above a published length. */
 export const PRICE_TIERS = ["standard", "fast", "long_prompt"] as const;
 export type PriceTier = (typeof PRICE_TIERS)[number];
 
@@ -573,8 +562,6 @@ export function isPriceTier(value: string): value is PriceTier {
   return (PRICE_TIERS as readonly string[]).includes(value);
 }
 
-/** The tier one API request bills at, from its model, usage, and the `speed`
- * the provider reported for it. */
 export function requestPriceTier(
   model: string | null | undefined,
   usage: TokenUsage,
@@ -641,8 +628,6 @@ export function estimateCostParts(
 
   const multiplier = tierMultiplier(tier);
   const per = (tokens: number, rate: number): number => (tokens * rate * multiplier) / 1_000_000.0;
-  // Clamped: a source that reports a 1h figure larger than the total must not
-  // produce a negative 5-minute remainder.
   const creationTotal = Math.max(0, usage.cacheCreation);
   const creation1h = Math.min(Math.max(0, usage.cacheCreation1h), creationTotal);
   const creation5m = creationTotal - creation1h;

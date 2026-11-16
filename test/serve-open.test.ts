@@ -5,11 +5,6 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// E2E for the serve banner and browser auto-open: spawn the real CLI the way
-// test/serve-wiring.test.ts does. Piped stdio means stdout is not a TTY, so
-// the platform-default open path never fires here; the explicit-BROWSER
-// override is both a feature and the test seam.
-
 const repoRoot = join(import.meta.dir, "..");
 const URL_LINE = /http:\/\/127\.0\.0\.1:(\d+)/;
 
@@ -62,8 +57,6 @@ async function waitFor(
   }
 }
 
-/** Resolves to 0 on a clean exit. Anything else becomes a description with
- * the signal and the server's stderr, so a failing assertion says why. */
 function stop(cli: CliProcess): Promise<number | string> {
   const { child } = cli;
   const status = (code: number | null, signal: string | null, when: string): number | string =>
@@ -82,8 +75,6 @@ function stop(cli: CliProcess): Promise<number | string> {
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
-    // A failed listen (EACCES, fd limits) emits "error"; without a listener
-    // that is an uncaught exception instead of a clean test failure.
     probe.on("error", reject);
     probe.listen(0, "127.0.0.1", () => {
       const address = probe.address();
@@ -102,7 +93,6 @@ function scratchDir(): string {
   return mkdtempSync(join(tmpdir(), "decant-serve-open-"));
 }
 
-/** BROWSER stub that appends its single argument to a log file. */
 function spyBrowser(scratch: string): { script: string; log: string } {
   const log = join(scratch, "opened.log");
   const script = join(scratch, "spy-browser.sh");
@@ -136,9 +126,6 @@ describe("serve banner and auto-open", () => {
     try {
       await waitFor(() => existsSync(spy.log), "spy browser invocation");
       expect(readFileSync(spy.log, "utf8").trim()).toBe(`http://127.0.0.1:${port}`);
-      // serve writes the banner before it spawns the opener, but the banner
-      // reaches this process through a pipe while the spy writes a file, so
-      // the file can appear first.
       await waitFor(() => cli.stderr().includes("Opening your browser"), "opening banner");
     } finally {
       expect(await stop(cli)).toBe(0);
@@ -147,8 +134,6 @@ describe("serve banner and auto-open", () => {
   }, 30_000);
 
   test("a SIGTERM sent the moment the banner prints stops the server cleanly", async () => {
-    // A supervisor or script may signal as soon as it reads the URL. Without a
-    // handler in place by then, the signal kills the process outright.
     const scratch = scratchDir();
     const port = await freePort();
     const spy = spyBrowser(scratch);
@@ -179,8 +164,6 @@ describe("serve banner and auto-open", () => {
       expect(cli.stderr()).toContain(`    http://127.0.0.1:${port}`);
     } finally {
       expect(await stop(cli)).toBe(0);
-      // If the opener were going to fire, it would have done so before startup
-      // finished and the server shut down cleanly.
       expect(existsSync(spy.log)).toBe(false);
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -210,9 +193,6 @@ describe("serve banner and auto-open", () => {
     const scratch = scratchDir();
     const port = await freePort();
     const holder = net.createServer();
-    // Same exposure as freePort's probe, plus a real race: this re-binds a
-    // port that was only just released, so a rare EADDRINUSE must reject
-    // rather than raise an unhandled "error" event.
     await new Promise<void>((resolve, reject) => {
       holder.on("error", reject);
       holder.listen(port, "127.0.0.1", resolve);

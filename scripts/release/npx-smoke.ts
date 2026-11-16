@@ -21,7 +21,6 @@ export function npxCacheDir(root: string, attempt: number): string {
   return join(root, `npm-cache-${attempt}`);
 }
 
-/** A fresh publish takes a while to reach every registry edge, so polling spans ten minutes. */
 export async function waitForNpx(options: {
   version: string;
   exec: (attempt: number) => boolean;

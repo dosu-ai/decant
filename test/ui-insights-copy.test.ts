@@ -81,7 +81,6 @@ describe("Insights information hierarchy", () => {
     const loaders = sourceFrom(main, "const SLICE_LOADERS");
     const loader = sourceBetween(loaders, "  recommendations: {", "  config: {");
     expect(loader).toContain("dateScoped: false");
-    expect(loader).toContain("Recommendations are archive-wide.");
     expect(loader).toContain('getJson<Recommendation[]>("/api/recommendations?status=all")');
   });
 });

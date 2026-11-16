@@ -169,12 +169,6 @@ export function normalizeTranscriptLanguage(
   return LANGUAGE_ALIASES[language.trim().toLowerCase()] ?? null;
 }
 
-/**
- * Recognizes only the embedded image shape emitted by Claude transcripts.
- * The archive keeps the complete canonical JSON; this summary deliberately
- * excludes the base64 payload so the UI never places megabytes of encoded
- * image data into the DOM.
- */
 export function embeddedAttachmentSummary(
   blockType: string,
   text: string | null | undefined,
@@ -328,13 +322,6 @@ export function transcriptCollapseLabel(value: CollapsedTranscriptText): string 
   return "Show full result";
 }
 
-/**
- * Markdown links are transcript data, not trusted application links. Relative
- * paths and fragments stay in-app; http(s) and mailto links require an explicit
- * user click and open without an opener. Active-content and file URLs are
- * dropped. Markdown images are disabled in the React renderer so rendering a
- * transcript never causes an outbound request.
- */
 export function markdownLinkBehavior(href: string | null | undefined): MarkdownLinkBehavior {
   const safeHref = safeMarkdownUrl(href);
   if (safeHref == null) {

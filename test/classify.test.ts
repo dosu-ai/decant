@@ -214,8 +214,6 @@ describe("workType", () => {
       toolResult: null,
       isError: null,
     };
-    // No user prompt, so the keyword classifier yields nothing and the tool
-    // mix decides.
     const searched = session([msg("assistant", [search])]);
     searched.tool = "opencode";
     expect(workType(searched, [])).toBe("research");

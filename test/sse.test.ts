@@ -16,7 +16,6 @@ import { handleRequest } from "../src/server.ts";
 const workDir = mkdtempSync(join(tmpdir(), "decant-sse-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
-// Long enough that no heartbeat lands inside a test.
 const QUIET_HEARTBEAT_MS = 60_000;
 const BIG_EVENT_BYTES = 256 * 1024;
 
@@ -84,7 +83,6 @@ describe("event streams", () => {
       expect(refused.status).toBe(503);
       expect(await refused.json()).toMatchObject({ code: "server_busy", retryable: true });
 
-      // A closed stream frees its slot.
       await readers.pop()?.cancel();
       readers.push(open());
       expect(eventClientCount()).toBe(MAX_EVENT_CLIENTS);
@@ -107,14 +105,10 @@ describe("event streams", () => {
         publishServerEvent(bigEvent(n));
         expect((await readHealthy()).data.n).toBe(n);
         if (n < underBound) {
-          // Still under the bound, so the stalled client keeps its stream.
           expect(eventClientCount()).toBe(before + 2);
         }
       }
-      // The stalled stream was dropped while the reader stayed connected.
       expect(eventClientCount()).toBe(before + 1);
-      // What it still delivers is what the stream held when it was dropped:
-      // hello and one event. The held-back events were discarded.
       let delivered = 0;
       for (let chunk = await stalled.read(); !chunk.done; chunk = await stalled.read()) {
         delivered += chunk.value.byteLength;
@@ -148,7 +142,6 @@ describe("event streams", () => {
       tail = (tail + data.toString("latin1")).slice(-16);
       onData();
     });
-    // Read the response head, then stop reading so the kernel buffers fill.
     socket.once("data", () => socket.pause());
     try {
       for (let i = 0; i < 100 && eventClientCount() === before; i += 1) await Bun.sleep(10);
@@ -158,8 +151,6 @@ describe("event streams", () => {
         await Bun.sleep(5);
       }
       expect(eventClientCount()).toBe(before);
-      // Once the client reads again the response ends with the last chunk, so
-      // an EventSource reconnects. Most of the published 8 MiB never arrives.
       const ended = new Promise<void>((resolve) => {
         onData = () => {
           if (tail.endsWith("\r\n0\r\n\r\n")) resolve();

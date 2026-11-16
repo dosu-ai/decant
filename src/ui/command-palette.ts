@@ -66,7 +66,6 @@ export interface CommandPaletteGroupInput<TItem extends CommandPaletteItem = Com
   contentSearch: TItem | null;
 }
 
-/** Recent searches are shown only before the user starts typing. */
 export function buildCommandPaletteGroups<TItem extends CommandPaletteItem>(
   input: CommandPaletteGroupInput<TItem>,
 ): CommandPaletteGroup<TItem>[] {
@@ -92,10 +91,6 @@ export function flattenCommandPaletteItems<TItem extends CommandPaletteItem>(
   return groups.flatMap((group) => group.items);
 }
 
-/**
- * Async session rows arriving after the user typed must not displace the
- * current choice (notably the transcript-search action).
- */
 export function reconcileCommandPaletteActiveIndex(
   activeItemId: string | null,
   items: readonly CommandPaletteItem[],
@@ -139,7 +134,6 @@ export interface CommandPaletteKeyResult extends CommandPaletteKeyState {
   handled: boolean;
 }
 
-/** Enter and Escape are returned as effects for the React layer to perform. */
 export function reduceCommandPaletteKey(
   state: CommandPaletteKeyState,
   input: CommandPaletteKeyInput,

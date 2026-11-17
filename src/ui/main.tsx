@@ -166,6 +166,7 @@ function App() {
   });
 
   const requestRefresh = useCallback(() => {
+    caughtUpRef.current = true;
     if (refreshTimerRef.current != null) {
       window.clearTimeout(refreshTimerRef.current);
     }
@@ -297,7 +298,6 @@ function App() {
       if (action === "refresh") {
         setArchiveUpdateAvailable(false);
         requestRefresh();
-        caughtUpRef.current = true;
       } else if (action === "offer_update") {
         setArchiveUpdateAvailable(true);
       }
@@ -666,12 +666,10 @@ function App() {
     [path],
   );
   const loadArchiveUpdates = () => {
-    caughtUpRef.current = true;
     setArchiveUpdateAvailable(false);
     requestRefresh();
   };
   const reconnectLiveUpdates = () => {
-    caughtUpRef.current = true;
     liveDroppedRef.current = false;
     setLiveDisconnected(false);
     setLiveConnectionKey((key) => key + 1);

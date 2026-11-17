@@ -28,7 +28,10 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).toMatch(
     /planArchiveUpdate\(\s*payload\.reason,\s*caughtUpRef\.current,\s*localSyncingRef\.current,?\s*\);\s*caughtUpRef\.current = plan\.caughtUp;/,
   );
-  expect(main).toMatch(/const loadArchiveUpdates = \(\) => \{\s*caughtUpRef\.current = true;/);
+  expect(main).toMatch(
+    /const requestRefresh = useCallback\(\(\) => \{\s*caughtUpRef\.current = true;/,
+  );
+  expect(main.match(/caughtUpRef\.current = true;/g)).toHaveLength(1);
   expect(main).toMatch(/setArchiveUpdateAvailable\(true\);\s*caughtUpRef\.current = false;\s*\}/);
   expect(main).toContain("localSyncingRef.current = localSyncing;");
   expect(main).toContain("const failure = parseSyncFailure(event);");

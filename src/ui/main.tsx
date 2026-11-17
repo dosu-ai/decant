@@ -50,14 +50,12 @@ import {
 import { type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
 import { SyncButton } from "./sync-button.tsx";
 import {
-  awaitsStats,
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
   LIVE_SESSIONS_TOP_PX,
   type LiveSessionsViewer,
   liveSessionsAction,
   parseSyncFailure,
-  pendingStatsRebuilds,
   planArchiveUpdate,
   restoreSync,
   sessionsAutoRefresh,
@@ -138,8 +136,7 @@ function App() {
   const sawSyncRef = useRef(false);
   const syncEndedRef = useRef(0);
   const archiveSyncedRef = useRef(true);
-  const awaitingStatsRef = useRef(false);
-  const pendingStatsRebuildsRef = useRef(0);
+  const caughtUpRef = useRef(true);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
   useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection);
@@ -300,9 +297,7 @@ function App() {
       if (action === "refresh") {
         setArchiveUpdateAvailable(false);
         requestRefresh();
-        if (pendingStatsRebuildsRef.current > 0) {
-          awaitingStatsRef.current = true;
-        }
+        caughtUpRef.current = true;
       } else if (action === "offer_update") {
         setArchiveUpdateAvailable(true);
       }
@@ -436,8 +431,8 @@ function App() {
           requestRefresh();
         } else {
           setArchiveUpdateAvailable(true);
+          caughtUpRef.current = false;
         }
-        pendingStatsRebuildsRef.current = 0;
         void readSyncStatus().then((read) => {
           if (read) {
             return;
@@ -510,16 +505,8 @@ function App() {
       try {
         payload = JSON.parse(event.data) as ServerEventPayload;
       } catch {}
-      const plan = planArchiveUpdate(
-        payload.reason,
-        awaitingStatsRef.current,
-        localSyncingRef.current,
-      );
-      pendingStatsRebuildsRef.current = pendingStatsRebuilds(
-        payload.reason,
-        pendingStatsRebuildsRef.current,
-      );
-      awaitingStatsRef.current = awaitsStats(plan, pendingStatsRebuildsRef.current);
+      const plan = planArchiveUpdate(payload.reason, caughtUpRef.current, localSyncingRef.current);
+      caughtUpRef.current = plan.caughtUp;
       if (plan.refresh) {
         setArchiveUpdateAvailable(false);
         requestRefresh();
@@ -679,13 +666,12 @@ function App() {
     [path],
   );
   const loadArchiveUpdates = () => {
-    if (pendingStatsRebuildsRef.current > 0) {
-      awaitingStatsRef.current = true;
-    }
+    caughtUpRef.current = true;
     setArchiveUpdateAvailable(false);
     requestRefresh();
   };
   const reconnectLiveUpdates = () => {
+    caughtUpRef.current = true;
     liveDroppedRef.current = false;
     setLiveDisconnected(false);
     setLiveConnectionKey((key) => key + 1);

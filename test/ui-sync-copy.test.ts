@@ -26,17 +26,10 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).toContain("const [archiveUpdateAvailable, setArchiveUpdateAvailable]");
   expect(main.match(/showsSync\(payload\.reason, archiveSyncedRef\.current\)/g)).toHaveLength(2);
   expect(main).toMatch(
-    /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
+    /planArchiveUpdate\(\s*payload\.reason,\s*caughtUpRef\.current,\s*localSyncingRef\.current,?\s*\);\s*caughtUpRef\.current = plan\.caughtUp;/,
   );
-  expect(main).toMatch(
-    /pendingStatsRebuildsRef\.current = pendingStatsRebuilds\(\s*payload\.reason,\s*pendingStatsRebuildsRef\.current,\s*\);\s*awaitingStatsRef\.current = awaitsStats\(plan, pendingStatsRebuildsRef\.current\);/,
-  );
-  expect(main).toMatch(
-    /const loadArchiveUpdates = \(\) => \{\s*if \(pendingStatsRebuildsRef\.current > 0\) \{\s*awaitingStatsRef\.current = true;/,
-  );
-  expect(main).toMatch(
-    /setArchiveUpdateAvailable\(true\);\s*\}\s*pendingStatsRebuildsRef\.current = 0;/,
-  );
+  expect(main).toMatch(/const loadArchiveUpdates = \(\) => \{\s*caughtUpRef\.current = true;/);
+  expect(main).toMatch(/setArchiveUpdateAvailable\(true\);\s*caughtUpRef\.current = false;\s*\}/);
   expect(main).toContain("localSyncingRef.current = localSyncing;");
   expect(main).toContain("const failure = parseSyncFailure(event);");
   expect(main).toMatch(

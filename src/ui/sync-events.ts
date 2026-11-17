@@ -19,37 +19,21 @@ export function showsSync(reason: string | undefined, archiveSynced: boolean): b
 export interface ArchiveUpdatePlan {
   refresh: boolean;
   offerUpdate: boolean;
-  awaitingStats: boolean;
+  caughtUp: boolean;
 }
 
 export function planArchiveUpdate(
   reason: string | undefined,
-  awaitingStats: boolean,
+  caughtUp: boolean,
   foregroundSyncRunning: boolean,
 ): ArchiveUpdatePlan {
-  if (isForegroundSync(reason)) {
-    return { refresh: true, offerUpdate: false, awaitingStats: true };
+  if (isForegroundSync(reason) || reason === "session_state" || (reason === "stats" && caughtUp)) {
+    return { refresh: true, offerUpdate: false, caughtUp: true };
   }
-  if (reason === "stats" && awaitingStats) {
-    return { refresh: true, offerUpdate: false, awaitingStats: false };
+  if (foregroundSyncRunning) {
+    return { refresh: false, offerUpdate: false, caughtUp };
   }
-  if (reason === "session_state") {
-    return { refresh: true, offerUpdate: false, awaitingStats };
-  }
-  return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
-}
-
-export const MAX_PENDING_STATS_REBUILDS = 2;
-
-export function pendingStatsRebuilds(reason: string | undefined, pending: number): number {
-  if (reason === "stats") {
-    return Math.max(0, pending - 1);
-  }
-  return Math.min(MAX_PENDING_STATS_REBUILDS, pending + 1);
-}
-
-export function awaitsStats(plan: ArchiveUpdatePlan, pendingRebuilds: number): boolean {
-  return plan.awaitingStats || (plan.refresh && pendingRebuilds > 0);
+  return { refresh: false, offerUpdate: true, caughtUp: false };
 }
 
 export const LIVE_SESSIONS_REFRESH_MS = 5_000;

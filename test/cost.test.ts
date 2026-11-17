@@ -189,6 +189,37 @@ describe("estimateCost", () => {
     }
   });
 
+  test("GPT-6.2 Astra and Sol use their published rates and exact model IDs", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...usage1m(),
+      cacheRead: 2_000_000,
+      cacheCreation: 3_000_000,
+      cacheCreation1h: 1_000_000,
+    };
+    for (const [model, expected] of [
+      ["gpt-6.2-astra", { input: 8, output: 40, cacheRead: 0.8, cacheCreation: 30 }],
+      ["gpt-6.2-sol", { input: 2, output: 10, cacheRead: 0.2, cacheCreation: 7.5 }],
+    ] as const) {
+      for (const alias of [model, `openai/${model}`, `OpenAI:${model.toUpperCase()}`]) {
+        expect(isPriceable(alias)).toBe(true);
+        expect(estimateCostParts(alias, usage, pricing)).toEqual(expected);
+        expect(estimateCost(alias, usage, pricing)).toBeCloseTo(
+          expected.input + expected.output + expected.cacheRead + expected.cacheCreation,
+          6,
+        );
+      }
+      for (const suffix of ["-2026-11-17", "-20261117", "-preview", "-pro", "-ultrafast", "ar"]) {
+        expect(isPriceable(`${model}${suffix}`)).toBe(false);
+        expect(estimateCost(`openai/${model}${suffix}`, usage, pricing)).toBe(0);
+      }
+    }
+    for (const model of ["gpt-6.2", "gpt-6.2-terra", "gpt-6.2-luna"]) {
+      expect(isPriceable(model)).toBe(false);
+      expect(estimateCost(model, usage, pricing)).toBe(0);
+    }
+  });
+
   test("Opus 5.5 uses its reduced cache-read rate and both cache-write TTLs", () => {
     const pricing = defaultPricing();
     const usage = {

@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+  awaitsStats,
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
   liveSessionsAction,
   parseSyncFailure,
+  pendingStatsRebuilds,
   planArchiveUpdate,
   restoreSync,
   SYNC_NOTICE_DELAY_MS,
   sessionsAutoRefresh,
   showsSync,
   showsSyncComplete,
-  statsRebuildPending,
   supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
@@ -69,25 +70,65 @@ test("stats rebuilds unrelated to a foreground sync stay deferred", () => {
   });
 });
 
-test("a stats rebuild is pending from each data update until its stats event", () => {
-  expect(statsRebuildPending("watch", false)).toBe(true);
-  expect(statsRebuildPending("sweep", false)).toBe(true);
-  expect(statsRebuildPending("manual", false)).toBe(true);
-  expect(statsRebuildPending("session_state", false)).toBe(false);
-  expect(statsRebuildPending("session_state", true)).toBe(true);
-  expect(statsRebuildPending("stats", true)).toBe(false);
+test("pending stats rebuilds follow the economics cache: one running, at most one queued", () => {
+  expect(pendingStatsRebuilds("watch", 0)).toBe(1);
+  expect(pendingStatsRebuilds("session_state", 0)).toBe(1);
+  expect(pendingStatsRebuilds("sweep", 1)).toBe(2);
+  expect(pendingStatsRebuilds("manual", 2)).toBe(2);
+  expect(pendingStatsRebuilds("stats", 2)).toBe(1);
+  expect(pendingStatsRebuilds("stats", 1)).toBe(0);
+  expect(pendingStatsRebuilds("stats", 0)).toBe(0);
 });
 
+function replay(
+  events: (string | "click")[],
+  foregroundSyncRunning = false,
+): { refreshes: number; updateOffered: boolean } {
+  let pending = 0;
+  let awaiting = false;
+  let refreshes = 0;
+  let updateOffered = false;
+  for (const event of events) {
+    if (event === "click") {
+      awaiting ||= pending > 0;
+      updateOffered = false;
+      refreshes += 1;
+      continue;
+    }
+    const plan = planArchiveUpdate(event, awaiting, foregroundSyncRunning);
+    pending = pendingStatsRebuilds(event, pending);
+    awaiting = awaitsStats(plan, pending);
+    if (plan.refresh) {
+      refreshes += 1;
+      updateOffered = false;
+    } else if (plan.offerUpdate) {
+      updateOffered = true;
+    }
+  }
+  return { refreshes, updateOffered };
+}
+
 test("the stats rebuild after a clicked Update loads without offering Update again", () => {
-  const watch = planArchiveUpdate("watch", false, false);
-  expect(watch.offerUpdate).toBe(true);
-  const pending = statsRebuildPending("watch", false);
-  const awaitingAfterClick = watch.awaitingStats || pending;
-  expect(planArchiveUpdate("stats", awaitingAfterClick, false)).toEqual({
-    refresh: true,
-    offerUpdate: false,
-    awaitingStats: false,
+  expect(replay(["watch", "click", "stats"])).toEqual({ refreshes: 2, updateOffered: false });
+});
+
+test("a follow-up rebuild queued mid-build is awaited too", () => {
+  expect(replay(["watch", "watch", "click", "stats", "stats"])).toEqual({
+    refreshes: 3,
+    updateOffered: false,
   });
+  expect(replay(["watch", "watch", "stats", "click", "stats"])).toEqual({
+    refreshes: 2,
+    updateOffered: false,
+  });
+});
+
+test("archiving a session refreshes once its stats rebuild lands instead of offering Update", () => {
+  expect(replay(["session_state", "stats"])).toEqual({ refreshes: 2, updateOffered: false });
+});
+
+test("a stats rebuild nobody refreshed for still waits for an Update click", () => {
+  expect(replay(["watch", "stats"])).toEqual({ refreshes: 0, updateOffered: true });
 });
 
 test("background updates during a foreground sync wait for that sync's refresh", () => {

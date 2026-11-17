@@ -39,11 +39,17 @@ export function planArchiveUpdate(
   return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
 }
 
-export function statsRebuildPending(reason: string | undefined, pending: boolean): boolean {
+export const MAX_PENDING_STATS_REBUILDS = 2;
+
+export function pendingStatsRebuilds(reason: string | undefined, pending: number): number {
   if (reason === "stats") {
-    return false;
+    return Math.max(0, pending - 1);
   }
-  return reason === "session_state" ? pending : true;
+  return Math.min(MAX_PENDING_STATS_REBUILDS, pending + 1);
+}
+
+export function awaitsStats(plan: ArchiveUpdatePlan, pendingRebuilds: number): boolean {
+  return plan.awaitingStats || (plan.refresh && pendingRebuilds > 0);
 }
 
 export const LIVE_SESSIONS_REFRESH_MS = 5_000;

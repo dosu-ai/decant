@@ -50,18 +50,19 @@ import {
 import { type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
 import { SyncButton } from "./sync-button.tsx";
 import {
+  awaitsStats,
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
   LIVE_SESSIONS_TOP_PX,
   type LiveSessionsViewer,
   liveSessionsAction,
   parseSyncFailure,
+  pendingStatsRebuilds,
   planArchiveUpdate,
   restoreSync,
   sessionsAutoRefresh,
   showsSync,
   showsSyncComplete,
-  statsRebuildPending,
   supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
@@ -138,7 +139,7 @@ function App() {
   const syncEndedRef = useRef(0);
   const archiveSyncedRef = useRef(true);
   const awaitingStatsRef = useRef(false);
-  const statsPendingRef = useRef(false);
+  const pendingStatsRebuildsRef = useRef(0);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
   useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection);
@@ -299,6 +300,9 @@ function App() {
       if (action === "refresh") {
         setArchiveUpdateAvailable(false);
         requestRefresh();
+        if (pendingStatsRebuildsRef.current > 0) {
+          awaitingStatsRef.current = true;
+        }
       } else if (action === "offer_update") {
         setArchiveUpdateAvailable(true);
       }
@@ -433,6 +437,7 @@ function App() {
         } else {
           setArchiveUpdateAvailable(true);
         }
+        pendingStatsRebuildsRef.current = 0;
         void readSyncStatus().then((read) => {
           if (read) {
             return;
@@ -510,8 +515,11 @@ function App() {
         awaitingStatsRef.current,
         localSyncingRef.current,
       );
-      awaitingStatsRef.current = plan.awaitingStats;
-      statsPendingRef.current = statsRebuildPending(payload.reason, statsPendingRef.current);
+      pendingStatsRebuildsRef.current = pendingStatsRebuilds(
+        payload.reason,
+        pendingStatsRebuildsRef.current,
+      );
+      awaitingStatsRef.current = awaitsStats(plan, pendingStatsRebuildsRef.current);
       if (plan.refresh) {
         setArchiveUpdateAvailable(false);
         requestRefresh();
@@ -671,7 +679,7 @@ function App() {
     [path],
   );
   const loadArchiveUpdates = () => {
-    if (statsPendingRef.current) {
+    if (pendingStatsRebuildsRef.current > 0) {
       awaitingStatsRef.current = true;
     }
     setArchiveUpdateAvailable(false);

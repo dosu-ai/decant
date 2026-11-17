@@ -28,11 +28,14 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).toMatch(
     /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
   );
-  expect(main).toContain(
-    "statsPendingRef.current = statsRebuildPending(payload.reason, statsPendingRef.current);",
+  expect(main).toMatch(
+    /pendingStatsRebuildsRef\.current = pendingStatsRebuilds\(\s*payload\.reason,\s*pendingStatsRebuildsRef\.current,\s*\);\s*awaitingStatsRef\.current = awaitsStats\(plan, pendingStatsRebuildsRef\.current\);/,
   );
   expect(main).toMatch(
-    /const loadArchiveUpdates = \(\) => \{\s*if \(statsPendingRef\.current\) \{\s*awaitingStatsRef\.current = true;/,
+    /const loadArchiveUpdates = \(\) => \{\s*if \(pendingStatsRebuildsRef\.current > 0\) \{\s*awaitingStatsRef\.current = true;/,
+  );
+  expect(main).toMatch(
+    /setArchiveUpdateAvailable\(true\);\s*\}\s*pendingStatsRebuildsRef\.current = 0;/,
   );
   expect(main).toContain("localSyncingRef.current = localSyncing;");
   expect(main).toContain("const failure = parseSyncFailure(event);");

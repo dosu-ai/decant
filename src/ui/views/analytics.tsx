@@ -61,6 +61,7 @@ import {
   sortRows,
 } from "../sorting.tsx";
 import { type DashboardSource, dashboardSourceOptions, sourceScopeQuery } from "../source-scope.ts";
+import { SyncButton } from "../sync-button.tsx";
 import type {
   Activity,
   ActivityBucket,
@@ -120,17 +121,12 @@ export function FirstRunPanel({
           machine.
         </p>
         <code>decant sync</code>
-        <button
-          aria-busy={syncing}
-          aria-label="Sync session logs"
-          className={`secondary-button sync-button${syncing ? " is-syncing" : ""}`}
-          disabled={syncing}
+        <SyncButton
+          ariaLabel="Sync session logs"
+          busy={syncing}
+          label="Sync now"
           onClick={onSync}
-          type="button"
-        >
-          <Icon name="refresh" />
-          {syncing ? null : "Sync now"}
-        </button>
+        />
       </div>
     </section>
   );

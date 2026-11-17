@@ -2958,6 +2958,19 @@ select {
   color: var(--accent-text);
 }
 
+.sync-button-label {
+  display: inline-grid;
+  justify-items: center;
+}
+
+.sync-button-label > span {
+  grid-area: 1 / 1;
+}
+
+.sync-button-label > [data-active="false"] {
+  visibility: hidden;
+}
+
 @keyframes sync-spin {
   to {
     transform: rotate(360deg);
@@ -6479,6 +6492,10 @@ pre {
 
   .icon-button.topbar-search-mobile {
     display: inline-grid;
+  }
+
+  .topbar .sync-button-label {
+    display: none;
   }
 }
 

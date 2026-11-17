@@ -28,6 +28,12 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).toMatch(
     /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
   );
+  expect(main).toContain(
+    "statsPendingRef.current = statsRebuildPending(payload.reason, statsPendingRef.current);",
+  );
+  expect(main).toMatch(
+    /const loadArchiveUpdates = \(\) => \{\s*if \(statsPendingRef\.current\) \{\s*awaitingStatsRef\.current = true;/,
+  );
   expect(main).toContain("localSyncingRef.current = localSyncing;");
   expect(main).toContain("const failure = parseSyncFailure(event);");
   expect(main).toMatch(
@@ -35,7 +41,8 @@ test("background archive activity waits for an explicit update", () => {
   );
   expect(main).toContain('events.addEventListener("archive_updated", handleArchiveUpdated');
   expect(main).not.toContain('events.addEventListener("archive_updated", requestRefresh)');
-  expect(main).toContain('archiveUpdateAvailable ? "Update" : "Sync"');
+  expect(main).toContain('label={archiveUpdateAvailable ? "Update" : "Sync"}');
+  expect(main).toContain('const TOPBAR_SYNC_LABELS = ["Sync", "Update"] as const;');
   expect(main).toContain("archiveUpdateAvailable ? loadArchiveUpdates : runSync");
   expect(main).not.toContain("/api/analytics/now");
 });

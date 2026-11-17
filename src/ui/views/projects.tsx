@@ -3,9 +3,9 @@ import { Badge, ToolBadge, toolLabel } from "../badges.tsx";
 import { CostValue, EmptyState, StatCard } from "../common.tsx";
 import { relativeTime } from "../date-time.ts";
 import { basename, capitalize, formatInt } from "../format.ts";
-import { Icon } from "../icons.tsx";
 import { Link } from "../link.tsx";
 import { projectSessionsHref } from "../navigation.ts";
+import { SyncButton } from "../sync-button.tsx";
 import type { ProjectSummary } from "../types.ts";
 
 export function ProjectsView({
@@ -81,17 +81,13 @@ export function ProjectsView({
         {sorted.length === 0 ? (
           <EmptyState
             action={
-              <button
-                aria-busy={syncing}
-                aria-label="Sync session logs"
-                className={`primary-button sync-button${syncing ? " is-syncing" : ""}`}
-                disabled={syncing}
+              <SyncButton
+                ariaLabel="Sync session logs"
+                busy={syncing}
+                label="Sync now"
                 onClick={onSync}
-                type="button"
-              >
-                <Icon name="refresh" />
-                {syncing ? null : "Sync now"}
-              </button>
+                tone="primary"
+              />
             }
             icon="folder"
             message="Projects appear after sessions are synced."

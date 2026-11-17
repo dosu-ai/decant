@@ -106,7 +106,7 @@ describe("ingest diagnostics", () => {
     expect(main).not.toContain(
       "detail.summary.ingest_issue_count > 0 ||\n            detail.summary.informational_ingest_issue_count > 0",
     );
-    expect(main).toContain('{syncing ? null : "Re-sync"}');
+    expect(main).toContain('label="Re-sync"');
     expect(main).toContain("Check for a Decant update");
     expect(main).toContain("onRetry={() => setIssuesError(null)}");
   });

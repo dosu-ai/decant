@@ -10,6 +10,7 @@ import {
   sessionsAutoRefresh,
   showsSync,
   showsSyncComplete,
+  statsRebuildPending,
   supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
@@ -65,6 +66,27 @@ test("stats rebuilds unrelated to a foreground sync stay deferred", () => {
     refresh: false,
     offerUpdate: true,
     awaitingStats: true,
+  });
+});
+
+test("a stats rebuild is pending from each data update until its stats event", () => {
+  expect(statsRebuildPending("watch", false)).toBe(true);
+  expect(statsRebuildPending("sweep", false)).toBe(true);
+  expect(statsRebuildPending("manual", false)).toBe(true);
+  expect(statsRebuildPending("session_state", false)).toBe(false);
+  expect(statsRebuildPending("session_state", true)).toBe(true);
+  expect(statsRebuildPending("stats", true)).toBe(false);
+});
+
+test("the stats rebuild after a clicked Update loads without offering Update again", () => {
+  const watch = planArchiveUpdate("watch", false, false);
+  expect(watch.offerUpdate).toBe(true);
+  const pending = statsRebuildPending("watch", false);
+  const awaitingAfterClick = watch.awaitingStats || pending;
+  expect(planArchiveUpdate("stats", awaitingAfterClick, false)).toEqual({
+    refresh: true,
+    offerUpdate: false,
+    awaitingStats: false,
   });
 });
 

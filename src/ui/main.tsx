@@ -48,6 +48,7 @@ import {
   loadSlicesIndependently,
 } from "./slice-loading.ts";
 import { type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
+import { SyncButton } from "./sync-button.tsx";
 import {
   isForegroundSync,
   LIVE_SESSIONS_REFRESH_MS,
@@ -60,6 +61,7 @@ import {
   sessionsAutoRefresh,
   showsSync,
   showsSyncComplete,
+  statsRebuildPending,
   supersededStatus,
   syncAnnouncement,
   syncCompleteLabel,
@@ -92,6 +94,7 @@ import "./styles.css";
 const LIVE_DISCONNECT_GRACE_MS = 15_000;
 const VIEWS_WITHOUT_HEADING = new Set(["not-found"]);
 const SYNC_PROGRESS_RENDER_MS = 150;
+const TOPBAR_SYNC_LABELS = ["Sync", "Update"] as const;
 
 function liveSessionsViewer(): LiveSessionsViewer {
   return {
@@ -135,6 +138,7 @@ function App() {
   const syncEndedRef = useRef(0);
   const archiveSyncedRef = useRef(true);
   const awaitingStatsRef = useRef(false);
+  const statsPendingRef = useRef(false);
   const localSyncingRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
   useTodayRollover(dateRangeSelection.preset === "today", setDateRangeSelection);
@@ -507,6 +511,7 @@ function App() {
         localSyncingRef.current,
       );
       awaitingStatsRef.current = plan.awaitingStats;
+      statsPendingRef.current = statsRebuildPending(payload.reason, statsPendingRef.current);
       if (plan.refresh) {
         setArchiveUpdateAvailable(false);
         requestRefresh();
@@ -666,6 +671,9 @@ function App() {
     [path],
   );
   const loadArchiveUpdates = () => {
+    if (statsPendingRef.current) {
+      awaitingStatsRef.current = true;
+    }
     setArchiveUpdateAvailable(false);
     requestRefresh();
   };
@@ -858,17 +866,14 @@ function App() {
           >
             <Icon name="search" />
           </button>
-          <button
-            aria-label={archiveUpdateAvailable ? "Load new activity" : "Sync session logs"}
-            aria-busy={syncInProgress}
-            className={`secondary-button sync-button${syncInProgress ? " is-syncing" : ""}${archiveUpdateAvailable ? " has-update" : ""}`}
-            disabled={syncInProgress}
+          <SyncButton
+            ariaLabel={archiveUpdateAvailable ? "Load new activity" : "Sync session logs"}
+            busy={syncInProgress}
+            label={archiveUpdateAvailable ? "Update" : "Sync"}
+            labels={TOPBAR_SYNC_LABELS}
             onClick={archiveUpdateAvailable ? loadArchiveUpdates : runSync}
-            type="button"
-          >
-            <Icon name="refresh" />
-            {syncInProgress ? null : archiveUpdateAvailable ? "Update" : "Sync"}
-          </button>
+            update={archiveUpdateAvailable}
+          />
           <span aria-live="polite" className="sr-only" role="status">
             {syncInProgress
               ? syncAnnouncement(syncProgress)

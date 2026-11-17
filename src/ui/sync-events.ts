@@ -39,6 +39,13 @@ export function planArchiveUpdate(
   return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
 }
 
+export function statsRebuildPending(reason: string | undefined, pending: boolean): boolean {
+  if (reason === "stats") {
+    return false;
+  }
+  return reason === "session_state" ? pending : true;
+}
+
 export const LIVE_SESSIONS_REFRESH_MS = 5_000;
 
 export function sessionsAutoRefresh({

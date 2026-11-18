@@ -200,6 +200,56 @@
     "timestamp": "2026-10-12T07:26:43.000Z"
   },
   {
+    "tool": "pi",
+    "source_session_id": "5a1e0000-0000-4000-8000-000000000001",
+    "seq": 2,
+    "path": "hello.txt",
+    "rel_path": "hello.txt",
+    "ext": "txt",
+    "operation": "read",
+    "timestamp": "2026-11-01T10:00:05.000Z"
+  },
+  {
+    "tool": "pi",
+    "source_session_id": "5a1e0000-0000-4000-8000-000000000001",
+    "seq": 4,
+    "path": "/decant-fixture/pi-example/hello.txt",
+    "rel_path": "hello.txt",
+    "ext": "txt",
+    "operation": "edit",
+    "timestamp": "2026-11-01T10:00:08.000Z"
+  },
+  {
+    "tool": "pi",
+    "source_session_id": "5a1e0000-0000-4000-8000-000000000001",
+    "seq": 10,
+    "path": "farewell.txt",
+    "rel_path": "farewell.txt",
+    "ext": "txt",
+    "operation": "write",
+    "timestamp": "2026-11-01T10:02:06.000Z"
+  },
+  {
+    "tool": "pi",
+    "source_session_id": "f0e10000-0000-4000-8000-000000000002",
+    "seq": 2,
+    "path": "hello.txt",
+    "rel_path": "hello.txt",
+    "ext": "txt",
+    "operation": "read",
+    "timestamp": "2026-11-01T10:00:05.000Z"
+  },
+  {
+    "tool": "pi",
+    "source_session_id": "f0e10000-0000-4000-8000-000000000002",
+    "seq": 5,
+    "path": "hello.txt",
+    "rel_path": "hello.txt",
+    "ext": "txt",
+    "operation": "edit",
+    "timestamp": "2026-11-02T09:00:34.000Z"
+  },
+  {
     "tool": "vscode_copilot",
     "source_session_id": "vscode-sample-session",
     "seq": 1,

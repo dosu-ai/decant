@@ -142,6 +142,8 @@ function sourceRoots(config: Config, tool: Tool): string[] {
       return config.atifDir == null ? [] : [config.atifDir];
     case "hermes":
       return config.hermesDir == null ? [] : [config.hermesDir];
+    case "pi":
+      return config.piDir == null ? [] : [config.piDir];
   }
 }
 

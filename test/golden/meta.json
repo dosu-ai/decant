@@ -24,6 +24,8 @@
     "fixtures/opencode/mcp.sql",
     "fixtures/opencode/sample.sql",
     "fixtures/opencode/v1-sample.sql",
+    "fixtures/pi/forked.jsonl",
+    "fixtures/pi/sample.jsonl",
     "fixtures/vscode-copilot/User/globalStorage/emptyWindowChatSessions/vscode-empty-window-session.jsonl",
     "fixtures/vscode-copilot/User/workspaceStorage/5f3e9c1a/chatSessions/vscode-legacy-session.json",
     "fixtures/vscode-copilot/User/workspaceStorage/5f3e9c1a/chatSessions/vscode-sample-session.jsonl"

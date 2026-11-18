@@ -13,6 +13,7 @@ const BUG_FORM_LABEL_FOR_EVERY_TOOL: Record<Tool, string> = {
   vscode_copilot: "Copilot Chat in VS Code",
   atif: "ATIF trajectories",
   hermes: "Hermes Agent",
+  pi: "Pi",
 };
 
 interface FormField {

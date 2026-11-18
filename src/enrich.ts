@@ -28,6 +28,19 @@ export interface Facets {
 }
 
 export const ACTIVE_GAP_CAP_SECONDS = 300;
+
+/** A Pi fork starts at its own header but keeps the history it copied from
+ * its parent, dated when the parent wrote it. That time was spent there. */
+export function copiedBeforeStart(
+  tool: string,
+  startedAt: string | null,
+  timestamp: string | null,
+): boolean {
+  if (tool !== "pi" || startedAt == null || timestamp == null) {
+    return false;
+  }
+  return Date.parse(timestamp) < Date.parse(startedAt);
+}
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
 /** OpenCode 2.x starts a child session with `subagent`; older builds named
@@ -90,6 +103,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "hermes") {
         keyedRef(HERMES_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (tool === "pi") {
+        keyedRef(PI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "vscode_copilot") {
         vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
       } else {
@@ -124,6 +139,13 @@ const OPENCODE_FILE_TOOLS: FileToolTable = {
   edit: { key: "path", fallbackKey: "filePath", operation: "edit" },
   write: { key: "path", fallbackKey: "filePath", operation: "write" },
   multiedit: { key: "filePath", operation: "edit" },
+};
+
+// Pi's built-in file tools take a `path`, absolute or relative to the session's cwd.
+const PI_FILE_TOOLS: FileToolTable = {
+  read: { key: "path", operation: "read" },
+  edit: { key: "path", operation: "edit" },
+  write: { key: "path", operation: "write" },
 };
 
 // The Cursor CLI's file tools take an absolute `path`.
@@ -389,6 +411,9 @@ export function facets(session: NormalizedSession): Facets {
     if (session.tool === "vscode_copilot" && rawBoolean(message.raw, "canceled") === true) {
       got.interruptionCount += 1;
     }
+    if (session.tool === "pi" && message.stopReason === "aborted") {
+      got.interruptionCount += 1;
+    }
 
     let hasRealText = false;
     for (const block of message.blocks) {
@@ -428,7 +453,11 @@ export function facets(session: NormalizedSession): Facets {
       got.turnCount += 1;
     }
 
-    const timestamp = message.timestamp == null ? null : epochSecs(message.timestamp);
+    const timestamp =
+      message.timestamp == null ||
+      copiedBeforeStart(session.tool, session.startedAt, message.timestamp)
+        ? null
+        : epochSecs(message.timestamp);
     if (timestamp != null) {
       if (previousTimestamp != null) {
         const gap = timestamp - previousTimestamp;

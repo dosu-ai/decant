@@ -88,7 +88,7 @@ before it is still reported as JSON.
 Decant rejects a value it would otherwise have to guess at.
 
 - `--tool` takes one of `claude_code`, `codex`, `gemini`, `opencode`, `cursor`,
-  `copilot`, `vscode_copilot`, `atif`, or `hermes`. These are the names `ls` prints.
+  `copilot`, `vscode_copilot`, `atif`, `hermes`, or `pi`. These are the names `ls` prints.
 - `--limit` takes an integer of 1 or more.
 - `--format` takes `table`, `json`, or `md`. Only commands that print Markdown
   accept `md`: `show`, `session show`, `export`, and `distill skill`.

@@ -305,6 +305,8 @@ describe("rules the code depends on", () => {
       ["agentId"],
       ["extra", "context_management", "type"],
       ["_compressed_summary"],
+      ["usage"],
+      ["tokensBefore"],
     ]);
   });
 });

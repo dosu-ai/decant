@@ -31,6 +31,7 @@ const sourceEnv = {
   DECANT_VSCODE_COPILOT_DIR: emptyDir,
   DECANT_ATIF_DIR: emptyDir,
   DECANT_HERMES_DIR: emptyDir,
+  DECANT_PI_DIR: emptyDir,
 };
 const noSyncEnv = { ...sourceEnv, DECANT_NO_SYNC: "1" };
 const archive = join(workDir, "archive.db");
@@ -173,7 +174,7 @@ describe("an explicit archive path that does not exist", () => {
 
 describe("invalid flag values", () => {
   const TOOLS =
-    "claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif | hermes";
+    "claude_code | codex | gemini | opencode | cursor | copilot | vscode_copilot | atif | hermes | pi";
   const cases: { argv: string[]; message: string; details: Record<string, unknown> }[] = [
     {
       argv: ["ls", "--tool", "claude"],

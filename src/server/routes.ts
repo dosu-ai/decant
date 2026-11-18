@@ -173,6 +173,7 @@ export const ROUTES: Record<ApiRoutePath, RouteSpec> = {
         vscodeCopilotDir: config.vscodeCopilotDir,
         atifDir: config.atifDir ?? null,
         hermesDir: config.hermesDir ?? null,
+        piDir: config.piDir ?? null,
         version: DECANT_VERSION,
       }),
   },

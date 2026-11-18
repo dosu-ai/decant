@@ -50,6 +50,14 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   const atifDir = join(caseDir, "sources", "atif");
   const hermesDir = join(caseDir, "sources", "hermes");
+  const piProjectDir = join(
+    caseDir,
+    "sources",
+    "pi",
+    "agent",
+    "sessions",
+    "--decant-fixture-pi-example--",
+  );
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
@@ -68,6 +76,9 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
       opencodeFixtures.push(name);
     } else if (fixture.startsWith("fixtures/hermes/")) {
       hermesFixtures.push(name);
+    } else if (fixture.startsWith("fixtures/pi/")) {
+      mkdirSync(piProjectDir, { recursive: true });
+      copyFileSync(source, join(piProjectDir, `2026-11-01T10-00-00-000Z_${name}`));
     } else if (fixture.startsWith("fixtures/cursor/")) {
       const chat = basename(dirname(source));
       buildCursorChat(join(cursorDir, "synthetic-workspace", chat), chat);
@@ -106,6 +117,7 @@ function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
     vscodeCopilotDir,
     atifDir,
     hermesDir,
+    piDir: dirname(piProjectDir),
   };
 }
 

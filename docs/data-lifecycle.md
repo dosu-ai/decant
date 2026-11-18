@@ -3,7 +3,7 @@
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
-Copilot Chat in VS Code, or Hermes Agent, or an ATIF trajectory file another
+Copilot Chat in VS Code, Hermes Agent, or Pi, or an ATIF trajectory file another
 agent wrote. `~/.decant/decant.db` is a searchable, rebuildable
 index plus Decant-owned user state.
 
@@ -133,6 +133,10 @@ By default Decant discovers:
   compaction copied forward read once, and without rows a rewind or edit
   removed (`active = 0, compacted = 0`). A session deleted from `state.db`
   stops being discovered, and the archive keeps the copy it last ingested.
+- Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
+  from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
+  `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
+  read-only, and Decant re-reads the whole file when it changes.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
@@ -210,7 +214,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-`opencode`, `cursor`, `copilot-cli`, `vscode-copilot-chat`, and `hermes`.
+`opencode`, `cursor`, `copilot-cli`, `vscode-copilot-chat`, `hermes`, and `pi`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.
@@ -765,7 +769,7 @@ a Decant user override does not move or rewrite provider files.
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
-VS Code, or Hermes Agent record remains on disk.
+VS Code, Hermes Agent, or Pi record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting

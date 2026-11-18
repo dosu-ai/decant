@@ -73,9 +73,17 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
   const messages = queryRows<BilledMessageRow>(
     db,
     `SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-            CASE WHEN ?2 = 'claude_code' THEN json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage') END AS usage_json,
+            CASE WHEN ?2 = 'claude_code' THEN json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage')
+                 WHEN ?2 = 'pi' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_object(
+                   'cache_creation', json_object('ephemeral_1h_input_tokens', COALESCE(
+                     json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage.cacheWrite1h'),
+                     json_extract(${MESSAGE_METADATA_SQL}, '$.usage.cacheWrite1h'), 0)))
+            END AS usage_json,
             CASE WHEN ?2 = 'opencode' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.cost')
                  WHEN ?2 = 'atif' AND json_valid(${MESSAGE_METADATA_SQL}) THEN json_extract(${MESSAGE_METADATA_SQL}, '$.metrics.cost_usd')
+                 WHEN ?2 = 'pi' AND json_valid(${MESSAGE_METADATA_SQL}) THEN COALESCE(
+                   json_extract(${MESSAGE_METADATA_SQL}, '$.message.usage.cost.total'),
+                   json_extract(${MESSAGE_METADATA_SQL}, '$.usage.cost.total'))
             END AS reported_cost
        FROM message m
       WHERE session_id = ?1

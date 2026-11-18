@@ -81,6 +81,7 @@ import {
   OpenCodeStore,
   readOpenCodeModelsCache,
 } from "./sources/opencode-store.ts";
+import { parsePiSession, piSessionIdFromStem } from "./sources/pi.ts";
 import { parseVscodeCopilotSession } from "./sources/vscode-copilot.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
@@ -114,10 +115,11 @@ export interface IngestConfig {
   vscodeCopilotInsidersDir?: string;
   atifDir?: string;
   hermesDir?: string;
+  piDir?: string;
   sourcePaths?: string[];
 }
 
-export const INGEST_PIPELINE_REVISION = 21;
+export const INGEST_PIPELINE_REVISION = 22;
 
 export interface SyncReport {
   repriced?: number;
@@ -170,10 +172,13 @@ export function discover(
   warn: DiscoveryWarn = logDiscoveryWarning,
 ): SourceFile[] {
   if (config.sourcePaths != null && config.sourcePaths.length > 0) {
-    return discoverSourcePaths(config.sourcePaths, warn, config.copilotDir, [
-      config.vscodeCopilotDir,
-      config.vscodeCopilotInsidersDir,
-    ]);
+    return discoverSourcePaths(
+      config.sourcePaths,
+      warn,
+      config.copilotDir,
+      [config.vscodeCopilotDir, config.vscodeCopilotInsidersDir],
+      config.piDir,
+    );
   }
 
   const out: SourceFile[] = [];
@@ -196,6 +201,9 @@ export function discover(
   if (config.atifDir != null) {
     collect(config.atifDir, "atif", false, () => true, out);
   }
+  if (config.piDir != null) {
+    collect(config.piDir, "pi", false, isSessionJsonl, out);
+  }
   return out.filter(
     (file) =>
       (file.tool !== "cursor" || isCursorConversationStore(file.path)) &&
@@ -208,12 +216,17 @@ export function discoverSourcePaths(
   warn: DiscoveryWarn = logDiscoveryWarning,
   copilotDir?: string,
   vscodeUserDirs: readonly (string | undefined)[] = [],
+  piDir?: string,
 ): SourceFile[] {
   const out: SourceFile[] = [];
   const databases: string[] = [];
   const hermesDatabases: string[] = [];
   for (const path of paths) {
-    collectSourcePath(path, out, databases, hermesDatabases, copilotDir, vscodeUserDirs);
+    collectSourcePath(path, out, databases, hermesDatabases, {
+      copilotDir,
+      vscodeUserDirs,
+      piDir,
+    });
   }
   return [
     ...preferVscodeLogs(dedupeSourceFiles(out)),
@@ -644,6 +657,8 @@ export function sync(
           parsed = parseVscodeCopilotSession(stem, content, {
             workspace: readVscodeWorkspace(file.path),
           });
+        } else if (file.tool === "pi") {
+          parsed = parsePiSession(piSessionIdFromStem(stem), content);
         } else if (file.tool === "gemini") {
           const layout = geminiSessionLayout(file.path);
           parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
@@ -2483,9 +2498,9 @@ function collectSourcePath(
   out: SourceFile[],
   databases: string[],
   hermesDatabases: string[],
-  copilotDir?: string,
-  vscodeUserDirs: readonly (string | undefined)[] = [],
+  roots: SourceRoots,
 ): void {
+  const { vscodeUserDirs = [] } = roots;
   let stats: Stats;
   try {
     stats = statSync(path);
@@ -2509,7 +2524,7 @@ function collectSourcePath(
       databases.push(path);
       return;
     }
-    const source = sourceFileForPath(path, copilotDir, vscodeUserDirs);
+    const source = sourceFileForPath(path, roots);
     if (source != null) {
       out.push(source);
     }
@@ -2530,18 +2545,21 @@ function collectSourcePath(
       hermesDatabases.push(child);
       continue;
     }
-    const source = sourceFileForPath(child, copilotDir, vscodeUserDirs);
+    const source = sourceFileForPath(child, roots);
     if (source != null) {
       out.push(source);
     }
   }
 }
 
-function sourceFileForPath(
-  path: string,
-  copilotDir?: string,
-  vscodeUserDirs: readonly (string | undefined)[] = [],
-): SourceFile | null {
+interface SourceRoots {
+  copilotDir?: string | undefined;
+  vscodeUserDirs?: readonly (string | undefined)[];
+  piDir?: string | undefined;
+}
+
+function sourceFileForPath(path: string, roots: SourceRoots): SourceFile | null {
+  const { copilotDir, vscodeUserDirs = [], piDir } = roots;
   const name = pathBasename(path);
   if (name === CURSOR_STORE_NAME) {
     return isCursorConversationStore(path) ? { tool: "cursor", path, archived: false } : null;
@@ -2558,6 +2576,9 @@ function sourceFileForPath(
   }
   if (isCopilotSessionLog(path, copilotDir)) {
     return { tool: "copilot", path, archived: false };
+  }
+  if (isPiSessionLog(path, piDir)) {
+    return { tool: "pi", path, archived: false };
   }
   if (isInCopilotSessionState(path, copilotDir)) {
     // Rotated `events.N.jsonl` archives and files a session wrote into its
@@ -2611,6 +2632,28 @@ function collectCopilot(copilotDir: string, out: SourceFile[]): void {
       out.push({ tool: "copilot", path, archived: false });
     }
   }
+}
+
+/** Pi writes `<sessions>/--<cwd>--/<timestamp>_<session id>.jsonl`, with the
+ * working directory's separators replaced by `-`. */
+function isPiSessionLog(path: string, piDir?: string): boolean {
+  const projectDir = dirname(path);
+  const sessionsDir = dirname(projectDir);
+  if (piDir != null && isInside(resolve(piDir), resolve(path))) {
+    return true;
+  }
+  const project = pathBasename(projectDir);
+  return (
+    pathBasename(sessionsDir) === "sessions" &&
+    pathBasename(dirname(sessionsDir)) === "agent" &&
+    project.length > 4 &&
+    project.startsWith("--") &&
+    project.endsWith("--")
+  );
+}
+
+function isInside(root: string, path: string): boolean {
+  return path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
 
 function isCopilotSessionLog(path: string, copilotDir?: string): boolean {

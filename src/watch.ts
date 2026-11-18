@@ -175,6 +175,8 @@ const copilotEvents: EventFilter = (filename) =>
 
 const atifEvents: EventFilter = (filename) => filename == null || filename.endsWith(".json");
 
+const piEvents: EventFilter = (filename) => filename == null || filename.endsWith(".jsonl");
+
 const vscodeWorkspaceChatEvents: EventFilter = (filename) => {
   if (filename == null) {
     return true;
@@ -331,6 +333,9 @@ export function watchRoots(config: Config): WatchRoot[] {
     ),
     ...(config.atifDir != null
       ? [{ dir: config.atifDir, recursive: true, accepts: () => atifEvents }]
+      : []),
+    ...(config.piDir != null
+      ? [{ dir: config.piDir, recursive: true, accepts: () => piEvents }]
       : []),
     // A running Hermes keeps its connection open and appends to the `-wal`,
     // which is the same event gap OpenCode has, so each profile's directory

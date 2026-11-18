@@ -54,6 +54,7 @@ const TRAJECTORY_SOURCES: Record<string, string> = {
   vscode_copilot: "vscode-copilot-chat",
   atif: "atif",
   hermes: "hermes",
+  pi: "pi",
 };
 
 const TRAJECTORY_NOISE_PREFIXES = [

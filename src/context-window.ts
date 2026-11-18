@@ -96,7 +96,7 @@ export interface MessageRawMeta {
 export const MESSAGE_RAW_META_SQL = `json_extract(${MESSAGE_METADATA_SQL}, '$.isSidechain', '$.subtype',
   '$.type', '$.isCompactSummary', '$.compactMetadata.trigger', '$.compactMetadata.preTokens',
   '$.agentId', '$.data.preCompactionTokens', '$.extra.context_management.type',
-  '$._compressed_summary')`;
+  '$._compressed_summary', '$.tokensBefore')`;
 
 export function parseMessageRawMeta(value: string | null, tool?: string): MessageRawMeta {
   const none: MessageRawMeta = {
@@ -130,11 +130,13 @@ export function parseMessageRawMeta(value: string | null, tool?: string): Messag
     copilotPreTokens,
     contextManagement,
     hermesSummary,
+    piPreTokens,
   ] = parsed as unknown[];
   // Hermes Agent's in-place compaction writes one summary row, which is both
   // the boundary and the summary.
   const hermesCompaction = tool === "hermes" && hermesSummary === 1;
-  const recordedPreTokens = tool === "copilot" ? copilotPreTokens : preTokens;
+  const recordedPreTokens =
+    tool === "copilot" ? copilotPreTokens : tool === "pi" ? piPreTokens : preTokens;
   return {
     // Copilot CLI marks a subagent's events in the parent journal with the
     // subagent's agentId instead of isSidechain.

@@ -37,6 +37,18 @@ describe("source and provenance marks", () => {
     });
   });
 
+  test("Pi has a labeled badge without a brand mark", () => {
+    const html = renderToStaticMarkup(<ToolBadge tool="pi" />);
+    expect(html).not.toContain('class="brand-mark"');
+    expect(html).toContain("Pi");
+    expect(providerIdentity("pi")).toEqual({
+      key: "assistant",
+      label: "Pi",
+      tone: "accent",
+      icon: null,
+    });
+  });
+
   test("GitHub Copilot CLI has a brand mark in source badges and assistant turns", () => {
     const html = renderToStaticMarkup(<ToolBadge tool="copilot" />);
     expect(html).toContain('class="brand-mark"');

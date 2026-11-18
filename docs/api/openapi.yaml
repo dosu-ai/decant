@@ -1295,7 +1295,7 @@ components:
       description: Combined provider and client filter for analytics sessions
       schema:
         type: string
-        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes]
+        enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes, pi]
     Model:
       name: model
       in: query
@@ -1617,7 +1617,7 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, atifDir, hermesDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, opencodeDir, cursorDir, copilotDir, vscodeCopilotDir, atifDir, hermesDir, piDir, version]
       properties:
         dbPath:
           type: string
@@ -1641,6 +1641,9 @@ components:
         hermesDir:
           type: [string, "null"]
           description: Hermes Agent home directory, whose `state.db` and `profiles/<name>/state.db` files are read. Null when the server's configuration names none.
+        piDir:
+          type: [string, "null"]
+          description: Pi sessions directory, read recursively for session files. Null when the server's configuration names none.
         version:
           type: string
       additionalProperties: false
@@ -3024,7 +3027,7 @@ components:
       properties:
         key:
           type: string
-          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes]
+          enum: [claude_code, codex_app, codex_cli, codex_other, gemini_cli, opencode, cursor_cli, copilot_cli, vscode_copilot, atif, hermes, pi]
         label:
           type: string
       additionalProperties: false

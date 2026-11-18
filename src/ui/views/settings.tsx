@@ -119,7 +119,7 @@ export function SettingsView({
             <p>
               See where your coding agents spend tokens, money, and time: a local-first, searchable
               archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
-              Copilot Chat in VS Code, and Hermes Agent sessions, with ATIF import and export.
+              Copilot Chat in VS Code, Hermes Agent, and Pi sessions, with ATIF import and export.
               Decant is an open source tool from Dosu.
             </p>
           </div>

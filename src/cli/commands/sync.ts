@@ -37,6 +37,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     vscodeCopilotDir?: string;
     atifDir?: string;
     hermesDir?: string;
+    piDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -92,6 +93,7 @@ export function registerSyncCommands(ctx: CliContext): void {
           vscodeCopilotDir: commandOptions.vscodeCopilotDir,
           atifDir: commandOptions.atifDir,
           hermesDir: commandOptions.hermesDir,
+          piDir: commandOptions.piDir,
         },
       },
     );
@@ -112,6 +114,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
+    .option("--pi-dir <dir>", "override the Pi sessions directory")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
@@ -129,6 +132,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         vscodeCopilotDir?: string;
         atifDir?: string;
         hermesDir?: string;
+        piDir?: string;
         path?: string[];
       }) => ctx.run(() => runSync(commandOptions)),
     );
@@ -157,6 +161,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
+    .option("--pi-dir <dir>", "override the Pi sessions directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -179,6 +184,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         vscodeCopilotDir?: string;
         atifDir?: string;
         hermesDir?: string;
+        piDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -194,6 +200,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
             hermesDir: commandOptions.hermesDir,
+            piDir: commandOptions.piDir,
           });
           const signal = waitForProcessSignal();
           try {
@@ -234,6 +241,7 @@ export function registerSyncCommands(ctx: CliContext): void {
     )
     .option("--atif-dir <dir>", "override the directory read for ATIF trajectory files")
     .option("--hermes-dir <dir>", "override the Hermes Agent home directory")
+    .option("--pi-dir <dir>", "override the Pi sessions directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -265,6 +273,7 @@ export function registerSyncCommands(ctx: CliContext): void {
         vscodeCopilotDir?: string;
         atifDir?: string;
         hermesDir?: string;
+        piDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -282,6 +291,7 @@ export function registerSyncCommands(ctx: CliContext): void {
             vscodeCopilotDir: commandOptions.vscodeCopilotDir,
             atifDir: commandOptions.atifDir,
             hermesDir: commandOptions.hermesDir,
+            piDir: commandOptions.piDir,
           });
           const syncEnabled = ctx.shouldSync();
           const { parsePeerList, serve: serveApp } = await import("../../server.ts");

@@ -148,6 +148,15 @@ function stageFixtures(dir: string): IngestConfig {
   }
   mkdirSync(hermesDir, { recursive: true });
   buildHermesFixtureDb(join(hermesDir, "state.db"), ["sample.sql", "subagent.sql"]);
+  const piDir = join(dir, "sources", "pi", "agent", "sessions");
+  const piProjectDir = join(piDir, "--decant-fixture-pi-example--");
+  mkdirSync(piProjectDir, { recursive: true });
+  for (const name of ["forked.jsonl", "sample.jsonl"]) {
+    copyFileSync(
+      join(fixtureRoot, "pi", name),
+      join(piProjectDir, `2026-11-01T10-00-00-000Z_${name}`),
+    );
+  }
 
   return {
     claudeDir,
@@ -160,6 +169,7 @@ function stageFixtures(dir: string): IngestConfig {
     vscodeCopilotDir,
     atifDir,
     hermesDir,
+    piDir,
   };
 }
 
@@ -2501,7 +2511,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 24, ingested: 24, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 26, ingested: 26, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(decodeGoldenRows(rows(db, sql)), dir), name).toEqual(
@@ -2525,7 +2535,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 24, ingested: 0, skipped: 24, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 26, ingested: 0, skipped: 26, failed: 0 });
     expect(
       db
         .query(
@@ -2544,7 +2554,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 24, ingested: 0, skipped: 24, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 26, ingested: 0, skipped: 26, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

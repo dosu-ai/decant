@@ -15,6 +15,7 @@ export const SESSION_SOURCES = [
   "vscode_copilot",
   "atif",
   "hermes",
+  "pi",
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -52,6 +53,8 @@ export function sessionSourceLabel(source: SessionSource): string {
       return "ATIF trajectories";
     case "hermes":
       return "Hermes Agent";
+    case "pi":
+      return "Pi";
   }
 }
 
@@ -107,6 +110,8 @@ export function sessionSourcePredicate(
       return { sql: `${alias}.tool = ?`, params: ["atif"] };
     case "hermes":
       return { sql: `${alias}.tool = ?`, params: ["hermes"] };
+    case "pi":
+      return { sql: `${alias}.tool = ?`, params: ["pi"] };
     default:
       return { sql: "", params: [] };
   }

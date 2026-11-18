@@ -11,7 +11,7 @@ import {
 import { defaultPricing } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
-import { ACTIVE_GAP_CAP_SECONDS } from "./enrich.ts";
+import { ACTIVE_GAP_CAP_SECONDS, copiedBeforeStart } from "./enrich.ts";
 import { byteLength } from "./json.ts";
 import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { TokenUsage } from "./model.ts";
@@ -856,7 +856,7 @@ function allocateLatency(
   let previous: number | null = null;
   for (const message of orderedMessages(blocks)) {
     const at = epochMillis(message.timestamp);
-    if (at == null) {
+    if (at == null || copiedBeforeStart(session.tool, session.started_at, message.timestamp)) {
       continue;
     }
     if (previous != null) {

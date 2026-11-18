@@ -25,10 +25,8 @@ import {
 /** Entry types Pi writes that carry nothing Decant stores (session-format.md). */
 const IGNORED_TYPES = new Set(["context_edit", "custom", "label"]);
 
-export interface PiSessionHeader {
-  timestamp: string | null;
-  parentSession: string | null;
-}
+/** The largest magnitude a JavaScript Date can hold (ECMA-262 21.4.1.1). */
+const MAX_DATE_MILLIS = 8.64e15;
 
 /** A session file is named `<timestamp>_<session id>.jsonl`; the header's
  * own `id` wins when the file has one. */
@@ -46,7 +44,6 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
   const outputByModel = new Map<string, number>();
   const totals = emptyUsage();
 
-  let header: PiSessionHeader | null = null;
   let headerRecord: JsonObject | null = null;
   let sourceSessionId: string | null = null;
   let cwd: string | null = null;
@@ -57,6 +54,8 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
   let endedAt: string | null = null;
   let reasoningReported = false;
   let copiedEntries = 0;
+  let forkedAt: number | null = null;
+  let entryIsCopy = false;
   let seq = 0;
 
   const push = (
@@ -81,12 +80,12 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
   };
 
   /** Usage on an entry the session copied from its parent was billed there. */
-  const billed = (entry: JsonObject, usage: Json | undefined): TokenUsage | null => {
+  const billed = (usage: Json | undefined): TokenUsage | null => {
     const converted = piUsage(usage);
     if (converted == null) {
       return null;
     }
-    if (header != null && isCopiedFromParent(entry, header)) {
+    if (entryIsCopy) {
       copiedEntries += 1;
       return null;
     }
@@ -98,15 +97,26 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
   for (const [index, line] of content.split(/\n/).entries()) {
     const lineNo = index + 1;
     const entry = parseJsonLine(line, lineNo, issues);
-    if (entry === undefined || !isObject(entry)) {
+    if (entry === undefined) {
+      continue;
+    }
+    if (!isObject(entry)) {
+      countUnknown(unknownTypes, "entry.non_object", lineNo);
       continue;
     }
     const typ = asString(entry.type);
     if (typ == null) {
+      countUnknown(unknownTypes, "entry.untyped", lineNo);
       continue;
     }
     const timestamp = entryTimestamp(entry);
-    if (timestamp != null && typ !== "session") {
+    if (typ !== "session") {
+      entryIsCopy = forkedAt != null && isCopiedFromParent(timestamp, forkedAt);
+      if (!entryIsCopy) {
+        forkedAt = null;
+      }
+    }
+    if (timestamp != null && typ !== "session" && !entryIsCopy) {
       startedAt = earlier(startedAt, timestamp);
       endedAt = later(endedAt, timestamp);
     }
@@ -117,21 +127,20 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
           break;
         }
         headerRecord = entry;
-        header = {
-          timestamp: asString(entry.timestamp),
-          parentSession: asString(entry.parentSession),
-        };
+        const headerTime = asString(entry.timestamp);
         sourceSessionId = asString(entry.id);
         cwd = asString(entry.cwd);
-        if (header.timestamp != null) {
-          startedAt = earlier(startedAt, header.timestamp);
+        if (headerTime != null) {
+          startedAt = earlier(startedAt, headerTime);
         }
+        const forked = asString(entry.parentSession) == null ? Number.NaN : timeOf(headerTime);
+        forkedAt = Number.isFinite(forked) ? forked : null;
         break;
       }
       case "message": {
         const message = isObject(entry.message) ? entry.message : null;
         if (message == null) {
-          countUnknown(unknownTypes, "message:(no message)", lineNo);
+          countUnknown(unknownTypes, "message.missing", lineNo);
           break;
         }
         const role = asString(message.role);
@@ -148,7 +157,7 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
           case "assistant": {
             const model = asString(message.model) ?? currentModel;
             const blocks = assistantBlocks(message.content, toolUses);
-            const usage = billed(entry, message.usage);
+            const usage = billed(message.usage);
             if (model != null && usage != null) {
               outputByModel.set(model, (outputByModel.get(model) ?? 0) + usage.output);
             }
@@ -179,7 +188,7 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
                 wrapper.innerToolCalls = inner;
               }
             }
-            push("tool", entry, [result], { usage: billed(entry, message.usage) });
+            push("tool", entry, [result], { usage: billed(message.usage) });
             break;
           }
           case "system": {
@@ -191,7 +200,9 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
             push("other", entry, [block(0, "text", { text: bashText(message) })]);
             break;
           }
-          case "custom": {
+          // Version 2 named the role `hookMessage`; version 3 renamed it.
+          case "custom":
+          case "hookMessage": {
             push("other", entry, contentBlocks(message.content));
             break;
           }
@@ -202,7 +213,11 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
             break;
           }
           default: {
-            countUnknown(unknownTypes, `message:${role ?? "(no role)"}`, lineNo);
+            countUnknown(
+              unknownTypes,
+              role == null ? "message.no_role" : `message:${role}`,
+              lineNo,
+            );
             push("other", entry, contentBlocks(message.content));
           }
         }
@@ -218,7 +233,7 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
       }
       case "usage": {
         const model = asString(entry.model) ?? currentModel;
-        const usage = billed(entry, entry.usage);
+        const usage = billed(entry.usage);
         if (usage == null) {
           break;
         }
@@ -235,7 +250,7 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
         const summary = asString(entry.summary) ?? "";
         push("system", entry, summary === "" ? [] : [block(0, "text", { text: summary })], {
           model: currentModel,
-          usage: billed(entry, entry.usage),
+          usage: billed(entry.usage),
         });
         break;
       }
@@ -289,21 +304,20 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
 }
 
 /**
- * `/fork`, `/clone`, and `SessionManager.forkFrom` start a new session file
- * whose header names the original in `parentSession`, then copy the original's
- * entries into it with their ids, timestamps, and usage unchanged. Pi already
- * billed those entries in the original session.
- *
- * Return true when `entry` is such a copy, so its usage is not counted twice.
+ * `/fork`, `/clone`, and `SessionManager.forkFrom` write a new session file in
+ * one pass: a header naming the original in `parentSession` and stamped with
+ * the fork time, then the original's entries with their ids, timestamps, and
+ * usage unchanged. Pi already billed those entries in the original session.
+ * New entries are only ever appended after them, so the copies are the run of
+ * entries right after the header that were written at or before the fork.
  */
-export function isCopiedFromParent(entry: JsonObject, header: PiSessionHeader): boolean {
-  if (header.parentSession == null || header.timestamp == null) {
-    return false;
-  }
-  const forkedAt = Date.parse(header.timestamp);
-  const recorded = entryTimestamp(entry);
-  const at = recorded == null ? Number.NaN : Date.parse(recorded);
-  return Number.isFinite(forkedAt) && Number.isFinite(at) && at < forkedAt;
+function isCopiedFromParent(timestamp: string | null, forkedAt: number): boolean {
+  const at = timeOf(timestamp);
+  return Number.isFinite(at) && at <= forkedAt;
+}
+
+function timeOf(timestamp: string | null): number {
+  return timestamp == null ? Number.NaN : Date.parse(timestamp);
 }
 
 /** Pi's `input` excludes cache reads and writes, as Decant's does, and its
@@ -329,7 +343,7 @@ function entryTimestamp(entry: JsonObject): string | null {
     return recorded;
   }
   const millis = get(entry.message, "timestamp");
-  return typeof millis === "number" && Number.isFinite(millis)
+  return typeof millis === "number" && Math.abs(millis) <= MAX_DATE_MILLIS
     ? new Date(millis).toISOString()
     : null;
 }

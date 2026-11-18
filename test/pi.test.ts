@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveConfig } from "../src/config.ts";
+import { contextWindowForSession } from "../src/context-window.ts";
 import { defaultPricing, estimateCost } from "../src/cost.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { facets, fileRefs } from "../src/enrich.ts";
@@ -225,6 +226,59 @@ describe("parsePiSession", () => {
     ]);
   });
 
+  test("reports lines that are not entries and reads past an impossible date", () => {
+    const { session, issues } = parsePiSession(
+      "fallback",
+      lines(
+        HEADER,
+        "{}",
+        "[]",
+        "null",
+        {
+          type: "message",
+          id: "y1",
+          parentId: null,
+          message: { role: "user", content: "far future", timestamp: 1e20 },
+        },
+        assistant("y2", "y1", "2026-11-03T08:00:05.000Z", { usage: usage(10, 1) }),
+      ),
+    );
+    expect(issues.map((issue) => [issue.code, issue.lineNo, issue.error])).toEqual([
+      ["unknown_record_type", 2, 'unknown record type "entry.untyped" on 1 line(s); ignored'],
+      ["unknown_record_type", 3, 'unknown record type "entry.non_object" on 2 line(s); ignored'],
+    ]);
+    expect(session.messages.map((message) => [message.sourceUuid, message.timestamp])).toEqual([
+      ["y1", null],
+      ["y2", "2026-11-03T08:00:05.000Z"],
+    ]);
+    expect(session.totals).toMatchObject({ input: 10, output: 1 });
+  });
+
+  test("reads a version 2 hookMessage as the custom message version 3 renamed it to", () => {
+    const { session, issues } = parsePiSession(
+      "fallback",
+      lines(
+        { ...HEADER, version: 2 },
+        {
+          type: "message",
+          id: "h1",
+          parentId: null,
+          timestamp: "2026-11-03T08:00:01.000Z",
+          message: {
+            role: "hookMessage",
+            customType: "note",
+            content: "from a hook",
+            display: true,
+          },
+        },
+      ),
+    );
+    expect(issues).toEqual([]);
+    expect(session.messages).toMatchObject([
+      { role: "other", blocks: [{ blockType: "text", text: "from a hook" }] },
+    ]);
+  });
+
   test("flags a tool result with no matching call", () => {
     const { issues } = parsePiSession(
       "fallback",
@@ -385,6 +439,40 @@ describe("Pi forks", () => {
     expect(session.totals).toMatchObject({ input: 200, output: 20 });
   });
 
+  test("a copy written in the same millisecond as the fork is still a copy", () => {
+    const fork = { ...HEADER, parentSession: "/decant-fixture/pi-example/original.jsonl" };
+    const { session } = parsePiSession(
+      "fallback",
+      lines(
+        fork,
+        assistant("c1", null, HEADER.timestamp, { usage: usage(100, 10) }),
+        assistant("c2", "c1", "2026-11-03T08:00:05.000Z", { usage: usage(200, 20) }),
+      ),
+    );
+    expect(session.totals).toMatchObject({ input: 200, output: 20 });
+  });
+
+  test("an entry after the fork's first own entry is billed even if the clock went back", () => {
+    const fork = { ...HEADER, parentSession: "/decant-fixture/pi-example/original.jsonl" };
+    const { session } = parsePiSession(
+      "fallback",
+      lines(
+        fork,
+        assistant("c1", null, "2026-11-03T07:00:00.000Z", { usage: usage(100, 10) }),
+        assistant("c2", "c1", "2026-11-03T08:00:05.000Z", { usage: usage(200, 20) }),
+        assistant("c3", "c2", "2026-11-03T07:30:00.000Z", { usage: usage(300, 30) }),
+      ),
+    );
+    expect(session.totals).toMatchObject({ input: 500, output: 50 });
+  });
+
+  test("a fork starts when it was forked and its active time leaves out the copies", () => {
+    const { session } = parsePiSession("fallback", fixture("forked"));
+    expect(session.startedAt).toBe("2026-11-02T09:00:00.000Z");
+    expect(session.endedAt).toBe("2026-11-02T09:00:36.000Z");
+    expect(facets(session).activeSeconds).toBe(6);
+  });
+
   test("a fork bills an entry whose time it cannot read rather than dropping it", () => {
     const fork = { ...HEADER, parentSession: "/decant-fixture/pi-example/original.jsonl" };
     const undated = {
@@ -443,6 +531,27 @@ describe("Pi ingest", () => {
     expect(discover({ ...withoutPiDir, sourcePaths: [file] })).toEqual([
       { tool: "pi", path: file, archived: false },
     ]);
+  });
+
+  test("classifies a file directly inside a custom session directory as Pi", () => {
+    const dir = freshDir();
+    const piDir = join(dir, "custom-sessions");
+    const file = join(piDir, "2026-11-01T10-00-00-000Z_sample.jsonl");
+    write(file, fixture("sample"));
+    const config = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex"), piDir };
+    expect(discover({ ...config, sourcePaths: [file] })).toEqual([
+      { tool: "pi", path: file, archived: false },
+    ]);
+  });
+
+  test("takes a compaction's size before compacting from Pi's tokensBefore", () => {
+    const dir = freshDir();
+    const config = stage(dir, ["sample"]);
+    const db = open(dir);
+    sync(db, config);
+    const { id } = db.query("SELECT id FROM session").get() as { id: number };
+    expect(contextWindowForSession(db, id)?.compactions[0]?.pre_tokens).toBe(9000);
+    closeDb(db);
   });
 
   test("ingests sessions with per-model cost and source filtering", () => {

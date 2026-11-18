@@ -214,7 +214,7 @@ logs or databases.
 `decant export <id> --as trajectory` emits Letta's `trajectory-v1` record
 format from the normalized archive. It does not change session discovery or
 send data to Letta. Source labels are `claude-code`, `codex`, `gemini-cli`,
-`opencode`, `cursor`, `copilot-cli`, `vscode-copilot-chat`, and `hermes`.
+`opencode`, `cursor`, `copilot-cli`, `vscode-copilot-chat`, `hermes`, and `pi`.
 
 Exports preserve recorded tool success/failure in the optional `ok` field;
 when the source omits an authoritative outcome, the field stays absent.

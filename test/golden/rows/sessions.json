@@ -860,7 +860,7 @@
     "git_branch": null,
     "model": "claude-sonnet-5",
     "cli_version": null,
-    "started_at": "2026-11-01T10:00:00.100Z",
+    "started_at": "2026-11-02T09:00:00.000Z",
     "ended_at": "2026-11-02T09:00:36.000Z",
     "message_count": 8,
     "total_input_tokens": 460,
@@ -883,7 +883,7 @@
     "command_count": 0,
     "thinking_block_count": 1,
     "thinking_chars": 29,
-    "active_seconds": 310,
+    "active_seconds": 6,
     "outcome": "completed",
     "work_type": "refactor"
   },

@@ -346,6 +346,18 @@ occupancy. Decant does not use the cost Hermes estimated or the cost a
 provider reported. A Hermes session with no recorded API call, no per-model
 usage row, and no tokens reports reasoning, tokens, and cost as unavailable.
 
+Pi records usage on each assistant reply and on cache-warming `usage` entries,
+each naming its model. Its `input` already excludes cache reads and writes, and
+its `reasoning` is part of `output`, so Decant reads them as written, with
+`cacheWrite1h` as the one-hour share of cache writes. Usage a tool's own model
+work recorded on its result names no model and is charged to the session's
+model. Compaction and branch summaries are charged to the model selected when
+Pi wrote them. A fork (`/fork`, `/clone`, or a session forked from another
+file) begins with copies of the original's entries. Those copies keep their
+transcript but count no usage, and the fork's start and active time begin at
+the fork, so its own requests are dated on the day it was made. A fork whose
+original was never archived therefore never counts the copied requests.
+
 Cursor CLI records no token usage, so its sessions carry zero token and cost
 columns. Neither does a Copilot Chat session from a VS Code build that predates
 the usage fields, nor an ATIF trajectory whose steps carry no metrics, nor a
@@ -364,7 +376,7 @@ usage, and `decant project ls` prints "-" for such a project and an asterisk
 after a cost that leaves sessions out.
 
 When Decant has no rate for a model, the cost OpenCode recorded for those
-requests, or an ATIF step's `metrics.cost_usd`, is used instead and the session's `cost_source` is `reported` (or
+requests, an ATIF step's `metrics.cost_usd`, or Pi's `usage.cost.total` is used instead and the session's `cost_source` is `reported` (or
 `mixed` when only some of its model rows fell back). A recorded cost of zero
 is never used: subscription routes such as the GLM Coding Plan record zero,
 which is a placeholder, not a price. A reported cost has no input/output
@@ -372,7 +384,8 @@ split; token-economics totals carry it as `reported_cost_usd`, and activity
 buckets receive it by context-window share.
 
 For Claude Code, a session's `model` is the model that served most of its
-requests; other sources use the model their session metadata records. The model
+requests, and for Pi the one with the most output tokens; other sources use the
+model their session metadata records. The model
 breakdown counts each session once, under that label, but splits tokens and
 estimated cost by the model behind each request. A model can therefore show
 tokens and cost with zero sessions. Each session's stored cost is divided among

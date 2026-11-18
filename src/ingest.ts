@@ -2639,7 +2639,12 @@ function collectCopilot(copilotDir: string, out: SourceFile[]): void {
 function isPiSessionLog(path: string, piDir?: string): boolean {
   const projectDir = dirname(path);
   const sessionsDir = dirname(projectDir);
-  if (piDir != null && resolve(sessionsDir) === resolve(piDir)) {
+  // Pi files sessions under a per-project folder by default, and directly in
+  // a session directory set with `--session-dir`.
+  if (
+    piDir != null &&
+    (resolve(sessionsDir) === resolve(piDir) || resolve(projectDir) === resolve(piDir))
+  ) {
     return true;
   }
   const project = pathBasename(projectDir);

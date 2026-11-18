@@ -244,8 +244,8 @@ The Pi coding agent writes each session to its own JSONL file,
 working directory with its separators replaced by `-`. When neither
 `DECANT_PI_DIR` nor `--pi-dir` is set, Decant reads the `sessions` directory
 under `PI_CODING_AGENT_DIR`, then under Pi's default `~/.pi/agent`. Decant does
-not read a custom `sessionDir` set in Pi's `settings.json`. Point
-`DECANT_PI_DIR` at it instead.
+not read a custom `sessionDir` set in Pi's `settings.json` or `--session-dir`,
+where Pi writes the files directly. Point `DECANT_PI_DIR` at it instead.
 
 A Pi session is a tree. `/tree` starts a new branch inside the same file, and
 Decant keeps every branch in the order Pi wrote it, so the transcript also
@@ -256,7 +256,9 @@ message, and the compaction counts as one.
 `/fork` and `/clone` start a new file that begins with copies of entries from
 the original session. Decant keeps those copies in the new session's
 transcript but leaves their usage out, because the original session already
-counts it.
+counts it. The fork starts when it was made, so its own work is dated that day
+and the copied history adds no active time. If the original session file was
+deleted before Decant archived it, the copied requests are counted nowhere.
 
 Pi records token usage on every assistant reply, plus usage for compaction and
 branch summaries, cache warming, and model work a tool does. Decant prices that

@@ -28,6 +28,19 @@ export interface Facets {
 }
 
 export const ACTIVE_GAP_CAP_SECONDS = 300;
+
+/** A Pi fork starts at its own header but keeps the history it copied from
+ * its parent, dated when the parent wrote it. That time was spent there. */
+export function copiedBeforeStart(
+  tool: string,
+  startedAt: string | null,
+  timestamp: string | null,
+): boolean {
+  if (tool !== "pi" || startedAt == null || timestamp == null) {
+    return false;
+  }
+  return Date.parse(timestamp) < Date.parse(startedAt);
+}
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
 /** OpenCode 2.x starts a child session with `subagent`; older builds named
@@ -440,7 +453,11 @@ export function facets(session: NormalizedSession): Facets {
       got.turnCount += 1;
     }
 
-    const timestamp = message.timestamp == null ? null : epochSecs(message.timestamp);
+    const timestamp =
+      message.timestamp == null ||
+      copiedBeforeStart(session.tool, session.startedAt, message.timestamp)
+        ? null
+        : epochSecs(message.timestamp);
     if (timestamp != null) {
       if (previousTimestamp != null) {
         const gap = timestamp - previousTimestamp;

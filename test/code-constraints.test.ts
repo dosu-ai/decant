@@ -306,6 +306,7 @@ describe("rules the code depends on", () => {
       ["extra", "context_management", "type"],
       ["_compressed_summary"],
       ["usage"],
+      ["tokensBefore"],
     ]);
   });
 });

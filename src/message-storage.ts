@@ -36,6 +36,7 @@ export const METADATA_PATHS = [
   ["extra", "context_management", "type"],
   ["_compressed_summary"],
   ["usage"],
+  ["tokensBefore"],
 ] as const;
 
 export interface StoredMessageRaw {

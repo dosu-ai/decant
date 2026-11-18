@@ -21,6 +21,7 @@ For how sync discovers, re-reads, and stores each source, see
 | Copilot Chat in VS Code | VS Code's `User` directory | `DECANT_VSCODE_COPILOT_DIR` | `--vscode-copilot-dir` |
 | ATIF trajectories | `~/.decant/atif` | `DECANT_ATIF_DIR` | `--atif-dir` |
 | Hermes Agent | `~/.hermes` | `DECANT_HERMES_DIR` | `--hermes-dir` |
+| Pi | `~/.pi/agent/sessions` | `DECANT_PI_DIR` | `--pi-dir` |
 
 The flags work on `sync`, `watch`, and `serve`.
 
@@ -235,6 +236,34 @@ is not recorded. Decant splits the name at its first underscore. A server whose
 own name holds an underscore or a dash is shown under its first word.
 
 `--path` also accepts a Hermes `state.db` file, or a directory holding one.
+
+## Pi
+
+The Pi coding agent writes each session to its own JSONL file,
+`<sessions>/--<cwd>--/<timestamp>_<session id>.jsonl`, where `<cwd>` is the
+working directory with its separators replaced by `-`. When neither
+`DECANT_PI_DIR` nor `--pi-dir` is set, Decant reads the `sessions` directory
+under `PI_CODING_AGENT_DIR`, then under Pi's default `~/.pi/agent`. Decant does
+not read a custom `sessionDir` set in Pi's `settings.json`. Point
+`DECANT_PI_DIR` at it instead.
+
+A Pi session is a tree. `/tree` starts a new branch inside the same file, and
+Decant keeps every branch in the order Pi wrote it, so the transcript also
+shows branches you left. Usage on an abandoned branch still counts, because
+those requests were sent and billed. A branch or compaction summary is a system
+message, and the compaction counts as one.
+
+`/fork` and `/clone` start a new file that begins with copies of entries from
+the original session. Decant keeps those copies in the new session's
+transcript but leaves their usage out, because the original session already
+counts it.
+
+Pi records token usage on every assistant reply, plus usage for compaction and
+branch summaries, cache warming, and model work a tool does. Decant prices that
+usage at its own rates and uses Pi's recorded cost only for a model it has no
+rate for, such as a local model.
+
+`--path` also accepts a Pi session file, or a directory holding them.
 
 ## Input limits
 

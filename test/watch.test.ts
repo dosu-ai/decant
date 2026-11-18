@@ -224,6 +224,17 @@ describe("watch mode", () => {
     ).toBe(true);
   });
 
+  test("the Pi root watches session files in every project directory", () => {
+    const base = freshConfig();
+    const piDir = join(dirname(base.dbPath), "pi", "sessions");
+    mkdirSync(piDir, { recursive: true });
+    const root = watchRoots({ ...base, piDir }).find((candidate) => candidate.dir === piDir);
+    expect(root?.recursive).toBe(true);
+    expect(root?.accepts("--tmp-example--/2026-11-01T10-00-00-000Z_abc.jsonl")).toBe(true);
+    expect(root?.accepts("--tmp-example--/notes.txt")).toBe(false);
+    expect(root?.accepts(null)).toBe(true);
+  });
+
   test("Hermes roots are each profile's directory, polled for state.db and its -wal", () => {
     const base = freshConfig();
     const hermesDir = join(dirname(base.dbPath), "hermes");

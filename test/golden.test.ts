@@ -48,6 +48,7 @@ describe("golden harness", () => {
         "vscode_copilot",
         "atif",
         "hermes",
+        "pi",
       ]),
     );
   });

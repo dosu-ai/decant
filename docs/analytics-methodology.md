@@ -46,7 +46,7 @@ The `source` filter scopes analytics to the client that produced a session:
 `claude_code` for Claude Code, `gemini_cli` for Gemini CLI, `opencode` for
 OpenCode, `cursor_cli` for Cursor CLI, `copilot_cli` for GitHub Copilot CLI,
 `vscode_copilot` for Copilot Chat in VS Code, `atif` for imported ATIF
-trajectories, `hermes` for Hermes Agent, and, for Codex, the recorded producer metadata splits sessions into
+trajectories, `hermes` for Hermes Agent, `pi` for Pi, and, for Codex, the recorded producer metadata splits sessions into
 `codex_app`, `codex_cli`, and `codex_other`. That
 split reads only the session's own `originator` and `source` metadata. Desktop
 origins (`Codex Desktop`, `codex_work_desktop`) count as the app, and CLI

@@ -38,6 +38,7 @@ const TOOL_LABELS: Record<string, string> = {
   vscode_copilot: "Copilot Chat",
   atif: "ATIF",
   hermes: "Hermes",
+  pi: "Pi",
 };
 
 export function toolLabel(tool: string): string {
@@ -105,7 +106,7 @@ export function ToolBadge({ tool }: { tool: string | null | undefined }) {
     return <Badge tone="info">{toolLabel(tool)}</Badge>;
   }
   // No brand mark: Decant ships only marks published under an open license.
-  if (tool === "hermes") {
+  if (tool === "hermes" || tool === "pi") {
     return <Badge tone="accent">{toolLabel(tool)}</Badge>;
   }
   return <Badge>{tool ?? "-"}</Badge>;
@@ -314,6 +315,9 @@ export function providerIdentity(tool: string): {
   }
   if (tool === "hermes") {
     return { key: "assistant", label: "Hermes", tone: "accent", icon: null };
+  }
+  if (tool === "pi") {
+    return { key: "assistant", label: "Pi", tone: "accent", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

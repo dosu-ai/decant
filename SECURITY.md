@@ -27,7 +27,8 @@ Decant is a local-first tool. It reads CLI session logs that already exist on
 disk (by default `~/.claude/projects`, `~/.codex`, `~/.gemini/tmp`, OpenCode's
 `~/.local/share/opencode`, `~/.cursor/chats`, `~/.copilot/session-state`,
 the chat session files in VS Code's `User` directory, Hermes Agent's
-`~/.hermes/state.db`, and ATIF trajectories in `~/.decant/atif`)
+`~/.hermes/state.db`, Pi's `~/.pi/agent/sessions`, and ATIF trajectories in
+`~/.decant/atif`)
 and writes a local SQLite archive. Its only outbound network requests are for
 updates, and none of them send session or archive data:
 

@@ -5,7 +5,7 @@
 
 Decant shows where your coding agents spend tokens, money, and time. It keeps a
 searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI,
-GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent sessions, plus
+GitHub Copilot CLI, Copilot Chat in VS Code, Hermes Agent, and Pi sessions, plus
 imported ATIF trajectories. See token and cost breakdowns, context-window
 usage, files touched, and tool usage, search prompts and tool calls, and browse
 complete transcripts.

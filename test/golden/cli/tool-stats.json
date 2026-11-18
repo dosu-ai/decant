@@ -10,6 +10,16 @@
     "last_used_at": "2026-10-02T10:00:10.000Z"
   },
   {
+    "tool_name": "read",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 5,
+    "errors": 0,
+    "p50_ms": 500,
+    "p95_ms": 500,
+    "last_used_at": "2026-11-01T10:00:05.000Z"
+  },
+  {
     "tool_name": "exec_command",
     "tool_kind": "builtin",
     "mcp_server": null,
@@ -40,6 +50,26 @@
     "last_used_at": "2026-10-02T10:00:04.000Z"
   },
   {
+    "tool_name": "bash",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 3,
+    "errors": 3,
+    "p50_ms": 1000,
+    "p95_ms": 2900,
+    "last_used_at": "2026-11-01T10:00:08.000Z"
+  },
+  {
+    "tool_name": "edit",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 3,
+    "errors": 0,
+    "p50_ms": 200,
+    "p95_ms": 400,
+    "last_used_at": "2026-11-02T09:00:34.000Z"
+  },
+  {
     "tool_name": "mcp__dosu__read_knowledge",
     "tool_kind": "mcp",
     "mcp_server": "dosu",
@@ -48,16 +78,6 @@
     "p50_ms": 2000,
     "p95_ms": 3000,
     "last_used_at": "2026-10-12T07:20:03.200Z"
-  },
-  {
-    "tool_name": "read",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 3,
-    "errors": 0,
-    "p50_ms": 500,
-    "p95_ms": 500,
-    "last_used_at": "2026-10-12T07:26:50.000Z"
   },
   {
     "tool_name": "Agent",
@@ -78,25 +98,5 @@
     "p50_ms": 30000,
     "p95_ms": 30000,
     "last_used_at": "2026-05-05T10:03:00.000Z"
-  },
-  {
-    "tool_name": "Write",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 2,
-    "errors": 0,
-    "p50_ms": 30000,
-    "p95_ms": 30000,
-    "last_used_at": "2026-05-05T10:03:00.000Z"
-  },
-  {
-    "tool_name": "apply_patch",
-    "tool_kind": "builtin",
-    "mcp_server": null,
-    "calls": 2,
-    "errors": 0,
-    "p50_ms": 1000,
-    "p95_ms": 1000,
-    "last_used_at": "2026-05-06T09:00:07.000Z"
   }
 ]

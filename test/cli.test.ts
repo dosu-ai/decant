@@ -33,6 +33,7 @@ function freshCase(): {
   copilotDir: string;
   vscodeCopilotDir: string;
   hermesDir: string;
+  piDir: string;
 } {
   caseCounter += 1;
   const dir = join(workDir, `case-${caseCounter}`);
@@ -44,6 +45,7 @@ function freshCase(): {
   const copilotDir = join(dir, "sources", "copilot");
   const vscodeCopilotDir = join(dir, "sources", "vscode", "User");
   const hermesDir = join(dir, "sources", "hermes");
+  const piDir = join(dir, "sources", "pi");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(geminiDir, { recursive: true });
@@ -70,6 +72,7 @@ function freshCase(): {
     copilotDir,
     vscodeCopilotDir,
     hermesDir,
+    piDir,
   };
 }
 
@@ -108,6 +111,8 @@ async function syncedCase(): Promise<{ dbPath: string }> {
     fixtureCase.vscodeCopilotDir,
     "--hermes-dir",
     fixtureCase.hermesDir,
+    "--pi-dir",
+    fixtureCase.piDir,
   ]);
   expect(result).toMatchObject({ code: 0, stderr: "" });
   expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 7, ingested: 7, issues: 0 });

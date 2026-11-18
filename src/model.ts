@@ -8,6 +8,7 @@ export const TOOLS = [
   "vscode_copilot",
   "atif",
   "hermes",
+  "pi",
 ] as const;
 export type Tool = (typeof TOOLS)[number];
 

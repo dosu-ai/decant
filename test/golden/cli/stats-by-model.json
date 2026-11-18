@@ -1,13 +1,13 @@
 [
   {
     "key": "gpt-5.4",
-    "sessions": 6,
-    "usage_sessions": 5,
-    "input_tokens": 21000,
-    "output_tokens": 620,
-    "reasoning_tokens": 140,
+    "sessions": 7,
+    "usage_sessions": 6,
+    "input_tokens": 33900,
+    "output_tokens": 1225,
+    "reasoning_tokens": 280,
     "est_reasoning_tokens": 0,
-    "estimated_cost_usd": 0.06405000000000001
+    "estimated_cost_usd": 0.10537500000000001
   },
   {
     "key": "claude-opus-4-7",
@@ -78,6 +78,16 @@
     "reasoning_tokens": 0,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.003495
+  },
+  {
+    "key": "claude-sonnet-5",
+    "sessions": 1,
+    "usage_sessions": 1,
+    "input_tokens": 2200,
+    "output_tokens": 272,
+    "reasoning_tokens": 0,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0.02152
   },
   {
     "key": "cursor-test-model",

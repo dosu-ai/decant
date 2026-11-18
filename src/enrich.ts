@@ -90,6 +90,8 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "hermes") {
         keyedRef(HERMES_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (tool === "pi") {
+        keyedRef(PI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else if (tool === "vscode_copilot") {
         vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
       } else {
@@ -124,6 +126,13 @@ const OPENCODE_FILE_TOOLS: FileToolTable = {
   edit: { key: "path", fallbackKey: "filePath", operation: "edit" },
   write: { key: "path", fallbackKey: "filePath", operation: "write" },
   multiedit: { key: "filePath", operation: "edit" },
+};
+
+// Pi's built-in file tools take a `path`, absolute or relative to the session's cwd.
+const PI_FILE_TOOLS: FileToolTable = {
+  read: { key: "path", operation: "read" },
+  edit: { key: "path", operation: "edit" },
+  write: { key: "path", operation: "write" },
 };
 
 // The Cursor CLI's file tools take an absolute `path`.
@@ -387,6 +396,9 @@ export function facets(session: NormalizedSession): Facets {
       got.interruptionCount += 1;
     }
     if (session.tool === "vscode_copilot" && rawBoolean(message.raw, "canceled") === true) {
+      got.interruptionCount += 1;
+    }
+    if (session.tool === "pi" && message.stopReason === "aborted") {
       got.interruptionCount += 1;
     }
 

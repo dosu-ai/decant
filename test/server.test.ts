@@ -141,7 +141,7 @@ describe("server routes", () => {
     expect(sourceHead).toContain('href="./assets/favicon.ico"');
     expect(sourceHead).toContain('href="./assets/apple-touch-icon.png"');
     expect(sourceHead).toContain(
-      "A local-first, searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot Chat in VS Code, and Hermes Agent sessions, with ATIF import and export.",
+      "A local-first, searchable archive of Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot Chat in VS Code, Hermes Agent, and Pi sessions, with ATIF import and export.",
     );
   });
 
@@ -1536,6 +1536,7 @@ describe("server routes", () => {
             "vscode_copilot",
             "atif",
             "hermes",
+            "pi",
           ],
         },
       });

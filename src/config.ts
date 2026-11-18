@@ -18,6 +18,7 @@ export interface Config {
   vscodeCopilotInsidersDir?: string;
   atifDir?: string;
   hermesDir?: string;
+  piDir?: string;
 }
 
 export interface ConfigOverrides {
@@ -31,6 +32,7 @@ export interface ConfigOverrides {
   vscodeCopilotDir?: string | null;
   atifDir?: string | null;
   hermesDir?: string | null;
+  piDir?: string | null;
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
   platform?: NodeJS.Platform;
@@ -79,7 +81,23 @@ export function resolveConfig(overrides: ConfigOverrides = {}): Config {
       nonEmpty(env.DECANT_HERMES_DIR) ??
       nonEmpty(env.HERMES_HOME) ??
       hermesDefaultHome(overrides.platform ?? process.platform, env, home),
+    // PI_CODING_AGENT_DIR relocates Pi's agent directory (getAgentDir in Pi's config.ts).
+    piDir:
+      overrides.piDir ??
+      nonEmpty(env.DECANT_PI_DIR) ??
+      join(
+        expandHome(nonEmpty(env.PI_CODING_AGENT_DIR), home) ?? join(home, ".pi", "agent"),
+        "sessions",
+      ),
   };
+}
+
+/** Pi expands a leading `~` in PI_CODING_AGENT_DIR itself. */
+function expandHome(path: string | null, home: string): string | null {
+  if (path === "~") {
+    return home;
+  }
+  return path?.startsWith("~/") ? join(home, path.slice(2)) : path;
 }
 
 /** Hermes's platform default (`_platform_default_hermes_home` in

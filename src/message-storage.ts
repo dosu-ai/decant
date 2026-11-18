@@ -35,6 +35,7 @@ export const METADATA_PATHS = [
   ["agentId"],
   ["extra", "context_management", "type"],
   ["_compressed_summary"],
+  ["usage"],
 ] as const;
 
 export interface StoredMessageRaw {

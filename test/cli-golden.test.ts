@@ -47,6 +47,7 @@ function stageFixtures(caseDir: string): {
   vscodeCopilotDir: string;
   atifDir: string;
   hermesDir: string;
+  piDir: string;
 } {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
@@ -57,6 +58,7 @@ function stageFixtures(caseDir: string): {
   const vscodeCopilotDir = join(caseDir, "sources", "vscode", "User");
   const atifDir = join(caseDir, "sources", "atif");
   const hermesDir = join(caseDir, "sources", "hermes");
+  const piDir = join(caseDir, "sources", "pi", "agent", "sessions");
   mkdirSync(opencodeDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
@@ -108,6 +110,14 @@ function stageFixtures(caseDir: string): {
     join(hermesDir, "state.db"),
     fixtureFiles("hermes", ".sql").filter((file) => file !== "schema.sql"),
   );
+  const piProjectDir = join(piDir, "--decant-fixture-pi-example--");
+  mkdirSync(piProjectDir, { recursive: true });
+  for (const file of fixtureFiles("pi")) {
+    copyFileSync(
+      join(import.meta.dir, "..", "fixtures", "pi", file),
+      join(piProjectDir, `2026-11-01T10-00-00-000Z_${file}`),
+    );
+  }
   return {
     claudeDir,
     codexDir,
@@ -119,6 +129,7 @@ function stageFixtures(caseDir: string): {
     vscodeCopilotDir,
     atifDir,
     hermesDir,
+    piDir,
   };
 }
 
@@ -196,6 +207,7 @@ describe("CLI golden parity", () => {
       vscodeCopilotDir,
       atifDir,
       hermesDir,
+      piDir,
     } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli(
@@ -222,6 +234,8 @@ describe("CLI golden parity", () => {
         atifDir,
         "--hermes-dir",
         hermesDir,
+        "--pi-dir",
+        piDir,
       ],
       {
         env: {

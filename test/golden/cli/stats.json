@@ -1,13 +1,13 @@
 {
-  "sessions": 22,
-  "usage_sessions": 20,
-  "messages": 181,
-  "tool_calls": 71,
-  "input_tokens": 60498,
-  "output_tokens": 4282,
-  "cache_read_tokens": 65908,
-  "cache_creation_tokens": 5532,
-  "reasoning_tokens": 397,
+  "sessions": 24,
+  "usage_sessions": 22,
+  "messages": 207,
+  "tool_calls": 77,
+  "input_tokens": 75598,
+  "output_tokens": 5159,
+  "cache_read_tokens": 92908,
+  "cache_creation_tokens": 8532,
+  "reasoning_tokens": 537,
   "est_reasoning_tokens": 494,
-  "estimated_cost_usd": 0.3204078
+  "estimated_cost_usd": 0.3832528
 }

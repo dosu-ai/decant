@@ -44,6 +44,7 @@ describe("resolveConfig", () => {
         DECANT_VSCODE_COPILOT_DIR: "/env/vscode",
         DECANT_ATIF_DIR: "/env/atif",
         DECANT_HERMES_DIR: "/env/hermes",
+        DECANT_PI_DIR: "/env/pi",
       },
       homeDir: "/home/dev",
     });
@@ -62,6 +63,7 @@ describe("resolveConfig", () => {
       vscodeCopilotDir: "/env/vscode",
       atifDir: "/env/atif",
       hermesDir: "/env/hermes",
+      piDir: "/env/pi",
     });
   });
 
@@ -81,6 +83,7 @@ describe("resolveConfig", () => {
     expect(config.copilotDir).toBe("/home/dev/.copilot/session-state");
     expect(config.atifDir).toBe("/home/dev/.decant/atif");
     expect(config.hermesDir).toBe("/home/dev/.hermes");
+    expect(config.piDir).toBe("/home/dev/.pi/agent/sessions");
   });
 
   test("reads VS Code and VS Code Insiders from each platform's user data directory", () => {

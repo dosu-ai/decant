@@ -3,7 +3,7 @@
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source logs are the durable record produced by
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
-Copilot Chat in VS Code, or Hermes Agent, or an ATIF trajectory file another
+Copilot Chat in VS Code, Hermes Agent, or Pi, or an ATIF trajectory file another
 agent wrote. `~/.decant/decant.db` is a searchable, rebuildable
 index plus Decant-owned user state.
 
@@ -118,6 +118,10 @@ By default Decant discovers:
   database read-only and never writes to or checkpoints it. A database
   without Hermes's `sessions` and `messages` tables is skipped with a
   warning. Each session becomes its own source `<database>#<session id>`.
+- Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
+  from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
+  `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
+  read-only, and Decant re-reads the whole file when it changes.
   When two profiles hold one session ID, Decant reads the copy with the most
   recent activity, and a tie goes to the database path that sorts first.
   Reading one copy forgets the change key recorded for the others, so if the
@@ -765,7 +769,7 @@ a Decant user override does not move or rewrite provider files.
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI,
-VS Code, or Hermes Agent record remains on disk.
+VS Code, Hermes Agent, or Pi record remains on disk.
 If the source record must also be removed, manage it through the owning tool or
 delete that source file only after deciding that losing the original transcript
 is intended. OpenCode keeps every session in one shared database, so deleting

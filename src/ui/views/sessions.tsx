@@ -190,7 +190,7 @@ export function SessionsView({
           <h1>Sessions</h1>
           <p>
             Every Claude Code, Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, Copilot
-            Chat in VS Code, and Hermes Agent session log on this device, plus imported ATIF
+            Chat in VS Code, Hermes Agent, and Pi session log on this device, plus imported ATIF
             trajectories.
           </p>
         </div>

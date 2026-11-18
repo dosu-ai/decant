@@ -19,24 +19,21 @@ export function showsSync(reason: string | undefined, archiveSynced: boolean): b
 export interface ArchiveUpdatePlan {
   refresh: boolean;
   offerUpdate: boolean;
-  awaitingStats: boolean;
+  caughtUp: boolean;
 }
 
 export function planArchiveUpdate(
   reason: string | undefined,
-  awaitingStats: boolean,
+  caughtUp: boolean,
   foregroundSyncRunning: boolean,
 ): ArchiveUpdatePlan {
-  if (isForegroundSync(reason)) {
-    return { refresh: true, offerUpdate: false, awaitingStats: true };
+  if (isForegroundSync(reason) || reason === "session_state" || (reason === "stats" && caughtUp)) {
+    return { refresh: true, offerUpdate: false, caughtUp: true };
   }
-  if (reason === "stats" && awaitingStats) {
-    return { refresh: true, offerUpdate: false, awaitingStats: false };
+  if (foregroundSyncRunning) {
+    return { refresh: false, offerUpdate: false, caughtUp };
   }
-  if (reason === "session_state") {
-    return { refresh: true, offerUpdate: false, awaitingStats };
-  }
-  return { refresh: false, offerUpdate: !foregroundSyncRunning, awaitingStats };
+  return { refresh: false, offerUpdate: true, caughtUp: false };
 }
 
 export const LIVE_SESSIONS_REFRESH_MS = 5_000;

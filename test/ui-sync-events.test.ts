@@ -47,32 +47,85 @@ test("foreground syncs and session state refresh immediately; background updates
 
 test("the stats rebuild that follows a foreground sync loads without an Update click", () => {
   const afterStartup = planArchiveUpdate("startup", false, false);
-  expect(afterStartup.awaitingStats).toBe(true);
-  expect(planArchiveUpdate("stats", afterStartup.awaitingStats, false)).toEqual({
+  expect(afterStartup.caughtUp).toBe(true);
+  expect(planArchiveUpdate("stats", afterStartup.caughtUp, false)).toEqual({
     refresh: true,
     offerUpdate: false,
-    awaitingStats: false,
+    caughtUp: true,
   });
 });
 
-test("stats rebuilds unrelated to a foreground sync stay deferred", () => {
-  expect(planArchiveUpdate("stats", false, false)).toEqual({
-    refresh: false,
-    offerUpdate: true,
-    awaitingStats: false,
-  });
+test("activity the page has not loaded makes later stats rebuilds wait for an Update click", () => {
   expect(planArchiveUpdate("watch", true, false)).toEqual({
     refresh: false,
     offerUpdate: true,
-    awaitingStats: true,
+    caughtUp: false,
   });
+  expect(planArchiveUpdate("stats", false, false)).toEqual({
+    refresh: false,
+    offerUpdate: true,
+    caughtUp: false,
+  });
+});
+
+function replay(events: (string | "click")[]): { refreshes: number; updateOffered: boolean } {
+  let caughtUp = true;
+  let refreshes = 0;
+  let updateOffered = false;
+  for (const event of events) {
+    if (event === "click") {
+      caughtUp = true;
+      updateOffered = false;
+      refreshes += 1;
+      continue;
+    }
+    const plan = planArchiveUpdate(event, caughtUp, false);
+    caughtUp = plan.caughtUp;
+    if (plan.refresh) {
+      refreshes += 1;
+      updateOffered = false;
+    } else if (plan.offerUpdate) {
+      updateOffered = true;
+    }
+  }
+  return { refreshes, updateOffered };
+}
+
+test("the stats rebuild after a clicked Update loads without offering Update again", () => {
+  expect(replay(["watch", "click", "stats"])).toEqual({ refreshes: 2, updateOffered: false });
+});
+
+test("a follow-up rebuild queued mid-build or started by a read loads too", () => {
+  expect(replay(["watch", "watch", "click", "stats", "stats"])).toEqual({
+    refreshes: 3,
+    updateOffered: false,
+  });
+  expect(replay(["watch", "click", "stats", "stats"])).toEqual({
+    refreshes: 3,
+    updateOffered: false,
+  });
+});
+
+test("archiving a session refreshes once its stats rebuild lands instead of offering Update", () => {
+  expect(replay(["session_state", "stats"])).toEqual({ refreshes: 2, updateOffered: false });
+});
+
+test("a failed rebuild leaves nothing waiting, so later background syncs still ask first", () => {
+  expect(replay(["watch", "click", "watch", "stats", "watch", "stats"])).toEqual({
+    refreshes: 1,
+    updateOffered: true,
+  });
+});
+
+test("a stats rebuild nobody refreshed for still waits for an Update click", () => {
+  expect(replay(["watch", "stats"])).toEqual({ refreshes: 0, updateOffered: true });
 });
 
 test("background updates during a foreground sync wait for that sync's refresh", () => {
   expect(planArchiveUpdate("stats", false, true)).toEqual({
     refresh: false,
     offerUpdate: false,
-    awaitingStats: false,
+    caughtUp: false,
   });
   expect(planArchiveUpdate("watch", false, true).offerUpdate).toBe(false);
 });

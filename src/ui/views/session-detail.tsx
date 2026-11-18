@@ -27,6 +27,7 @@ import {
   sessionStateRequest,
 } from "../session-state.ts";
 import { sessionDisplayTitle } from "../session-title.ts";
+import { SyncButton } from "../sync-button.tsx";
 import { ThreadTocEntry, threadStats, threadToc, threadTocFromOutline } from "../thread-toc.tsx";
 import {
   countSubagentRuns,
@@ -1090,17 +1091,12 @@ export function IngestIssuesPanel({
             parser notes are included here for context.
           </p>
         </div>
-        <button
-          aria-busy={syncing}
-          aria-label="Re-sync session logs"
-          className={`secondary-button sync-button${syncing ? " is-syncing" : ""}`}
-          disabled={syncing}
+        <SyncButton
+          ariaLabel="Re-sync session logs"
+          busy={syncing}
+          label="Re-sync"
           onClick={onResync}
-          type="button"
-        >
-          <Icon name="refresh" />
-          {syncing ? null : "Re-sync"}
-        </button>
+        />
       </div>
       <div className="panel-body">
         {error != null ? (

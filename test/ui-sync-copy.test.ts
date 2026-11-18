@@ -26,8 +26,13 @@ test("background archive activity waits for an explicit update", () => {
   expect(main).toContain("const [archiveUpdateAvailable, setArchiveUpdateAvailable]");
   expect(main.match(/showsSync\(payload\.reason, archiveSyncedRef\.current\)/g)).toHaveLength(2);
   expect(main).toMatch(
-    /planArchiveUpdate\(\s*payload\.reason,\s*awaitingStatsRef\.current,\s*localSyncingRef\.current,\s*\)/,
+    /planArchiveUpdate\(\s*payload\.reason,\s*caughtUpRef\.current,\s*localSyncingRef\.current,?\s*\);\s*caughtUpRef\.current = plan\.caughtUp;/,
   );
+  expect(main).toMatch(
+    /const requestRefresh = useCallback\(\(\) => \{\s*caughtUpRef\.current = true;/,
+  );
+  expect(main.match(/caughtUpRef\.current = true;/g)).toHaveLength(1);
+  expect(main).toMatch(/setArchiveUpdateAvailable\(true\);\s*caughtUpRef\.current = false;\s*\}/);
   expect(main).toContain("localSyncingRef.current = localSyncing;");
   expect(main).toContain("const failure = parseSyncFailure(event);");
   expect(main).toMatch(
@@ -35,7 +40,8 @@ test("background archive activity waits for an explicit update", () => {
   );
   expect(main).toContain('events.addEventListener("archive_updated", handleArchiveUpdated');
   expect(main).not.toContain('events.addEventListener("archive_updated", requestRefresh)');
-  expect(main).toContain('archiveUpdateAvailable ? "Update" : "Sync"');
+  expect(main).toContain('label={archiveUpdateAvailable ? "Update" : "Sync"}');
+  expect(main).toContain('const TOPBAR_SYNC_LABELS = ["Sync", "Update"] as const;');
   expect(main).toContain("archiveUpdateAvailable ? loadArchiveUpdates : runSync");
   expect(main).not.toContain("/api/analytics/now");
 });

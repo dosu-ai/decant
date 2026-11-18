@@ -221,6 +221,8 @@ function buildDefaultPricing(): Map<string, Price> {
     ["claude-haiku-5-5", claudePrice(0.1, 0.5)],
     ["claude-haiku", claudePrice(1.0, 5.0)],
     ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
+    ["gpt-6.2-astra", openAiPrice(8.0, 0.4, 40.0, 1.25)],
+    ["gpt-6.2-sol", openAiPrice(2.0, 0.1, 10.0, 1.25)],
     ["gpt-6-astra", openAiPrice(10.0, 1.0, 50.0, 1.25)],
     ["gpt-6-cyber", openAiPrice(20.0, 2.0, 100.0, 1.25)],
     ["gpt-6-sol", openAiPrice(2.0, 0.2, 10.0, 1.25)],
@@ -400,6 +402,8 @@ function canonicalModel(raw: string): string | null {
   }
 
   if (
+    model === "gpt-6.2-astra" ||
+    model === "gpt-6.2-sol" ||
     model === "gpt-6-astra" ||
     model === "gpt-6-cyber" ||
     model === "gpt-6-sol" ||

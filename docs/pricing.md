@@ -1,8 +1,10 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
+GPT-6.2 Astra and Sol rates were verified on November 17, 2026, against
+OpenAI's pricing page, model pages, and launch announcement below.
 On November 16, 2026, every Anthropic, OpenAI, Gemini, Z.ai, Meta, DeepSeek,
-MiniMax, MiMo, Qwen, StepFun, Tencent, and Reflection rate in the table below
+MiniMax, MiMo, Qwen, StepFun, Tencent, and Reflection rate then in the table
 was checked against the provider pages listed here and found unchanged, and the
 new Gemini 4 Carbon and Hydrogen, GPT-6 Cyber, GPT-5.5 Cyber Preview,
 Qwen4-Max, Muse Ember, MiniMax-M3.1-Flash, Hy4, Step 3.7 Flash, and xAI Grok
@@ -33,6 +35,9 @@ a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 - [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations)
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [OpenAI model pages](https://developers.openai.com/api/docs/models)
+- [OpenAI GPT-6.2 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6.2-astra)
+- [OpenAI GPT-6.2 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+- [Introducing GPT-6.2 Astra and Sol](https://openai.com/index/introducing-gpt-6-2-astra-sol/)
 - [OpenAI GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 - [OpenAI GPT-6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6-sol)
 - [OpenAI GPT-6.1 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
@@ -84,6 +89,8 @@ provider does not publish a first-party API token price for that model slug.
 | Claude Haiku 3.5 | $0.80 | $0.08 | $1.00 / $1.60 | $4.00 |
 | Claude Opus 3, Sonnet 3.7, 3.5, 3, Haiku 3 | — | — | — | — |
 | GPT-6 Cyber | $20.00 | $2.00 | $25.00 | $100.00 |
+| GPT-6.2 Astra | $8.00 | $0.40 | $10.00 | $40.00 |
+| GPT-6.2 Sol | $2.00 | $0.10 | $2.50 | $10.00 |
 | GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
 | GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
 | GPT-6.1 Sol | $2.00 | $0.10 | $2.50 | $10.00 |
@@ -166,14 +173,14 @@ provider does not publish a first-party API token price for that model slug.
 
 The two cache-write figures for Claude, Kimi K3.1 Pro, and Qwen4-Max are the
 5-minute and 1-hour rates. Kimi K3.1 Pro uses flat rates across its full context window.
-OpenAI cache writes before GPT-5.6 have no additional fee; GPT-5.6 and the GPT-6
-and GPT-6.1 models above bill cache writes at 1.25 times the uncached-input
-rate, which OpenAI lists as the 30-minute cache write. OpenAI also lists a
-12-hour cache write for GPT-6 and GPT-6.1 at twice the input rate, but Codex
-does not report which retention a write used, so Decant bills every write at
-the 30-minute rate. Gemini bills cache storage by the token-hour, so Decant
-maps the equivalent write charge to approximately the input rate for typical
-session-length holds.
+OpenAI cache writes before GPT-5.6 have no additional fee. The GPT-5.6, GPT-6,
+GPT-6.1, and GPT-6.2 models above bill cache writes at 1.25 times the
+uncached-input rate, which OpenAI lists as the 30-minute cache write. OpenAI
+also lists a 12-hour cache write at $20.00 for GPT-6.2 Astra and $5.00 for
+GPT-6.2 Sol. Codex does not report which retention a write used, so Decant
+bills every write at the 30-minute rate. Gemini bills cache storage by the
+token-hour, so Decant maps the equivalent write charge to approximately the
+input rate for typical session-length holds.
 
 Z.ai and Meta charge no separate cache-write fee, so Decant bills cache writes
 for GLM and Muse models at the input rate. Z.ai lists cached-input storage as
@@ -344,10 +351,10 @@ Copilot premium requests or credits. See
 
 The estimates use standard global API token rates. They do not attempt to
 convert ChatGPT subscription usage or Codex credits to dollars, and they do not
-apply Batch, Flex, Priority, regional-processing, data-residency, or
-partner-cloud modifiers. Requests made through subscription routes such as the
-GLM Coding Plan are estimated at the model's API list rate. GitHub Copilot CLI
-costs likewise estimate the underlying model's API list price, not Copilot
+apply Batch, Flex, OpenAI Fast or Ultrafast, regional-processing,
+data-residency, or partner-cloud modifiers. Requests made through subscription
+routes such as the GLM Coding Plan are estimated at the model's API list rate.
+GitHub Copilot CLI costs likewise estimate the underlying model's API list price, not Copilot
 subscription charges or premium requests.
 
 OpenAI applies long-context rates above 272,000 prompt tokens for eligible API

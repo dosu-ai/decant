@@ -22,8 +22,8 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.5",
-    "@letta-ai/trajectory": "^0.4.3",
+    "@biomejs/biome": "^2.6.7",
+    "@letta-ai/trajectory": "^0.4.4",
     "@types/bun": "^1.4.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -38,10 +38,10 @@
     "@shikijs/themes": "^4.6.0",
     "acorn": "^8.19.0",
     "acorn-walk": "^8.3.5",
-    "commander": "^15.0.0",
+    "commander": "^15.1.0",
     "diff": "^9.0.0",
     "echarts": "^6.1.0",
-    "lucide-react": "^1.69.0",
+    "lucide-react": "^1.72.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",

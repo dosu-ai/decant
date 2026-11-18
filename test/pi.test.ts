@@ -504,17 +504,14 @@ describe("Pi ingest", () => {
 
   test("resolves the sessions directory from Pi's own environment variable", () => {
     const env = { DECANT_PI_DIR: "", PI_CODING_AGENT_DIR: "" };
-    expect(resolveConfig({ env, homeDir: "/home/example" }).piDir).toBe(
-      "/home/example/.pi/agent/sessions",
-    );
+    expect(resolveConfig({ env, homeDir: "/home/dev" }).piDir).toBe("/home/dev/.pi/agent/sessions");
     expect(
-      resolveConfig({ env: { PI_CODING_AGENT_DIR: "~/agents/pi" }, homeDir: "/home/example" })
-        .piDir,
-    ).toBe("/home/example/agents/pi/sessions");
+      resolveConfig({ env: { PI_CODING_AGENT_DIR: "~/agents/pi" }, homeDir: "/home/dev" }).piDir,
+    ).toBe("/home/dev/agents/pi/sessions");
     expect(
       resolveConfig({
         env: { DECANT_PI_DIR: "/elsewhere", PI_CODING_AGENT_DIR: "/ignored" },
-        homeDir: "/home/example",
+        homeDir: "/home/dev",
       }).piDir,
     ).toBe("/elsewhere");
   });
@@ -533,7 +530,7 @@ describe("Pi ingest", () => {
     ]);
   });
 
-  test("classifies a file directly inside a custom session directory as Pi", () => {
+  test("classifies any file under a custom session directory as Pi", () => {
     const dir = freshDir();
     const piDir = join(dir, "custom-sessions");
     const file = join(piDir, "2026-11-01T10-00-00-000Z_sample.jsonl");
@@ -541,6 +538,11 @@ describe("Pi ingest", () => {
     const config = { claudeDir: join(dir, "claude"), codexDir: join(dir, "codex"), piDir };
     expect(discover({ ...config, sourcePaths: [file] })).toEqual([
       { tool: "pi", path: file, archived: false },
+    ]);
+    const nested = join(piDir, "archive", "2026", "2026-11-01T10-00-00-000Z_sample.jsonl");
+    write(nested, fixture("sample"));
+    expect(discover({ ...config, sourcePaths: [nested] })).toEqual([
+      { tool: "pi", path: nested, archived: false },
     ]);
   });
 

@@ -118,10 +118,6 @@ By default Decant discovers:
   database read-only and never writes to or checkpoints it. A database
   without Hermes's `sessions` and `messages` tables is skipped with a
   warning. Each session becomes its own source `<database>#<session id>`.
-- Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
-  from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
-  `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
-  read-only, and Decant re-reads the whole file when it changes.
   When two profiles hold one session ID, Decant reads the copy with the most
   recent activity, and a tie goes to the database path that sorts first.
   Reading one copy forgets the change key recorded for the others, so if the
@@ -137,6 +133,10 @@ By default Decant discovers:
   compaction copied forward read once, and without rows a rewind or edit
   removed (`active = 0, compacted = 0`). A session deleted from `state.db`
   stops being discovered, and the archive keeps the copy it last ingested.
+- Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
+  from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
+  `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
+  read-only, and Decant re-reads the whole file when it changes.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the

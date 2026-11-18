@@ -119,7 +119,7 @@ export interface IngestConfig {
   sourcePaths?: string[];
 }
 
-export const INGEST_PIPELINE_REVISION = 21;
+export const INGEST_PIPELINE_REVISION = 22;
 
 export interface SyncReport {
   repriced?: number;
@@ -2639,12 +2639,7 @@ function collectCopilot(copilotDir: string, out: SourceFile[]): void {
 function isPiSessionLog(path: string, piDir?: string): boolean {
   const projectDir = dirname(path);
   const sessionsDir = dirname(projectDir);
-  // Pi files sessions under a per-project folder by default, and directly in
-  // a session directory set with `--session-dir`.
-  if (
-    piDir != null &&
-    (resolve(sessionsDir) === resolve(piDir) || resolve(projectDir) === resolve(piDir))
-  ) {
+  if (piDir != null && isInside(resolve(piDir), resolve(path))) {
     return true;
   }
   const project = pathBasename(projectDir);
@@ -2655,6 +2650,10 @@ function isPiSessionLog(path: string, piDir?: string): boolean {
     project.startsWith("--") &&
     project.endsWith("--")
   );
+}
+
+function isInside(root: string, path: string): boolean {
+  return path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
 
 function isCopilotSessionLog(path: string, copilotDir?: string): boolean {

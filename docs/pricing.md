@@ -1,6 +1,8 @@
 # Pricing estimates
 
 Decant estimates token costs at ingest using published first-party API rates.
+Gemini 4 Neon rates were verified on November 18, 2026, against Google's
+standard Gemini Developer API pricing.
 GPT-6.2 Astra and Sol rates were verified on November 17, 2026, against
 OpenAI's pricing page, model pages, and launch announcement below.
 On November 16, 2026, every Anthropic, OpenAI, Gemini, Z.ai, Meta, DeepSeek,
@@ -51,6 +53,8 @@ a rate. Kimi K3.1 Pro rates were verified on October 25, 2026.
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
 - [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked November 16, 2026)
+- [Gemini 4 Neon pricing](https://aistudio.google.com/docs/pricing#gemini-4-neon) (checked November 18, 2026)
+- [Gemini 4 Neon reasoning-level model IDs](https://antigravity.google/docs/models#gemini-4-neon)
 - [Gemini models](https://ai.google.dev/gemini-api/docs/models) (Gemini 4 Argon, Carbon, and Hydrogen model codes, checked November 16, 2026)
 - [Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog) (Gemini 3.5 Flash and 3.7 Flash deprecations, checked November 16, 2026)
 - [Z.ai pricing](https://docs.z.ai/guides/overview/pricing) (checked November 16, 2026)
@@ -110,6 +114,7 @@ provider does not publish a first-party API token price for that model slug.
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
 | Gemini 4 Argon, Gemini 4 Carbon | $4.00 | $0.20 | $4.00-equiv | $20.00 |
+| Gemini 4 Neon | $3.00 | $0.15 | $3.00-equiv | $15.00 |
 | Gemini 4 Hydrogen | $1.50 | $0.075 | $1.50-equiv | $7.50 |
 | Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
 | Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
@@ -178,9 +183,13 @@ GPT-6.1, and GPT-6.2 models above bill cache writes at 1.25 times the
 uncached-input rate, which OpenAI lists as the 30-minute cache write. OpenAI
 also lists a 12-hour cache write at $20.00 for GPT-6.2 Astra and $5.00 for
 GPT-6.2 Sol. Codex does not report which retention a write used, so Decant
-bills every write at the 30-minute rate. Gemini bills cache storage by the
-token-hour, so Decant maps the equivalent write charge to approximately the
-input rate for typical session-length holds.
+bills every write at the 30-minute rate. For Gemini models with explicit
+caching, Google bills cache storage by the token-hour. Decant approximates
+that charge at the input rate for typical session-length holds. Gemini 4 Neon
+uses implicit caching. If an imported record reports Neon tokens separately as
+cache writes, Decant values them at the input rate with no storage surcharge.
+The `low`, `medium`, `high`, and `xhigh` Neon IDs use the same standard API
+rates.
 
 Z.ai and Meta charge no separate cache-write fee, so Decant bills cache writes
 for GLM and Muse models at the input rate. Z.ai lists cached-input storage as

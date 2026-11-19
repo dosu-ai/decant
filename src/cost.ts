@@ -37,9 +37,9 @@ function openAiPrice(
   };
 }
 
-// Gemini bills cache storage by the token-hour instead of a flat write, so for
-// a typical session the write-plus-hold cost lands near the input rate per
-// token. The docs list both prices; Decant maps cache writes to the input rate.
+// Google bills explicit Gemini cache storage by the token-hour. Decant
+// approximates short holds at the input rate and uses that rate for any
+// separately reported write tokens on implicit-cache models.
 function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMtok: number): Price {
   return {
     inputPerMtok,
@@ -288,6 +288,7 @@ function buildDefaultPricing(): Map<string, Price> {
     // December 1 rates. The Gemini 4 models have implicit caching only.
     ["gemini-4-argon", geminiPrice(4.0, 0.2, 20.0)],
     ["gemini-4-carbon", geminiPrice(4.0, 0.2, 20.0)],
+    ["gemini-4-neon", geminiPrice(3.0, 0.15, 15.0)],
     ["gemini-4-hydrogen", geminiPrice(1.5, 0.075, 7.5)],
     // 3.8-flash, 3.7-flash, and 3.6-flash carry a promo price through 2026-12-31.
     ["gemini-3.8-flash", geminiPrice(0.75, 0.075, 3.75)],
@@ -491,8 +492,11 @@ function canonicalModel(raw: string): string | null {
       return null;
     }
     const routed = model.replace(/\[[^\]]*\]$/, "").replace(HOSTED_ROUTE_SUFFIX, "");
+    if (/(?:^|\/)gemini-4-neon-(?:low|medium|high|xhigh)$/.test(routed)) {
+      return "gemini-4-neon";
+    }
     const gemini4 =
-      /(?:^|\/)gemini-4-(argon|carbon|hydrogen)(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.exec(
+      /(?:^|\/)gemini-4-(argon|carbon|hydrogen|neon)(?:-(?:latest|preview[\w.-]*|\d[\w.-]*))?$/.exec(
         routed,
       );
     if (gemini4 != null) {

@@ -735,6 +735,38 @@ describe("isPriceable", () => {
       });
     }
   });
+
+  test("prices Gemini 4 Neon and its reasoning-level IDs at the standard API rate", () => {
+    const pricing = defaultPricing();
+    const usage = {
+      ...emptyUsage(),
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheCreation: 1_000_000,
+    };
+    for (const model of [
+      "gemini-4-neon",
+      "models/gemini-4-neon",
+      "gemini-4-neon-20261118",
+      "gemini-4-neon-low",
+      "gemini-4-neon-medium",
+      "gemini-4-neon-high",
+      "gemini-4-neon-xhigh",
+      "google/gemini-4-neon:floor",
+    ]) {
+      expect(isPriceable(model)).toBe(true);
+      expect(estimateCostParts(model, usage, pricing)).toEqual({
+        input: 3,
+        output: 15,
+        cacheRead: 0.15,
+        cacheCreation: 3,
+      });
+    }
+    for (const model of ["gemini-4-neon-lite", "gemini-4-neon-max", "gemini-4-neon-image"]) {
+      expect(isPriceable(model)).toBe(false);
+    }
+  });
 });
 
 describe("Kimi K3.1 Pro pricing", () => {

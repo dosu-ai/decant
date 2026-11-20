@@ -7,6 +7,27 @@
       "icon": "configure",
       "runOnWorktreeCreate": true,
       "async": false
+    },
+    {
+      "name": "Check",
+      "command": "just ts-check",
+      "icon": "test"
+    },
+    {
+      "name": "Fix formatting",
+      "command": "just fmt",
+      "icon": "lint"
+    },
+    {
+      "name": "Serve UI on a scratch copy",
+      "command": "just serve-scratch",
+      "icon": "play",
+      "stopOnSettle": true
+    },
+    {
+      "name": "Build native binary",
+      "command": "just build-binary --target native",
+      "icon": "build"
     }
   ]
 }

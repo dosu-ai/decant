@@ -46,18 +46,16 @@ only needed when validating the container image.
 - `bun run dev` performs a frozen dependency install, startup sync, local UI,
   and source watcher.
 - `bun run src/cli.ts --help` runs the CLI from source.
-- `bun test` runs the test suite.
-- `bunx tsc --noEmit` runs the type check.
-- `bunx biome check .` runs the formatting and lint check.
 - `just check` runs the full local gate, including the native distribution
   staging smoke. It needs network access because the smoke packs and installs
   the npm launcher packages.
 
 The default archive is `~/.decant/decant.db`. Override it with `DECANT_DB` or
 `--db`. Set `DECANT_NO_SYNC` or pass `--no-sync` whenever a command points at a
-scratch archive, or automatic sync may populate it from the real Claude Code,
-Codex, Gemini CLI, OpenCode, Cursor CLI, GitHub Copilot CLI, VS Code, Hermes
-Agent, and Pi directories.
+scratch archive, or automatic sync may populate it from the real source
+directories listed in `docs/sources.md`. Opening an archive also migrates it,
+so serve a branch against a copy, never `~/.decant/decant.db` itself.
+`just serve-scratch` makes and serves that copy.
 
 ## Definition of done
 
@@ -122,7 +120,6 @@ A change is ready when:
 
 ## Conventions
 
-- Use surrounding code style, narrow changes, and focused tests.
 - Use Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`,
   and `chore:`. Sign commits when the environment supports it.
 - Code comments are for things the code cannot say and we cannot change: a
@@ -137,21 +134,9 @@ A change is ready when:
 ## Pull requests
 
 - Open a pull request only when the developer asks for one.
-- Fill in every heading of `.github/PULL_REQUEST_TEMPLATE.md`, including the
-  schema and privacy checkboxes. Do not replace it with your own layout.
-- Verification lists the focused commands or manual checks you ran and what
-  they showed. "Tests pass" alone is not evidence.
-- Upload screenshots and recordings with the pull request
-  (`gh pr edit <n> --body-file <file> --attach <image>`). Never commit PR-only
-  assets.
-- End the description with the model and harness that wrote the change.
-- `bun run scripts/pr-policy.ts` runs the same policy checks as CI: committed
-  migrations unchanged, docs updated alongside rate and route-manifest
-  changes, and a pattern scan of fixtures for real-looking home paths, emails,
-  and credentials. Passing the scan does not prove a fixture is synthetic.
-- When babysitting a pull request, wait for check and review events instead of
-  polling. Check each bot finding against the source, fix the real ones, and
-  answer false positives with a reason.
+- Before opening, updating, or babysitting one, follow the `pull-request`
+  skill. It points to `CONTRIBUTING.md`, which owns the template, evidence,
+  screenshot, attribution, and policy-check rules.
 
 ## Documentation expectations
 

@@ -85,6 +85,24 @@ watch *ARGS:
 serve *ARGS:
     bun run src/cli.ts serve {{ARGS}}
 
+# Serve this checkout's UI from a reused copy of ~/.decant/decant.db, so a branch's migrations never touch the real archive. Delete the printed directory for a fresh copy.
+[group('cli')]
+serve-scratch *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="${TMPDIR:-/tmp}/decant-scratch-$(basename "$PWD")"
+    mkdir -p "$dir/config"
+    real="$HOME/.decant/decant.db"
+    if [ ! -f "$dir/archive.db" ] && [ -f "$real" ]; then
+      for suffix in "" -wal; do
+        [ -f "$real$suffix" ] || continue
+        cp -c "$real$suffix" "$dir/archive.db$suffix" 2>/dev/null || cp "$real$suffix" "$dir/archive.db$suffix"
+      done
+    fi
+    echo "Scratch archive: $dir/archive.db"
+    DECANT_NO_SYNC=1 DECANT_UPDATE_CHECK=0 DECANT_CONFIG_DIR="$dir/config" \
+      exec bun run src/cli.ts --db "$dir/archive.db" --no-sync serve --no-open --port 0 {{ARGS}}
+
 [group('cli')]
 ls *ARGS:
     bun run src/cli.ts ls {{ARGS}}

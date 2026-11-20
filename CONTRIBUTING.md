@@ -26,8 +26,12 @@ Requirements:
 - Bun 1.3 or newer.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
-- Optional: [T3 Code](https://t3.codes) runs `t3.json`'s setup script, which
-  installs dependencies, in each new worktree.
+- Optional: [T3 Code](https://t3.codes). `t3.json` declares project actions,
+  but T3 runs them only after you import them under Settings → Projects →
+  Actions → Import from t3.json. Once imported, `Setup Worktree` installs
+  dependencies in each new worktree before the agent starts, and the other
+  actions run `just` recipes: `ts-check`, `fmt`, `serve-scratch`, and
+  `build-binary`.
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git
@@ -125,9 +129,23 @@ Do not weaken or remove tests to make a change pass.
   `refactor:`, and `chore:`.
 - Sign commits. The protected `main` branch requires verified commits.
 - Keep one concern per pull request and explain the user-visible outcome.
-- Fill in every section of the pull request template. Verification names the
-  commands and checks you ran and what you saw.
+- Fill in every section of the pull request template, including the schema
+  and privacy checkboxes, and keep its layout. Verification names the commands
+  and checks you ran and what you saw. "Tests pass" alone is not evidence.
+- Run `bun run scripts/pr-policy.ts` before pushing. It runs the same policy
+  checks as CI: committed migrations stay unchanged, docs change alongside
+  rate and route-manifest changes, and fixtures get a pattern scan for
+  real-looking home paths, emails, and credentials. Passing the scan does not
+  prove a fixture is synthetic.
+- Upload screenshots and recordings with the pull request, for example
+  `gh pr edit <n> --body-file <file> --attach <image>`. Never commit PR-only
+  assets.
+- If a coding agent wrote the change, end the description with the model and
+  harness.
 - Link the issue the pull request closes when one exists.
+- While a pull request waits on CI or review, wait for check and review events
+  instead of polling. Check each bot finding against the source, fix the real
+  ones, and answer false positives with a reason.
 - Keep `main` green, as every pull request needs passing CI and review.
 
 CodeRabbit reviews every pull request once it leaves draft. Its approval is

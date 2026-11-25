@@ -836,7 +836,8 @@ describe("sync terminal state", () => {
         coordinator.isBusy,
       );
       await manualStarted.promise;
-      expect(syncStatus.last_error).toBe("watch run failed");
+      expect(syncStatus.in_progress).toBe(true);
+      expect(syncStatus.last_error).toBeNull();
 
       releaseManual.resolve();
       expect((await manual).status).toBe(200);

@@ -227,16 +227,17 @@ export async function syncNow(
   } catch (error) {
     if (handle.owned) {
       const stillBusy = handle.isBusy?.() === true;
+      const errorMessage = error instanceof Error ? error.message : String(error);
       syncStatus.in_progress = stillBusy;
       syncStatus.last_sync_at = new Date().toISOString();
-      syncStatus.last_error = error instanceof Error ? error.message : String(error);
+      syncStatus.last_error = stillBusy ? null : errorMessage;
       if (!stillBusy) {
         endSyncActivity();
       }
       publishServerEvent({
         type: "error",
         reason: "manual",
-        error: syncStatus.last_error,
+        error: errorMessage,
         status: { ...syncStatus },
       });
     }
@@ -876,7 +877,7 @@ export function applyWatchEvent(
     syncStatus.last_sync_at = event.status.last_sync_at;
     syncStatus.in_progress = event.status.in_progress || stillBusy;
     syncStatus.last_report = event.status.last_report;
-    syncStatus.last_error = event.status.last_error;
+    syncStatus.last_error = stillBusy && event.type === "error" ? null : event.status.last_error;
     syncStatus.ingested_count = event.status.ingested_count;
   }
   if (event.type === "sync_progress") {
@@ -889,7 +890,14 @@ export function applyWatchEvent(
   }
   const published =
     stillBusy && "status" in event && event.status != null && !event.status.in_progress
-      ? { ...event, status: { ...event.status, in_progress: true } }
+      ? {
+          ...event,
+          status: {
+            ...event.status,
+            in_progress: true,
+            last_error: event.type === "error" ? null : event.status.last_error,
+          },
+        }
       : event;
   publishServerEvent(published);
   if (event.type === "sync" && reportMutatedArchive(event.report)) {

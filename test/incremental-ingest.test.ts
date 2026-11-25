@@ -2577,11 +2577,13 @@ describe("Sol review regression coverage (F1-F13)", () => {
     }
   });
 
-  test("seenResponseKeys Bloom filter stays unsaturated on large sessions while still catching late response repeats", () => {
+  test("seenResponseKeys Bloom filter scales with full response count and still catches late response repeats", () => {
     const { dir, dbPath, config } = freshCase();
     const file = join(config.claudeDir, "proj", "c-bloom-scale.jsonl");
     let content = "";
-    for (let i = 1; i <= 250; i += 1) {
+    // 3,000 responses: 3000 * 48 = 144,000 -> next power of two is 262,144 bits (32,768 bytes),
+    // proving the bulk-sizing branch ran rather than promoting at 65 entries (131,072 bits).
+    for (let i = 1; i <= 3_000; i += 1) {
       content += claudeTurn("c-bloom-scale", i, `req-${i}`, 40);
     }
     writeFileSync(file, content);
@@ -2591,8 +2593,23 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Append 20 distinct turns: economics fold must stay valid (not saturate Bloom and disable itself).
-      for (let i = 251; i <= 270; i += 1) {
+      const initialCpRow = db
+        .query("SELECT state_blob FROM ingest_checkpoint WHERE path = ?1")
+        .get(file) as { state_blob: Uint8Array } | null;
+      if (initialCpRow == null) {
+        throw new Error("expected checkpoint row");
+      }
+      const initialCp = JSON.parse(
+        new TextDecoder().decode(Bun.zstdDecompressSync(initialCpRow.state_blob)),
+      ) as { economics: { valid: boolean; seenResponseKeys?: { bloom?: string } } };
+      expect(initialCp.economics.valid).toBe(true);
+      expect(initialCp.economics.seenResponseKeys?.bloom).toBeDefined();
+      expect(Buffer.from(initialCp.economics.seenResponseKeys?.bloom ?? "", "base64").length).toBe(
+        32_768,
+      );
+
+      // Append 25 distinct turns: economics fold must stay valid (zero false-positive saturation).
+      for (let i = 3_001; i <= 3_025; i += 1) {
         appendFileSync(file, claudeTurn("c-bloom-scale", i, `req-${i}`, 40));
         expect(sync(db, config).ingested).toBe(1);
       }
@@ -2607,7 +2624,7 @@ describe("Sol review regression coverage (F1-F13)", () => {
       ) as { economics: { valid: boolean } };
       expect(parsedCp.economics.valid).toBe(true);
 
-      // Now append a late thinking block for msg_req-1 (270 turns back) and verify it still triggers rematerialization.
+      // Now append a late thinking block for msg_req-1 (3,025 turns back) and verify it triggers rematerialization.
       appendFileSync(
         file,
         `${JSON.stringify({
@@ -2628,7 +2645,7 @@ describe("Sol review regression coverage (F1-F13)", () => {
               cache_read_input_tokens: 500,
               cache_creation_input_tokens: 0,
             },
-            content: [{ type: "thinking", thinking: "Late thinking after 270 turns" }],
+            content: [{ type: "thinking", thinking: "Late thinking after 3025 turns" }],
           },
         })}\n`,
       );

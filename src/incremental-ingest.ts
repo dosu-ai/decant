@@ -113,7 +113,7 @@ import { classifyTool, previewHeadTail } from "./tools.ts";
 
 export type IncrementalTool = "claude_code" | "codex" | "pi";
 
-const CHECKPOINT_VERSION = 5;
+const CHECKPOINT_VERSION = 6;
 const ANCHOR_SAMPLE_BYTES = 32_768;
 const ANCHOR_MID_BYTES = 4_096;
 const CHARS_PER_TOKEN = 4;
@@ -1461,19 +1461,21 @@ function foldEconomicsDelta(
       }
     }
   } else {
-    const seenResponses =
-      econ.seenResponseKeys == null ? null : openCompactSet(econ.seenResponseKeys);
-    const deltaRespIds = new Set<string>();
+    const isEmptyInitial =
+      econ.seenResponseKeys == null ||
+      ("exact" in econ.seenResponseKeys && econ.seenResponseKeys.exact.length === 0);
+    const seenResponses = isEmptyInitial ? null : openCompactSet(econ.seenResponseKeys);
+    const deltaRespKeys = new Set<string>();
     const byResp = new Map<string, EconBlockInput[]>();
     const respOutput = new Map<string, number>();
     for (const blk of active) {
+      const rk = econResponseKey(blk);
       if (blk.responseId != null) {
-        if (seenResponses != null && compactSetHas(seenResponses, blk.responseId)) {
+        if (seenResponses != null && compactSetHas(seenResponses, rk)) {
           return false;
         }
-        deltaRespIds.add(blk.responseId);
+        deltaRespKeys.add(rk);
       }
-      const rk = econResponseKey(blk);
       const list = byResp.get(rk) ?? [];
       list.push(blk);
       byResp.set(rk, list);
@@ -1512,14 +1514,24 @@ function foldEconomicsDelta(
       return false;
     }
     if (seenResponses == null) {
-      if (deltaRespIds.size > 0) {
-        econ.seenResponseKeys = buildCompactSet(deltaRespIds, deltaRespIds.size);
+      if (deltaRespKeys.size > 0) {
+        econ.seenResponseKeys = buildCompactSet(deltaRespKeys, deltaRespKeys.size);
       }
-    } else if (deltaRespIds.size > 0) {
-      for (const rid of deltaRespIds) {
-        compactSetAdd(seenResponses, rid);
+    } else if (deltaRespKeys.size > 0) {
+      if (
+        seenResponses.exact != null &&
+        seenResponses.exact.size + deltaRespKeys.size > COMPACT_SET_EXACT_LIMIT
+      ) {
+        for (const rk of deltaRespKeys) {
+          seenResponses.exact.add(rk);
+        }
+        econ.seenResponseKeys = buildCompactSet(seenResponses.exact, seenResponses.exact.size);
+      } else {
+        for (const rk of deltaRespKeys) {
+          compactSetAdd(seenResponses, rk);
+        }
+        econ.seenResponseKeys = sealCompactSet(seenResponses);
       }
-      econ.seenResponseKeys = sealCompactSet(seenResponses);
     }
   }
 

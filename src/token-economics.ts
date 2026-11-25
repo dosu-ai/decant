@@ -19,6 +19,11 @@ import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.t
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
+import {
+  bumpEconomicsSeq,
+  bumpSyncStateGeneration,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "./sync-state.ts";
 
 const CHARS_PER_TOKEN = 4;
 export const SESSION_ECONOMICS_FORMAT_VERSION = 12;
@@ -436,6 +441,9 @@ export function refreshSessionCosts(db: Database): number {
         storeEconomicsVector(db, refresh.staleVector);
       }
     }
+    if (pending.length > 0) {
+      bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    }
     return pending.length;
   });
 }
@@ -595,6 +603,7 @@ export function storeEconomicsVector(db: Database, vector: SessionEconomicsVecto
        computed_at = excluded.computed_at`,
     [vector.id, SESSION_ECONOMICS_FORMAT_VERSION, JSON.stringify(vector)],
   );
+  bumpEconomicsSeq(db);
 }
 
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {

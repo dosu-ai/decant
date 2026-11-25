@@ -24,6 +24,7 @@ export type SyncWorkerRunner = (
 export interface SyncRunHandle {
   promise: Promise<SyncReport>;
   owned: boolean;
+  isBusy?: () => boolean;
 }
 
 export interface SyncCoordinator {
@@ -34,6 +35,7 @@ export interface SyncCoordinator {
     onProgress?: (progress: SyncProgress) => void,
     syncOptions?: SyncOptions,
   ): SyncRunHandle;
+  isBusy(): boolean;
   close(): Promise<void>;
 }
 
@@ -49,6 +51,7 @@ export interface SyncCoordinatorOptions {
 interface SyncReportMeta {
   sessionIds: number[];
   tombstoned: boolean;
+  ownEconomicsWrites?: number;
   priorDataVersion?: number | null;
 }
 
@@ -110,9 +113,10 @@ function refreshEconomicsForReport(
     !meta.tombstoned &&
     (report.repriced ?? 0) === 0 &&
     meta.sessionIds.length > 0 &&
+    meta.ownEconomicsWrites != null &&
     typeof economics.refreshSessions === "function"
   ) {
-    economics.refreshSessions(meta.sessionIds, meta.priorDataVersion);
+    economics.refreshSessions(meta.sessionIds, meta.priorDataVersion, meta.ownEconomicsWrites);
   } else {
     economics.invalidate();
   }
@@ -147,13 +151,20 @@ export async function syncNow(
     if (!handle.owned) {
       return json(report);
     }
-    syncStatus.in_progress = false;
+    const stillBusy = handle.isBusy?.() === true;
+    syncStatus.in_progress = stillBusy;
     syncStatus.last_sync_at = new Date().toISOString();
     syncStatus.last_report =
       `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
       `issues ${report.issues}, failed ${report.failed}`;
     syncStatus.ingested_count = report.ingested;
-    endSyncActivity(report);
+    if (stillBusy) {
+      if (!report.cancelled) {
+        syncActivity.archiveSynced = true;
+      }
+    } else {
+      endSyncActivity(report);
+    }
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0 || (report.repriced ?? 0) > 0) {
       refreshEconomicsForReport(economics, report);
@@ -167,10 +178,13 @@ export async function syncNow(
     return json(report);
   } catch (error) {
     if (handle.owned) {
-      syncStatus.in_progress = false;
+      const stillBusy = handle.isBusy?.() === true;
+      syncStatus.in_progress = stillBusy;
       syncStatus.last_sync_at = new Date().toISOString();
       syncStatus.last_error = error instanceof Error ? error.message : String(error);
-      endSyncActivity();
+      if (!stillBusy) {
+        endSyncActivity();
+      }
       publishServerEvent({
         type: "error",
         reason: "manual",
@@ -269,6 +283,7 @@ export function runSyncWorker(
             report: ReturnType<typeof ingestSync>;
             changedSessionIds?: number[];
             tombstoned?: boolean;
+            ownEconomicsWrites?: number;
           }
         | { type: "complete"; ok: false; error: string };
       if (data.type === "progress") {
@@ -283,6 +298,7 @@ export function runSyncWorker(
             syncReportMeta.set(data.report, {
               sessionIds: data.changedSessionIds,
               tombstoned: data.tombstoned === true,
+              ownEconomicsWrites: data.ownEconomicsWrites,
             });
           }
           resolve(data.report);
@@ -453,6 +469,7 @@ class PersistentSyncWorker {
             report: ReturnType<typeof ingestSync>;
             changedSessionIds?: number[];
             tombstoned?: boolean;
+            ownEconomicsWrites?: number;
           }
         | { type: "complete"; id?: number; ok: false; error: string };
       if (data.type === "progress") {
@@ -471,6 +488,7 @@ class PersistentSyncWorker {
             syncReportMeta.set(data.report, {
               sessionIds: data.changedSessionIds,
               tombstoned: data.tombstoned === true,
+              ownEconomicsWrites: data.ownEconomicsWrites,
             });
           }
           resolve?.(data.report);
@@ -683,6 +701,8 @@ export function createSyncCoordinator(
     return promise;
   };
 
+  const isBusy = (): boolean => active != null || queued != null;
+
   const start = (
     config: Config,
     cancel?: { aborted: boolean },
@@ -694,6 +714,7 @@ export function createSyncCoordinator(
       return {
         promise: Promise.reject(new Error("sync coordinator is closed")),
         owned: false,
+        isBusy,
       };
     }
     if (active != null) {
@@ -704,7 +725,7 @@ export function createSyncCoordinator(
         if (listenWhenJoined && onProgress != null) {
           active.listeners.add(onProgress);
         }
-        return { promise: active.promise, owned: false };
+        return { promise: active.promise, owned: false, isBusy };
       }
       if (queued != null) {
         queued.config = config;
@@ -715,7 +736,7 @@ export function createSyncCoordinator(
         if (listenWhenJoined && onProgress != null) {
           queued.listeners.add(onProgress);
         }
-        return { promise: queued.promise, owned: false };
+        return { promise: queued.promise, owned: false, isBusy };
       }
       const listeners = new Set<(progress: SyncProgress) => void>();
       const cancelSources = new Set<{ aborted: boolean }>([ownedCancel]);
@@ -735,7 +756,7 @@ export function createSyncCoordinator(
         resolve: deferred.resolve,
         reject: deferred.reject,
       };
-      return { promise: deferred.promise, owned: true };
+      return { promise: deferred.promise, owned: true, isBusy };
     }
 
     const listeners = new Set<(progress: SyncProgress) => void>();
@@ -747,7 +768,7 @@ export function createSyncCoordinator(
       listeners.add(onProgress);
     }
     const promise = launch(config, listeners, cancelSources, syncOptions);
-    return { promise, owned: true };
+    return { promise, owned: true, isBusy };
   };
   const run: SyncWorkerRunner = (config, cancel, onProgress, syncOptions) =>
     start(config, cancel, onProgress, true, syncOptions).promise;
@@ -772,7 +793,7 @@ export function createSyncCoordinator(
     await persistentWorker?.close();
   };
 
-  return { run, runWithOwnership, close };
+  return { run, runWithOwnership, isBusy, close };
 }
 
 export async function workerSyncRunner(
@@ -802,16 +823,21 @@ export async function workerSyncRunner(
     status.finishErr(error instanceof Error ? error.message : String(error));
     return { error, emitTerminal: handle.owned };
   } finally {
-    if (!handle.owned) {
+    if (!handle.owned && handle.isBusy?.() !== true) {
       syncStatus.in_progress = false;
     }
   }
 }
 
-export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
+export function applyWatchEvent(
+  event: WatchEvent,
+  economics: EconomicsCache,
+  isBusy?: () => boolean,
+): void {
+  const stillBusy = isBusy?.() === true;
   if ("status" in event && event.status != null) {
     syncStatus.last_sync_at = event.status.last_sync_at;
-    syncStatus.in_progress = event.status.in_progress;
+    syncStatus.in_progress = event.status.in_progress || stillBusy;
     syncStatus.last_report = event.status.last_report;
     syncStatus.last_error = event.status.last_error;
     syncStatus.ingested_count = event.status.ingested_count;
@@ -821,8 +847,14 @@ export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): v
     syncActivity.progress = event.progress;
   } else if (!syncStatus.in_progress) {
     endSyncActivity(event.type === "sync" ? event.report : undefined);
+  } else if (event.type === "sync" && !event.report.cancelled) {
+    syncActivity.archiveSynced = true;
   }
-  publishServerEvent(event);
+  const published =
+    stillBusy && "status" in event && event.status != null && !event.status.in_progress
+      ? { ...event, status: { ...event.status, in_progress: true } }
+      : event;
+  publishServerEvent(published);
   if (event.type === "sync" && (event.report.ingested > 0 || (event.report.repriced ?? 0) > 0)) {
     refreshEconomicsForReport(economics, event.report);
     publishServerEvent({

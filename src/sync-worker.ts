@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Config } from "./config.ts";
 import { closeDb, openDb } from "./db.ts";
 import { type SyncOptions, type SyncProgress, sync } from "./ingest.ts";
+import { committedEconomicsWrites } from "./sync-state.ts";
 
 export interface SyncWorkerSyncOptions {
   candidatePaths?: string[];
@@ -34,6 +35,7 @@ type SyncWorkerMessage =
       report: ReturnType<typeof sync>;
       changedSessionIds: number[];
       tombstoned: boolean;
+      ownEconomicsWrites: number;
     }
   | { type: "complete"; id?: number; ok: false; error: string };
 
@@ -70,6 +72,7 @@ function runSyncOnDb(
 ): SyncWorkerMessage {
   const changedSessionIds: number[] = [];
   let tombstoned = false;
+  const economicsWritesBefore = committedEconomicsWrites(db);
   const syncOptions: SyncOptions = {
     ...(options?.candidatePaths != null ? { candidatePaths: options.candidatePaths } : {}),
     ...(options?.deferDerivedRefresh === true ? { deferDerivedRefresh: true } : {}),
@@ -80,6 +83,9 @@ function runSyncOnDb(
       changedSessionIds.push(sessionId);
     },
     onTombstoned: () => {
+      tombstoned = true;
+    },
+    onEconomicsBulkChanged: () => {
       tombstoned = true;
     },
   };
@@ -96,9 +102,10 @@ function runSyncOnDb(
     },
     syncOptions,
   );
+  const ownEconomicsWrites = committedEconomicsWrites(db) - economicsWritesBefore;
   return id == null
-    ? { type: "complete", ok: true, report, changedSessionIds, tombstoned }
-    : { type: "complete", id, ok: true, report, changedSessionIds, tombstoned };
+    ? { type: "complete", ok: true, report, changedSessionIds, tombstoned, ownEconomicsWrites }
+    : { type: "complete", id, ok: true, report, changedSessionIds, tombstoned, ownEconomicsWrites };
 }
 
 self.addEventListener("message", function onMessage(event) {

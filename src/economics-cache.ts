@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { DateFilter } from "./date-filter.ts";
 import { exceptionAttributes, getDecantLogger } from "./logging.ts";
+import { readEconomicsSeq } from "./sync-state.ts";
 import {
   aggregateEconomicsVectors,
   computeSessionEconomicsVectorsByIds,
@@ -30,6 +31,7 @@ export interface EconomicsCacheOptions {
 export class EconomicsCache {
   #vectors: SessionEconomicsVector[] | null = null;
   #builtDataVersion: number | null = null;
+  #builtEconomicsSeq: number | null = null;
   #building: Promise<void> | null = null;
   #buildAbort: AbortController | null = null;
   #rebuildRequestedMidBuild = false;
@@ -43,7 +45,11 @@ export class EconomicsCache {
   async get(filter?: DateFilter | null): Promise<TokenEconomics> {
     if (this.#vectors == null) {
       await (this.#building ?? this.#rebuild());
-    } else if (this.#dataVersion() !== this.#builtDataVersion) {
+    } else if (
+      this.#dataVersion() !== this.#builtDataVersion ||
+      (this.#builtEconomicsSeq != null &&
+        readEconomicsSeq(this.#options.db) !== this.#builtEconomicsSeq)
+    ) {
       void this.#rebuild();
     }
     const vectors = this.#vectors ?? [];
@@ -60,7 +66,11 @@ export class EconomicsCache {
     return this.#dataVersion();
   }
 
-  refreshSessions(sessionIds: readonly number[], expectedDataVersion?: number | null): void {
+  refreshSessions(
+    sessionIds: readonly number[],
+    expectedDataVersion?: number | null,
+    ownEconomicsWrites?: number,
+  ): void {
     if (this.#disposed) {
       return;
     }
@@ -77,8 +87,30 @@ export class EconomicsCache {
       return;
     }
     try {
+      const dvBefore = this.#dataVersion();
+      const seqBefore = readEconomicsSeq(this.#options.db);
+      if (ownEconomicsWrites !== undefined) {
+        if (
+          this.#builtEconomicsSeq == null ||
+          seqBefore == null ||
+          ownEconomicsWrites < 0 ||
+          seqBefore !== this.#builtEconomicsSeq + ownEconomicsWrites
+        ) {
+          this.invalidate();
+          return;
+        }
+      } else if (dvBefore !== this.#builtDataVersion) {
+        this.invalidate();
+        return;
+      }
       const uniqueIds = [...new Set(sessionIds)];
       const updated = computeSessionEconomicsVectorsByIds(this.#options.db, uniqueIds);
+      const dvAfter = this.#dataVersion();
+      const seqAfter = readEconomicsSeq(this.#options.db);
+      if (seqAfter !== seqBefore || dvAfter !== dvBefore) {
+        this.invalidate();
+        return;
+      }
       const updatedById = new Map(updated.map((vector) => [vector.id, vector]));
       const touched = new Set(uniqueIds);
       const next: SessionEconomicsVector[] = [];
@@ -97,7 +129,8 @@ export class EconomicsCache {
         next.push(added);
       }
       this.#vectors = next;
-      this.#builtDataVersion = this.#dataVersion();
+      this.#builtDataVersion = dvAfter;
+      this.#builtEconomicsSeq = seqAfter;
     } catch {
       this.invalidate();
     }
@@ -160,6 +193,7 @@ export class EconomicsCache {
     }
     const compute = this.#options.computeVectors ?? computeVectorsInWorker;
     const version = this.#dataVersion();
+    const economicsSeq = readEconomicsSeq(this.#options.db);
     const abort = new AbortController();
     this.#buildAbort = abort;
     this.#building = compute(this.#options.dbPath, { signal: abort.signal })
@@ -170,6 +204,7 @@ export class EconomicsCache {
         const replacedModel = this.#vectors != null;
         this.#vectors = vectors;
         this.#builtDataVersion = version;
+        this.#builtEconomicsSeq = economicsSeq;
         if (replacedModel) {
           this.#options.onRebuilt?.();
         }

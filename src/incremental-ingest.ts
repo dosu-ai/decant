@@ -17,9 +17,11 @@ import {
 } from "./buckets.ts";
 import { isWebSearchBlock, keywordWorkType, type Outcome, type WorkType } from "./classify.ts";
 import {
+  CONTEXT_WINDOW_USER_TEXT_PREDICATE_SQL,
   contextTokensFromUsage,
   inferClaudeContextWindowTokens,
   isCompactBoundary,
+  isContextWindowRealUserText,
   type MessageRawMeta,
   materializeContextWindow,
 } from "./context-window.ts";
@@ -96,6 +98,11 @@ import {
   parseSourceJson,
 } from "./sources/shared.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
+import {
+  bumpSyncStateGeneration,
+  SYNC_STATE_DERIVED_PENDING,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "./sync-state.ts";
 import {
   materializeSessionEconomics,
   type Phase,
@@ -1113,14 +1120,7 @@ function rebuildContextWindowFoldFromDb(
     db,
     `SELECT m.role, m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
             ${MESSAGE_METADATA_SQL} AS meta_json,
-            CASE WHEN m.role = 'user' THEN EXISTS(
-              SELECT 1 FROM block b INDEXED BY idx_block_message
-               WHERE b.message_id = m.id
-                 AND b.type = 'text'
-                 AND TRIM(COALESCE(b.text, '')) <> ''
-                 AND COALESCE(b.text, '') NOT LIKE '${INTERRUPTION_MARKER}%'
-                 AND instr(COALESCE(b.text, ''), '${COMMAND_MARKER}') = 0
-            ) ELSE 0 END AS has_real_user_text
+            CASE WHEN m.role = 'user' THEN ${CONTEXT_WINDOW_USER_TEXT_PREDICATE_SQL} ELSE 0 END AS has_real_user_text
        FROM message m
       WHERE m.session_id = ?1 AND m.role IN ('user', 'assistant', 'system')
       ORDER BY m.seq`,
@@ -1190,12 +1190,7 @@ function messageRawMetaForContext(raw: Json, tool: IncrementalTool): MessageRawM
 function messageHasRealTextForContext(message: NormalizedMessage): boolean {
   for (const blk of message.blocks) {
     if (blk.blockType !== "text") continue;
-    const text = blk.text ?? "";
-    if (
-      text.trim() !== "" &&
-      !text.startsWith(INTERRUPTION_MARKER) &&
-      !text.includes(COMMAND_MARKER)
-    ) {
+    if (isContextWindowRealUserText(blk.text)) {
       return true;
     }
   }
@@ -1769,7 +1764,7 @@ function lookupPiToolUseAnchor(
        FROM block b
        JOIN message m ON m.id = b.message_id
       WHERE b.session_id = ?1 AND b.tool_use_id = ?2 AND b.type = 'tool_use'
-      ORDER BY b.id DESC
+      ORDER BY m.seq DESC, b.ordinal DESC
       LIMIT 1`,
     [sessionId, toolCallId],
   );
@@ -1783,18 +1778,6 @@ function lookupPiToolUseAnchor(
     timestamp: row.timestamp,
     hasInner: row.call_count > 1,
   };
-}
-
-function markSyncStateFlagInTx(db: Database, key: string): void {
-  if (
-    queryRow<{ present: number }>(
-      db,
-      "SELECT 1 AS present FROM sync_state WHERE key = ?1 LIMIT 1",
-      [key],
-    ) == null
-  ) {
-    runStatement(db, "INSERT OR IGNORE INTO sync_state(key, value) VALUES (?1, '1')", [key]);
-  }
 }
 
 function loadCheckpoint(
@@ -2270,6 +2253,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
 
 export type IncrementalAttemptResult =
   | { kind: "fallback" }
+  | { kind: "conflict" }
   | { kind: "oversized" }
   | { kind: "skipped" }
   | {
@@ -2297,48 +2281,6 @@ export interface TryIncrementalInput {
 }
 
 export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAttemptResult {
-  let attemptInput = input;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const result = tryIncrementalIngestOnce(attemptInput);
-    if (result.kind !== "retry") {
-      return result;
-    }
-    const refreshed = queryRow<{
-      size: number;
-      mtime: number;
-      ingest_revision: number;
-      session_id: number | null;
-    }>(
-      input.db,
-      "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1",
-      [input.sourcePath],
-    );
-    if (
-      refreshed == null ||
-      refreshed.session_id == null ||
-      refreshed.ingest_revision !== input.expectedRevision
-    ) {
-      return { kind: "fallback" };
-    }
-    if (
-      refreshed.size === input.stats.size &&
-      refreshed.mtime === Math.trunc(input.stats.mtimeMs / 1000)
-    ) {
-      return { kind: "skipped" };
-    }
-    attemptInput = {
-      ...input,
-      priorSize: refreshed.size,
-      priorSessionId: refreshed.session_id,
-      ingestRevision: refreshed.ingest_revision,
-    };
-  }
-  return { kind: "fallback" };
-}
-
-function tryIncrementalIngestOnce(
-  input: TryIncrementalInput,
-): IncrementalAttemptResult | { kind: "retry" } {
   const { db, fd, stats, sourcePath, tool } = input;
   if (stats.size > MAX_SOURCE_FILE_BYTES) {
     return { kind: "oversized" };
@@ -2352,7 +2294,38 @@ function tryIncrementalIngestOnce(
     loaded.state.tool !== tool ||
     loaded.state.sessionId !== input.priorSessionId
   ) {
+    const srcNow = queryRow<{
+      size: number;
+      ingest_revision: number;
+      session_id: number | null;
+    }>(db, "SELECT size, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
+      sourcePath,
+    ]);
+    if (
+      srcNow != null &&
+      (srcNow.size !== input.priorSize ||
+        srcNow.session_id !== input.priorSessionId ||
+        srcNow.ingest_revision !== input.ingestRevision)
+    ) {
+      return { kind: "conflict" };
+    }
     return { kind: "fallback" };
+  }
+  if (loaded.parsedOffset > input.priorSize) {
+    const srcNow = queryRow<{
+      size: number;
+      mtime: number;
+      ingest_revision: number;
+    }>(db, "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1", [sourcePath]);
+    if (
+      srcNow != null &&
+      srcNow.size === stats.size &&
+      srcNow.mtime === Math.trunc(stats.mtimeMs / 1000) &&
+      srcNow.ingest_revision === input.expectedRevision
+    ) {
+      return { kind: "skipped" };
+    }
+    return { kind: "conflict" };
   }
   const state = loaded.state;
   if (state.isArchived !== input.archived) {
@@ -2445,8 +2418,8 @@ function tryIncrementalIngestOnce(
     seq: number;
     requestId: string;
     usage: TokenUsage;
-    replacementApiMessageId: string | null;
   }[] = [];
+  const claudeFinalApiIdByReqId = new Map<string, string | null>();
   let codexStampedOld: { seq: number; usage: TokenUsage; previousUsage: TokenUsage | null } | null =
     null;
   const piNestedCalls: { toolCallId: string; inner: NormalizedInnerToolCall[] }[] = [];
@@ -2471,20 +2444,23 @@ function tryIncrementalIngestOnce(
             newMessages[idx] = { ...prev, usage: null };
           }
         } else {
-          claudeUnbilledOld.push({
-            ...step.unbilledPrevious,
-            replacementApiMessageId:
-              step.message != null ? claudeApiMessageId(step.message.raw) : null,
-          });
+          claudeUnbilledOld.push(step.unbilledPrevious);
         }
       }
       if (step.message != null) {
+        if (step.message.usage != null && step.requestId != null) {
+          claudeFinalApiIdByReqId.set(step.requestId, claudeApiMessageId(step.message.raw));
+        }
         newMessages.push(step.message);
       }
     }
     for (const unbilled of claudeUnbilledOld) {
       const runtime = ownGet(state.claudeBilledRuntime, unbilled.requestId);
-      if (runtime == null || runtime.apiMessageId !== unbilled.replacementApiMessageId) {
+      if (
+        runtime == null ||
+        !claudeFinalApiIdByReqId.has(unbilled.requestId) ||
+        runtime.apiMessageId !== claudeFinalApiIdByReqId.get(unbilled.requestId)
+      ) {
         return { kind: "fallback" };
       }
     }
@@ -2640,7 +2616,7 @@ function tryIncrementalIngestOnce(
 
   let affectedSessionIds: number[] = [];
   let committedLinkageIssues: Issue[] = [];
-  const txOutcome = withImmediateTransaction(db, (): "committed" | "skipped" | "retry" => {
+  const txOutcome = withImmediateTransaction(db, (): "committed" | "skipped" | "conflict" => {
     const srcNow = queryRow<{
       size: number;
       mtime: number;
@@ -2676,7 +2652,7 @@ function tryIncrementalIngestOnce(
       cpNow.parsed_line_count !== loaded.parsedLineCount ||
       cpNow.prefix_hash !== loaded.prefixHash
     ) {
-      return "retry";
+      return "conflict";
     }
     if (
       tool === "claude_code" &&
@@ -2684,7 +2660,7 @@ function tryIncrementalIngestOnce(
         state.sessionId,
       ]) != null
     ) {
-      return "retry";
+      return "conflict";
     }
 
     const sessionId = state.sessionId;
@@ -3428,9 +3404,9 @@ function tryIncrementalIngestOnce(
       nextPrefixHash,
       state,
     );
-    markSyncStateFlagInTx(db, "recommendations_pending");
+    bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
     if (lineageDirty) {
-      markSyncStateFlagInTx(db, "derived_pending");
+      bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
     }
     committedLinkageIssues = newLinkageIssues;
     return "committed";
@@ -3439,8 +3415,8 @@ function tryIncrementalIngestOnce(
   if (txOutcome === "skipped") {
     return { kind: "skipped" };
   }
-  if (txOutcome === "retry") {
-    return { kind: "retry" };
+  if (txOutcome === "conflict") {
+    return { kind: "conflict" };
   }
 
   const allReportIssues = [...deltaIssues, ...committedLinkageIssues];

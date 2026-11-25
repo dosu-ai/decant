@@ -16,8 +16,13 @@ import {
   type SchemaDifference,
   type SchemaManifest,
 } from "./schema-manifest.ts";
+import {
+  beginEconomicsTransaction,
+  commitEconomicsTransaction,
+  rollbackEconomicsTransaction,
+} from "./sync-state.ts";
 
-export const LATEST_SCHEMA_VERSION = 32;
+export const LATEST_SCHEMA_VERSION = 33;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -86,11 +91,14 @@ export const ARCHIVE_DIR_MODE = 0o700;
  */
 export function withImmediateTransaction<T>(db: Database, operation: () => T): T {
   db.exec("BEGIN IMMEDIATE;");
+  beginEconomicsTransaction(db);
   try {
     const result = operation();
     db.exec("COMMIT;");
+    commitEconomicsTransaction(db);
     return result;
   } catch (error) {
+    rollbackEconomicsTransaction(db);
     try {
       db.exec("ROLLBACK;");
     } catch {
@@ -906,10 +914,6 @@ function migrate(db: Database, current: number): void {
   prefix_hash TEXT NOT NULL,
   state_blob BLOB NOT NULL
 )`);
-      db.exec(`CREATE TABLE IF NOT EXISTS sync_state (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-) WITHOUT ROWID`);
       if (!hasColumn(db, "session", "reply_count")) {
         db.exec("ALTER TABLE session ADD COLUMN reply_count INTEGER");
       }
@@ -921,6 +925,15 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (32, datetime('now'))",
+      ).run();
+    }
+    if (current < 33) {
+      db.exec(`CREATE TABLE IF NOT EXISTS sync_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID`);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (33, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

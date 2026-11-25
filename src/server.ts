@@ -226,7 +226,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           ),
         onEvent: (event) => {
           if (economics != null) {
-            applyWatchEvent(event, economics);
+            applyWatchEvent(event, economics, syncCoordinator.isBusy);
           }
           onEvent?.(event);
         },

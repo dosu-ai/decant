@@ -97,6 +97,16 @@ import { parsePiSession, piSessionIdFromStem } from "./sources/pi.ts";
 import { parseVscodeCopilotSession } from "./sources/vscode-copilot.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
+  bumpEconomicsSeq,
+  bumpSyncStateGeneration,
+  markSyncStateCleared,
+  readSyncStateGeneration,
+  SYNC_STATE_DERIVED_CLEARED,
+  SYNC_STATE_DERIVED_PENDING,
+  SYNC_STATE_RECOMMENDATIONS_CLEARED,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "./sync-state.ts";
+import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
   refreshSessionCosts,
@@ -160,6 +170,7 @@ export interface SyncOptions {
   recommendationMinIntervalMs?: number;
   onSessionChanged?: (sessionId: number) => void;
   onTombstoned?: () => void;
+  onEconomicsBulkChanged?: () => void;
 }
 
 export interface SourceFile {
@@ -243,7 +254,7 @@ function isRegularFileNoSymlinks(rootDir: string, candidatePath: string): boolea
   if (rel === "") {
     return false;
   }
-  const parts = rel.split(/[\\/]+/);
+  const parts = sep === "/" ? rel.split("/") : rel.split(/[\\/]+/);
   let current = absRoot;
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
@@ -625,31 +636,18 @@ const PLANNER_STATISTICS_INTERVAL = 25;
 const initializedSyncConnections = new WeakSet<Database>();
 const lastRecommendationRefreshByDb = new WeakMap<Database, number>();
 const ingestsSinceOptimizeByDb = new WeakMap<Database, number>();
+const MAX_FILE_CONFLICT_ATTEMPTS = 4;
 
-const SYNC_STATE_DERIVED_PENDING = "derived_pending";
-const SYNC_STATE_RECOMMENDATIONS_PENDING = "recommendations_pending";
-
-function hasSyncStateFlag(db: Database, key: string): boolean {
-  return (
-    queryRow<{ present: number }>(
-      db,
-      "SELECT 1 AS present FROM sync_state WHERE key = ?1 LIMIT 1",
-      [key],
-    ) != null
-  );
-}
-
-function markSyncStateFlag(db: Database, key: string): void {
-  if (!hasSyncStateFlag(db, key)) {
-    runStatement(db, "INSERT OR IGNORE INTO sync_state(key, value) VALUES (?1, '1')", [key]);
-  }
-}
-
-function clearSyncStateFlag(db: Database, key: string): void {
-  if (hasSyncStateFlag(db, key)) {
-    runStatement(db, "DELETE FROM sync_state WHERE key = ?1", [key]);
-  }
-}
+type ExpectedIngestSourcePrior =
+  | { exists: false }
+  | {
+      exists: true;
+      size: number;
+      mtime: number;
+      ingestRevision: number;
+      sessionId: number | null;
+      hash: string | null;
+    };
 
 export function sync(
   db: Database,
@@ -665,13 +663,15 @@ export function sync(
   let repriced = 0;
   if (!backgroundRefresh) {
     seedModelPricing(db);
+    let reconciledBackfill = false;
     materializeMissingModelUsage(db, (id) => {
+      reconciledBackfill = true;
       reconcileBilledRequests(db, id, { refreshReconciledSession: true });
     });
-    repriced = refreshSessionCosts(db);
-    if (repriced > 0) {
-      markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    if (reconciledBackfill) {
+      options?.onEconomicsBulkChanged?.();
     }
+    repriced = refreshSessionCosts(db);
   }
   const candidatePaths = options?.candidatePaths;
   const targeted = candidatePaths != null && candidatePaths.length > 0;
@@ -755,8 +755,6 @@ export function sync(
             for (const sid of outcome.sessionIds) {
               options?.onSessionChanged?.(sid);
             }
-            markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
-            markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
           } else if (outcome.kind === "failed") {
             report.failed += 1;
           } else {
@@ -766,216 +764,277 @@ export function sync(
               if (file.opencode != null) {
                 touchedOpenCode = true;
               }
-              markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
               options?.onTombstoned?.();
             }
           }
           continue;
         }
-        let fd: number;
-        try {
-          fd = openSync(file.path, "r");
-        } catch (error) {
-          if ((error as { code?: string }).code !== "ENOENT") {
-            report.failed += 1;
-          }
-          continue;
-        }
-        let stats: Stats;
-        let content: string | null = null;
-        let rawBuffer: Buffer | null = null;
-        let sidecarMeta: Json | null = null;
-        let handledIncrementally = false;
-        try {
-          stats = fstatSync(fd);
-          const prior = queryRow<{
-            size: number;
-            mtime: number;
-            ingest_revision: number;
-            session_id: number | null;
-          }>(
-            db,
-            "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1",
-            [file.path],
-          );
-          if (
-            prior != null &&
-            prior.size === stats.size &&
-            prior.mtime === mtimeSecs(stats) &&
-            prior.ingest_revision === INGEST_PIPELINE_REVISION
-          ) {
-            report.skipped += 1;
-            continue;
-          }
-          if (isIncrementalTool(file.tool)) {
-            if (file.tool === "claude_code") {
-              sidecarMeta = readClaudeSidecarMeta(file.path);
+        for (let fileAttempt = 0; fileAttempt < MAX_FILE_CONFLICT_ATTEMPTS; fileAttempt += 1) {
+          let fd: number;
+          try {
+            fd = openSync(file.path, "r");
+          } catch (error) {
+            if ((error as { code?: string }).code !== "ENOENT") {
+              report.failed += 1;
             }
+            break;
+          }
+          let stats: Stats | null = null;
+          let priorSnapshot: ExpectedIngestSourcePrior = { exists: false };
+          let content: string | null = null;
+          let rawBuffer: Buffer | null = null;
+          let sidecarMeta: Json | null = null;
+          let fileAction: "parse" | "done" | "retry" = "parse";
+          try {
+            stats = fstatSync(fd);
+            const prior = queryRow<{
+              size: number;
+              mtime: number;
+              ingest_revision: number;
+              session_id: number | null;
+              hash: string | null;
+            }>(
+              db,
+              "SELECT size, mtime, ingest_revision, session_id, hash FROM ingest_source WHERE path = ?1",
+              [file.path],
+            );
+            priorSnapshot =
+              prior == null
+                ? { exists: false }
+                : {
+                    exists: true,
+                    size: prior.size,
+                    mtime: prior.mtime,
+                    ingestRevision: prior.ingest_revision,
+                    sessionId: prior.session_id,
+                    hash: prior.hash,
+                  };
             if (
               prior != null &&
-              prior.session_id != null &&
+              prior.size === stats.size &&
+              prior.mtime === mtimeSecs(stats) &&
               prior.ingest_revision === INGEST_PIPELINE_REVISION
             ) {
-              const inc = tryIncrementalIngest({
-                db,
-                fd,
-                stats,
-                sourcePath: file.path,
-                tool: file.tool,
-                archived: file.archived,
-                priorSize: prior.size,
-                priorSessionId: prior.session_id,
-                ingestRevision: prior.ingest_revision,
-                expectedRevision: INGEST_PIPELINE_REVISION,
-                sidecarMeta,
-                codexTitles: titles,
-              });
-              if (inc.kind === "oversized") {
+              report.skipped += 1;
+              fileAction = "done";
+            } else if (isIncrementalTool(file.tool)) {
+              if (file.tool === "claude_code") {
+                sidecarMeta = readClaudeSidecarMeta(file.path);
+              }
+              if (
+                prior != null &&
+                prior.session_id != null &&
+                prior.ingest_revision === INGEST_PIPELINE_REVISION
+              ) {
+                const inc = tryIncrementalIngest({
+                  db,
+                  fd,
+                  stats,
+                  sourcePath: file.path,
+                  tool: file.tool,
+                  archived: file.archived,
+                  priorSize: prior.size,
+                  priorSessionId: prior.session_id,
+                  ingestRevision: prior.ingest_revision,
+                  expectedRevision: INGEST_PIPELINE_REVISION,
+                  sidecarMeta,
+                  codexTitles: titles,
+                });
+                if (inc.kind === "conflict") {
+                  fileAction = "retry";
+                } else if (inc.kind === "oversized") {
+                  report.failed += 1;
+                  logger.warning("Source file could not be read.", {
+                    "event.name": "decant.ingest.source_read_failed",
+                    "file.path": file.path,
+                    "error.message": FILE_LIMIT_MESSAGE,
+                  });
+                  fileAction = "done";
+                } else if (inc.kind === "skipped") {
+                  report.skipped += 1;
+                  fileAction = "done";
+                } else if (inc.kind === "ingested") {
+                  report.ingested += 1;
+                  report.issues += inc.issues.length;
+                  for (const issue of inc.issues) {
+                    report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+                  }
+                  lineageMayHaveChanged ||= inc.lineageDirty;
+                  touchedProject ||= inc.projectCreated;
+                  options?.onSessionChanged?.(inc.sessionId);
+                  for (const peerId of inc.affectedSessionIds) {
+                    options?.onSessionChanged?.(peerId);
+                  }
+                  fileAction = "done";
+                }
+              }
+              if (fileAction === "parse") {
+                const limitedBuf = readSourceBuffer(fd, stats.size);
+                if (limitedBuf === null) {
+                  report.failed += 1;
+                  logger.warning("Source file could not be read.", {
+                    "event.name": "decant.ingest.source_read_failed",
+                    "file.path": file.path,
+                    "error.message": FILE_LIMIT_MESSAGE,
+                  });
+                  fileAction = "done";
+                } else {
+                  rawBuffer = limitedBuf;
+                }
+              }
+            } else {
+              const limited = readSourceFile(fd);
+              if (limited === null) {
                 report.failed += 1;
                 logger.warning("Source file could not be read.", {
                   "event.name": "decant.ingest.source_read_failed",
                   "file.path": file.path,
                   "error.message": FILE_LIMIT_MESSAGE,
                 });
-                continue;
-              }
-              if (inc.kind === "skipped") {
-                report.skipped += 1;
-                continue;
-              }
-              if (inc.kind === "ingested") {
-                report.ingested += 1;
-                report.issues += inc.issues.length;
-                for (const issue of inc.issues) {
-                  report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
-                }
-                lineageMayHaveChanged ||= inc.lineageDirty;
-                touchedProject ||= inc.projectCreated;
-                options?.onSessionChanged?.(inc.sessionId);
-                for (const peerId of inc.affectedSessionIds) {
-                  options?.onSessionChanged?.(peerId);
-                }
-                handledIncrementally = true;
-                continue;
+                fileAction = "done";
+              } else {
+                content = limited;
               }
             }
-            const limitedBuf = readSourceBuffer(fd, stats.size);
-            if (limitedBuf === null) {
-              report.failed += 1;
-              logger.warning("Source file could not be read.", {
-                "event.name": "decant.ingest.source_read_failed",
-                "file.path": file.path,
-                "error.message": FILE_LIMIT_MESSAGE,
-              });
-              continue;
+          } catch (error) {
+            report.failed += 1;
+            logger.warning("Source file could not be read.", {
+              "event.name": "decant.ingest.source_read_failed",
+              "file.path": file.path,
+              "error.type": (error as { code?: string }).code ?? "unknown",
+              "error.message": error instanceof Error ? error.message : String(error),
+            });
+            fileAction = "done";
+          } finally {
+            try {
+              closeSync(fd);
+            } catch {
+              // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+              // read that already succeeded, and a throw here would mask the real
+              // error on the failure path.
             }
-            rawBuffer = limitedBuf;
-          } else {
-            const limited = readSourceFile(fd);
-            if (limited === null) {
-              report.failed += 1;
-              logger.warning("Source file could not be read.", {
-                "event.name": "decant.ingest.source_read_failed",
-                "file.path": file.path,
-                "error.message": FILE_LIMIT_MESSAGE,
-              });
-              continue;
-            }
-            content = limited;
           }
-        } catch (error) {
-          report.failed += 1;
-          logger.warning("Source file could not be read.", {
-            "event.name": "decant.ingest.source_read_failed",
-            "file.path": file.path,
-            "error.type": (error as { code?: string }).code ?? "unknown",
-            "error.message": error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        } finally {
+          if (fileAction === "done" || stats == null) {
+            break;
+          }
+          if (fileAction === "retry") {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
+            continue;
+          }
+
+          let pathStillMatches = true;
           try {
-            closeSync(fd);
-          } catch {
-            // A close failure (EIO on network/FUSE mounts) cannot invalidate a
-            // read that already succeeded, and a throw here would mask the real
-            // error on the failure path.
+            const live = statSync(file.path);
+            if (live.dev !== stats.dev || live.ino !== stats.ino) {
+              pathStillMatches = false;
+            } else if (
+              fileAttempt + 1 < MAX_FILE_CONFLICT_ATTEMPTS &&
+              (live.size !== stats.size || mtimeSecs(live) !== mtimeSecs(stats))
+            ) {
+              pathStillMatches = false;
+            }
+          } catch (error) {
+            if ((error as { code?: string }).code === "ENOENT") {
+              break;
+            }
           }
-        }
-        if (handledIncrementally) {
-          continue;
-        }
+          if (!pathStillMatches) {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
+            continue;
+          }
 
-        const stem = fileStem(file.path);
-        let parsed: ParsedSession;
-        let checkpointFull: FullParseWithCheckpointResult | undefined;
-        let totalLineCount: number;
-        if (isIncrementalTool(file.tool) && rawBuffer != null) {
-          checkpointFull = parseFullForCheckpoint({
-            tool: file.tool,
-            sourcePath: file.path,
-            stem: file.tool === "pi" ? piSessionIdFromStem(stem) : stem,
-            rawBuffer,
-            archived: file.archived,
-            sidecarMeta,
-            codexTitles: titles,
-          });
-          parsed = checkpointFull.parsed;
-          totalLineCount = checkpointFull.scanned.totalLines;
-        } else {
-          const textContent = content ?? "";
-          if (file.tool === "claude_code") {
-            parsed = parseClaudeSession(stem, textContent, {
+          const stem = fileStem(file.path);
+          let parsed: ParsedSession;
+          let checkpointFull: FullParseWithCheckpointResult | undefined;
+          let totalLineCount: number;
+          if (isIncrementalTool(file.tool) && rawBuffer != null) {
+            checkpointFull = parseFullForCheckpoint({
+              tool: file.tool,
               sourcePath: file.path,
-              sidecarMeta: readClaudeSidecarMeta(file.path),
+              stem: file.tool === "pi" ? piSessionIdFromStem(stem) : stem,
+              rawBuffer,
+              archived: file.archived,
+              sidecarMeta,
+              codexTitles: titles,
             });
-          } else if (file.tool === "copilot") {
-            // Every Copilot log is named events.jsonl; its directory names the session.
-            parsed = parseCopilotSession(pathBasename(dirname(file.path)), textContent);
-          } else if (file.tool === "vscode_copilot") {
-            parsed = parseVscodeCopilotSession(stem, textContent, {
-              workspace: readVscodeWorkspace(file.path),
-            });
-          } else if (file.tool === "pi") {
-            parsed = parsePiSession(piSessionIdFromStem(stem), textContent);
-          } else if (file.tool === "gemini") {
-            const layout = geminiSessionLayout(file.path);
-            parsed = parseGeminiSession(stem, textContent, geminiProjectPath(layout), {
-              parentSessionId: layout?.parentSessionId ?? null,
-            });
+            parsed = checkpointFull.parsed;
+            totalLineCount = checkpointFull.scanned.totalLines;
           } else {
-            parsed = parseCodexSession(stem, textContent, titles);
+            const textContent = content ?? "";
+            if (file.tool === "claude_code") {
+              parsed = parseClaudeSession(stem, textContent, {
+                sourcePath: file.path,
+                sidecarMeta: readClaudeSidecarMeta(file.path),
+              });
+            } else if (file.tool === "copilot") {
+              // Every Copilot log is named events.jsonl; its directory names the session.
+              parsed = parseCopilotSession(pathBasename(dirname(file.path)), textContent);
+            } else if (file.tool === "vscode_copilot") {
+              parsed = parseVscodeCopilotSession(stem, textContent, {
+                workspace: readVscodeWorkspace(file.path),
+              });
+            } else if (file.tool === "pi") {
+              parsed = parsePiSession(piSessionIdFromStem(stem), textContent);
+            } else if (file.tool === "gemini") {
+              const layout = geminiSessionLayout(file.path);
+              parsed = parseGeminiSession(stem, textContent, geminiProjectPath(layout), {
+                parentSessionId: layout?.parentSessionId ?? null,
+              });
+            } else {
+              parsed = parseCodexSession(stem, textContent, titles);
+            }
+            parsed.session.isArchived = file.archived;
+            totalLineCount = lineCount(textContent);
           }
-          parsed.session.isArchived = file.archived;
-          totalLineCount = lineCount(textContent);
-        }
 
-        const prepared: Prepared = {
-          file,
-          lineCount: totalLineCount,
-          mtime: mtimeSecs(stats),
-          size: stats.size,
-        };
+          const prepared: Prepared = {
+            file,
+            lineCount: totalLineCount,
+            mtime: mtimeSecs(stats),
+            size: stats.size,
+          };
 
-        const outcome = writeIngestedFile(db, prepared, parsed, undefined, checkpointFull);
-        if (outcome.kind === "tombstoned") {
-          report.skipped += 1;
-          lineageMayHaveChanged = true;
-          options?.onTombstoned?.();
-        } else {
-          report.ingested += 1;
-          report.issues += parsed.issues.length;
-          for (const issue of parsed.issues) {
-            report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+          const outcome = writeIngestedFileIfPriorMatches(
+            db,
+            prepared,
+            parsed,
+            priorSnapshot,
+            checkpointFull,
+          );
+          if (outcome.kind === "conflict") {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
+            continue;
           }
-          lineageMayHaveChanged = true;
-          touchedProject = true;
-          if (file.tool === "copilot") {
-            touchedCopilot = true;
+          if (outcome.kind === "tombstoned") {
+            report.skipped += 1;
+            lineageMayHaveChanged = true;
+            options?.onTombstoned?.();
+          } else {
+            report.ingested += 1;
+            report.issues += parsed.issues.length;
+            for (const issue of parsed.issues) {
+              report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+            }
+            lineageMayHaveChanged = true;
+            touchedProject = true;
+            if (file.tool === "copilot") {
+              touchedCopilot = true;
+            }
+            options?.onSessionChanged?.(outcome.sessionId);
+            for (const peerId of outcome.affectedSessionIds) {
+              options?.onSessionChanged?.(peerId);
+            }
           }
-          options?.onSessionChanged?.(outcome.sessionId);
-          for (const peerId of outcome.affectedSessionIds) {
-            options?.onSessionChanged?.(peerId);
-          }
+          break;
         }
       } finally {
         inspected += 1;
@@ -1000,6 +1059,7 @@ export function sync(
       alreadyInitialized,
       deferDerivedRefresh: options?.deferDerivedRefresh === true,
       recommendationMinIntervalMs: options?.recommendationMinIntervalMs ?? 0,
+      onEconomicsBulkChanged: options?.onEconomicsBulkChanged,
     });
     if (!targeted && options?.deferDerivedRefresh !== true) {
       initializedSyncConnections.add(db);
@@ -1017,15 +1077,18 @@ interface DerivedRefreshFlags {
   alreadyInitialized: boolean;
   deferDerivedRefresh: boolean;
   recommendationMinIntervalMs: number;
+  onEconomicsBulkChanged?: () => void;
 }
 
 function refreshDerivedState(
   db: Database,
   report: SyncReport,
-  repriced: number,
+  _repriced: number,
   flags: DerivedRefreshFlags,
 ): void {
-  const derivedPending = hasSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
+  const derivedGenBefore = readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+  const derivedCleared = readSyncStateGeneration(db, SYNC_STATE_DERIVED_CLEARED);
+  const derivedPending = derivedGenBefore > derivedCleared;
   const background =
     flags.alreadyInitialized &&
     (flags.deferDerivedRefresh || flags.recommendationMinIntervalMs > 0);
@@ -1045,6 +1108,9 @@ function refreshDerivedState(
     resolveSubagentParents(db);
   }
   const materializedEconomics = fullPass ? materializeMissingSessionEconomics(db) : 0;
+  if (materializedEconomics > 0) {
+    flags.onEconomicsBulkChanged?.();
+  }
   if (
     flags.touchedCopilot ||
     !flags.alreadyInitialized ||
@@ -1064,10 +1130,7 @@ function refreshDerivedState(
     resolveProjectRemotes(db);
   }
   if (!flags.deferDerivedRefresh && derivedPending) {
-    clearSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
-  }
-  if (report.ingested > 0 || repriced > 0) {
-    markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    markSyncStateCleared(db, SYNC_STATE_DERIVED_CLEARED, derivedGenBefore);
   }
   if (!flags.deferDerivedRefresh) {
     const now = Date.now();
@@ -1076,7 +1139,9 @@ function refreshDerivedState(
       flags.recommendationMinIntervalMs <= 0 ||
       lastRefresh === 0 ||
       now - lastRefresh >= flags.recommendationMinIntervalMs;
-    const dirty = hasSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    const recGenBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    const recCleared = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED);
+    const dirty = recGenBefore > recCleared;
     const uncheckedRecommendationImpactLabels =
       !background &&
       db
@@ -1089,7 +1154,9 @@ function refreshDerivedState(
         .get() != null;
     if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
       regenerateRecommendations(db);
-      clearSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      if (recGenBefore > 0) {
+        markSyncStateCleared(db, SYNC_STATE_RECOMMENDATIONS_CLEARED, recGenBefore);
+      }
       lastRecommendationRefreshByDb.set(db, now);
     } else if (!background && lastRefresh === 0) {
       lastRecommendationRefreshByDb.set(db, now);
@@ -1303,7 +1370,11 @@ function syncOpenCodeSession(
   const outcome = writeIngestedFile(db, prepared, parsed, opencode);
   return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues, sessionIds: [outcome.sessionId] };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function knownSourceDatabases(db: Database, tool: "opencode" | "hermes"): Set<string> {
@@ -1421,7 +1492,11 @@ function syncHermesSession(
   const outcome = writeIngestedFile(db, prepared, parsed, hermes);
   return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues, sessionIds: [outcome.sessionId] };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function unreadableArchivedCopy(
@@ -1506,7 +1581,11 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
   const outcome = writeIngestedFile(db, prepared, parsed);
   return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues, sessionIds: [outcome.sessionId] };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
@@ -1585,7 +1664,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
           [rootId],
         )?.source_path;
   if (superseded != null && superseded !== file.path) {
-    releaseRemovedAtifSubagents(db, superseded, new Set());
+    releaseRemovedAtifSubagents(db, superseded, new Set(), subSessionIds);
   }
   for (const { key, parsed } of document.sessions) {
     if (key == null) {
@@ -1604,10 +1683,10 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     const subOutcome = writeIngestedFile(db, prepared, parsed);
     if (subOutcome.kind === "ingested") {
       issues.push(...parsed.issues);
-      subSessionIds.push(subOutcome.sessionId);
+      subSessionIds.push(subOutcome.sessionId, ...subOutcome.affectedSessionIds);
     }
   }
-  releaseRemovedAtifSubagents(db, file.path, subagentPaths);
+  releaseRemovedAtifSubagents(db, file.path, subagentPaths, subSessionIds);
   if (root == null) {
     return { kind: "failed" };
   }
@@ -1625,11 +1704,16 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   return {
     kind: "ingested",
     issues: [...root.issues, ...issues],
-    sessionIds: [rootOutcome.sessionId, ...subSessionIds],
+    sessionIds: [rootOutcome.sessionId, ...rootOutcome.affectedSessionIds, ...subSessionIds],
   };
 }
 
-function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<string>): void {
+function releaseRemovedAtifSubagents(
+  db: Database,
+  path: string,
+  current: Set<string>,
+  affectedOut?: number[],
+): void {
   const prefix = `${path}#`;
   const escaped = prefix.replace(/[\\%_]/g, (char) => `\\${char}`);
   // LIKE ignores ASCII case, so the prefix is checked again exactly.
@@ -1644,11 +1728,13 @@ function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<st
   withImmediateTransaction(db, () => {
     for (const row of stale) {
       if (row.session_id != null) {
-        deleteSessionRow(db, row.session_id);
+        deleteSessionRow(db, row.session_id, affectedOut);
       }
       runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
       runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
     }
+    bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+    bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
   });
 }
 
@@ -2331,6 +2417,53 @@ function inferAtifSubagent(
   };
 }
 
+function ingestSourceMatchesPrior(
+  db: Database,
+  path: string,
+  expected: ExpectedIngestSourcePrior,
+): boolean {
+  const current = queryRow<{
+    size: number;
+    mtime: number;
+    ingest_revision: number;
+    session_id: number | null;
+    hash: string | null;
+  }>(
+    db,
+    "SELECT size, mtime, ingest_revision, session_id, hash FROM ingest_source WHERE path = ?1",
+    [path],
+  );
+  if (!expected.exists) {
+    return current == null;
+  }
+  return (
+    current != null &&
+    current.size === expected.size &&
+    current.mtime === expected.mtime &&
+    current.ingest_revision === expected.ingestRevision &&
+    current.session_id === expected.sessionId &&
+    current.hash === expected.hash
+  );
+}
+
+function writeIngestedFileIfPriorMatches(
+  db: Database,
+  prepared: Prepared,
+  parsed: ParsedSession,
+  expectedPrior: ExpectedIngestSourcePrior,
+  checkpointFull?: FullParseWithCheckpointResult,
+):
+  | { kind: "ingested"; sessionId: number; affectedSessionIds: number[] }
+  | { kind: "tombstoned" }
+  | { kind: "conflict" } {
+  return withImmediateTransaction(db, () => {
+    if (!ingestSourceMatchesPrior(db, prepared.file.path, expectedPrior)) {
+      return { kind: "conflict" };
+    }
+    return writeIngestedFileInTx(db, prepared, parsed, undefined, checkpointFull);
+  });
+}
+
 function writeIngestedFile(
   db: Database,
   prepared: Prepared,
@@ -2338,73 +2471,77 @@ function writeIngestedFile(
   sources?: SourceDatabaseRun,
   checkpointFull?: FullParseWithCheckpointResult,
 ): { kind: "ingested"; sessionId: number; affectedSessionIds: number[] } | { kind: "tombstoned" } {
-  return withImmediateTransaction(db, () => {
-    const affectedSessionIds: number[] = [];
-    releaseMisfiledFork(db, prepared.file.path, parsed, affectedSessionIds);
-    releaseReplacedCursorIdentity(db, prepared.file.path, parsed, affectedSessionIds);
-    const ref = prepared.file.opencode ?? prepared.file.hermes;
-    if (ref != null && sources != null) {
-      const databases = sources.sourceDatabases();
-      releaseSupersededSources(
-        db,
-        prepared.file.tool,
-        prepared.file.path,
-        ref.sessionId,
-        databases,
-      );
-      databases.add(ref.dbPath);
-    }
-    runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
-      prepared.file.path,
-    ]);
-    const artifactOut: { value?: FullWriteArtifact } | undefined =
-      checkpointFull != null ? {} : undefined;
-    const sessionId = writeSession(
-      db,
-      parsed,
-      prepared.file.path,
-      prepared.mtime,
-      prepared.size,
-      prepared.hash ?? null,
-      artifactOut,
-      true,
-      affectedSessionIds,
-    );
-    if (sessionId == null) {
-      runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
-      runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
-      writeIngestSource(db, prepared, null, "skipped_deleted");
-      markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
-      return { kind: "tombstoned" };
-    }
+  return withImmediateTransaction(db, () =>
+    writeIngestedFileInTx(db, prepared, parsed, sources, checkpointFull),
+  );
+}
+
+function writeIngestedFileInTx(
+  db: Database,
+  prepared: Prepared,
+  parsed: ParsedSession,
+  sources?: SourceDatabaseRun,
+  checkpointFull?: FullParseWithCheckpointResult,
+): { kind: "ingested"; sessionId: number; affectedSessionIds: number[] } | { kind: "tombstoned" } {
+  const affectedSessionIds: number[] = [];
+  releaseMisfiledFork(db, prepared.file.path, parsed, affectedSessionIds);
+  releaseReplacedCursorIdentity(db, prepared.file.path, parsed, affectedSessionIds);
+  const ref = prepared.file.opencode ?? prepared.file.hermes;
+  if (ref != null && sources != null) {
+    const databases = sources.sourceDatabases();
+    releaseSupersededSources(db, prepared.file.tool, prepared.file.path, ref.sessionId, databases);
+    databases.add(ref.dbPath);
+  }
+  runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
+    prepared.file.path,
+  ]);
+  const artifactOut: { value?: FullWriteArtifact } | undefined =
+    checkpointFull != null ? {} : undefined;
+  const sessionId = writeSession(
+    db,
+    parsed,
+    prepared.file.path,
+    prepared.mtime,
+    prepared.size,
+    prepared.hash ?? null,
+    artifactOut,
+    true,
+    affectedSessionIds,
+  );
+  if (sessionId == null) {
     runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
-    const insertIssue = db.prepare(
-      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+    runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
+    writeIngestSource(db, prepared, null, "skipped_deleted");
+    bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+    return { kind: "tombstoned" };
+  }
+  runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
+  const insertIssue = db.prepare(
+    `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+  );
+  try {
+    for (const issue of parsed.issues) {
+      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
+    }
+  } finally {
+    insertIssue.finalize();
+  }
+  const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
+  writeIngestSource(db, prepared, sessionId, status);
+  if (checkpointFull != null && artifactOut?.value != null) {
+    buildAndPersistCheckpointAfterFullWrite(
+      db,
+      prepared.file.path,
+      checkpointFull,
+      artifactOut.value,
     );
-    try {
-      for (const issue of parsed.issues) {
-        insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
-      }
-    } finally {
-      insertIssue.finalize();
-    }
-    const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
-    writeIngestSource(db, prepared, sessionId, status);
-    if (checkpointFull != null && artifactOut?.value != null) {
-      buildAndPersistCheckpointAfterFullWrite(
-        db,
-        prepared.file.path,
-        checkpointFull,
-        artifactOut.value,
-      );
-    } else {
-      runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
-    }
-    markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
-    markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
-    return { kind: "ingested", sessionId, affectedSessionIds };
-  });
+  } else {
+    runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
+  }
+  bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+  bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+  return { kind: "ingested", sessionId, affectedSessionIds };
 }
 
 function releaseMisfiledFork(
@@ -2505,8 +2642,8 @@ function releaseSupersededSources(
 
 function deleteSessionRow(db: Database, id: number, affectedOut?: number[]): void {
   const peers = releaseBilledRequests(db, [id]);
-  if (affectedOut != null && peers.length > 0) {
-    affectedOut.push(...peers);
+  if (affectedOut != null) {
+    affectedOut.push(id, ...peers);
   }
   deleteSessionRowKeepingBilledClaims(db, id);
 }
@@ -2516,6 +2653,7 @@ function deleteSessionRowKeepingBilledClaims(db: Database, id: number): void {
     id,
   ]);
   runStatement(db, "DELETE FROM session WHERE id = ?1", [id]);
+  bumpEconomicsSeq(db);
 }
 
 function writeIngestSource(
@@ -2624,6 +2762,9 @@ function writeSession(
       runStatement(db, "DELETE FROM billed_request WHERE session_id = ?1", [existing.id]);
       runStatement(db, "DELETE FROM unbilled_request WHERE session_id = ?1", [existing.id]);
     } else {
+      if (affectedOut != null) {
+        affectedOut.push(existing.id);
+      }
       deleteSessionRowKeepingBilledClaims(db, existing.id);
     }
   }

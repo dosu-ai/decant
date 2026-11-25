@@ -1,4 +1,4 @@
--- decant:schema_version=32
+-- decant:schema_version=33
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL

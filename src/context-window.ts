@@ -204,6 +204,35 @@ interface TimelineRow {
   has_text: number;
 }
 
+export const CONTEXT_WINDOW_USER_TEXT_PREDICATE_SQL = `EXISTS(
+  SELECT 1 FROM block b INDEXED BY idx_block_message
+  WHERE b.message_id = m.id AND b.type = 'text'
+    AND TRIM(COALESCE(b.text, '')) != ''
+    AND b.text NOT LIKE '[Request interrupted by user%'
+    AND b.text NOT LIKE '%<command-name>%'
+)`;
+
+const ASCII_SPACE_TRIM = /^ +| +$/g;
+const INTERRUPTION_PREFIX_LOWER = "[request interrupted by user";
+const COMMAND_MARKER_LOWER = "<command-name>";
+
+function asciiLower(value: string): string {
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    out += code >= 0x41 && code <= 0x5a ? String.fromCharCode(code + 32) : value[i];
+  }
+  return out;
+}
+
+export function isContextWindowRealUserText(text: string | null | undefined): boolean {
+  if (text == null || text.replace(ASCII_SPACE_TRIM, "") === "") {
+    return false;
+  }
+  const lower = asciiLower(text);
+  return !lower.startsWith(INTERRUPTION_PREFIX_LOWER) && !lower.includes(COMMAND_MARKER_LOWER);
+}
+
 export function contextWindowForSession(
   db: Database,
   sessionId: number,
@@ -240,13 +269,7 @@ export function contextWindowForSession(
     `SELECT m.seq, m.timestamp, m.role,
               m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
               ${MESSAGE_RAW_META_SQL} AS raw_meta,
-              EXISTS(
-                SELECT 1 FROM block b INDEXED BY idx_block_message
-                WHERE b.message_id = m.id AND b.type = 'text'
-                  AND TRIM(COALESCE(b.text, '')) != ''
-                  AND b.text NOT LIKE '[Request interrupted by user%'
-                  AND b.text NOT LIKE '%<command-name>%'
-              ) AS has_text
+              ${CONTEXT_WINDOW_USER_TEXT_PREDICATE_SQL} AS has_text
        FROM message m
        WHERE m.session_id = ?1 AND m.role IN ('assistant', 'system', 'user')
        ORDER BY m.seq`,

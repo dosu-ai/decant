@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
@@ -6,6 +7,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
-import { closeDb, openDb } from "../src/db.ts";
+import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import { tryIncrementalIngest } from "../src/incremental-ingest.ts";
 import {
@@ -26,9 +28,24 @@ import {
 } from "../src/ingest.ts";
 import { getSession, search } from "../src/query.ts";
 import { ReadConnection } from "../src/read-connection.ts";
+import { regenerate as regenerateRecommendations } from "../src/recommendations.ts";
 import { ReaderStatistics } from "../src/server/reader-statistics.ts";
-import { createSyncCoordinator } from "../src/server/sync.ts";
+import {
+  applyWatchEvent,
+  createSyncCoordinator,
+  syncNow,
+  syncStatus,
+  workerSyncRunner,
+} from "../src/server/sync.ts";
+import {
+  committedEconomicsWrites,
+  markSyncStateCleared,
+  readSyncStateGeneration,
+  SYNC_STATE_RECOMMENDATIONS_CLEARED,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "../src/sync-state.ts";
 import { tokenEconomics } from "../src/token-economics.ts";
+import { SyncStatusStore } from "../src/watch.ts";
 import { assertDatabaseIntegrity, captureCanonicalSnapshot } from "./helpers/ingest-oracle.ts";
 
 const rootDir = mkdtempSync(join(tmpdir(), "decant-incremental-unit-"));
@@ -1165,13 +1182,13 @@ describe("Sol review regression coverage (F1-F13)", () => {
             toolCallId: "pi-call-1",
             toolName: "execute",
             content: [{ type: "text", text: "done" }],
-            details: {
+            nestedCalls: {
               calls: [
                 {
                   id: "inner-1",
                   name: "Read",
                   arguments: { path: "src/index.ts" },
-                  isError: false,
+                  status: "ok",
                 },
               ],
             },
@@ -1180,11 +1197,761 @@ describe("Sol review regression coverage (F1-F13)", () => {
       );
       expect(sync(db, config).ingested).toBe(1);
       expect(sync(freshDb, config).ingested).toBe(1);
+      expect(
+        (
+          db
+            .query("SELECT COUNT(*) AS n FROM tool_call WHERE tool_use_id = 'pi-call-1#inner-1'")
+            .get() as { n: number }
+        ).n,
+      ).toBe(1);
       assertDatabaseIntegrity(db);
       expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
     } finally {
       closeDb(db);
       closeDb(freshDb);
+    }
+  });
+
+  test("F13 (round 2): evicted Pi anchor lookup orders by message seq and block ordinal after in-place rewrite", () => {
+    const { dir, dbPath, config } = freshCase();
+    const piFile = join(
+      config.piDir ?? "",
+      "--work--",
+      "2026-11-01T10-00-00-000Z_pi-f13-order.jsonl",
+    );
+    const header = `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "pi-f13-order",
+      timestamp: "2026-11-01T10:00:00.000Z",
+      cwd: "/home/dev/work/app",
+    })}\n`;
+    const makeCall = (id: string, callId: string, sec: number, arg: string) =>
+      `${JSON.stringify({
+        type: "message",
+        id,
+        timestamp: `2026-11-01T10:${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}.000Z`,
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          stopReason: "toolUse",
+          usage: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0 },
+          content: [{ type: "toolCall", id: callId, name: "execute", arguments: { code: arg } }],
+        },
+      })}\n`;
+    let tail = makeCall("m-dup-1", "dup-call", 2, "second");
+    for (let i = 1; i <= 70; i += 1) {
+      tail += makeCall(`m-evict-${i}`, `evict-${i}`, 10 + i, `run(${i})`);
+    }
+    // Initial write: seq 0 and seq 1 both have toolCall id "dup-call".
+    writeFileSync(piFile, header + makeCall("m-dup-0", "dup-call", 1, "first-v1") + tail);
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Rewrite seq 0 in place with a second block so seq 0's tool_use block gets a higher block.id than seq 1.
+      const rewrittenSeq0 = `${JSON.stringify({
+        type: "message",
+        id: "m-dup-0",
+        timestamp: "2026-11-01T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          stopReason: "toolUse",
+          usage: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0 },
+          content: [
+            { type: "text", text: "Extra prefix text" },
+            { type: "toolCall", id: "dup-call", name: "execute", arguments: { code: "first-v2" } },
+          ],
+        },
+      })}\n`;
+      writeFileSync(piFile, header + rewrittenSeq0 + tail);
+      const bumped = new Date(Date.now() + 5_000);
+      utimesSync(piFile, bumped, bumped);
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Verify seq 0 block.id is indeed higher than seq 1 block.id.
+      const orderRows = db
+        .query(
+          `SELECT m.seq, b.id AS block_id
+             FROM block b JOIN message m ON m.id = b.message_id
+            WHERE b.tool_use_id = 'dup-call' AND b.type = 'tool_use'
+            ORDER BY m.seq`,
+        )
+        .all() as { seq: number; block_id: number }[];
+      expect(orderRows).toHaveLength(2);
+      expect(orderRows[0]?.block_id).toBeGreaterThan(orderRows[1]?.block_id ?? 0);
+
+      // Append a nested call for the evicted "dup-call": must attach to seq 1 (not seq 0).
+      appendFileSync(
+        piFile,
+        `${JSON.stringify({
+          type: "message",
+          id: "m-res-dup",
+          timestamp: "2026-11-01T10:05:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "dup-call",
+            toolName: "execute",
+            content: [{ type: "text", text: "done" }],
+            nestedCalls: {
+              calls: [
+                {
+                  id: "inner-dup",
+                  name: "Read",
+                  arguments: { path: "src/app.ts" },
+                  status: "ok",
+                },
+              ],
+            },
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      const attached = db
+        .query(
+          `SELECT m.seq
+             FROM tool_call tc JOIN message m ON m.id = tc.message_id
+            WHERE tc.tool_use_id = 'dup-call#inner-dup'`,
+        )
+        .get() as { seq: number } | null;
+      expect(attached?.seq).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F1 (round 2): atomic file replacement conflict forces reopen instead of writing stale fd", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f1-atomic.jsonl");
+    const tmpFile = join(config.claudeDir, "proj", "c-f1-atomic.tmp");
+    writeFileSync(file, claudeTurn("c-f1-atomic", 1, "req-1"));
+
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config).ingested).toBe(1);
+      const prior = dbA
+        .query("SELECT size, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; session_id: number };
+
+      // Append turn 2 to inode 1 and hold an open fd on inode 1.
+      appendFileSync(file, claudeTurn("c-f1-atomic", 2, "req-2"));
+      const staleFd = openSync(file, "r");
+      const staleStats = statSync(file);
+
+      try {
+        // Atomically replace path with inode 2 containing 3 turns, and commit via connection B.
+        writeFileSync(
+          tmpFile,
+          claudeTurn("c-f1-atomic", 1, "req-1") +
+            claudeTurn("c-f1-atomic", 2, "req-2") +
+            claudeTurn("c-f1-atomic", 3, "req-3"),
+        );
+        renameSync(tmpFile, file);
+        expect(sync(dbB, config).ingested).toBe(1);
+
+        // Stale writer attempting incremental ingest with old fd must get "conflict", not "fallback".
+        const res = tryIncrementalIngest({
+          db: dbA,
+          fd: staleFd,
+          stats: staleStats,
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(res.kind).toBe("conflict");
+      } finally {
+        closeSync(staleFd);
+      }
+
+      // Subsequent sync on dbA sees the 3-turn file and preserves all 6 messages.
+      expect(sync(dbA, config).skipped).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      expect(
+        (dbA.query("SELECT message_count FROM session LIMIT 1").get() as { message_count: number })
+          .message_count,
+      ).toBe(6);
+      assertDatabaseIntegrity(dbA);
+      expect(captureCanonicalSnapshot(dbA)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F3 (round 2): targeted watch accepts valid POSIX filenames containing backslashes", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dbPath, config } = freshCase();
+    const bsDir = join(config.claudeDir, "proj\\with\\backslash");
+    mkdirSync(bsDir, { recursive: true });
+    const file = join(bsDir, "c-bs.jsonl");
+    writeFileSync(file, claudeTurn("c-bs", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    try {
+      const report = sync(db, config, undefined, undefined, {
+        candidatePaths: [file],
+        deferDerivedRefresh: true,
+      });
+      expect(report.scanned).toBe(1);
+      expect(report.ingested).toBe(1);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("F4 (round 2): EconomicsCache detects external writer committing after priorDataVersion capture", async () => {
+    const { dbPath, config } = freshCase();
+    const fileA = join(config.claudeDir, "proj", "c-f4a.jsonl");
+    const fileB = join(config.claudeDir, "proj", "c-f4b.jsonl");
+    writeFileSync(fileA, claudeTurn("c-f4a", 1, "req-a1", 100));
+    writeFileSync(fileB, claudeTurn("c-f4b", 1, "req-b1", 100));
+
+    const readerDb = openDb(dbPath);
+    const workerDb = openDb(dbPath);
+    const externalDb = openDb(dbPath);
+    try {
+      expect(sync(workerDb, config).ingested).toBe(2);
+      const cache = new EconomicsCache({ dbPath, db: readerDb });
+      try {
+        const initial = await cache.get();
+        expect(initial).toEqual(tokenEconomics(readerDb));
+
+        // Capture priorDataVersion before both worker sync and concurrent external write.
+        const versionBefore = cache.dataVersion();
+        const writesBefore = committedEconomicsWrites(workerDb);
+        const changed: number[] = [];
+
+        appendFileSync(fileA, claudeTurn("c-f4a", 2, "req-a2", 80));
+        expect(
+          sync(workerDb, config, undefined, undefined, {
+            candidatePaths: [fileA],
+            deferDerivedRefresh: true,
+            onSessionChanged: (id) => changed.push(id),
+          }).ingested,
+        ).toBe(1);
+        const ownWrites = committedEconomicsWrites(workerDb) - writesBefore;
+
+        // Separate external connection commits fileB AFTER versionBefore was captured.
+        appendFileSync(fileB, claudeTurn("c-f4b", 2, "req-b2", 120));
+        expect(
+          sync(externalDb, config, undefined, undefined, {
+            candidatePaths: [fileB],
+            deferDerivedRefresh: true,
+          }).ingested,
+        ).toBe(1);
+
+        // Partial refresh must detect the external economics_seq bump and rebuild to 400.
+        cache.refreshSessions(changed, versionBefore, ownWrites);
+        await cache.settled();
+        const after = await cache.get();
+        expect(after).toEqual(tokenEconomics(readerDb));
+        expect(after.totals.generation_tokens).toBe(400);
+      } finally {
+        cache.dispose();
+        await cache.settled();
+      }
+    } finally {
+      closeDb(readerDb);
+      closeDb(workerDb);
+      closeDb(externalDb);
+    }
+  });
+
+  test("F6 (round 2): overlapping writer during recommendation refresh preserves pending generation", () => {
+    const { dir, dbPath, config } = freshCase();
+    const fileA = join(config.claudeDir, "proj", "c-f6a.jsonl");
+    const fileB = join(config.claudeDir, "proj", "c-f6b.jsonl");
+    writeFileSync(fileA, claudeTurn("c-f6a", 1, "req-1"));
+
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const dbC = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config, undefined, undefined, { deferDerivedRefresh: true }).ingested).toBe(
+        1,
+      );
+      const genBefore = readSyncStateGeneration(dbA, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      expect(genBefore).toBeGreaterThan(0);
+
+      // Writer 1 runs recommendations on state before Writer 2 commits.
+      regenerateRecommendations(dbA);
+
+      // Writer 2 commits a file with malformed JSONL lines while Writer 1's refresh is finishing.
+      writeFileSync(
+        fileB,
+        `${claudeTurn("c-f6b", 1, "req-2")}{not valid json\n{also broken\n{still broken\n`,
+      );
+      expect(
+        sync(dbB, config, undefined, undefined, {
+          candidatePaths: [fileB],
+          deferDerivedRefresh: true,
+        }).ingested,
+      ).toBe(1);
+
+      // Writer 1 clears only up to the generation it read before refreshing.
+      markSyncStateCleared(dbA, SYNC_STATE_RECOMMENDATIONS_CLEARED, genBefore);
+
+      // A subsequent zero-ingest sync must still see Writer 2's higher generation and refresh recommendations.
+      const zeroSync = sync(dbC, config);
+      expect(zeroSync.ingested).toBe(0);
+
+      expect(sync(freshDb, config).ingested).toBe(2);
+      const actual = dbC.query("SELECT key, detail, score FROM recommendation ORDER BY key").all();
+      const expected = freshDb
+        .query("SELECT key, detail, score FROM recommendation ORDER BY key")
+        .all();
+      expect(actual).toEqual(expected);
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(dbC);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F8 (round 2): uppercase <COMMAND-NAME> matches case-insensitive SQLite LIKE after Codex restamp", () => {
+    const { dir, dbPath, config } = freshCase();
+    const codexFile = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "11",
+      "01",
+      "rollout-2026-11-01T10-00-00-cx-f8-case.jsonl",
+    );
+    writeFileSync(
+      codexFile,
+      `${JSON.stringify({
+        timestamp: "2026-11-01T10:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "cx-f8-case", cwd: "/home/dev/work/app", cli_version: "0.2.0" },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:01.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.4" },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "<COMMAND-NAME>/clear</COMMAND-NAME>" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Real prompt 1" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Reply 1" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:05.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1000,
+              output_tokens: 50,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+            last_token_usage: {
+              input_tokens: 1000,
+              output_tokens: 50,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+          },
+        },
+      })}\n`,
+    );
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Restamp forces rebuildContextWindowFoldFromDb.
+      appendFileSync(
+        codexFile,
+        `${JSON.stringify({
+          timestamp: "2026-11-01T10:00:06.000Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 500,
+                output_tokens: 50,
+                cached_input_tokens: 0,
+                reasoning_output_tokens: 0,
+              },
+              last_token_usage: {
+                input_tokens: 500,
+                output_tokens: 50,
+                cached_input_tokens: 0,
+                reasoning_output_tokens: 0,
+              },
+            },
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Follow-up user turn increments from the rebuilt fold.
+      appendFileSync(
+        codexFile,
+        `${JSON.stringify({
+          timestamp: "2026-11-01T10:00:07.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Real prompt 2" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+
+      const turnCount = (
+        db.query("SELECT turn_count FROM session LIMIT 1").get() as { turn_count: number }
+      ).turn_count;
+      expect(turnCount).toBe(2);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F9 (round 2): single append replacing Claude requestId A -> A -> B releases stale claim A", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f9-aab.jsonl");
+    writeFileSync(file, claudeTurn("c-f9-aab", 1, "req-1", 40));
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Replace req-1 twice in the same append: first keeping msg_req-1 (A), then switching to msg_req-1_B (B).
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "a-1-r1",
+          requestId: "req-1",
+          sessionId: "c-f9-aab",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:05.000Z",
+          message: {
+            id: "msg_req-1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: null,
+            usage: { input_tokens: 101, output_tokens: 80 },
+            content: [{ type: "text", text: "Intermediate A" }],
+          },
+        })}\n${JSON.stringify({
+          type: "assistant",
+          uuid: "a-1-r2",
+          requestId: "req-1",
+          sessionId: "c-f9-aab",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:06.000Z",
+          message: {
+            id: "msg_req-1_B",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: "end_turn",
+            usage: { input_tokens: 101, output_tokens: 120 },
+            content: [{ type: "text", text: "Final B" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+
+      const claims = db
+        .query("SELECT request_id FROM billed_request ORDER BY request_id")
+        .all() as { request_id: string }[];
+      expect(claims).toEqual([{ request_id: "msg_req-1_B" }]);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F15: existing schema v32 archive without sync_state upgrades cleanly to v33", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f15.jsonl");
+    writeFileSync(file, claudeTurn("c-f15", 1, "req-1"));
+
+    // Initialize and downgrade schema to the v32 shape (before sync_state existed).
+    const initial = openDb(dbPath);
+    closeDb(initial);
+    const raw = new Database(dbPath);
+    try {
+      raw.exec("DROP TABLE sync_state;");
+      raw.exec("DELETE FROM schema_migrations WHERE version = 33;");
+    } finally {
+      raw.close();
+    }
+
+    const upgraded = openDb(dbPath);
+    try {
+      const latest = upgraded.query("SELECT MAX(version) AS v FROM schema_migrations").get() as {
+        v: number;
+      };
+      expect(latest.v).toBe(LATEST_SCHEMA_VERSION);
+      expect(
+        upgraded
+          .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'")
+          .get(),
+      ).not.toBeNull();
+      expect(sync(upgraded, config).ingested).toBe(1);
+      assertDatabaseIntegrity(upgraded);
+    } finally {
+      closeDb(upgraded);
+    }
+  });
+
+  test("F16: finishing watch run keeps syncStatus.in_progress true while queued manual run is active", async () => {
+    const { dbPath, config } = freshCase();
+    const fullConfig = { ...config, dbPath } as Config;
+    const db = openDb(dbPath);
+    const economics = new EconomicsCache({ dbPath, db });
+    const watchGate = Promise.withResolvers<void>();
+    const manualGate = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<void>();
+    let runCount = 0;
+    const coordinator = createSyncCoordinator(async () => {
+      runCount += 1;
+      if (runCount === 1) {
+        await watchGate.promise;
+      } else {
+        manualStarted.resolve();
+        await manualGate.promise;
+      }
+      return {
+        scanned: 1,
+        ingested: 0,
+        skipped: 1,
+        issues: 0,
+        issuesByCode: {},
+        failed: 0,
+        cancelled: false,
+      } satisfies SyncReport;
+    });
+
+    try {
+      const store = new SyncStatusStore();
+      const watchPromise = workerSyncRunner(
+        fullConfig,
+        store,
+        { aborted: false },
+        () => {},
+        coordinator.runWithOwnership,
+        { candidatePaths: ["/only-one.jsonl"], deferDerivedRefresh: true },
+      );
+
+      // Manual sync queues behind the narrow watch run.
+      const manualPromise = syncNow(
+        fullConfig,
+        economics,
+        coordinator.run,
+        coordinator.runWithOwnership,
+      );
+
+      // Watch finishes; coordinator immediately starts queued manual run.
+      watchGate.resolve();
+      const watchRes = await watchPromise;
+      await manualStarted.promise;
+      expect("report" in watchRes).toBe(true);
+      if ("report" in watchRes) {
+        applyWatchEvent(
+          { type: "sync", reason: "watch", report: watchRes.report, status: store.snapshot() },
+          economics,
+          coordinator.isBusy,
+        );
+      }
+
+      // Manual run is still blocked on manualGate, so status must remain in_progress.
+      expect(coordinator.isBusy()).toBe(true);
+      expect(syncStatus.in_progress).toBe(true);
+
+      manualGate.resolve();
+      await manualPromise;
+      expect(coordinator.isBusy()).toBe(false);
+      expect(syncStatus.in_progress).toBe(false);
+    } finally {
+      economics.dispose();
+      await economics.settled();
+      await coordinator.close();
+      closeDb(db);
+    }
+  });
+
+  test("F17: replacing a misfiled Codex session reports the deleted ID so EconomicsCache drops its stale vector", async () => {
+    const { dbPath, config } = freshCase();
+    const codexFile = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "11",
+      "01",
+      "rollout-2026-11-01T10-00-00-cx-fork-f17.jsonl",
+    );
+    const makeCodex = (metaPayload: Record<string, unknown>, outputTokens: number) =>
+      `${JSON.stringify({
+        timestamp: "2026-11-01T10:00:00.000Z",
+        type: "session_meta",
+        payload: metaPayload,
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:01.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.4" },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Answer" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              output_tokens: outputTokens,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+            last_token_usage: {
+              input_tokens: 100,
+              output_tokens: outputTokens,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+          },
+        },
+      })}\n`;
+
+    const otherCodexFile = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "11",
+      "01",
+      "rollout-2026-11-01T10-00-01-cx-other-f17.jsonl",
+    );
+    writeFileSync(
+      codexFile,
+      makeCodex({ id: "cx-parent-f17", cwd: "/home/dev/work/app", cli_version: "0.2.0" }, 40),
+    );
+    writeFileSync(
+      otherCodexFile,
+      makeCodex({ id: "cx-other-f17", cwd: "/home/dev/work/app", cli_version: "0.2.0" }, 10),
+    );
+
+    const readerDb = openDb(dbPath);
+    const workerDb = openDb(dbPath);
+    try {
+      expect(sync(workerDb, config).ingested).toBe(2);
+      const oldSessionId = (
+        readerDb
+          .query("SELECT id FROM session WHERE source_session_id = 'cx-parent-f17'")
+          .get() as { id: number }
+      ).id;
+      const cache = new EconomicsCache({ dbPath, db: readerDb });
+      try {
+        const before = await cache.get();
+        expect(before).toEqual(tokenEconomics(readerDb));
+        expect(before.totals.generation_tokens).toBe(50);
+
+        // Replace with forked child session whose parent_thread_id matches the misfiled parent.
+        writeFileSync(
+          codexFile,
+          makeCodex(
+            {
+              id: "cx-child-f17",
+              parent_thread_id: "cx-parent-f17",
+              cwd: "/home/dev/work/app",
+              cli_version: "0.2.0",
+            },
+            200,
+          ),
+        );
+        const bumped = new Date(Date.now() + 5_000);
+        utimesSync(codexFile, bumped, bumped);
+
+        const versionBefore = cache.dataVersion();
+        const writesBefore = committedEconomicsWrites(workerDb);
+        const changed: number[] = [];
+        expect(
+          sync(workerDb, config, undefined, undefined, {
+            onSessionChanged: (id) => changed.push(id),
+          }).ingested,
+        ).toBe(1);
+        const ownWrites = committedEconomicsWrites(workerDb) - writesBefore;
+        const newSessionId = (
+          readerDb
+            .query("SELECT id FROM session WHERE source_session_id = 'cx-child-f17'")
+            .get() as { id: number }
+        ).id;
+        expect(newSessionId).not.toBe(oldSessionId);
+        expect(changed).toContain(oldSessionId);
+        expect(changed).toContain(newSessionId);
+
+        cache.refreshSessions(changed, versionBefore, ownWrites);
+        await cache.settled();
+        const after = await cache.get();
+        expect(after).toEqual(tokenEconomics(readerDb));
+        expect(after.totals.generation_tokens).toBe(210);
+      } finally {
+        cache.dispose();
+        await cache.settled();
+      }
+    } finally {
+      closeDb(readerDb);
+      closeDb(workerDb);
     }
   });
 });

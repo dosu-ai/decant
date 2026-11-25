@@ -25,6 +25,9 @@ import { contextWindowForSession } from "../src/context-window.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import {
+  ANCHOR_SAMPLE_BYTES,
+  computePrefixHashFromBuffer,
+  extendPrefixSamples,
   MAX_CHECKPOINT_ORPHAN_RESULT_IDS,
   MAX_CHECKPOINT_UNMATCHED_CALLS,
   readSourceBuffer,
@@ -61,6 +64,7 @@ import {
   bumpSyncStateGeneration,
   committedEconomicsWrites,
   markSyncStateCleared,
+  readEconomicsSeq,
   readSyncStateGeneration,
   SYNC_STATE_DERIVED_CLEARED,
   SYNC_STATE_DERIVED_PENDING,
@@ -68,7 +72,7 @@ import {
   SYNC_STATE_RECOMMENDATIONS_PENDING,
   SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ,
 } from "../src/sync-state.ts";
-import { tokenEconomics } from "../src/token-economics.ts";
+import { computeSessionEconomicsVectors, tokenEconomics } from "../src/token-economics.ts";
 import { SyncStatusStore } from "../src/watch.ts";
 import { assertDatabaseIntegrity, captureCanonicalSnapshot } from "./helpers/ingest-oracle.ts";
 
@@ -3101,6 +3105,441 @@ describe("holistic audit regressions", () => {
       closeDb(dbA);
       closeDb(dbB);
       closeDb(freshDb);
+    }
+  });
+});
+
+function paddedClaudeTranscript(sessionId: string, turns: number): string {
+  let out = "";
+  for (let turn = 1; turn <= turns; turn++) {
+    out += claudeTurn(sessionId, turn, `req-${turn}`, 40, `TOKEN${turn}AAAA ${"x".repeat(6000)}`);
+  }
+  return out;
+}
+
+function priorSource(
+  db: Database,
+  file: string,
+): { size: number; mtime: number; session_id: number } {
+  return db
+    .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+    .get(file) as { size: number; mtime: number; session_id: number };
+}
+
+function incrementalInput(
+  db: Database,
+  fd: number,
+  file: string,
+  prior: { size: number; mtime: number; session_id: number },
+): Parameters<typeof tryIncrementalIngest>[0] {
+  return {
+    db,
+    fd,
+    stats: fstatSync(fd),
+    sourcePath: file,
+    tool: "claude_code",
+    archived: false,
+    priorSize: prior.size,
+    priorMtime: prior.mtime,
+    priorSessionId: prior.session_id,
+    ingestRevision: INGEST_PIPELINE_REVISION,
+    expectedRevision: INGEST_PIPELINE_REVISION,
+    sidecarMeta: null,
+    codexTitles: new Map(),
+  };
+}
+
+describe("checkpoint prefix hash samples only validated head and tail bytes", () => {
+  test("extending prior samples with parsed delta bytes matches hashing the whole ingested prefix", () => {
+    const sample = ANCHOR_SAMPLE_BYTES;
+    const full = Buffer.alloc(sample * 4 + 123);
+    for (let i = 0; i < full.length; i++) {
+      full[i] = (i * 31 + 7) % 251;
+    }
+    for (const priorLen of [0, 1, 100, sample - 1, sample, sample + 5, sample * 2 + 9]) {
+      for (const deltaLen of [0, 1, 50, sample - 1, sample, sample + 7, sample * 2]) {
+        const nextLen = priorLen + deltaLen;
+        const prior = {
+          parsedOffset: priorLen,
+          head: full.subarray(0, Math.min(sample, priorLen)),
+          tail: full.subarray(Math.max(0, priorLen - sample), priorLen),
+        };
+        const next = extendPrefixSamples(prior, full.subarray(priorLen, nextLen));
+        expect(next.parsedOffset).toBe(nextLen);
+        expect(next.head.equals(full.subarray(0, Math.min(sample, nextLen)))).toBe(true);
+        expect(next.tail.equals(full.subarray(Math.max(0, nextLen - sample), nextLen))).toBe(true);
+      }
+    }
+  });
+
+  test("a rewrite in the unsampled middle racing an append never enters the next checkpoint hash", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir as string, "proj", "c-mid-race.jsonl");
+    writeFileSync(file, paddedClaudeTranscript("c-mid-race", 10));
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const prior = priorSource(db, file);
+      expect(prior.size).toBeGreaterThan(ANCHOR_SAMPLE_BYTES * 3);
+      appendFileSync(file, claudeTurn("c-mid-race", 11, "req-11"));
+      const ingested = readFileSync(file);
+
+      const target = Math.floor((ingested.length - 4096) / 2);
+      const editAt = ingested.indexOf("xxxxxxxx", target);
+      expect(editAt).toBeGreaterThan(ANCHOR_SAMPLE_BYTES);
+      expect(editAt + 8).toBeLessThan(prior.size - ANCHOR_SAMPLE_BYTES);
+
+      const realReadSync = fs.readSync;
+      const reads: { start: number; end: number }[] = [];
+      let mutated = false;
+      const fd = openSync(file, "r");
+      const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+        const count = (realReadSync as (...a: unknown[]) => number)(...args);
+        const position = args[4];
+        if (args[0] === fd && typeof position === "number") {
+          reads.push({ start: position, end: position + count });
+          if (!mutated && position >= prior.size) {
+            mutated = true;
+            const writer = openSync(file, "r+");
+            try {
+              writeSync(writer, Buffer.from("yyyyyyyy"), 0, 8, editAt);
+              const appended = Buffer.from(claudeTurn("c-mid-race", 12, "req-12"));
+              writeSync(writer, appended, 0, appended.length, ingested.length);
+            } finally {
+              closeSync(writer);
+            }
+          }
+        }
+        return count;
+      }) as typeof fs.readSync);
+      try {
+        expect(tryIncrementalIngest(incrementalInput(db, fd, file, prior)).kind).toBe("ingested");
+        expect(mutated).toBe(true);
+      } finally {
+        readSpy.mockRestore();
+        closeSync(fd);
+      }
+
+      const unsampledStart = ANCHOR_SAMPLE_BYTES;
+      const unsampledEnd = prior.size - ANCHOR_SAMPLE_BYTES;
+      expect(reads.filter((r) => r.start < unsampledEnd && r.end > unsampledStart)).toEqual([]);
+
+      const checkpoint = db
+        .query("SELECT parsed_offset, prefix_hash FROM ingest_checkpoint WHERE path = ?1")
+        .get(file) as { parsed_offset: number; prefix_hash: string };
+      expect(checkpoint.parsed_offset).toBe(ingested.length);
+      expect(checkpoint.prefix_hash).toBe(
+        computePrefixHashFromBuffer(ingested, checkpoint.parsed_offset),
+      );
+      expect(
+        readFileSync(file)
+          .subarray(editAt, editAt + 8)
+          .toString(),
+      ).toBe("yyyyyyyy");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  for (const region of ["head", "tail"] as const) {
+    test(`a rewrite touching the sampled ${region} during an append falls back to a full re-parse`, () => {
+      const { dir, dbPath, config } = freshCase();
+      const file = join(config.claudeDir as string, "proj", `c-${region}-edit.jsonl`);
+      writeFileSync(file, paddedClaudeTranscript(`c-${region}-edit`, 10));
+      const db = openDb(dbPath);
+      const freshDb = openDb(join(dir, "fresh.db"));
+      try {
+        expect(sync(db, config).ingested).toBe(1);
+        const prior = priorSource(db, file);
+        const original = readFileSync(file);
+        const token = region === "head" ? "TOKEN1AAAA" : "TOKEN10AAAA";
+        const replacement = region === "head" ? "TOKEN1BBBB" : "TOKEN10BBBB";
+        const at = original.indexOf(token);
+        if (region === "head") {
+          expect(at + token.length).toBeLessThan(ANCHOR_SAMPLE_BYTES);
+        } else {
+          expect(at).toBeGreaterThan(prior.size - ANCHOR_SAMPLE_BYTES);
+        }
+        const writer = openSync(file, "r+");
+        try {
+          writeSync(writer, Buffer.from(replacement), 0, replacement.length, at);
+        } finally {
+          closeSync(writer);
+        }
+        appendFileSync(file, claudeTurn(`c-${region}-edit`, 11, "req-11"));
+
+        const fd = openSync(file, "r");
+        try {
+          expect(tryIncrementalIngest(incrementalInput(db, fd, file, prior)).kind).toBe("fallback");
+        } finally {
+          closeSync(fd);
+        }
+        expect(sync(db, config).ingested).toBe(1);
+        expect(search(db, replacement).length).toBeGreaterThan(0);
+        expect(sync(freshDb, config).ingested).toBe(1);
+        assertDatabaseIntegrity(db);
+        expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+      } finally {
+        closeDb(db);
+        closeDb(freshDb);
+      }
+    });
+  }
+});
+
+const V34_INGEST_REVISION = 23;
+
+function downgradeToV34Revision23(dbPath: string, staleSql: string): void {
+  const raw = new Database(dbPath);
+  try {
+    raw.exec(`
+      DROP TRIGGER IF EXISTS block_au;
+      CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+        INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+        VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+        INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+        VALUES (new.id, new.text, new.tool_name, new.tool_input);
+      END;
+      DELETE FROM schema_migrations WHERE version > 34;
+    `);
+    raw.query("UPDATE ingest_source SET ingest_revision = ?1").run(V34_INGEST_REVISION);
+    raw.exec(staleSql);
+  } finally {
+    raw.close();
+  }
+}
+
+describe("upgrading a v34 archive at ingest revision 23", () => {
+  test("re-derives search_count for run_shell_command, powershell, and run_in_terminal calls", () => {
+    expect(INGEST_PIPELINE_REVISION).toBeGreaterThan(V34_INGEST_REVISION);
+    const { dir, dbPath, config } = freshCase();
+    const sessionId = "c-shell-search";
+    const file = join(config.claudeDir as string, "proj", `${sessionId}.jsonl`);
+    const toolLine = (turn: number, name: string) =>
+      `${JSON.stringify({
+        type: "assistant",
+        uuid: `tool-${turn}`,
+        requestId: `req-tool-${turn}`,
+        sessionId,
+        cwd: "/home/dev/work/app",
+        timestamp: `2026-11-01T10:00:0${turn}.700Z`,
+        message: {
+          id: `msg_tool_${turn}`,
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          stop_reason: "tool_use",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [
+            {
+              type: "tool_use",
+              id: `toolu_${name}`,
+              name,
+              input: { command: "rg needle src" },
+            },
+          ],
+        },
+      })}\n`;
+    writeFileSync(
+      file,
+      claudeTurn(sessionId, 1, "req-1") +
+        toolLine(2, "run_shell_command") +
+        toolLine(3, "powershell") +
+        toolLine(4, "run_in_terminal"),
+    );
+    const db0 = openDb(dbPath);
+    try {
+      expect(sync(db0, config).ingested).toBe(1);
+    } finally {
+      closeDb(db0);
+    }
+    downgradeToV34Revision23(dbPath, "UPDATE session SET search_count = 0");
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      const searchCount = (target: Database) =>
+        (target.query("SELECT search_count FROM session").get() as { search_count: number })
+          .search_count;
+      expect(searchCount(freshDb)).toBe(3);
+      expect(searchCount(db)).toBe(3);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("links a Codex child whose spawn result was already ingested without a spawn_tool_use_id", () => {
+    expect(INGEST_PIPELINE_REVISION).toBeGreaterThan(V34_INGEST_REVISION);
+    const { dir, dbPath, config } = freshCase();
+    const parentId = "55555555-5555-4555-8555-555555555555";
+    const childId = "66666666-6666-4666-8666-666666666666";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-00-${parentId}.jsonl`),
+      line("2026-11-01T10:00:00.000Z", "session_meta", { id: parentId, cwd: "/home/dev/app" }) +
+        line("2026-11-01T10:00:01.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Spawn a helper agent" }],
+        }) +
+        line("2026-11-01T10:00:02.000Z", "response_item", {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ prompt: "inspect tests" }),
+          call_id: "call_spawn_r23",
+        }) +
+        line("2026-11-01T10:00:03.000Z", "response_item", {
+          type: "function_call_output",
+          call_id: "call_spawn_r23",
+          output: JSON.stringify({ agent_id: childId, status: "spawned" }),
+        }),
+    );
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-04-${childId}.jsonl`),
+      line("2026-11-01T10:00:04.000Z", "session_meta", {
+        id: childId,
+        cwd: "/home/dev/app",
+        source: { subagent: { thread_spawn: { parent_thread_id: parentId, depth: 1 } } },
+      }) +
+        line("2026-11-01T10:00:05.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "inspect tests" }],
+        }),
+    );
+    const childLink = (target: Database) =>
+      target
+        .query("SELECT is_subagent, spawn_tool_use_id FROM session WHERE source_session_id = ?1")
+        .get(childId) as { is_subagent: number; spawn_tool_use_id: string | null };
+
+    const db0 = openDb(dbPath);
+    try {
+      expect(sync(db0, config).ingested).toBe(2);
+    } finally {
+      closeDb(db0);
+    }
+    downgradeToV34Revision23(
+      dbPath,
+      `UPDATE session SET spawn_tool_use_id = NULL WHERE source_session_id = '${childId}'`,
+    );
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(childLink(db)).toEqual({ is_subagent: 1, spawn_tool_use_id: null });
+      expect(sync(db, config).ingested).toBe(2);
+      expect(sync(freshDb, config).ingested).toBe(2);
+      expect(childLink(freshDb)).toEqual({ is_subagent: 1, spawn_tool_use_id: "call_spawn_r23" });
+      expect(childLink(db)).toEqual(childLink(freshDb));
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+});
+
+describe("EconomicsCache across a worker and a server connection", () => {
+  test("a recommendation-only sweep moves data_version without a rebuild, and economics writes still rebuild", async () => {
+    const { dbPath, config } = freshCase();
+    const fileA = join(config.claudeDir as string, "proj", "c-econ-a.jsonl");
+    const fileB = join(config.claudeDir as string, "proj", "c-econ-b.jsonl");
+    writeFileSync(fileA, claudeTurn("c-econ-a", 1, "req-a1", 100));
+    writeFileSync(fileB, claudeTurn("c-econ-b", 1, "req-b1", 60));
+
+    const serverDb = openDb(dbPath);
+    const workerDb = openDb(dbPath);
+    let builds = 0;
+    const cache = new EconomicsCache({
+      dbPath,
+      db: serverDb,
+      computeVectors: (path) => {
+        builds += 1;
+        const reader = new Database(path, { readonly: true, strict: true });
+        try {
+          return Promise.resolve(computeSessionEconomicsVectors(reader));
+        } finally {
+          reader.close();
+        }
+      },
+    });
+    const sessionIdFor = (source: string) =>
+      (
+        workerDb.query("SELECT id FROM session WHERE source_session_id = ?1").get(source) as {
+          id: number;
+        }
+      ).id;
+    const expectRebuildAfter = async (write: () => void) => {
+      const seqBefore = readEconomicsSeq(workerDb) ?? 0;
+      const buildsBefore = builds;
+      write();
+      expect(readEconomicsSeq(serverDb) ?? 0).toBeGreaterThan(seqBefore);
+      await cache.get();
+      await cache.settled();
+      expect(builds).toBe(buildsBefore + 1);
+      expect(await cache.get()).toEqual(tokenEconomics(serverDb));
+      expect(builds).toBe(buildsBefore + 1);
+    };
+    try {
+      expect(sync(workerDb, config).ingested).toBe(2);
+      const warmed = await cache.get();
+      expect(warmed).toEqual(tokenEconomics(serverDb));
+      expect(builds).toBe(1);
+
+      const dataVersionBefore = cache.dataVersion();
+      const seqBefore = readEconomicsSeq(serverDb);
+      bumpSyncStateGeneration(workerDb, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      let refreshed = 0;
+      const sweep = sync(workerDb, config, undefined, undefined, {
+        onRecommendationsRefreshed: () => {
+          refreshed += 1;
+        },
+      });
+      expect(sweep.ingested).toBe(0);
+      expect(refreshed).toBe(1);
+      expect(cache.dataVersion()).not.toBe(dataVersionBefore);
+      expect(readEconomicsSeq(serverDb)).toBe(seqBefore);
+      expect(await cache.get()).toEqual(warmed);
+      await cache.settled();
+      expect(builds).toBe(1);
+      expect(await cache.get()).toEqual(tokenEconomics(serverDb));
+      expect(builds).toBe(1);
+
+      await expectRebuildAfter(() => {
+        appendFileSync(fileA, claudeTurn("c-econ-a", 2, "req-a2", 80));
+        expect(sync(workerDb, config).ingested).toBe(1);
+      });
+      await expectRebuildAfter(() => {
+        const row = workerDb
+          .query("SELECT session_id, vector_json FROM session_economics WHERE session_id = ?1")
+          .get(sessionIdFor("c-econ-b")) as { session_id: number; vector_json: string };
+        const stale = { ...JSON.parse(row.vector_json), input_cost: 123.45 };
+        workerDb
+          .query("UPDATE session_economics SET vector_json = ?2 WHERE session_id = ?1")
+          .run(row.session_id, JSON.stringify(stale));
+        expect(sync(workerDb, config).repriced).toBe(1);
+      });
+      await expectRebuildAfter(() => {
+        expect(setSessionUserState(workerDb, sessionIdFor("c-econ-a"), "archived")).toBe(true);
+      });
+      await expectRebuildAfter(() => {
+        expect(setSessionUserState(workerDb, sessionIdFor("c-econ-a"), "visible")).toBe(true);
+      });
+      await expectRebuildAfter(() => {
+        expect(setSessionUserState(workerDb, sessionIdFor("c-econ-b"), "deleted")).toBe(true);
+      });
+    } finally {
+      cache.dispose();
+      await cache.settled();
+      closeDb(serverDb);
+      closeDb(workerDb);
     }
   });
 });

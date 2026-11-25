@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,8 +20,11 @@ import {
 import {
   acquireCorpusLock,
   cachedCorpusManifest,
+  corpusDirFor,
+  corpusLockPath,
   corpusNamespace,
   portableCorpusManifest,
+  prepareLockedCorpus,
   trustedCorpusManifest,
 } from "../scripts/bench-ingest.ts";
 import { closeDb, openDb } from "../src/db.ts";
@@ -216,13 +228,40 @@ describe("bench corpus lock", () => {
   test("a second run cannot take the corpus while the first holds it", () => {
     const tmp = mkdtempSync(join(tmpdir(), "decant-bench-lock-"));
     try {
-      const release = acquireCorpusLock(tmp);
-      expect(statSync(join(tmp, ".bench.lock")).mode & 0o777).toBe(0o600);
-      expect(() => acquireCorpusLock(tmp)).toThrow(/another bench run/);
+      const lockPath = corpusLockPath(tmp, "pi", 7);
+      expect(lockPath).toBe(join(tmp, ".bench-pi-7.lock"));
+      const release = acquireCorpusLock(lockPath);
+      expect(statSync(lockPath).mode & 0o777).toBe(0o600);
+      expect(() => acquireCorpusLock(lockPath)).toThrow(/another bench run/);
       release();
-      acquireCorpusLock(tmp)();
+      acquireCorpusLock(lockPath)();
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a held lock stops --rebuild-seed before it deletes the corpus directory", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "decant-bench-lock-"));
+    try {
+      const corpusDir = corpusDirFor({ workDir, profile: "pi", seed: 7 });
+      mkdirSync(corpusDir, { recursive: true });
+      const marker = join(corpusDir, "in-use.txt");
+      writeFileSync(marker, "concurrent run data\n");
+      const lockPath = corpusLockPath(workDir, "pi", 7);
+      const release = acquireCorpusLock(lockPath);
+      try {
+        await expect(
+          prepareLockedCorpus({ workDir, profile: "pi", seed: 7, rebuildSeed: true }),
+        ).rejects.toThrow(/another bench run/);
+        expect(existsSync(corpusDir)).toBe(true);
+        expect(readFileSync(marker, "utf8")).toBe("concurrent run data\n");
+        expect(existsSync(lockPath)).toBe(true);
+      } finally {
+        release();
+      }
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
     }
   });
 });

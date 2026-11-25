@@ -117,9 +117,8 @@ import { classifyTool, previewHeadTail } from "./tools.ts";
 
 export type IncrementalTool = "claude_code" | "codex" | "pi";
 
-const CHECKPOINT_VERSION = 6;
-const ANCHOR_SAMPLE_BYTES = 32_768;
-const ANCHOR_MID_BYTES = 4_096;
+const CHECKPOINT_VERSION = 7;
+export const ANCHOR_SAMPLE_BYTES = 32_768;
 const CHARS_PER_TOKEN = 4;
 const ACTIVE_GAP_CAP_MS = ACTIVE_GAP_CAP_SECONDS * 1000;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
@@ -402,110 +401,60 @@ export function scanLinesFromBuffer(
   };
 }
 
-type ByteRange = readonly [start: number, end: number];
-
-interface PrefixSampleRanges {
-  head: ByteRange;
-  mid: ByteRange | null;
-  tail: ByteRange | null;
+export interface PrefixSamples {
+  parsedOffset: number;
+  head: Buffer;
+  tail: Buffer;
 }
 
-function prefixSampleRanges(parsedOffset: number): PrefixSampleRanges | null {
-  if (parsedOffset <= 0) {
-    return null;
-  }
-  const midStart = Math.floor((parsedOffset - ANCHOR_MID_BYTES) / 2);
-  const tailStart = Math.max(0, parsedOffset - ANCHOR_SAMPLE_BYTES);
-  return {
-    head: [0, Math.min(ANCHOR_SAMPLE_BYTES, parsedOffset)],
-    mid: parsedOffset > ANCHOR_SAMPLE_BYTES * 2 ? [midStart, midStart + ANCHOR_MID_BYTES] : null,
-    tail: tailStart > 0 ? [tailStart, parsedOffset] : null,
-  };
-}
-
-function hashPrefixSamples(
-  parsedOffset: number,
-  read: (start: number, end: number) => Buffer,
-): string {
+function hashPrefixSamples(samples: PrefixSamples): string {
   const hash = createHash("sha256");
-  hash.update(`v1:${parsedOffset}:`);
-  const ranges = prefixSampleRanges(parsedOffset);
-  if (ranges == null) {
-    return `v1:${hash.digest("hex")}`;
-  }
-  hash.update(read(...ranges.head));
+  hash.update(`v2:${samples.parsedOffset}:`);
+  hash.update(samples.head);
   hash.update(":");
-  if (ranges.mid != null) {
-    hash.update(read(...ranges.mid));
-    hash.update(":");
-  }
-  if (ranges.tail != null) {
-    hash.update(read(...ranges.tail));
-  }
-  return `v1:${hash.digest("hex")}`;
+  hash.update(samples.tail);
+  return `v2:${hash.digest("hex")}`;
+}
+
+function headLength(parsedOffset: number): number {
+  return Math.min(ANCHOR_SAMPLE_BYTES, parsedOffset);
+}
+
+function tailStart(parsedOffset: number): number {
+  return Math.max(0, parsedOffset - ANCHOR_SAMPLE_BYTES);
 }
 
 export function computePrefixHashFromBuffer(buf: Buffer, parsedOffset: number): string {
-  return hashPrefixSamples(parsedOffset, (start, end) => buf.subarray(start, end));
-}
-
-interface ByteSegment {
-  start: number;
-  bytes: Buffer;
-}
-
-interface PrefixSnapshot {
-  parsedOffset: number;
-  hash: string;
-  samples: ByteSegment[];
-}
-
-function snapshotPrefix(fd: number, parsedOffset: number): PrefixSnapshot {
-  const samples: ByteSegment[] = [];
-  const hash = hashPrefixSamples(parsedOffset, (start, end) => {
-    const bytes = readSlice(fd, start, end - start);
-    samples.push({ start, bytes });
-    return bytes;
+  return hashPrefixSamples({
+    parsedOffset,
+    head: buf.subarray(0, headLength(parsedOffset)),
+    tail: buf.subarray(tailStart(parsedOffset), parsedOffset),
   });
-  return { parsedOffset, hash, samples };
 }
 
-function extendPrefixHash(
-  fd: number,
-  snapshot: PrefixSnapshot,
-  appended: Buffer,
-  nextOffset: number,
-): string {
-  const segments: ByteSegment[] = [
-    { start: snapshot.parsedOffset, bytes: appended },
-    ...snapshot.samples,
-  ];
-  return hashPrefixSamples(nextOffset, (start, end) => {
-    const parts: Buffer[] = [];
-    let pos = start;
-    while (pos < end) {
-      const covering = segments.find(
-        (segment) => segment.start <= pos && pos < segment.start + segment.bytes.length,
-      );
-      if (covering != null) {
-        const stop = Math.min(end, covering.start + covering.bytes.length);
-        parts.push(covering.bytes.subarray(pos - covering.start, stop - covering.start));
-        pos = stop;
-        continue;
-      }
-      const nextStart = segments.reduce(
-        (min, segment) => (segment.start > pos && segment.start < min ? segment.start : min),
-        end,
-      );
-      const bytes = readSlice(fd, pos, nextStart - pos);
-      parts.push(bytes);
-      if (bytes.length < nextStart - pos) {
-        break;
-      }
-      pos = nextStart;
-    }
-    return Buffer.concat(parts);
-  });
+function readPrefixSamples(fd: number, parsedOffset: number): PrefixSamples | null {
+  const head = readSlice(fd, 0, headLength(parsedOffset));
+  const start = tailStart(parsedOffset);
+  const tail = start === 0 ? head : readSlice(fd, start, parsedOffset - start);
+  if (head.length !== headLength(parsedOffset) || tail.length !== parsedOffset - start) {
+    return null;
+  }
+  return { parsedOffset, head, tail };
+}
+
+export function extendPrefixSamples(prior: PrefixSamples, delta: Buffer): PrefixSamples {
+  const parsedOffset = prior.parsedOffset + delta.length;
+  const head =
+    prior.parsedOffset >= ANCHOR_SAMPLE_BYTES
+      ? prior.head
+      : Buffer.concat([prior.head, delta]).subarray(0, headLength(parsedOffset));
+  const tail =
+    delta.length >= ANCHOR_SAMPLE_BYTES
+      ? delta.subarray(delta.length - ANCHOR_SAMPLE_BYTES)
+      : Buffer.concat([prior.tail, delta]).subarray(
+          prior.tail.length + delta.length - (parsedOffset - tailStart(parsedOffset)),
+        );
+  return { parsedOffset, head, tail };
 }
 
 function readSlice(fd: number, position: number, length: number): Buffer {
@@ -2532,8 +2481,8 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   if (stats.size <= input.priorSize || stats.size < loaded.parsedOffset) {
     return { kind: "fallback" };
   }
-  const prefixSnapshot = snapshotPrefix(fd, loaded.parsedOffset);
-  if (prefixSnapshot.hash !== loaded.prefixHash) {
+  const priorSamples = readPrefixSamples(fd, loaded.parsedOffset);
+  if (priorSamples == null || hashPrefixSamples(priorSamples) !== loaded.prefixHash) {
     return { kind: "fallback" };
   }
   const currentExternalKey = externalKeyFor(
@@ -2789,12 +2738,14 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     }
   }
 
-  const nextPrefixHash = extendPrefixHash(
-    fd,
-    prefixSnapshot,
-    Buffer.concat([separator, deltaBuf]),
-    scanned.parsedOffset,
+  const parsedDelta = Buffer.concat([separator, deltaBuf]).subarray(
+    0,
+    scanned.parsedOffset - loaded.parsedOffset,
   );
+  if (parsedDelta.length !== scanned.parsedOffset - loaded.parsedOffset) {
+    return { kind: "fallback" };
+  }
+  const nextPrefixHash = hashPrefixSamples(extendPrefixSamples(priorSamples, parsedDelta));
   const mtime = Math.trunc(stats.mtimeMs / 1000);
 
   let lineageDirty =

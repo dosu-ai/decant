@@ -45,11 +45,7 @@ export class EconomicsCache {
   async get(filter?: DateFilter | null): Promise<TokenEconomics> {
     if (this.#vectors == null) {
       await (this.#building ?? this.#rebuild());
-    } else if (
-      this.#dataVersion() !== this.#builtDataVersion ||
-      (this.#builtEconomicsSeq != null &&
-        readEconomicsSeq(this.#options.db) !== this.#builtEconomicsSeq)
-    ) {
+    } else if (this.#isStale()) {
       void this.#rebuild();
     }
     const vectors = this.#vectors ?? [];
@@ -167,6 +163,21 @@ export class EconomicsCache {
   dispose(): void {
     this.#disposed = true;
     this.#buildAbort?.abort();
+  }
+
+  #isStale(): boolean {
+    const dataVersion = this.#dataVersion();
+    const economicsSeq = readEconomicsSeq(this.#options.db);
+    if (economicsSeq == null || this.#builtEconomicsSeq == null) {
+      return dataVersion !== this.#builtDataVersion;
+    }
+    if (economicsSeq !== this.#builtEconomicsSeq) {
+      return true;
+    }
+    if (dataVersion != null && dataVersion !== this.#builtDataVersion) {
+      this.#builtDataVersion = dataVersion;
+    }
+    return false;
   }
 
   #dataVersion(): number | null {

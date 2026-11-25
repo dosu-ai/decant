@@ -41,7 +41,6 @@ const DEFAULT_WORK_DIR = join(homedir(), ".cache", "decant-bench");
 const CONTAINER_WORK_DIR = "/bench";
 const CONTAINER_RUN_ROOT = "/var/tmp/decant-bench-run";
 const CONTAINER_RUN_DIR_MOUNT = "/bench-runs";
-const CORPUS_LOCK_NAME = ".bench.lock";
 const CORPUS_FORMAT = 2;
 const SAMPLE_INTERVAL_MS = 5_000;
 const FRESHNESS_POLL_MS = 500;
@@ -749,16 +748,17 @@ function endsWithNewline(path: string): boolean {
   }
 }
 
-export function acquireCorpusLock(corpusDir: string): () => void {
-  const lockPath = join(corpusDir, CORPUS_LOCK_NAME);
+export function corpusLockPath(workDir: string, profile: string, seed: number): string {
+  return join(workDir, `.bench-${profile}-${seed}.lock`);
+}
+
+export function acquireCorpusLock(lockPath: string): () => void {
   let fd: number;
   try {
     fd = openSync(lockPath, "wx", 0o600);
   } catch (error) {
     if ((error as { code?: string }).code === "EEXIST") {
-      throw new Error(
-        `another bench run is using ${corpusDir} (${lockPath} exists); remove the lock if no run is active`,
-      );
+      throw new Error(`another bench run holds ${lockPath}; remove the lock if no run is active`);
     }
     throw error;
   }
@@ -768,6 +768,23 @@ export function acquireCorpusLock(corpusDir: string): () => void {
     closeSync(fd);
   }
   return () => rmSync(lockPath, { force: true });
+}
+
+type CorpusOptions = Pick<Options, "workDir" | "profile" | "seed" | "rebuildSeed">;
+
+export async function prepareLockedCorpus(
+  options: CorpusOptions,
+): Promise<{ corpus: CorpusInfo; releaseLock: () => void }> {
+  ensurePrivateDir(options.workDir);
+  const releaseLock = acquireCorpusLock(
+    corpusLockPath(options.workDir, options.profile, options.seed),
+  );
+  try {
+    return { corpus: await ensureCorpus(options), releaseLock };
+  } catch (error) {
+    releaseLock();
+    throw error;
+  }
 }
 
 function assertInside(parent: string, child: string): void {
@@ -864,11 +881,12 @@ export function corpusNamespace(corpusDir: string): string {
   return createHash("sha256").update(resolve(corpusDir)).digest("hex").slice(0, 12);
 }
 
-async function ensureCorpus(options: Options): Promise<CorpusInfo> {
-  const dir = resolve(
-    options.workDir,
-    `corpus-v${CORPUS_FORMAT}-${options.profile}-${options.seed}`,
-  );
+export function corpusDirFor(options: Pick<Options, "workDir" | "profile" | "seed">): string {
+  return resolve(options.workDir, `corpus-v${CORPUS_FORMAT}-${options.profile}-${options.seed}`);
+}
+
+async function ensureCorpus(options: CorpusOptions): Promise<CorpusInfo> {
+  const dir = corpusDirFor(options);
   const manifestPath = join(dir, "manifest.json");
   const cached = options.rebuildSeed ? null : readCachedManifest(manifestPath, dir);
   if (cached !== null) {
@@ -1905,15 +1923,14 @@ async function runNative(options: Options): Promise<number> {
   const scratchRoot = options.runDir ?? join(options.workDir, "runs");
   ensurePrivateDir(scratchRoot);
   const tag = await schemaTag();
-  const corpus = await ensureCorpus(options);
-  const clkTck = clockTicks();
+  const { corpus, releaseLock } = await prepareLockedCorpus(options);
   const live = corpus.manifest.liveSession;
 
   let seed: SeedInfo | null = null;
   let replay: Replay | null = null;
   let scaling: Scaling | null = null;
-  const releaseLock = acquireCorpusLock(corpus.dir);
   try {
+    const clkTck = clockTicks();
     if (!options.scalingOnly) {
       seed = await ensureSeed(
         options,

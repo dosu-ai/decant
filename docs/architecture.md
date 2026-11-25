@@ -189,9 +189,12 @@ The server keeps request handling responsive by reusing one long-lived
 scans in `src/stats-worker.ts`, and serving heavy archive reads from a pool of
 `src/read-worker.ts` threads. Economics vectors are cached in memory: small
 incremental syncs patch only the changed session vectors directly, while larger
-changes or external commits (detected via `PRAGMA data_version`) trigger a
-background `stats-worker` rebuild that serves the previous model until ready
-and then emits `archive_updated`. At the end of a sync, the server and read
+changes or external commits trigger a background `stats-worker` rebuild that
+serves the previous model until ready and then emits `archive_updated`. Every
+write that changes a stored vector, a session's start time, or which sessions
+are visible bumps the `economics_seq` counter in `sync_state`. When `PRAGMA
+data_version` shows another connection committed but `economics_seq` has not
+moved, as after a recommendation-only sweep, the cache keeps its model. At the end of a sync, the server and read
 workers reload planner statistics only when `sqlite_stat1` actually changed.
 
 The Tools page summary and tool usage table read every matching tool call.

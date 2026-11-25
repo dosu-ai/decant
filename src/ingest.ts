@@ -145,7 +145,7 @@ export interface IngestConfig {
   sourcePaths?: string[];
 }
 
-export const INGEST_PIPELINE_REVISION = 23;
+export const INGEST_PIPELINE_REVISION = 24;
 
 export interface SyncReport {
   repriced?: number;

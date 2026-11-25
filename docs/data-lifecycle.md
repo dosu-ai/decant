@@ -146,11 +146,13 @@ replace an object's prototype.
 `decant sync` inserts new sessions and updates changed ones transactionally.
 For append-only JSONL logs (Claude Code, Codex, and Pi), Decant stores a
 bounded per-file parser and fold checkpoint in `ingest_checkpoint` alongside a
-sampled hash of the already-ingested prefix (first 32 KiB, middle 4 KiB, and
-last 32 KiB). When a file grows past its previously ingested byte size and its
+sampled hash of the already-ingested prefix (its first 32 KiB and its last
+32 KiB). When a file grows past its previously ingested byte size and its
 sampled prefix hash still matches, Decant reads and writes only the newly
 appended lines, matching open tool calls, usage totals, context windows, and
-economics vectors in place. Truncation, same-size rewrites that change the
+economics vectors in place. The new checkpoint's hash comes from the verified
+head and tail samples plus the appended bytes it just parsed, never from a
+second read of the file, so bytes Decant has not ingested never enter it. Truncation, same-size rewrites that change the
 file's size or whole-second modification time, prefix rewrites within the
 sampled regions, torn-line corrections that alter prior state, and
 cross-session billed-request adjustments fall back automatically to a full

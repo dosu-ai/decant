@@ -189,7 +189,7 @@ describe("message source storage", () => {
 
 describe("block tool_result storage", () => {
   test("round-trips large UTF-8 tool results and leaves null, small, or incompressible text uncompressed", () => {
-    const large = "héllo → 🙂\u0000 line output\n".repeat(400);
+    const large = "\uFEFFhéllo → 🙂\u0000 line output\n".repeat(400);
     const encoded = encodeBlockToolResult(large);
     expect(encoded.toolResult).toBeInstanceOf(Uint8Array);
     if (!(encoded.toolResult instanceof Uint8Array)) {
@@ -231,7 +231,7 @@ describe("block tool_result storage", () => {
 
   test("compacts existing tool_result rows resumable across interruptions while keeping FTS intact", () => {
     const db = openDb(join(workDir, "tool-result-resume.db"));
-    const payload = "tool output 🙂 line\n".repeat(400);
+    const payload = `\uFEFF${"tool output 🙂 line\n".repeat(400)}`;
     try {
       db.exec("INSERT INTO session(id, tool, source_session_id) VALUES (1, 'claude_code', 'tr')");
       db.exec("INSERT INTO message(id, session_id, seq, role, raw) VALUES (1, 1, 0, 'user', '{}')");
@@ -268,9 +268,10 @@ describe("block tool_result storage", () => {
       }[];
       expect(rows).toHaveLength(260);
       for (const row of rows) {
-        expect(decodeBlockToolResult(row.tool_result)).toBe(payload);
+        expect(decodeBlockToolResult(row.tool_result, row.tool_result_bytes)).toBe(payload);
         expect(row.tool_result_bytes).toBe(Buffer.byteLength(payload));
       }
+      expect(getSession(db, 1)?.messages[0]?.blocks[0]?.tool_result).toBe(payload);
       expect(
         db
           .query("SELECT COUNT(*) AS n FROM block_fts WHERE block_fts MATCH 'trcanarysearchable'")

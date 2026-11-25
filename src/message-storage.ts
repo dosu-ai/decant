@@ -7,7 +7,7 @@ import type { Json } from "./model.ts";
 const MIN_COMPRESS_BYTES = 1024;
 const MIN_TOOL_RESULT_SAVINGS_BYTES = 32;
 const COMPACT_BATCH_SIZE = 128;
-const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const MESSAGE_METADATA_SQL = "COALESCE(m.raw_meta, m.raw)";
 

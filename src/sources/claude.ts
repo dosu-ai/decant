@@ -28,11 +28,10 @@ import { preview } from "../tools.ts";
 import {
   block,
   contentText,
-  countUnknown,
+  countUnknownInRecord,
   nullRecord,
   ownGet,
   parseJsonLine,
-  type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
 
@@ -344,9 +343,7 @@ export function stepClaudeLine(
     !IGNORED_JOURNAL_META.has(typ) &&
     !IGNORED_JOURNAL_PREFIXES.some((prefix) => typ.startsWith(prefix))
   ) {
-    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
-    countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = nullRecord(unknownMap);
+    countUnknownInRecord(state.unknownTypes, typ, lineNo);
     const message = simpleMessage(value, "other", state.seq);
     state.seq += 1;
     return { message };

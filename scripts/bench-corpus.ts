@@ -576,8 +576,8 @@ class CorpusWriter {
   private written = 0;
 
   constructor(path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.fd = openSync(path, "w");
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    this.fd = openSync(path, "wx", 0o600);
   }
 
   bytesWritten(): number {
@@ -626,7 +626,6 @@ interface ClaudeContext {
   turnIndex: number;
 }
 
-/** Project directories are `-home-dev-work-<project>`, and project names carry no hyphens. */
 function cwdForProjectDir(projectDir: string): string {
   return `/home/dev/work/${projectDir.slice("-home-dev-work-".length)}`;
 }
@@ -1217,7 +1216,7 @@ export async function generateCorpus(options: GenerateCorpusOptions): Promise<Co
   if (existsSync(outDir) && readdirSync(outDir).length > 0) {
     throw new Error(`refusing to write a corpus into a non-empty directory: ${outDir}`);
   }
-  mkdirSync(outDir, { recursive: true });
+  mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const claudeDir = join(outDir, "claude");
   const codexDir = join(outDir, "codex");
   const copilotDir = join(outDir, "copilot");

@@ -128,6 +128,9 @@ const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
 const CLAUDE_RECENT_REQUEST_WINDOW = 64;
 const MAX_PI_TOOL_USES_WINDOW = 64;
 const MAX_CODEX_ECON_BLOCKS = 256;
+export const MAX_CHECKPOINT_UNMATCHED_CALLS = 512;
+export const MAX_CHECKPOINT_ORPHAN_RESULT_IDS = 512;
+export const MAX_CHECKPOINT_PENDING_TOOL_BYTES = 256 * 1024;
 const COMPACT_SET_EXACT_LIMIT = 64;
 const BLOOM_HASHES = 10;
 const BLOOM_MIN_BITS = 16_384;
@@ -1709,6 +1712,29 @@ function buildEconomicsVector(
   };
 }
 
+function pendingToolStateWithinBudget(state: IncrementalCheckpointState): boolean {
+  const orphans = state.diagnostics.orphanToolResultIds;
+  if (orphans.length > MAX_CHECKPOINT_ORPHAN_RESULT_IDS) {
+    return false;
+  }
+  let calls = 0;
+  let bytes = 0;
+  for (const id of orphans) {
+    bytes += byteLength(id);
+  }
+  for (const [id, queue] of Object.entries(state.unmatchedCalls)) {
+    calls += queue.length;
+    bytes += byteLength(id);
+    for (const call of queue) {
+      bytes += byteLength(call.toolName) + (call.input == null ? 0 : byteLength(call.input));
+    }
+    if (calls > MAX_CHECKPOINT_UNMATCHED_CALLS || bytes > MAX_CHECKPOINT_PENDING_TOOL_BYTES) {
+      return false;
+    }
+  }
+  return bytes <= MAX_CHECKPOINT_PENDING_TOOL_BYTES;
+}
+
 function saveCheckpoint(
   db: Database,
   path: string,
@@ -1717,6 +1743,10 @@ function saveCheckpoint(
   prefixHash: string,
   state: IncrementalCheckpointState,
 ): void {
+  if (!pendingToolStateWithinBudget(state)) {
+    deleteCheckpoint(db, path);
+    return;
+  }
   const compressed = zstdCompressSync(JSON.stringify(state), { level: 3 });
   const stmt = db.prepare(
     `INSERT INTO ingest_checkpoint(path, parsed_offset, parsed_line_count, prefix_hash, state_blob)
@@ -3113,6 +3143,9 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
                   durationBetween(call.timestamp, message.timestamp),
                 );
                 matchedCallForResult = { toolName: call.toolName, input: call.input };
+                if (tool === "codex" && call.toolName === "spawn_agent") {
+                  lineageDirty = true;
+                }
                 econMatchedResults.push({
                   toolName: call.toolName,
                   input: call.input,

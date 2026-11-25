@@ -319,7 +319,6 @@ describe("block tool_result storage", () => {
         .get(sessionId) as { n: number };
       expect(compressedCount.n).toBeGreaterThan(0);
 
-      // Clear tool_call.output_bytes so vectorsForScope exercises rb.tool_result_bytes directly.
       db.query("UPDATE tool_call SET output_bytes = NULL WHERE session_id = ?1").run(sessionId);
 
       const readAll = () => {
@@ -664,7 +663,6 @@ describe("block tool_result storage", () => {
       expect(firstRow.kind).toBe("blob");
       expect(firstRow.tool_result_bytes).toBe(Buffer.byteLength(largeA));
 
-      // Rewriting an earlier message forces full fallback diff while keeping tool_result unchanged.
       writeAndSync("run 2", largeA, 1_780_000_010);
       const sameRow = db
         .query(
@@ -674,7 +672,6 @@ describe("block tool_result storage", () => {
       expect(sameRow).toEqual(firstRow);
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(largeA);
 
-      // Modifying the large tool_result updates the BLOB and byte count in place on the same row.
       writeAndSync("run 2", largeB, 1_780_000_020);
       const secondRow = db
         .query(
@@ -688,7 +685,6 @@ describe("block tool_result storage", () => {
       });
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(largeB);
 
-      // Shrinking below the compression threshold transitions back to TEXT with NULL byte count.
       writeAndSync("run 2", small, 1_780_000_030);
       const thirdRow = db
         .query(
@@ -758,18 +754,15 @@ describe("block tool_result storage", () => {
         .query("SELECT id FROM session WHERE source_session_id = 'tr-repair'")
         .get() as { id: number };
 
-      // Corrupt the stored BLOB while keeping the recorded 2048-byte count.
       db.query(
         "UPDATE block SET tool_result = X'01020304' WHERE session_id = ?1 AND type = 'tool_result'",
       ).run(session.id);
 
-      // Rewriting an earlier message forces Option 3b diff with the same result text.
       writeFileSync(filePath, makeJsonl("run 2", payloadA));
       utimesSync(filePath, 1_780_000_010, 1_780_000_010);
       expect(sync(db, config).failed).toBe(0);
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(payloadA);
 
-      // Corrupt again and replace with a different result of the exact same byte length.
       db.query(
         "UPDATE block SET tool_result = X'' WHERE session_id = ?1 AND type = 'tool_result'",
       ).run(session.id);
@@ -779,9 +772,6 @@ describe("block tool_result storage", () => {
       expect(sync(db, config).failed).toBe(0);
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(payloadB);
 
-      // Replace literal U+FFFD bytes (EF BF BD) with malformed 3-byte UTF-8 (F0 9F 92) inside
-      // both compressed block.tool_result and message.raw; strict UTF-8 decode must reject both
-      // and in-place sync must overwrite both corrupt BLOBs with valid UTF-8 payloads.
       const replacementPayload = `\uFFFD${"C".repeat(2045)}`;
       writeFileSync(filePath, makeJsonl("run 4", replacementPayload));
       utimesSync(filePath, 1_780_000_030, 1_780_000_030);
@@ -923,7 +913,6 @@ describe("block tool_result storage", () => {
     const db = openDb(join(rootDir, "codex-corrupt.db"));
     try {
       expect(sync(db, config).failed).toBe(0);
-      // Corrupt both an older unrelated result and a newer result ordered ahead of the valid match.
       db.exec(
         "UPDATE block SET tool_result = X'01020304' WHERE tool_use_id IN ('call_spawn_old', 'call_spawn_latest_corrupt') AND type = 'tool_result'",
       );

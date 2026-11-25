@@ -1,4 +1,4 @@
--- decant:schema_version=34
+-- decant:schema_version=35
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -289,7 +289,11 @@ CREATE TRIGGER block_ad AFTER DELETE ON block BEGIN
   INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
   VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
 END;
-CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+CREATE TRIGGER block_au AFTER UPDATE ON block
+WHEN old.text IS NOT new.text
+  OR old.tool_name IS NOT new.tool_name
+  OR old.tool_input IS NOT new.tool_input
+BEGIN
   INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
   VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

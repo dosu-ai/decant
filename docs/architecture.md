@@ -97,8 +97,10 @@ Hermes's from the session row's changing columns and its message rows' counts;
 see
 [data lifecycle](data-lifecycle.md). A changed session is updated
 transactionally: append-only JSONL tools (Claude Code, Codex, and Pi) advance
-from their `ingest_checkpoint` row and write only new rows when the recorded
-prefix hash still matches, while other tools and fallback re-parses diff
+from their `ingest_checkpoint` row when the recorded prefix hash still matches.
+They add rows for the appended lines and update the rows those lines complete,
+such as a tool call answered by a new result, plus the session's rollups. Other
+tools and fallback re-parses diff
 existing messages, blocks, tool calls, and file references in place so
 unchanged blocks keep their row IDs and FTS entries. Decant then updates
 context-window rollups and versioned per-session economics vectors. Costs are
@@ -144,13 +146,18 @@ archive has none. Without them, per-message block lookups go through
 size. Sync therefore runs `PRAGMA optimize` between session files every 25
 ingested sessions. SQLite skips the work unless a table is unanalyzed or has
 grown 25x since its last `ANALYZE`, so the calls after the first are close to
-free. Sync also runs `PRAGMA optimize` once more after the ingest loop.
+free. After the ingest loop, sync runs `PRAGMA optimize` again when it
+materialized derived rows, drained pending work, finished the first full sync
+on its connection after ingesting sessions, or has ingested 25 sessions since
+the last run. Most syncs that ingest nothing skip it.
 
 A connection reads statistics only when it loads the schema, so it does not
 see rows another connection writes. The serve connection runs
 `PRAGMA optimize=0x10002` when it opens, and after each worker sync that
 ingested sessions it rereads its schema to load the statistics that the worker
-wrote. The optimize step skips a read-only archive or a write lock held past
+wrote. A worker sync that ingested nothing triggers no reread, even when it
+refreshed statistics, so those load after the next sync that ingests a
+session. The optimize step skips a read-only archive or a write lock held past
 the busy timeout, because statistics only affect query speed.
 
 A first sync can run for minutes while the dashboard polls, so serve's

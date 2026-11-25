@@ -25,6 +25,7 @@ export interface SyncRunHandle {
   promise: Promise<SyncReport>;
   owned: boolean;
   isBusy?: () => boolean;
+  started?: Promise<void>;
 }
 
 export interface SyncCoordinator {
@@ -46,6 +47,7 @@ export interface SyncCoordinatorOptions {
   onProgress?: (progress: SyncProgress) => void;
   onCompleted?: (report: SyncReport) => void;
   readDataVersion?: () => number | null;
+  workerOptions?: SyncWorkerOptions;
 }
 
 interface SyncReportMeta {
@@ -53,6 +55,26 @@ interface SyncReportMeta {
   tombstoned: boolean;
   ownEconomicsWrites?: number;
   priorDataVersion?: number | null;
+  recommendationsRefreshed?: boolean;
+}
+
+interface SyncWorkerCompletion {
+  report: SyncReport;
+  changedSessionIds?: number[];
+  tombstoned?: boolean;
+  ownEconomicsWrites?: number;
+  recommendationsRefreshed?: boolean;
+}
+
+function recordWorkerCompletion(data: SyncWorkerCompletion): void {
+  if (data.changedSessionIds != null) {
+    syncReportMeta.set(data.report, {
+      sessionIds: data.changedSessionIds,
+      tombstoned: data.tombstoned === true,
+      ownEconomicsWrites: data.ownEconomicsWrites,
+      recommendationsRefreshed: data.recommendationsRefreshed === true,
+    });
+  }
 }
 
 const syncReportMeta = new WeakMap<SyncReport, SyncReportMeta>();
@@ -111,6 +133,12 @@ function reportMutatedArchive(report: SyncReport): boolean {
   );
 }
 
+function reportChangedArchiveViews(report: SyncReport): boolean {
+  return (
+    reportMutatedArchive(report) || syncReportMeta.get(report)?.recommendationsRefreshed === true
+  );
+}
+
 function refreshEconomicsForReport(
   economics: EconomicsCache | undefined,
   report: SyncReport,
@@ -155,7 +183,13 @@ export async function syncNow(
     ({ promise: runSync(config, undefined, progress), owned: true } satisfies SyncRunHandle);
   if (handle.owned) {
     syncStatus.in_progress = true;
-    syncStatus.last_error = null;
+    if (handle.started == null) {
+      syncStatus.last_error = null;
+    } else {
+      void handle.started.then(() => {
+        syncStatus.last_error = null;
+      });
+    }
   }
   try {
     const report = await handle.promise;
@@ -165,6 +199,7 @@ export async function syncNow(
     const stillBusy = handle.isBusy?.() === true;
     syncStatus.in_progress = stillBusy;
     syncStatus.last_sync_at = new Date().toISOString();
+    syncStatus.last_error = null;
     syncStatus.last_report =
       `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
       `issues ${report.issues}, failed ${report.failed}`;
@@ -179,6 +214,8 @@ export async function syncNow(
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (reportMutatedArchive(report)) {
       refreshEconomicsForReport(economics, report);
+    }
+    if (reportChangedArchiveViews(report)) {
       publishServerEvent({
         type: "archive_updated",
         reason: "manual",
@@ -288,14 +325,7 @@ export function runSyncWorker(
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { type: "progress"; progress: SyncProgress }
-        | {
-            type: "complete";
-            ok: true;
-            report: ReturnType<typeof ingestSync>;
-            changedSessionIds?: number[];
-            tombstoned?: boolean;
-            ownEconomicsWrites?: number;
-          }
+        | ({ type: "complete"; ok: true } & SyncWorkerCompletion)
         | { type: "complete"; ok: false; error: string };
       if (data.type === "progress") {
         if (!settled) {
@@ -305,13 +335,7 @@ export function runSyncWorker(
       }
       finish(() => {
         if (data.ok) {
-          if (data.changedSessionIds != null) {
-            syncReportMeta.set(data.report, {
-              sessionIds: data.changedSessionIds,
-              tombstoned: data.tombstoned === true,
-              ownEconomicsWrites: data.ownEconomicsWrites,
-            });
-          }
+          recordWorkerCompletion(data);
           resolve(data.report);
         } else {
           reject(new Error(data.error));
@@ -340,16 +364,27 @@ export function runSyncWorker(
   });
 }
 
-class PersistentSyncWorker {
-  #worker: Worker | null = null;
-  #exited: PromiseWithResolvers<void> | null = null;
+interface PersistentSyncJob {
+  id: number;
+  worker: Worker;
+  onProgress?: (progress: SyncProgress) => void;
+  resolve: (report: ReturnType<typeof ingestSync>) => void;
+  reject: (error: Error) => void;
+}
+
+export class PersistentSyncWorker {
+  #current: { worker: Worker; exited: PromiseWithResolvers<void> } | null = null;
   #nextId = 0;
-  #active: {
-    id: number;
-    onProgress?: (progress: SyncProgress) => void;
-    finish: (outcome: () => void) => void;
-  } | null = null;
+  #active: PersistentSyncJob | null = null;
   #closing = false;
+  readonly #spawn: () => Worker;
+  readonly #cancelGraceMs: number;
+
+  constructor(options: SyncWorkerOptions = {}) {
+    this.#spawn =
+      options.spawn ?? (() => new Worker(workerUrl("sync-worker.ts"), { type: "module" }));
+    this.#cancelGraceMs = Math.max(0, options.cancelGraceMs ?? SYNC_WORKER_CANCEL_GRACE_MS);
+  }
 
   run(
     config: Config,
@@ -360,7 +395,7 @@ class PersistentSyncWorker {
     if (this.#closing) {
       return Promise.reject(new Error("sync worker is closed"));
     }
-    const graceMs = SYNC_WORKER_CANCEL_GRACE_MS;
+    const graceMs = this.#cancelGraceMs;
     const worker = this.#ensureWorker();
     const id = ++this.#nextId;
     return new Promise((resolve, reject) => {
@@ -402,9 +437,13 @@ class PersistentSyncWorker {
         }, graceMs);
       };
 
-      this.#active = { id, onProgress, finish };
-      this.#resolveActive = (report) => finish(() => resolve(report));
-      this.#rejectActive = (error) => finish(() => reject(error));
+      this.#active = {
+        id,
+        worker,
+        onProgress,
+        resolve: (report) => finish(() => resolve(report)),
+        reject: (error) => finish(() => reject(error)),
+      };
       if (cancel != null) {
         forwardCancel();
         if (stopDeadline == null) {
@@ -421,30 +460,23 @@ class PersistentSyncWorker {
           ...(workerOpts != null ? { options: workerOpts } : {}),
         });
       } catch (error) {
-        this.#resolveActive = null;
-        this.#rejectActive = null;
         this.#dropWorker(worker, true);
         finish(() => reject(error instanceof Error ? error : new Error(String(error))));
       }
     });
   }
 
-  #resolveActive: ((report: ReturnType<typeof ingestSync>) => void) | null = null;
-  #rejectActive: ((error: Error) => void) | null = null;
-
   async close(): Promise<void> {
     this.#closing = true;
-    const worker = this.#worker;
-    if (worker == null) {
+    const current = this.#current;
+    if (current == null) {
       return;
     }
-    const exited = this.#exited ?? Promise.withResolvers<void>();
-    this.#exited = exited;
     let timer: Timer | null = null;
     try {
-      worker.postMessage({ type: "close" });
+      current.worker.postMessage({ type: "close" });
       await Promise.race([
-        exited.promise,
+        current.exited.promise,
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, WORKER_CLOSE_TIMEOUT_MS);
         }),
@@ -454,83 +486,66 @@ class PersistentSyncWorker {
       if (timer != null) {
         clearTimeout(timer);
       }
-      if (this.#worker === worker) {
-        this.#dropWorker(worker, true);
+      if (this.#current === current) {
+        this.#dropWorker(current.worker, true);
       }
     }
   }
 
+  #jobOwnedBy(worker: Worker): PersistentSyncJob | null {
+    const active = this.#active;
+    return active != null && active.worker === worker ? active : null;
+  }
+
   #ensureWorker(): Worker {
-    if (this.#worker != null) {
-      return this.#worker;
+    if (this.#current != null) {
+      return this.#current.worker;
     }
-    const worker = new Worker(workerUrl("sync-worker.ts"), { type: "module" });
-    this.#worker = worker;
-    this.#exited = Promise.withResolvers<void>();
+    const worker = this.#spawn();
+    const exited = Promise.withResolvers<void>();
+    this.#current = { worker, exited };
     worker.addEventListener("message", (event) => {
-      if (this.#worker !== worker) {
+      if (this.#current?.worker !== worker) {
         return;
       }
       const data = event.data as
         | { type: "progress"; id?: number; progress: SyncProgress }
-        | {
-            type: "complete";
-            id?: number;
-            ok: true;
-            report: ReturnType<typeof ingestSync>;
-            changedSessionIds?: number[];
-            tombstoned?: boolean;
-            ownEconomicsWrites?: number;
-          }
+        | ({ type: "complete"; id?: number; ok: true } & SyncWorkerCompletion)
         | { type: "complete"; id?: number; ok: false; error: string };
-      if (data.type === "progress") {
-        if (this.#active != null && (data.id == null || data.id === this.#active.id)) {
-          this.#active.onProgress?.(data.progress);
-        }
+      const job = this.#jobOwnedBy(worker);
+      if (job == null || (data.id != null && data.id !== job.id)) {
         return;
       }
-      if (this.#active != null && (data.id == null || data.id === this.#active.id)) {
-        const resolve = this.#resolveActive;
-        const reject = this.#rejectActive;
-        this.#resolveActive = null;
-        this.#rejectActive = null;
-        if (data.ok) {
-          if (data.changedSessionIds != null) {
-            syncReportMeta.set(data.report, {
-              sessionIds: data.changedSessionIds,
-              tombstoned: data.tombstoned === true,
-              ownEconomicsWrites: data.ownEconomicsWrites,
-            });
-          }
-          resolve?.(data.report);
-        } else {
-          reject?.(new Error(data.error));
-        }
+      if (data.type === "progress") {
+        job.onProgress?.(data.progress);
+        return;
+      }
+      if (data.ok) {
+        recordWorkerCompletion(data);
+        job.resolve(data.report);
+      } else {
+        job.reject(new Error(data.error));
       }
     });
     worker.addEventListener("error", (event) => {
       const error = workerError(event, "sync worker failed");
       this.#dropWorker(worker, true);
-      const reject = this.#rejectActive;
-      this.#resolveActive = null;
-      this.#rejectActive = null;
-      reject?.(error);
+      this.#jobOwnedBy(worker)?.reject(error);
     });
     worker.addEventListener("close", (event) => {
-      this.#exited?.resolve();
+      exited.resolve();
       const code = (event as Event & { code?: number }).code ?? "unknown";
       this.#dropWorker(worker, false);
-      const reject = this.#rejectActive;
-      this.#resolveActive = null;
-      this.#rejectActive = null;
-      reject?.(new Error(`sync worker exited with code ${code} before reporting`));
+      this.#jobOwnedBy(worker)?.reject(
+        new Error(`sync worker exited with code ${code} before reporting`),
+      );
     });
     return worker;
   }
 
   #dropWorker(worker: Worker, terminate: boolean): void {
-    if (this.#worker === worker) {
-      this.#worker = null;
+    if (this.#current?.worker === worker) {
+      this.#current = null;
     }
     if (terminate) {
       try {
@@ -540,10 +555,17 @@ class PersistentSyncWorker {
   }
 }
 
+function isFilesystemNotification(syncOptions: SyncOptions | undefined): boolean {
+  return syncOptions?.deferDerivedRefresh === true;
+}
+
 function syncCoversRequest(
   activeOpts: SyncOptions | undefined,
   requestedOpts: SyncOptions | undefined,
 ): boolean {
+  if (isFilesystemNotification(requestedOpts)) {
+    return false;
+  }
   const activePaths = activeOpts?.candidatePaths;
   const reqPaths = requestedOpts?.candidatePaths;
   const activeFull = activePaths == null || activePaths.length === 0;
@@ -599,7 +621,7 @@ export function createSyncCoordinator(
   worker?: SyncWorkerRunner,
   options: SyncCoordinatorOptions = {},
 ): SyncCoordinator {
-  const persistentWorker = worker == null ? new PersistentSyncWorker() : null;
+  const persistentWorker = worker == null ? new PersistentSyncWorker(options.workerOptions) : null;
   const runWorker: SyncWorkerRunner =
     worker ??
     ((config, cancel, onProgress, syncOptions) => {
@@ -627,6 +649,7 @@ export function createSyncCoordinator(
     promise: Promise<SyncReport>;
     resolve: (report: SyncReport) => void;
     reject: (error: unknown) => void;
+    started: PromiseWithResolvers<void>;
   } | null = null;
 
   const launch = (
@@ -705,6 +728,7 @@ export function createSyncCoordinator(
             next.cancelSources,
             next.syncOptions,
           );
+          next.started.resolve();
           nextPromise.then(next.resolve, next.reject);
         }
       });
@@ -758,6 +782,7 @@ export function createSyncCoordinator(
         listeners.add(onProgress);
       }
       const deferred = Promise.withResolvers<SyncReport>();
+      const started = Promise.withResolvers<void>();
       queued = {
         config,
         syncOptions,
@@ -766,8 +791,9 @@ export function createSyncCoordinator(
         promise: deferred.promise,
         resolve: deferred.resolve,
         reject: deferred.reject,
+        started,
       };
-      return { promise: deferred.promise, owned: true, isBusy };
+      return { promise: deferred.promise, owned: true, isBusy, started: started.promise };
     }
 
     const listeners = new Set<(progress: SyncProgress) => void>();
@@ -868,6 +894,8 @@ export function applyWatchEvent(
   publishServerEvent(published);
   if (event.type === "sync" && reportMutatedArchive(event.report)) {
     refreshEconomicsForReport(economics, event.report);
+  }
+  if (event.type === "sync" && reportChangedArchiveViews(event.report)) {
     publishServerEvent({
       type: "archive_updated",
       reason: event.reason,

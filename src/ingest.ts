@@ -173,6 +173,7 @@ export interface SyncOptions {
   onSessionChanged?: (sessionId: number) => void;
   onTombstoned?: () => void;
   onEconomicsBulkChanged?: () => void;
+  onRecommendationsRefreshed?: () => void;
 }
 
 export interface SourceFile {
@@ -1096,6 +1097,7 @@ export function sync(
       deferDerivedRefresh: options?.deferDerivedRefresh === true,
       recommendationMinIntervalMs: options?.recommendationMinIntervalMs ?? 0,
       onEconomicsBulkChanged: options?.onEconomicsBulkChanged,
+      onRecommendationsRefreshed: options?.onRecommendationsRefreshed,
     });
     if (!targeted && options?.deferDerivedRefresh !== true) {
       initializedSyncConnections.add(db);
@@ -1114,6 +1116,7 @@ interface DerivedRefreshFlags {
   deferDerivedRefresh: boolean;
   recommendationMinIntervalMs: number;
   onEconomicsBulkChanged?: () => void;
+  onRecommendationsRefreshed?: () => void;
 }
 
 function refreshDerivedState(
@@ -1191,8 +1194,11 @@ function refreshDerivedState(
         )
         .get() != null;
     if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
-      regenerateRecommendations(db);
+      const committed = regenerateRecommendations(db);
       lastRecommendationRefreshByDb.set(db, now);
+      if (committed) {
+        flags.onRecommendationsRefreshed?.();
+      }
     } else if (!background && lastRefresh === 0) {
       lastRecommendationRefreshByDb.set(db, now);
     }

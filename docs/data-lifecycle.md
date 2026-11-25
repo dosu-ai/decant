@@ -150,11 +150,21 @@ sampled hash of the already-ingested prefix (first 32 KiB, middle 4 KiB, and
 last 32 KiB). When a file grows past its previously ingested byte size and its
 sampled prefix hash still matches, Decant reads and writes only the newly
 appended lines, matching open tool calls, usage totals, context windows, and
-economics vectors in place. Same-size rewrites, truncation, prefix rewrites
-within the sampled regions, torn-line corrections that alter prior state, or
+economics vectors in place. Truncation, same-size rewrites that change the
+file's size or whole-second modification time, prefix rewrites within the
+sampled regions, torn-line corrections that alter prior state, and
 cross-session billed-request adjustments fall back automatically to a full
-re-parse (an in-place edit that both grows a file and modifies bytes strictly
-outside the sampled prefix regions requires a full rebuild). Full re-parses
+re-parse of that file. Two edits go unseen until something else changes the
+file. A rewrite that keeps the size and lands in the whole second the archive
+already recorded is skipped, because size and whole-second modification time
+both match. An in-place edit that grows a file and changes bytes only outside
+the sampled prefix regions is read as an append, so the archive keeps the old
+prefix. A later full re-parse of that file corrects either one, and no archive
+rebuild is needed. A later edit inside the sampled regions, a truncation, or a
+new ingest pipeline revision triggers that re-parse. A file whose checkpoint
+would hold more than 512 unanswered tool calls, more than 512 tool results
+without a matching call, or more than 256 KiB of pending call data keeps no
+checkpoint and is re-parsed in full each time it changes. Full re-parses
 (including Copilot CLI, Gemini CLI, VS Code
 Copilot Chat, OpenCode, Cursor CLI, Hermes Agent, and ATIF) diff existing
 messages, blocks, tool calls, and file references in place so unchanged blocks
@@ -202,9 +212,16 @@ do not leave the archive stale. Events are debounced so a burst of writes become
 one sync, and a log an agent keeps writing still syncs about every 5 seconds
 instead of waiting for the agent to pause. When a native event names an
 individual transcript file, the watch sync inspects only the changed paths and
-defers archive-wide recommendation refreshes to the periodic sweep (throttled
-to at most once every 5 minutes during continuous background activity) or to
-manual and startup syncs. OpenCode database directories are watched
+defers archive-wide recommendation refreshes to the periodic sweep or to manual
+and startup syncs. `decant serve` keeps one sync connection, so its sweep
+refreshes recommendations at most once every 5 minutes during continuous
+background activity. `decant watch` opens a fresh connection for each run, so
+each of its sweeps refreshes recommendations whenever an earlier sync left them
+pending. Once a server's sync connection has finished its first full sync, its
+watch and sweep syncs skip the archive-wide repricing pass, which startup,
+manual, and CLI syncs still run. A filesystem event that arrives while another
+sync is running waits for the next run instead of joining the running one,
+which may already have read that file. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
@@ -464,8 +481,9 @@ recording the original UTF-8 byte count so economics and size queries avoid
 decompression. Small records and tool results stay as text. Compression
 preserves the complete canonical JSON and complete tool output without
 truncating or redacting content. Searchable transcript blocks (`block.text`,
-`block.tool_name`, and `block.tool_input`) and the full-text index stay
-unchanged.
+`block.tool_name`, and `block.tool_input`) stay unchanged, so search returns the
+same results. Rewriting only a block's tool result, as compression does, leaves
+the full-text index untouched.
 
 For compressed source records, `message.raw_meta` holds the small JSON
 projection that transcript and accounting queries need, and `message.raw_bytes`
@@ -773,8 +791,10 @@ anyway so the OS can restart it.
 
 Stopping `decant serve` or the service cancels a sync in progress. The sync
 finishes the file it is reading and stops. It skips the work that normally ends
-a sync, such as linking subagents to their parents and refreshing signals, and
-the next sync that ingests a file does that work for the whole archive. A sync
+a sync, such as linking subagents to their parents and refreshing signals. The
+archive records that work as pending, so the next sync that ingests a file, or
+a later startup, manual, or sweep sync that ingests nothing, does it for the
+whole archive. A sync
 that is still running 5 seconds after it was cancelled is terminated. SQLite
 discards any write it had not committed, so the archive stays consistent and
 the next sync picks up where it left off. Homebrew installs register the stable
@@ -887,8 +907,10 @@ archived rows, so it also corrects sessions whose source files are gone, and
 no source is re-read for it.
 
 Costs are materialized at ingest and reconciled with current pricing on every
-sync. This includes unchanged and archived sessions, even when their source
-files are no longer available. Session costs and cached activity cost components
+CLI sync and on each server's startup and manual syncs. Background watch and
+sweep syncs on a server whose sync connection has already finished a full sync
+skip this pass. Reconciliation includes unchanged and archived sessions, even
+when their source files are no longer available. Session costs and cached activity cost components
 update in one transaction. Recommendations and server caches refresh after
 repricing. No archive rebuild is needed, and user state is preserved.
 

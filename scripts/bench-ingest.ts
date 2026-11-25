@@ -1,9 +1,14 @@
 import { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
+  constants,
   copyFileSync,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -16,9 +21,9 @@ import {
   statSync,
   unlinkSync,
   utimesSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
-import { cpus, release, totalmem } from "node:os";
+import { cpus, homedir, release, totalmem } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   type CorpusManifest,
@@ -32,6 +37,7 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 const CLI_PATH = join(REPO_ROOT, "src", "cli.ts");
 const DEFAULT_SEED = 20261125;
 const DEFAULT_IMAGE = "decant-bench:local";
+const DEFAULT_WORK_DIR = join(homedir(), ".cache", "decant-bench");
 const CONTAINER_WORK_DIR = "/bench";
 const CONTAINER_RUN_ROOT = "/var/tmp/decant-bench-run";
 const SAMPLE_INTERVAL_MS = 5_000;
@@ -57,7 +63,8 @@ measures steady-state ingest cost from outside the process (/proc and strace).
   --profile pi|small        corpus profile (default pi)
   --duration-sec <n>        steady-state replay window (default 600)
   --cadence-ms <n>          one live append every n ms (default 2000)
-  --work-dir <dir>          corpus, seed, and log cache (default /tmp/decant-bench)
+  --work-dir <dir>          corpus, seed, and log cache, kept owner-only
+                            (default ~/.cache/decant-bench)
   --run-dir <dir>           where each run's database copy lives (default <work-dir>/runs)
   --seed <n>                corpus seed (default ${DEFAULT_SEED})
   --rebuild-seed            regenerate the corpus and seeded databases
@@ -101,12 +108,69 @@ interface Options {
 
 class UsageError extends Error {}
 
+function ensurePrivateDir(dir: string): string {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stats = lstatSync(dir);
+  if (!stats.isDirectory()) {
+    throw new Error(`${dir} is not a directory`);
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && uid !== 0 && stats.uid !== uid) {
+    throw new Error(`${dir} is not owned by the current user`);
+  }
+  if ((stats.mode & 0o077) !== 0) {
+    chmodSync(dir, 0o700);
+  }
+  return dir;
+}
+
+function siblingTempPath(target: string): string {
+  return join(dirname(target), `.${basename(target)}.${randomBytes(8).toString("hex")}.tmp`);
+}
+
+function publishAtomically(target: string, fill: (temp: string) => void): void {
+  const temp = siblingTempPath(target);
+  try {
+    fill(temp);
+    renameSync(temp, target);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
+function publishText(target: string, contents: string): void {
+  publishAtomically(target, (temp) => {
+    const fd = openSync(temp, "wx", 0o600);
+    try {
+      writeSync(fd, contents);
+    } finally {
+      closeSync(fd);
+    }
+  });
+}
+
+function publishCopy(source: string, target: string): void {
+  publishAtomically(target, (temp) => {
+    copyFileSync(source, temp, constants.COPYFILE_EXCL);
+    chmodSync(temp, 0o600);
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isInside(parent: string, child: string): boolean {
+  return resolve(child).startsWith(`${resolve(parent)}/`);
+}
+
 function parseArgs(argv: string[]): Options | null {
   const options: Options = {
     profile: "pi",
     durationSec: 600,
     cadenceMs: 2000,
-    workDir: "/tmp/decant-bench",
+    workDir: DEFAULT_WORK_DIR,
     runDir: null,
     seed: DEFAULT_SEED,
     rebuildSeed: false,
@@ -292,7 +356,7 @@ function forwardedArgs(options: Options, outJson: string | null): string[] {
 
 async function runInDocker(options: Options): Promise<number> {
   await ensureDockerImage(options.dockerImage);
-  mkdirSync(options.workDir, { recursive: true });
+  ensurePrivateDir(options.workDir);
   const hostWorkDir = realpathSync(options.workDir);
   const reportName = `report-${Date.now()}.json`;
   const containerOut =
@@ -329,8 +393,8 @@ async function runInDocker(options: Options): Promise<number> {
   if (options.outJson !== null) {
     const produced = join(hostWorkDir, "reports", reportName);
     if (existsSync(produced)) {
-      mkdirSync(dirname(options.outJson), { recursive: true });
-      copyFileSync(produced, options.outJson);
+      mkdirSync(dirname(options.outJson), { recursive: true, mode: 0o700 });
+      publishText(options.outJson, readFileSync(produced, "utf8"));
       unlinkSync(produced);
       console.error(`[bench] wrote ${options.outJson}`);
     } else {
@@ -593,7 +657,7 @@ function isolatedEnv(
     xdgCache: join(runDir, "xdg-cache"),
     config: join(runDir, "decant-config"),
   };
-  for (const dir of [empty, ...Object.values(dirs)]) mkdirSync(dir, { recursive: true });
+  for (const dir of [empty, ...Object.values(dirs)]) ensurePrivateDir(dir);
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     LANG: "C.UTF-8",
@@ -650,10 +714,10 @@ function restoreSource(origPath: string, livePath: string, mtimeSec: number): vo
 }
 
 function endsWithNewline(path: string): boolean {
-  const size = statSync(path).size;
-  if (size === 0) return true;
   const fd = openSync(path, "r");
   try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return true;
     const buf = Buffer.alloc(1);
     readSync(fd, buf, 0, 1, size - 1);
     return buf[0] === 0x0a;
@@ -663,19 +727,68 @@ function endsWithNewline(path: string): boolean {
 }
 
 function assertInside(parent: string, child: string): void {
-  if (!resolve(child).startsWith(`${resolve(parent)}/`)) {
+  if (!isInside(parent, child)) {
     throw new Error(`refusing to delete ${child}: outside ${parent}`);
+  }
+}
+
+export function trustedCorpusManifest(value: unknown, dir: string): CorpusManifest | null {
+  if (!isRecord(value)) return null;
+  const expectedDirs: Record<string, string> = {
+    outDir: dir,
+    claudeDir: join(dir, "claude"),
+    codexDir: join(dir, "codex"),
+    copilotDir: join(dir, "copilot"),
+  };
+  for (const [key, expected] of Object.entries(expectedDirs)) {
+    if (value[key] !== expected) return null;
+  }
+  const live = value.liveSession;
+  if (
+    !isRecord(live) ||
+    typeof live.filePath !== "string" ||
+    !isInside(expectedDirs.claudeDir as string, live.filePath)
+  ) {
+    return null;
+  }
+  const scaling = value.scalingFiles;
+  if (!Array.isArray(scaling)) return null;
+  for (const file of scaling) {
+    if (
+      !isRecord(file) ||
+      typeof file.label !== "string" ||
+      !/^[a-z0-9]+$/.test(file.label) ||
+      typeof file.claudeDir !== "string" ||
+      typeof file.filePath !== "string" ||
+      !isInside(dir, file.claudeDir) ||
+      !isInside(file.claudeDir, file.filePath)
+    ) {
+      return null;
+    }
+  }
+  return value as unknown as CorpusManifest;
+}
+
+function readCachedManifest(manifestPath: string, dir: string): CorpusManifest | null {
+  let text: string;
+  try {
+    text = readFileSync(manifestPath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return trustedCorpusManifest(JSON.parse(text), dir);
+  } catch {
+    return null;
   }
 }
 
 async function ensureCorpus(options: Options): Promise<CorpusInfo> {
   const dir = join(options.workDir, `corpus-${options.profile}-${options.seed}`);
   const manifestPath = join(dir, "manifest.json");
-  if (!options.rebuildSeed && existsSync(manifestPath)) {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CorpusManifest;
-    if (manifest.scalingFiles !== undefined) {
-      return { dir, manifest, generatedNow: false, generateMs: null };
-    }
+  const cached = options.rebuildSeed ? null : readCachedManifest(manifestPath, dir);
+  if (cached !== null) {
+    return { dir, manifest: cached, generatedNow: false, generateMs: null };
   }
   if (existsSync(dir)) {
     assertInside(options.workDir, dir);
@@ -695,15 +808,15 @@ async function ensureCorpus(options: Options): Promise<CorpusInfo> {
     pinnedMtimeSec(live.lastTimestampMs),
     pinnedMtimeSec(live.lastTimestampMs),
   );
-  copyFileSync(live.filePath, liveOrigPath(dir));
-  mkdirSync(join(dir, "scaling-orig"), { recursive: true });
+  publishCopy(live.filePath, liveOrigPath(dir));
+  ensurePrivateDir(join(dir, "scaling-orig"));
   for (const file of manifest.scalingFiles ?? []) {
     const mtime = pinnedMtimeSec(file.lastTimestampMs);
     utimesSync(file.filePath, mtime, mtime);
-    copyFileSync(file.filePath, scalingOrigPath(dir, file.label));
+    publishCopy(file.filePath, scalingOrigPath(dir, file.label));
   }
   const generateMs = performance.now() - started;
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  publishText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return { dir, manifest, generatedNow: true, generateMs };
 }
 
@@ -803,7 +916,8 @@ function removeDbFiles(dbPath: string): void {
 
 function copyDb(from: string, to: string): void {
   removeDbFiles(to);
-  copyFileSync(from, to);
+  copyFileSync(from, to, constants.COPYFILE_EXCL);
+  chmodSync(to, 0o600);
 }
 
 interface SyncMeasurement {
@@ -897,7 +1011,7 @@ async function ensureSeed(
   console.error(`[bench] seeding ${label} database`);
   restore();
   const buildDir = join(scratchRoot, `seed-build-${label}-${Date.now()}`);
-  mkdirSync(buildDir, { recursive: true });
+  ensurePrivateDir(buildDir);
   const buildDb = join(buildDir, "decant.db");
   const env = isolatedEnv(buildDir, buildDb, sources);
   const measured = await measureSync(env, buildDir, null);
@@ -914,9 +1028,8 @@ async function ensureSeed(
     files: fileSizes(buildDb),
     inspection: inspectDb(buildDb, { integrity: false }),
   };
-  copyFileSync(buildDb, `${cachePath}.tmp`);
-  renameSync(`${cachePath}.tmp`, cachePath);
-  writeFileSync(metaPath, `${JSON.stringify(info, null, 2)}\n`);
+  publishCopy(buildDb, cachePath);
+  publishText(metaPath, `${JSON.stringify(info, null, 2)}\n`);
   assertInside(scratchRoot, buildDir);
   rmSync(buildDir, { recursive: true, force: true });
   return info;
@@ -925,13 +1038,13 @@ async function ensureSeed(
 class Api {
   constructor(readonly base: string) {}
 
-  async get<T>(path: string): Promise<T> {
+  async get(path: string): Promise<unknown> {
     const response = await fetch(`${this.base}${path}`, { signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new Error(`GET ${path} -> ${response.status}`);
-    return (await response.json()) as T;
+    return (await response.json()) as unknown;
   }
 
-  async post<T>(path: string, body: unknown): Promise<T> {
+  async post(path: string, body: unknown): Promise<unknown> {
     const response = await fetch(`${this.base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -939,14 +1052,13 @@ class Api {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`POST ${path} -> ${response.status}`);
-    return (await response.json()) as T;
+    return (await response.json()) as unknown;
   }
 }
 
 interface SseEvent {
   type: string;
   atMs: number;
-  data: Record<string, unknown> | null;
 }
 
 function streamEvents(api: Api, onEvent: (event: SseEvent) => void): AbortController {
@@ -965,16 +1077,10 @@ function streamEvents(api: Api, onEvent: (event: SseEvent) => void): AbortContro
           buffer = buffer.slice(split + 2);
           split = buffer.indexOf("\n\n");
           let type = "message";
-          let data = "";
           for (const line of frame.split("\n")) {
             if (line.startsWith("event: ")) type = line.slice(7);
-            else if (line.startsWith("data: ")) data += line.slice(6);
           }
-          let parsed: Record<string, unknown> | null = null;
-          try {
-            parsed = data === "" ? null : (JSON.parse(data) as Record<string, unknown>);
-          } catch {}
-          onEvent({ type, atMs: performance.now(), data: parsed });
+          onEvent({ type, atMs: performance.now() });
         }
       }
     } catch {}
@@ -1009,24 +1115,68 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}${lastError === null ? "" : `: ${lastError}`}`);
 }
 
-interface SessionRow {
-  id: number;
-  source_session_id: string;
+interface SessionDetailPage {
+  messageCount: number;
+  messageCountOnPage: number;
+  searchableText: string;
+  hasMoreMessages: boolean;
 }
 
-interface SessionDetailPage {
-  summary: { message_count: number };
-  messages: Array<{
-    blocks: Array<{ text: string | null; tool_input: string | null; tool_result: string | null }>;
-  }>;
-  has_more_messages?: boolean;
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} is not a non-negative integer`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function sessionDetailPage(value: unknown): SessionDetailPage {
+  if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.messages)) {
+    throw new Error("session detail response has an unexpected shape");
+  }
+  const text: string[] = [];
+  for (const message of value.messages) {
+    const blocks = isRecord(message) && Array.isArray(message.blocks) ? message.blocks : [];
+    for (const block of blocks) {
+      if (isRecord(block)) {
+        text.push(
+          `${optionalString(block.text)}\n${optionalString(block.tool_input)}\n${optionalString(block.tool_result)}`,
+        );
+      }
+    }
+  }
+  return {
+    messageCount: nonNegativeInteger(value.summary.message_count, "summary.message_count"),
+    messageCountOnPage: value.messages.length,
+    searchableText: text.join("\n"),
+    hasMoreMessages: value.has_more_messages === true,
+  };
+}
+
+function syncIdle(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.in_progress !== "boolean") {
+    throw new Error("sync status response has an unexpected shape");
+  }
+  return !value.in_progress && typeof value.last_sync_at === "string";
+}
+
+function searchHitCount(value: unknown): number {
+  if (Array.isArray(value)) return value.length;
+  return isRecord(value) && Array.isArray(value.results) ? value.results.length : 0;
 }
 
 async function findSessionId(api: Api, sourceSessionId: string): Promise<number> {
   for (let offset = 0; offset < 100_000; offset += 100) {
-    const rows = await api.get<SessionRow[]>(`/api/sessions?limit=100&offset=${offset}`);
-    const match = rows.find((row) => row.source_session_id === sourceSessionId);
-    if (match !== undefined) return match.id;
+    const rows = await api.get(`/api/sessions?limit=100&offset=${offset}`);
+    if (!Array.isArray(rows)) throw new Error("session list response is not an array");
+    const match = rows.find(
+      (row): row is Record<string, unknown> =>
+        isRecord(row) && row.source_session_id === sourceSessionId,
+    );
+    if (match !== undefined) return nonNegativeInteger(match.id, "session id");
     if (rows.length < 100) break;
   }
   throw new Error(`live session ${sourceSessionId} is not in the archive`);
@@ -1099,8 +1249,8 @@ async function runReplay(ctx: ReplayContext) {
   const runStamp = stamp();
   const logDir = join(options.workDir, "runs", `${runStamp}-${options.profile}`);
   const runDir = join(options.runDir ?? join(options.workDir, "runs"), `${runStamp}-replay`);
-  mkdirSync(logDir, { recursive: true });
-  mkdirSync(runDir, { recursive: true });
+  ensurePrivateDir(logDir);
+  ensurePrivateDir(runDir);
   const dbPath = join(runDir, "decant.db");
   copyDb(ctx.seed.path, dbPath);
   restoreSource(liveOrigPath(corpus.dir), live.filePath, pinnedMtimeSec(live.lastTimestampMs));
@@ -1155,18 +1305,15 @@ async function runReplay(ctx: ReplayContext) {
     (await fetch(`${api.base}/api/health`)).ok ? true : null,
   );
   const healthMs = performance.now() - spawnedAt;
-  await waitFor("startup sync", 1_800_000, async () => {
-    const status = await api.get<{ in_progress: boolean; last_sync_at: string | null }>(
-      "/api/sync-status",
-    );
-    return !status.in_progress && status.last_sync_at !== null ? true : null;
-  });
+  await waitFor("startup sync", 1_800_000, async () =>
+    syncIdle(await api.get("/api/sync-status")) ? true : null,
+  );
   const startupSyncMs = performance.now() - spawnedAt;
   const sessionId = await findSessionId(api, live.sessionId);
-  const initialDetail = await api.get<SessionDetailPage>(
-    `/api/sessions/${sessionId}?message_limit=1&message_offset=0`,
+  const initialDetail = sessionDetailPage(
+    await api.get(`/api/sessions/${sessionId}?message_limit=1&message_offset=0`),
   );
-  let knownMessageCount = initialDetail.summary.message_count;
+  let knownMessageCount = initialDetail.messageCount;
   const initialMessageCount = knownMessageCount;
 
   const events: SseEvent[] = [];
@@ -1206,36 +1353,31 @@ async function runReplay(ctx: ReplayContext) {
         if (pendingApi.length > 0) {
           let offset = Math.max(0, knownMessageCount - 20);
           for (let page = 0; page < 10; page += 1) {
-            const detail = await api.get<SessionDetailPage>(
-              `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
+            const detail = sessionDetailPage(
+              await api.get(
+                `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
+              ),
             );
             const seenAt = performance.now();
-            const text = detail.messages
-              .flatMap((message) => message.blocks)
-              .map(
-                (block) =>
-                  `${block.text ?? ""}\n${block.tool_input ?? ""}\n${block.tool_result ?? ""}`,
-              )
-              .join("\n");
+            const text = detail.searchableText;
             for (const marker of pendingApi) {
               if (marker.apiMs === null && text.includes(`${marker.marker} `)) {
                 marker.apiMs = seenAt - marker.appendedAtMs;
               }
             }
-            knownMessageCount = Math.max(knownMessageCount, detail.summary.message_count);
-            if (detail.has_more_messages !== true) break;
-            offset += detail.messages.length;
+            knownMessageCount = Math.max(knownMessageCount, detail.messageCount);
+            if (!detail.hasMoreMessages) break;
+            offset += detail.messageCountOnPage;
           }
         }
         for (const marker of pendingFts) {
-          const result = await api.post<{ results?: unknown[] } | unknown[]>("/api/search", {
+          const result = await api.post("/api/search", {
             query: marker.marker,
             include_subagents: true,
             include_total: false,
             limit: 5,
           });
-          const hits = Array.isArray(result) ? result : (result.results ?? []);
-          if (hits.length > 0) marker.ftsMs = performance.now() - marker.appendedAtMs;
+          if (searchHitCount(result) > 0) marker.ftsMs = performance.now() - marker.appendedAtMs;
         }
       } while (rerun);
     } catch (error) {
@@ -1453,8 +1595,8 @@ async function runScaling(options: Options, corpus: CorpusInfo, tag: string) {
     const runStamp = stamp();
     const logDir = join(options.workDir, "runs", `${runStamp}-scaling-${file.label}`);
     const runDir = join(scratchRoot, `${runStamp}-scaling-${file.label}`);
-    mkdirSync(logDir, { recursive: true });
-    mkdirSync(runDir, { recursive: true });
+    ensurePrivateDir(logDir);
+    ensurePrivateDir(runDir);
     const dbPath = join(runDir, "decant.db");
     copyDb(seed.path, dbPath);
     restore();
@@ -1636,9 +1778,9 @@ async function runNative(options: Options): Promise<number> {
   if (options.strace !== "off" && Bun.spawnSync(["strace", "-V"]).exitCode !== 0) {
     throw new Error("strace is not installed; install it or pass --strace off");
   }
-  mkdirSync(options.workDir, { recursive: true });
+  ensurePrivateDir(options.workDir);
   const scratchRoot = options.runDir ?? join(options.workDir, "runs");
-  mkdirSync(scratchRoot, { recursive: true });
+  ensurePrivateDir(scratchRoot);
   const tag = await schemaTag();
   const corpus = await ensureCorpus(options);
   const clkTck = clockTicks();
@@ -1682,7 +1824,7 @@ async function runNative(options: Options): Promise<number> {
       bunVersion: Bun.version,
       inContainer: existsSync("/.dockerenv"),
     },
-    options,
+    options: { ...options, env: Object.keys(options.env).sort() },
     schemaTag: tag,
     corpus: {
       dir: corpus.dir,
@@ -1708,8 +1850,8 @@ async function runNative(options: Options): Promise<number> {
   if (seed !== null && replay !== null) printReplay(replay, seed);
   if (scaling !== null) printScaling(scaling);
   if (options.outJson !== null) {
-    mkdirSync(dirname(options.outJson), { recursive: true });
-    writeFileSync(options.outJson, `${JSON.stringify(report, null, 2)}\n`);
+    mkdirSync(dirname(options.outJson), { recursive: true, mode: 0o700 });
+    publishText(options.outJson, `${JSON.stringify(report, null, 2)}\n`);
     console.error(`[bench] wrote ${options.outJson}`);
   }
   const failed =

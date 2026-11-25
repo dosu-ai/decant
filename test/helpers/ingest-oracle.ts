@@ -1,15 +1,18 @@
 import type { Database } from "bun:sqlite";
 import { expect } from "bun:test";
 import {
-  appendFileSync,
+  closeSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   realpathSync,
   rmSync,
   truncateSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -37,10 +40,6 @@ export interface CanonicalSnapshot {
 
 const SESSION_KEY_SQL = "s.tool || ':' || s.source_session_id";
 
-/** Every table an ingest writes, with database ids resolved to natural keys
- * (`tool:source_session_id`, message `seq`, block `ordinal`) and the
- * wall-clock columns dropped, so two archives built from the same files in a
- * different order compare equal exactly when their content does. */
 export function captureCanonicalSnapshot(db: Database): CanonicalSnapshot {
   return {
     session: sessionRows(db),
@@ -194,10 +193,6 @@ export interface FtsCapture {
   search: { total: number | null; hits: Row[] };
 }
 
-/** What full-text search finds for each query, read two ways: straight from
- * the `block_fts` index (with its bm25 score, which depends on index-wide
- * statistics a stale or duplicated row would skew) and through `searchPage`,
- * the function the CLI and API search with. */
 export function captureFtsResults(db: Database, queries: string[]): FtsCapture[] {
   const ordinalOf = db.query("SELECT ordinal FROM block WHERE id = ?1");
   const sessionKeyOf = db.query(
@@ -249,7 +244,6 @@ export function assertDatabaseIntegrity(db: Database): void {
   ).not.toThrow();
 }
 
-/** Source roots inside a scenario workspace. Mutation paths start with one. */
 export const SOURCE_ROOTS = {
   claude: "claude",
   codex: "codex",
@@ -270,10 +264,6 @@ export type FileMutation =
 export interface ScenarioStep {
   label: string;
   mutations: FileMutation[];
-  /** `advance` (the default) moves every touched file's mtime 2s past the
-   * previous step, so whole-second change detection sees the mutation.
-   * `hold` stamps the previous step's second again, the way a writer that
-   * lands twice within one second leaves a file. */
   clock?: "advance" | "hold";
 }
 
@@ -299,9 +289,6 @@ const CONTENT_OPS: ReadonlySet<FileMutation["op"]> = new Set([
 const CLOCK_START_SECONDS = Date.UTC(2026, 10, 1, 12, 0, 0) / 1000;
 const CLOCK_STEP_SECONDS = 2;
 
-/** Replays `scenario` one step at a time into an archive synced after every
- * step, then syncs the final files once into an empty archive and requires
- * the two to match table for table and query for query. */
 export function runDifferentialScenario(scenario: DifferentialScenario): DifferentialResult {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "decant-oracle-")));
   const config = isolatedConfig(workspace);
@@ -357,8 +344,6 @@ export function runDifferentialScenario(scenario: DifferentialScenario): Differe
   }
 }
 
-/** Every source directory inside the workspace, so a scenario never reads the
- * real home directory's agent logs. */
 export function isolatedConfig(workspace: string): Config {
   const root = (name: string): string => join(workspace, name);
   return {
@@ -378,6 +363,32 @@ export function isolatedConfig(workspace: string): Config {
   };
 }
 
+function writeExistingFile(
+  path: string,
+  content: string | Uint8Array,
+  flags: number,
+  mutation: Record<string, string>,
+): void {
+  let fd: number;
+  try {
+    fd = openSync(path, flags);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      expect({ ...mutation, exists: false }).toEqual({ ...mutation, exists: true });
+    }
+    throw error;
+  }
+  try {
+    const bytes = typeof content === "string" ? Buffer.from(content) : content;
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      offset += writeSync(fd, bytes, offset);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function applyMutations(workspace: string, mutations: FileMutation[]): string[] {
   const touched = new Set<string>();
   for (const mutation of mutations) {
@@ -389,11 +400,9 @@ function applyMutations(workspace: string, mutations: FileMutation[]): string[] 
         touched.add(path);
         break;
       case "append":
-        expect({ append: mutation.path, exists: existsSync(path) }).toEqual({
+        writeExistingFile(path, mutation.content, constants.O_WRONLY | constants.O_APPEND, {
           append: mutation.path,
-          exists: true,
         });
-        appendFileSync(path, mutation.content);
         touched.add(path);
         break;
       case "truncate":
@@ -401,11 +410,9 @@ function applyMutations(workspace: string, mutations: FileMutation[]): string[] 
         touched.add(path);
         break;
       case "rewrite":
-        expect({ rewrite: mutation.path, exists: existsSync(path) }).toEqual({
+        writeExistingFile(path, mutation.content, constants.O_WRONLY | constants.O_TRUNC, {
           rewrite: mutation.path,
-          exists: true,
         });
-        writeFileSync(path, mutation.content);
         touched.add(path);
         break;
       case "mkdir":

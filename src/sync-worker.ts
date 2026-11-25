@@ -36,6 +36,7 @@ type SyncWorkerMessage =
       changedSessionIds: number[];
       tombstoned: boolean;
       ownEconomicsWrites: number;
+      recommendationsRefreshed: boolean;
     }
   | { type: "complete"; id?: number; ok: false; error: string };
 
@@ -72,6 +73,7 @@ function runSyncOnDb(
 ): SyncWorkerMessage {
   const changedSessionIds: number[] = [];
   let tombstoned = false;
+  let recommendationsRefreshed = false;
   const economicsWritesBefore = committedEconomicsWrites(db);
   const syncOptions: SyncOptions = {
     ...(options?.candidatePaths != null ? { candidatePaths: options.candidatePaths } : {}),
@@ -88,6 +90,9 @@ function runSyncOnDb(
     onEconomicsBulkChanged: () => {
       tombstoned = true;
     },
+    onRecommendationsRefreshed: () => {
+      recommendationsRefreshed = true;
+    },
   };
   const report = sync(
     db,
@@ -103,9 +108,16 @@ function runSyncOnDb(
     syncOptions,
   );
   const ownEconomicsWrites = committedEconomicsWrites(db) - economicsWritesBefore;
+  const completion = {
+    report,
+    changedSessionIds,
+    tombstoned,
+    ownEconomicsWrites,
+    recommendationsRefreshed,
+  };
   return id == null
-    ? { type: "complete", ok: true, report, changedSessionIds, tombstoned, ownEconomicsWrites }
-    : { type: "complete", id, ok: true, report, changedSessionIds, tombstoned, ownEconomicsWrites };
+    ? { type: "complete", ok: true, ...completion }
+    : { type: "complete", id, ok: true, ...completion };
 }
 
 self.addEventListener("message", function onMessage(event) {
@@ -149,7 +161,6 @@ self.addEventListener("message", function onMessage(event) {
     return;
   }
 
-  // Legacy one-shot request: handle one sync, then exit naturally after closing SQLite.
   self.removeEventListener("message", onMessage);
   let db: ReturnType<typeof openDb> | null = null;
   let result: SyncWorkerMessage;

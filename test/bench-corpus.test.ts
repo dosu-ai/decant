@@ -8,6 +8,7 @@ import {
   generateLiveAppendChunk,
   type LiveAppenderState,
 } from "../scripts/bench-corpus.ts";
+import { trustedCorpusManifest } from "../scripts/bench-ingest.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { type IngestConfig, type SyncReport, sync } from "../src/ingest.ts";
 
@@ -80,5 +81,47 @@ describe("bench corpus generator", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("bench corpus cache", () => {
+  const dir = "/home/dev/.cache/decant-bench/corpus-pi-1";
+  const manifest = {
+    outDir: dir,
+    claudeDir: `${dir}/claude`,
+    codexDir: `${dir}/codex`,
+    copilotDir: `${dir}/copilot`,
+    liveSession: { filePath: `${dir}/claude/-home-dev-work-atlas/live.jsonl` },
+    scalingFiles: [
+      {
+        label: "1mb",
+        claudeDir: `${dir}/scaling/1mb/claude`,
+        filePath: `${dir}/scaling/1mb/claude/-home-dev-work-atlas/s.jsonl`,
+      },
+    ],
+  };
+
+  test("accepts a cached manifest whose paths stay under its corpus directory", () => {
+    expect(trustedCorpusManifest(manifest, dir)).not.toBeNull();
+  });
+
+  test.each([
+    ["outDir", { ...manifest, outDir: "/etc" }],
+    ["liveSession", { ...manifest, liveSession: { filePath: "/etc/passwd" } }],
+    ["traversal", { ...manifest, liveSession: { filePath: `${dir}/claude/../../../x.jsonl` } }],
+    [
+      "scaling file",
+      {
+        ...manifest,
+        scalingFiles: [{ ...manifest.scalingFiles[0], filePath: "/var/tmp/s.jsonl" }],
+      },
+    ],
+    [
+      "scaling label",
+      { ...manifest, scalingFiles: [{ ...manifest.scalingFiles[0], label: "../x" }] },
+    ],
+    ["missing scaling", { ...manifest, scalingFiles: undefined }],
+  ])("rejects a cached manifest with an untrusted %s", (_label, tampered) => {
+    expect(trustedCorpusManifest(tampered, dir)).toBeNull();
   });
 });

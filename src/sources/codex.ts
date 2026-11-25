@@ -17,10 +17,9 @@ import { preview } from "../tools.ts";
 import {
   block,
   contentText,
-  countUnknown,
+  countUnknownInRecord,
   nullRecord,
   parseJsonLine,
-  type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
 
@@ -234,9 +233,7 @@ export function stepCodexLine(
   }
 
   if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
-    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
-    countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = nullRecord(unknownMap);
+    countUnknownInRecord(state.unknownTypes, typ, lineNo);
   }
   return { messages: [] };
 }

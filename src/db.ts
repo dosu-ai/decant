@@ -22,7 +22,7 @@ import {
   rollbackEconomicsTransaction,
 } from "./sync-state.ts";
 
-export const LATEST_SCHEMA_VERSION = 34;
+export const LATEST_SCHEMA_VERSION = 35;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -942,6 +942,24 @@ function migrate(db: Database, current: number): void {
       }
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (34, datetime('now'))",
+      ).run();
+    }
+    if (current < 35) {
+      db.exec(`
+        DROP TRIGGER IF EXISTS block_au;
+        CREATE TRIGGER block_au AFTER UPDATE ON block
+        WHEN old.text IS NOT new.text
+          OR old.tool_name IS NOT new.tool_name
+          OR old.tool_input IS NOT new.tool_input
+        BEGIN
+          INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+          VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+          INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+          VALUES (new.id, new.text, new.tool_name, new.tool_input);
+        END;
+      `);
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (35, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

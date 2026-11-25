@@ -3,6 +3,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   closeSync,
+  fstatSync,
+  futimesSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -13,6 +15,7 @@ import {
   symlinkSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +23,11 @@ import type { Config } from "../src/config.ts";
 import { contextWindowForSession } from "../src/context-window.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
-import { tryIncrementalIngest } from "../src/incremental-ingest.ts";
+import {
+  MAX_CHECKPOINT_ORPHAN_RESULT_IDS,
+  MAX_CHECKPOINT_UNMATCHED_CALLS,
+  tryIncrementalIngest,
+} from "../src/incremental-ingest.ts";
 import {
   INGEST_PIPELINE_REVISION,
   type IngestConfig,
@@ -40,10 +47,19 @@ import {
 } from "../src/server/sync.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import {
+  claudeUnknownTypeIssues,
+  createClaudeStepper,
+  stepClaudeLine,
+} from "../src/sources/claude.ts";
+import { codexUnknownTypeIssues, createCodexStepper, stepCodexLine } from "../src/sources/codex.ts";
+import { createPiStepper, piUnknownTypeIssues, stepPiLine } from "../src/sources/pi.ts";
+import { printableType } from "../src/sources/shared.ts";
+import {
   bumpSyncStateGeneration,
   committedEconomicsWrites,
   markSyncStateCleared,
   readSyncStateGeneration,
+  SYNC_STATE_DERIVED_PENDING,
   SYNC_STATE_RECOMMENDATIONS_CLEARED,
   SYNC_STATE_RECOMMENDATIONS_PENDING,
   SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ,
@@ -250,7 +266,6 @@ describe("incremental ingest fast path", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Repeat request #1 (which was evicted past the 64-request window) with higher output_tokens.
       appendFileSync(
         claudeFile,
         `${JSON.stringify({
@@ -325,7 +340,6 @@ describe("in-place diff/upsert on full rebuilds", () => {
       expect(afterBlockIds.slice(0, beforeBlockIds.length)).toEqual(beforeBlockIds);
       assertDatabaseIntegrity(db);
 
-      // Truncate back to the first 6 lines: must remove trailing tool_calls/blocks cleanly without FK errors.
       writeFileSync(eventsPath, `${sample.slice(0, 6).join("\n")}\n`);
       expect(sync(db, config).ingested).toBe(1);
       expect(sync(freshDb, config).ingested).toBe(1);
@@ -486,7 +500,6 @@ describe("serve watch & cache incremental helpers", () => {
       expect(after).toEqual({ reply_count: 3, tool_call_count: 2, search_count: 3 });
       expect(getSession(db, id)?.totals).toEqual({ reply_count: 3, tool_call_count: 2 });
 
-      // Clear materialized columns to verify fallback matches identically.
       db.run("UPDATE session SET reply_count = NULL, tool_call_count = NULL WHERE id = ?1", [id]);
       expect(getSession(db, id)?.totals).toEqual({ reply_count: 3, tool_call_count: 2 });
     } finally {
@@ -534,13 +547,11 @@ describe("Sol review regression coverage (F1-F13)", () => {
         .get(file) as { size: number; mtime: number; session_id: number };
 
       appendFileSync(file, claudeTurn("c-f1", 2, "req-2"));
-      const stats = statSync(file);
-
-      // Connection B commits the append first while A still holds stale prior metadata.
-      expect(sync(dbB, config).ingested).toBe(1);
-
       const fd = openSync(file, "r");
       try {
+        const stats = fstatSync(fd);
+        expect(sync(dbB, config).ingested).toBe(1);
+
         const res = tryIncrementalIngest({
           db: dbA,
           fd,
@@ -702,7 +713,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         cache.refreshSessions(changed, versionBefore);
         expect(await cache.get()).toEqual(tokenEconomics(db));
 
-        // Passing a mismatched expectedDataVersion must trigger invalidation instead of masking external writes.
         cache.refreshSessions(changed, (versionBefore ?? 0) - 999);
         await cache.settled();
         expect(await cache.get()).toEqual(tokenEconomics(db));
@@ -771,7 +781,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Restamp previous assistant from 1000 -> 10 input tokens and switch model to gpt-5.4-mini.
       appendFileSync(
         codexFile,
         `${JSON.stringify({
@@ -802,7 +811,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       );
       expect(sync(db, config).ingested).toBe(1);
 
-      // Follow with a compaction + unrelated user message to verify checkpoint stays exact.
       appendFileSync(
         codexFile,
         `${JSON.stringify({
@@ -834,7 +842,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const file = join(config.claudeDir, "proj", "c-f6.jsonl");
     writeFileSync(file, claudeTurn("c-f6", 1, "req-1"));
 
-    // 1. Cancel during final progress must return cancelled: true and skip recommendations.
     const db1 = openDb(dbPath);
     const cancel = { aborted: false };
     try {
@@ -852,7 +859,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       closeDb(db1);
     }
 
-    // 2. Reopen on a fresh connection and run a full sync that ingests 0 new files: pending recommendations must still run.
     const db2 = openDb(dbPath);
     try {
       const report = sync(db2, config);
@@ -970,7 +976,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Append a thinking block for msg_req-1 (20 responses ago) without increasing usage.
       appendFileSync(
         file,
         `${JSON.stringify({
@@ -1062,7 +1067,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         ).n,
       ).toBe(0);
 
-      // Now append a genuine orphan tool_result and verify report.issues counts it.
       appendFileSync(
         file,
         `${JSON.stringify({
@@ -1175,7 +1179,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Append a nested call referencing pi-call-1 (evicted past the 64-call window).
       appendFileSync(
         piFile,
         `${JSON.stringify({
@@ -1248,7 +1251,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     for (let i = 1; i <= 70; i += 1) {
       tail += makeCall(`m-evict-${i}`, `evict-${i}`, 10 + i, `run(${i})`);
     }
-    // Initial write: seq 0 and seq 1 both have toolCall id "dup-call".
     writeFileSync(piFile, header + makeCall("m-dup-0", "dup-call", 1, "first-v1") + tail);
 
     const db = openDb(dbPath);
@@ -1256,7 +1258,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Rewrite seq 0 in place with a second block so seq 0's tool_use block gets a higher block.id than seq 1.
       const rewrittenSeq0 = `${JSON.stringify({
         type: "message",
         id: "m-dup-0",
@@ -1277,7 +1278,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       utimesSync(piFile, bumped, bumped);
       expect(sync(db, config).ingested).toBe(1);
 
-      // Verify seq 0 block.id is indeed higher than seq 1 block.id.
       const orderRows = db
         .query(
           `SELECT m.seq, b.id AS block_id
@@ -1289,7 +1289,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       expect(orderRows).toHaveLength(2);
       expect(orderRows[0]?.block_id).toBeGreaterThan(orderRows[1]?.block_id ?? 0);
 
-      // Append a nested call for the evicted "dup-call": must attach to seq 1 (not seq 0).
       appendFileSync(
         piFile,
         `${JSON.stringify({
@@ -1347,13 +1346,11 @@ describe("Sol review regression coverage (F1-F13)", () => {
         .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
         .get(file) as { size: number; mtime: number; session_id: number };
 
-      // Append turn 2 to inode 1 and hold an open fd on inode 1.
       appendFileSync(file, claudeTurn("c-f1-atomic", 2, "req-2"));
       const staleFd = openSync(file, "r");
       const staleStats = statSync(file);
 
       try {
-        // Atomically replace path with inode 2 containing 3 turns, and commit via connection B.
         writeFileSync(
           tmpFile,
           claudeTurn("c-f1-atomic", 1, "req-1") +
@@ -1363,7 +1360,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         renameSync(tmpFile, file);
         expect(sync(dbB, config).ingested).toBe(1);
 
-        // Stale writer attempting incremental ingest with old fd must get "conflict", not "fallback".
         const res = tryIncrementalIngest({
           db: dbA,
           fd: staleFd,
@@ -1384,7 +1380,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         closeSync(staleFd);
       }
 
-      // Subsequent sync on dbA sees the 3-turn file and preserves all 6 messages.
       expect(sync(dbA, config).skipped).toBe(1);
       expect(sync(freshDb, config).ingested).toBe(1);
       expect(
@@ -1440,7 +1435,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         const initial = await cache.get();
         expect(initial).toEqual(tokenEconomics(readerDb));
 
-        // Capture priorDataVersion before both worker sync and concurrent external write.
         const versionBefore = cache.dataVersion();
         const writesBefore = committedEconomicsWrites(workerDb);
         const changed: number[] = [];
@@ -1455,7 +1449,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         ).toBe(1);
         const ownWrites = committedEconomicsWrites(workerDb) - writesBefore;
 
-        // Separate external connection commits fileB AFTER versionBefore was captured.
         appendFileSync(fileB, claudeTurn("c-f4b", 2, "req-b2", 120));
         expect(
           sync(externalDb, config, undefined, undefined, {
@@ -1464,7 +1457,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
           }).ingested,
         ).toBe(1);
 
-        // Partial refresh must detect the external economics_seq bump and rebuild to 400.
         cache.refreshSessions(changed, versionBefore, ownWrites);
         await cache.settled();
         const after = await cache.get();
@@ -1498,10 +1490,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
       const genBefore = readSyncStateGeneration(dbA, SYNC_STATE_RECOMMENDATIONS_PENDING);
       expect(genBefore).toBeGreaterThan(0);
 
-      // Writer 1 runs recommendations on state before Writer 2 commits.
       regenerateRecommendations(dbA);
 
-      // Writer 2 commits a file with malformed JSONL lines while Writer 1's refresh is finishing.
       writeFileSync(
         fileB,
         `${claudeTurn("c-f6b", 1, "req-2")}{not valid json\n{also broken\n{still broken\n`,
@@ -1513,10 +1503,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
         }).ingested,
       ).toBe(1);
 
-      // Writer 1 clears only up to the generation it read before refreshing.
       markSyncStateCleared(dbA, SYNC_STATE_RECOMMENDATIONS_CLEARED, genBefore);
 
-      // A subsequent zero-ingest sync must still see Writer 2's higher generation and refresh recommendations.
       const zeroSync = sync(dbC, config);
       expect(zeroSync.ingested).toBe(0);
 
@@ -1606,7 +1594,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Restamp forces rebuildContextWindowFoldFromDb.
       appendFileSync(
         codexFile,
         `${JSON.stringify({
@@ -1633,7 +1620,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       );
       expect(sync(db, config).ingested).toBe(1);
 
-      // Follow-up user turn increments from the rebuilt fold.
       appendFileSync(
         codexFile,
         `${JSON.stringify({
@@ -1671,7 +1657,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
 
-      // Replace req-1 twice in the same append: first keeping msg_req-1 (A), then switching to msg_req-1_B (B).
       appendFileSync(
         file,
         `${JSON.stringify({
@@ -1726,7 +1711,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const file = join(config.claudeDir, "proj", "c-f15.jsonl");
     writeFileSync(file, claudeTurn("c-f15", 1, "req-1"));
 
-    // Initialize and downgrade schema to the v32 shape (before sync_state existed).
     const initial = openDb(dbPath);
     closeDb(initial);
     const raw = new Database(dbPath);
@@ -1795,7 +1779,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         { candidatePaths: ["/only-one.jsonl"], deferDerivedRefresh: true },
       );
 
-      // Manual sync queues behind the narrow watch run.
       const manualPromise = syncNow(
         fullConfig,
         economics,
@@ -1803,7 +1786,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         coordinator.runWithOwnership,
       );
 
-      // Watch finishes; coordinator immediately starts queued manual run.
       watchGate.resolve();
       const watchRes = await watchPromise;
       await manualStarted.promise;
@@ -1816,7 +1798,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         );
       }
 
-      // Manual run is still blocked on manualGate, so status must remain in_progress.
       expect(coordinator.isBusy()).toBe(true);
       expect(syncStatus.in_progress).toBe(true);
 
@@ -1913,7 +1894,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         expect(before).toEqual(tokenEconomics(readerDb));
         expect(before.totals.generation_tokens).toBe(50);
 
-        // Replace with forked child session whose parent_thread_id matches the misfiled parent.
         writeFileSync(
           codexFile,
           makeCodex(
@@ -1978,20 +1958,17 @@ describe("Sol review regression coverage (F1-F13)", () => {
         .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
         .get(file) as { size: number; mtime: number; session_id: number };
 
-      // Append turn 2 to inode 1 and capture fd + stats for stale writer A.
       appendFileSync(file, claudeTurn("c-f1-r3", 2, "req-2"));
       const staleFd = openSync(file, "r");
       const staleStats = statSync(file);
 
       try {
-        // Atomically replace path with the original 2-message content and a newer mtime, then sync via B.
         writeFileSync(tmpFile, original);
         const newer = new Date(Date.now() + 5_000);
         utimesSync(tmpFile, newer, newer);
         renameSync(tmpFile, file);
         expect(sync(dbB, config).ingested).toBe(1);
 
-        // Writer A must detect the conflict (mtime and inode moved) and refuse to commit 4 messages.
         const res = tryIncrementalIngest({
           db: dbA,
           fd: staleFd,
@@ -2046,11 +2023,9 @@ describe("Sol review regression coverage (F1-F13)", () => {
         refreshBefore + 1,
       );
 
-      // Verify a concurrent stale writer blocked behind BEGIN IMMEDIATE cannot overwrite newer recommendations.
       const blocker = openDb(dbPath);
       try {
         blocker.exec("BEGIN IMMEDIATE;");
-        // Simulate B completing a newer refresh inside the lock, raising refresh_seq and writing a sentinel row.
         bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
         const newerGen = readSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
         bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
@@ -2067,7 +2042,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         closeDb(blocker);
       }
 
-      // A zero-ingest sync sees pending === cleared and preserves the newer refresh result.
       expect(sync(db, config).ingested).toBe(0);
       const kept = db
         .query("SELECT COUNT(*) AS n FROM recommendation WHERE detail = 'newer-writer-result'")
@@ -2218,7 +2192,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       await economics.settled();
       expect((await economics.get()).totals.generation_tokens).toBe(50);
 
-      // Rewrite liveDoc to use the deleted root identity and drop the embedded child.
       writeFileSync(
         liveDoc,
         JSON.stringify({
@@ -2321,7 +2294,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       await economics.settled();
       expect((await economics.get()).totals.generation_tokens).toBe(0);
 
-      // Remove parent's reference to child so resolveSubagentParents clears child's parent_session_id.
       writeFileSync(
         parentDoc,
         JSON.stringify({
@@ -2355,7 +2327,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const db = openDb(dbPath);
     try {
       expect(sync(db, config).ingested).toBe(1);
-      // Simulate an archive written by the previous ingest revision with a stale turn_count.
       db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
       db.query("UPDATE session SET turn_count = 99").run();
 
@@ -2387,20 +2358,24 @@ describe("Sol review regression coverage (F1-F13)", () => {
         .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
         .get(file) as { size: number; mtime: number; session_id: number };
 
-      // Append OLDTOKEN, pin mtime to sec + 100ms, and open fd before in-place rewrite.
       appendFileSync(file, turn2Old);
       const baseSec = Math.floor(Date.now() / 1000) + 2;
       const t1 = new Date(baseSec * 1000 + 100);
-      utimesSync(file, t1, t1);
-      const fd = openSync(file, "r");
-      const stats = statSync(file);
-      const statsBig = statSync(file, { bigint: true });
-
+      const fd = openSync(file, "r+");
       try {
-        // Rewrite the exact same inode to the exact same byte length with NEWTOKEN at sec + 500ms (same whole second!).
-        writeFileSync(file, turn1 + turn2New);
+        futimesSync(fd, t1, t1);
+        const stats = fstatSync(fd);
+        const statsBig = fstatSync(fd, { bigint: true });
+
+        const rewritten = Buffer.from(turn1 + turn2New);
+        expect(rewritten.byteLength).toBe(stats.size);
+        expect(writeSync(fd, rewritten, 0, rewritten.byteLength, 0)).toBe(rewritten.byteLength);
         const t2 = new Date(baseSec * 1000 + 500);
-        utimesSync(file, t2, t2);
+        futimesSync(fd, t2, t2);
+        const rewrittenStats = fstatSync(fd, { bigint: true });
+        expect(rewrittenStats.size).toBe(statsBig.size);
+        expect(rewrittenStats.mtimeNs / 1_000_000_000n).toBe(statsBig.mtimeNs / 1_000_000_000n);
+        expect(rewrittenStats.mtimeNs).not.toBe(statsBig.mtimeNs);
 
         const res = tryIncrementalIngest({
           db,
@@ -2424,7 +2399,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         closeSync(fd);
       }
 
-      // Reopening via normal sync ingests NEWTOKEN and matches a fresh ingest.
       expect(sync(db, config).ingested).toBe(1);
       expect(sync(freshDb, config).ingested).toBe(1);
       expect(search(db, "NEWTOKEN").length).toBeGreaterThan(0);
@@ -2460,21 +2434,22 @@ describe("Sol review regression coverage (F1-F13)", () => {
       const t1 = new Date(baseSec * 1000 + 100);
       utimesSync(file, t1, t1);
 
-      // Sync A opens fd on OLDTEXT1 before B commits or rewrite occurs.
-      const fdA = openSync(file, "r");
-      const statsA = statSync(file);
-      const statsABig = statSync(file, { bigint: true });
-
+      const fdA = openSync(file, "r+");
       try {
-        // Sync B commits OLDTEXT1 (same size + whole second as A's stats).
+        const statsA = fstatSync(fdA);
+        const statsABig = fstatSync(fdA, { bigint: true });
         expect(sync(dbB, config).ingested).toBe(1);
 
-        // File is rewritten in place to NEWTEXT2 advancing mtime by 400ms within the same second.
-        writeFileSync(file, turn1 + turn2New);
+        const rewritten = Buffer.from(turn1 + turn2New);
+        expect(rewritten.byteLength).toBe(statsA.size);
+        expect(writeSync(fdA, rewritten, 0, rewritten.byteLength, 0)).toBe(rewritten.byteLength);
         const t2 = new Date(baseSec * 1000 + 500);
-        utimesSync(file, t2, t2);
+        futimesSync(fdA, t2, t2);
+        const rewrittenStats = fstatSync(fdA, { bigint: true });
+        expect(rewrittenStats.size).toBe(statsABig.size);
+        expect(rewrittenStats.mtimeNs / 1_000_000_000n).toBe(statsABig.mtimeNs / 1_000_000_000n);
+        expect(rewrittenStats.mtimeNs).not.toBe(statsABig.mtimeNs);
 
-        // Sync A must NOT take the early "skipped" return; it must detect the live file changed.
         const res = tryIncrementalIngest({
           db: dbA,
           fd: fdA,
@@ -2497,12 +2472,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
         closeSync(fdA);
       }
 
-      // Verify full sync via live-file-paused retry in sync() itself: force B to commit OLDTEXT1
-      // while A is blocked in BEGIN IMMEDIATE, rewrite in place to NEWTEXT2, then let A retry.
       const blocker = openDb(dbPath);
       try {
-        // Reset archive to turn1, append OLDTEXT1, let B commit OLDTEXT1, then rewrite to NEWTEXT2
-        // and verify sync(dbA) with a live file rewritten during sync retries past coarse skip.
         const file2 = join(config.claudeDir, "proj", "c-f1-retry-bypass.jsonl");
         const r1 = claudeTurn("c-f1-retry-bypass", 1, "req-1");
         const r2Old = claudeTurn("c-f1-retry-bypass", 2, "req-2", 40, "OLDVAL99");
@@ -2514,9 +2485,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         const s1 = new Date(sec2 * 1000 + 100);
         utimesSync(file2, s1, s1);
 
-        // Interleave via a short write lock on blocker: while dbA enters sync and blocks on BEGIN IMMEDIATE,
-        // wait: sync is synchronous on the same thread, so verify the retry loop directly using a worker
-        // that holds BEGIN IMMEDIATE while committing OLDVAL99 and rewriting NEWVAL99 before releasing!
         const workerScript = `
           import { Database } from "bun:sqlite";
           import { writeFileSync, utimesSync } from "node:fs";
@@ -2526,7 +2494,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
             wdb.exec("BEGIN IMMEDIATE;");
             self.postMessage("locked");
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 180);
-            // Rewrite file in place BEFORE releasing the SQLite write lock so sync(dbA) sees both the commit and the rewrite.
             wdb.query("UPDATE ingest_source SET size = ?1, mtime = ?2 WHERE path = ?3").run(data.size, data.mtimeSec, data.file);
             writeFileSync(data.file, data.newContent);
             const t2 = new Date(data.mtimeSec * 1000 + 500);
@@ -2555,8 +2522,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
           newContent: r1 + r2New,
         });
         await locked.promise;
-        // sync(dbA) reads OLDVAL99 before blocking on BEGIN IMMEDIATE, worker commits + rewrites NEWVAL99,
-        // then sync(dbA) unblocks, hits conflict_live, bypasses coarse skip, and ingests NEWVAL99!
         const rep = sync(dbA, config, undefined, undefined, { candidatePaths: [file2] });
         await done.promise;
         w.terminate();
@@ -2582,8 +2547,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const { dir, dbPath, config } = freshCase();
     const file = join(config.claudeDir, "proj", "c-bloom-scale.jsonl");
     let content = "";
-    // 3,000 responses: 3000 * 48 = 144,000 -> next power of two is 262,144 bits (32,768 bytes),
-    // proving the bulk-sizing branch ran rather than promoting at 65 entries (131,072 bits).
     for (let i = 1; i <= 3_000; i += 1) {
       content += claudeTurn("c-bloom-scale", i, `req-${i}`, 40);
     }
@@ -2609,7 +2572,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
         32_768,
       );
 
-      // Append 25 distinct turns: economics fold must stay valid (zero false-positive saturation).
       for (let i = 3_001; i <= 3_025; i += 1) {
         appendFileSync(file, claudeTurn("c-bloom-scale", i, `req-${i}`, 40));
         expect(sync(db, config).ingested).toBe(1);
@@ -2625,8 +2587,6 @@ describe("Sol review regression coverage (F1-F13)", () => {
       ) as { economics: { valid: boolean } };
       expect(parsedCp.economics.valid).toBe(true);
 
-      // Now append a late thinking block with msg_req-1 and no requestId so it exercises
-      // foldEconomicsDelta's seenResponseKeys Bloom lookup directly (not claudeEvictedRequests).
       appendFileSync(
         file,
         `${JSON.stringify({
@@ -2667,6 +2627,303 @@ describe("Sol review regression coverage (F1-F13)", () => {
     } finally {
       closeDb(db);
       closeDb(freshDb);
+    }
+  });
+});
+
+describe("holistic audit regressions", () => {
+  test("a Codex spawn_agent result appended after its child was ingested links the child on a targeted watch sync", () => {
+    const { dbPath, config } = freshCase();
+    const parentId = "33333333-3333-4333-8333-333333333333";
+    const childId = "44444444-4444-4444-8444-444444444444";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const parentFile = join(day, `rollout-2026-11-01T10-00-00-${parentId}.jsonl`);
+    const childFile = join(day, `rollout-2026-11-01T10-00-04-${childId}.jsonl`);
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    writeFileSync(
+      parentFile,
+      line("2026-11-01T10:00:00.000Z", "session_meta", { id: parentId, cwd: "/home/dev/app" }) +
+        line("2026-11-01T10:00:01.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Spawn a helper agent" }],
+        }) +
+        line("2026-11-01T10:00:02.000Z", "response_item", {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ prompt: "inspect tests" }),
+          call_id: "call_spawn_late",
+        }),
+    );
+    writeFileSync(
+      childFile,
+      line("2026-11-01T10:00:04.000Z", "session_meta", {
+        id: childId,
+        cwd: "/home/dev/app",
+        source: { subagent: { thread_spawn: { parent_thread_id: parentId, depth: 1 } } },
+      }) +
+        line("2026-11-01T10:00:05.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "inspect tests" }],
+        }),
+    );
+
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+      const childLink = () =>
+        db
+          .query("SELECT is_subagent, spawn_tool_use_id FROM session WHERE source_session_id = ?1")
+          .get(childId) as { is_subagent: number; spawn_tool_use_id: string | null };
+      expect(childLink()).toEqual({ is_subagent: 1, spawn_tool_use_id: null });
+
+      appendFileSync(
+        parentFile,
+        line("2026-11-01T10:00:03.000Z", "response_item", {
+          type: "function_call_output",
+          call_id: "call_spawn_late",
+          output: JSON.stringify({
+            agent_id: childId,
+            status: "spawned",
+            notes: "verbose startup context ".repeat(150),
+          }),
+        }),
+      );
+      const derivedBefore = readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+      expect(
+        sync(db, config, undefined, undefined, {
+          candidatePaths: [parentFile],
+          deferDerivedRefresh: true,
+        }),
+      ).toMatchObject({ ingested: 1, failed: 0 });
+      expect(
+        db
+          .query(
+            "SELECT typeof(tool_result) AS kind FROM block WHERE tool_use_id = 'call_spawn_late' AND type = 'tool_result'",
+          )
+          .get(),
+      ).toEqual({ kind: "blob" });
+      expect(readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING)).toBeGreaterThan(
+        derivedBefore,
+      );
+      expect(childLink()).toEqual({ is_subagent: 1, spawn_tool_use_id: "call_spawn_late" });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test.each([
+    {
+      source: "claude",
+      run: (lines: string[]) => {
+        const state = createClaudeStepper("unknown-claude");
+        const table = state.unknownTypes;
+        lines.forEach((line, index) => {
+          stepClaudeLine(state, line, index + 1, []);
+        });
+        return { sameTable: state.unknownTypes === table, issues: claudeUnknownTypeIssues(state) };
+      },
+    },
+    {
+      source: "codex",
+      run: (lines: string[]) => {
+        const state = createCodexStepper("unknown-codex");
+        const table = state.unknownTypes;
+        lines.forEach((line, index) => {
+          stepCodexLine(state, line, index + 1, []);
+        });
+        return { sameTable: state.unknownTypes === table, issues: codexUnknownTypeIssues(state) };
+      },
+    },
+    {
+      source: "pi",
+      run: (lines: string[]) => {
+        const state = createPiStepper("unknown-pi");
+        const table = state.unknownTypes;
+        lines.forEach((line, index) => {
+          stepPiLine(state, line, index + 1, []);
+        });
+        return { sameTable: state.unknownTypes === table, issues: piUnknownTypeIssues(state) };
+      },
+    },
+  ])("the $source stepper counts many distinct unknown record types in place", ({ run }) => {
+    const distinct = 4_000;
+    const types = [
+      ...Array.from({ length: distinct }, (_, index) => `mystery_${index}`),
+      "not printable!",
+    ];
+    const record = (type: string) =>
+      JSON.stringify({ type, timestamp: "2026-11-01T10:00:00.000Z", payload: {} });
+    const lines = [...types, ...types, ...types.slice(0, 10)].map(record);
+
+    const { sameTable, issues } = run(lines);
+
+    expect(sameTable).toBe(true);
+    const unknown = issues.filter((issue) => issue.code === "unknown_record_type");
+    expect(unknown).toHaveLength(types.length);
+    const byLabel = new Map(
+      unknown.map((issue) => [/unknown record type "(.*)" on/.exec(issue.error)?.[1], issue]),
+    );
+    types.forEach((type, index) => {
+      const issue = byLabel.get(printableType(type));
+      expect(issue?.lineNo).toBe(index + 1);
+      expect(issue?.error).toContain(`on ${index < 10 ? 3 : 2} line(s)`);
+    });
+  });
+
+  test.each([
+    {
+      shape: "unresolved calls",
+      calls: MAX_CHECKPOINT_UNMATCHED_CALLS + 1,
+      orphans: 0,
+      checkpointsAfterResult: 1,
+    },
+    {
+      shape: "orphan results",
+      calls: 1,
+      orphans: MAX_CHECKPOINT_ORPHAN_RESULT_IDS + 1,
+      checkpointsAfterResult: 0,
+    },
+  ])(
+    "a session with too many $shape keeps no checkpoint and still matches a fresh ingest after a late result",
+    ({ calls, orphans, checkpointsAfterResult }) => {
+      const { dir, dbPath, config } = freshCase();
+      const sessionId = `c-budget-${calls}-${orphans}`;
+      const file = join(config.claudeDir as string, "proj", `${sessionId}.jsonl`);
+      const record = (fields: Record<string, unknown>) =>
+        `${JSON.stringify({ sessionId, cwd: "/home/dev/work/app", ...fields })}\n`;
+      const callBlocks = Array.from({ length: calls }, (_, index) => ({
+        type: "tool_use",
+        id: `tu-pending-${index}`,
+        name: "Read",
+        input: { file_path: `/home/dev/work/app/src/file-${index}.ts` },
+      }));
+      const orphanBlocks = Array.from({ length: orphans }, (_, index) => ({
+        type: "tool_result",
+        tool_use_id: `tu-missing-${index}`,
+        content: "no call",
+      }));
+      writeFileSync(
+        file,
+        record({
+          type: "user",
+          uuid: "u-1",
+          timestamp: "2026-11-01T10:00:00.000Z",
+          message: { role: "user", content: "Read every file" },
+        }) +
+          record({
+            type: "assistant",
+            uuid: "a-1",
+            requestId: "req-1",
+            timestamp: "2026-11-01T10:00:01.000Z",
+            message: {
+              id: "msg_req-1",
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              stop_reason: "tool_use",
+              usage: { input_tokens: 100, output_tokens: 20 },
+              content: callBlocks,
+            },
+          }) +
+          (orphans > 0
+            ? record({
+                type: "user",
+                uuid: "u-orphans",
+                timestamp: "2026-11-01T10:00:02.000Z",
+                message: { role: "user", content: orphanBlocks },
+              })
+            : ""),
+      );
+
+      const db = openDb(dbPath);
+      const freshDb = openDb(join(dir, "fresh.db"));
+      const checkpoints = () =>
+        (
+          db.query("SELECT COUNT(*) AS n FROM ingest_checkpoint WHERE path = ?1").get(file) as {
+            n: number;
+          }
+        ).n;
+      try {
+        expect(sync(db, config).ingested).toBe(1);
+        expect(checkpoints()).toBe(0);
+
+        appendFileSync(
+          file,
+          record({
+            type: "user",
+            uuid: "u-late",
+            timestamp: "2026-11-01T10:00:05.000Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "tu-pending-0", content: "late output" },
+              ],
+            },
+          }),
+        );
+        expect(sync(db, config).ingested).toBe(1);
+        expect(checkpoints()).toBe(checkpointsAfterResult);
+        expect(sync(freshDb, config).ingested).toBe(1);
+        assertDatabaseIntegrity(db);
+        expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+        expect(
+          db
+            .query(
+              "SELECT output_bytes FROM tool_call WHERE tool_use_id = 'tu-pending-0' AND result_block_id IS NOT NULL",
+            )
+            .get(),
+        ).toEqual({ output_bytes: "late output".length });
+      } finally {
+        closeDb(db);
+        closeDb(freshDb);
+      }
+    },
+  );
+
+  test("a zero-ingest sweep that regenerates deferred recommendations reports the refresh", async () => {
+    const { dbPath, config } = freshCase();
+    const fileA = join(config.claudeDir as string, "proj", "c-rec-a.jsonl");
+    const fileB = join(config.claudeDir as string, "proj", "c-rec-b.jsonl");
+    writeFileSync(fileA, claudeTurn("c-rec-a", 1, "req-1"));
+    const db = openDb(dbPath);
+    try {
+      let refreshed = 0;
+      const onRecommendationsRefreshed = () => {
+        refreshed += 1;
+      };
+      expect(sync(db, config, undefined, undefined, { onRecommendationsRefreshed }).ingested).toBe(
+        1,
+      );
+      expect(refreshed).toBe(1);
+
+      writeFileSync(fileB, `${claudeTurn("c-rec-b", 1, "req-2")}{not valid json\n`);
+      expect(
+        sync(db, config, undefined, undefined, {
+          candidatePaths: [fileB],
+          deferDerivedRefresh: true,
+          onRecommendationsRefreshed,
+        }).ingested,
+      ).toBe(1);
+      expect(refreshed).toBe(1);
+
+      await Bun.sleep(5);
+      const sweep = sync(db, config, undefined, undefined, {
+        recommendationMinIntervalMs: 1,
+        onRecommendationsRefreshed,
+      });
+      expect(sweep.ingested).toBe(0);
+      expect(refreshed).toBe(2);
+
+      await Bun.sleep(5);
+      sync(db, config, undefined, undefined, {
+        recommendationMinIntervalMs: 1,
+        onRecommendationsRefreshed,
+      });
+      expect(refreshed).toBe(2);
+    } finally {
+      closeDb(db);
     }
   });
 });

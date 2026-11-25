@@ -140,15 +140,22 @@ returning the watch sync's report.
 
 Sync responses include `repriced` when stored session or activity costs changed.
 A repricing-only sync also invalidates server economics caches and emits
-`archive_updated`, even when `ingested` is zero.
+`archive_updated`, even when `ingested` is zero. A sync that only regenerates
+recommendations also emits `archive_updated` with `ingested` zero, but leaves
+the economics caches alone.
 
 `GET /api/sync-status` describes the server's current sync. `in_progress` turns
-true when a sync starts and stays true if a queued sync takes over. On an idle
-server, `reason` and `progress` stay null until the sync has discovered its
-sources and reported its first counts. They reset to null when sync work ends. `archive_synced` is false only while a new archive waits for its
-first completed sync: the server opened it with no sessions or ingested
-sources, and no sync has finished since. A failed or cancelled sync leaves it
-false. Server-Sent Events are not replayed, so a client that connects or
+true when a sync starts and stays true if a queued sync takes over. For a sync
+that starts on an idle server, `reason` and `progress` stay null until the sync
+has discovered its sources and reported its first counts. A queued sync that
+takes over can show the previous sync's `progress` until it reports its own
+first update. Both reset to null when sync work ends. A queued manual sync
+clears `last_error` when it starts and again when it succeeds.
+`archive_synced` is false only while a new archive waits for its first
+completed sync. That is a sync that returned a report and was not cancelled,
+even if the report counts individual file failures. The server opened the
+archive with no sessions or ingested sources, and no sync has completed since.
+A failed or cancelled sync leaves it false. Server-Sent Events are not replayed, so a client that connects or
 reconnects during a sync reads this route to restore its state.
 
 `GET /api/date-bounds` covers visible sessions only, with no

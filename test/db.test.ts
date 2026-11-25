@@ -374,6 +374,75 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
+  test("upgrades a v34 archive so tool_result-only block updates skip the FTS index", () => {
+    const path = freshPath();
+    const legacy = openDb(path);
+    const expected = buildSchemaManifest(legacy);
+    legacy.exec(`
+      INSERT INTO session(id, tool, source_session_id) VALUES (1, 'claude_code', 'fts-v35');
+      INSERT INTO message(id, session_id, seq, role, raw) VALUES (1, 1, 0, 'assistant', '{}');
+      INSERT INTO block(id, message_id, session_id, ordinal, type, text, tool_name, tool_input, tool_result)
+      VALUES (1, 1, 1, 0, 'tool_use', 'porting decant', 'Read', '{"file_path":"README.md"}', 'done');
+      DROP TRIGGER block_au;
+      CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+        INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
+        VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
+        INSERT INTO block_fts(rowid, text, tool_name, tool_input)
+        VALUES (new.id, new.text, new.tool_name, new.tool_input);
+      END;
+      DELETE FROM schema_migrations WHERE version > 34;
+    `);
+    const changesFor = (db: Database, sql: string): number => {
+      const before = (db.query("SELECT total_changes() AS n").get() as { n: number }).n;
+      db.exec(sql);
+      return (db.query("SELECT total_changes() AS n").get() as { n: number }).n - before;
+    };
+    expect(
+      changesFor(legacy, "UPDATE block SET tool_result = 'v34 rewrite' WHERE id = 1"),
+    ).toBeGreaterThan(1);
+    closeDb(legacy);
+
+    const migrated = openDb(path);
+    try {
+      expect(buildSchemaManifest(migrated)).toEqual(expected);
+      expect(migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual(
+        { version: LATEST_SCHEMA_VERSION },
+      );
+      expect(
+        changesFor(
+          migrated,
+          "UPDATE block SET tool_result = 'compacted', tool_result_bytes = 9 WHERE id = 1",
+        ),
+      ).toBe(1);
+
+      const matches = (query: string): number[] =>
+        (
+          migrated
+            .query("SELECT rowid FROM block_fts WHERE block_fts MATCH ?1 ORDER BY rowid")
+            .all(query) as { rowid: number }[]
+        ).map((row) => row.rowid);
+      expect(matches("porting")).toEqual([1]);
+
+      expect(
+        changesFor(migrated, "UPDATE block SET text = 'renamed archive' WHERE id = 1"),
+      ).toBeGreaterThan(1);
+      expect(matches("porting")).toEqual([]);
+      expect(matches("renamed")).toEqual([1]);
+
+      migrated.exec("UPDATE block SET tool_name = 'Grep' WHERE id = 1");
+      expect(matches("tool_name:Read")).toEqual([]);
+      expect(matches("tool_name:Grep")).toEqual([1]);
+
+      migrated.exec(`UPDATE block SET tool_input = '{"pattern":"needle"}' WHERE id = 1`);
+      expect(matches("tool_input:needle")).toEqual([1]);
+      expect(matches("tool_input:README")).toEqual([]);
+
+      migrated.exec("INSERT INTO block_fts(block_fts) VALUES('integrity-check')");
+    } finally {
+      closeDb(migrated);
+    }
+  });
+
   test("upgrades a v33 archive with tool_result_bytes without rewriting retained blocks", () => {
     const path = freshPath();
     const legacy = openDb(path);

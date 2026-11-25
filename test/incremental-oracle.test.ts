@@ -37,8 +37,6 @@ function sessionRow(snapshot: CanonicalSnapshot, key: string): Rec {
   return row as Rec;
 }
 
-// ---------------------------------------------------------------- Claude Code
-
 function claudePath(session: string): string {
   return `${CLAUDE_PROJECT}/${session}.jsonl`;
 }
@@ -734,8 +732,6 @@ describe("incremental ingest matches a fresh ingest: Claude Code", () => {
   });
 });
 
-// ---------------------------------------------------------------- Codex
-
 function codexLine(ts: string, type: string, payload: unknown, ordinal?: number): Rec {
   return { timestamp: ts, ...(ordinal == null ? {} : { ordinal }), type, payload };
 }
@@ -951,8 +947,6 @@ describe("incremental ingest matches a fresh ingest: Codex", () => {
   });
 });
 
-// ---------------------------------------------------------------- Pi
-
 describe("incremental ingest matches a fresh ingest: Pi", () => {
   test("nested calls answered in a later chunk, and a fork with copied entries", () => {
     const ORIGINAL = "5a1e0000-0000-4000-8000-0000000000a1";
@@ -1096,8 +1090,6 @@ describe("incremental ingest matches a fresh ingest: Pi", () => {
     );
   });
 });
-
-// ---------------------------------------------------------------- Copilot CLI
 
 describe("incremental ingest matches a fresh ingest: Copilot CLI", () => {
   test("usage records, tool executions, checkpoints, shutdowns, and replayed event ids", () => {
@@ -1305,8 +1297,6 @@ describe("incremental ingest matches a fresh ingest: Copilot CLI", () => {
   });
 });
 
-// ---------------------------------------------------------------- Gemini CLI
-
 describe("incremental ingest matches a fresh ingest: Gemini CLI", () => {
   test("a chat log appended with $set checkpoints and a $rewindTo", () => {
     const S = "9e000000-0000-4000-8000-000000000001";
@@ -1418,8 +1408,6 @@ describe("incremental ingest matches a fresh ingest: Gemini CLI", () => {
   });
 });
 
-// ---------------------------------------------------------------- VS Code
-
 const repoFixtures = join(import.meta.dir, "..", "fixtures");
 
 function chunkLines(content: string, cuts: number[]): string[] {
@@ -1469,8 +1457,6 @@ describe("incremental ingest matches a fresh ingest: Copilot Chat in VS Code", (
     ).toBeGreaterThan(0);
   });
 });
-
-// ---------------------------------------------------------------- fixture replay
 
 describe("incremental ingest matches a fresh ingest: repository fixtures replayed in chunks", () => {
   const cases: [string, string, string][] = [
@@ -1536,8 +1522,6 @@ describe("incremental ingest matches a fresh ingest: repository fixtures replaye
   }
 });
 
-// ---------------------------------------------------------------- change detection edges
-
 describe("incremental ingest and whole-second change detection", () => {
   const S = "c3000000-0000-4000-8000-000000000001";
   const path = claudePath(S);
@@ -1590,27 +1574,23 @@ describe("incremental ingest and whole-second change detection", () => {
     });
   });
 
-  // Known limit: a rewrite that keeps the size and lands in the second the
-  // archive already recorded is indistinguishable by (size, whole-second
-  // mtime), so the incremental archive keeps the old text. When change
-  // detection learns to see it, this starts passing and `.failing` must go.
-  test.failing("a same-size rewrite within the recorded second is re-read", () => {
-    runDifferentialScenario({
-      name: "same-second-same-size",
-      steps: [
-        { label: "first turn", mutations: [write(path, turn(1, "apple"))] },
-        {
-          label: "same-size rewrite in the same second",
-          clock: "hold",
-          mutations: [{ op: "rewrite", path, content: jsonl(turn(1, "grape")) }],
-        },
-      ],
-      queries: ["apple", "grape"],
-    });
+  test("a same-size rewrite within the recorded second keeps the archived text because size and whole-second mtime both match", () => {
+    expect(() =>
+      runDifferentialScenario({
+        name: "same-second-same-size",
+        steps: [
+          { label: "first turn", mutations: [write(path, turn(1, "apple"))] },
+          {
+            label: "same-size rewrite in the same second",
+            clock: "hold",
+            mutations: [{ op: "rewrite", path, content: jsonl(turn(1, "grape")) }],
+          },
+        ],
+        queries: ["apple", "grape"],
+      }),
+    ).toThrow();
   });
 });
-
-// ---------------------------------------------------------------- the oracle itself
 
 describe("the differential oracle", () => {
   function syncedArchive(): { db: Database; dir: string } {

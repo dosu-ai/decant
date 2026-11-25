@@ -16,11 +16,10 @@ import {
 import { preview } from "../tools.ts";
 import {
   block,
-  countUnknown,
+  countUnknownInRecord,
   nullRecord,
   ownGet,
   parseJsonLine,
-  type UnknownTypes,
   unknownTypeIssues,
 } from "./shared.ts";
 
@@ -98,9 +97,7 @@ export function stepPiLine(
     return {};
   }
   const noteUnknown = (typ: string): void => {
-    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
-    countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = nullRecord(unknownMap);
+    countUnknownInRecord(state.unknownTypes, typ, lineNo);
   };
   if (!isObject(entry)) {
     noteUnknown("entry.non_object");

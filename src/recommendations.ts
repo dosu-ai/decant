@@ -308,7 +308,7 @@ export function current(db: Database): Recommendation[] {
 
 const MAX_RECOMMENDATION_REGENERATE_ATTEMPTS = 3;
 
-export function regenerate(db: Database): void {
+export function regenerate(db: Database): boolean {
   for (let attempt = 0; attempt < MAX_RECOMMENDATION_REGENERATE_ATTEMPTS; attempt += 1) {
     const startPendingGen = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
     const startRefreshSeq = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
@@ -496,9 +496,10 @@ export function regenerate(db: Database): void {
       }
     });
     if (outcome !== "retry") {
-      return;
+      return outcome === "committed";
     }
   }
+  return false;
 }
 
 function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: string[]): void {

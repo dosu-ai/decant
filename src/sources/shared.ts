@@ -86,6 +86,22 @@ export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: nu
   unknownTypes.set(label, seen);
 }
 
+export type UnknownTypeCounts = Record<string, { count: number; firstLine: number }>;
+
+export function countUnknownInRecord(
+  unknownTypes: UnknownTypeCounts,
+  typ: string,
+  lineNo: number,
+): void {
+  const label = printableType(typ);
+  const seen = ownGet(unknownTypes, label);
+  if (seen == null) {
+    unknownTypes[label] = { count: 1, firstLine: lineNo };
+  } else {
+    seen.count += 1;
+  }
+}
+
 export type UnknownTypeHandling = "ignored" | 'kept as role "other"' | "read as ATIF-v1.8";
 
 export function unknownTypeIssues(

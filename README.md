@@ -224,7 +224,7 @@ decant distill script          # workflow script from command history
 decant db info                 # what the archive holds and where
 decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
-decant db compact              # losslessly compress stored source records
+decant db compact              # losslessly compress stored source records and tool results
 decant update                  # update Decant with the tool that installed it
 decant service install         # start Decant at login and keep it running
 decant doctor                  # redacted environment report for bug reports

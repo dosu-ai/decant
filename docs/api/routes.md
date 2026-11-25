@@ -133,16 +133,19 @@ open. Unexpected failures return generic `internal_error` prose;
 the structured stderr log retains the diagnostic.
 
 `DECANT_NO_SYNC` and `--no-sync` suppress Decant-initiated startup, watch, and
-sweep syncs. They do not disable `POST /api/sync`.
+sweep syncs. They do not disable `POST /api/sync`. A manual sync can share an
+in-flight sync that already covers the request. If the watcher is syncing
+only changed paths, the manual request waits for a full sync rather than
+returning the watch sync's report.
 
 Sync responses include `repriced` when stored session or activity costs changed.
 A repricing-only sync also invalidates server economics caches and emits
 `archive_updated`, even when `ingested` is zero.
 
 `GET /api/sync-status` describes the server's current sync. `in_progress` turns
-true when a sync starts. `reason` and `progress` stay null until the sync has
-discovered its sources and reported its first counts, and they are null again
-once it ends. `archive_synced` is false only while a new archive waits for its
+true when a sync starts and stays true if a queued sync takes over. On an idle
+server, `reason` and `progress` stay null until the sync has discovered its
+sources and reported its first counts. They reset to null when sync work ends. `archive_synced` is false only while a new archive waits for its
 first completed sync: the server opened it with no sessions or ingested
 sources, and no sync has finished since. A failed or cancelled sync leaves it
 false. Server-Sent Events are not replayed, so a client that connects or

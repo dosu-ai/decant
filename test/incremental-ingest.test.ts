@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
+import { contextWindowForSession } from "../src/context-window.ts";
 import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import { tryIncrementalIngest } from "../src/incremental-ingest.ts";
@@ -37,12 +38,15 @@ import {
   syncStatus,
   workerSyncRunner,
 } from "../src/server/sync.ts";
+import { setSessionUserState } from "../src/session-user-state.ts";
 import {
+  bumpSyncStateGeneration,
   committedEconomicsWrites,
   markSyncStateCleared,
   readSyncStateGeneration,
   SYNC_STATE_RECOMMENDATIONS_CLEARED,
   SYNC_STATE_RECOMMENDATIONS_PENDING,
+  SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ,
 } from "../src/sync-state.ts";
 import { tokenEconomics } from "../src/token-economics.ts";
 import { SyncStatusStore } from "../src/watch.ts";
@@ -526,8 +530,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(dbA, config).ingested).toBe(1);
       const prior = dbA
-        .query("SELECT size, session_id FROM ingest_source WHERE path = ?1")
-        .get(file) as { size: number; session_id: number };
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
 
       appendFileSync(file, claudeTurn("c-f1", 2, "req-2"));
       const stats = statSync(file);
@@ -545,6 +549,7 @@ describe("Sol review regression coverage (F1-F13)", () => {
           tool: "claude_code",
           archived: false,
           priorSize: prior.size,
+          priorMtime: prior.mtime,
           priorSessionId: prior.session_id,
           ingestRevision: INGEST_PIPELINE_REVISION,
           expectedRevision: INGEST_PIPELINE_REVISION,
@@ -1339,8 +1344,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
     try {
       expect(sync(dbA, config).ingested).toBe(1);
       const prior = dbA
-        .query("SELECT size, session_id FROM ingest_source WHERE path = ?1")
-        .get(file) as { size: number; session_id: number };
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
 
       // Append turn 2 to inode 1 and hold an open fd on inode 1.
       appendFileSync(file, claudeTurn("c-f1-atomic", 2, "req-2"));
@@ -1367,6 +1372,7 @@ describe("Sol review regression coverage (F1-F13)", () => {
           tool: "claude_code",
           archived: false,
           priorSize: prior.size,
+          priorMtime: prior.mtime,
           priorSessionId: prior.session_id,
           ingestRevision: INGEST_PIPELINE_REVISION,
           expectedRevision: INGEST_PIPELINE_REVISION,
@@ -1952,6 +1958,414 @@ describe("Sol review regression coverage (F1-F13)", () => {
     } finally {
       closeDb(readerDb);
       closeDb(workerDb);
+    }
+  });
+
+  test("F1 (round 3): same-size atomic replacement with newer mtime rejects stale incremental append", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f1-r3.jsonl");
+    const tmpFile = join(config.claudeDir, "proj", "c-f1-r3.tmp");
+    const original = claudeTurn("c-f1-r3", 1, "req-1");
+    writeFileSync(file, original);
+
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config).ingested).toBe(1);
+      const prior = dbA
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
+
+      // Append turn 2 to inode 1 and capture fd + stats for stale writer A.
+      appendFileSync(file, claudeTurn("c-f1-r3", 2, "req-2"));
+      const staleFd = openSync(file, "r");
+      const staleStats = statSync(file);
+
+      try {
+        // Atomically replace path with the original 2-message content and a newer mtime, then sync via B.
+        writeFileSync(tmpFile, original);
+        const newer = new Date(Date.now() + 5_000);
+        utimesSync(tmpFile, newer, newer);
+        renameSync(tmpFile, file);
+        expect(sync(dbB, config).ingested).toBe(1);
+
+        // Writer A must detect the conflict (mtime and inode moved) and refuse to commit 4 messages.
+        const res = tryIncrementalIngest({
+          db: dbA,
+          fd: staleFd,
+          stats: staleStats,
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorMtime: prior.mtime,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(res.kind).toBe("conflict");
+      } finally {
+        closeSync(staleFd);
+      }
+
+      expect(
+        (dbA.query("SELECT message_count FROM session LIMIT 1").get() as { message_count: number })
+          .message_count,
+      ).toBe(2);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(dbA);
+      expect(captureCanonicalSnapshot(dbA)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F6 (round 3): regenerateRecommendations bumps refresh seq and clears pending atomically", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f6-r3.jsonl");
+    writeFileSync(file, claudeTurn("c-f6-r3", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config, undefined, undefined, { deferDerivedRefresh: true }).ingested).toBe(
+        1,
+      );
+      const pendingBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      const refreshBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+      expect(pendingBefore).toBeGreaterThan(0);
+
+      regenerateRecommendations(db);
+      expect(readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED)).toBe(pendingBefore);
+      expect(readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ)).toBe(
+        refreshBefore + 1,
+      );
+
+      // Verify a concurrent stale writer blocked behind BEGIN IMMEDIATE cannot overwrite newer recommendations.
+      const blocker = openDb(dbPath);
+      try {
+        blocker.exec("BEGIN IMMEDIATE;");
+        // Simulate B completing a newer refresh inside the lock, raising refresh_seq and writing a sentinel row.
+        bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
+        const newerGen = readSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
+        bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+        markSyncStateCleared(blocker, SYNC_STATE_RECOMMENDATIONS_CLEARED, newerGen);
+        blocker
+          .query(
+            `UPDATE recommendation
+                SET status = 'open', status_source = NULL, detail = 'newer-writer-result'
+              WHERE kind = 'catalog' AND key = (SELECT key FROM recommendation WHERE kind = 'catalog' LIMIT 1)`,
+          )
+          .run();
+        blocker.exec("COMMIT;");
+      } finally {
+        closeDb(blocker);
+      }
+
+      // A zero-ingest sync sees pending === cleared and preserves the newer refresh result.
+      expect(sync(db, config).ingested).toBe(0);
+      const kept = db
+        .query("SELECT COUNT(*) AS n FROM recommendation WHERE detail = 'newer-writer-result'")
+        .get() as { n: number };
+      expect(kept.n).toBe(1);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("F8 (round 3): embedded NUL before <COMMAND-NAME> matches SQLite LIKE turn count", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f8-nul.jsonl");
+    writeFileSync(file, claudeTurn("c-f8-nul", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "u-nul-2",
+          sessionId: "c-f8-nul",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:05.000Z",
+          message: { role: "user", content: "visible\u0000<COMMAND-NAME>/clear" },
+        })}\n${JSON.stringify({
+          type: "assistant",
+          uuid: "a-nul-2",
+          requestId: "req-2",
+          sessionId: "c-f8-nul",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:06.000Z",
+          message: {
+            id: "msg_req-2",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: "end_turn",
+            usage: { input_tokens: 120, output_tokens: 40 },
+            content: [{ type: "text", text: "Reply after NUL prompt" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+
+      const session = db.query("SELECT id, turn_count FROM session LIMIT 1").get() as {
+        id: number;
+        turn_count: number;
+      };
+      const timeline = contextWindowForSession(db, session.id);
+      const lastPointTurn = timeline?.points.at(-1)?.turn;
+      expect(session.turn_count).toBe(2);
+      expect(lastPointTurn).toBe(2);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F17 (round 3): tombstoned ATIF replacement removes child and refreshes EconomicsCache via syncNow", async () => {
+    const { dir, dbPath, config } = freshCase();
+    const atifDir = join(dir, "atif");
+    mkdirSync(atifDir, { recursive: true });
+    const fullConfig = { ...config, atifDir, dbPath } as Config;
+    const deletedDoc = join(atifDir, "deleted.atif.json");
+    const liveDoc = join(atifDir, "live.atif.json");
+
+    writeFileSync(
+      deletedDoc,
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "atif-tomb-root",
+        agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+        steps: [
+          { step_id: 1, source: "user", message: "Delete me" },
+          {
+            step_id: 2,
+            source: "agent",
+            message: "Gone",
+            metrics: { prompt_tokens: 10, completion_tokens: 5 },
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      liveDoc,
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "atif-live-root",
+        agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+        steps: [
+          {
+            step_id: 1,
+            source: "agent",
+            message: "",
+            tool_calls: [{ tool_call_id: "call-1", function_name: "Agent", arguments: {} }],
+            observation: {
+              results: [
+                {
+                  source_call_id: "call-1",
+                  subagent_trajectory_ref: [{ trajectory_id: "atif-child-f17" }],
+                },
+              ],
+            },
+          },
+        ],
+        subagent_trajectories: [
+          {
+            schema_version: "ATIF-v1.7",
+            trajectory_id: "atif-child-f17",
+            agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+            steps: [
+              { step_id: 1, source: "user", message: "Work" },
+              {
+                step_id: 2,
+                source: "agent",
+                message: "Done",
+                metrics: { prompt_tokens: 100, completion_tokens: 50 },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const db = openDb(dbPath);
+    const economics = new EconomicsCache({ dbPath, db });
+    const coordinator = createSyncCoordinator(undefined, {
+      readDataVersion: () => economics.dataVersion(),
+    });
+    try {
+      await syncNow(fullConfig, economics, coordinator.run, coordinator.runWithOwnership);
+      await economics.settled();
+      const tombId = (
+        db.query("SELECT id FROM session WHERE source_session_id = 'atif-tomb-root'").get() as {
+          id: number;
+        }
+      ).id;
+      expect(setSessionUserState(db, tombId, "deleted")).toBe(true);
+      rmSync(deletedDoc);
+      economics.invalidate();
+      await economics.settled();
+      expect((await economics.get()).totals.generation_tokens).toBe(50);
+
+      // Rewrite liveDoc to use the deleted root identity and drop the embedded child.
+      writeFileSync(
+        liveDoc,
+        JSON.stringify({
+          schema_version: "ATIF-v1.7",
+          trajectory_id: "atif-tomb-root",
+          agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+          steps: [{ step_id: 1, source: "user", message: "Now tombstoned" }],
+        }),
+      );
+      const bumped = new Date(Date.now() + 5_000);
+      utimesSync(liveDoc, bumped, bumped);
+
+      const res = await syncNow(
+        fullConfig,
+        economics,
+        coordinator.run,
+        coordinator.runWithOwnership,
+      );
+      const report = (await res.json()) as SyncReport;
+      expect(report.ingested).toBe(0);
+      await economics.settled();
+      const after = await economics.get();
+      expect(after).toEqual(tokenEconomics(db));
+      expect(after.totals.generation_tokens).toBe(0);
+    } finally {
+      economics.dispose();
+      await economics.settled();
+      await coordinator.close();
+      closeDb(db);
+    }
+  });
+
+  test("F18: unlinking an ATIF child from an archived parent refreshes EconomicsCache via real sync worker", async () => {
+    const { dir, dbPath, config } = freshCase();
+    const atifDir = join(dir, "atif");
+    mkdirSync(atifDir, { recursive: true });
+    const fullConfig = { ...config, atifDir, dbPath } as Config;
+    const parentDoc = join(atifDir, "parent.atif.json");
+    const childDoc = join(atifDir, "child.atif.json");
+
+    writeFileSync(
+      parentDoc,
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "atif-parent-f18",
+        agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+        steps: [
+          {
+            step_id: 1,
+            source: "agent",
+            message: "",
+            tool_calls: [{ tool_call_id: "call-c", function_name: "Agent", arguments: {} }],
+            observation: {
+              results: [
+                {
+                  source_call_id: "call-c",
+                  subagent_trajectory_ref: [
+                    { trajectory_id: "atif-child-f18", trajectory_path: "child.atif.json" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      childDoc,
+      JSON.stringify({
+        schema_version: "ATIF-v1.7",
+        trajectory_id: "atif-child-f18",
+        agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+        steps: [
+          { step_id: 1, source: "user", message: "Subtask" },
+          {
+            step_id: 2,
+            source: "agent",
+            message: "Subtask done",
+            metrics: { prompt_tokens: 100, completion_tokens: 50 },
+          },
+        ],
+      }),
+    );
+
+    const db = openDb(dbPath);
+    const economics = new EconomicsCache({ dbPath, db });
+    const coordinator = createSyncCoordinator(undefined, {
+      readDataVersion: () => economics.dataVersion(),
+    });
+    try {
+      await syncNow(fullConfig, economics, coordinator.run, coordinator.runWithOwnership);
+      await economics.settled();
+      const parentId = (
+        db.query("SELECT id FROM session WHERE source_session_id = 'atif-parent-f18'").get() as {
+          id: number;
+        }
+      ).id;
+      expect(setSessionUserState(db, parentId, "archived")).toBe(true);
+      economics.invalidate();
+      await economics.settled();
+      expect((await economics.get()).totals.generation_tokens).toBe(0);
+
+      // Remove parent's reference to child so resolveSubagentParents clears child's parent_session_id.
+      writeFileSync(
+        parentDoc,
+        JSON.stringify({
+          schema_version: "ATIF-v1.7",
+          trajectory_id: "atif-parent-f18",
+          agent: { name: "example-agent", version: "1.0.0", model_name: "gpt-5.4" },
+          steps: [{ step_id: 1, source: "user", message: "No longer spawns child" }],
+        }),
+      );
+      const bumped = new Date(Date.now() + 5_000);
+      utimesSync(parentDoc, bumped, bumped);
+
+      await syncNow(fullConfig, economics, coordinator.run, coordinator.runWithOwnership);
+      await economics.settled();
+      const after = await economics.get();
+      expect(after).toEqual(tokenEconomics(db));
+      expect(after.totals.generation_tokens).toBe(50);
+    } finally {
+      economics.dispose();
+      await economics.settled();
+      await coordinator.close();
+      closeDb(db);
+    }
+  });
+
+  test("F19: bumping INGEST_PIPELINE_REVISION and CHECKPOINT_VERSION re-derives prior revision archives", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f19.jsonl");
+    writeFileSync(file, claudeTurn("c-f19", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      // Simulate an archive written by the previous ingest revision with a stale turn_count.
+      db.query("UPDATE ingest_source SET ingest_revision = ?1").run(INGEST_PIPELINE_REVISION - 1);
+      db.query("UPDATE session SET turn_count = 99").run();
+
+      const rep = sync(db, config);
+      expect(rep.ingested).toBe(1);
+      expect(
+        (db.query("SELECT turn_count FROM session LIMIT 1").get() as { turn_count: number })
+          .turn_count,
+      ).toBe(1);
+    } finally {
+      closeDb(db);
     }
   });
 });

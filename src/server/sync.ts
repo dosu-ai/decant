@@ -100,6 +100,17 @@ export function syncStatusBody() {
   };
 }
 
+function reportMutatedArchive(report: SyncReport): boolean {
+  const meta = syncReportMeta.get(report);
+  return (
+    report.ingested > 0 ||
+    (report.repriced ?? 0) > 0 ||
+    meta?.tombstoned === true ||
+    (meta?.ownEconomicsWrites ?? 0) > 0 ||
+    (meta?.sessionIds.length ?? 0) > 0
+  );
+}
+
 function refreshEconomicsForReport(
   economics: EconomicsCache | undefined,
   report: SyncReport,
@@ -166,7 +177,7 @@ export async function syncNow(
       endSyncActivity(report);
     }
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
-    if (report.ingested > 0 || (report.repriced ?? 0) > 0) {
+    if (reportMutatedArchive(report)) {
       refreshEconomicsForReport(economics, report);
       publishServerEvent({
         type: "archive_updated",
@@ -855,7 +866,7 @@ export function applyWatchEvent(
       ? { ...event, status: { ...event.status, in_progress: true } }
       : event;
   publishServerEvent(published);
-  if (event.type === "sync" && (event.report.ingested > 0 || (event.report.repriced ?? 0) > 0)) {
+  if (event.type === "sync" && reportMutatedArchive(event.report)) {
     refreshEconomicsForReport(economics, event.report);
     publishServerEvent({
       type: "archive_updated",

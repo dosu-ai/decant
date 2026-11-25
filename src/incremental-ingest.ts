@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { readSync, type Stats } from "node:fs";
+import { readSync, type Stats, statSync } from "node:fs";
 import { zstdCompressSync, zstdDecompressSync } from "bun";
 import {
   type IncrementalBilledEntry,
@@ -113,7 +113,7 @@ import { classifyTool, previewHeadTail } from "./tools.ts";
 
 export type IncrementalTool = "claude_code" | "codex" | "pi";
 
-const CHECKPOINT_VERSION = 4;
+const CHECKPOINT_VERSION = 5;
 const ANCHOR_SAMPLE_BYTES = 32_768;
 const ANCHOR_MID_BYTES = 4_096;
 const CHARS_PER_TOKEN = 4;
@@ -2273,6 +2273,7 @@ export interface TryIncrementalInput {
   tool: IncrementalTool;
   archived: boolean;
   priorSize: number;
+  priorMtime: number;
   priorSessionId: number | null;
   ingestRevision: number;
   expectedRevision: number;
@@ -2296,14 +2297,16 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   ) {
     const srcNow = queryRow<{
       size: number;
+      mtime: number;
       ingest_revision: number;
       session_id: number | null;
-    }>(db, "SELECT size, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
+    }>(db, "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
       sourcePath,
     ]);
     if (
       srcNow != null &&
       (srcNow.size !== input.priorSize ||
+        srcNow.mtime !== input.priorMtime ||
         srcNow.session_id !== input.priorSessionId ||
         srcNow.ingest_revision !== input.ingestRevision)
     ) {
@@ -2645,6 +2648,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     if (
       srcNow == null ||
       srcNow.size !== input.priorSize ||
+      srcNow.mtime !== input.priorMtime ||
       srcNow.session_id !== state.sessionId ||
       srcNow.ingest_revision !== input.expectedRevision ||
       cpNow == null ||
@@ -2652,6 +2656,14 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       cpNow.parsed_line_count !== loaded.parsedLineCount ||
       cpNow.prefix_hash !== loaded.prefixHash
     ) {
+      return "conflict";
+    }
+    try {
+      const live = statSync(sourcePath);
+      if (live.dev !== stats.dev || live.ino !== stats.ino || live.size < stats.size) {
+        return "conflict";
+      }
+    } catch {
       return "conflict";
     }
     if (

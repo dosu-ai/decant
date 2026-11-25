@@ -5,6 +5,7 @@ export const SYNC_STATE_DERIVED_PENDING = "derived_pending";
 export const SYNC_STATE_DERIVED_CLEARED = "derived_cleared";
 export const SYNC_STATE_RECOMMENDATIONS_PENDING = "recommendations_pending";
 export const SYNC_STATE_RECOMMENDATIONS_CLEARED = "recommendations_cleared";
+export const SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ = "recommendations_refresh_seq";
 export const SYNC_STATE_ECONOMICS_SEQ = "economics_seq";
 
 const committedEconomicsWritesByDb = new WeakMap<Database, number>();

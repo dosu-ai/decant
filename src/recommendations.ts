@@ -9,6 +9,14 @@ import { RECOMMENDATION_KEY_CHARS } from "./recommendation-key.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { visibleSessionPredicate } from "./session-visibility.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
+import {
+  bumpSyncStateGeneration,
+  markSyncStateCleared,
+  readSyncStateGeneration,
+  SYNC_STATE_RECOMMENDATIONS_CLEARED,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+  SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ,
+} from "./sync-state.ts";
 import { basename } from "./worktree.ts";
 
 export interface Recommendation {
@@ -298,47 +306,58 @@ export function current(db: Database): Recommendation[] {
   return [...signals(db), ...catalog()];
 }
 
+const MAX_RECOMMENDATION_REGENERATE_ATTEMPTS = 3;
+
 export function regenerate(db: Database): void {
-  const recentTools = toolUsage(db, false, Number.MAX_SAFE_INTEGER, {
-    from: recentWindowStart(),
-  });
-  const { shown, eligible } = signalSet(db, recentTools);
-  const recs = [...shown, ...catalog()];
-  const now = nowRfc3339();
-  withImmediateTransaction(db, () => {
-    type LegacyState = {
-      detail: string | null;
-      status: string;
-      status_source: string | null;
-      note: string | null;
-      first_seen_at: string | null;
-      implemented_at: string | null;
-    };
-    const candidatesByLegacy = new Map<string, Candidate[]>();
-    for (const candidate of eligible) {
-      const legacyKey = candidate.legacy?.key;
-      if (legacyKey != null) {
-        const legacyCandidates = candidatesByLegacy.get(legacyKey) ?? [];
-        legacyCandidates.push(candidate);
-        candidatesByLegacy.set(legacyKey, legacyCandidates);
+  for (let attempt = 0; attempt < MAX_RECOMMENDATION_REGENERATE_ATTEMPTS; attempt += 1) {
+    const startPendingGen = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    const startRefreshSeq = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+    const recentTools = toolUsage(db, false, Number.MAX_SAFE_INTEGER, {
+      from: recentWindowStart(),
+    });
+    const { shown, eligible } = signalSet(db, recentTools);
+    const recs = [...shown, ...catalog()];
+    const now = nowRfc3339();
+    const outcome = withImmediateTransaction(db, (): "committed" | "retry" | "stale" => {
+      const curPendingGen = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      const curRefreshSeq = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+      if (curPendingGen !== startPendingGen || curRefreshSeq !== startRefreshSeq) {
+        const curCleared = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED);
+        return curPendingGen > curCleared ? "retry" : "stale";
       }
-    }
-    const currentKeys = new Set(recs.map((rec) => rec.key));
-    const legacyStates = new Map<string, LegacyState>();
-    for (const legacyKey of candidatesByLegacy.keys()) {
-      const row = db
-        .query(
-          `SELECT detail, status, status_source, note, first_seen_at, implemented_at
+      type LegacyState = {
+        detail: string | null;
+        status: string;
+        status_source: string | null;
+        note: string | null;
+        first_seen_at: string | null;
+        implemented_at: string | null;
+      };
+      const candidatesByLegacy = new Map<string, Candidate[]>();
+      for (const candidate of eligible) {
+        const legacyKey = candidate.legacy?.key;
+        if (legacyKey != null) {
+          const legacyCandidates = candidatesByLegacy.get(legacyKey) ?? [];
+          legacyCandidates.push(candidate);
+          candidatesByLegacy.set(legacyKey, legacyCandidates);
+        }
+      }
+      const currentKeys = new Set(recs.map((rec) => rec.key));
+      const legacyStates = new Map<string, LegacyState>();
+      for (const legacyKey of candidatesByLegacy.keys()) {
+        const row = db
+          .query(
+            `SELECT detail, status, status_source, note, first_seen_at, implemented_at
            FROM recommendation
            WHERE key = ?1`,
-        )
-        .get(legacyKey) as LegacyState | null;
-      if (row != null) {
-        legacyStates.set(legacyKey, row);
+          )
+          .get(legacyKey) as LegacyState | null;
+        if (row != null) {
+          legacyStates.set(legacyKey, row);
+        }
       }
-    }
-    const upsert = db.prepare(
-      `INSERT INTO recommendation
+      const upsert = db.prepare(
+        `INSERT INTO recommendation
          (key, kind, category, title, detail, suggestion, prompt, url,
           link_label, icon, tone, impact_label, impact_label_checked, score,
           status, status_source, note,
@@ -379,98 +398,107 @@ export function regenerate(db: Database): void {
            ELSE recommendation.implemented_at
          END,
          updated_at = excluded.updated_at`,
-    );
-    const preserveLegacyFirstSeen = db.prepare(
-      `UPDATE recommendation
+      );
+      const preserveLegacyFirstSeen = db.prepare(
+        `UPDATE recommendation
        SET first_seen_at = CASE
          WHEN first_seen_at IS NULL OR first_seen_at > ?2 THEN ?2
          ELSE first_seen_at
        END
        WHERE key = ?1 AND ?2 IS NOT NULL`,
-    );
-    const preserveDurableLegacyState = db.prepare(
-      `UPDATE recommendation
+      );
+      const preserveDurableLegacyState = db.prepare(
+        `UPDATE recommendation
        SET status = ?2,
            status_source = ?3,
            note = ?4,
            implemented_at = ?5
        WHERE key = ?1
          AND (status_source IS NULL OR status_source = 'activity')`,
-    );
-    const removeLegacy = db.prepare("DELETE FROM recommendation WHERE key = ?1");
-    try {
-      for (const rec of recs) {
-        upsert.run(
-          rec.key,
-          rec.kind,
-          rec.category,
-          rec.title,
-          rec.detail,
-          rec.suggestion,
-          rec.prompt,
-          rec.url,
-          rec.link_label,
-          rec.icon,
-          rec.tone,
-          rec.impact_label,
-          rec.score,
-          now,
-        );
-      }
-
-      for (const [legacyKey, legacyCandidates] of candidatesByLegacy) {
-        const legacy = legacyStates.get(legacyKey);
-        if (legacy == null) {
-          continue;
+      );
+      const removeLegacy = db.prepare("DELETE FROM recommendation WHERE key = ?1");
+      try {
+        for (const rec of recs) {
+          upsert.run(
+            rec.key,
+            rec.kind,
+            rec.category,
+            rec.title,
+            rec.detail,
+            rec.suggestion,
+            rec.prompt,
+            rec.url,
+            rec.link_label,
+            rec.icon,
+            rec.tone,
+            rec.impact_label,
+            rec.score,
+            now,
+          );
         }
-        const durable = legacy.status === "implemented" && legacy.status_source !== "activity";
-        const target = legacyMigrationTarget(legacyKey, legacy.detail, legacyCandidates);
-        if (target != null && currentKeys.has(target.key)) {
-          preserveLegacyFirstSeen.run(target.key, legacy.first_seen_at);
-          if (durable) {
-            preserveDurableLegacyState.run(
-              target.key,
-              legacy.status,
-              legacy.status_source,
-              legacy.note,
-              legacy.implemented_at,
-            );
+
+        for (const [legacyKey, legacyCandidates] of candidatesByLegacy) {
+          const legacy = legacyStates.get(legacyKey);
+          if (legacy == null) {
+            continue;
           }
-          removeLegacy.run(legacyKey);
-        } else if (!durable) {
-          removeLegacy.run(legacyKey);
+          const durable = legacy.status === "implemented" && legacy.status_source !== "activity";
+          const target = legacyMigrationTarget(legacyKey, legacy.detail, legacyCandidates);
+          if (target != null && currentKeys.has(target.key)) {
+            preserveLegacyFirstSeen.run(target.key, legacy.first_seen_at);
+            if (durable) {
+              preserveDurableLegacyState.run(
+                target.key,
+                legacy.status,
+                legacy.status_source,
+                legacy.note,
+                legacy.implemented_at,
+              );
+            }
+            removeLegacy.run(legacyKey);
+          } else if (!durable) {
+            removeLegacy.run(legacyKey);
+          }
         }
-      }
 
-      const signalKeys = shown.map((rec) => rec.key);
-      pruneUnresolvedSignals(db, eligible, signalKeys);
-      let sql = `UPDATE recommendation
+        const signalKeys = shown.map((rec) => rec.key);
+        pruneUnresolvedSignals(db, eligible, signalKeys);
+        let sql = `UPDATE recommendation
                    SET status = 'implemented', status_source = 'activity',
                        implemented_at = ?1, updated_at = ?1
                  WHERE kind = 'signal' AND status = 'open'`;
-      const params: string[] = [now];
-      if (signalKeys.length > 0) {
-        sql += ` AND key NOT IN (${signalKeys.map(() => "?").join(", ")})`;
-        params.push(...signalKeys);
-      }
-      const resolveStale = db.prepare(sql);
-      try {
-        resolveStale.run(...params);
-      } finally {
-        resolveStale.finalize();
-      }
-      db.exec(`
+        const params: string[] = [now];
+        if (signalKeys.length > 0) {
+          sql += ` AND key NOT IN (${signalKeys.map(() => "?").join(", ")})`;
+          params.push(...signalKeys);
+        }
+        const resolveStale = db.prepare(sql);
+        try {
+          resolveStale.run(...params);
+        } finally {
+          resolveStale.finalize();
+        }
+        db.exec(`
         UPDATE recommendation
         SET impact_label_checked = 1
         WHERE kind = 'signal' AND impact_label_checked = 0
       `);
-    } finally {
-      removeLegacy.finalize();
-      preserveDurableLegacyState.finalize();
-      preserveLegacyFirstSeen.finalize();
-      upsert.finalize();
+        bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+        if (startPendingGen > 0) {
+          markSyncStateCleared(db, SYNC_STATE_RECOMMENDATIONS_CLEARED, startPendingGen);
+        }
+        return "committed";
+      } finally {
+        removeLegacy.finalize();
+        preserveDurableLegacyState.finalize();
+        preserveLegacyFirstSeen.finalize();
+        upsert.finalize();
+      }
+    });
+    if (outcome !== "retry") {
+      return;
     }
-  });
+  }
 }
 
 function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: string[]): void {
@@ -522,6 +550,7 @@ export function refreshForSessionStateChange(
     } finally {
       pruneStale.finalize();
     }
+    bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
   };
   if (options.alreadyInTransaction === true) {
     apply();

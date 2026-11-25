@@ -141,7 +141,7 @@ export interface IngestConfig {
   sourcePaths?: string[];
 }
 
-export const INGEST_PIPELINE_REVISION = 22;
+export const INGEST_PIPELINE_REVISION = 23;
 
 export interface SyncReport {
   repriced?: number;
@@ -757,12 +757,23 @@ export function sync(
             }
           } else if (outcome.kind === "failed") {
             report.failed += 1;
+            if (outcome.sessionIds != null && outcome.sessionIds.length > 0) {
+              for (const sid of outcome.sessionIds) {
+                options?.onSessionChanged?.(sid);
+              }
+              options?.onEconomicsBulkChanged?.();
+            }
           } else {
             report.skipped += 1;
             if (outcome.kind === "tombstoned") {
               lineageMayHaveChanged = true;
               if (file.opencode != null) {
                 touchedOpenCode = true;
+              }
+              if (outcome.sessionIds != null) {
+                for (const sid of outcome.sessionIds) {
+                  options?.onSessionChanged?.(sid);
+                }
               }
               options?.onTombstoned?.();
             }
@@ -834,6 +845,7 @@ export function sync(
                   tool: file.tool,
                   archived: file.archived,
                   priorSize: prior.size,
+                  priorMtime: prior.mtime,
                   priorSessionId: prior.session_id,
                   ingestRevision: prior.ingest_revision,
                   expectedRevision: INGEST_PIPELINE_REVISION,
@@ -1105,7 +1117,9 @@ function refreshDerivedState(
     (!flags.deferDerivedRefresh && derivedPending) ||
     (fullPass && report.ingested > 0)
   ) {
-    resolveSubagentParents(db);
+    if (resolveSubagentParents(db)) {
+      flags.onEconomicsBulkChanged?.();
+    }
   }
   const materializedEconomics = fullPass ? materializeMissingSessionEconomics(db) : 0;
   if (materializedEconomics > 0) {
@@ -1154,9 +1168,6 @@ function refreshDerivedState(
         .get() != null;
     if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
       regenerateRecommendations(db);
-      if (recGenBefore > 0) {
-        markSyncStateCleared(db, SYNC_STATE_RECOMMENDATIONS_CLEARED, recGenBefore);
-      }
       lastRecommendationRefreshByDb.set(db, now);
     } else if (!background && lastRefresh === 0) {
       lastRecommendationRefreshByDb.set(db, now);
@@ -1192,7 +1203,8 @@ export function upsertSession(
 }
 
 type SessionSyncOutcome =
-  | { kind: "skipped" | "tombstoned" | "failed" }
+  | { kind: "skipped" }
+  | { kind: "tombstoned" | "failed"; sessionIds?: number[] }
   | { kind: "ingested"; issues: Issue[]; sessionIds: number[] };
 
 const WITHOUT_CATALOG = "|no-catalog";
@@ -1688,7 +1700,9 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   }
   releaseRemovedAtifSubagents(db, file.path, subagentPaths, subSessionIds);
   if (root == null) {
-    return { kind: "failed" };
+    return subSessionIds.length > 0
+      ? { kind: "failed", sessionIds: subSessionIds }
+      : { kind: "failed" };
   }
   const prepared: Prepared = {
     file,
@@ -1699,7 +1713,9 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   };
   const rootOutcome = writeIngestedFile(db, prepared, root);
   if (rootOutcome.kind === "tombstoned") {
-    return { kind: "tombstoned" };
+    return subSessionIds.length > 0
+      ? { kind: "tombstoned", sessionIds: subSessionIds }
+      : { kind: "tombstoned" };
   }
   return {
     kind: "ingested",
@@ -1990,7 +2006,7 @@ export function seedModelPricing(db: Database): void {
   }
 }
 
-export function resolveSubagentParents(db: Database): void {
+export function resolveSubagentParents(db: Database): boolean {
   const rows = queryRows<{
     id: number;
     tool: Tool;
@@ -2089,6 +2105,7 @@ export function resolveSubagentParents(db: Database): void {
          spawn_depth = COALESCE(spawn_depth, ?6)
      WHERE id = ?7`,
   );
+  let parentChanged = false;
   try {
     withImmediateTransaction(db, () => {
       for (const row of rows) {
@@ -2096,6 +2113,7 @@ export function resolveSubagentParents(db: Database): void {
         if (info == null || !info.isSubagent) {
           if (row.tool === "atif" && row.is_subagent !== 0) {
             clearAtif.run(row.id);
+            parentChanged = true;
           }
           continue;
         }
@@ -2131,6 +2149,9 @@ export function resolveSubagentParents(db: Database): void {
         ) {
           continue;
         }
+        if (row.parent_session_id !== nextParent) {
+          parentChanged = true;
+        }
         update.run(
           1,
           nextParent,
@@ -2141,6 +2162,9 @@ export function resolveSubagentParents(db: Database): void {
           row.id,
         );
       }
+      if (parentChanged) {
+        bumpEconomicsSeq(db);
+      }
     });
   } finally {
     clearAtif.finalize();
@@ -2148,6 +2172,7 @@ export function resolveSubagentParents(db: Database): void {
     findCodexSpawner.finalize();
     findSpawner.finalize();
   }
+  return parentChanged;
 }
 
 export function materializeMissingReasoningEfforts(db: Database): number {
@@ -2645,10 +2670,29 @@ function deleteSessionRow(db: Database, id: number, affectedOut?: number[]): voi
   if (affectedOut != null) {
     affectedOut.push(id, ...peers);
   }
-  deleteSessionRowKeepingBilledClaims(db, id);
+  deleteSessionRowKeepingBilledClaims(db, id, affectedOut);
 }
 
-function deleteSessionRowKeepingBilledClaims(db: Database, id: number): void {
+function deleteSessionRowKeepingBilledClaims(
+  db: Database,
+  id: number,
+  affectedOut?: number[],
+): void {
+  if (affectedOut != null) {
+    const descendants = queryRows<{ id: number }>(
+      db,
+      `WITH RECURSIVE descendants(id) AS (
+         SELECT id FROM session WHERE parent_session_id = ?1
+         UNION
+         SELECT child.id FROM session child JOIN descendants ON child.parent_session_id = descendants.id
+       )
+       SELECT id FROM descendants`,
+      [id],
+    );
+    for (const descendant of descendants) {
+      affectedOut.push(descendant.id);
+    }
+  }
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
   ]);
@@ -2765,7 +2809,7 @@ function writeSession(
       if (affectedOut != null) {
         affectedOut.push(existing.id);
       }
-      deleteSessionRowKeepingBilledClaims(db, existing.id);
+      deleteSessionRowKeepingBilledClaims(db, existing.id, affectedOut);
     }
   }
 

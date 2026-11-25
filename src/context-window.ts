@@ -229,7 +229,10 @@ export function isContextWindowRealUserText(text: string | null | undefined): bo
   if (text == null || text.replace(ASCII_SPACE_TRIM, "") === "") {
     return false;
   }
-  const lower = asciiLower(text);
+  // SQLite's LIKE stops at embedded NUL bytes while TRIM scans the full string.
+  const nulIndex = text.indexOf("\u0000");
+  const likeInput = nulIndex < 0 ? text : text.slice(0, nulIndex);
+  const lower = asciiLower(likeInput);
   return !lower.startsWith(INTERRUPTION_PREFIX_LOWER) && !lower.includes(COMMAND_MARKER_LOWER);
 }
 

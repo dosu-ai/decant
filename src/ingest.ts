@@ -780,7 +780,10 @@ export function sync(
           }
           continue;
         }
+        let bypassCoarseSkip = false;
         for (let fileAttempt = 0; fileAttempt < MAX_FILE_CONFLICT_ATTEMPTS; fileAttempt += 1) {
+          const skipCoarseCheck = bypassCoarseSkip;
+          bypassCoarseSkip = false;
           let fd: number;
           try {
             fd = openSync(file.path, "r");
@@ -823,6 +826,7 @@ export function sync(
                     hash: prior.hash,
                   };
             if (
+              !skipCoarseCheck &&
               prior != null &&
               prior.size === stats.size &&
               prior.mtime === mtimeSecs(stats) &&
@@ -857,6 +861,9 @@ export function sync(
                   codexTitles: titles,
                 });
                 if (inc.kind === "conflict") {
+                  if (inc.liveChanged) {
+                    bypassCoarseSkip = true;
+                  }
                   fileAction = "retry";
                 } else if (inc.kind === "oversized") {
                   report.failed += 1;
@@ -968,6 +975,7 @@ export function sync(
               report.skipped += 1;
               break;
             }
+            bypassCoarseSkip = true;
             continue;
           }
 
@@ -1034,6 +1042,9 @@ export function sync(
             if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
               report.skipped += 1;
               break;
+            }
+            if (outcome.liveChanged) {
+              bypassCoarseSkip = true;
             }
             continue;
           }
@@ -2492,11 +2503,8 @@ function writeIngestedFileIfPriorMatches(
 ):
   | { kind: "ingested"; sessionId: number; affectedSessionIds: number[] }
   | { kind: "tombstoned" }
-  | { kind: "conflict" } {
+  | { kind: "conflict"; liveChanged?: boolean } {
   return withImmediateTransaction(db, () => {
-    if (!ingestSourceMatchesPrior(db, prepared.file.path, expectedPrior)) {
-      return { kind: "conflict" };
-    }
     try {
       const live = statSync(prepared.file.path, { bigint: true });
       if (
@@ -2506,9 +2514,12 @@ function writeIngestedFileIfPriorMatches(
         (live.size === sourceStats.size &&
           (live.mtimeNs !== sourceStats.mtimeNs || live.ctimeNs !== sourceStats.ctimeNs))
       ) {
-        return { kind: "conflict" };
+        return { kind: "conflict", liveChanged: true };
       }
     } catch {
+      return { kind: "conflict", liveChanged: true };
+    }
+    if (!ingestSourceMatchesPrior(db, prepared.file.path, expectedPrior)) {
       return { kind: "conflict" };
     }
     return writeIngestedFileInTx(db, prepared, parsed, undefined, checkpointFull);

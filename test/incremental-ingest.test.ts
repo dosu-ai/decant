@@ -2435,4 +2435,145 @@ describe("Sol review regression coverage (F1-F13)", () => {
       closeDb(freshDb);
     }
   });
+
+  test("F1 (concurrent rewrite): concurrent writer committing OLD before in-place rewrite to NEW within same second still returns conflict with liveChanged", async () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f1-concurrent-rewrite.jsonl");
+    const turn1 = claudeTurn("c-f1-concurrent-rewrite", 1, "req-1");
+    const turn2Old = claudeTurn("c-f1-concurrent-rewrite", 2, "req-2", 40, "OLDTEXT1");
+    const turn2New = claudeTurn("c-f1-concurrent-rewrite", 2, "req-2", 40, "NEWTEXT2");
+    expect(Buffer.byteLength(turn2Old)).toBe(Buffer.byteLength(turn2New));
+
+    writeFileSync(file, turn1);
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config).ingested).toBe(1);
+      const prior = dbA
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
+
+      appendFileSync(file, turn2Old);
+      const baseSec = Math.floor(Date.now() / 1000) + 2;
+      const t1 = new Date(baseSec * 1000 + 100);
+      utimesSync(file, t1, t1);
+
+      // Sync A opens fd on OLDTEXT1 before B commits or rewrite occurs.
+      const fdA = openSync(file, "r");
+      const statsA = statSync(file);
+      const statsABig = statSync(file, { bigint: true });
+
+      try {
+        // Sync B commits OLDTEXT1 (same size + whole second as A's stats).
+        expect(sync(dbB, config).ingested).toBe(1);
+
+        // File is rewritten in place to NEWTEXT2 advancing mtime by 400ms within the same second.
+        writeFileSync(file, turn1 + turn2New);
+        const t2 = new Date(baseSec * 1000 + 500);
+        utimesSync(file, t2, t2);
+
+        // Sync A must NOT take the early "skipped" return; it must detect the live file changed.
+        const res = tryIncrementalIngest({
+          db: dbA,
+          fd: fdA,
+          stats: statsA,
+          mtimeNs: statsABig.mtimeNs,
+          ctimeNs: statsABig.ctimeNs,
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorMtime: prior.mtime,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(res).toEqual({ kind: "conflict", liveChanged: true });
+      } finally {
+        closeSync(fdA);
+      }
+
+      // Verify full sync via live-file-paused retry in sync() itself: force B to commit OLDTEXT1
+      // while A is blocked in BEGIN IMMEDIATE, rewrite in place to NEWTEXT2, then let A retry.
+      const blocker = openDb(dbPath);
+      try {
+        // Reset archive to turn1, append OLDTEXT1, let B commit OLDTEXT1, then rewrite to NEWTEXT2
+        // and verify sync(dbA) with a live file rewritten during sync retries past coarse skip.
+        const file2 = join(config.claudeDir, "proj", "c-f1-retry-bypass.jsonl");
+        const r1 = claudeTurn("c-f1-retry-bypass", 1, "req-1");
+        const r2Old = claudeTurn("c-f1-retry-bypass", 2, "req-2", 40, "OLDVAL99");
+        const r2New = claudeTurn("c-f1-retry-bypass", 2, "req-2", 40, "NEWVAL99");
+        writeFileSync(file2, r1);
+        expect(sync(dbB, config).ingested).toBe(1);
+        appendFileSync(file2, r2Old);
+        const sec2 = Math.floor(Date.now() / 1000) + 4;
+        const s1 = new Date(sec2 * 1000 + 100);
+        utimesSync(file2, s1, s1);
+
+        // Interleave via a short write lock on blocker: while dbA enters sync and blocks on BEGIN IMMEDIATE,
+        // wait: sync is synchronous on the same thread, so verify the retry loop directly using a worker
+        // that holds BEGIN IMMEDIATE while committing OLDVAL99 and rewriting NEWVAL99 before releasing!
+        const workerScript = `
+          import { Database } from "bun:sqlite";
+          import { writeFileSync, utimesSync } from "node:fs";
+          self.onmessage = ({ data }) => {
+            const wdb = new Database(data.dbPath);
+            wdb.exec("PRAGMA busy_timeout = 5000;");
+            wdb.exec("BEGIN IMMEDIATE;");
+            self.postMessage("locked");
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 180);
+            // Rewrite file in place BEFORE releasing the SQLite write lock so sync(dbA) sees both the commit and the rewrite.
+            wdb.query("UPDATE ingest_source SET size = ?1, mtime = ?2 WHERE path = ?3").run(data.size, data.mtimeSec, data.file);
+            writeFileSync(data.file, data.newContent);
+            const t2 = new Date(data.mtimeSec * 1000 + 500);
+            utimesSync(data.file, t2, t2);
+            wdb.exec("COMMIT;");
+            wdb.close();
+            self.postMessage("done");
+          };
+        `;
+        const blobUrl = URL.createObjectURL(
+          new Blob([workerScript], { type: "application/javascript" }),
+        );
+        const w = new Worker(blobUrl);
+        const locked = Promise.withResolvers<void>();
+        const done = Promise.withResolvers<void>();
+        w.onmessage = (ev) => {
+          if (ev.data === "locked") locked.resolve();
+          if (ev.data === "done") done.resolve();
+        };
+        const stOld = statSync(file2);
+        w.postMessage({
+          dbPath,
+          file: file2,
+          size: stOld.size,
+          mtimeSec: sec2,
+          newContent: r1 + r2New,
+        });
+        await locked.promise;
+        // sync(dbA) reads OLDVAL99 before blocking on BEGIN IMMEDIATE, worker commits + rewrites NEWVAL99,
+        // then sync(dbA) unblocks, hits conflict_live, bypasses coarse skip, and ingests NEWVAL99!
+        const rep = sync(dbA, config, undefined, undefined, { candidatePaths: [file2] });
+        await done.promise;
+        w.terminate();
+        URL.revokeObjectURL(blobUrl);
+
+        expect(rep.ingested).toBe(1);
+        expect(search(dbA, "NEWVAL99").length).toBeGreaterThan(0);
+        expect(search(dbA, "OLDVAL99").length).toBe(0);
+      } finally {
+        closeDb(blocker);
+      }
+
+      expect(sync(freshDb, config).ingested).toBeGreaterThan(0);
+      assertDatabaseIntegrity(dbA);
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(freshDb);
+    }
+  });
 });

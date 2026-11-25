@@ -2253,7 +2253,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
 
 export type IncrementalAttemptResult =
   | { kind: "fallback" }
-  | { kind: "conflict" }
+  | { kind: "conflict"; liveChanged?: boolean }
   | { kind: "oversized" }
   | { kind: "skipped" }
   | {
@@ -2264,6 +2264,40 @@ export type IncrementalAttemptResult =
       lineageDirty: boolean;
       projectCreated: boolean;
     };
+
+function isLiveFileStale(
+  sourcePath: string,
+  stats: Stats,
+  mtimeNs?: bigint,
+  ctimeNs?: bigint,
+): boolean {
+  try {
+    if (mtimeNs != null || ctimeNs != null) {
+      const live = statSync(sourcePath, { bigint: true });
+      const dev = BigInt(stats.dev);
+      const ino = BigInt(stats.ino);
+      const size = BigInt(stats.size);
+      return (
+        live.dev !== dev ||
+        live.ino !== ino ||
+        live.size < size ||
+        (live.size === size &&
+          ((mtimeNs != null && live.mtimeNs !== mtimeNs) ||
+            (ctimeNs != null && live.ctimeNs !== ctimeNs)))
+      );
+    }
+    const live = statSync(sourcePath);
+    return (
+      live.dev !== stats.dev ||
+      live.ino !== stats.ino ||
+      live.size < stats.size ||
+      (live.size === stats.size &&
+        (live.mtimeMs !== stats.mtimeMs || live.ctimeMs !== stats.ctimeMs))
+    );
+  } catch {
+    return true;
+  }
+}
 
 export interface TryIncrementalInput {
   db: Database;
@@ -2317,6 +2351,9 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     return { kind: "fallback" };
   }
   if (loaded.parsedOffset > input.priorSize) {
+    if (isLiveFileStale(sourcePath, stats, input.mtimeNs, input.ctimeNs)) {
+      return { kind: "conflict", liveChanged: true };
+    }
     const srcNow = queryRow<{
       size: number;
       mtime: number;
@@ -2621,409 +2658,481 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
 
   let affectedSessionIds: number[] = [];
   let committedLinkageIssues: Issue[] = [];
-  const txOutcome = withImmediateTransaction(db, (): "committed" | "skipped" | "conflict" => {
-    const srcNow = queryRow<{
-      size: number;
-      mtime: number;
-      ingest_revision: number;
-      session_id: number | null;
-    }>(db, "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
-      sourcePath,
-    ]);
-    if (
-      srcNow != null &&
-      srcNow.size === stats.size &&
-      srcNow.mtime === mtime &&
-      srcNow.ingest_revision === input.expectedRevision
-    ) {
-      return "skipped";
-    }
-    const cpNow = queryRow<{
-      parsed_offset: number;
-      parsed_line_count: number;
-      prefix_hash: string;
-    }>(
-      db,
-      "SELECT parsed_offset, parsed_line_count, prefix_hash FROM ingest_checkpoint WHERE path = ?1",
-      [sourcePath],
-    );
-    if (
-      srcNow == null ||
-      srcNow.size !== input.priorSize ||
-      srcNow.mtime !== input.priorMtime ||
-      srcNow.session_id !== state.sessionId ||
-      srcNow.ingest_revision !== input.expectedRevision ||
-      cpNow == null ||
-      cpNow.parsed_offset !== loaded.parsedOffset ||
-      cpNow.parsed_line_count !== loaded.parsedLineCount ||
-      cpNow.prefix_hash !== loaded.prefixHash
-    ) {
-      return "conflict";
-    }
-    try {
-      if (input.mtimeNs != null || input.ctimeNs != null) {
-        const live = statSync(sourcePath, { bigint: true });
-        const dev = BigInt(stats.dev);
-        const ino = BigInt(stats.ino);
-        const size = BigInt(stats.size);
-        if (
-          live.dev !== dev ||
-          live.ino !== ino ||
-          live.size < size ||
-          (live.size === size &&
-            ((input.mtimeNs != null && live.mtimeNs !== input.mtimeNs) ||
-              (input.ctimeNs != null && live.ctimeNs !== input.ctimeNs)))
-        ) {
-          return "conflict";
-        }
-      } else {
-        const live = statSync(sourcePath);
-        if (
-          live.dev !== stats.dev ||
-          live.ino !== stats.ino ||
-          live.size < stats.size ||
-          (live.size === stats.size &&
-            (live.mtimeMs !== stats.mtimeMs || live.ctimeMs !== stats.ctimeMs))
-        ) {
-          return "conflict";
-        }
+  const txOutcome = withImmediateTransaction(
+    db,
+    (): "committed" | "skipped" | "conflict" | "conflict_live" => {
+      if (isLiveFileStale(sourcePath, stats, input.mtimeNs, input.ctimeNs)) {
+        return "conflict_live";
       }
-    } catch {
-      return "conflict";
-    }
-    if (
-      tool === "claude_code" &&
-      queryRow(db, "SELECT 1 FROM unbilled_request WHERE session_id = ?1 LIMIT 1", [
-        state.sessionId,
-      ]) != null
-    ) {
-      return "conflict";
-    }
+      const srcNow = queryRow<{
+        size: number;
+        mtime: number;
+        ingest_revision: number;
+        session_id: number | null;
+      }>(db, "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
+        sourcePath,
+      ]);
+      if (
+        srcNow != null &&
+        srcNow.size === stats.size &&
+        srcNow.mtime === mtime &&
+        srcNow.ingest_revision === input.expectedRevision
+      ) {
+        return "skipped";
+      }
+      const cpNow = queryRow<{
+        parsed_offset: number;
+        parsed_line_count: number;
+        prefix_hash: string;
+      }>(
+        db,
+        "SELECT parsed_offset, parsed_line_count, prefix_hash FROM ingest_checkpoint WHERE path = ?1",
+        [sourcePath],
+      );
+      if (
+        srcNow == null ||
+        srcNow.size !== input.priorSize ||
+        srcNow.mtime !== input.priorMtime ||
+        srcNow.session_id !== state.sessionId ||
+        srcNow.ingest_revision !== input.expectedRevision ||
+        cpNow == null ||
+        cpNow.parsed_offset !== loaded.parsedOffset ||
+        cpNow.parsed_line_count !== loaded.parsedLineCount ||
+        cpNow.prefix_hash !== loaded.prefixHash
+      ) {
+        return "conflict";
+      }
+      if (
+        tool === "claude_code" &&
+        queryRow(db, "SELECT 1 FROM unbilled_request WHERE session_id = ?1 LIMIT 1", [
+          state.sessionId,
+        ]) != null
+      ) {
+        return "conflict";
+      }
 
-    const sessionId = state.sessionId;
-    const modelChanged = (nextSummary.model ?? "") !== (prevSessionSummary.model ?? "");
-    let needsModelUsageFallback =
-      modelChanged && (state.modelUsage.hasUnrecordedModelMessage || tool === "codex");
-    let needsContextWindowFallback = false;
-    let needsEconomicsFallback = !state.economics.valid;
+      const sessionId = state.sessionId;
+      const modelChanged = (nextSummary.model ?? "") !== (prevSessionSummary.model ?? "");
+      let needsModelUsageFallback =
+        modelChanged && (state.modelUsage.hasUnrecordedModelMessage || tool === "codex");
+      let needsContextWindowFallback = false;
+      let needsEconomicsFallback = !state.economics.valid;
 
-    const replacedOldMessageIds = new Set<number>();
-    if (
-      tool === "claude_code" &&
-      claudeUnbilledOld.length > 0 &&
-      state.claudeBilledRuntime != null
-    ) {
-      const clearUsage = db.prepare(
-        `UPDATE message
+      const replacedOldMessageIds = new Set<number>();
+      if (
+        tool === "claude_code" &&
+        claudeUnbilledOld.length > 0 &&
+        state.claudeBilledRuntime != null
+      ) {
+        const clearUsage = db.prepare(
+          `UPDATE message
             SET input_tokens = NULL, output_tokens = NULL,
                 cache_read_tokens = NULL, cache_creation_tokens = NULL
           WHERE id = ?1`,
-      );
-      try {
-        for (const unbilled of claudeUnbilledOld) {
-          const runtime = ownGet(state.claudeBilledRuntime, unbilled.requestId);
-          if (runtime == null) {
-            needsModelUsageFallback = true;
-            needsContextWindowFallback = true;
+        );
+        try {
+          for (const unbilled of claudeUnbilledOld) {
+            const runtime = ownGet(state.claudeBilledRuntime, unbilled.requestId);
+            if (runtime == null) {
+              needsModelUsageFallback = true;
+              needsContextWindowFallback = true;
+              needsEconomicsFallback = true;
+              continue;
+            }
+            clearUsage.run(runtime.messageId);
+            replacedOldMessageIds.add(runtime.messageId);
+            applyModelUsageResolved(
+              state.modelUsage,
+              runtime.model ?? prevSessionSummary.model ?? "",
+              runtime.tier,
+              runtime.usage,
+              runtime.reportedCost,
+              -1,
+            );
+            const oldCtx = contextTokensFromUsage({
+              input_tokens: runtime.usage.input,
+              cache_read_tokens: runtime.usage.cacheRead,
+              cache_creation_tokens: runtime.usage.cacheCreation,
+            });
+            if (oldCtx != null && oldCtx >= state.contextWindow.peakTokens) {
+              needsContextWindowFallback = true;
+            }
+            state.contextWindow.pointCount = Math.max(0, state.contextWindow.pointCount - 1);
             needsEconomicsFallback = true;
-            continue;
+            delete state.claudeBilledRuntime[unbilled.requestId];
           }
-          clearUsage.run(runtime.messageId);
-          replacedOldMessageIds.add(runtime.messageId);
-          applyModelUsageResolved(
-            state.modelUsage,
-            runtime.model ?? prevSessionSummary.model ?? "",
-            runtime.tier,
-            runtime.usage,
-            runtime.reportedCost,
-            -1,
-          );
-          const oldCtx = contextTokensFromUsage({
-            input_tokens: runtime.usage.input,
-            cache_read_tokens: runtime.usage.cacheRead,
-            cache_creation_tokens: runtime.usage.cacheCreation,
-          });
-          if (oldCtx != null && oldCtx >= state.contextWindow.peakTokens) {
-            needsContextWindowFallback = true;
-          }
-          state.contextWindow.pointCount = Math.max(0, state.contextWindow.pointCount - 1);
-          needsEconomicsFallback = true;
-          delete state.claudeBilledRuntime[unbilled.requestId];
+        } finally {
+          clearUsage.finalize();
         }
-      } finally {
-        clearUsage.finalize();
       }
-    }
 
-    if (tool === "codex" && codexStampedOld != null) {
-      const targetId = state.codexLatestAssistantMessageId;
-      if (targetId != null) {
-        runStatement(
-          db,
-          `UPDATE message
+      if (tool === "codex" && codexStampedOld != null) {
+        const targetId = state.codexLatestAssistantMessageId;
+        if (targetId != null) {
+          runStatement(
+            db,
+            `UPDATE message
               SET input_tokens = ?2, output_tokens = ?3,
                   cache_read_tokens = ?4, cache_creation_tokens = ?5
             WHERE id = ?1`,
-          [
-            targetId,
-            codexStampedOld.usage.input,
-            codexStampedOld.usage.output,
-            codexStampedOld.usage.cacheRead,
-            codexStampedOld.usage.cacheCreation,
-          ],
-        );
-        const sm = nextSummary.model ?? "";
-        const prevSm = prevSessionSummary.model ?? "";
-        if (codexStampedOld.previousUsage != null) {
-          applyModelUsageResolved(
-            state.modelUsage,
-            prevSm,
-            "standard",
-            codexStampedOld.previousUsage,
-            0,
-            -1,
+            [
+              targetId,
+              codexStampedOld.usage.input,
+              codexStampedOld.usage.output,
+              codexStampedOld.usage.cacheRead,
+              codexStampedOld.usage.cacheCreation,
+            ],
           );
+          const sm = nextSummary.model ?? "";
+          const prevSm = prevSessionSummary.model ?? "";
+          if (codexStampedOld.previousUsage != null) {
+            applyModelUsageResolved(
+              state.modelUsage,
+              prevSm,
+              "standard",
+              codexStampedOld.previousUsage,
+              0,
+              -1,
+            );
+            needsContextWindowFallback = true;
+          }
+          applyModelUsageResolved(state.modelUsage, sm, "standard", codexStampedOld.usage, 0, 1);
+          if (sm !== prevSm) {
+            needsModelUsageFallback = true;
+          }
+          const ctx = contextTokensFromUsage({
+            input_tokens: codexStampedOld.usage.input,
+            cache_read_tokens: codexStampedOld.usage.cacheRead,
+            cache_creation_tokens: codexStampedOld.usage.cacheCreation,
+          });
+          if (ctx != null && !needsContextWindowFallback) {
+            state.contextWindow.pointCount += 1;
+            state.contextWindow.peakTokens = Math.max(state.contextWindow.peakTokens, ctx);
+            state.contextWindow.lastContextSinceCompaction = ctx;
+          }
+        } else {
+          needsModelUsageFallback = true;
           needsContextWindowFallback = true;
         }
-        applyModelUsageResolved(state.modelUsage, sm, "standard", codexStampedOld.usage, 0, 1);
-        if (sm !== prevSm) {
-          needsModelUsageFallback = true;
-        }
-        const ctx = contextTokensFromUsage({
-          input_tokens: codexStampedOld.usage.input,
-          cache_read_tokens: codexStampedOld.usage.cacheRead,
-          cache_creation_tokens: codexStampedOld.usage.cacheCreation,
-        });
-        if (ctx != null && !needsContextWindowFallback) {
-          state.contextWindow.pointCount += 1;
-          state.contextWindow.peakTokens = Math.max(state.contextWindow.peakTokens, ctx);
-          state.contextWindow.lastContextSinceCompaction = ctx;
-        }
-      } else {
-        needsModelUsageFallback = true;
-        needsContextWindowFallback = true;
       }
-    }
 
-    const insertMessage = db.prepare(
-      `INSERT INTO message(
+      const insertMessage = db.prepare(
+        `INSERT INTO message(
          session_id, seq, source_uuid, parent_source_uuid, role, model, stop_reason,
          timestamp, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, raw, raw_meta, raw_bytes
        )
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
-    );
-    const insertBlock = db.prepare(
-      `INSERT INTO block(
+      );
+      const insertBlock = db.prepare(
+        `INSERT INTO block(
          message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result
        )
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    );
-    const insertToolCall = db.prepare(
-      `INSERT INTO tool_call(
+      );
+      const insertToolCall = db.prepare(
+        `INSERT INTO tool_call(
          session_id, message_id, call_block_id, result_block_id, tool_kind, tool_name,
          mcp_server, tool_base_name, tool_use_id, input, input_bytes, is_error, has_result,
          output_preview, output_bytes, duration_ms, ordinal, timestamp
        )
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
-    );
-    const updateToolCallResult = db.prepare(
-      `UPDATE tool_call
+      );
+      const updateToolCallResult = db.prepare(
+        `UPDATE tool_call
           SET result_block_id = ?2, is_error = ?3, has_result = 1,
               output_preview = ?4, output_bytes = ?5, duration_ms = ?6
         WHERE id = ?1`,
-    );
-    const insertFileRef = db.prepare(
-      `INSERT INTO file_ref(session_id, message_id, path, rel_path, ext, operation, timestamp)
+      );
+      const insertFileRef = db.prepare(
+        `INSERT INTO file_ref(session_id, message_id, path, rel_path, ext, operation, timestamp)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-    );
+      );
 
-    const newBilledForReconcile: IncrementalBilledEntry[] = [];
-    const econBlocks: EconBlockInput[] = [];
-    const econNewCalls: {
-      toolName: string;
-      input: string | null;
-      outputBytes: number;
-      callSeq: number;
-    }[] = [];
-    const econMatchedResults: {
-      toolName: string;
-      input: string | null;
-      outputBytes: number;
-      callSeq: number;
-    }[] = [];
-    const newLinkageIssues: Issue[] = [];
+      const newBilledForReconcile: IncrementalBilledEntry[] = [];
+      const econBlocks: EconBlockInput[] = [];
+      const econNewCalls: {
+        toolName: string;
+        input: string | null;
+        outputBytes: number;
+        callSeq: number;
+      }[] = [];
+      const econMatchedResults: {
+        toolName: string;
+        input: string | null;
+        outputBytes: number;
+        callSeq: number;
+      }[] = [];
+      const newLinkageIssues: Issue[] = [];
 
-    const sessionModel = nextSummary.model ?? "";
+      const sessionModel = nextSummary.model ?? "";
 
-    try {
-      for (const message of newMessages) {
-        const storedRaw = encodeMessageRaw(canonicalJson(message.raw), message.raw);
-        const messageId = Number(
-          insertMessage.run(
-            sessionId,
-            message.seq,
-            message.sourceUuid,
-            message.parentSourceUuid,
-            message.role,
-            message.model,
-            message.stopReason,
-            message.timestamp,
-            message.usage?.input ?? null,
-            message.usage?.output ?? null,
-            message.usage?.cacheRead ?? null,
-            message.usage?.cacheCreation ?? null,
-            storedRaw.raw,
-            storedRaw.rawMeta,
-            storedRaw.rawBytes,
-          ).lastInsertRowid,
-        );
-
-        if (tool === "codex") {
-          if (message.role === "user" || message.role === "system") {
-            state.codexLatestAssistantMessageId = null;
-          } else if (message.role === "assistant") {
-            state.codexLatestAssistantMessageId = messageId;
-          }
-        }
-
-        if (message.usage != null) {
-          const applied = applyModelUsageMessage(
-            state.modelUsage,
-            tool,
-            sessionModel,
-            message.model,
-            message.usage,
-            message.raw,
-            1,
-          );
-          if (tool === "claude_code") {
-            const reqId = claudeRequestId(message.raw);
-            const apiId = claudeApiMessageId(message.raw);
-            if (reqId != null && state.claudeBilledRuntime != null) {
-              state.claudeBilledRuntime[reqId] = {
-                messageId,
-                model: applied.model,
-                tier: applied.tier,
-                usage: applied.resolvedUsage,
-                reportedCost: applied.reportedCost,
-                apiMessageId: apiId,
-              };
-            }
-            if (apiId != null && apiId !== "") {
-              newBilledForReconcile.push({ messageId, requestId: apiId });
-            }
-          }
-        }
-
-        const refs = fileRefsForMessage(tool, message.seq, message, nextSummary.cwd);
-        for (const ref of refs) {
-          insertFileRef.run(
-            sessionId,
-            messageId,
-            ref.path,
-            ref.relPath,
-            ref.ext,
-            ref.operation,
-            ref.timestamp,
-          );
-        }
-
-        const spawned = foldEnrichMessage(
-          state.enrich,
-          tool,
-          nextSummary.isSubagent,
-          nextSummary.startedAt,
-          message,
-          refs.length,
-          refs,
-        );
-        lineageDirty ||= spawned;
-        if (isRenderableReply(message)) state.replyCount += 1;
-        state.toolCallCount += countToolUseBlocks(message);
-        foldContextWindowMessage(state.contextWindow, tool, nextSummary.isSubagent, message);
-
-        const respId = message.role === "assistant" ? claudeApiMessageId(message.raw) : null;
-        for (const blk of message.blocks) {
-          const toolInputStr = blk.toolInput === undefined ? null : canonicalJson(blk.toolInput);
-          const blockId = Number(
-            insertBlock.run(
-              messageId,
+      try {
+        for (const message of newMessages) {
+          const storedRaw = encodeMessageRaw(canonicalJson(message.raw), message.raw);
+          const messageId = Number(
+            insertMessage.run(
               sessionId,
-              blk.ordinal,
-              blk.blockType,
-              blk.text,
-              blk.toolName,
-              blk.toolUseId,
-              toolInputStr,
-              blk.toolResult,
+              message.seq,
+              message.sourceUuid,
+              message.parentSourceUuid,
+              message.role,
+              message.model,
+              message.stopReason,
+              message.timestamp,
+              message.usage?.input ?? null,
+              message.usage?.output ?? null,
+              message.usage?.cacheRead ?? null,
+              message.usage?.cacheCreation ?? null,
+              storedRaw.raw,
+              storedRaw.rawMeta,
+              storedRaw.rawBytes,
             ).lastInsertRowid,
           );
 
-          let matchedCallForResult: { toolName: string; input: string | null } | null = null;
+          if (tool === "codex") {
+            if (message.role === "user" || message.role === "system") {
+              state.codexLatestAssistantMessageId = null;
+            } else if (message.role === "assistant") {
+              state.codexLatestAssistantMessageId = messageId;
+            }
+          }
 
-          if (blk.blockType === "tool_use") {
-            const name = blk.toolName ?? "";
-            const classified = classifyTool(name);
-            const callTs = blk.calledAt ?? message.timestamp;
-            const tcId = Number(
-              insertToolCall.run(
-                sessionId,
+          if (message.usage != null) {
+            const applied = applyModelUsageMessage(
+              state.modelUsage,
+              tool,
+              sessionModel,
+              message.model,
+              message.usage,
+              message.raw,
+              1,
+            );
+            if (tool === "claude_code") {
+              const reqId = claudeRequestId(message.raw);
+              const apiId = claudeApiMessageId(message.raw);
+              if (reqId != null && state.claudeBilledRuntime != null) {
+                state.claudeBilledRuntime[reqId] = {
+                  messageId,
+                  model: applied.model,
+                  tier: applied.tier,
+                  usage: applied.resolvedUsage,
+                  reportedCost: applied.reportedCost,
+                  apiMessageId: apiId,
+                };
+              }
+              if (apiId != null && apiId !== "") {
+                newBilledForReconcile.push({ messageId, requestId: apiId });
+              }
+            }
+          }
+
+          const refs = fileRefsForMessage(tool, message.seq, message, nextSummary.cwd);
+          for (const ref of refs) {
+            insertFileRef.run(
+              sessionId,
+              messageId,
+              ref.path,
+              ref.relPath,
+              ref.ext,
+              ref.operation,
+              ref.timestamp,
+            );
+          }
+
+          const spawned = foldEnrichMessage(
+            state.enrich,
+            tool,
+            nextSummary.isSubagent,
+            nextSummary.startedAt,
+            message,
+            refs.length,
+            refs,
+          );
+          lineageDirty ||= spawned;
+          if (isRenderableReply(message)) state.replyCount += 1;
+          state.toolCallCount += countToolUseBlocks(message);
+          foldContextWindowMessage(state.contextWindow, tool, nextSummary.isSubagent, message);
+
+          const respId = message.role === "assistant" ? claudeApiMessageId(message.raw) : null;
+          for (const blk of message.blocks) {
+            const toolInputStr = blk.toolInput === undefined ? null : canonicalJson(blk.toolInput);
+            const blockId = Number(
+              insertBlock.run(
                 messageId,
-                blockId,
-                null,
-                classified.kind,
-                name,
-                classified.mcpServer,
-                classified.baseName,
+                sessionId,
+                blk.ordinal,
+                blk.blockType,
+                blk.text,
+                blk.toolName,
                 blk.toolUseId,
                 toolInputStr,
-                toolInputStr == null ? null : byteLength(toolInputStr),
-                null,
-                0,
-                null,
-                null,
-                null,
-                blk.ordinal,
-                callTs,
+                blk.toolResult,
               ).lastInsertRowid,
             );
-            state.searchCount += countSearchCandidateToolCall(name, toolInputStr);
-            econNewCalls.push({
-              toolName: name,
-              input: toolInputStr,
-              outputBytes: 0,
-              callSeq: message.seq,
-            });
-            if (blk.toolUseId != null) {
-              const queue = ownGet(state.unmatchedCalls, blk.toolUseId) ?? [];
-              queue.push({
-                toolCallId: tcId,
-                callBlockId: blockId,
-                callSeq: message.seq,
+
+            let matchedCallForResult: { toolName: string; input: string | null } | null = null;
+
+            if (blk.blockType === "tool_use") {
+              const name = blk.toolName ?? "";
+              const classified = classifyTool(name);
+              const callTs = blk.calledAt ?? message.timestamp;
+              const tcId = Number(
+                insertToolCall.run(
+                  sessionId,
+                  messageId,
+                  blockId,
+                  null,
+                  classified.kind,
+                  name,
+                  classified.mcpServer,
+                  classified.baseName,
+                  blk.toolUseId,
+                  toolInputStr,
+                  toolInputStr == null ? null : byteLength(toolInputStr),
+                  null,
+                  0,
+                  null,
+                  null,
+                  null,
+                  blk.ordinal,
+                  callTs,
+                ).lastInsertRowid,
+              );
+              state.searchCount += countSearchCandidateToolCall(name, toolInputStr);
+              econNewCalls.push({
                 toolName: name,
                 input: toolInputStr,
-                timestamp: callTs,
+                outputBytes: 0,
+                callSeq: message.seq,
               });
-              state.unmatchedCalls[blk.toolUseId] = queue;
-              compactSetAdd(seenToolUse, blk.toolUseId);
+              if (blk.toolUseId != null) {
+                const queue = ownGet(state.unmatchedCalls, blk.toolUseId) ?? [];
+                queue.push({
+                  toolCallId: tcId,
+                  callBlockId: blockId,
+                  callSeq: message.seq,
+                  toolName: name,
+                  input: toolInputStr,
+                  timestamp: callTs,
+                });
+                state.unmatchedCalls[blk.toolUseId] = queue;
+                compactSetAdd(seenToolUse, blk.toolUseId);
+              }
+              if (tool === "pi" && state.piToolUses != null && blk.toolUseId != null) {
+                state.piToolUses[blk.toolUseId] = {
+                  messageId,
+                  callBlockId: blockId,
+                  ordinal: blk.ordinal,
+                  timestamp: callTs,
+                  hasInner: (blk.innerToolCalls?.length ?? 0) > 0,
+                };
+              }
+              for (const inner of blk.innerToolCalls ?? []) {
+                const innerClassified = classifyTool(inner.toolName);
+                const innerInput =
+                  inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
+                insertToolCall.run(
+                  sessionId,
+                  messageId,
+                  blockId,
+                  null,
+                  innerClassified.kind,
+                  inner.toolName,
+                  innerClassified.mcpServer,
+                  innerClassified.baseName,
+                  inner.toolUseId,
+                  innerInput,
+                  innerInput == null ? null : byteLength(innerInput),
+                  inner.isError == null ? null : Number(inner.isError),
+                  0,
+                  null,
+                  null,
+                  null,
+                  blk.ordinal,
+                  callTs,
+                );
+                state.searchCount += countSearchCandidateToolCall(inner.toolName, innerInput);
+                econNewCalls.push({
+                  toolName: inner.toolName,
+                  input: innerInput,
+                  outputBytes: 0,
+                  callSeq: message.seq,
+                });
+              }
+            } else if (blk.blockType === "tool_result" && blk.toolUseId != null) {
+              const queue = ownGet(state.unmatchedCalls, blk.toolUseId);
+              const call = queue?.shift();
+              if (queue != null && queue.length === 0) {
+                delete state.unmatchedCalls[blk.toolUseId];
+              }
+              if (call != null) {
+                const output = blk.toolResult ?? "";
+                const outBytes = byteLength(output);
+                updateToolCallResult.run(
+                  call.toolCallId,
+                  blockId,
+                  blk.isError == null ? null : Number(blk.isError),
+                  previewHeadTail(output, 500),
+                  outBytes,
+                  durationBetween(call.timestamp, message.timestamp),
+                );
+                matchedCallForResult = { toolName: call.toolName, input: call.input };
+                econMatchedResults.push({
+                  toolName: call.toolName,
+                  input: call.input,
+                  outputBytes: outBytes,
+                  callSeq: call.callSeq,
+                });
+              }
+              if (call == null && !hasPriorToolUse(blk.toolUseId)) {
+                orphanSet.add(blk.toolUseId);
+                newLinkageIssues.push({
+                  code: "orphan_tool_result",
+                  lineNo: null,
+                  error: `tool_result references tool_use id "${blk.toolUseId}" absent from the session`,
+                  rawLine: null,
+                });
+                state.diagnostics.hasLinkageIssues = true;
+              }
+              compactSetAdd(answeredToolUse, blk.toolUseId);
             }
-            if (tool === "pi" && state.piToolUses != null && blk.toolUseId != null) {
-              state.piToolUses[blk.toolUseId] = {
-                messageId,
-                callBlockId: blockId,
-                ordinal: blk.ordinal,
-                timestamp: callTs,
-                hasInner: (blk.innerToolCalls?.length ?? 0) > 0,
-              };
-            }
-            for (const inner of blk.innerToolCalls ?? []) {
+
+            const { otherKind, textBytes } = econOtherKind(blk);
+            econBlocks.push({
+              messageId,
+              seq: message.seq,
+              role: message.role,
+              outputTokens: message.usage?.output ?? null,
+              responseId: respId,
+              type: blk.blockType,
+              toolName: blk.toolName ?? matchedCallForResult?.toolName ?? null,
+              toolInput:
+                blk.blockType === "tool_use" ||
+                blk.blockType === "tool_result" ||
+                blk.blockType === "web_search"
+                  ? (toolInputStr ?? matchedCallForResult?.input ?? null)
+                  : null,
+              textBytes,
+              timestamp: message.timestamp,
+              otherKind,
+            });
+          }
+        }
+
+        if (tool === "pi" && piNestedCalls.length > 0 && state.piToolUses != null) {
+          for (const nc of piNestedCalls) {
+            const anchor = lookupPiToolUseAnchor(db, sessionId, state.piToolUses, nc.toolCallId);
+            if (anchor == null) continue;
+            anchor.hasInner = true;
+            state.piToolUses[nc.toolCallId] = anchor;
+            for (const inner of nc.inner) {
               const innerClassified = classifyTool(inner.toolName);
               const innerInput =
                 inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
               insertToolCall.run(
                 sessionId,
-                messageId,
-                blockId,
+                anchor.messageId,
+                anchor.callBlockId,
                 null,
                 innerClassified.kind,
                 inner.toolName,
@@ -3037,159 +3146,61 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
                 null,
                 null,
                 null,
-                blk.ordinal,
-                callTs,
+                anchor.ordinal,
+                anchor.timestamp,
               );
               state.searchCount += countSearchCandidateToolCall(inner.toolName, innerInput);
               econNewCalls.push({
                 toolName: inner.toolName,
                 input: innerInput,
                 outputBytes: 0,
-                callSeq: message.seq,
+                callSeq: startSeq,
               });
+              needsEconomicsFallback = true;
             }
-          } else if (blk.blockType === "tool_result" && blk.toolUseId != null) {
-            const queue = ownGet(state.unmatchedCalls, blk.toolUseId);
-            const call = queue?.shift();
-            if (queue != null && queue.length === 0) {
-              delete state.unmatchedCalls[blk.toolUseId];
-            }
-            if (call != null) {
-              const output = blk.toolResult ?? "";
-              const outBytes = byteLength(output);
-              updateToolCallResult.run(
-                call.toolCallId,
-                blockId,
-                blk.isError == null ? null : Number(blk.isError),
-                previewHeadTail(output, 500),
-                outBytes,
-                durationBetween(call.timestamp, message.timestamp),
-              );
-              matchedCallForResult = { toolName: call.toolName, input: call.input };
-              econMatchedResults.push({
-                toolName: call.toolName,
-                input: call.input,
-                outputBytes: outBytes,
-                callSeq: call.callSeq,
-              });
-            }
-            if (call == null && !hasPriorToolUse(blk.toolUseId)) {
-              orphanSet.add(blk.toolUseId);
-              newLinkageIssues.push({
-                code: "orphan_tool_result",
-                lineNo: null,
-                error: `tool_result references tool_use id "${blk.toolUseId}" absent from the session`,
-                rawLine: null,
-              });
-              state.diagnostics.hasLinkageIssues = true;
-            }
-            compactSetAdd(answeredToolUse, blk.toolUseId);
-          }
-
-          const { otherKind, textBytes } = econOtherKind(blk);
-          econBlocks.push({
-            messageId,
-            seq: message.seq,
-            role: message.role,
-            outputTokens: message.usage?.output ?? null,
-            responseId: respId,
-            type: blk.blockType,
-            toolName: blk.toolName ?? matchedCallForResult?.toolName ?? null,
-            toolInput:
-              blk.blockType === "tool_use" ||
-              blk.blockType === "tool_result" ||
-              blk.blockType === "web_search"
-                ? (toolInputStr ?? matchedCallForResult?.input ?? null)
-                : null,
-            textBytes,
-            timestamp: message.timestamp,
-            otherKind,
-          });
-        }
-      }
-
-      if (tool === "pi" && piNestedCalls.length > 0 && state.piToolUses != null) {
-        for (const nc of piNestedCalls) {
-          const anchor = lookupPiToolUseAnchor(db, sessionId, state.piToolUses, nc.toolCallId);
-          if (anchor == null) continue;
-          anchor.hasInner = true;
-          state.piToolUses[nc.toolCallId] = anchor;
-          for (const inner of nc.inner) {
-            const innerClassified = classifyTool(inner.toolName);
-            const innerInput =
-              inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
-            insertToolCall.run(
-              sessionId,
-              anchor.messageId,
-              anchor.callBlockId,
-              null,
-              innerClassified.kind,
-              inner.toolName,
-              innerClassified.mcpServer,
-              innerClassified.baseName,
-              inner.toolUseId,
-              innerInput,
-              innerInput == null ? null : byteLength(innerInput),
-              inner.isError == null ? null : Number(inner.isError),
-              0,
-              null,
-              null,
-              null,
-              anchor.ordinal,
-              anchor.timestamp,
-            );
-            state.searchCount += countSearchCandidateToolCall(inner.toolName, innerInput);
-            econNewCalls.push({
-              toolName: inner.toolName,
-              input: innerInput,
-              outputBytes: 0,
-              callSeq: startSeq,
-            });
-            needsEconomicsFallback = true;
           }
         }
+      } finally {
+        insertFileRef.finalize();
+        updateToolCallResult.finalize();
+        insertToolCall.finalize();
+        insertBlock.finalize();
+        insertMessage.finalize();
       }
-    } finally {
-      insertFileRef.finalize();
-      updateToolCallResult.finalize();
-      insertToolCall.finalize();
-      insertBlock.finalize();
-      insertMessage.finalize();
-    }
 
-    state.diagnostics.seenToolUse = sealCompactSet(seenToolUse);
-    state.diagnostics.answeredToolUse = sealCompactSet(answeredToolUse);
-    state.diagnostics.orphanToolResultIds = [...orphanSet];
-    if (tool === "claude_code" && claudeEvicted != null) {
-      const claudeSt = state.parser as ClaudeStepperState;
-      compactClaudeStepper(claudeSt, CLAUDE_RECENT_REQUEST_WINDOW, (key) => {
-        compactSetAdd(claudeEvicted, key);
-      });
-      if (state.claudeBilledRuntime != null) {
-        for (const reqId of Object.keys(state.claudeBilledRuntime)) {
-          if (ownGet(claudeSt.billed, reqId) == null) {
-            delete state.claudeBilledRuntime[reqId];
+      state.diagnostics.seenToolUse = sealCompactSet(seenToolUse);
+      state.diagnostics.answeredToolUse = sealCompactSet(answeredToolUse);
+      state.diagnostics.orphanToolResultIds = [...orphanSet];
+      if (tool === "claude_code" && claudeEvicted != null) {
+        const claudeSt = state.parser as ClaudeStepperState;
+        compactClaudeStepper(claudeSt, CLAUDE_RECENT_REQUEST_WINDOW, (key) => {
+          compactSetAdd(claudeEvicted, key);
+        });
+        if (state.claudeBilledRuntime != null) {
+          for (const reqId of Object.keys(state.claudeBilledRuntime)) {
+            if (ownGet(claudeSt.billed, reqId) == null) {
+              delete state.claudeBilledRuntime[reqId];
+            }
           }
         }
+        if (claudeEvicted.bits != null || (claudeEvicted.exact?.size ?? 0) > 0) {
+          state.claudeEvictedRequests = sealCompactSet(claudeEvicted);
+        }
       }
-      if (claudeEvicted.bits != null || (claudeEvicted.exact?.size ?? 0) > 0) {
-        state.claudeEvictedRequests = sealCompactSet(claudeEvicted);
-      }
-    }
-    compactPiToolUses(state.piToolUses, MAX_PI_TOOL_USES_WINDOW);
+      compactPiToolUses(state.piToolUses, MAX_PI_TOOL_USES_WINDOW);
 
-    const cwCols = computeContextWindowColumns(
-      state.contextWindow,
-      tool,
-      nextSummary.model,
-      nextSummary.rawMeta,
-    );
-    const gotOutcome = outcomeFromEnrich(state.enrich);
-    const gotWorkType = workTypeFromEnrich(state.enrich);
+      const cwCols = computeContextWindowColumns(
+        state.contextWindow,
+        tool,
+        nextSummary.model,
+        nextSummary.rawMeta,
+      );
+      const gotOutcome = outcomeFromEnrich(state.enrich);
+      const gotWorkType = workTypeFromEnrich(state.enrich);
 
-    runStatement(
-      db,
-      `UPDATE session
+      runStatement(
+        db,
+        `UPDATE session
           SET title = ?2,
               cwd = ?3,
               git_branch = ?4,
@@ -3232,185 +3243,187 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
               tool_call_count = ?40,
               search_count = ?41
         WHERE id = ?1`,
-      [
-        sessionId,
-        nextSummary.title,
-        nextSummary.cwd,
-        nextSummary.gitBranch,
-        nextSummary.model,
-        nextSummary.reasoningEffort,
-        canonicalJson(nextSummary.reasoningEffortLevels),
-        nextSummary.cliVersion,
-        nextSummary.startedAt,
-        nextSummary.endedAt,
-        state.parser.seq,
-        nextSummary.totals.input,
-        nextSummary.totals.output,
-        nextSummary.totals.cacheRead,
-        nextSummary.totals.cacheCreation,
-        nextSummary.totals.cacheCreation1h,
-        nextSummary.totals.reasoning,
-        nextSummary.estReasoningTokens,
-        nextSummary.reasoningSource,
-        canonicalJson(nextSummary.rawMeta),
-        mtime,
-        stats.size,
-        cwCols.turnCount,
-        state.enrich.facets.errorCount,
-        state.enrich.facets.interruptionCount,
-        cwCols.compactionCount,
-        state.enrich.facets.sidechainMessageCount,
-        state.enrich.facets.agentSpawnCount,
-        state.enrich.facets.skillCount,
-        state.enrich.facets.commandCount,
-        state.enrich.facets.thinkingBlockCount,
-        state.enrich.facets.thinkingChars,
-        state.enrich.facets.activeSeconds,
-        gotOutcome,
-        gotWorkType,
-        cwCols.windowTokens,
-        cwCols.peakTokens,
-        nextSummary.agentId,
-        state.replyCount,
-        state.toolCallCount,
-        state.searchCount,
-      ],
-    );
-
-    let ownBilledModified = false;
-    if (tool === "claude_code") {
-      const billedRes = reconcileBilledRequestsIncremental(
-        db,
-        sessionId,
-        newBilledForReconcile,
-        replacedOldMessageIds,
+        [
+          sessionId,
+          nextSummary.title,
+          nextSummary.cwd,
+          nextSummary.gitBranch,
+          nextSummary.model,
+          nextSummary.reasoningEffort,
+          canonicalJson(nextSummary.reasoningEffortLevels),
+          nextSummary.cliVersion,
+          nextSummary.startedAt,
+          nextSummary.endedAt,
+          state.parser.seq,
+          nextSummary.totals.input,
+          nextSummary.totals.output,
+          nextSummary.totals.cacheRead,
+          nextSummary.totals.cacheCreation,
+          nextSummary.totals.cacheCreation1h,
+          nextSummary.totals.reasoning,
+          nextSummary.estReasoningTokens,
+          nextSummary.reasoningSource,
+          canonicalJson(nextSummary.rawMeta),
+          mtime,
+          stats.size,
+          cwCols.turnCount,
+          state.enrich.facets.errorCount,
+          state.enrich.facets.interruptionCount,
+          cwCols.compactionCount,
+          state.enrich.facets.sidechainMessageCount,
+          state.enrich.facets.agentSpawnCount,
+          state.enrich.facets.skillCount,
+          state.enrich.facets.commandCount,
+          state.enrich.facets.thinkingBlockCount,
+          state.enrich.facets.thinkingChars,
+          state.enrich.facets.activeSeconds,
+          gotOutcome,
+          gotWorkType,
+          cwCols.windowTokens,
+          cwCols.peakTokens,
+          nextSummary.agentId,
+          state.replyCount,
+          state.toolCallCount,
+          state.searchCount,
+        ],
       );
-      ownBilledModified = billedRes.ownSessionModified;
-      affectedSessionIds = billedRes.affectedSessionIds;
-      if (ownBilledModified) {
-        needsModelUsageFallback = true;
-        needsContextWindowFallback = true;
-        needsEconomicsFallback = true;
-      }
-    }
 
-    let usageRows: ModelUsageRow[];
-    if (needsModelUsageFallback) {
-      usageRows = materializeModelUsage(db, sessionId);
-      state.modelUsage = rebuildModelUsageFoldFromDb(db, sessionId, tool, sessionModel);
-    } else {
-      usageRows = computeModelUsageRows(state.modelUsage, sessionModel, nextSummary.totals);
-      writeModelUsageRows(db, sessionId, usageRows);
-    }
-    const costSession = ownBilledModified
-      ? queryRow<{
-          model: string | null;
-          total_input_tokens: number;
-          total_output_tokens: number;
-          total_cache_read_tokens: number;
-          total_cache_creation_tokens: number;
-          total_cache_creation_1h_tokens: number;
-        }>(
+      let ownBilledModified = false;
+      if (tool === "claude_code") {
+        const billedRes = reconcileBilledRequestsIncremental(
           db,
-          `SELECT model, total_input_tokens, total_output_tokens, total_cache_read_tokens,
+          sessionId,
+          newBilledForReconcile,
+          replacedOldMessageIds,
+        );
+        ownBilledModified = billedRes.ownSessionModified;
+        affectedSessionIds = billedRes.affectedSessionIds;
+        if (ownBilledModified) {
+          needsModelUsageFallback = true;
+          needsContextWindowFallback = true;
+          needsEconomicsFallback = true;
+        }
+      }
+
+      let usageRows: ModelUsageRow[];
+      if (needsModelUsageFallback) {
+        usageRows = materializeModelUsage(db, sessionId);
+        state.modelUsage = rebuildModelUsageFoldFromDb(db, sessionId, tool, sessionModel);
+      } else {
+        usageRows = computeModelUsageRows(state.modelUsage, sessionModel, nextSummary.totals);
+        writeModelUsageRows(db, sessionId, usageRows);
+      }
+      const costSession = ownBilledModified
+        ? queryRow<{
+            model: string | null;
+            total_input_tokens: number;
+            total_output_tokens: number;
+            total_cache_read_tokens: number;
+            total_cache_creation_tokens: number;
+            total_cache_creation_1h_tokens: number;
+          }>(
+            db,
+            `SELECT model, total_input_tokens, total_output_tokens, total_cache_read_tokens,
                   total_cache_creation_tokens, total_cache_creation_1h_tokens
              FROM session WHERE id = ?1`,
-          [sessionId],
-        )
-      : null;
-    const costUsage =
-      costSession == null
-        ? nextSummary.totals
-        : {
-            input: costSession.total_input_tokens,
-            output: costSession.total_output_tokens,
-            cacheRead: costSession.total_cache_read_tokens,
-            cacheCreation: costSession.total_cache_creation_tokens,
-            cacheCreation1h: costSession.total_cache_creation_1h_tokens,
-            reasoning: 0,
-          };
-    runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
-      totalCost(sessionCostParts(usageRows, { model: nextSummary.model, usage: costUsage })),
-      sessionId,
-    ]);
-
-    if (needsContextWindowFallback) {
-      materializeContextWindow(db, sessionId);
-      state.contextWindow = rebuildContextWindowFoldFromDb(
-        db,
+            [sessionId],
+          )
+        : null;
+      const costUsage =
+        costSession == null
+          ? nextSummary.totals
+          : {
+              input: costSession.total_input_tokens,
+              output: costSession.total_output_tokens,
+              cacheRead: costSession.total_cache_read_tokens,
+              cacheCreation: costSession.total_cache_creation_tokens,
+              cacheCreation1h: costSession.total_cache_creation_1h_tokens,
+              reasoning: 0,
+            };
+      runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
+        totalCost(sessionCostParts(usageRows, { model: nextSummary.model, usage: costUsage })),
         sessionId,
-        tool,
-        nextSummary.isSubagent,
-      );
-    }
+      ]);
 
-    if (!needsEconomicsFallback) {
-      const econOk = foldEconomicsDelta(
-        state.economics,
-        tool,
-        nextSummary.startedAt,
-        econBlocks,
-        econNewCalls,
-        econMatchedResults,
-      );
-      if (econOk) {
-        storeEconomicsVector(
+      if (needsContextWindowFallback) {
+        materializeContextWindow(db, sessionId);
+        state.contextWindow = rebuildContextWindowFoldFromDb(
           db,
-          buildEconomicsVector(state.economics, sessionId, nextSummary, usageRows),
+          sessionId,
+          tool,
+          nextSummary.isSubagent,
         );
-      } else {
-        needsEconomicsFallback = true;
       }
-    }
-    if (needsEconomicsFallback) {
-      materializeSessionEconomics(db, sessionId);
-      state.economics.valid = false;
-    }
 
-    runStatement(
-      db,
-      "DELETE FROM ingest_issue WHERE source_path = ?1 AND code = 'unparsed_line' AND line_no > ?2",
-      [sourcePath, loaded.parsedLineCount],
-    );
-    const unknownChanged = canonicalJson(state.parser.unknownTypes) !== prevUnknownJson;
-    if (unknownChanged) {
+      if (!needsEconomicsFallback) {
+        const econOk = foldEconomicsDelta(
+          state.economics,
+          tool,
+          nextSummary.startedAt,
+          econBlocks,
+          econNewCalls,
+          econMatchedResults,
+        );
+        if (econOk) {
+          storeEconomicsVector(
+            db,
+            buildEconomicsVector(state.economics, sessionId, nextSummary, usageRows),
+          );
+        } else {
+          needsEconomicsFallback = true;
+        }
+      }
+      if (needsEconomicsFallback) {
+        materializeSessionEconomics(db, sessionId);
+        state.economics.valid = false;
+      }
+
       runStatement(
         db,
-        "DELETE FROM ingest_issue WHERE source_path = ?1 AND code = 'unknown_record_type'",
-        [sourcePath],
+        "DELETE FROM ingest_issue WHERE source_path = ?1 AND code = 'unparsed_line' AND line_no > ?2",
+        [sourcePath, loaded.parsedLineCount],
       );
-    }
-    const unknownIssues = unknownChanged
-      ? tool === "claude_code"
-        ? claudeUnknownTypeIssues(state.parser as ClaudeStepperState)
-        : tool === "codex"
-          ? codexUnknownTypeIssues(state.parser as CodexStepperState)
-          : piUnknownTypeIssues(state.parser as PiStepperState)
-      : [];
-    const issuesToInsert = [...deltaIssues, ...unknownIssues, ...newLinkageIssues];
-    if (issuesToInsert.length > 0) {
-      const insertIssue = db.prepare(
-        `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
-      );
-      try {
-        for (const issue of issuesToInsert) {
-          insertIssue.run(sourcePath, issue.lineNo, issue.error, issue.rawLine, issue.code);
-        }
-      } finally {
-        insertIssue.finalize();
+      const unknownChanged = canonicalJson(state.parser.unknownTypes) !== prevUnknownJson;
+      if (unknownChanged) {
+        runStatement(
+          db,
+          "DELETE FROM ingest_issue WHERE source_path = ?1 AND code = 'unknown_record_type'",
+          [sourcePath],
+        );
       }
-    }
+      const unknownIssues = unknownChanged
+        ? tool === "claude_code"
+          ? claudeUnknownTypeIssues(state.parser as ClaudeStepperState)
+          : tool === "codex"
+            ? codexUnknownTypeIssues(state.parser as CodexStepperState)
+            : piUnknownTypeIssues(state.parser as PiStepperState)
+        : [];
+      const issuesToInsert = [...deltaIssues, ...unknownIssues, ...newLinkageIssues];
+      if (issuesToInsert.length > 0) {
+        const insertIssue = db.prepare(
+          `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+        );
+        try {
+          for (const issue of issuesToInsert) {
+            insertIssue.run(sourcePath, issue.lineNo, issue.error, issue.rawLine, issue.code);
+          }
+        } finally {
+          insertIssue.finalize();
+        }
+      }
 
-    const totalIssueCount =
-      queryRow<{ n: number }>(db, "SELECT COUNT(*) AS n FROM ingest_issue WHERE source_path = ?1", [
-        sourcePath,
-      ])?.n ?? 0;
-    const status = totalIssueCount === 0 ? "ok" : "ok_with_issues";
+      const totalIssueCount =
+        queryRow<{ n: number }>(
+          db,
+          "SELECT COUNT(*) AS n FROM ingest_issue WHERE source_path = ?1",
+          [sourcePath],
+        )?.n ?? 0;
+      const status = totalIssueCount === 0 ? "ok" : "ok_with_issues";
 
-    runStatement(
-      db,
-      `UPDATE ingest_source
+      runStatement(
+        db,
+        `UPDATE ingest_source
           SET size = ?2,
               mtime = ?3,
               hash = NULL,
@@ -3421,36 +3434,40 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
               error = NULL,
               last_ingested_at = datetime('now')
         WHERE path = ?1`,
-      [
-        sourcePath,
-        stats.size,
-        mtime,
-        input.expectedRevision,
-        sessionId,
-        scanned.totalLines,
-        status,
-      ],
-    );
+        [
+          sourcePath,
+          stats.size,
+          mtime,
+          input.expectedRevision,
+          sessionId,
+          scanned.totalLines,
+          status,
+        ],
+      );
 
-    state.needsLeadingNewline = scanned.needsLeadingNewline;
-    saveCheckpoint(
-      db,
-      sourcePath,
-      scanned.parsedOffset,
-      scanned.parsedLineCount,
-      nextPrefixHash,
-      state,
-    );
-    bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
-    if (lineageDirty) {
-      bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
-    }
-    committedLinkageIssues = newLinkageIssues;
-    return "committed";
-  });
+      state.needsLeadingNewline = scanned.needsLeadingNewline;
+      saveCheckpoint(
+        db,
+        sourcePath,
+        scanned.parsedOffset,
+        scanned.parsedLineCount,
+        nextPrefixHash,
+        state,
+      );
+      bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      if (lineageDirty) {
+        bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+      }
+      committedLinkageIssues = newLinkageIssues;
+      return "committed";
+    },
+  );
 
   if (txOutcome === "skipped") {
     return { kind: "skipped" };
+  }
+  if (txOutcome === "conflict_live") {
+    return { kind: "conflict", liveChanged: true };
   }
   if (txOutcome === "conflict") {
     return { kind: "conflict" };

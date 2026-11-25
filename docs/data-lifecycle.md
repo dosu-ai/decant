@@ -136,14 +136,28 @@ By default Decant discovers:
 - Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
   from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
   `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
-  read-only, and Decant re-reads the whole file when it changes.
+  read-only.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
 last valid state, and later valid updates still apply. Mutation paths cannot
 replace an object's prototype.
 
-`decant sync` inserts new sessions and replaces changed ones transactionally.
+`decant sync` inserts new sessions and updates changed ones transactionally.
+For append-only JSONL logs (Claude Code, Codex, and Pi), Decant stores a
+bounded per-file parser and fold checkpoint in `ingest_checkpoint` alongside a
+sampled hash of the already-ingested prefix. When a file grows and its prefix
+hash still matches, Decant reads and writes only the newly appended lines,
+matching open tool calls, usage totals, context windows, and economics vectors
+in place. Truncation, prefix rewrites, torn-line corrections that alter prior
+state, or cross-session billed-request adjustments fall back automatically to a
+full re-parse. Full re-parses (including Copilot CLI, Gemini CLI, VS Code
+Copilot Chat, OpenCode, Cursor CLI, Hermes Agent, and ATIF) diff existing
+messages, blocks, tool calls, and file references in place so unchanged blocks
+keep their row IDs and avoid churning the full-text index. Both paths also
+materialize per-session reply, tool-call, and search counts on the `session`
+row (with SQL fallback for pre-existing rows that leave them null) so paginated
+session reads and recommendation scans do not re-scan full transcripts.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
 chat, the existence, size, and nanosecond modification time of each of
 `store.db`, `store.db-wal`, and `meta.json` if present, since a running chat appends to
@@ -182,7 +196,11 @@ archive stays linear in its size; see
 combines native filesystem events with a periodic sweep so missed notifications
 do not leave the archive stale. Events are debounced so a burst of writes becomes
 one sync, and a log an agent keeps writing still syncs about every 5 seconds
-instead of waiting for the agent to pause. OpenCode database directories are watched
+instead of waiting for the agent to pause. When a native event names an
+individual transcript file, the watch sync inspects only the changed paths and
+defers archive-wide recommendation refreshes to the periodic sweep (throttled
+to at most once every 5 minutes during continuous background activity) or to
+manual and startup syncs. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
@@ -736,7 +754,15 @@ The service checks its binary once a minute. After `decant update`, a Homebrew
 upgrade, or an npm update replaces it, the service waits until the new file
 stops changing, then exits and the OS starts the new version. If a sync is
 stuck and the service has not stopped 10 seconds after it began, it exits
-anyway so the OS can restart it. Homebrew installs register the stable
+anyway so the OS can restart it.
+
+Stopping `decant serve` or the service cancels a sync in progress. The sync
+finishes the file it is reading and stops. It skips the work that normally ends
+a sync, such as linking subagents to their parents and refreshing signals, and
+the next sync that ingests a file does that work for the whole archive. A sync
+that is still running 5 seconds after it was cancelled is terminated. SQLite
+discards any write it had not committed, so the archive stays consistent and
+the next sync picks up where it left off. Homebrew installs register the stable
 `$(brew --prefix)/opt/decant/bin/decant` path, so upgrades keep working. Source
 checkouts, `npx`, and the container cannot register a service.
 

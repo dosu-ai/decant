@@ -39,7 +39,7 @@ index plus local user state such as recommendations and session tombstones.
 | --- | --- | --- |
 | Composition | `src/cli.ts`, `src/cli/`, `src/config.ts`, `src/settings.ts`, `src/update.ts`, `src/doctor.ts` | Commands, global flags, output policy, configuration, saved UI settings, the opt-in release check and `decant update`, the redacted `decant doctor` report, and process lifecycle. |
 | Sources | `src/sources/`, `src/model.ts` | Pure, print-free parsers and the normalized wire model. |
-| Ingest | `src/ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, normalization writes, derived facets, and ingest issues. |
+| Ingest | `src/ingest.ts`, `src/incremental-ingest.ts`, `src/enrich.ts`, `src/diagnostics.ts` | Discovery, change detection, append-only incremental checkpoints, in-place diff writes, derived facets, and ingest issues. |
 | Economics | `src/cost.ts`, `src/model-usage.ts`, `src/billed-requests.ts`, `src/buckets.ts`, `src/token-economics.ts`, `src/context-window.ts` | Pricing, per-model usage splits, one billing session per copied Claude Code request, activity attribution, persisted vectors, and occupancy timelines. |
 | Storage | `src/db.ts`, `src/schema.sql`, `src/schema-manifest.ts` | SQLite ownership, WAL, migrations, permissions, and schema-drift detection. |
 | Reads | `src/query.ts`, `src/stats.ts`, `src/source-filter.ts`, `src/project-scope.ts`, `src/recommendations.ts`, `src/distill.ts`, `src/export.ts`, `src/export-atif.ts`, `src/atif-mirror.ts` | Session retrieval, aggregates, the Analytics source scope, resolving a typed project or repository to stored keys, recommendations, deterministic artifacts, Markdown, JSON, trajectory, and ATIF exports, and the ATIF folder mirror. |
@@ -95,12 +95,17 @@ in `ingest_source.hash`. OpenCode's is built per layout from the session's
 update time and its message (and, for 1.x, part) counts and update times, and
 Hermes's from the session row's changing columns and its message rows' counts;
 see
-[data lifecycle](data-lifecycle.md). A changed session is replaced
-transactionally, then Decant materializes context-window rollups and versioned
-per-session economics vectors. Costs are also stored at ingest and reconciled
-with current rates on every sync while transcripts and user state remain
-intact. Reading a foreign database does not change Decant's own rule that one
-process owns the archive; the OpenCode database stays OpenCode's.
+[data lifecycle](data-lifecycle.md). A changed session is updated
+transactionally: append-only JSONL tools (Claude Code, Codex, and Pi) advance
+from their `ingest_checkpoint` row and write only new rows when the recorded
+prefix hash still matches, while other tools and fallback re-parses diff
+existing messages, blocks, tool calls, and file references in place so
+unchanged blocks keep their row IDs and FTS entries. Decant then updates
+context-window rollups and versioned per-session economics vectors. Costs are
+stored at ingest and reconciled with current rates on startup, manual, and CLI
+syncs while transcripts and user state remain intact. Reading a foreign database
+does not change Decant's own rule that one process owns the archive; the
+OpenCode database stays OpenCode's.
 
 The supported extension point is a new parser under `src/sources/`. Follow
 [Add a source](adding-a-source.md); it defines the privacy, capability,
@@ -121,6 +126,13 @@ objects before Decant continues on a drifted archive.
 
 Archive files and sidecars are created or narrowed to owner-only permissions
 where the platform supports POSIX modes.
+
+Connections disable SQLite memory-mapping (`mmap_size = 0`) so large archives
+do not pin database pages into process RSS, keep temporary sort and grouping
+tables in memory (`temp_store = MEMORY`) with bounded page caches (`cache_size`
+8 MiB on writer connections and 4 MiB on read-only workers), and cap WAL
+growth with `wal_autocheckpoint = 4000` (16 MiB) and
+`journal_size_limit = 33554432` (32 MiB).
 
 ### Planner statistics
 
@@ -163,12 +175,15 @@ merged segment, and every later merge would read the whole index. After each
 second server fail with a truthful port-in-use message instead of first
 becoming another database owner.
 
-The server keeps request handling responsive by running source syncs in
-`src/sync-worker.ts`, economics-vector scans in `src/stats-worker.ts`, and the
-heavy archive reads in a pool of `src/read-worker.ts` threads.
-Economics vectors are cached in memory. `PRAGMA data_version` detects writes by
-other connections; the server serves the previous model while rebuilding and
-then emits `archive_updated` so clients can refresh.
+The server keeps request handling responsive by reusing one long-lived
+`src/sync-worker.ts` thread for source syncs, running full economics-vector
+scans in `src/stats-worker.ts`, and serving heavy archive reads from a pool of
+`src/read-worker.ts` threads. Economics vectors are cached in memory: small
+incremental syncs patch only the changed session vectors directly, while larger
+changes or external commits (detected via `PRAGMA data_version`) trigger a
+background `stats-worker` rebuild that serves the previous model until ready
+and then emits `archive_updated`. At the end of a sync, the server and read
+workers reload planner statistics only when `sqlite_stat1` actually changed.
 
 The Tools page summary and tool usage table read every matching tool call.
 `src/read-cache.ts` keeps up to 32 of those results per connection, keyed by

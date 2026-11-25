@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { closeDb } from "./db.ts";
+import { closeDb, configureConnectionPragmas } from "./db.ts";
 import { computeSessionEconomicsVectors } from "./token-economics.ts";
 
 self.addEventListener("message", function onMessage(event) {
@@ -27,7 +27,7 @@ self.addEventListener("message", function onMessage(event) {
     }
     db = new Database(dbPath, { readonly: true, strict: true });
     db.exec("PRAGMA busy_timeout = 5000;");
-    db.exec("PRAGMA mmap_size = 1073741824;");
+    configureConnectionPragmas(db, "ro");
     result = { ok: true, vectors: computeSessionEconomicsVectors(db, { cancelled }) };
     if (cancelled()) {
       throw new Error("aborted");

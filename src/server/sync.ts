@@ -1,6 +1,7 @@
 import type { Config } from "../config.ts";
 import type { EconomicsCache } from "../economics-cache.ts";
-import type { sync as ingestSync, SyncProgress, SyncReport } from "../ingest.ts";
+import type { sync as ingestSync, SyncOptions, SyncProgress, SyncReport } from "../ingest.ts";
+import type { SyncWorkerSyncOptions } from "../sync-worker.ts";
 import type {
   SyncReason,
   SyncRunnerFailure,
@@ -17,6 +18,7 @@ export type SyncWorkerRunner = (
   config: Config,
   cancel?: { aborted: boolean },
   onProgress?: (progress: SyncProgress) => void,
+  syncOptions?: SyncOptions,
 ) => Promise<SyncReport>;
 
 export interface SyncRunHandle {
@@ -30,6 +32,7 @@ export interface SyncCoordinator {
     config: Config,
     cancel?: { aborted: boolean },
     onProgress?: (progress: SyncProgress) => void,
+    syncOptions?: SyncOptions,
   ): SyncRunHandle;
   close(): Promise<void>;
 }
@@ -41,6 +44,13 @@ export interface SyncCoordinatorOptions {
   onProgress?: (progress: SyncProgress) => void;
   onCompleted?: (report: SyncReport) => void;
 }
+
+interface SyncReportMeta {
+  sessionIds: number[];
+  tombstoned: boolean;
+}
+
+const syncReportMeta = new WeakMap<SyncReport, SyncReportMeta>();
 
 export const syncStatus = {
   last_sync_at: null as string | null,
@@ -85,10 +95,32 @@ export function syncStatusBody() {
   };
 }
 
+function refreshEconomicsForReport(
+  economics: EconomicsCache | undefined,
+  report: SyncReport,
+): void {
+  if (economics == null) {
+    return;
+  }
+  const meta = syncReportMeta.get(report);
+  if (
+    meta != null &&
+    !meta.tombstoned &&
+    (report.repriced ?? 0) === 0 &&
+    meta.sessionIds.length > 0 &&
+    typeof economics.refreshSessions === "function"
+  ) {
+    economics.refreshSessions(meta.sessionIds);
+  } else {
+    economics.invalidate();
+  }
+}
+
 export async function syncNow(
   config: Config,
   economics?: EconomicsCache,
-  runSync: SyncWorkerRunner = runSyncWorker,
+  runSync: SyncWorkerRunner = (workerConfig, cancel, onProgress, syncOptions) =>
+    runSyncWorker(workerConfig, cancel, onProgress, {}, syncOptions),
   runWithOwnership?: SyncCoordinator["runWithOwnership"],
 ): Promise<Response> {
   const progress = (update: SyncProgress): void => {
@@ -122,7 +154,7 @@ export async function syncNow(
     endSyncActivity(report);
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0 || (report.repriced ?? 0) > 0) {
-      economics?.invalidate();
+      refreshEconomicsForReport(economics, report);
       publishServerEvent({
         type: "archive_updated",
         reason: "manual",
@@ -148,61 +180,348 @@ export async function syncNow(
   }
 }
 
-function runSyncWorker(
+// Bun cannot interrupt a worker inside a native SQLite call, so terminate()
+// takes effect once the current statement returns. SQLite rolls back the
+// worker's uncommitted transaction when its connection is torn down.
+export const SYNC_WORKER_CANCEL_GRACE_MS = 5_000;
+const CANCEL_POLL_MS = 150;
+const WORKER_CLOSE_TIMEOUT_MS = 2_000;
+
+export class SyncWorkerStopTimeoutError extends Error {
+  constructor(graceMs: number) {
+    super(`sync worker did not stop within ${graceMs}ms of cancellation`);
+    this.name = "SyncWorkerStopTimeoutError";
+  }
+}
+
+export interface SyncWorkerOptions {
+  cancelGraceMs?: number;
+  spawn?: () => Worker;
+}
+
+function toWorkerSyncOptions(syncOptions?: SyncOptions): SyncWorkerSyncOptions | undefined {
+  if (syncOptions == null) {
+    return undefined;
+  }
+  return {
+    ...(syncOptions.candidatePaths != null
+      ? { candidatePaths: [...syncOptions.candidatePaths] }
+      : {}),
+    ...(syncOptions.deferDerivedRefresh === true ? { deferDerivedRefresh: true } : {}),
+    ...(syncOptions.recommendationMinIntervalMs != null
+      ? { recommendationMinIntervalMs: syncOptions.recommendationMinIntervalMs }
+      : {}),
+  };
+}
+
+export function runSyncWorker(
   config: Config,
   cancel?: { aborted: boolean },
   onProgress?: (progress: SyncProgress) => void,
+  options: SyncWorkerOptions = {},
+  syncOptions?: SyncOptions,
 ): Promise<ReturnType<typeof ingestSync>> {
+  const graceMs = Math.max(0, options.cancelGraceMs ?? SYNC_WORKER_CANCEL_GRACE_MS);
   return new Promise((resolve, reject) => {
-    const worker = new Worker(workerUrl("sync-worker.ts"), { type: "module" });
-    const cancelBuffer =
-      cancel == null ? null : new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    const cancelView = cancelBuffer == null ? null : new Int32Array(cancelBuffer);
+    const worker = options.spawn?.() ?? new Worker(workerUrl("sync-worker.ts"), { type: "module" });
+    const cancelView =
+      cancel == null ? null : new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     let cancelPoll: Timer | null = null;
-    const settle = (): void => {
+    let stopDeadline: Timer | null = null;
+    let settled = false;
+    const finish = (outcome: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (cancelPoll != null) {
         clearInterval(cancelPoll);
         cancelPoll = null;
       }
+      if (stopDeadline != null) {
+        clearTimeout(stopDeadline);
+        stopDeadline = null;
+      }
+      outcome();
+    };
+    const forwardCancel = (): void => {
+      if (cancel?.aborted !== true || cancelView == null || stopDeadline != null || settled) {
+        return;
+      }
+      Atomics.store(cancelView, 0, 1);
+      if (cancelPoll != null) {
+        clearInterval(cancelPoll);
+        cancelPoll = null;
+      }
+      stopDeadline = setTimeout(() => {
+        finish(() => reject(new SyncWorkerStopTimeoutError(graceMs)));
+        worker.terminate();
+      }, graceMs);
     };
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { type: "progress"; progress: SyncProgress }
-        | { type: "complete"; ok: true; report: ReturnType<typeof ingestSync> }
+        | {
+            type: "complete";
+            ok: true;
+            report: ReturnType<typeof ingestSync>;
+            changedSessionIds?: number[];
+            tombstoned?: boolean;
+          }
         | { type: "complete"; ok: false; error: string };
       if (data.type === "progress") {
-        onProgress?.(data.progress);
+        if (!settled) {
+          onProgress?.(data.progress);
+        }
         return;
       }
-      settle();
-      if (data.ok) {
-        resolve(data.report);
-      } else {
-        reject(new Error(data.error));
-      }
+      finish(() => {
+        if (data.ok) {
+          if (data.changedSessionIds != null) {
+            syncReportMeta.set(data.report, {
+              sessionIds: data.changedSessionIds,
+              tombstoned: data.tombstoned === true,
+            });
+          }
+          resolve(data.report);
+        } else {
+          reject(new Error(data.error));
+        }
+      });
     });
     worker.addEventListener("error", (event) => {
-      settle();
-      reject(workerError(event, "sync worker failed"));
+      finish(() => reject(workerError(event, "sync worker failed")));
+    });
+    worker.addEventListener("close", (event) => {
+      const code = (event as Event & { code?: number }).code ?? "unknown";
+      finish(() => reject(new Error(`sync worker exited with code ${code} before reporting`)));
     });
     if (cancel != null) {
-      if (cancel.aborted && cancelView != null) {
-        Atomics.store(cancelView, 0, 1);
+      forwardCancel();
+      if (stopDeadline == null) {
+        cancelPoll = setInterval(forwardCancel, CANCEL_POLL_MS);
       }
-      cancelPoll = setInterval(() => {
-        if (cancel.aborted && cancelView != null) {
-          Atomics.store(cancelView, 0, 1);
-        }
-      }, 150);
     }
-    worker.postMessage({ config, cancelBuffer });
+    const workerOpts = toWorkerSyncOptions(syncOptions);
+    worker.postMessage({
+      config,
+      cancelBuffer: cancelView?.buffer ?? null,
+      ...(workerOpts != null ? { options: workerOpts } : {}),
+    });
   });
 }
 
+class PersistentSyncWorker {
+  #worker: Worker | null = null;
+  #exited: PromiseWithResolvers<void> | null = null;
+  #nextId = 0;
+  #active: {
+    id: number;
+    onProgress?: (progress: SyncProgress) => void;
+    finish: (outcome: () => void) => void;
+  } | null = null;
+  #closing = false;
+
+  run(
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+    syncOptions?: SyncOptions,
+  ): Promise<ReturnType<typeof ingestSync>> {
+    if (this.#closing) {
+      return Promise.reject(new Error("sync worker is closed"));
+    }
+    const graceMs = SYNC_WORKER_CANCEL_GRACE_MS;
+    const worker = this.#ensureWorker();
+    const id = ++this.#nextId;
+    return new Promise((resolve, reject) => {
+      const cancelView =
+        cancel == null ? null : new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      let cancelPoll: Timer | null = null;
+      let stopDeadline: Timer | null = null;
+      let settled = false;
+      const finish = (outcome: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.#active?.id === id) {
+          this.#active = null;
+        }
+        if (cancelPoll != null) {
+          clearInterval(cancelPoll);
+          cancelPoll = null;
+        }
+        if (stopDeadline != null) {
+          clearTimeout(stopDeadline);
+          stopDeadline = null;
+        }
+        outcome();
+      };
+      const forwardCancel = (): void => {
+        if (cancel?.aborted !== true || cancelView == null || stopDeadline != null || settled) {
+          return;
+        }
+        Atomics.store(cancelView, 0, 1);
+        if (cancelPoll != null) {
+          clearInterval(cancelPoll);
+          cancelPoll = null;
+        }
+        stopDeadline = setTimeout(() => {
+          finish(() => reject(new SyncWorkerStopTimeoutError(graceMs)));
+          this.#dropWorker(worker, true);
+        }, graceMs);
+      };
+
+      this.#active = { id, onProgress, finish };
+      this.#resolveActive = (report) => finish(() => resolve(report));
+      this.#rejectActive = (error) => finish(() => reject(error));
+      if (cancel != null) {
+        forwardCancel();
+        if (stopDeadline == null) {
+          cancelPoll = setInterval(forwardCancel, CANCEL_POLL_MS);
+        }
+      }
+      const workerOpts = toWorkerSyncOptions(syncOptions);
+      try {
+        worker.postMessage({
+          type: "sync",
+          id,
+          config,
+          cancelBuffer: cancelView?.buffer ?? null,
+          ...(workerOpts != null ? { options: workerOpts } : {}),
+        });
+      } catch (error) {
+        this.#resolveActive = null;
+        this.#rejectActive = null;
+        this.#dropWorker(worker, true);
+        finish(() => reject(error instanceof Error ? error : new Error(String(error))));
+      }
+    });
+  }
+
+  #resolveActive: ((report: ReturnType<typeof ingestSync>) => void) | null = null;
+  #rejectActive: ((error: Error) => void) | null = null;
+
+  async close(): Promise<void> {
+    this.#closing = true;
+    const worker = this.#worker;
+    if (worker == null) {
+      return;
+    }
+    const exited = this.#exited ?? Promise.withResolvers<void>();
+    this.#exited = exited;
+    let timer: Timer | null = null;
+    try {
+      worker.postMessage({ type: "close" });
+      await Promise.race([
+        exited.promise,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, WORKER_CLOSE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+    } finally {
+      if (timer != null) {
+        clearTimeout(timer);
+      }
+      if (this.#worker === worker) {
+        this.#dropWorker(worker, true);
+      }
+    }
+  }
+
+  #ensureWorker(): Worker {
+    if (this.#worker != null) {
+      return this.#worker;
+    }
+    const worker = new Worker(workerUrl("sync-worker.ts"), { type: "module" });
+    this.#worker = worker;
+    this.#exited = Promise.withResolvers<void>();
+    worker.addEventListener("message", (event) => {
+      if (this.#worker !== worker) {
+        return;
+      }
+      const data = event.data as
+        | { type: "progress"; id?: number; progress: SyncProgress }
+        | {
+            type: "complete";
+            id?: number;
+            ok: true;
+            report: ReturnType<typeof ingestSync>;
+            changedSessionIds?: number[];
+            tombstoned?: boolean;
+          }
+        | { type: "complete"; id?: number; ok: false; error: string };
+      if (data.type === "progress") {
+        if (this.#active != null && (data.id == null || data.id === this.#active.id)) {
+          this.#active.onProgress?.(data.progress);
+        }
+        return;
+      }
+      if (this.#active != null && (data.id == null || data.id === this.#active.id)) {
+        const resolve = this.#resolveActive;
+        const reject = this.#rejectActive;
+        this.#resolveActive = null;
+        this.#rejectActive = null;
+        if (data.ok) {
+          if (data.changedSessionIds != null) {
+            syncReportMeta.set(data.report, {
+              sessionIds: data.changedSessionIds,
+              tombstoned: data.tombstoned === true,
+            });
+          }
+          resolve?.(data.report);
+        } else {
+          reject?.(new Error(data.error));
+        }
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      const error = workerError(event, "sync worker failed");
+      this.#dropWorker(worker, true);
+      const reject = this.#rejectActive;
+      this.#resolveActive = null;
+      this.#rejectActive = null;
+      reject?.(error);
+    });
+    worker.addEventListener("close", (event) => {
+      this.#exited?.resolve();
+      const code = (event as Event & { code?: number }).code ?? "unknown";
+      this.#dropWorker(worker, false);
+      const reject = this.#rejectActive;
+      this.#resolveActive = null;
+      this.#rejectActive = null;
+      reject?.(new Error(`sync worker exited with code ${code} before reporting`));
+    });
+    return worker;
+  }
+
+  #dropWorker(worker: Worker, terminate: boolean): void {
+    if (this.#worker === worker) {
+      this.#worker = null;
+    }
+    if (terminate) {
+      try {
+        worker.terminate();
+      } catch {}
+    }
+  }
+}
+
 export function createSyncCoordinator(
-  worker: SyncWorkerRunner = runSyncWorker,
+  worker?: SyncWorkerRunner,
   options: SyncCoordinatorOptions = {},
 ): SyncCoordinator {
+  const persistentWorker = worker == null ? new PersistentSyncWorker() : null;
+  const runWorker: SyncWorkerRunner =
+    worker ??
+    ((config, cancel, onProgress, syncOptions) => {
+      if (persistentWorker == null) {
+        throw new Error("Persistent sync worker is unavailable");
+      }
+      return persistentWorker.run(config, cancel, onProgress, syncOptions);
+    });
   const progressEveryFiles = Math.max(1, options.progressEveryFiles ?? 25);
   const progressEveryMs = Math.max(0, options.progressEveryMs ?? 250);
   const now = options.now ?? (() => performance.now());
@@ -219,6 +538,7 @@ export function createSyncCoordinator(
     cancel?: { aborted: boolean },
     onProgress?: (progress: SyncProgress) => void,
     listenWhenJoined = true,
+    syncOptions?: SyncOptions,
   ): SyncRunHandle => {
     if (closed) {
       return {
@@ -280,7 +600,7 @@ export function createSyncCoordinator(
 
     let promise: Promise<SyncReport>;
     promise = Promise.resolve()
-      .then(() => worker(config, sharedCancel, forward))
+      .then(() => runWorker(config, sharedCancel, forward, syncOptions))
       .then(
         (report) => {
           flush();
@@ -300,10 +620,14 @@ export function createSyncCoordinator(
     active = { promise, listeners, cancelSources };
     return { promise, owned: true };
   };
-  const run: SyncWorkerRunner = (config, cancel, onProgress) =>
-    start(config, cancel, onProgress).promise;
-  const runWithOwnership: SyncCoordinator["runWithOwnership"] = (config, cancel, onProgress) =>
-    start(config, cancel, onProgress, false);
+  const run: SyncWorkerRunner = (config, cancel, onProgress, syncOptions) =>
+    start(config, cancel, onProgress, true, syncOptions).promise;
+  const runWithOwnership: SyncCoordinator["runWithOwnership"] = (
+    config,
+    cancel,
+    onProgress,
+    syncOptions,
+  ) => start(config, cancel, onProgress, false, syncOptions);
 
   const close = async (): Promise<void> => {
     closed = true;
@@ -311,6 +635,7 @@ export function createSyncCoordinator(
     try {
       await active?.promise;
     } catch {}
+    await persistentWorker?.close();
   };
 
   return { run, runWithOwnership, close };
@@ -321,14 +646,20 @@ export async function workerSyncRunner(
   status: SyncStatusStore,
   cancel: { aborted: boolean },
   onProgress: (progress: SyncProgress) => void,
-  runSync: SyncCoordinator["runWithOwnership"] = (workerConfig, workerCancel, workerProgress) => ({
-    promise: runSyncWorker(workerConfig, workerCancel, workerProgress),
+  runSync: SyncCoordinator["runWithOwnership"] = (
+    workerConfig,
+    workerCancel,
+    workerProgress,
+    workerSyncOptions,
+  ) => ({
+    promise: runSyncWorker(workerConfig, workerCancel, workerProgress, {}, workerSyncOptions),
     owned: true,
   }),
+  syncOptions?: SyncOptions,
 ): Promise<SyncRunnerResult | SyncRunnerFailure> {
   status.start();
   syncStatus.in_progress = true;
-  const handle = runSync(config, cancel, onProgress);
+  const handle = runSync(config, cancel, onProgress, syncOptions);
   try {
     const report = await handle.promise;
     status.finishOk(report);
@@ -359,7 +690,7 @@ export function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): v
   }
   publishServerEvent(event);
   if (event.type === "sync" && (event.report.ingested > 0 || (event.report.repriced ?? 0) > 0)) {
-    economics.invalidate();
+    refreshEconomicsForReport(economics, event.report);
     publishServerEvent({
       type: "archive_updated",
       reason: event.reason,

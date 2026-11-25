@@ -3,6 +3,7 @@ import type { DateFilter } from "./date-filter.ts";
 import { exceptionAttributes, getDecantLogger } from "./logging.ts";
 import {
   aggregateEconomicsVectors,
+  computeSessionEconomicsVectorsByIds,
   economicsVectorMatchesFilter,
   type SessionEconomicsVector,
   type TokenEconomics,
@@ -53,6 +54,47 @@ export class EconomicsCache {
 
   invalidate(): void {
     void this.#rebuild();
+  }
+
+  refreshSessions(sessionIds: readonly number[]): void {
+    if (this.#disposed) {
+      return;
+    }
+    if (
+      this.#vectors == null ||
+      this.#building != null ||
+      this.#options.computeVectors != null ||
+      sessionIds.length === 0 ||
+      sessionIds.length > 16
+    ) {
+      this.invalidate();
+      return;
+    }
+    try {
+      const uniqueIds = [...new Set(sessionIds)];
+      const updated = computeSessionEconomicsVectorsByIds(this.#options.db, uniqueIds);
+      const updatedById = new Map(updated.map((vector) => [vector.id, vector]));
+      const touched = new Set(uniqueIds);
+      const next: SessionEconomicsVector[] = [];
+      for (const vector of this.#vectors) {
+        if (!touched.has(vector.id)) {
+          next.push(vector);
+          continue;
+        }
+        const replacement = updatedById.get(vector.id);
+        if (replacement != null) {
+          next.push(replacement);
+          updatedById.delete(vector.id);
+        }
+      }
+      for (const added of updatedById.values()) {
+        next.push(added);
+      }
+      this.#vectors = next;
+      this.#builtDataVersion = this.#dataVersion();
+    } catch {
+      this.invalidate();
+    }
   }
 
   prewarm(): void {
@@ -150,50 +192,48 @@ export class EconomicsCache {
   }
 }
 
-function computeVectorsInWorker(
+export function computeVectorsInWorker(
   dbPath: string,
   { signal }: ComputeVectorsOptions,
+  spawn: () => Worker = () => new Worker(workerUrl("stats-worker.ts"), { type: "module" }),
 ): Promise<SessionEconomicsVector[]> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(new Error("aborted"));
       return;
     }
-    const worker = new Worker(workerUrl("stats-worker.ts"), { type: "module" });
+    const worker = spawn();
     const cancelBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const cancelView = new Int32Array(cancelBuffer);
     let promiseSettled = false;
-    const onAbort = (): void => {
-      Atomics.store(cancelView, 0, 1);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    const settle = (): void => {
+    const finish = (outcome: () => void): void => {
       signal.removeEventListener("abort", onAbort);
+      if (promiseSettled) {
+        return;
+      }
+      promiseSettled = true;
+      outcome();
     };
+    function onAbort(): void {
+      Atomics.store(cancelView, 0, 1);
+      finish(() => reject(new Error("aborted")));
+      worker.terminate();
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { ok: true; vectors: SessionEconomicsVector[] }
         | { ok: false; error: string };
-      settle();
-      if (promiseSettled) {
-        return;
-      }
-      promiseSettled = true;
-      if (signal.aborted) {
-        reject(new Error("aborted"));
-      } else if (data.ok) {
-        resolve(data.vectors);
-      } else {
-        reject(new Error(data.error));
-      }
+      finish(() => (data.ok ? resolve(data.vectors) : reject(new Error(data.error))));
     });
     worker.addEventListener("error", (event) => {
-      settle();
-      if (promiseSettled) {
-        return;
-      }
-      promiseSettled = true;
-      reject(workerError(event, "token economics worker failed"));
+      finish(() => reject(workerError(event, "token economics worker failed")));
+    });
+    worker.addEventListener("close", (event) => {
+      const code = (event as Event & { code?: number }).code ?? "unknown";
+      finish(() =>
+        reject(new Error(`token economics worker exited with code ${code} before reporting`)),
+      );
     });
     worker.postMessage({ dbPath, cancelBuffer });
   });

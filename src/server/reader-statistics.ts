@@ -68,4 +68,16 @@ export class ReaderStatistics {
     this.#checkedAt = 0;
     this.#nextReloadAt = 0;
   }
+
+  onCompleted(): boolean {
+    const stored = this.#options.stored();
+    const reloaded = stored !== this.#loaded;
+    if (reloaded) {
+      this.#options.reload();
+      this.#loaded = stored;
+    }
+    this.#checkedAt = 0;
+    this.#nextReloadAt = 0;
+    return reloaded;
+  }
 }

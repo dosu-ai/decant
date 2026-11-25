@@ -2269,6 +2269,8 @@ export interface TryIncrementalInput {
   db: Database;
   fd: number;
   stats: Stats;
+  mtimeNs?: bigint;
+  ctimeNs?: bigint;
   sourcePath: string;
   tool: IncrementalTool;
   archived: boolean;
@@ -2659,9 +2661,32 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       return "conflict";
     }
     try {
-      const live = statSync(sourcePath);
-      if (live.dev !== stats.dev || live.ino !== stats.ino || live.size < stats.size) {
-        return "conflict";
+      if (input.mtimeNs != null || input.ctimeNs != null) {
+        const live = statSync(sourcePath, { bigint: true });
+        const dev = BigInt(stats.dev);
+        const ino = BigInt(stats.ino);
+        const size = BigInt(stats.size);
+        if (
+          live.dev !== dev ||
+          live.ino !== ino ||
+          live.size < size ||
+          (live.size === size &&
+            ((input.mtimeNs != null && live.mtimeNs !== input.mtimeNs) ||
+              (input.ctimeNs != null && live.ctimeNs !== input.ctimeNs)))
+        ) {
+          return "conflict";
+        }
+      } else {
+        const live = statSync(sourcePath);
+        if (
+          live.dev !== stats.dev ||
+          live.ino !== stats.ino ||
+          live.size < stats.size ||
+          (live.size === stats.size &&
+            (live.mtimeMs !== stats.mtimeMs || live.ctimeMs !== stats.ctimeMs))
+        ) {
+          return "conflict";
+        }
       }
     } catch {
       return "conflict";

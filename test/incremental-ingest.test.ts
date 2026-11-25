@@ -2368,4 +2368,71 @@ describe("Sol review regression coverage (F1-F13)", () => {
       closeDb(db);
     }
   });
+
+  test("F1 (final): same-inode same-size in-place rewrite advancing high-res mtime within the same second conflicts", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f1-inplace.jsonl");
+    const turn1 = claudeTurn("c-f1-inplace", 1, "req-1");
+    const turn2Old = claudeTurn("c-f1-inplace", 2, "req-2", 40, "OLDTOKEN");
+    const turn2New = claudeTurn("c-f1-inplace", 2, "req-2", 40, "NEWTOKEN");
+    expect(Buffer.byteLength(turn2Old)).toBe(Buffer.byteLength(turn2New));
+
+    writeFileSync(file, turn1);
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const prior = db
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
+
+      // Append OLDTOKEN, pin mtime to sec + 100ms, and open fd before in-place rewrite.
+      appendFileSync(file, turn2Old);
+      const baseSec = Math.floor(Date.now() / 1000) + 2;
+      const t1 = new Date(baseSec * 1000 + 100);
+      utimesSync(file, t1, t1);
+      const fd = openSync(file, "r");
+      const stats = statSync(file);
+      const statsBig = statSync(file, { bigint: true });
+
+      try {
+        // Rewrite the exact same inode to the exact same byte length with NEWTOKEN at sec + 500ms (same whole second!).
+        writeFileSync(file, turn1 + turn2New);
+        const t2 = new Date(baseSec * 1000 + 500);
+        utimesSync(file, t2, t2);
+
+        const res = tryIncrementalIngest({
+          db,
+          fd,
+          stats,
+          mtimeNs: statsBig.mtimeNs,
+          ctimeNs: statsBig.ctimeNs,
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorMtime: prior.mtime,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(res.kind).toBe("conflict");
+      } finally {
+        closeSync(fd);
+      }
+
+      // Reopening via normal sync ingests NEWTOKEN and matches a fresh ingest.
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      expect(search(db, "NEWTOKEN").length).toBeGreaterThan(0);
+      expect(search(db, "OLDTOKEN").length).toBe(0);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
 });

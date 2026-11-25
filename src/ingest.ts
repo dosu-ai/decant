@@ -791,6 +791,7 @@ export function sync(
             break;
           }
           let stats: Stats | null = null;
+          let statsBig: BigIntStats | null = null;
           let priorSnapshot: ExpectedIngestSourcePrior = { exists: false };
           let content: string | null = null;
           let rawBuffer: Buffer | null = null;
@@ -798,6 +799,7 @@ export function sync(
           let fileAction: "parse" | "done" | "retry" = "parse";
           try {
             stats = fstatSync(fd);
+            statsBig = fstatSync(fd, { bigint: true });
             const prior = queryRow<{
               size: number;
               mtime: number;
@@ -841,6 +843,8 @@ export function sync(
                   db,
                   fd,
                   stats,
+                  mtimeNs: statsBig.mtimeNs,
+                  ctimeNs: statsBig.ctimeNs,
                   sourcePath: file.path,
                   tool: file.tool,
                   archived: file.archived,
@@ -926,7 +930,7 @@ export function sync(
               // error on the failure path.
             }
           }
-          if (fileAction === "done" || stats == null) {
+          if (fileAction === "done" || stats == null || statsBig == null) {
             break;
           }
           if (fileAction === "retry") {
@@ -939,12 +943,18 @@ export function sync(
 
           let pathStillMatches = true;
           try {
-            const live = statSync(file.path);
-            if (live.dev !== stats.dev || live.ino !== stats.ino) {
+            const live = statSync(file.path, { bigint: true });
+            if (
+              live.dev !== statsBig.dev ||
+              live.ino !== statsBig.ino ||
+              live.size < statsBig.size ||
+              (live.size === statsBig.size &&
+                (live.mtimeNs !== statsBig.mtimeNs || live.ctimeNs !== statsBig.ctimeNs))
+            ) {
               pathStillMatches = false;
             } else if (
               fileAttempt + 1 < MAX_FILE_CONFLICT_ATTEMPTS &&
-              (live.size !== stats.size || mtimeSecs(live) !== mtimeSecs(stats))
+              (live.size !== statsBig.size || live.mtimeNs !== statsBig.mtimeNs)
             ) {
               pathStillMatches = false;
             }
@@ -1017,6 +1027,7 @@ export function sync(
             prepared,
             parsed,
             priorSnapshot,
+            statsBig,
             checkpointFull,
           );
           if (outcome.kind === "conflict") {
@@ -2476,6 +2487,7 @@ function writeIngestedFileIfPriorMatches(
   prepared: Prepared,
   parsed: ParsedSession,
   expectedPrior: ExpectedIngestSourcePrior,
+  sourceStats: BigIntStats,
   checkpointFull?: FullParseWithCheckpointResult,
 ):
   | { kind: "ingested"; sessionId: number; affectedSessionIds: number[] }
@@ -2483,6 +2495,20 @@ function writeIngestedFileIfPriorMatches(
   | { kind: "conflict" } {
   return withImmediateTransaction(db, () => {
     if (!ingestSourceMatchesPrior(db, prepared.file.path, expectedPrior)) {
+      return { kind: "conflict" };
+    }
+    try {
+      const live = statSync(prepared.file.path, { bigint: true });
+      if (
+        live.dev !== sourceStats.dev ||
+        live.ino !== sourceStats.ino ||
+        live.size < sourceStats.size ||
+        (live.size === sourceStats.size &&
+          (live.mtimeNs !== sourceStats.mtimeNs || live.ctimeNs !== sourceStats.ctimeNs))
+      ) {
+        return { kind: "conflict" };
+      }
+    } catch {
       return { kind: "conflict" };
     }
     return writeIngestedFileInTx(db, prepared, parsed, undefined, checkpointFull);

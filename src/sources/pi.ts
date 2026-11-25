@@ -17,6 +17,8 @@ import { preview } from "../tools.ts";
 import {
   block,
   countUnknown,
+  nullRecord,
+  ownGet,
   parseJsonLine,
   type UnknownTypes,
   unknownTypeIssues,
@@ -75,13 +77,13 @@ export function createPiStepper(fallbackId: string): PiStepperState {
     startedAt: null,
     endedAt: null,
     efforts: [],
-    outputByModel: {},
+    outputByModel: nullRecord<number>(),
     totals: emptyUsage(),
     reasoningReported: false,
     copiedEntries: 0,
     forkedAt: null,
     seq: 0,
-    unknownTypes: {},
+    unknownTypes: nullRecord<{ count: number; firstLine: number }>(),
   };
 }
 
@@ -98,7 +100,7 @@ export function stepPiLine(
   const noteUnknown = (typ: string): void => {
     const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
     countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = Object.fromEntries(unknownMap);
+    state.unknownTypes = nullRecord(unknownMap);
   };
   if (!isObject(entry)) {
     noteUnknown("entry.non_object");
@@ -194,7 +196,7 @@ export function stepPiLine(
           const blocks = assistantBlocks(message.content);
           const usage = billed(message.usage);
           if (model != null && usage != null) {
-            state.outputByModel[model] = (state.outputByModel[model] ?? 0) + usage.output;
+            state.outputByModel[model] = (ownGet(state.outputByModel, model) ?? 0) + usage.output;
           }
           const error = asString(message.errorMessage);
           if (error != null && error !== "") {
@@ -272,7 +274,7 @@ export function stepPiLine(
         return {};
       }
       if (model != null) {
-        state.outputByModel[model] = (state.outputByModel[model] ?? 0) + usage.output;
+        state.outputByModel[model] = (ownGet(state.outputByModel, model) ?? 0) + usage.output;
       }
       return { message: makeMessage("other", [], { model, usage }) };
     }

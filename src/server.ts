@@ -81,6 +81,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let watchHandle: WatchHandle | null = null;
   let readerStatistics: ReaderStatistics | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
+    readDataVersion: () => economics?.dataVersion() ?? null,
     onProgress: (progress) => readerStatistics?.onProgress(progress),
     // The worker ends each ingesting sync with PRAGMA optimize on its own
     // connection. This connection keeps the statistics it loaded until told to

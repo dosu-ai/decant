@@ -29,6 +29,8 @@ import {
   block,
   contentText,
   countUnknown,
+  nullRecord,
+  ownGet,
   parseJsonLine,
   type UnknownTypes,
   unknownTypeIssues,
@@ -153,12 +155,12 @@ export function createClaudeStepper(
     metadataTitle: null,
     customTitle: null,
     seq: 0,
-    modelCounts: {},
-    billed: {},
-    turns: {},
+    modelCounts: nullRecord<number>(),
+    billed: nullRecord<ClaudeBilledEntry>(),
+    turns: nullRecord<TurnAcc>(),
     settledEstReasoningTokens: 0,
     settledHasThinking: false,
-    unknownTypes: {},
+    unknownTypes: nullRecord<{ count: number; firstLine: number }>(),
     sidecarMeta: options.sidecarMeta ?? null,
   };
 }
@@ -174,7 +176,7 @@ export function compactClaudeStepper(
     for (let i = 0; i < evictCount; i += 1) {
       const key = turnKeys[i];
       if (key == null) continue;
-      const turn = state.turns[key];
+      const turn = ownGet(state.turns, key);
       if (turn != null) {
         if (turn.hasThinking) {
           state.settledHasThinking = true;
@@ -213,7 +215,7 @@ function addUsageInto(target: TokenUsage, delta: TokenUsage, sign: 1 | -1): void
 
 function noteModelCount(counts: Record<string, number>, model: string | null): void {
   if (model != null) {
-    counts[model] = (counts[model] ?? 0) + 1;
+    counts[model] = (ownGet(counts, model) ?? 0) + 1;
   }
 }
 
@@ -268,7 +270,7 @@ export function stepClaudeLine(
     const requestId = assistantRequestId(value);
     const turnKey = requestId ?? `\0seq${state.seq}`;
     const [output, visible, hasThinking] = lineReasoningInputs(rawMessage);
-    const acc = state.turns[turnKey] ?? { output: 0, visible: 0, hasThinking: false };
+    const acc = ownGet(state.turns, turnKey) ?? { output: 0, visible: 0, hasThinking: false };
     acc.output = Math.max(acc.output, output);
     acc.visible += visible;
     acc.hasThinking ||= hasThinking;
@@ -277,7 +279,7 @@ export function stepClaudeLine(
     let message = rawMessage;
     let unbilledPrevious: ClaudeLineStepResult["unbilledPrevious"];
     if (message.usage != null && requestId != null) {
-      const previous = state.billed[requestId];
+      const previous = ownGet(state.billed, requestId);
       if (previous == null) {
         state.billed[requestId] = {
           seq: message.seq,
@@ -344,7 +346,7 @@ export function stepClaudeLine(
   ) {
     const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
     countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = Object.fromEntries(unknownMap);
+    state.unknownTypes = nullRecord(unknownMap);
     const message = simpleMessage(value, "other", state.seq);
     state.seq += 1;
     return { message };

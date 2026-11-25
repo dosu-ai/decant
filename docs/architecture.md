@@ -130,9 +130,11 @@ where the platform supports POSIX modes.
 Connections disable SQLite memory-mapping (`mmap_size = 0`) so large archives
 do not pin database pages into process RSS, keep temporary sort and grouping
 tables in memory (`temp_store = MEMORY`) with bounded page caches (`cache_size`
-8 MiB on writer connections and 4 MiB on read-only workers), and cap WAL
-growth with `wal_autocheckpoint = 4000` (16 MiB) and
-`journal_size_limit = 33554432` (32 MiB).
+8 MiB on writer connections and 4 MiB on read-only workers), set the automatic
+WAL checkpoint threshold to 4,000 pages (`wal_autocheckpoint = 4000`, about
+16 MiB), and cap retained WAL size after a checkpoint reset to 32 MiB
+(`journal_size_limit = 33554432`; an active reader holding an older snapshot
+can still let the WAL grow past either setting until that snapshot closes).
 
 ### Planner statistics
 

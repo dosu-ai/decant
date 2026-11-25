@@ -124,6 +124,7 @@ const BASELINE_TABLES = [
   "session_economics",
   "session_model_usage",
   "session_user_state",
+  "sync_state",
   "tool_call",
   "unbilled_request",
 ];

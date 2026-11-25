@@ -156,6 +156,10 @@ CREATE TABLE ingest_checkpoint (
   prefix_hash TEXT NOT NULL,
   state_blob BLOB NOT NULL
 );
+CREATE TABLE sync_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE ingest_issue (
   id INTEGER PRIMARY KEY,
   source_path TEXT,

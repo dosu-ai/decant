@@ -18,6 +18,7 @@ import {
   block,
   contentText,
   countUnknown,
+  nullRecord,
   parseJsonLine,
   type UnknownTypes,
   unknownTypeIssues,
@@ -87,7 +88,7 @@ export function createCodexStepper(fallbackId: string): CodexStepperState {
     seq: 0,
     ownSessionId: null,
     historyStartOrdinal: null,
-    unknownTypes: {},
+    unknownTypes: nullRecord<{ count: number; firstLine: number }>(),
     latestAssistant: null,
   };
 }
@@ -235,7 +236,7 @@ export function stepCodexLine(
   if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
     const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
     countUnknown(unknownMap, typ, lineNo);
-    state.unknownTypes = Object.fromEntries(unknownMap);
+    state.unknownTypes = nullRecord(unknownMap);
   }
   return { messages: [] };
 }

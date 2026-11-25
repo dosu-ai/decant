@@ -45,7 +45,7 @@ import {
   get,
   isObject,
 } from "./json.ts";
-import { encodeMessageRaw } from "./message-storage.ts";
+import { encodeMessageRaw, MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import {
   emptyUsage,
   type Issue,
@@ -88,8 +88,14 @@ import {
   piUnknownTypeIssues,
   stepPiLine,
 } from "./sources/pi.ts";
-import { diagnosticRawLine, jsonProblem, parseSourceJson } from "./sources/shared.ts";
-import { queryRow, runStatement } from "./sqlite-statements.ts";
+import {
+  diagnosticRawLine,
+  jsonProblem,
+  nullRecord,
+  ownGet,
+  parseSourceJson,
+} from "./sources/shared.ts";
+import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
   materializeSessionEconomics,
   type Phase,
@@ -100,7 +106,7 @@ import { classifyTool, previewHeadTail } from "./tools.ts";
 
 export type IncrementalTool = "claude_code" | "codex" | "pi";
 
-const CHECKPOINT_VERSION = 3;
+const CHECKPOINT_VERSION = 4;
 const ANCHOR_SAMPLE_BYTES = 32_768;
 const ANCHOR_MID_BYTES = 4_096;
 const CHARS_PER_TOKEN = 4;
@@ -108,8 +114,9 @@ const ACTIVE_GAP_CAP_MS = ACTIVE_GAP_CAP_SECONDS * 1000;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
 const MODEL_INPUT_KINDS = new Set(["agent_message", "compaction"]);
-const RECENT_RESPONSE_KEY_LIMIT = 16;
 const CLAUDE_RECENT_REQUEST_WINDOW = 64;
+const MAX_PI_TOOL_USES_WINDOW = 64;
+const MAX_CODEX_ECON_BLOCKS = 256;
 const COMPACT_SET_EXACT_LIMIT = 64;
 const BLOOM_HASHES = 10;
 const BLOOM_MIN_BITS = 16_384;
@@ -537,7 +544,7 @@ interface EconomicsFoldState {
   previousLatencyMs: number | null;
   waitingOnUserMs: number;
   sawMessageOutput: boolean;
-  recentResponseKeys: string[];
+  seenResponseKeys: CompactKeySet;
   buckets: Record<ActivityBucket, EconomicsBucketState>;
   codexWeights?: {
     blocks: [number, 0 | 1, number][];
@@ -616,7 +623,7 @@ function createEmptyEnrich(): EnrichFoldState {
 
 function createEmptyModelUsage(): ModelUsageFoldState {
   return {
-    groups: {},
+    groups: nullRecord<ModelUsageGroupState>(),
     billed: emptyUsage(),
     totalBilledMessages: 0,
     unpricedReportedTotal: 0,
@@ -659,7 +666,7 @@ function createEmptyEconomics(tool: IncrementalTool): EconomicsFoldState {
     previousLatencyMs: null,
     waitingOnUserMs: 0,
     sawMessageOutput: false,
-    recentResponseKeys: [],
+    seenResponseKeys: buildCompactSet([], 0),
     buckets: emptyEconomicsBuckets(),
     ...(tool === "codex"
       ? {
@@ -917,7 +924,7 @@ function applyModelUsageResolved(
   sign: 1 | -1,
 ): void {
   const id = modelUsageKey(model, tier);
-  const entry = state.groups[id] ?? {
+  const entry = ownGet(state.groups, id) ?? {
     model,
     tier,
     requests: 0,
@@ -1038,6 +1045,130 @@ function computeModelUsageRows(
     (left, right) =>
       compareCodePoints(left.model, right.model) || compareCodePoints(left.tier, right.tier),
   );
+}
+
+function rebuildModelUsageFoldFromDb(
+  db: Database,
+  sessionId: number,
+  tool: IncrementalTool,
+  sessionModel: string,
+): ModelUsageFoldState {
+  const rebuilt = createEmptyModelUsage();
+  const rows = queryRows<{
+    model: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    cache_creation_tokens: number | null;
+    meta_json: string | null;
+  }>(
+    db,
+    `SELECT m.model, m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
+            ${MESSAGE_METADATA_SQL} AS meta_json
+       FROM message m
+      WHERE m.session_id = ?1
+        AND (m.input_tokens IS NOT NULL OR m.output_tokens IS NOT NULL
+             OR m.cache_read_tokens IS NOT NULL OR m.cache_creation_tokens IS NOT NULL)
+      ORDER BY m.seq`,
+    [sessionId],
+  );
+  for (const row of rows) {
+    let raw: Json = null;
+    if (row.meta_json != null && row.meta_json !== "") {
+      try {
+        raw = JSON.parse(row.meta_json) as Json;
+      } catch {
+        raw = null;
+      }
+    }
+    const usage: TokenUsage = {
+      input: row.input_tokens ?? 0,
+      output: row.output_tokens ?? 0,
+      cacheRead: row.cache_read_tokens ?? 0,
+      cacheCreation: row.cache_creation_tokens ?? 0,
+      cacheCreation1h: 0,
+      reasoning: 0,
+    };
+    applyModelUsageMessage(rebuilt, tool, sessionModel, row.model, usage, raw, 1);
+  }
+  return rebuilt;
+}
+
+function rebuildContextWindowFoldFromDb(
+  db: Database,
+  sessionId: number,
+  tool: IncrementalTool,
+  isSubagent: boolean,
+): ContextWindowFoldState {
+  const cw = createEmptyContextWindow();
+  const rows = queryRows<{
+    role: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    cache_creation_tokens: number | null;
+    meta_json: string | null;
+    has_real_user_text: number;
+  }>(
+    db,
+    `SELECT m.role, m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens,
+            ${MESSAGE_METADATA_SQL} AS meta_json,
+            CASE WHEN m.role = 'user' THEN EXISTS(
+              SELECT 1 FROM block b INDEXED BY idx_block_message
+               WHERE b.message_id = m.id
+                 AND b.type = 'text'
+                 AND TRIM(COALESCE(b.text, '')) <> ''
+                 AND COALESCE(b.text, '') NOT LIKE '${INTERRUPTION_MARKER}%'
+                 AND instr(COALESCE(b.text, ''), '${COMMAND_MARKER}') = 0
+            ) ELSE 0 END AS has_real_user_text
+       FROM message m
+      WHERE m.session_id = ?1 AND m.role IN ('user', 'assistant', 'system')
+      ORDER BY m.seq`,
+    [sessionId],
+  );
+  for (const row of rows) {
+    let raw: Json = null;
+    if (row.meta_json != null && row.meta_json !== "") {
+      try {
+        raw = JSON.parse(row.meta_json) as Json;
+      } catch {
+        raw = null;
+      }
+    }
+    const meta = messageRawMetaForContext(raw, tool);
+    if (meta.isSidechain && !isSubagent) {
+      continue;
+    }
+    if (row.role === "user") {
+      if (row.has_real_user_text === 1 && !meta.isCompactSummary) {
+        cw.turn += 1;
+      }
+      continue;
+    }
+    if (row.role === "system") {
+      if (isCompactBoundary(meta)) {
+        const pre = meta.compactPreTokens ?? cw.lastContextSinceCompaction;
+        if (pre != null) {
+          cw.peakTokens = Math.max(cw.peakTokens, pre);
+        }
+        cw.compactionCount += 1;
+        cw.lastContextSinceCompaction = null;
+      }
+      continue;
+    }
+    const ctx = contextTokensFromUsage({
+      input_tokens: row.input_tokens,
+      cache_read_tokens: row.cache_read_tokens,
+      cache_creation_tokens: row.cache_creation_tokens,
+    });
+    if (ctx == null) {
+      continue;
+    }
+    cw.pointCount += 1;
+    cw.peakTokens = Math.max(cw.peakTokens, ctx);
+    cw.lastContextSinceCompaction = ctx;
+  }
+  return cw;
 }
 
 function messageRawMetaForContext(raw: Json, tool: IncrementalTool): MessageRawMeta {
@@ -1317,6 +1448,10 @@ function foldEconomicsDelta(
   if (tool === "codex" && econ.codexWeights != null) {
     for (const blk of active) {
       if (blk.role === "assistant" && blk.type !== "thinking") {
+        if (econ.codexWeights.blocks.length >= MAX_CODEX_ECON_BLOCKS) {
+          econ.codexWeights.blocks = [];
+          return false;
+        }
         const w = Math.max(1, econBlockSize(blk));
         const b = blockBucket(blk.type, blk.toolName, blk.toolInput);
         const bIdx = ACTIVITY_BUCKETS.indexOf(b);
@@ -1331,12 +1466,12 @@ function foldEconomicsDelta(
       }
     }
   } else {
-    const recentSet = new Set(econ.recentResponseKeys);
+    const seenResponses = openCompactSet(econ.seenResponseKeys);
     const byResp = new Map<string, EconBlockInput[]>();
     const respOutput = new Map<string, number>();
     for (const blk of active) {
       const rk = econResponseKey(blk);
-      if (recentSet.has(rk)) {
+      if (compactSetHas(seenResponses, rk)) {
         return false;
       }
       const list = byResp.get(rk) ?? [];
@@ -1377,11 +1512,9 @@ function foldEconomicsDelta(
       return false;
     }
     for (const rk of byResp.keys()) {
-      econ.recentResponseKeys.push(rk);
+      compactSetAdd(seenResponses, rk);
     }
-    if (econ.recentResponseKeys.length > RECENT_RESPONSE_KEY_LIMIT) {
-      econ.recentResponseKeys = econ.recentResponseKeys.slice(-RECENT_RESPONSE_KEY_LIMIT);
-    }
+    econ.seenResponseKeys = sealCompactSet(seenResponses);
   }
 
   for (const id of msgOrder) {
@@ -1572,6 +1705,98 @@ function saveCheckpoint(
   }
 }
 
+function hydrateCheckpointDictionaries(state: IncrementalCheckpointState): void {
+  state.unmatchedCalls = nullRecord(state.unmatchedCalls);
+  state.modelUsage.groups = nullRecord(state.modelUsage.groups);
+  if (state.claudeBilledRuntime != null) {
+    state.claudeBilledRuntime = nullRecord(state.claudeBilledRuntime);
+  }
+  if (state.piToolUses != null) {
+    state.piToolUses = nullRecord(state.piToolUses);
+  }
+  state.parser.unknownTypes = nullRecord(state.parser.unknownTypes);
+  if (state.tool === "claude_code") {
+    const p = state.parser as ClaudeStepperState;
+    p.modelCounts = nullRecord(p.modelCounts);
+    p.billed = nullRecord(p.billed);
+    p.turns = nullRecord(p.turns);
+  } else if (state.tool === "pi") {
+    const p = state.parser as PiStepperState;
+    p.outputByModel = nullRecord(p.outputByModel);
+  }
+}
+
+function compactPiToolUses(
+  anchors: Record<string, PiToolUseAnchor> | undefined,
+  maxRecent: number,
+): void {
+  if (anchors == null) {
+    return;
+  }
+  const keys = Object.keys(anchors);
+  if (keys.length <= maxRecent) {
+    return;
+  }
+  const evict = keys.length - maxRecent;
+  for (let i = 0; i < evict; i += 1) {
+    const key = keys[i];
+    if (key != null) {
+      delete anchors[key];
+    }
+  }
+}
+
+function lookupPiToolUseAnchor(
+  db: Database,
+  sessionId: number,
+  anchors: Record<string, PiToolUseAnchor> | undefined,
+  toolCallId: string,
+): PiToolUseAnchor | null {
+  const cached = ownGet(anchors, toolCallId);
+  if (cached != null) {
+    return cached;
+  }
+  const row = queryRow<{
+    call_block_id: number;
+    message_id: number;
+    ordinal: number;
+    timestamp: string | null;
+    call_count: number;
+  }>(
+    db,
+    `SELECT b.id AS call_block_id, b.message_id, b.ordinal, m.timestamp,
+            (SELECT COUNT(*) FROM tool_call tc WHERE tc.call_block_id = b.id) AS call_count
+       FROM block b
+       JOIN message m ON m.id = b.message_id
+      WHERE b.session_id = ?1 AND b.tool_use_id = ?2 AND b.type = 'tool_use'
+      ORDER BY b.id DESC
+      LIMIT 1`,
+    [sessionId, toolCallId],
+  );
+  if (row == null) {
+    return null;
+  }
+  return {
+    messageId: row.message_id,
+    callBlockId: row.call_block_id,
+    ordinal: row.ordinal,
+    timestamp: row.timestamp,
+    hasInner: row.call_count > 1,
+  };
+}
+
+function markSyncStateFlagInTx(db: Database, key: string): void {
+  if (
+    queryRow<{ present: number }>(
+      db,
+      "SELECT 1 AS present FROM sync_state WHERE key = ?1 LIMIT 1",
+      [key],
+    ) == null
+  ) {
+    runStatement(db, "INSERT OR IGNORE INTO sync_state(key, value) VALUES (?1, '1')", [key]);
+  }
+}
+
 function loadCheckpoint(
   db: Database,
   path: string,
@@ -1600,6 +1825,7 @@ function loadCheckpoint(
     if (state.version !== CHECKPOINT_VERSION) {
       return null;
     }
+    hydrateCheckpointDictionaries(state);
     return {
       parsedOffset: row.parsed_offset,
       parsedLineCount: row.parsed_line_count,
@@ -1830,8 +2056,9 @@ export function buildAndPersistCheckpointAfterFullWrite(
   const contextWindow = createEmptyContextWindow();
   const economics = createEmptyEconomics(tool);
   const claudeBilledRuntime: Record<string, ClaudeBilledRuntime> | undefined =
-    tool === "claude_code" ? {} : undefined;
-  const piToolUses: Record<string, PiToolUseAnchor> | undefined = tool === "pi" ? {} : undefined;
+    tool === "claude_code" ? nullRecord<ClaudeBilledRuntime>() : undefined;
+  const piToolUses: Record<string, PiToolUseAnchor> | undefined =
+    tool === "pi" ? nullRecord<PiToolUseAnchor>() : undefined;
 
   const sessionModel = s.model ?? "";
   const seenToolUseIds = new Set<string>();
@@ -1923,7 +2150,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
     }
   }
 
-  const unmatchedCalls: Record<string, UnmatchedToolCall[]> = {};
+  const unmatchedCalls: Record<string, UnmatchedToolCall[]> = nullRecord<UnmatchedToolCall[]>();
   const econToolCalls: {
     toolName: string;
     input: string | null;
@@ -1940,7 +2167,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
       callSeq: tc.callSeq,
     });
     if (!tc.isInner && !tc.matched && tc.toolUseId != null) {
-      const list = unmatchedCalls[tc.toolUseId] ?? [];
+      const list = ownGet(unmatchedCalls, tc.toolUseId) ?? [];
       list.push({
         toolCallId: tc.toolCallId,
         callBlockId: tc.callBlockId,
@@ -1961,6 +2188,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
       };
     }
   }
+  compactPiToolUses(piToolUses, MAX_PI_TOOL_USES_WINDOW);
 
   const hasUnbilled =
     tool === "claude_code" &&
@@ -1992,7 +2220,7 @@ export function buildAndPersistCheckpointAfterFullWrite(
     });
     if (claudeBilledRuntime != null) {
       for (const reqId of Object.keys(claudeBilledRuntime)) {
-        if (claudeSt.billed[reqId] == null) {
+        if (ownGet(claudeSt.billed, reqId) == null) {
           delete claudeBilledRuntime[reqId];
         }
       }
@@ -2047,6 +2275,7 @@ export type IncrementalAttemptResult =
   | {
       kind: "ingested";
       sessionId: number;
+      affectedSessionIds: number[];
       issues: Issue[];
       lineageDirty: boolean;
       projectCreated: boolean;
@@ -2059,6 +2288,7 @@ export interface TryIncrementalInput {
   sourcePath: string;
   tool: IncrementalTool;
   archived: boolean;
+  priorSize: number;
   priorSessionId: number | null;
   ingestRevision: number;
   expectedRevision: number;
@@ -2067,6 +2297,48 @@ export interface TryIncrementalInput {
 }
 
 export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAttemptResult {
+  let attemptInput = input;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = tryIncrementalIngestOnce(attemptInput);
+    if (result.kind !== "retry") {
+      return result;
+    }
+    const refreshed = queryRow<{
+      size: number;
+      mtime: number;
+      ingest_revision: number;
+      session_id: number | null;
+    }>(
+      input.db,
+      "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1",
+      [input.sourcePath],
+    );
+    if (
+      refreshed == null ||
+      refreshed.session_id == null ||
+      refreshed.ingest_revision !== input.expectedRevision
+    ) {
+      return { kind: "fallback" };
+    }
+    if (
+      refreshed.size === input.stats.size &&
+      refreshed.mtime === Math.trunc(input.stats.mtimeMs / 1000)
+    ) {
+      return { kind: "skipped" };
+    }
+    attemptInput = {
+      ...input,
+      priorSize: refreshed.size,
+      priorSessionId: refreshed.session_id,
+      ingestRevision: refreshed.ingest_revision,
+    };
+  }
+  return { kind: "fallback" };
+}
+
+function tryIncrementalIngestOnce(
+  input: TryIncrementalInput,
+): IncrementalAttemptResult | { kind: "retry" } {
   const { db, fd, stats, sourcePath, tool } = input;
   if (stats.size > MAX_SOURCE_FILE_BYTES) {
     return { kind: "oversized" };
@@ -2105,7 +2377,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   ) {
     return { kind: "fallback" };
   }
-  if (stats.size < loaded.parsedOffset) {
+  if (stats.size <= input.priorSize || stats.size < loaded.parsedOffset) {
     return { kind: "fallback" };
   }
   const currentPrefixHash = computePrefixHash(fd, loaded.parsedOffset);
@@ -2169,7 +2441,12 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   const newMessages: NormalizedMessage[] = [];
   const startSeq = state.parser.seq;
 
-  const claudeUnbilledOld: { seq: number; requestId: string; usage: TokenUsage }[] = [];
+  const claudeUnbilledOld: {
+    seq: number;
+    requestId: string;
+    usage: TokenUsage;
+    replacementApiMessageId: string | null;
+  }[] = [];
   let codexStampedOld: { seq: number; usage: TokenUsage; previousUsage: TokenUsage | null } | null =
     null;
   const piNestedCalls: { toolCallId: string; inner: NormalizedInnerToolCall[] }[] = [];
@@ -2194,11 +2471,21 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
             newMessages[idx] = { ...prev, usage: null };
           }
         } else {
-          claudeUnbilledOld.push(step.unbilledPrevious);
+          claudeUnbilledOld.push({
+            ...step.unbilledPrevious,
+            replacementApiMessageId:
+              step.message != null ? claudeApiMessageId(step.message.raw) : null,
+          });
         }
       }
       if (step.message != null) {
         newMessages.push(step.message);
+      }
+    }
+    for (const unbilled of claudeUnbilledOld) {
+      const runtime = ownGet(state.claudeBilledRuntime, unbilled.requestId);
+      if (runtime == null || runtime.apiMessageId !== unbilled.replacementApiMessageId) {
+        return { kind: "fallback" };
       }
     }
   } else if (tool === "codex") {
@@ -2291,7 +2578,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   }
   if (tool === "pi" && piNestedCalls.length > 0) {
     for (const nc of piNestedCalls) {
-      const anchor = state.piToolUses?.[nc.toolCallId];
+      const anchor = lookupPiToolUseAnchor(db, state.sessionId, state.piToolUses, nc.toolCallId);
       if (anchor?.hasInner) {
         return { kind: "fallback" };
       }
@@ -2310,6 +2597,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     );
   const deltaSeenIds = new Set<string>();
   const deltaAnsweredIds = new Set<string>();
+  const deltaUnmatchedResults = new Set<string>();
   const deltaUnmatchedCounts = new Map<string, number>();
   for (const [id, queue] of Object.entries(state.unmatchedCalls)) {
     deltaUnmatchedCounts.set(id, queue.length);
@@ -2319,6 +2607,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       if (blk.blockType === "tool_use" && blk.toolUseId != null) {
         if (
           orphanSet.has(blk.toolUseId) ||
+          deltaUnmatchedResults.has(blk.toolUseId) ||
           hasPriorToolUse(blk.toolUseId) ||
           deltaSeenIds.has(blk.toolUseId)
         ) {
@@ -2336,6 +2625,8 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
           deltaUnmatchedCounts.set(blk.toolUseId, avail - 1);
         } else if (hasPriorToolUse(blk.toolUseId) || deltaSeenIds.has(blk.toolUseId)) {
           return { kind: "fallback" };
+        } else {
+          deltaUnmatchedResults.add(blk.toolUseId);
         }
       }
     }
@@ -2347,11 +2638,59 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   let lineageDirty =
     canonicalJson(nextSummary.rawMeta) !== canonicalJson(prevSessionSummary.rawMeta);
 
-  withImmediateTransaction(db, () => {
+  let affectedSessionIds: number[] = [];
+  let committedLinkageIssues: Issue[] = [];
+  const txOutcome = withImmediateTransaction(db, (): "committed" | "skipped" | "retry" => {
+    const srcNow = queryRow<{
+      size: number;
+      mtime: number;
+      ingest_revision: number;
+      session_id: number | null;
+    }>(db, "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
+      sourcePath,
+    ]);
+    if (
+      srcNow != null &&
+      srcNow.size === stats.size &&
+      srcNow.mtime === mtime &&
+      srcNow.ingest_revision === input.expectedRevision
+    ) {
+      return "skipped";
+    }
+    const cpNow = queryRow<{
+      parsed_offset: number;
+      parsed_line_count: number;
+      prefix_hash: string;
+    }>(
+      db,
+      "SELECT parsed_offset, parsed_line_count, prefix_hash FROM ingest_checkpoint WHERE path = ?1",
+      [sourcePath],
+    );
+    if (
+      srcNow == null ||
+      srcNow.size !== input.priorSize ||
+      srcNow.session_id !== state.sessionId ||
+      srcNow.ingest_revision !== input.expectedRevision ||
+      cpNow == null ||
+      cpNow.parsed_offset !== loaded.parsedOffset ||
+      cpNow.parsed_line_count !== loaded.parsedLineCount ||
+      cpNow.prefix_hash !== loaded.prefixHash
+    ) {
+      return "retry";
+    }
+    if (
+      tool === "claude_code" &&
+      queryRow(db, "SELECT 1 FROM unbilled_request WHERE session_id = ?1 LIMIT 1", [
+        state.sessionId,
+      ]) != null
+    ) {
+      return "retry";
+    }
+
     const sessionId = state.sessionId;
+    const modelChanged = (nextSummary.model ?? "") !== (prevSessionSummary.model ?? "");
     let needsModelUsageFallback =
-      state.modelUsage.hasUnrecordedModelMessage &&
-      (nextSummary.model ?? "") !== (prevSessionSummary.model ?? "");
+      modelChanged && (state.modelUsage.hasUnrecordedModelMessage || tool === "codex");
     let needsContextWindowFallback = false;
     let needsEconomicsFallback = !state.economics.valid;
 
@@ -2369,7 +2708,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       );
       try {
         for (const unbilled of claudeUnbilledOld) {
-          const runtime = state.claudeBilledRuntime[unbilled.requestId];
+          const runtime = ownGet(state.claudeBilledRuntime, unbilled.requestId);
           if (runtime == null) {
             needsModelUsageFallback = true;
             needsContextWindowFallback = true;
@@ -2421,10 +2760,11 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
           ],
         );
         const sm = nextSummary.model ?? "";
+        const prevSm = prevSessionSummary.model ?? "";
         if (codexStampedOld.previousUsage != null) {
           applyModelUsageResolved(
             state.modelUsage,
-            sm,
+            prevSm,
             "standard",
             codexStampedOld.previousUsage,
             0,
@@ -2433,6 +2773,9 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
           needsContextWindowFallback = true;
         }
         applyModelUsageResolved(state.modelUsage, sm, "standard", codexStampedOld.usage, 0, 1);
+        if (sm !== prevSm) {
+          needsModelUsageFallback = true;
+        }
         const ctx = contextTokensFromUsage({
           input_tokens: codexStampedOld.usage.input,
           cache_read_tokens: codexStampedOld.usage.cacheRead,
@@ -2639,7 +2982,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
               callSeq: message.seq,
             });
             if (blk.toolUseId != null) {
-              const queue = state.unmatchedCalls[blk.toolUseId] ?? [];
+              const queue = ownGet(state.unmatchedCalls, blk.toolUseId) ?? [];
               queue.push({
                 toolCallId: tcId,
                 callBlockId: blockId,
@@ -2693,7 +3036,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
               });
             }
           } else if (blk.blockType === "tool_result" && blk.toolUseId != null) {
-            const queue = state.unmatchedCalls[blk.toolUseId];
+            const queue = ownGet(state.unmatchedCalls, blk.toolUseId);
             const call = queue?.shift();
             if (queue != null && queue.length === 0) {
               delete state.unmatchedCalls[blk.toolUseId];
@@ -2754,9 +3097,10 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
 
       if (tool === "pi" && piNestedCalls.length > 0 && state.piToolUses != null) {
         for (const nc of piNestedCalls) {
-          const anchor = state.piToolUses[nc.toolCallId];
+          const anchor = lookupPiToolUseAnchor(db, sessionId, state.piToolUses, nc.toolCallId);
           if (anchor == null) continue;
           anchor.hasInner = true;
+          state.piToolUses[nc.toolCallId] = anchor;
           for (const inner of nc.inner) {
             const innerClassified = classifyTool(inner.toolName);
             const innerInput =
@@ -2810,7 +3154,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       });
       if (state.claudeBilledRuntime != null) {
         for (const reqId of Object.keys(state.claudeBilledRuntime)) {
-          if (claudeSt.billed[reqId] == null) {
+          if (ownGet(claudeSt.billed, reqId) == null) {
             delete state.claudeBilledRuntime[reqId];
           }
         }
@@ -2819,6 +3163,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
         state.claudeEvictedRequests = sealCompactSet(claudeEvicted);
       }
     }
+    compactPiToolUses(state.piToolUses, MAX_PI_TOOL_USES_WINDOW);
 
     const cwCols = computeContextWindowColumns(
       state.contextWindow,
@@ -2928,6 +3273,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
         replacedOldMessageIds,
       );
       ownBilledModified = billedRes.ownSessionModified;
+      affectedSessionIds = billedRes.affectedSessionIds;
       if (ownBilledModified) {
         needsModelUsageFallback = true;
         needsContextWindowFallback = true;
@@ -2938,6 +3284,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     let usageRows: ModelUsageRow[];
     if (needsModelUsageFallback) {
       usageRows = materializeModelUsage(db, sessionId);
+      state.modelUsage = rebuildModelUsageFoldFromDb(db, sessionId, tool, sessionModel);
     } else {
       usageRows = computeModelUsageRows(state.modelUsage, sessionModel, nextSummary.totals);
       writeModelUsageRows(db, sessionId, usageRows);
@@ -2976,19 +3323,12 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
 
     if (needsContextWindowFallback) {
       materializeContextWindow(db, sessionId);
-      const updatedCw = queryRow<{
-        turn_count: number;
-        compaction_count: number;
-        peak_context_tokens: number | null;
-      }>(
+      state.contextWindow = rebuildContextWindowFoldFromDb(
         db,
-        "SELECT turn_count, compaction_count, peak_context_tokens FROM session WHERE id = ?1",
-        [sessionId],
+        sessionId,
+        tool,
+        nextSummary.isSubagent,
       );
-      if (updatedCw != null) {
-        state.contextWindow.peakTokens = updatedCw.peak_context_tokens ?? 0;
-        state.contextWindow.compactionCount = updatedCw.compaction_count;
-      }
     }
 
     if (!needsEconomicsFallback) {
@@ -3088,9 +3428,22 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       nextPrefixHash,
       state,
     );
+    markSyncStateFlagInTx(db, "recommendations_pending");
+    if (lineageDirty) {
+      markSyncStateFlagInTx(db, "derived_pending");
+    }
+    committedLinkageIssues = newLinkageIssues;
+    return "committed";
   });
 
-  const allReportIssues = [...deltaIssues];
+  if (txOutcome === "skipped") {
+    return { kind: "skipped" };
+  }
+  if (txOutcome === "retry") {
+    return { kind: "retry" };
+  }
+
+  const allReportIssues = [...deltaIssues, ...committedLinkageIssues];
   if (canonicalJson(state.parser.unknownTypes) !== prevUnknownJson) {
     allReportIssues.push(
       ...(tool === "claude_code"
@@ -3104,6 +3457,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   return {
     kind: "ingested",
     sessionId: state.sessionId,
+    affectedSessionIds,
     issues: allReportIssues,
     lineageDirty,
     projectCreated: false,

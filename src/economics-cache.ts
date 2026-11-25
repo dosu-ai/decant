@@ -56,7 +56,11 @@ export class EconomicsCache {
     void this.#rebuild();
   }
 
-  refreshSessions(sessionIds: readonly number[]): void {
+  dataVersion(): number | null {
+    return this.#dataVersion();
+  }
+
+  refreshSessions(sessionIds: readonly number[], expectedDataVersion?: number | null): void {
     if (this.#disposed) {
       return;
     }
@@ -65,7 +69,9 @@ export class EconomicsCache {
       this.#building != null ||
       this.#options.computeVectors != null ||
       sessionIds.length === 0 ||
-      sessionIds.length > 16
+      sessionIds.length > 16 ||
+      (expectedDataVersion !== undefined &&
+        (expectedDataVersion == null || expectedDataVersion !== this.#builtDataVersion))
     ) {
       this.invalidate();
       return;

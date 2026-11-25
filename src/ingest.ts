@@ -5,6 +5,7 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  lstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -230,6 +231,104 @@ export function discover(
       (file.tool !== "cursor" || isCursorConversationStore(file.path)) &&
       (file.tool !== "atif" || isAtifDocument(file.path)),
   );
+}
+
+function isRegularFileNoSymlinks(rootDir: string, candidatePath: string): boolean {
+  const absRoot = resolve(rootDir);
+  const absPath = resolve(candidatePath);
+  if (!isInside(absRoot, absPath)) {
+    return false;
+  }
+  const rel = absPath.slice(absRoot.endsWith(sep) ? absRoot.length : absRoot.length + 1);
+  if (rel === "") {
+    return false;
+  }
+  const parts = rel.split(/[\\/]+/);
+  let current = absRoot;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (part == null || part === "" || part === "." || part === "..") {
+      return false;
+    }
+    current = join(current, part);
+    let st: Stats;
+    try {
+      st = lstatSync(current);
+    } catch {
+      return false;
+    }
+    if (st.isSymbolicLink()) {
+      return false;
+    }
+    if (i < parts.length - 1) {
+      if (!st.isDirectory()) {
+        return false;
+      }
+    } else if (!st.isFile()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function discoverConfiguredCandidatePaths(
+  config: IngestConfig,
+  candidatePaths: readonly string[],
+): SourceFile[] {
+  if (config.sourcePaths != null && config.sourcePaths.length > 0) {
+    return discover(config);
+  }
+  const codexSessionsDir = join(config.codexDir, "sessions");
+  const codexArchivedDir = join(config.codexDir, "archived_sessions");
+  const out: SourceFile[] = [];
+  for (const rawPath of candidatePaths) {
+    const name = pathBasename(rawPath);
+    if (isRegularFileNoSymlinks(config.claudeDir, rawPath) && isSessionJsonl(name)) {
+      out.push({ tool: "claude_code", path: rawPath, archived: false });
+      continue;
+    }
+    if (isRegularFileNoSymlinks(codexSessionsDir, rawPath) && isCodexRollout(name)) {
+      out.push({ tool: "codex", path: rawPath, archived: false });
+      continue;
+    }
+    if (isRegularFileNoSymlinks(codexArchivedDir, rawPath) && isCodexRollout(name)) {
+      out.push({ tool: "codex", path: rawPath, archived: true });
+      continue;
+    }
+    if (
+      config.geminiDir != null &&
+      isRegularFileNoSymlinks(config.geminiDir, rawPath) &&
+      geminiSessionLayout(rawPath) != null
+    ) {
+      out.push({ tool: "gemini", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.copilotDir != null &&
+      name === COPILOT_EVENTS_NAME &&
+      resolve(dirname(dirname(rawPath))) === resolve(config.copilotDir) &&
+      isRegularFileNoSymlinks(config.copilotDir, rawPath)
+    ) {
+      out.push({ tool: "copilot", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.atifDir != null &&
+      isRegularFileNoSymlinks(config.atifDir, rawPath) &&
+      isAtifDocument(rawPath)
+    ) {
+      out.push({ tool: "atif", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.piDir != null &&
+      isRegularFileNoSymlinks(config.piDir, rawPath) &&
+      isSessionJsonl(name)
+    ) {
+      out.push({ tool: "pi", path: rawPath, archived: false });
+    }
+  }
+  return dedupeSourceFiles(out);
 }
 
 export function discoverSourcePaths(
@@ -524,9 +623,33 @@ function canonicalPath(path: string): string {
 const PLANNER_STATISTICS_INTERVAL = 25;
 
 const initializedSyncConnections = new WeakSet<Database>();
-const recommendationsDirtyConnections = new WeakSet<Database>();
 const lastRecommendationRefreshByDb = new WeakMap<Database, number>();
 const ingestsSinceOptimizeByDb = new WeakMap<Database, number>();
+
+const SYNC_STATE_DERIVED_PENDING = "derived_pending";
+const SYNC_STATE_RECOMMENDATIONS_PENDING = "recommendations_pending";
+
+function hasSyncStateFlag(db: Database, key: string): boolean {
+  return (
+    queryRow<{ present: number }>(
+      db,
+      "SELECT 1 AS present FROM sync_state WHERE key = ?1 LIMIT 1",
+      [key],
+    ) != null
+  );
+}
+
+function markSyncStateFlag(db: Database, key: string): void {
+  if (!hasSyncStateFlag(db, key)) {
+    runStatement(db, "INSERT OR IGNORE INTO sync_state(key, value) VALUES (?1, '1')", [key]);
+  }
+}
+
+function clearSyncStateFlag(db: Database, key: string): void {
+  if (hasSyncStateFlag(db, key)) {
+    runStatement(db, "DELETE FROM sync_state WHERE key = ?1", [key]);
+  }
+}
 
 export function sync(
   db: Database,
@@ -542,21 +665,18 @@ export function sync(
   let repriced = 0;
   if (!backgroundRefresh) {
     seedModelPricing(db);
-    materializeMissingModelUsage(db, (id) =>
-      reconcileBilledRequests(db, id, { refreshReconciledSession: true }),
-    );
+    materializeMissingModelUsage(db, (id) => {
+      reconcileBilledRequests(db, id, { refreshReconciledSession: true });
+    });
     repriced = refreshSessionCosts(db);
+    if (repriced > 0) {
+      markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    }
   }
   const candidatePaths = options?.candidatePaths;
   const targeted = candidatePaths != null && candidatePaths.length > 0;
   const files = targeted
-    ? discoverSourcePaths(
-        [...candidatePaths],
-        logDiscoveryWarning,
-        config.copilotDir,
-        [config.vscodeCopilotDir, config.vscodeCopilotInsidersDir],
-        config.piDir,
-      )
+    ? discoverConfiguredCandidatePaths(config, candidatePaths)
     : discover(config);
   const needsCodexTitles = files.some((file) => file.tool === "codex");
   const titles = needsCodexTitles ? codexTitles(config) : new Map<string, string>();
@@ -635,6 +755,8 @@ export function sync(
             for (const sid of outcome.sessionIds) {
               options?.onSessionChanged?.(sid);
             }
+            markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
+            markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
           } else if (outcome.kind === "failed") {
             report.failed += 1;
           } else {
@@ -644,6 +766,7 @@ export function sync(
               if (file.opencode != null) {
                 touchedOpenCode = true;
               }
+              markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
               options?.onTombstoned?.();
             }
           }
@@ -700,6 +823,7 @@ export function sync(
                 sourcePath: file.path,
                 tool: file.tool,
                 archived: file.archived,
+                priorSize: prior.size,
                 priorSessionId: prior.session_id,
                 ingestRevision: prior.ingest_revision,
                 expectedRevision: INGEST_PIPELINE_REVISION,
@@ -728,6 +852,9 @@ export function sync(
                 lineageMayHaveChanged ||= inc.lineageDirty;
                 touchedProject ||= inc.projectCreated;
                 options?.onSessionChanged?.(inc.sessionId);
+                for (const peerId of inc.affectedSessionIds) {
+                  options?.onSessionChanged?.(peerId);
+                }
                 handledIncrementally = true;
                 continue;
               }
@@ -846,6 +973,9 @@ export function sync(
             touchedCopilot = true;
           }
           options?.onSessionChanged?.(outcome.sessionId);
+          for (const peerId of outcome.affectedSessionIds) {
+            options?.onSessionChanged?.(peerId);
+          }
         }
       } finally {
         inspected += 1;
@@ -855,6 +985,10 @@ export function sync(
   } finally {
     opencode.close();
     hermes.close();
+  }
+
+  if (!report.cancelled && cancel?.aborted === true) {
+    report.cancelled = true;
   }
 
   if (!report.cancelled) {
@@ -891,29 +1025,49 @@ function refreshDerivedState(
   repriced: number,
   flags: DerivedRefreshFlags,
 ): void {
+  const derivedPending = hasSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
   const background =
     flags.alreadyInitialized &&
     (flags.deferDerivedRefresh || flags.recommendationMinIntervalMs > 0);
-  const fullPass = !background;
-  if (flags.touchedOpenCode || (fullPass && (report.ingested > 0 || flags.lineageMayHaveChanged))) {
+  const fullPass = !background || (!flags.deferDerivedRefresh && derivedPending);
+  if (
+    flags.touchedOpenCode ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && (report.ingested > 0 || flags.lineageMayHaveChanged))
+  ) {
     resolveOpenCodeSpawnLinks(db);
   }
-  if (flags.lineageMayHaveChanged || (fullPass && report.ingested > 0)) {
+  if (
+    flags.lineageMayHaveChanged ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && report.ingested > 0)
+  ) {
     resolveSubagentParents(db);
   }
   const materializedEconomics = fullPass ? materializeMissingSessionEconomics(db) : 0;
-  if (flags.touchedCopilot || !flags.alreadyInitialized) {
+  if (
+    flags.touchedCopilot ||
+    !flags.alreadyInitialized ||
+    (!flags.deferDerivedRefresh && derivedPending)
+  ) {
     backfillCopilotCompactionMetadata(db);
   }
   const materializedWindows =
     fullPass || flags.touchedCopilot ? materializeMissingContextWindows(db) : 0;
   const materializedEfforts = fullPass ? materializeMissingReasoningEfforts(db) : 0;
-  if ((report.ingested > 0 && flags.touchedProject) || (fullPass && report.ingested > 0)) {
+  if (
+    (report.ingested > 0 && flags.touchedProject) ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && report.ingested > 0)
+  ) {
     resolveWorktreeRoots(db);
     resolveProjectRemotes(db);
   }
+  if (!flags.deferDerivedRefresh && derivedPending) {
+    clearSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
+  }
   if (report.ingested > 0 || repriced > 0) {
-    recommendationsDirtyConnections.add(db);
+    markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
   }
   if (!flags.deferDerivedRefresh) {
     const now = Date.now();
@@ -922,7 +1076,7 @@ function refreshDerivedState(
       flags.recommendationMinIntervalMs <= 0 ||
       lastRefresh === 0 ||
       now - lastRefresh >= flags.recommendationMinIntervalMs;
-    const dirty = recommendationsDirtyConnections.has(db);
+    const dirty = hasSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
     const uncheckedRecommendationImpactLabels =
       !background &&
       db
@@ -935,7 +1089,7 @@ function refreshDerivedState(
         .get() != null;
     if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
       regenerateRecommendations(db);
-      recommendationsDirtyConnections.delete(db);
+      clearSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
       lastRecommendationRefreshByDb.set(db, now);
     } else if (!background && lastRefresh === 0) {
       lastRecommendationRefreshByDb.set(db, now);
@@ -946,6 +1100,7 @@ function refreshDerivedState(
     materializedEconomics > 0 ||
     materializedWindows > 0 ||
     materializedEfforts > 0 ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
     (!flags.alreadyInitialized && report.ingested > 0) ||
     pendingIngests >= PLANNER_STATISTICS_INTERVAL;
   if (shouldOptimize) {
@@ -2182,10 +2337,11 @@ function writeIngestedFile(
   parsed: ParsedSession,
   sources?: SourceDatabaseRun,
   checkpointFull?: FullParseWithCheckpointResult,
-): { kind: "ingested"; sessionId: number } | { kind: "tombstoned" } {
+): { kind: "ingested"; sessionId: number; affectedSessionIds: number[] } | { kind: "tombstoned" } {
   return withImmediateTransaction(db, () => {
-    releaseMisfiledFork(db, prepared.file.path, parsed);
-    releaseReplacedCursorIdentity(db, prepared.file.path, parsed);
+    const affectedSessionIds: number[] = [];
+    releaseMisfiledFork(db, prepared.file.path, parsed, affectedSessionIds);
+    releaseReplacedCursorIdentity(db, prepared.file.path, parsed, affectedSessionIds);
     const ref = prepared.file.opencode ?? prepared.file.hermes;
     if (ref != null && sources != null) {
       const databases = sources.sourceDatabases();
@@ -2212,11 +2368,13 @@ function writeIngestedFile(
       prepared.hash ?? null,
       artifactOut,
       true,
+      affectedSessionIds,
     );
     if (sessionId == null) {
       runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
       runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
       writeIngestSource(db, prepared, null, "skipped_deleted");
+      markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
       return { kind: "tombstoned" };
     }
     runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
@@ -2243,11 +2401,18 @@ function writeIngestedFile(
     } else {
       runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
     }
-    return { kind: "ingested", sessionId };
+    markSyncStateFlag(db, SYNC_STATE_DERIVED_PENDING);
+    markSyncStateFlag(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    return { kind: "ingested", sessionId, affectedSessionIds };
   });
 }
 
-function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession): void {
+function releaseMisfiledFork(
+  db: Database,
+  path: string,
+  parsed: ParsedSession,
+  affectedOut?: number[],
+): void {
   const parent = parsed.session.rootSourceSessionId;
   if (parsed.session.tool !== "codex" || parent == null) {
     return;
@@ -2258,11 +2423,16 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
     [parent, path],
   );
   if (misfiled != null) {
-    deleteSessionRow(db, misfiled.id);
+    deleteSessionRow(db, misfiled.id, affectedOut);
   }
 }
 
-function releaseReplacedCursorIdentity(db: Database, path: string, parsed: ParsedSession): void {
+function releaseReplacedCursorIdentity(
+  db: Database,
+  path: string,
+  parsed: ParsedSession,
+  affectedOut?: number[],
+): void {
   if (parsed.session.tool !== "cursor") {
     return;
   }
@@ -2296,7 +2466,7 @@ function releaseReplacedCursorIdentity(db: Database, path: string, parsed: Parse
     [previous],
   );
   if (stale != null) {
-    deleteSessionRow(db, stale.id);
+    deleteSessionRow(db, stale.id, affectedOut);
   }
   runStatement(
     db,
@@ -2333,8 +2503,11 @@ function releaseSupersededSources(
   }
 }
 
-function deleteSessionRow(db: Database, id: number): void {
-  releaseBilledRequests(db, [id]);
+function deleteSessionRow(db: Database, id: number, affectedOut?: number[]): void {
+  const peers = releaseBilledRequests(db, [id]);
+  if (affectedOut != null && peers.length > 0) {
+    affectedOut.push(...peers);
+  }
   deleteSessionRowKeepingBilledClaims(db, id);
 }
 
@@ -2395,6 +2568,7 @@ function writeSession(
   hash: string | null = null,
   artifactOut?: { value?: FullWriteArtifact },
   diffExisting = false,
+  affectedOut?: number[],
 ): number | null {
   const s = parsed.session;
   if (
@@ -3350,7 +3524,13 @@ function writeSession(
     }
   }
 
-  reconcileBilledRequests(db, sessionId, { refreshReconciledSession: false, unsettled });
+  const affectedPeers = reconcileBilledRequests(db, sessionId, {
+    refreshReconciledSession: false,
+    unsettled,
+  });
+  if (affectedOut != null && affectedPeers.length > 0) {
+    affectedOut.push(...affectedPeers);
+  }
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),

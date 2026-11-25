@@ -43,11 +43,13 @@ export interface SyncCoordinatorOptions {
   now?: () => number;
   onProgress?: (progress: SyncProgress) => void;
   onCompleted?: (report: SyncReport) => void;
+  readDataVersion?: () => number | null;
 }
 
 interface SyncReportMeta {
   sessionIds: number[];
   tombstoned: boolean;
+  priorDataVersion?: number | null;
 }
 
 const syncReportMeta = new WeakMap<SyncReport, SyncReportMeta>();
@@ -110,7 +112,7 @@ function refreshEconomicsForReport(
     meta.sessionIds.length > 0 &&
     typeof economics.refreshSessions === "function"
   ) {
-    economics.refreshSessions(meta.sessionIds);
+    economics.refreshSessions(meta.sessionIds, meta.priorDataVersion);
   } else {
     economics.invalidate();
   }
@@ -509,6 +511,61 @@ class PersistentSyncWorker {
   }
 }
 
+function syncCoversRequest(
+  activeOpts: SyncOptions | undefined,
+  requestedOpts: SyncOptions | undefined,
+): boolean {
+  const activePaths = activeOpts?.candidatePaths;
+  const reqPaths = requestedOpts?.candidatePaths;
+  const activeFull = activePaths == null || activePaths.length === 0;
+  const reqFull = reqPaths == null || reqPaths.length === 0;
+  if (!activeFull) {
+    if (reqFull) {
+      return false;
+    }
+    const activeSet = new Set(activePaths);
+    for (const path of reqPaths) {
+      if (!activeSet.has(path)) {
+        return false;
+      }
+    }
+  }
+  const activeDeferred = activeOpts?.deferDerivedRefresh === true;
+  const reqDeferred = requestedOpts?.deferDerivedRefresh === true;
+  if (!reqDeferred && activeDeferred) {
+    return false;
+  }
+  const activeMinInterval = activeOpts?.recommendationMinIntervalMs ?? 0;
+  const reqMinInterval = requestedOpts?.recommendationMinIntervalMs ?? 0;
+  if (reqMinInterval < activeMinInterval) {
+    return false;
+  }
+  return true;
+}
+
+function mergeQueuedSyncOptions(
+  a: SyncOptions | undefined,
+  b: SyncOptions | undefined,
+): SyncOptions | undefined {
+  const aPaths = a?.candidatePaths;
+  const bPaths = b?.candidatePaths;
+  const fullScan = aPaths == null || aPaths.length === 0 || bPaths == null || bPaths.length === 0;
+  const candidatePaths = fullScan ? undefined : [...new Set([...aPaths, ...bPaths])];
+  const deferDerivedRefresh = a?.deferDerivedRefresh === true && b?.deferDerivedRefresh === true;
+  const recommendationMinIntervalMs = Math.min(
+    a?.recommendationMinIntervalMs ?? 0,
+    b?.recommendationMinIntervalMs ?? 0,
+  );
+  if (candidatePaths == null && !deferDerivedRefresh && recommendationMinIntervalMs <= 0) {
+    return undefined;
+  }
+  return {
+    ...(candidatePaths != null ? { candidatePaths } : {}),
+    ...(deferDerivedRefresh ? { deferDerivedRefresh: true } : {}),
+    ...(recommendationMinIntervalMs > 0 ? { recommendationMinIntervalMs } : {}),
+  };
+}
+
 export function createSyncCoordinator(
   worker?: SyncWorkerRunner,
   options: SyncCoordinatorOptions = {},
@@ -531,39 +588,24 @@ export function createSyncCoordinator(
     promise: Promise<SyncReport>;
     listeners: Set<(progress: SyncProgress) => void>;
     cancelSources: Set<{ aborted: boolean }>;
+    syncOptions?: SyncOptions;
+  } | null = null;
+  let queued: {
+    config: Config;
+    syncOptions?: SyncOptions;
+    listeners: Set<(progress: SyncProgress) => void>;
+    cancelSources: Set<{ aborted: boolean }>;
+    promise: Promise<SyncReport>;
+    resolve: (report: SyncReport) => void;
+    reject: (error: unknown) => void;
   } | null = null;
 
-  const start = (
+  const launch = (
     config: Config,
-    cancel?: { aborted: boolean },
-    onProgress?: (progress: SyncProgress) => void,
-    listenWhenJoined = true,
+    listeners: Set<(progress: SyncProgress) => void>,
+    cancelSources: Set<{ aborted: boolean }>,
     syncOptions?: SyncOptions,
-  ): SyncRunHandle => {
-    if (closed) {
-      return {
-        promise: Promise.reject(new Error("sync coordinator is closed")),
-        owned: false,
-      };
-    }
-    if (active != null) {
-      if (cancel != null) {
-        active.cancelSources.add(cancel);
-      }
-      if (listenWhenJoined && onProgress != null) {
-        active.listeners.add(onProgress);
-      }
-      return { promise: active.promise, owned: false };
-    }
-
-    const listeners = new Set<(progress: SyncProgress) => void>();
-    const cancelSources = new Set<{ aborted: boolean }>([ownedCancel]);
-    if (cancel != null) {
-      cancelSources.add(cancel);
-    }
-    if (onProgress != null) {
-      listeners.add(onProgress);
-    }
+  ): Promise<SyncReport> => {
     const sharedCancel = {
       get aborted(): boolean {
         return [...cancelSources].some((source) => source.aborted);
@@ -598,12 +640,17 @@ export function createSyncCoordinator(
       }
     };
 
+    const priorDataVersion = options.readDataVersion?.();
     let promise: Promise<SyncReport>;
     promise = Promise.resolve()
       .then(() => runWorker(config, sharedCancel, forward, syncOptions))
       .then(
         (report) => {
           flush();
+          const meta = syncReportMeta.get(report);
+          if (meta != null && priorDataVersion !== undefined) {
+            meta.priorDataVersion = priorDataVersion;
+          }
           runIsolated(() => options.onCompleted?.(report));
           return report;
         },
@@ -616,8 +663,90 @@ export function createSyncCoordinator(
         if (active?.promise === promise) {
           active = null;
         }
+        if (queued != null && active == null) {
+          const next = queued;
+          queued = null;
+          if (closed) {
+            next.reject(new Error("sync coordinator is closed"));
+            return;
+          }
+          const nextPromise = launch(
+            next.config,
+            next.listeners,
+            next.cancelSources,
+            next.syncOptions,
+          );
+          nextPromise.then(next.resolve, next.reject);
+        }
       });
-    active = { promise, listeners, cancelSources };
+    active = { promise, listeners, cancelSources, syncOptions };
+    return promise;
+  };
+
+  const start = (
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+    listenWhenJoined = true,
+    syncOptions?: SyncOptions,
+  ): SyncRunHandle => {
+    if (closed) {
+      return {
+        promise: Promise.reject(new Error("sync coordinator is closed")),
+        owned: false,
+      };
+    }
+    if (active != null) {
+      if (syncCoversRequest(active.syncOptions, syncOptions)) {
+        if (cancel != null) {
+          active.cancelSources.add(cancel);
+        }
+        if (listenWhenJoined && onProgress != null) {
+          active.listeners.add(onProgress);
+        }
+        return { promise: active.promise, owned: false };
+      }
+      if (queued != null) {
+        queued.config = config;
+        queued.syncOptions = mergeQueuedSyncOptions(queued.syncOptions, syncOptions);
+        if (cancel != null) {
+          queued.cancelSources.add(cancel);
+        }
+        if (listenWhenJoined && onProgress != null) {
+          queued.listeners.add(onProgress);
+        }
+        return { promise: queued.promise, owned: false };
+      }
+      const listeners = new Set<(progress: SyncProgress) => void>();
+      const cancelSources = new Set<{ aborted: boolean }>([ownedCancel]);
+      if (cancel != null) {
+        cancelSources.add(cancel);
+      }
+      if (onProgress != null) {
+        listeners.add(onProgress);
+      }
+      const deferred = Promise.withResolvers<SyncReport>();
+      queued = {
+        config,
+        syncOptions,
+        listeners,
+        cancelSources,
+        promise: deferred.promise,
+        resolve: deferred.resolve,
+        reject: deferred.reject,
+      };
+      return { promise: deferred.promise, owned: true };
+    }
+
+    const listeners = new Set<(progress: SyncProgress) => void>();
+    const cancelSources = new Set<{ aborted: boolean }>([ownedCancel]);
+    if (cancel != null) {
+      cancelSources.add(cancel);
+    }
+    if (onProgress != null) {
+      listeners.add(onProgress);
+    }
+    const promise = launch(config, listeners, cancelSources, syncOptions);
     return { promise, owned: true };
   };
   const run: SyncWorkerRunner = (config, cancel, onProgress, syncOptions) =>
@@ -632,6 +761,11 @@ export function createSyncCoordinator(
   const close = async (): Promise<void> => {
     closed = true;
     ownedCancel.aborted = true;
+    if (queued != null) {
+      const pending = queued;
+      queued = null;
+      pending.reject(new Error("sync coordinator is closed"));
+    }
     try {
       await active?.promise;
     } catch {}

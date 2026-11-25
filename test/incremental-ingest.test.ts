@@ -1,20 +1,33 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
+  closeSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Config } from "../src/config.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
-import { type IngestConfig, sync } from "../src/ingest.ts";
-import { getSession } from "../src/query.ts";
+import { tryIncrementalIngest } from "../src/incremental-ingest.ts";
+import {
+  INGEST_PIPELINE_REVISION,
+  type IngestConfig,
+  type SyncReport,
+  sync,
+} from "../src/ingest.ts";
+import { getSession, search } from "../src/query.ts";
 import { ReadConnection } from "../src/read-connection.ts";
 import { ReaderStatistics } from "../src/server/reader-statistics.ts";
+import { createSyncCoordinator } from "../src/server/sync.ts";
 import { tokenEconomics } from "../src/token-economics.ts";
 import { assertDatabaseIntegrity, captureCanonicalSnapshot } from "./helpers/ingest-oracle.ts";
 
@@ -480,6 +493,698 @@ describe("serve watch & cache incremental helpers", () => {
     } finally {
       reader.close();
       closeDb(writer);
+    }
+  });
+});
+
+describe("Sol review regression coverage (F1-F13)", () => {
+  test("F1: concurrent writer advancing checkpoint does not duplicate appended messages", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f1.jsonl");
+    writeFileSync(file, claudeTurn("c-f1", 1, "req-1"));
+
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config).ingested).toBe(1);
+      const prior = dbA
+        .query("SELECT size, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; session_id: number };
+
+      appendFileSync(file, claudeTurn("c-f1", 2, "req-2"));
+      const stats = statSync(file);
+
+      // Connection B commits the append first while A still holds stale prior metadata.
+      expect(sync(dbB, config).ingested).toBe(1);
+
+      const fd = openSync(file, "r");
+      try {
+        const res = tryIncrementalIngest({
+          db: dbA,
+          fd,
+          stats,
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(res.kind).toBe("skipped");
+      } finally {
+        closeSync(fd);
+      }
+
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(dbA);
+      expect(captureCanonicalSnapshot(dbA)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F2: same-size rewrite outside sampled prefix regions with newer mtime re-parses and updates FTS", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f2.jsonl");
+    const padA = "A".repeat(45_000);
+    const padB = "B".repeat(45_000);
+    const makeLine = (seq: number, body: string) =>
+      `${JSON.stringify({
+        type: "user",
+        uuid: `u-${seq}`,
+        sessionId: "c-f2",
+        cwd: "/home/dev/work/app",
+        timestamp: `2026-11-01T10:00:${String(seq).padStart(2, "0")}.000Z`,
+        message: { role: "user", content: body },
+      })}\n`;
+    const middleBefore = "OLD_TOKEN_UNIQ_0001";
+    const middleAfter = "NEW_TOKEN_UNIQ_9999";
+    const before =
+      makeLine(1, padA) +
+      makeLine(2, `middle ${middleBefore} ${"C".repeat(10_000)}`) +
+      makeLine(3, padB) +
+      makeLine(4, padA) +
+      makeLine(5, padB);
+    const after = before.replace(middleBefore, middleAfter);
+    expect(Buffer.byteLength(before)).toBe(Buffer.byteLength(after));
+    expect(Buffer.byteLength(before)).toBeGreaterThan(180_000);
+
+    writeFileSync(file, before);
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      expect(search(db, middleBefore).length).toBeGreaterThan(0);
+
+      writeFileSync(file, after);
+      const bumped = new Date(Date.now() + 5_000);
+      utimesSync(file, bumped, bumped);
+
+      expect(sync(db, config).ingested).toBe(1);
+      expect(search(db, middleAfter).length).toBeGreaterThan(0);
+      expect(search(db, middleBefore).length).toBe(0);
+
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F3: targeted watch candidatePaths enforces source root rules and skips symlinks", () => {
+    const { dir, dbPath, config } = freshCase();
+    const nonTranscript = join(config.codexDir, "sessions", "non-transcript.jsonl");
+    writeFileSync(nonTranscript, claudeTurn("should-not-ingest", 1, "req-1"));
+
+    const outside = join(dir, "outside.jsonl");
+    writeFileSync(outside, claudeTurn("outside-symlink", 1, "req-2"));
+    const linked = join(config.claudeDir, "proj", "linked.jsonl");
+    symlinkSync(outside, linked);
+
+    const db = openDb(dbPath);
+    try {
+      const report = sync(db, config, undefined, undefined, {
+        candidatePaths: [nonTranscript, linked],
+        deferDerivedRefresh: true,
+      });
+      expect(report.scanned).toBe(0);
+      expect(report.ingested).toBe(0);
+      expect((db.query("SELECT COUNT(*) AS n FROM session").get() as { n: number }).n).toBe(0);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("F4: cross-session billed_request transfer updates both sessions in EconomicsCache and rejects stale dataVersion", async () => {
+    const { dbPath, config } = freshCase();
+    const original = join(config.claudeDir, "proj", "c-orig.jsonl");
+    const branch = join(config.claudeDir, "proj", "c-branch.jsonl");
+    const sharedAssistant = (sessionId: string, forkedFrom?: string) =>
+      `${JSON.stringify({
+        type: "user",
+        uuid: `u-${sessionId}`,
+        sessionId,
+        cwd: "/home/dev/work/app",
+        timestamp: forkedFrom != null ? "2026-11-01T10:05:00.000Z" : "2026-11-01T10:00:00.000Z",
+        ...(forkedFrom != null ? { forkedFrom: { sessionId: forkedFrom } } : {}),
+        message: { role: "user", content: "Shared turn" },
+      })}\n${JSON.stringify({
+        type: "assistant",
+        uuid: `a-${sessionId}`,
+        requestId: "req-shared-1",
+        sessionId,
+        cwd: "/home/dev/work/app",
+        timestamp: "2026-11-01T10:00:02.000Z",
+        ...(forkedFrom != null ? { forkedFrom: { sessionId: forkedFrom } } : {}),
+        message: {
+          id: "msg_shared_f4",
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          content: [{ type: "text", text: "Answer" }],
+        },
+      })}\n`;
+
+    writeFileSync(branch, sharedAssistant("c-branch", "c-orig"));
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const cache = new EconomicsCache({ dbPath, db });
+      try {
+        const before = await cache.get();
+        expect(before).toEqual(tokenEconomics(db));
+
+        writeFileSync(original, sharedAssistant("c-orig"));
+        const changed: number[] = [];
+        const versionBefore = cache.dataVersion();
+        const report = sync(db, config, undefined, undefined, {
+          onSessionChanged: (id) => changed.push(id),
+        });
+        expect(report.ingested).toBe(1);
+        expect(new Set(changed).size).toBe(2);
+
+        cache.refreshSessions(changed, versionBefore);
+        expect(await cache.get()).toEqual(tokenEconomics(db));
+
+        // Passing a mismatched expectedDataVersion must trigger invalidation instead of masking external writes.
+        cache.refreshSessions(changed, (versionBefore ?? 0) - 999);
+        await cache.settled();
+        expect(await cache.get()).toEqual(tokenEconomics(db));
+      } finally {
+        cache.dispose();
+        await cache.settled();
+      }
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("F5 & F8: Codex model switch and usage restamp keep checkpoint model_usage and context_window in sync", () => {
+    const { dir, dbPath, config } = freshCase();
+    const codexFile = join(
+      config.codexDir,
+      "sessions",
+      "2026",
+      "11",
+      "01",
+      "rollout-2026-11-01T10-00-00-cx-f5f8.jsonl",
+    );
+    writeFileSync(
+      codexFile,
+      `${JSON.stringify({
+        timestamp: "2026-11-01T10:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "cx-f5f8", cwd: "/home/dev/work/app", cli_version: "0.2.0" },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:01.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.4" },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "One" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-11-01T10:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1000,
+              output_tokens: 50,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+            last_token_usage: {
+              input_tokens: 1000,
+              output_tokens: 50,
+              cached_input_tokens: 0,
+              reasoning_output_tokens: 0,
+            },
+          },
+        },
+      })}\n`,
+    );
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Restamp previous assistant from 1000 -> 10 input tokens and switch model to gpt-5.4-mini.
+      appendFileSync(
+        codexFile,
+        `${JSON.stringify({
+          timestamp: "2026-11-01T10:00:04.000Z",
+          type: "turn_context",
+          payload: { model: "gpt-5.4-mini" },
+        })}\n${JSON.stringify({
+          timestamp: "2026-11-01T10:00:05.000Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 10,
+                output_tokens: 50,
+                cached_input_tokens: 0,
+                reasoning_output_tokens: 0,
+              },
+              last_token_usage: {
+                input_tokens: 10,
+                output_tokens: 50,
+                cached_input_tokens: 0,
+                reasoning_output_tokens: 0,
+              },
+            },
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Follow with a compaction + unrelated user message to verify checkpoint stays exact.
+      appendFileSync(
+        codexFile,
+        `${JSON.stringify({
+          timestamp: "2026-11-01T10:00:06.000Z",
+          type: "event_msg",
+          payload: { type: "context_compacted" },
+        })}\n${JSON.stringify({
+          timestamp: "2026-11-01T10:00:07.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Follow up" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F6: deferred derived work persists across connection close and final-file cancel is honored", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f6.jsonl");
+    writeFileSync(file, claudeTurn("c-f6", 1, "req-1"));
+
+    // 1. Cancel during final progress must return cancelled: true and skip recommendations.
+    const db1 = openDb(dbPath);
+    const cancel = { aborted: false };
+    try {
+      const report = sync(db1, config, cancel, (p) => {
+        if (p.scanned >= p.total && p.total > 0) {
+          cancel.aborted = true;
+        }
+      });
+      expect(report.ingested).toBe(1);
+      expect(report.cancelled).toBe(true);
+      expect((db1.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(
+        0,
+      );
+    } finally {
+      closeDb(db1);
+    }
+
+    // 2. Reopen on a fresh connection and run a full sync that ingests 0 new files: pending recommendations must still run.
+    const db2 = openDb(dbPath);
+    try {
+      const report = sync(db2, config);
+      expect(report.ingested).toBe(0);
+      expect(report.skipped).toBe(1);
+      expect(
+        (db2.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n,
+      ).toBeGreaterThan(0);
+    } finally {
+      closeDb(db2);
+    }
+  });
+
+  test("F7: SyncCoordinator queues manual or disjoint runs instead of coalescing onto a narrower watch run", async () => {
+    const { dbPath, config } = freshCase();
+    const fullConfig = { ...config, dbPath } as Config;
+    const gate = Promise.withResolvers<void>();
+    const calls: (readonly string[] | undefined)[] = [];
+    const coordinator = createSyncCoordinator(async (_cfg, _cancel, _onProgress, syncOpts) => {
+      calls.push(syncOpts?.candidatePaths);
+      if (calls.length === 1) {
+        await gate.promise;
+      }
+      return {
+        scanned: syncOpts?.candidatePaths?.length ?? 99,
+        ingested: 1,
+        skipped: 0,
+        issues: 0,
+        issuesByCode: {},
+        failed: 0,
+        cancelled: false,
+      } satisfies SyncReport;
+    });
+
+    try {
+      const watchHandle = coordinator.runWithOwnership(fullConfig, undefined, undefined, {
+        candidatePaths: ["/a.jsonl"],
+        deferDerivedRefresh: true,
+      });
+      const manualHandle = coordinator.runWithOwnership(
+        fullConfig,
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(manualHandle.owned).toBe(true);
+      gate.resolve();
+      const [watchReport, manualReport] = await Promise.all([
+        watchHandle.promise,
+        manualHandle.promise,
+      ]);
+      expect(watchReport.scanned).toBe(1);
+      expect(manualReport.scanned).toBe(99);
+      expect(calls).toEqual([["/a.jsonl"], undefined]);
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  test("F9: Claude streaming replacement changing message.id releases old billed_request claim", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f9.jsonl");
+    writeFileSync(file, claudeTurn("c-f9", 1, "req-1", 40));
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "a-1-replace",
+          requestId: "req-1",
+          sessionId: "c-f9",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:05.000Z",
+          message: {
+            id: "msg_req-1_DIFFERENT_ID",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 101,
+              output_tokens: 120,
+              cache_read_input_tokens: 500,
+              cache_creation_input_tokens: 0,
+            },
+            content: [{ type: "text", text: "Replaced with different message.id" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F10: late Claude thinking block for response outside 16-response window updates economics", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f10.jsonl");
+    let content = "";
+    for (let i = 1; i <= 20; i += 1) {
+      content += claudeTurn("c-f10", i, `req-${i}`, 400);
+    }
+    writeFileSync(file, content);
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Append a thinking block for msg_req-1 (20 responses ago) without increasing usage.
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "a-1-late-think",
+          requestId: "req-1",
+          sessionId: "c-f10",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:05:00.000Z",
+          message: {
+            id: "msg_req-1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: null,
+            usage: {
+              input_tokens: 101,
+              output_tokens: 400,
+              cache_read_input_tokens: 500,
+              cache_creation_input_tokens: 0,
+            },
+            content: [{ type: "thinking", thinking: "Deep thought about response 1" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F11: tool_result before tool_use in same delta matches fresh ingest and true orphans increment report.issues", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f11.jsonl");
+    writeFileSync(file, claudeTurn("c-f11", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "u-res-first",
+          sessionId: "c-f11",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:05.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tu-out-of-order", content: "ok" }],
+          },
+        })}\n${JSON.stringify({
+          type: "assistant",
+          uuid: "a-call-second",
+          requestId: "req-2",
+          sessionId: "c-f11",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:06.000Z",
+          message: {
+            id: "msg_req-2",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: "tool_use",
+            usage: { input_tokens: 100, output_tokens: 20 },
+            content: [
+              {
+                type: "tool_use",
+                id: "tu-out-of-order",
+                name: "Read",
+                input: { file_path: "/tmp/a" },
+              },
+            ],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+      expect(
+        (
+          db
+            .query("SELECT COUNT(*) AS n FROM ingest_issue WHERE code = 'orphan_tool_result'")
+            .get() as { n: number }
+        ).n,
+      ).toBe(0);
+
+      // Now append a genuine orphan tool_result and verify report.issues counts it.
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "u-true-orphan",
+          sessionId: "c-f11",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:07.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tu-missing", content: "orphan" }],
+          },
+        })}\n`,
+      );
+      const rep = sync(db, config);
+      expect(rep.ingested).toBe(1);
+      expect(rep.issues).toBe(1);
+      expect(rep.issuesByCode.orphan_tool_result).toBe(1);
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F12: prototype-property IDs like constructor and toString do not crash incremental ingest", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-f12.jsonl");
+    writeFileSync(file, claudeTurn("c-f12", 1, "req-1"));
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "a-proto",
+          requestId: "toString",
+          sessionId: "c-f12",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:05.000Z",
+          message: {
+            id: "msg_toString",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: "tool_use",
+            usage: { input_tokens: 100, output_tokens: 20 },
+            content: [
+              { type: "tool_use", id: "constructor", name: "Read", input: { file_path: "/tmp/x" } },
+            ],
+          },
+        })}\n${JSON.stringify({
+          type: "user",
+          uuid: "u-proto",
+          sessionId: "c-f12",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T10:00:06.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "constructor", content: "ok" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("F13: Pi checkpoint bounds piToolUses and resolves older anchors from SQLite", () => {
+    const { dir, dbPath, config } = freshCase();
+    const piFile = join(config.piDir ?? "", "--work--", "2026-11-01T10-00-00-000Z_pi-f13.jsonl");
+    let lines = `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "pi-f13",
+      timestamp: "2026-11-01T10:00:00.000Z",
+      cwd: "/home/dev/work/app",
+    })}\n`;
+    for (let i = 1; i <= 70; i += 1) {
+      lines += `${JSON.stringify({
+        type: "message",
+        id: `m-${i}`,
+        timestamp: `2026-11-01T10:01:${String(i % 60).padStart(2, "0")}.000Z`,
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          stopReason: "toolUse",
+          usage: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0 },
+          content: [
+            {
+              type: "toolCall",
+              id: `pi-call-${i}`,
+              name: "execute",
+              arguments: { code: `run(${i})` },
+            },
+          ],
+        },
+      })}\n`;
+    }
+    writeFileSync(piFile, lines);
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Append a nested call referencing pi-call-1 (evicted past the 64-call window).
+      appendFileSync(
+        piFile,
+        `${JSON.stringify({
+          type: "message",
+          id: "m-res-1",
+          timestamp: "2026-11-01T10:03:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "pi-call-1",
+            toolName: "execute",
+            content: [{ type: "text", text: "done" }],
+            details: {
+              calls: [
+                {
+                  id: "inner-1",
+                  name: "Read",
+                  arguments: { path: "src/index.ts" },
+                  isError: false,
+                },
+              ],
+            },
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
     }
   });
 });

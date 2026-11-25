@@ -146,12 +146,16 @@ replace an object's prototype.
 `decant sync` inserts new sessions and updates changed ones transactionally.
 For append-only JSONL logs (Claude Code, Codex, and Pi), Decant stores a
 bounded per-file parser and fold checkpoint in `ingest_checkpoint` alongside a
-sampled hash of the already-ingested prefix. When a file grows and its prefix
-hash still matches, Decant reads and writes only the newly appended lines,
-matching open tool calls, usage totals, context windows, and economics vectors
-in place. Truncation, prefix rewrites, torn-line corrections that alter prior
-state, or cross-session billed-request adjustments fall back automatically to a
-full re-parse. Full re-parses (including Copilot CLI, Gemini CLI, VS Code
+sampled hash of the already-ingested prefix (first 32 KiB, middle 4 KiB, and
+last 32 KiB). When a file grows past its previously ingested byte size and its
+sampled prefix hash still matches, Decant reads and writes only the newly
+appended lines, matching open tool calls, usage totals, context windows, and
+economics vectors in place. Same-size rewrites, truncation, prefix rewrites
+within the sampled regions, torn-line corrections that alter prior state, or
+cross-session billed-request adjustments fall back automatically to a full
+re-parse (an in-place edit that both grows a file and modifies bytes strictly
+outside the sampled prefix regions requires a full rebuild). Full re-parses
+(including Copilot CLI, Gemini CLI, VS Code
 Copilot Chat, OpenCode, Cursor CLI, Hermes Agent, and ATIF) diff existing
 messages, blocks, tool calls, and file references in place so unchanged blocks
 keep their row IDs and avoid churning the full-text index. Both paths also

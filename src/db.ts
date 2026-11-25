@@ -906,6 +906,10 @@ function migrate(db: Database, current: number): void {
   prefix_hash TEXT NOT NULL,
   state_blob BLOB NOT NULL
 )`);
+      db.exec(`CREATE TABLE IF NOT EXISTS sync_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID`);
       if (!hasColumn(db, "session", "reply_count")) {
         db.exec("ALTER TABLE session ADD COLUMN reply_count INTEGER");
       }

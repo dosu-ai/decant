@@ -55,6 +55,7 @@ export function captureCanonicalSnapshot(db: Database): CanonicalSnapshot {
       ).map((row) => {
         const decodedToolResult = decodeBlockToolResult(
           row.tool_result as string | Uint8Array | null,
+          row.tool_result_bytes as number | null,
         );
         return {
           ...omit(row, ["id", "message_id", "session_id", "tool_result"]),

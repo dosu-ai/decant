@@ -92,6 +92,9 @@ export function encodeMessageRaw(raw: string, parsed?: Json): StoredMessageRaw {
 
 export function decodeMessageRaw(raw: string | Uint8Array): string {
   if (typeof raw === "string") return raw;
+  if (raw.byteLength === 0) {
+    throw new Error("compressed message source record is empty");
+  }
   return zstdDecompressSync(raw).toString("utf8");
 }
 
@@ -106,15 +109,31 @@ export function encodeBlockToolResult(toolResult: string | null): StoredBlockToo
   return { toolResult: compressed, toolResultBytes: bytes };
 }
 
-export function decodeBlockToolResult(toolResult: string | Uint8Array | null): string | null {
+export function decodeBlockToolResult(
+  toolResult: string | Uint8Array | null,
+  expectedBytes?: number | null,
+): string | null {
   if (toolResult == null || typeof toolResult === "string") return toolResult;
-  return zstdDecompressSync(toolResult).toString("utf8");
+  if (toolResult.byteLength === 0) {
+    throw new Error("compressed tool_result payload is empty");
+  }
+  const decoded = zstdDecompressSync(toolResult);
+  if (expectedBytes != null && decoded.byteLength !== expectedBytes) {
+    throw new Error(
+      `compressed tool_result byte length ${decoded.byteLength} does not match recorded ${expectedBytes}`,
+    );
+  }
+  return decoded.toString("utf8");
 }
 
 export interface CompactMessageStorageResult {
   scanned: number;
   compressed: number;
   saved_bytes: number;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.byteLength === b.byteLength && Buffer.compare(a, b) === 0;
 }
 
 export function compactMessageStorage(
@@ -126,7 +145,7 @@ export function compactMessageStorage(
     `SELECT id FROM message WHERE id > ?1 AND typeof(raw) = 'text'
        AND octet_length(raw) >= ?2 ORDER BY id LIMIT ?3`,
   );
-  const read = db.prepare("SELECT raw FROM message WHERE id = ?1");
+  const read = db.prepare("SELECT raw, CAST(raw AS BLOB) AS raw_blob FROM message WHERE id = ?1");
   const update = db.prepare(
     "UPDATE message SET raw = ?1, raw_meta = ?2, raw_bytes = ?3 WHERE id = ?4",
   );
@@ -137,18 +156,23 @@ export function compactMessageStorage(
       if (batch.length === 0) break;
       withImmediateTransaction(db, () => {
         for (const { id } of batch) {
-          const row = read.get(id) as { raw: string | Uint8Array } | null;
+          const row = read.get(id) as { raw: string | Uint8Array; raw_blob: Uint8Array } | null;
           if (row == null || typeof row.raw !== "string") continue;
           result.scanned += 1;
+          if (!bytesEqual(Buffer.from(row.raw, "utf8"), row.raw_blob)) continue;
           const encoded = encodeMessageRaw(row.raw);
           if (typeof encoded.raw === "string") continue;
-          if (decodeMessageRaw(encoded.raw) !== row.raw) {
+          const decompressed = zstdDecompressSync(encoded.raw);
+          if (
+            !bytesEqual(decompressed, row.raw_blob) ||
+            decompressed.toString("utf8") !== row.raw
+          ) {
             throw new Error(`message ${id} failed lossless compression verification`);
           }
           update.run(encoded.raw, encoded.rawMeta, encoded.rawBytes, id);
           result.compressed += 1;
           result.saved_bytes +=
-            byteLength(row.raw) - encoded.raw.byteLength - byteLength(encoded.rawMeta ?? "");
+            row.raw_blob.byteLength - encoded.raw.byteLength - byteLength(encoded.rawMeta ?? "");
         }
       });
       after = batch[batch.length - 1]?.id ?? after;
@@ -171,7 +195,9 @@ export function compactBlockToolResultStorage(
     `SELECT id FROM block WHERE id > ?1 AND typeof(tool_result) = 'text'
        AND octet_length(tool_result) >= ?2 ORDER BY id LIMIT ?3`,
   );
-  const read = db.prepare("SELECT tool_result FROM block WHERE id = ?1");
+  const read = db.prepare(
+    "SELECT tool_result, CAST(tool_result AS BLOB) AS raw_blob FROM block WHERE id = ?1",
+  );
   const update = db.prepare(
     "UPDATE block SET tool_result = ?1, tool_result_bytes = ?2 WHERE id = ?3",
   );
@@ -182,17 +208,25 @@ export function compactBlockToolResultStorage(
       if (batch.length === 0) break;
       withImmediateTransaction(db, () => {
         for (const { id } of batch) {
-          const row = read.get(id) as { tool_result: string | Uint8Array | null } | null;
-          if (row == null || typeof row.tool_result !== "string") continue;
+          const row = read.get(id) as {
+            tool_result: string | Uint8Array | null;
+            raw_blob: Uint8Array | null;
+          } | null;
+          if (row == null || typeof row.tool_result !== "string" || row.raw_blob == null) continue;
           result.scanned += 1;
+          if (!bytesEqual(Buffer.from(row.tool_result, "utf8"), row.raw_blob)) continue;
           const encoded = encodeBlockToolResult(row.tool_result);
           if (encoded.toolResult == null || typeof encoded.toolResult === "string") continue;
-          if (decodeBlockToolResult(encoded.toolResult) !== row.tool_result) {
+          const decompressed = zstdDecompressSync(encoded.toolResult);
+          if (
+            !bytesEqual(decompressed, row.raw_blob) ||
+            decompressed.toString("utf8") !== row.tool_result
+          ) {
             throw new Error(`block ${id} failed lossless compression verification`);
           }
           update.run(encoded.toolResult, encoded.toolResultBytes, id);
           result.compressed += 1;
-          result.saved_bytes += byteLength(row.tool_result) - encoded.toolResult.byteLength;
+          result.saved_bytes += row.raw_blob.byteLength - encoded.toolResult.byteLength;
         }
       });
       after = batch[batch.length - 1]?.id ?? after;

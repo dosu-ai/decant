@@ -74,6 +74,7 @@ describe("message source storage", () => {
       expect(decodeMessageRaw(raw)).toBe(raw);
     }
     expect(() => decodeMessageRaw(new Uint8Array([0, 1, 2, 3]))).toThrow();
+    expect(() => decodeMessageRaw(new Uint8Array(0))).toThrow();
   });
 
   test("resumes after a failed batch, preserves source text and search, and reclaims space", () => {
@@ -221,6 +222,10 @@ describe("block tool_result storage", () => {
     expect(decodeBlockToolResult(incompressible)).toBe(incompressible);
 
     expect(() => decodeBlockToolResult(new Uint8Array([0, 1, 2, 3]))).toThrow();
+    expect(() => decodeBlockToolResult(new Uint8Array(0))).toThrow();
+    expect(() =>
+      decodeBlockToolResult(encoded.toolResult, (encoded.toolResultBytes ?? 0) - 1),
+    ).toThrow();
   });
 
   test("compacts existing tool_result rows resumable across interruptions while keeping FTS intact", () => {
@@ -690,6 +695,278 @@ describe("block tool_result storage", () => {
         .get(session.id) as { id: number; kind: string; tool_result_bytes: number | null };
       expect(thirdRow).toEqual({ id: firstRow.id, kind: "text", tool_result_bytes: null });
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(small);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("repairs a corrupt compressed tool_result during in-place sync even when byte length matches", () => {
+    const rootDir = mkdtempSync(join(workDir, "tool-result-repair-"));
+    const config = isolatedConfig(rootDir);
+    const projectDir = join(rootDir, SOURCE_ROOTS.claude, "projects", "-Users-dev-proj");
+    mkdirSync(projectDir, { recursive: true });
+    const filePath = join(projectDir, "tr-repair.jsonl");
+    const payloadA = "A".repeat(2048);
+    const payloadB = "B".repeat(2048);
+    const makeJsonl = (promptText: string, resultText: string) =>
+      `${[
+        JSON.stringify({
+          type: "user",
+          uuid: "u1",
+          sessionId: "tr-repair",
+          timestamp: "2026-05-01T10:00:00.000Z",
+          cwd: "/Users/dev/proj",
+          message: { role: "user", content: promptText },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "a1",
+          parentUuid: "u1",
+          sessionId: "tr-repair",
+          timestamp: "2026-05-01T10:00:01.000Z",
+          cwd: "/Users/dev/proj",
+          message: {
+            id: "m1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 100, output_tokens: 20 },
+            content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          uuid: "u2",
+          parentUuid: "a1",
+          sessionId: "tr-repair",
+          timestamp: "2026-05-01T10:00:02.000Z",
+          cwd: "/Users/dev/proj",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "t1", content: resultText }],
+          },
+        }),
+      ].join("\n")}\n`;
+
+    const db = openDb(join(rootDir, "repair.db"));
+    try {
+      writeFileSync(filePath, makeJsonl("run 1", payloadA));
+      utimesSync(filePath, 1_780_000_000, 1_780_000_000);
+      expect(sync(db, config).failed).toBe(0);
+      const session = db
+        .query("SELECT id FROM session WHERE source_session_id = 'tr-repair'")
+        .get() as { id: number };
+
+      // Corrupt the stored BLOB while keeping the recorded 2048-byte count.
+      db.query(
+        "UPDATE block SET tool_result = X'01020304' WHERE session_id = ?1 AND type = 'tool_result'",
+      ).run(session.id);
+
+      // Rewriting an earlier message forces Option 3b diff with the same result text.
+      writeFileSync(filePath, makeJsonl("run 2", payloadA));
+      utimesSync(filePath, 1_780_000_010, 1_780_000_010);
+      expect(sync(db, config).failed).toBe(0);
+      expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(payloadA);
+
+      // Corrupt again and replace with a different result of the exact same byte length.
+      db.query(
+        "UPDATE block SET tool_result = X'' WHERE session_id = ?1 AND type = 'tool_result'",
+      ).run(session.id);
+      expect(() => getSession(db, session.id)).toThrow();
+      writeFileSync(filePath, makeJsonl("run 3", payloadB));
+      utimesSync(filePath, 1_780_000_020, 1_780_000_020);
+      expect(sync(db, config).failed).toBe(0);
+      expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(payloadB);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("skips a corrupt unrelated Codex spawn_agent result while still linking valid children", () => {
+    const rootDir = mkdtempSync(join(workDir, "codex-spawner-corrupt-"));
+    const config = isolatedConfig(rootDir);
+    const parentId = "33333333-3333-3333-3333-333333333333";
+    const childId = "44444444-4444-4444-4444-444444444444";
+    const codexDir = join(rootDir, SOURCE_ROOTS.codex, "sessions", "2026", "05", "01");
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(
+      join(codexDir, `rollout-2026-05-01T10-00-00-${parentId}.jsonl`),
+      `${[
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:00.000Z",
+          type: "session_meta",
+          payload: { id: parentId, cwd: "/Users/dev/proj" },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Spawn helpers" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:02.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ prompt: "older task" }),
+            call_id: "call_spawn_old",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:03.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_spawn_old",
+            output: JSON.stringify({ agent_id: "other-agent", pad: "x".repeat(2048) }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:04.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ prompt: "newer task" }),
+            call_id: "call_spawn_new",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:05.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_spawn_new",
+            output: JSON.stringify({ agent_id: childId, pad: "y".repeat(2048) }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:05.500Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ prompt: "latest corrupt task" }),
+            call_id: "call_spawn_latest_corrupt",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-01T10:00:05.600Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_spawn_latest_corrupt",
+            output: JSON.stringify({ agent_id: "third-agent", pad: "z".repeat(2048) }),
+          },
+        }),
+      ].join("\n")}\n`,
+    );
+
+    const db = openDb(join(rootDir, "codex-corrupt.db"));
+    try {
+      expect(sync(db, config).failed).toBe(0);
+      // Corrupt both an older unrelated result and a newer result ordered ahead of the valid match.
+      db.exec(
+        "UPDATE block SET tool_result = X'01020304' WHERE tool_use_id IN ('call_spawn_old', 'call_spawn_latest_corrupt') AND type = 'tool_result'",
+      );
+      writeFileSync(
+        join(codexDir, `rollout-2026-05-01T10-00-06-${childId}.jsonl`),
+        `${[
+          JSON.stringify({
+            timestamp: "2026-05-01T10:00:06.000Z",
+            type: "session_meta",
+            payload: {
+              id: childId,
+              cwd: "/Users/dev/proj",
+              source: {
+                subagent: {
+                  thread_spawn: { parent_thread_id: parentId, depth: 1 },
+                },
+              },
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-05-01T10:00:07.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "newer task" }],
+            },
+          }),
+        ].join("\n")}\n`,
+      );
+
+      expect(sync(db, config).failed).toBe(0);
+      const parent = db
+        .query("SELECT id FROM session WHERE source_session_id = ?1")
+        .get(parentId) as { id: number };
+      const child = db
+        .query(
+          "SELECT is_subagent, parent_session_id, spawn_tool_use_id FROM session WHERE source_session_id = ?1",
+        )
+        .get(childId) as {
+        is_subagent: number;
+        parent_session_id: number | null;
+        spawn_tool_use_id: string | null;
+      };
+      expect(child).toEqual({
+        is_subagent: 1,
+        parent_session_id: parent.id,
+        spawn_tool_use_id: "call_spawn_new",
+      });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  test("leaves legacy TEXT rows with invalid UTF-8 bytes untouched during compaction", () => {
+    const db = openDb(join(workDir, "malformed-utf8-compact.db"));
+    try {
+      db.exec(`
+        INSERT INTO session(id, tool, source_session_id) VALUES (1, 'claude_code', 'bad-utf8');
+        INSERT INTO message(id, session_id, seq, role, raw)
+          VALUES (1, 1, 0, 'user', CAST(X'7B226B223A2241FF' AS TEXT) || printf('%02048d', 0) || '"}');
+        INSERT INTO block(id, message_id, session_id, ordinal, type, tool_result)
+          VALUES (1, 1, 1, 0, 'tool_result', CAST(X'41FF' AS TEXT) || printf('%02048d', 0));
+      `);
+      const beforeMsg = db
+        .query(
+          "SELECT typeof(raw) AS kind, CAST(raw AS BLOB) AS raw_blob FROM message WHERE id = 1",
+        )
+        .get() as { kind: string; raw_blob: Uint8Array };
+      const beforeBlk = db
+        .query(
+          "SELECT typeof(tool_result) AS kind, CAST(tool_result AS BLOB) AS raw_blob FROM block WHERE id = 1",
+        )
+        .get() as { kind: string; raw_blob: Uint8Array };
+
+      expect(compactMessageStorage(db)).toEqual({ scanned: 1, compressed: 0, saved_bytes: 0 });
+      expect(compactBlockToolResultStorage(db)).toEqual({
+        scanned: 1,
+        compressed: 0,
+        saved_bytes: 0,
+      });
+
+      const afterMsg = db
+        .query(
+          "SELECT typeof(raw) AS kind, CAST(raw AS BLOB) AS raw_blob, raw_bytes FROM message WHERE id = 1",
+        )
+        .get() as { kind: string; raw_blob: Uint8Array; raw_bytes: number | null };
+      const afterBlk = db
+        .query(
+          "SELECT typeof(tool_result) AS kind, CAST(tool_result AS BLOB) AS raw_blob, tool_result_bytes FROM block WHERE id = 1",
+        )
+        .get() as { kind: string; raw_blob: Uint8Array; tool_result_bytes: number | null };
+      expect(afterMsg.kind).toBe("text");
+      expect(afterMsg.raw_bytes).toBeNull();
+      expect(Buffer.compare(afterMsg.raw_blob, beforeMsg.raw_blob)).toBe(0);
+      expect(afterBlk.kind).toBe("text");
+      expect(afterBlk.tool_result_bytes).toBeNull();
+      expect(Buffer.compare(afterBlk.raw_blob, beforeBlk.raw_blob)).toBe(0);
     } finally {
       closeDb(db);
     }

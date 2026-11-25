@@ -686,6 +686,7 @@ interface MessageBlockRow {
   tool_use_id: string | null;
   tool_input: string | null;
   tool_result: string | Uint8Array | null;
+  tool_result_bytes: number | null;
 }
 
 const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
@@ -798,7 +799,7 @@ export function getSession(
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
-                    b.tool_use_id, b.tool_input, b.tool_result
+                    b.tool_use_id, b.tool_input, b.tool_result, b.tool_result_bytes
              FROM message m
              LEFT JOIN block b ON b.message_id = m.id
              WHERE m.session_id = ?1
@@ -819,7 +820,7 @@ export function getSession(
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
-                    b.tool_use_id, b.tool_input, b.tool_result
+                    b.tool_use_id, b.tool_input, b.tool_result, b.tool_result_bytes
              FROM page_message pm
              JOIN message m ON m.id = pm.id
              LEFT JOIN block b ON b.message_id = m.id
@@ -855,7 +856,7 @@ export function getSession(
         tool_name: row.tool_name,
         tool_use_id: row.tool_use_id,
         tool_input: row.tool_input,
-        tool_result: decodeBlockToolResult(row.tool_result),
+        tool_result: decodeBlockToolResult(row.tool_result, row.tool_result_bytes),
       });
     }
   }

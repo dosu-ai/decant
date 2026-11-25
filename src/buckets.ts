@@ -175,15 +175,8 @@ const SEARCH_COMMANDS = new Set([
   "fd",
 ]);
 const SEARCH_TOOLS = new Set(["grep", "glob"]);
-export const SEARCH_CANDIDATE_TOOLS = [
-  "grep",
-  "glob",
-  "bash",
-  "shell",
-  "exec_command",
-  "local_shell",
-] as const;
-const SEARCH_CANDIDATE_TOOL_SET = new Set<string>(SEARCH_CANDIDATE_TOOLS);
+export const SEARCH_CANDIDATE_TOOLS: readonly string[] = [...SEARCH_TOOLS, ...SHELL_TOOLS];
+const SEARCH_CANDIDATE_TOOL_SET = new Set(SEARCH_CANDIDATE_TOOLS);
 
 export function isSearchCandidateTool(toolName: string): boolean {
   const lower = toolName.toLowerCase();

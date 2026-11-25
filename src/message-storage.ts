@@ -241,7 +241,12 @@ export function compactBlockToolResultStorage(
   return result;
 }
 
-export function backfillCopilotCompactionMetadata(db: Database): number {
+export interface CopilotCompactionBackfillResult {
+  repaired: number;
+  unreadableMessageIds: number[];
+}
+
+export function backfillCopilotCompactionMetadata(db: Database): CopilotCompactionBackfillResult {
   const ids = db.prepare(`SELECT m.id FROM message m JOIN session s ON s.id = m.session_id
     WHERE s.tool = 'copilot' AND m.id > ?1 AND m.role = 'system'
       AND json_extract(${MESSAGE_METADATA_SQL}, '$.type') = 'session.compaction_complete'
@@ -251,7 +256,7 @@ export function backfillCopilotCompactionMetadata(db: Database): number {
   const update = db.prepare("UPDATE message SET raw_meta = ?1 WHERE id = ?2");
   const invalidate = db.prepare("UPDATE session SET peak_context_tokens = NULL WHERE id = ?1");
   let after = 0;
-  let repaired = 0;
+  const result: CopilotCompactionBackfillResult = { repaired: 0, unreadableMessageIds: [] };
   try {
     while (true) {
       const batch = ids.all(after, COMPACT_BATCH_SIZE) as { id: number }[];
@@ -259,10 +264,16 @@ export function backfillCopilotCompactionMetadata(db: Database): number {
       withImmediateTransaction(db, () => {
         for (const { id } of batch) {
           const row = read.get(id) as { raw: string | Uint8Array; session_id: number };
-          const raw = JSON.parse(decodeMessageRaw(row.raw)) as Json;
+          let raw: Json;
+          try {
+            raw = JSON.parse(decodeMessageRaw(row.raw)) as Json;
+          } catch {
+            result.unreadableMessageIds.push(id);
+            continue;
+          }
           update.run(rawMetadata(raw), id);
           invalidate.run(row.session_id);
-          repaired += 1;
+          result.repaired += 1;
         }
       });
       after = batch[batch.length - 1]?.id ?? after;
@@ -273,5 +284,5 @@ export function backfillCopilotCompactionMetadata(db: Database): number {
     update.finalize();
     invalidate.finalize();
   }
-  return repaired;
+  return result;
 }

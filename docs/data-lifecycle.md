@@ -217,7 +217,9 @@ and startup syncs. `decant serve` keeps one sync connection, so its sweep
 refreshes recommendations at most once every 5 minutes during continuous
 background activity. `decant watch` opens a fresh connection for each run, so
 each of its sweeps refreshes recommendations whenever an earlier sync left them
-pending. Once a server's sync connection has finished its first full sync, its
+pending. A recommendation refresh that runs while another sync's lineage and
+worktree updates are still pending keeps the refresh pending, so the sync that
+settles those updates refreshes recommendations again. Once a server's sync connection has finished its first full sync, its
 watch and sweep syncs skip the archive-wide repricing pass, which startup,
 manual, and CLI syncs still run. A filesystem event that arrives while another
 sync is running waits for the next run instead of joining the running one,
@@ -241,7 +243,9 @@ A profile created later is found by the periodic sweep.
 Sync repairs Copilot compaction metadata from retained message records and
 recomputes affected context peaks. This also works for compressed messages
 whose original journals are gone. Records without a pre-compaction token count
-keep it unavailable, and completed repairs are skipped on later syncs.
+keep it unavailable, and completed repairs are skipped on later syncs. A
+retained record that cannot be decoded is left as it is and logged by message
+ID without its content, and the repair continues with the remaining records.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local

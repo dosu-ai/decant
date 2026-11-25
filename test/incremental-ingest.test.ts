@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   appendFileSync,
   closeSync,
@@ -26,6 +27,8 @@ import { EconomicsCache } from "../src/economics-cache.ts";
 import {
   MAX_CHECKPOINT_ORPHAN_RESULT_IDS,
   MAX_CHECKPOINT_UNMATCHED_CALLS,
+  readSourceBuffer,
+  sourceFileStats,
   tryIncrementalIngest,
 } from "../src/incremental-ingest.ts";
 import {
@@ -59,6 +62,7 @@ import {
   committedEconomicsWrites,
   markSyncStateCleared,
   readSyncStateGeneration,
+  SYNC_STATE_DERIVED_CLEARED,
   SYNC_STATE_DERIVED_PENDING,
   SYNC_STATE_RECOMMENDATIONS_CLEARED,
   SYNC_STATE_RECOMMENDATIONS_PENDING,
@@ -2013,6 +2017,11 @@ describe("Sol review regression coverage (F1-F13)", () => {
       expect(sync(db, config, undefined, undefined, { deferDerivedRefresh: true }).ingested).toBe(
         1,
       );
+      markSyncStateCleared(
+        db,
+        SYNC_STATE_DERIVED_CLEARED,
+        readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING),
+      );
       const pendingBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
       const refreshBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
       expect(pendingBefore).toBeGreaterThan(0);
@@ -2924,6 +2933,174 @@ describe("holistic audit regressions", () => {
       expect(refreshed).toBe(2);
     } finally {
       closeDb(db);
+    }
+  });
+
+  test("a head rewrite racing an append cannot leak into the next checkpoint prefix hash", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir as string, "proj", "c-prefix-race.jsonl");
+    writeFileSync(file, claudeTurn("c-prefix-race", 1, "req-1"));
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const prior = db
+        .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+        .get(file) as { size: number; mtime: number; session_id: number };
+      appendFileSync(file, claudeTurn("c-prefix-race", 2, "req-2"));
+
+      const original = readFileSync(file);
+      const marker = original.indexOf("Prompt 1 ");
+      expect(marker).toBeGreaterThan(-1);
+      const realReadSync = fs.readSync;
+      let mutated = false;
+      const fd = openSync(file, "r");
+      const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+        const count = (realReadSync as (...a: unknown[]) => number)(...args);
+        const position = args[4];
+        if (!mutated && typeof position === "number" && position >= prior.size) {
+          mutated = true;
+          const writer = openSync(file, "r+");
+          try {
+            writeSync(writer, Buffer.from("Prompt 9 "), 0, 9, marker);
+            const appended = Buffer.from(claudeTurn("c-prefix-race", 3, "req-3"));
+            writeSync(writer, appended, 0, appended.length, original.length);
+          } finally {
+            closeSync(writer);
+          }
+        }
+        return count;
+      }) as typeof fs.readSync);
+      try {
+        const res = tryIncrementalIngest({
+          db,
+          fd,
+          stats: fstatSync(fd),
+          sourcePath: file,
+          tool: "claude_code",
+          archived: false,
+          priorSize: prior.size,
+          priorMtime: prior.mtime,
+          priorSessionId: prior.session_id,
+          ingestRevision: INGEST_PIPELINE_REVISION,
+          expectedRevision: INGEST_PIPELINE_REVISION,
+          sidecarMeta: null,
+          codexTitles: new Map(),
+        });
+        expect(mutated).toBe(true);
+        expect(res.kind).toBe("ingested");
+      } finally {
+        readSpy.mockRestore();
+        closeSync(fd);
+      }
+
+      sync(db, config);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      expect(search(db, "Prompt 9").length).toBeGreaterThan(0);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("full reads stop at the stat snapshot even when a line lands after it", () => {
+    const { dir } = freshCase();
+    const file = join(dir, "snapshot.jsonl");
+    writeFileSync(file, '{"a":1}\n');
+    const fd = openSync(file, "r");
+    try {
+      const stats = sourceFileStats(fstatSync(fd, { bigint: true }));
+      appendFileSync(file, '{"b":2}\n');
+      const buf = readSourceBuffer(fd, stats.size);
+      expect(buf?.toString("utf8")).toBe('{"a":1}\n');
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  test("a checkpoint already past its recorded source size recovers with a full reparse", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir as string, "proj", "c-ahead.jsonl");
+    writeFileSync(file, claudeTurn("c-ahead", 1, "req-1") + claudeTurn("c-ahead", 2, "req-2"));
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const { size } = db.query("SELECT size FROM ingest_source WHERE path = ?1").get(file) as {
+        size: number;
+      };
+      db.run("UPDATE ingest_source SET size = ?2 WHERE path = ?1", [file, size - 10]);
+      appendFileSync(file, claudeTurn("c-ahead", 3, "req-3"));
+
+      const report = sync(db, config);
+      expect(report.ingested).toBe(1);
+      expect(report.skipped).toBe(0);
+      const row = db
+        .query(
+          `SELECT s.size AS size, c.parsed_offset AS parsed_offset
+             FROM ingest_source s JOIN ingest_checkpoint c ON c.path = s.path
+            WHERE s.path = ?1`,
+        )
+        .get(file) as { size: number; parsed_offset: number };
+      expect(row.parsed_offset).toBeLessThanOrEqual(row.size);
+      expect(row.size).toBe(statSync(file).size);
+
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("a recommendation refresh racing unsettled lineage and worktree work leaves its generation pending", () => {
+    const { dir, dbPath, config } = freshCase();
+    const fileA = join(config.claudeDir as string, "proj", "c-rec-race-a.jsonl");
+    const fileB = join(config.claudeDir as string, "proj", "c-rec-race-b.jsonl");
+    writeFileSync(fileA, claudeTurn("c-rec-race-a", 1, "req-1"));
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(dbA, config).ingested).toBe(1);
+
+      writeFileSync(fileB, claudeTurn("c-rec-race-b", 1, "req-2"));
+      expect(
+        sync(dbB, config, undefined, undefined, {
+          candidatePaths: [fileB],
+          deferDerivedRefresh: true,
+        }).ingested,
+      ).toBe(1);
+      const pending = readSyncStateGeneration(dbA, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      expect(readSyncStateGeneration(dbA, SYNC_STATE_DERIVED_PENDING)).toBeGreaterThan(
+        readSyncStateGeneration(dbA, SYNC_STATE_DERIVED_CLEARED),
+      );
+
+      expect(regenerateRecommendations(dbA)).toBe(true);
+      expect(readSyncStateGeneration(dbA, SYNC_STATE_RECOMMENDATIONS_CLEARED)).toBeLessThan(
+        pending,
+      );
+
+      let refreshed = 0;
+      sync(dbB, config, undefined, undefined, {
+        onRecommendationsRefreshed: () => {
+          refreshed += 1;
+        },
+      });
+      expect(refreshed).toBe(1);
+      expect(readSyncStateGeneration(dbB, SYNC_STATE_RECOMMENDATIONS_CLEARED)).toBe(pending);
+
+      expect(sync(freshDb, config).ingested).toBe(2);
+      const recommendations = (db: typeof dbA) =>
+        db.query("SELECT key, detail, score FROM recommendation ORDER BY key").all();
+      expect(recommendations(dbB)).toEqual(recommendations(freshDb));
+    } finally {
+      closeDb(dbA);
+      closeDb(dbB);
+      closeDb(freshDb);
     }
   });
 });

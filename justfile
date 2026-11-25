@@ -124,5 +124,6 @@ policy BASE="origin/main":
 
 # Deterministic ingest replay benchmark: Docker on macOS, native on Linux (`ARGS`: --help lists them)
 [group('bench')]
+[positional-arguments]
 bench-ingest *ARGS:
-    bun run scripts/bench-ingest.ts {{ARGS}}
+    bun run scripts/bench-ingest.ts "$@"

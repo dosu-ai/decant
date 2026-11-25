@@ -33,6 +33,8 @@ import {
   isIncrementalTool,
   parseFullForCheckpoint,
   readSourceBuffer,
+  type SourceFileStats,
+  sourceFileStats,
   tryIncrementalIngest,
 } from "./incremental-ingest.ts";
 import { FILE_LIMIT_MESSAGE, readSourceFile } from "./ingest-limits.ts";
@@ -796,7 +798,7 @@ export function sync(
             }
             break;
           }
-          let stats: Stats | null = null;
+          let stats: SourceFileStats | null = null;
           let statsBig: BigIntStats | null = null;
           let priorSnapshot: ExpectedIngestSourcePrior = { exists: false };
           let content: string | null = null;
@@ -804,8 +806,8 @@ export function sync(
           let sidecarMeta: Json | null = null;
           let fileAction: "parse" | "done" | "retry" = "parse";
           try {
-            stats = fstatSync(fd);
             statsBig = fstatSync(fd, { bigint: true });
+            stats = sourceFileStats(statsBig);
             const prior = queryRow<{
               size: number;
               mtime: number;
@@ -1157,7 +1159,14 @@ function refreshDerivedState(
     !flags.alreadyInitialized ||
     (!flags.deferDerivedRefresh && derivedPending)
   ) {
-    backfillCopilotCompactionMetadata(db);
+    const backfill = backfillCopilotCompactionMetadata(db);
+    if (backfill.unreadableMessageIds.length > 0) {
+      logger.warning("Stored Copilot compaction records could not be decoded.", {
+        "event.name": "decant.ingest.copilot_compaction_unreadable",
+        "message.unreadable.count": backfill.unreadableMessageIds.length,
+        "message.unreadable.ids": backfill.unreadableMessageIds.slice(0, 20),
+      });
+    }
   }
   const materializedWindows =
     fullPass || flags.touchedCopilot ? materializeMissingContextWindows(db) : 0;
@@ -4385,7 +4394,7 @@ export function lineCount(content: string): number {
   return content.endsWith("\n") ? newlines : newlines + 1;
 }
 
-function mtimeSecs(stats: Stats): number {
+function mtimeSecs(stats: Pick<Stats, "mtimeMs">): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 

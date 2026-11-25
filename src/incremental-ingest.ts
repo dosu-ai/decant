@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { readSync, type Stats, statSync } from "node:fs";
+import { type BigIntStats, readSync, type Stats, statSync } from "node:fs";
 import { zstdCompressSync, zstdDecompressSync } from "bun";
 import {
   type IncrementalBilledEntry,
@@ -402,47 +402,110 @@ export function scanLinesFromBuffer(
   };
 }
 
-export function computePrefixHash(fd: number, parsedOffset: number): string {
+type ByteRange = readonly [start: number, end: number];
+
+interface PrefixSampleRanges {
+  head: ByteRange;
+  mid: ByteRange | null;
+  tail: ByteRange | null;
+}
+
+function prefixSampleRanges(parsedOffset: number): PrefixSampleRanges | null {
+  if (parsedOffset <= 0) {
+    return null;
+  }
+  const midStart = Math.floor((parsedOffset - ANCHOR_MID_BYTES) / 2);
+  const tailStart = Math.max(0, parsedOffset - ANCHOR_SAMPLE_BYTES);
+  return {
+    head: [0, Math.min(ANCHOR_SAMPLE_BYTES, parsedOffset)],
+    mid: parsedOffset > ANCHOR_SAMPLE_BYTES * 2 ? [midStart, midStart + ANCHOR_MID_BYTES] : null,
+    tail: tailStart > 0 ? [tailStart, parsedOffset] : null,
+  };
+}
+
+function hashPrefixSamples(
+  parsedOffset: number,
+  read: (start: number, end: number) => Buffer,
+): string {
   const hash = createHash("sha256");
   hash.update(`v1:${parsedOffset}:`);
-  if (parsedOffset <= 0) {
+  const ranges = prefixSampleRanges(parsedOffset);
+  if (ranges == null) {
     return `v1:${hash.digest("hex")}`;
   }
-  const headLen = Math.min(ANCHOR_SAMPLE_BYTES, parsedOffset);
-  const head = readSlice(fd, 0, headLen);
-  hash.update(head);
+  hash.update(read(...ranges.head));
   hash.update(":");
-  if (parsedOffset > ANCHOR_SAMPLE_BYTES * 2) {
-    const midPos = Math.floor((parsedOffset - ANCHOR_MID_BYTES) / 2);
-    hash.update(readSlice(fd, midPos, ANCHOR_MID_BYTES));
+  if (ranges.mid != null) {
+    hash.update(read(...ranges.mid));
     hash.update(":");
   }
-  const tailStart = Math.max(0, parsedOffset - ANCHOR_SAMPLE_BYTES);
-  if (tailStart > 0) {
-    hash.update(readSlice(fd, tailStart, parsedOffset - tailStart));
+  if (ranges.tail != null) {
+    hash.update(read(...ranges.tail));
   }
   return `v1:${hash.digest("hex")}`;
 }
 
 export function computePrefixHashFromBuffer(buf: Buffer, parsedOffset: number): string {
-  const hash = createHash("sha256");
-  hash.update(`v1:${parsedOffset}:`);
-  if (parsedOffset <= 0) {
-    return `v1:${hash.digest("hex")}`;
-  }
-  const headLen = Math.min(ANCHOR_SAMPLE_BYTES, parsedOffset);
-  hash.update(buf.subarray(0, headLen));
-  hash.update(":");
-  if (parsedOffset > ANCHOR_SAMPLE_BYTES * 2) {
-    const midPos = Math.floor((parsedOffset - ANCHOR_MID_BYTES) / 2);
-    hash.update(buf.subarray(midPos, midPos + ANCHOR_MID_BYTES));
-    hash.update(":");
-  }
-  const tailStart = Math.max(0, parsedOffset - ANCHOR_SAMPLE_BYTES);
-  if (tailStart > 0) {
-    hash.update(buf.subarray(tailStart, parsedOffset));
-  }
-  return `v1:${hash.digest("hex")}`;
+  return hashPrefixSamples(parsedOffset, (start, end) => buf.subarray(start, end));
+}
+
+interface ByteSegment {
+  start: number;
+  bytes: Buffer;
+}
+
+interface PrefixSnapshot {
+  parsedOffset: number;
+  hash: string;
+  samples: ByteSegment[];
+}
+
+function snapshotPrefix(fd: number, parsedOffset: number): PrefixSnapshot {
+  const samples: ByteSegment[] = [];
+  const hash = hashPrefixSamples(parsedOffset, (start, end) => {
+    const bytes = readSlice(fd, start, end - start);
+    samples.push({ start, bytes });
+    return bytes;
+  });
+  return { parsedOffset, hash, samples };
+}
+
+function extendPrefixHash(
+  fd: number,
+  snapshot: PrefixSnapshot,
+  appended: Buffer,
+  nextOffset: number,
+): string {
+  const segments: ByteSegment[] = [
+    { start: snapshot.parsedOffset, bytes: appended },
+    ...snapshot.samples,
+  ];
+  return hashPrefixSamples(nextOffset, (start, end) => {
+    const parts: Buffer[] = [];
+    let pos = start;
+    while (pos < end) {
+      const covering = segments.find(
+        (segment) => segment.start <= pos && pos < segment.start + segment.bytes.length,
+      );
+      if (covering != null) {
+        const stop = Math.min(end, covering.start + covering.bytes.length);
+        parts.push(covering.bytes.subarray(pos - covering.start, stop - covering.start));
+        pos = stop;
+        continue;
+      }
+      const nextStart = segments.reduce(
+        (min, segment) => (segment.start > pos && segment.start < min ? segment.start : min),
+        end,
+      );
+      const bytes = readSlice(fd, pos, nextStart - pos);
+      parts.push(bytes);
+      if (bytes.length < nextStart - pos) {
+        break;
+      }
+      pos = nextStart;
+    }
+    return Buffer.concat(parts);
+  });
 }
 
 function readSlice(fd: number, position: number, length: number): Buffer {
@@ -458,27 +521,8 @@ function readSlice(fd: number, position: number, length: number): Buffer {
   return out;
 }
 
-export function readSourceBuffer(fd: number, sizeHint?: number): Buffer | null {
-  if (sizeHint != null && sizeHint > MAX_SOURCE_FILE_BYTES) {
-    return null;
-  }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  let position = 0;
-  while (total <= MAX_SOURCE_FILE_BYTES) {
-    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_SOURCE_FILE_BYTES + 1 - total));
-    const count = readSync(fd, chunk, 0, chunk.length, position);
-    if (count === 0) {
-      return Buffer.concat(chunks, total);
-    }
-    total += count;
-    position += count;
-    if (total > MAX_SOURCE_FILE_BYTES) {
-      return null;
-    }
-    chunks.push(chunk.subarray(0, count));
-  }
-  return null;
+export function readSourceBuffer(fd: number, maxBytes: number): Buffer | null {
+  return maxBytes > MAX_SOURCE_FILE_BYTES ? null : readSlice(fd, 0, maxBytes);
 }
 
 interface EnrichFoldState {
@@ -2331,7 +2375,7 @@ export type IncrementalAttemptResult =
 
 function isLiveFileStale(
   sourcePath: string,
-  stats: Stats,
+  stats: SourceFileStats,
   mtimeNs?: bigint,
   ctimeNs?: bigint,
 ): boolean {
@@ -2363,10 +2407,22 @@ function isLiveFileStale(
   }
 }
 
+export type SourceFileStats = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
+
+export function sourceFileStats(stats: BigIntStats): SourceFileStats {
+  return {
+    dev: Number(stats.dev),
+    ino: Number(stats.ino),
+    size: Number(stats.size),
+    mtimeMs: Number(stats.mtimeNs / 1000n) / 1000,
+    ctimeMs: Number(stats.ctimeNs / 1000n) / 1000,
+  };
+}
+
 export interface TryIncrementalInput {
   db: Database;
   fd: number;
-  stats: Stats;
+  stats: SourceFileStats;
   mtimeNs?: bigint;
   ctimeNs?: bigint;
   sourcePath: string;
@@ -2422,7 +2478,10 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       size: number;
       mtime: number;
       ingest_revision: number;
-    }>(db, "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1", [sourcePath]);
+      session_id: number | null;
+    }>(db, "SELECT size, mtime, ingest_revision, session_id FROM ingest_source WHERE path = ?1", [
+      sourcePath,
+    ]);
     if (
       srcNow != null &&
       srcNow.size === stats.size &&
@@ -2431,7 +2490,21 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     ) {
       return { kind: "skipped" };
     }
-    return { kind: "conflict" };
+    const cpNow = queryRow<{ parsed_offset: number; prefix_hash: string }>(
+      db,
+      "SELECT parsed_offset, prefix_hash FROM ingest_checkpoint WHERE path = ?1",
+      [sourcePath],
+    );
+    const inconsistentSinceLoad =
+      srcNow != null &&
+      srcNow.size === input.priorSize &&
+      srcNow.mtime === input.priorMtime &&
+      srcNow.session_id === input.priorSessionId &&
+      srcNow.ingest_revision === input.ingestRevision &&
+      cpNow != null &&
+      cpNow.parsed_offset === loaded.parsedOffset &&
+      cpNow.prefix_hash === loaded.prefixHash;
+    return inconsistentSinceLoad ? { kind: "fallback" } : { kind: "conflict" };
   }
   const state = loaded.state;
   if (state.isArchived !== input.archived) {
@@ -2459,8 +2532,8 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   if (stats.size <= input.priorSize || stats.size < loaded.parsedOffset) {
     return { kind: "fallback" };
   }
-  const currentPrefixHash = computePrefixHash(fd, loaded.parsedOffset);
-  if (currentPrefixHash !== loaded.prefixHash) {
+  const prefixSnapshot = snapshotPrefix(fd, loaded.parsedOffset);
+  if (prefixSnapshot.hash !== loaded.prefixHash) {
     return { kind: "fallback" };
   }
   const currentExternalKey = externalKeyFor(
@@ -2473,6 +2546,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   }
 
   let readStart = loaded.parsedOffset;
+  let separator: Buffer = Buffer.alloc(0);
   if (state.needsLeadingNewline) {
     if (stats.size === loaded.parsedOffset) {
       return { kind: "fallback" };
@@ -2485,6 +2559,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     } else {
       return { kind: "fallback" };
     }
+    separator = peek.subarray(0, readStart - loaded.parsedOffset);
   }
 
   const deltaLen = stats.size - readStart;
@@ -2714,7 +2789,12 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
     }
   }
 
-  const nextPrefixHash = computePrefixHash(fd, scanned.parsedOffset);
+  const nextPrefixHash = extendPrefixHash(
+    fd,
+    prefixSnapshot,
+    Buffer.concat([separator, deltaBuf]),
+    scanned.parsedOffset,
+  );
   const mtime = Math.trunc(stats.mtimeMs / 1000);
 
   let lineageDirty =

@@ -13,6 +13,8 @@ import {
   bumpSyncStateGeneration,
   markSyncStateCleared,
   readSyncStateGeneration,
+  SYNC_STATE_DERIVED_CLEARED,
+  SYNC_STATE_DERIVED_PENDING,
   SYNC_STATE_RECOMMENDATIONS_CLEARED,
   SYNC_STATE_RECOMMENDATIONS_PENDING,
   SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ,
@@ -312,6 +314,7 @@ export function regenerate(db: Database): boolean {
   for (let attempt = 0; attempt < MAX_RECOMMENDATION_REGENERATE_ATTEMPTS; attempt += 1) {
     const startPendingGen = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
     const startRefreshSeq = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+    const derivedSettledAtStart = derivedStateSettled(db);
     const recentTools = toolUsage(db, false, Number.MAX_SAFE_INTEGER, {
       from: recentWindowStart(),
     });
@@ -484,7 +487,7 @@ export function regenerate(db: Database): boolean {
         WHERE kind = 'signal' AND impact_label_checked = 0
       `);
         bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
-        if (startPendingGen > 0) {
+        if (startPendingGen > 0 && derivedSettledAtStart && derivedStateSettled(db)) {
           markSyncStateCleared(db, SYNC_STATE_RECOMMENDATIONS_CLEARED, startPendingGen);
         }
         return "committed";
@@ -500,6 +503,13 @@ export function regenerate(db: Database): boolean {
     }
   }
   return false;
+}
+
+function derivedStateSettled(db: Database): boolean {
+  return (
+    readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING) <=
+    readSyncStateGeneration(db, SYNC_STATE_DERIVED_CLEARED)
+  );
 }
 
 function pruneUnresolvedSignals(db: Database, eligible: Candidate[], shownKeys: string[]): void {

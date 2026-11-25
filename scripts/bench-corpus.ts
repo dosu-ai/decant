@@ -94,7 +94,9 @@ const SCALING_SIZES = [
   { label: "20mb", targetMb: 20 },
   { label: "60mb", targetMb: 60 },
 ];
-const SCALE_PROJECT_DIR = "-home-dev-work-scale";
+const SYNTHETIC_WORK_ROOT = "/synthetic-decant-bench/work";
+const SYNTHETIC_PROJECT_DIR_PREFIX = `${SYNTHETIC_WORK_ROOT.replaceAll("/", "-")}-`;
+const SCALE_PROJECT_DIR = `${SYNTHETIC_PROJECT_DIR_PREFIX}scale`;
 
 const PROJECTS = ["atlas", "ledger", "orbit", "forge", "relay", "quill", "harbor", "summit"];
 const DIRS = ["src", "src/sources", "src/ui", "test", "scripts", "docs", "lib", "packages/core"];
@@ -522,7 +524,7 @@ function dataPara(rng: Rng): string {
       return JSON.stringify(
         {
           id: rng.uuid(),
-          path: filePath(rng, "/home/dev/work/atlas"),
+          path: filePath(rng, `${SYNTHETIC_WORK_ROOT}/atlas`),
           bytes: rng.int(1024, 900000),
           tokens: { input: rng.int(1, 9000), output: rng.int(1, 4000) },
           flags: [rng.pick(WORDS), rng.pick(WORDS)],
@@ -604,8 +606,11 @@ class CorpusWriter {
   }
 
   close(): void {
-    this.flush();
-    closeSync(this.fd);
+    try {
+      this.flush();
+    } finally {
+      closeSync(this.fd);
+    }
   }
 }
 
@@ -627,7 +632,7 @@ interface ClaudeContext {
 }
 
 function cwdForProjectDir(projectDir: string): string {
-  return `/home/dev/work/${projectDir.slice("-home-dev-work-".length)}`;
+  return `${SYNTHETIC_WORK_ROOT}/${projectDir.slice(SYNTHETIC_PROJECT_DIR_PREFIX.length)}`;
 }
 
 function claudeModelFor(sessionId: string): string {
@@ -1229,7 +1234,7 @@ export async function generateCorpus(options: GenerateCorpusOptions): Promise<Co
     const startMs = BASE_MS + rng.int(0, 20 * 24 * 3600 * 1000);
     if (entry.tool === "claude") {
       const sessionId = rng.uuid();
-      const projectDir = `-home-dev-work-${PROJECTS[entry.index % PROJECTS.length] ?? "atlas"}`;
+      const projectDir = `${SYNTHETIC_PROJECT_DIR_PREFIX}${PROJECTS[entry.index % PROJECTS.length] ?? "atlas"}`;
       const cwd = cwdForProjectDir(projectDir);
       const filePath = join(claudeDir, projectDir, `${sessionId}.jsonl`);
       const result = writeClaudeSession(filePath, entry.bytes, rng, {
@@ -1255,7 +1260,7 @@ export async function generateCorpus(options: GenerateCorpusOptions): Promise<Co
       );
       const bytes = writeCodexSession(filePath, entry.bytes, rng, {
         sessionId,
-        cwd: `/home/dev/work/${PROJECTS[entry.index % PROJECTS.length] ?? "atlas"}`,
+        cwd: `${SYNTHETIC_WORK_ROOT}/${PROJECTS[entry.index % PROJECTS.length] ?? "atlas"}`,
         startMs,
       });
       files.push({ tool: "codex", path: filePath, bytes });
@@ -1265,7 +1270,7 @@ export async function generateCorpus(options: GenerateCorpusOptions): Promise<Co
       const filePath = join(copilotDir, sessionId, "events.jsonl");
       const bytes = writeCopilotSession(filePath, entry.bytes, rng, {
         sessionId,
-        cwd: `/home/dev/work/${project}`,
+        cwd: `${SYNTHETIC_WORK_ROOT}/${project}`,
         startMs,
         repository: `example/${project}`,
       });
@@ -1323,7 +1328,7 @@ function writeScaling(outDir: string, seed: number): NonNullable<CorpusManifest[
     const result = writeClaudeSession(filePath, targetMb * MB, rng, {
       sessionId,
       projectDir: SCALE_PROJECT_DIR,
-      cwd: "/home/dev/work/scale",
+      cwd: cwdForProjectDir(SCALE_PROJECT_DIR),
       startMs: BASE_MS,
     });
     return {
@@ -1344,7 +1349,7 @@ export function generateLiveAppendChunk(
   options: LiveAppendOptions,
 ): LiveAppendChunk {
   const rng = new Rng(
-    options.seed ?? subSeed(DEFAULT_SEED, `live:${state.sessionId}:${state.turnIndex}`),
+    subSeed(options.seed ?? DEFAULT_SEED, `live:${state.sessionId}:${state.turnIndex}`),
   );
   const ctx: ClaudeContext = {
     rng,

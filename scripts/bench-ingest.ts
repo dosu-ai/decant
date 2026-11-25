@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -24,7 +24,7 @@ import {
   writeSync,
 } from "node:fs";
 import { cpus, homedir, release, totalmem } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type CorpusManifest,
   type CorpusProfile,
@@ -40,6 +40,9 @@ const DEFAULT_IMAGE = "decant-bench:local";
 const DEFAULT_WORK_DIR = join(homedir(), ".cache", "decant-bench");
 const CONTAINER_WORK_DIR = "/bench";
 const CONTAINER_RUN_ROOT = "/var/tmp/decant-bench-run";
+const CONTAINER_RUN_DIR_MOUNT = "/bench-runs";
+const CORPUS_LOCK_NAME = ".bench.lock";
+const CORPUS_FORMAT = 2;
 const SAMPLE_INTERVAL_MS = 5_000;
 const FRESHNESS_POLL_MS = 500;
 const RSS_POLL_MS = 5;
@@ -65,7 +68,9 @@ measures steady-state ingest cost from outside the process (/proc and strace).
   --cadence-ms <n>          one live append every n ms (default 2000)
   --work-dir <dir>          corpus, seed, and log cache, kept owner-only
                             (default ~/.cache/decant-bench)
-  --run-dir <dir>           where each run's database copy lives (default <work-dir>/runs)
+  --run-dir <dir>           where each run's database copy lives (default <work-dir>/runs;
+                            --docker mounts it, and without it a run stays in the
+                            container unless --keep-run-db keeps it in <work-dir>/runs)
   --seed <n>                corpus seed (default ${DEFAULT_SEED})
   --rebuild-seed            regenerate the corpus and seeded databases
   --scaling                 also run the 1/5/20/60 MB session-size sub-benchmark
@@ -326,13 +331,13 @@ async function ensureDockerImage(image: string): Promise<void> {
   }
 }
 
-function forwardedArgs(options: Options, outJson: string | null): string[] {
+function forwardedArgs(options: Options, outJson: string | null, runDir: string): string[] {
   const args = [
     "--native",
     "--work-dir",
     CONTAINER_WORK_DIR,
     "--run-dir",
-    CONTAINER_RUN_ROOT,
+    runDir,
     "--profile",
     options.profile,
     "--duration-sec",
@@ -358,6 +363,14 @@ async function runInDocker(options: Options): Promise<number> {
   await ensureDockerImage(options.dockerImage);
   ensurePrivateDir(options.workDir);
   const hostWorkDir = realpathSync(options.workDir);
+  const hostRunDir =
+    options.runDir === null ? null : realpathSync(ensurePrivateDir(options.runDir));
+  const containerRunDir =
+    hostRunDir !== null
+      ? CONTAINER_RUN_DIR_MOUNT
+      : options.keepRunDb
+        ? `${CONTAINER_WORK_DIR}/runs`
+        : CONTAINER_RUN_ROOT;
   const reportName = `report-${Date.now()}.json`;
   const containerOut =
     options.outJson === null ? null : `${CONTAINER_WORK_DIR}/reports/${reportName}`;
@@ -375,13 +388,14 @@ async function runInDocker(options: Options): Promise<number> {
     `${REPO_ROOT}:/repo:ro`,
     "-v",
     `${hostWorkDir}:${CONTAINER_WORK_DIR}`,
+    ...(hostRunDir === null ? [] : ["-v", `${hostRunDir}:${CONTAINER_RUN_DIR_MOUNT}`]),
     "-w",
     "/tmp",
     options.dockerImage,
     "bun",
     "run",
     "/repo/scripts/bench-ingest.ts",
-    ...forwardedArgs(options, containerOut),
+    ...forwardedArgs(options, containerOut, containerRunDir),
   ];
   const proc = Bun.spawn(cmd, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
   const stop = (): void => {
@@ -444,8 +458,17 @@ interface ProcSnapshot {
 }
 
 function readProcIo(pid: number | "self"): ProcIo {
+  return parseProcIo(readFileSync(`/proc/${pid}/io`, "utf8"));
+}
+
+function readOwnIo(): { io: ProcIo; readBytes: number } {
+  const text = readFileSync("/proc/self/io", "utf8");
+  return { io: parseProcIo(text), readBytes: Buffer.byteLength(text) };
+}
+
+function parseProcIo(text: string): ProcIo {
   const fields = new Map<string, number>();
-  for (const line of readFileSync(`/proc/${pid}/io`, "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     const [key, val] = line.split(":");
     if (key !== undefined && val !== undefined) {
       fields.set(key.trim(), Number(val.trim()));
@@ -726,6 +749,27 @@ function endsWithNewline(path: string): boolean {
   }
 }
 
+export function acquireCorpusLock(corpusDir: string): () => void {
+  const lockPath = join(corpusDir, CORPUS_LOCK_NAME);
+  let fd: number;
+  try {
+    fd = openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") {
+      throw new Error(
+        `another bench run is using ${corpusDir} (${lockPath} exists); remove the lock if no run is active`,
+      );
+    }
+    throw error;
+  }
+  try {
+    writeSync(fd, `${process.pid}\n`);
+  } finally {
+    closeSync(fd);
+  }
+  return () => rmSync(lockPath, { force: true });
+}
+
 function assertInside(parent: string, child: string): void {
   if (!isInside(parent, child)) {
     throw new Error(`refusing to delete ${child}: outside ${parent}`);
@@ -769,6 +813,39 @@ export function trustedCorpusManifest(value: unknown, dir: string): CorpusManife
   return value as unknown as CorpusManifest;
 }
 
+function mapManifestPaths(value: unknown, map: (path: string) => string): unknown {
+  if (!isRecord(value)) return value;
+  const at = (path: unknown): unknown => (typeof path === "string" ? map(path) : path);
+  const live = value.liveSession;
+  const scaling = value.scalingFiles;
+  return {
+    ...value,
+    outDir: at(value.outDir),
+    claudeDir: at(value.claudeDir),
+    codexDir: at(value.codexDir),
+    copilotDir: at(value.copilotDir),
+    liveSession: isRecord(live) ? { ...live, filePath: at(live.filePath) } : live,
+    scalingFiles: Array.isArray(scaling)
+      ? scaling.map((file: unknown) =>
+          isRecord(file)
+            ? { ...file, claudeDir: at(file.claudeDir), filePath: at(file.filePath) }
+            : file,
+        )
+      : scaling,
+  };
+}
+
+export function portableCorpusManifest(manifest: CorpusManifest, dir: string): unknown {
+  return mapManifestPaths(manifest, (path) => relative(dir, path) || ".");
+}
+
+export function cachedCorpusManifest(value: unknown, dir: string): CorpusManifest | null {
+  return trustedCorpusManifest(
+    mapManifestPaths(value, (path) => resolve(dir, path)),
+    dir,
+  );
+}
+
 function readCachedManifest(manifestPath: string, dir: string): CorpusManifest | null {
   let text: string;
   try {
@@ -777,14 +854,21 @@ function readCachedManifest(manifestPath: string, dir: string): CorpusManifest |
     return null;
   }
   try {
-    return trustedCorpusManifest(JSON.parse(text), dir);
+    return cachedCorpusManifest(JSON.parse(text), dir);
   } catch {
     return null;
   }
 }
 
+export function corpusNamespace(corpusDir: string): string {
+  return createHash("sha256").update(resolve(corpusDir)).digest("hex").slice(0, 12);
+}
+
 async function ensureCorpus(options: Options): Promise<CorpusInfo> {
-  const dir = join(options.workDir, `corpus-${options.profile}-${options.seed}`);
+  const dir = resolve(
+    options.workDir,
+    `corpus-v${CORPUS_FORMAT}-${options.profile}-${options.seed}`,
+  );
   const manifestPath = join(dir, "manifest.json");
   const cached = options.rebuildSeed ? null : readCachedManifest(manifestPath, dir);
   if (cached !== null) {
@@ -816,7 +900,7 @@ async function ensureCorpus(options: Options): Promise<CorpusInfo> {
     publishCopy(file.filePath, scalingOrigPath(dir, file.label));
   }
   const generateMs = performance.now() - started;
-  publishText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  publishText(manifestPath, `${JSON.stringify(portableCorpusManifest(manifest, dir), null, 2)}\n`);
   return { dir, manifest, generatedNow: true, generateMs };
 }
 
@@ -941,19 +1025,29 @@ async function measureSync(
 ): Promise<SyncMeasurement> {
   const base = [process.execPath, "run", CLI_PATH, "sync", "--json"];
   const cmd = straceFile === null ? base : [...straceArgs(straceFile), "--seccomp-bpf", ...base];
-  const before = readProcIo("self");
+  const before = readOwnIo();
+  let pollingRchar = before.readBytes;
   const started = performance.now();
   const proc = Bun.spawn(cmd, { env, cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   let target: number | null = straceFile === null ? proc.pid : null;
   let peakRssKb = 0;
   let rssSamples = 0;
-  const rssPoller = setInterval(() => {
+  const pollRss = (): void => {
     target ??= decantChild(proc.pid);
     if (target === null) return;
     try {
       peakRssKb = Math.max(peakRssKb, readStatus(target).vmHwmKb);
       rssSamples += 1;
     } catch {}
+  };
+  const rssPoller = setInterval(() => {
+    const pre = readOwnIo();
+    try {
+      pollRss();
+    } finally {
+      const post = readOwnIo();
+      pollingRchar += post.io.rchar - pre.io.rchar + post.readBytes;
+    }
   }, RSS_POLL_MS);
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -962,7 +1056,8 @@ async function measureSync(
   ]);
   clearInterval(rssPoller);
   const wallMs = performance.now() - started;
-  const io = ioDelta(before, readProcIo("self"));
+  const harnessIo = ioDelta(before.io, readProcIo("self"));
+  const io = { ...harnessIo, rchar: Math.max(0, harnessIo.rchar - pollingRchar) };
   const usage = proc.resourceUsage();
   let report: Record<string, unknown> | null = null;
   try {
@@ -983,6 +1078,20 @@ async function measureSync(
     fsync: straceFile === null ? null : countFsyncs(straceFile, target),
     report,
   };
+}
+
+function requireSyncSucceeded(label: string, measured: SyncMeasurement): void {
+  const failure = syncFailure(measured);
+  if (failure !== null) {
+    throw new Error(`${label} ${failure}; the scaling run cannot be averaged`);
+  }
+}
+
+function syncFailure(measured: SyncMeasurement): string | null {
+  if (measured.exitCode !== 0) return `exited ${measured.exitCode}`;
+  if (measured.report === null) return "printed no JSON report";
+  if (measured.report.failed !== 0) return `reported failed=${String(measured.report.failed)}`;
+  return null;
 }
 
 interface SeedInfo {
@@ -1015,8 +1124,9 @@ async function ensureSeed(
   const buildDb = join(buildDir, "decant.db");
   const env = isolatedEnv(buildDir, buildDb, sources);
   const measured = await measureSync(env, buildDir, null);
-  if (measured.exitCode !== 0 && measured.report === null) {
-    throw new Error(`seed sync for ${label} failed with exit ${measured.exitCode}`);
+  const failure = syncFailure(measured);
+  if (failure !== null) {
+    throw new Error(`seed sync for ${label} ${failure}; not caching its database`);
   }
   checkpointAndClose(buildDb);
   const info: SeedInfo = {
@@ -1314,6 +1424,7 @@ async function runReplay(ctx: ReplayContext) {
     await api.get(`/api/sessions/${sessionId}?message_limit=1&message_offset=0`),
   );
   let knownMessageCount = initialDetail.messageCount;
+  let scannedOffset = knownMessageCount;
   const initialMessageCount = knownMessageCount;
 
   const events: SseEvent[] = [];
@@ -1334,6 +1445,7 @@ async function runReplay(ctx: ReplayContext) {
   }
 
   const markers: MarkerRecord[] = [];
+  let acceptResults = true;
   let checking = false;
   let rerun = false;
   let checksRun = 0;
@@ -1351,13 +1463,14 @@ async function runReplay(ctx: ReplayContext) {
         if (pendingApi.length === 0 && pendingFts.length === 0) break;
         checksRun += 1;
         if (pendingApi.length > 0) {
-          let offset = Math.max(0, knownMessageCount - 20);
+          let offset = Math.max(0, scannedOffset - 20);
           for (let page = 0; page < 10; page += 1) {
             const detail = sessionDetailPage(
               await api.get(
                 `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
               ),
             );
+            if (!acceptResults) return;
             const seenAt = performance.now();
             const text = detail.searchableText;
             for (const marker of pendingApi) {
@@ -1366,8 +1479,9 @@ async function runReplay(ctx: ReplayContext) {
               }
             }
             knownMessageCount = Math.max(knownMessageCount, detail.messageCount);
-            if (!detail.hasMoreMessages) break;
             offset += detail.messageCountOnPage;
+            scannedOffset = Math.max(scannedOffset, offset);
+            if (!detail.hasMoreMessages) break;
           }
         }
         for (const marker of pendingFts) {
@@ -1377,6 +1491,7 @@ async function runReplay(ctx: ReplayContext) {
             include_total: false,
             limit: 5,
           });
+          if (!acceptResults) return;
           if (searchHitCount(result) > 0) marker.ftsMs = performance.now() - marker.appendedAtMs;
         }
       } while (rerun);
@@ -1448,6 +1563,7 @@ async function runReplay(ctx: ReplayContext) {
     await check();
     await Bun.sleep(FRESHNESS_POLL_MS);
   }
+  acceptResults = false;
   clearInterval(poller);
   sse.abort();
 
@@ -1586,7 +1702,7 @@ async function runScaling(options: Options, corpus: CorpusInfo, tag: string) {
       `scaling-${file.label}`,
       join(
         options.workDir,
-        `seed-${options.profile}-${options.seed}-${tag}-scaling-${file.label}.db`,
+        `seed-${options.profile}-${options.seed}-${tag}-${corpusNamespace(corpus.dir)}-scaling-${file.label}.db`,
       ),
       { claude: file.claudeDir },
       restore,
@@ -1604,34 +1720,41 @@ async function runScaling(options: Options, corpus: CorpusInfo, tag: string) {
     const strace = (name: string): string | null =>
       options.strace === "off" ? null : join(logDir, `strace-${name}.txt`);
     console.error(`[bench] scaling ${file.label}: no-op sync + ${SCALING_APPENDS} appends`);
-    const noop = await measureSync(env, runDir, strace("noop"));
-    let state: LiveAppenderState = {
-      sessionId: file.sessionId,
-      projectDir: basename(dirname(file.filePath)),
-      lastUuid: file.lastUuid,
-      lastTimestampMs: file.lastTimestampMs,
-      turnIndex: 0,
-    };
-    const needsLeadingNewline = !endsWithNewline(file.filePath);
     const appends: Array<SyncMeasurement & { appendBytes: number; fileBytes: number }> = [];
-    for (let i = 0; i < SCALING_APPENDS; i += 1) {
-      const chunk = generateLiveAppendChunk(state, {
-        kind: "tool_burst",
-        marker: `${MARKER_PREFIX}s${String(i + 1).padStart(5, "0")}`,
-      });
-      const body = `${i === 0 && needsLeadingNewline ? "\n" : ""}${chunk.lines.join("\n")}\n`;
-      appendFileSync(file.filePath, body);
-      state = chunk.nextState;
-      const measured = await measureSync(env, runDir, strace(`append-${i + 1}`));
-      appends.push({
-        appendBytes: Buffer.byteLength(body),
-        fileBytes: statSync(file.filePath).size,
-        ...measured,
-      });
+    let noop: SyncMeasurement;
+    let files: FileSizes;
+    try {
+      noop = await measureSync(env, runDir, strace("noop"));
+      requireSyncSucceeded(`scaling ${file.label} no-op sync`, noop);
+      let state: LiveAppenderState = {
+        sessionId: file.sessionId,
+        projectDir: basename(dirname(file.filePath)),
+        lastUuid: file.lastUuid,
+        lastTimestampMs: file.lastTimestampMs,
+        turnIndex: 0,
+      };
+      const needsLeadingNewline = !endsWithNewline(file.filePath);
+      for (let i = 0; i < SCALING_APPENDS; i += 1) {
+        const chunk = generateLiveAppendChunk(state, {
+          kind: "tool_burst",
+          marker: `${MARKER_PREFIX}s${String(i + 1).padStart(5, "0")}`,
+        });
+        const body = `${i === 0 && needsLeadingNewline ? "\n" : ""}${chunk.lines.join("\n")}\n`;
+        appendFileSync(file.filePath, body);
+        state = chunk.nextState;
+        const measured = await measureSync(env, runDir, strace(`append-${i + 1}`));
+        requireSyncSucceeded(`scaling ${file.label} append ${i + 1} sync`, measured);
+        appends.push({
+          appendBytes: Buffer.byteLength(body),
+          fileBytes: statSync(file.filePath).size,
+          ...measured,
+        });
+      }
+      files = fileSizes(dbPath);
+    } finally {
+      if (!options.keepRunDb) removeDbFiles(dbPath);
+      restore();
     }
-    const files = fileSizes(dbPath);
-    if (!options.keepRunDb) removeDbFiles(dbPath);
-    restore();
     const avg = (pick: (a: (typeof appends)[number]) => number): number =>
       appends.reduce((sum, a) => sum + pick(a), 0) / appends.length;
     results.push({
@@ -1788,27 +1911,36 @@ async function runNative(options: Options): Promise<number> {
 
   let seed: SeedInfo | null = null;
   let replay: Replay | null = null;
-  if (!options.scalingOnly) {
-    seed = await ensureSeed(
-      options,
-      options.profile,
-      join(options.workDir, `seed-${options.profile}-${options.seed}-${tag}.db`),
-      {
-        claude: corpus.manifest.claudeDir,
-        codex: corpus.manifest.codexDir,
-        copilot: corpus.manifest.copilotDir,
-      },
-      () =>
-        restoreSource(
-          liveOrigPath(corpus.dir),
-          live.filePath,
-          pinnedMtimeSec(live.lastTimestampMs),
+  let scaling: Scaling | null = null;
+  const releaseLock = acquireCorpusLock(corpus.dir);
+  try {
+    if (!options.scalingOnly) {
+      seed = await ensureSeed(
+        options,
+        options.profile,
+        join(
+          options.workDir,
+          `seed-${options.profile}-${options.seed}-${tag}-${corpusNamespace(corpus.dir)}.db`,
         ),
-      scratchRoot,
-    );
-    replay = await runReplay({ options, corpus, seed, clkTck });
+        {
+          claude: corpus.manifest.claudeDir,
+          codex: corpus.manifest.codexDir,
+          copilot: corpus.manifest.copilotDir,
+        },
+        () =>
+          restoreSource(
+            liveOrigPath(corpus.dir),
+            live.filePath,
+            pinnedMtimeSec(live.lastTimestampMs),
+          ),
+        scratchRoot,
+      );
+      replay = await runReplay({ options, corpus, seed, clkTck });
+    }
+    scaling = options.scaling ? await runScaling(options, corpus, tag) : null;
+  } finally {
+    releaseLock();
   }
-  const scaling = options.scaling ? await runScaling(options, corpus, tag) : null;
 
   const report = {
     tool: "decant-bench-ingest",
@@ -1843,7 +1975,7 @@ async function runNative(options: Options): Promise<number> {
       "Any strace mode still raises serve CPU (mostly system time) and append-to-visible latency, while write volume stays comparable. Take CPU and freshness from a --strace off run and fsync counts from a traced run.",
       "Scaling peak RSS is the sync child's VmHWM polled every 5 ms; Bun's resourceUsage().maxRSS is a running maximum across all reaped children, so it is not used.",
       "Freshness latency is measured from the append to the first check that saw the marker; checks run on every archive_updated SSE event and every 500 ms.",
-      "Scaling I/O is the harness's /proc/self/io delta across the spawned sync (reaped children are folded into the parent), so it includes strace's own small log writes.",
+      "Scaling I/O is the harness's /proc/self/io delta across the spawned sync (reaped children are folded into the parent), so it includes strace's own small log writes. The harness's own /proc reads for RSS polling are measured around each poll and subtracted from rchar.",
     ],
   };
 

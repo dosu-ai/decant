@@ -7,6 +7,7 @@ import type { Json } from "./model.ts";
 const MIN_COMPRESS_BYTES = 1024;
 const MIN_TOOL_RESULT_SAVINGS_BYTES = 32;
 const COMPACT_BATCH_SIZE = 128;
+const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export const MESSAGE_METADATA_SQL = "COALESCE(m.raw_meta, m.raw)";
 
@@ -95,7 +96,7 @@ export function decodeMessageRaw(raw: string | Uint8Array): string {
   if (raw.byteLength === 0) {
     throw new Error("compressed message source record is empty");
   }
-  return zstdDecompressSync(raw).toString("utf8");
+  return STRICT_UTF8_DECODER.decode(zstdDecompressSync(raw));
 }
 
 export function encodeBlockToolResult(toolResult: string | null): StoredBlockToolResult {
@@ -123,7 +124,7 @@ export function decodeBlockToolResult(
       `compressed tool_result byte length ${decoded.byteLength} does not match recorded ${expectedBytes}`,
     );
   }
-  return decoded.toString("utf8");
+  return STRICT_UTF8_DECODER.decode(decoded);
 }
 
 export interface CompactMessageStorageResult {
@@ -165,7 +166,7 @@ export function compactMessageStorage(
           const decompressed = zstdDecompressSync(encoded.raw);
           if (
             !bytesEqual(decompressed, row.raw_blob) ||
-            decompressed.toString("utf8") !== row.raw
+            STRICT_UTF8_DECODER.decode(decompressed) !== row.raw
           ) {
             throw new Error(`message ${id} failed lossless compression verification`);
           }
@@ -220,7 +221,7 @@ export function compactBlockToolResultStorage(
           const decompressed = zstdDecompressSync(encoded.toolResult);
           if (
             !bytesEqual(decompressed, row.raw_blob) ||
-            decompressed.toString("utf8") !== row.tool_result
+            STRICT_UTF8_DECODER.decode(decompressed) !== row.tool_result
           ) {
             throw new Error(`block ${id} failed lossless compression verification`);
           }

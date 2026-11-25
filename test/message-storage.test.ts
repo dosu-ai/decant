@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { zstdCompressSync, zstdDecompressSync } from "bun";
 import { contextWindowForSession } from "../src/context-window.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { exportTrajectory, toMarkdown } from "../src/export.ts";
@@ -776,6 +777,59 @@ describe("block tool_result storage", () => {
       utimesSync(filePath, 1_780_000_020, 1_780_000_020);
       expect(sync(db, config).failed).toBe(0);
       expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(payloadB);
+
+      // Replace literal U+FFFD bytes (EF BF BD) with malformed 3-byte UTF-8 (F0 9F 92) inside
+      // both compressed block.tool_result and message.raw; strict UTF-8 decode must reject both
+      // and in-place sync must overwrite both corrupt BLOBs with valid UTF-8 payloads.
+      const replacementPayload = `\uFFFD${"C".repeat(2045)}`;
+      writeFileSync(filePath, makeJsonl("run 4", replacementPayload));
+      utimesSync(filePath, 1_780_000_030, 1_780_000_030);
+      expect(sync(db, config).failed).toBe(0);
+
+      const replaceUtf8Fffd = (blob: Uint8Array): Uint8Array => {
+        const bytes = Buffer.from(zstdDecompressSync(blob));
+        const idx = bytes.indexOf(Buffer.from([0xef, 0xbf, 0xbd]));
+        expect(idx).toBeGreaterThanOrEqual(0);
+        bytes[idx] = 0xf0;
+        bytes[idx + 1] = 0x9f;
+        bytes[idx + 2] = 0x92;
+        return zstdCompressSync(bytes, { level: 3 });
+      };
+      const storedBlk = db
+        .query(
+          "SELECT id, tool_result, tool_result_bytes FROM block WHERE session_id = ?1 AND type = 'tool_result'",
+        )
+        .get(session.id) as { id: number; tool_result: Uint8Array; tool_result_bytes: number };
+      const storedMsg = db
+        .query("SELECT id, raw FROM message WHERE session_id = ?1 ORDER BY seq DESC LIMIT 1")
+        .get(session.id) as { id: number; raw: Uint8Array };
+      const corruptBlkBlob = replaceUtf8Fffd(storedBlk.tool_result);
+      const corruptMsgBlob = replaceUtf8Fffd(storedMsg.raw);
+      db.query("UPDATE block SET tool_result = ?1 WHERE id = ?2").run(corruptBlkBlob, storedBlk.id);
+      db.query("UPDATE message SET raw = ?1 WHERE id = ?2").run(corruptMsgBlob, storedMsg.id);
+
+      expect(() => decodeBlockToolResult(corruptBlkBlob, storedBlk.tool_result_bytes)).toThrow();
+      expect(() => decodeMessageRaw(corruptMsgBlob)).toThrow();
+      expect(() => getSession(db, session.id)).toThrow();
+
+      writeFileSync(filePath, makeJsonl("run 5", replacementPayload));
+      utimesSync(filePath, 1_780_000_040, 1_780_000_040);
+      expect(sync(db, config).failed).toBe(0);
+      const repairedBlk = db
+        .query("SELECT tool_result, tool_result_bytes FROM block WHERE id = ?1")
+        .get(storedBlk.id) as { tool_result: Uint8Array; tool_result_bytes: number };
+      const repairedMsg = db.query("SELECT raw FROM message WHERE id = ?1").get(storedMsg.id) as {
+        raw: Uint8Array;
+      };
+      expect(Buffer.compare(repairedBlk.tool_result, corruptBlkBlob)).not.toBe(0);
+      expect(Buffer.compare(repairedMsg.raw, corruptMsgBlob)).not.toBe(0);
+      expect(decodeBlockToolResult(repairedBlk.tool_result, repairedBlk.tool_result_bytes)).toBe(
+        replacementPayload,
+      );
+      expect(decodeMessageRaw(repairedMsg.raw)).toContain("\uFFFD");
+      expect(getSession(db, session.id)?.messages.at(-1)?.blocks[0]?.tool_result).toBe(
+        replacementPayload,
+      );
     } finally {
       closeDb(db);
     }

@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import type { Config } from "../../src/config.ts";
 import { closeDb, openDb } from "../../src/db.ts";
 import { type SyncReport, sync } from "../../src/ingest.ts";
-import { decodeMessageRaw } from "../../src/message-storage.ts";
+import { decodeBlockToolResult, decodeMessageRaw } from "../../src/message-storage.ts";
 import { searchPage } from "../../src/query.ts";
 import { buildFtsQuery } from "../../src/search-query.ts";
 
@@ -52,7 +52,15 @@ export function captureCanonicalSnapshot(db: Database): CanonicalSnapshot {
            FROM block b
            JOIN message m ON m.id = b.message_id
            JOIN session s ON s.id = b.session_id`,
-      ).map((row) => omit(row, ["id", "message_id", "session_id"])),
+      ).map((row) => {
+        const decodedToolResult = decodeBlockToolResult(
+          row.tool_result as string | Uint8Array | null,
+        );
+        return {
+          ...omit(row, ["id", "message_id", "session_id", "tool_result"]),
+          decoded_tool_result: decodedToolResult,
+        };
+      }),
       (row) => [row.session_key, row.message_seq, row.ordinal],
     ),
     tool_call: sorted(
@@ -172,8 +180,8 @@ function messageRows(db: Database): Row[] {
          JOIN session s ON s.id = m.session_id
          LEFT JOIN message pm ON pm.id = m.parent_id`,
     ).map((row) => {
-      const { raw, ...rest } = omit(row, ["id", "session_id", "parent_id"]);
-      return { ...rest, decoded_raw: decodeMessageRaw(raw as string | Uint8Array) };
+      const decodedRaw = decodeMessageRaw(row.raw as string | Uint8Array);
+      return { ...omit(row, ["id", "session_id", "parent_id", "raw"]), decoded_raw: decodedRaw };
     }),
     (row) => [row.session_key, row.seq],
   );

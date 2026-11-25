@@ -47,7 +47,11 @@ import {
   get,
   isObject,
 } from "./json.ts";
-import { encodeMessageRaw, MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import {
+  encodeBlockToolResult,
+  encodeMessageRaw,
+  MESSAGE_METADATA_SQL,
+} from "./message-storage.ts";
 import {
   emptyUsage,
   type Issue,
@@ -2855,9 +2859,9 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
       );
       const insertBlock = db.prepare(
         `INSERT INTO block(
-         message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result
+         message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result, tool_result_bytes
        )
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
       );
       const insertToolCall = db.prepare(
         `INSERT INTO tool_call(
@@ -2986,6 +2990,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
           const respId = message.role === "assistant" ? claudeApiMessageId(message.raw) : null;
           for (const blk of message.blocks) {
             const toolInputStr = blk.toolInput === undefined ? null : canonicalJson(blk.toolInput);
+            const storedToolResult = encodeBlockToolResult(blk.toolResult);
             const blockId = Number(
               insertBlock.run(
                 messageId,
@@ -2996,7 +3001,8 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
                 blk.toolName,
                 blk.toolUseId,
                 toolInputStr,
-                blk.toolResult,
+                storedToolResult.toolResult,
+                storedToolResult.toolResultBytes,
               ).lastInsertRowid,
             );
 

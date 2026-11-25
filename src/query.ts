@@ -7,7 +7,7 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
-import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import { decodeBlockToolResult, MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { CostSource, Tool } from "./model.ts";
 import { costSourceFor } from "./model-usage.ts";
 import { cachedRead, statementKey } from "./read-cache.ts";
@@ -685,7 +685,7 @@ interface MessageBlockRow {
   tool_name: string | null;
   tool_use_id: string | null;
   tool_input: string | null;
-  tool_result: string | null;
+  tool_result: string | Uint8Array | null;
 }
 
 const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
@@ -855,7 +855,7 @@ export function getSession(
         tool_name: row.tool_name,
         tool_use_id: row.tool_use_id,
         tool_input: row.tool_input,
-        tool_result: row.tool_result,
+        tool_result: decodeBlockToolResult(row.tool_result),
       });
     }
   }

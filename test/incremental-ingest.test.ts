@@ -1732,7 +1732,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const raw = new Database(dbPath);
     try {
       raw.exec("DROP TABLE sync_state;");
-      raw.exec("DELETE FROM schema_migrations WHERE version = 33;");
+      raw.exec("ALTER TABLE block DROP COLUMN tool_result_bytes;");
+      raw.exec("DELETE FROM schema_migrations WHERE version > 32;");
     } finally {
       raw.close();
     }

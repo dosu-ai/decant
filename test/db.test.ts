@@ -374,6 +374,42 @@ describe("openDb", () => {
     closeDb(migrated);
   });
 
+  test("upgrades a v33 archive with tool_result_bytes without rewriting retained blocks", () => {
+    const path = freshPath();
+    const legacy = openDb(path);
+    const expected = buildSchemaManifest(legacy);
+    const toolResult = "retained tool output line\n".repeat(400);
+    legacy.exec(`
+      INSERT INTO session(id, tool, source_session_id) VALUES (1, 'claude_code', 'kept-tr');
+      INSERT INTO message(id, session_id, seq, role, raw) VALUES (1, 1, 0, 'user', '{}');
+    `);
+    legacy
+      .query(
+        "INSERT INTO block(id, message_id, session_id, ordinal, type, tool_result) VALUES (1, 1, 1, 0, 'tool_result', ?1)",
+      )
+      .run(toolResult);
+    legacy.exec(`
+      ALTER TABLE block DROP COLUMN tool_result_bytes;
+      DELETE FROM schema_migrations WHERE version > 33;
+    `);
+    closeDb(legacy);
+
+    const migrated = openDb(path);
+    expect(buildSchemaManifest(migrated)).toEqual(expected);
+    expect(
+      migrated.query("SELECT tool_result, tool_result_bytes FROM block WHERE id = 1").get(),
+    ).toEqual({
+      tool_result: toolResult,
+      tool_result_bytes: null,
+    });
+    expect(
+      migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+        version: number;
+      },
+    ).toEqual({ version: LATEST_SCHEMA_VERSION });
+    closeDb(migrated);
+  });
+
   test("clears stored context peaks of v27 sessions with compactions", () => {
     const path = freshPath();
     const legacy = openDb(path);

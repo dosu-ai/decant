@@ -22,7 +22,7 @@ import {
   rollbackEconomicsTransaction,
 } from "./sync-state.ts";
 
-export const LATEST_SCHEMA_VERSION = 33;
+export const LATEST_SCHEMA_VERSION = 34;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -934,6 +934,14 @@ function migrate(db: Database, current: number): void {
 ) WITHOUT ROWID`);
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (33, datetime('now'))",
+      ).run();
+    }
+    if (current < 34) {
+      if (!hasColumn(db, "block", "tool_result_bytes")) {
+        db.exec("ALTER TABLE block ADD COLUMN tool_result_bytes INTEGER");
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (34, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

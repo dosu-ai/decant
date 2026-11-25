@@ -5,6 +5,7 @@ import { byteLength, canonicalJson, get } from "./json.ts";
 import type { Json } from "./model.ts";
 
 const MIN_COMPRESS_BYTES = 1024;
+const MIN_TOOL_RESULT_SAVINGS_BYTES = 32;
 const COMPACT_BATCH_SIZE = 128;
 
 export const MESSAGE_METADATA_SQL = "COALESCE(m.raw_meta, m.raw)";
@@ -43,6 +44,11 @@ export interface StoredMessageRaw {
   raw: string | Uint8Array;
   rawMeta: string | null;
   rawBytes: number | null;
+}
+
+export interface StoredBlockToolResult {
+  toolResult: string | Uint8Array | null;
+  toolResultBytes: number | null;
 }
 
 function rawMetadata(raw: Json): string {
@@ -89,6 +95,22 @@ export function decodeMessageRaw(raw: string | Uint8Array): string {
   return zstdDecompressSync(raw).toString("utf8");
 }
 
+export function encodeBlockToolResult(toolResult: string | null): StoredBlockToolResult {
+  if (toolResult == null) return { toolResult: null, toolResultBytes: null };
+  const bytes = byteLength(toolResult);
+  if (bytes < MIN_COMPRESS_BYTES) return { toolResult, toolResultBytes: null };
+  const compressed = zstdCompressSync(toolResult, { level: 3 });
+  if (compressed.byteLength + MIN_TOOL_RESULT_SAVINGS_BYTES >= bytes) {
+    return { toolResult, toolResultBytes: null };
+  }
+  return { toolResult: compressed, toolResultBytes: bytes };
+}
+
+export function decodeBlockToolResult(toolResult: string | Uint8Array | null): string | null {
+  if (toolResult == null || typeof toolResult === "string") return toolResult;
+  return zstdDecompressSync(toolResult).toString("utf8");
+}
+
 export interface CompactMessageStorageResult {
   scanned: number;
   compressed: number;
@@ -127,6 +149,50 @@ export function compactMessageStorage(
           result.compressed += 1;
           result.saved_bytes +=
             byteLength(row.raw) - encoded.raw.byteLength - byteLength(encoded.rawMeta ?? "");
+        }
+      });
+      after = batch[batch.length - 1]?.id ?? after;
+      onProgress?.({ ...result });
+    }
+  } finally {
+    ids.finalize();
+    read.finalize();
+    update.finalize();
+  }
+  return result;
+}
+
+export function compactBlockToolResultStorage(
+  db: Database,
+  onProgress?: (result: Readonly<CompactMessageStorageResult>) => void,
+): CompactMessageStorageResult {
+  const result = { scanned: 0, compressed: 0, saved_bytes: 0 };
+  const ids = db.prepare(
+    `SELECT id FROM block WHERE id > ?1 AND typeof(tool_result) = 'text'
+       AND octet_length(tool_result) >= ?2 ORDER BY id LIMIT ?3`,
+  );
+  const read = db.prepare("SELECT tool_result FROM block WHERE id = ?1");
+  const update = db.prepare(
+    "UPDATE block SET tool_result = ?1, tool_result_bytes = ?2 WHERE id = ?3",
+  );
+  let after = 0;
+  try {
+    while (true) {
+      const batch = ids.all(after, MIN_COMPRESS_BYTES, COMPACT_BATCH_SIZE) as { id: number }[];
+      if (batch.length === 0) break;
+      withImmediateTransaction(db, () => {
+        for (const { id } of batch) {
+          const row = read.get(id) as { tool_result: string | Uint8Array | null } | null;
+          if (row == null || typeof row.tool_result !== "string") continue;
+          result.scanned += 1;
+          const encoded = encodeBlockToolResult(row.tool_result);
+          if (encoded.toolResult == null || typeof encoded.toolResult === "string") continue;
+          if (decodeBlockToolResult(encoded.toolResult) !== row.tool_result) {
+            throw new Error(`block ${id} failed lossless compression verification`);
+          }
+          update.run(encoded.toolResult, encoded.toolResultBytes, id);
+          result.compressed += 1;
+          result.saved_bytes += byteLength(row.tool_result) - encoded.toolResult.byteLength;
         }
       });
       after = batch[batch.length - 1]?.id ?? after;

@@ -621,7 +621,7 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
               CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
                    THEN COALESCE(b.tool_input, tc.input) END AS tool_input,
               CASE WHEN b.type = 'tool_result'
-                   THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
+                   THEN COALESCE(b.tool_result_bytes, length(CAST(b.tool_result AS BLOB)), 0)
                    -- An agent message's routing metadata outweighs its text,
                    -- and only the text reaches the model.
                    WHEN b.type = 'other' AND json_valid(b.text)
@@ -698,7 +698,7 @@ function vectorsForScope(
     db,
     `${scopeCte}
        SELECT t.session_id, t.tool_name, t.input,
-              COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
+              COALESCE(t.output_bytes, rb.tool_result_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
               cm.seq AS call_seq
        FROM scoped_session fs
        CROSS JOIN tool_call t INDEXED BY idx_toolcall_session

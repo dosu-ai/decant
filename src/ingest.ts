@@ -40,7 +40,9 @@ import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "
 import { getDecantLogger } from "./logging.ts";
 import {
   backfillCopilotCompactionMetadata,
+  decodeBlockToolResult,
   decodeMessageRaw,
+  encodeBlockToolResult,
   encodeMessageRaw,
   MESSAGE_METADATA_SQL,
 } from "./message-storage.ts";
@@ -2097,8 +2099,8 @@ export function resolveSubagentParents(db: Database): boolean {
      ORDER BY s.is_subagent DESC, b.id DESC
      LIMIT 1`,
   );
-  const findCodexSpawner = db.prepare(
-    `SELECT call.tool_use_id AS tool_use_id
+  const findCodexSpawners = db.prepare(
+    `SELECT call.tool_use_id AS tool_use_id, result.tool_result AS tool_result
      FROM block call INDEXED BY idx_block_tool
      JOIN block result
        ON result.session_id = call.session_id
@@ -2107,10 +2109,10 @@ export function resolveSubagentParents(db: Database): boolean {
      WHERE call.session_id = ?1
        AND call.type = 'tool_use'
        AND call.tool_name = 'spawn_agent'
-       AND result.tool_result LIKE ?2
-     ORDER BY call.id DESC
-     LIMIT 1`,
+       AND result.tool_result IS NOT NULL
+     ORDER BY call.id DESC`,
   );
+  const codexSpawnersByRoot = new Map<number, { toolUseId: string; lowerResult: string }[]>();
   const clearAtif = db.prepare(
     `UPDATE session
      SET is_subagent = 0, parent_session_id = NULL, spawn_tool_use_id = NULL,
@@ -2143,10 +2145,25 @@ export function resolveSubagentParents(db: Database): boolean {
         let parentId: number | null = null;
         let spawnToolUseId = info.spawnToolUseId;
         if (spawnToolUseId == null && row.tool === "codex" && rootId != null) {
-          const spawner = findCodexSpawner.get(rootId, `%${row.source_session_id}%`) as {
-            tool_use_id: string;
-          } | null;
-          spawnToolUseId = spawner?.tool_use_id ?? null;
+          let candidates = codexSpawnersByRoot.get(rootId);
+          if (candidates == null) {
+            candidates = (
+              findCodexSpawners.all(rootId) as {
+                tool_use_id: string;
+                tool_result: string | Uint8Array | null;
+              }[]
+            ).flatMap((candidate) => {
+              const decoded = decodeBlockToolResult(candidate.tool_result);
+              return decoded == null
+                ? []
+                : [{ toolUseId: candidate.tool_use_id, lowerResult: decoded.toLowerCase() }];
+            });
+            codexSpawnersByRoot.set(rootId, candidates);
+          }
+          const needle = row.source_session_id.toLowerCase();
+          spawnToolUseId =
+            candidates.find((candidate) => candidate.lowerResult.includes(needle))?.toolUseId ??
+            null;
         }
         // ATIF call IDs are only unique within a document, so an archive-wide
         // lookup could name another trial's session. The parser already
@@ -2191,7 +2208,7 @@ export function resolveSubagentParents(db: Database): boolean {
   } finally {
     clearAtif.finalize();
     update.finalize();
-    findCodexSpawner.finalize();
+    findCodexSpawners.finalize();
     findSpawner.finalize();
   }
   return parentChanged;
@@ -2768,7 +2785,10 @@ function writeIngestSource(
   );
 }
 
-function rawBytesEqual(a: string | Uint8Array, b: string | Uint8Array): boolean {
+function rawBytesEqual(a: string | Uint8Array | null, b: string | Uint8Array | null): boolean {
+  if (a == null || b == null) {
+    return a === b;
+  }
   if (typeof a === "string" && typeof b === "string") {
     return a === b;
   }
@@ -3111,7 +3131,8 @@ function writeSession(
     tool_name: string | null;
     tool_use_id: string | null;
     tool_input: string | null;
-    tool_result: string | null;
+    tool_result: string | Uint8Array | null;
+    tool_result_bytes: number | null;
   }
   interface ExistingToolCallRow {
     id: number;
@@ -3165,7 +3186,7 @@ function writeSession(
     existingBlocksByMsg = new Map();
     for (const row of queryRows<ExistingBlockRow>(
       db,
-      `SELECT id, message_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result
+      `SELECT id, message_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result, tool_result_bytes
          FROM block WHERE session_id = ?1 ORDER BY message_id, ordinal`,
       [sessionId],
     )) {
@@ -3227,15 +3248,15 @@ function writeSession(
     : null;
   const insertBlock = db.prepare(
     `INSERT INTO block(
-       message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result
+       message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result, tool_result_bytes
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
   );
   const updateBlock = useDiff
     ? db.prepare(
         `UPDATE block
             SET type = ?2, text = ?3, tool_name = ?4, tool_use_id = ?5,
-                tool_input = ?6, tool_result = ?7
+                tool_input = ?6, tool_result = ?7, tool_result_bytes = ?8
           WHERE id = ?1`,
       )
     : null;
@@ -3334,25 +3355,44 @@ function writeSession(
         if (oldBlk != null && oldBlocksForMsg != null) {
           oldBlocksForMsg.delete(block.ordinal);
           blockId = oldBlk.id;
-          const changed =
+          const blockMetaChanged =
             oldBlk.type !== block.blockType ||
             oldBlk.text !== block.text ||
             oldBlk.tool_name !== block.toolName ||
             oldBlk.tool_use_id !== block.toolUseId ||
-            oldBlk.tool_input !== toolInputStr ||
-            oldBlk.tool_result !== block.toolResult;
-          if (changed && updateBlock != null) {
-            updateBlock.run(
-              blockId,
-              block.blockType,
-              block.text,
-              block.toolName,
-              block.toolUseId,
-              toolInputStr,
-              block.toolResult,
-            );
+            oldBlk.tool_input !== toolInputStr;
+          const toolResultUnchanged =
+            (oldBlk.tool_result == null && block.toolResult == null) ||
+            (typeof oldBlk.tool_result === "string" &&
+              oldBlk.tool_result_bytes == null &&
+              oldBlk.tool_result === block.toolResult) ||
+            (oldBlk.tool_result instanceof Uint8Array &&
+              block.toolResult != null &&
+              oldBlk.tool_result_bytes === byteLength(block.toolResult) &&
+              decodeBlockToolResult(oldBlk.tool_result) === block.toolResult);
+          if (blockMetaChanged || !toolResultUnchanged) {
+            const storedToolResult = toolResultUnchanged
+              ? { toolResult: oldBlk.tool_result, toolResultBytes: oldBlk.tool_result_bytes }
+              : encodeBlockToolResult(block.toolResult);
+            const changed =
+              blockMetaChanged ||
+              oldBlk.tool_result_bytes !== storedToolResult.toolResultBytes ||
+              !rawBytesEqual(oldBlk.tool_result, storedToolResult.toolResult);
+            if (changed && updateBlock != null) {
+              updateBlock.run(
+                blockId,
+                block.blockType,
+                block.text,
+                block.toolName,
+                block.toolUseId,
+                toolInputStr,
+                storedToolResult.toolResult,
+                storedToolResult.toolResultBytes,
+              );
+            }
           }
         } else {
+          const storedToolResult = encodeBlockToolResult(block.toolResult);
           blockId = Number(
             insertBlock.run(
               messageId,
@@ -3363,7 +3403,8 @@ function writeSession(
               block.toolName,
               block.toolUseId,
               toolInputStr,
-              block.toolResult,
+              storedToolResult.toolResult,
+              storedToolResult.toolResultBytes,
             ).lastInsertRowid,
           );
         }

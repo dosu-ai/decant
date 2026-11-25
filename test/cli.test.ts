@@ -1087,17 +1087,28 @@ describe("db info discloses what the archive stores", () => {
     expect(info.text_bytes).toBe(52);
   });
 
-  test("db compact preserves logical bytes and reports smaller source storage", async () => {
+  test("db compact preserves logical bytes and reports smaller source and tool-result storage", async () => {
     const dbPath = join(workDir, "compact.db");
     const raw = JSON.stringify({ unknown: "retained 🙂 content\n".repeat(3000) });
+    const toolResult = "retained tool 🙂 output\n".repeat(3000);
     const db = openDb(dbPath);
     db.exec("INSERT INTO session(id, tool, source_session_id) VALUES (1, 'codex', 'compact')");
-    db.query("INSERT INTO message(session_id, seq, role, raw) VALUES (1, 0, 'user', ?1)").run(raw);
+    const messageId = Number(
+      db.query("INSERT INTO message(session_id, seq, role, raw) VALUES (1, 0, 'user', ?1)").run(raw)
+        .lastInsertRowid,
+    );
+    db.query(
+      "INSERT INTO block(message_id, session_id, ordinal, type, tool_result) VALUES (?1, 1, 0, 'tool_result', ?2)",
+    ).run(messageId, toolResult);
     closeDb(db);
 
     const result = await runCli(["--db", dbPath, "--json", "db", "compact"]);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ compressed: 1 });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      compressed: 1,
+      tool_results_compressed: 1,
+    });
+    expect(result.stderr).toContain("compressing tool results");
     expect(result.stderr).toContain("vacuuming archive");
     const info = await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"]);
     expect(info.code).toBe(0);
@@ -1106,11 +1117,17 @@ describe("db info discloses what the archive stores", () => {
       text_bytes: number;
       compressed_messages: number;
       raw_stored_bytes: number;
+      compressed_tool_results: number;
+      tool_result_stored_bytes: number;
     };
+    const rawBytes = Buffer.byteLength(raw);
+    const toolResultBytes = Buffer.byteLength(toolResult);
     expect(row.sessions).toBe(1);
-    expect(row.text_bytes).toBe(Buffer.byteLength(raw));
+    expect(row.text_bytes).toBe(rawBytes + toolResultBytes);
     expect(row.compressed_messages).toBe(1);
-    expect(row.raw_stored_bytes).toBeLessThan(row.text_bytes / 4);
+    expect(row.raw_stored_bytes).toBeLessThan(rawBytes / 4);
+    expect(row.compressed_tool_results).toBe(1);
+    expect(row.tool_result_stored_bytes).toBeLessThan(toolResultBytes / 4);
   });
 });
 

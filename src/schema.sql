@@ -1,4 +1,4 @@
--- decant:schema_version=33
+-- decant:schema_version=34
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -103,7 +103,8 @@ CREATE TABLE block (
   tool_name TEXT,
   tool_use_id TEXT,
   tool_input TEXT,
-  tool_result TEXT
+  tool_result TEXT,
+  tool_result_bytes INTEGER
 );
 CREATE TABLE tool_call (
   id INTEGER PRIMARY KEY,

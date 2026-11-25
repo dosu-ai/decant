@@ -446,7 +446,7 @@ that duplicate retained messages or contain only stream metadata.
 | Prompt, response, and reasoning text | `block.text` |
 | A display title, normally the first 120 characters of the opening prompt or a provider title | `session.title` |
 | Tool arguments, including shell commands, file paths, and patch bodies | `block.tool_input`, `tool_call.input` |
-| Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
+| Tool output, including the contents of files an agent read, optionally compressed losslessly | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
 | The remote of each project's repository, as a host and path with any credentials removed | `project.repo_remote` |
@@ -458,15 +458,22 @@ which makes them harder to find, not absent.
 
 Large source records use standard Zstandard BLOBs in `message.raw` when the
 compressed record and its metadata take less space than the original JSON.
-Small records stay as JSON text. Compression preserves the complete canonical
-JSON, including fields Decant does not recognize. It does not truncate or redact
-content. Normalized transcript blocks and the full-text index stay unchanged.
+Large tool outputs in `block.tool_result` use standard Zstandard BLOBs under
+the same threshold when compression saves space, with `block.tool_result_bytes`
+recording the original UTF-8 byte count so economics and size queries avoid
+decompression. Small records and tool results stay as text. Compression
+preserves the complete canonical JSON and complete tool output without
+truncating or redacting content. Searchable transcript blocks (`block.text`,
+`block.tool_name`, and `block.tool_input`) and the full-text index stay
+unchanged.
 
-For compressed records, `message.raw_meta` holds the small JSON projection that
-transcript and accounting queries need, and `message.raw_bytes` records the
-original UTF-8 byte count. These queries read the projection without inflating
-the full source record. Code reading complete source records should use
-`decodeMessageRaw` from `src/message-storage.ts` for both TEXT and BLOB rows.
+For compressed source records, `message.raw_meta` holds the small JSON
+projection that transcript and accounting queries need, and `message.raw_bytes`
+records the original UTF-8 byte count. These queries read the projection without
+inflating the full source record. Code reading complete source records or tool
+results directly from SQLite should use `decodeMessageRaw` and
+`decodeBlockToolResult` from `src/message-storage.ts` for both TEXT and BLOB
+rows.
 
 There is no redaction step. Decant does not detect, mask, or strip secrets,
 tokens, keys, or personal data. Whatever your agents read, and whatever was
@@ -511,15 +518,18 @@ decant db info
 decant db info --full   # adds fts_rows and text_bytes: a full scan, slow on a large archive
 ```
 
-`--full` also reports `compressed_messages` and `raw_stored_bytes`. The latter
-counts stored source-record bytes plus their metadata. `text_bytes` still
-counts the original uncompressed source records and normalized transcript text.
+`--full` also reports `compressed_messages`, `raw_stored_bytes`,
+`compressed_tool_results`, and `tool_result_stored_bytes`. The stored-byte
+totals count compressed and uncompressed payload bytes on disk (including
+`message.raw_meta` for messages), while `text_bytes` still counts the original
+uncompressed source records and normalized transcript text.
 
 ### Compressing an existing archive
 
-New and changed sessions use lossless source-record compression when they are
-ingested. Opening an existing archive adds the storage columns without
-rewriting its retained records. Compress those records explicitly with
+New and changed sessions use lossless compression for `message.raw` and
+`block.tool_result` when they are ingested. Opening an existing archive adds
+the storage columns without rewriting its retained records. Compress those
+records explicitly with
 
 ```sh
 decant --no-sync db compact
@@ -527,17 +537,18 @@ decant --no-sync db compact
 
 Stop any running Decant server before upgrading and compacting the archive,
 then restart it with the new build. A process running an older build cannot
-read compressed source records. Keep a consistent backup before maintaining a
-large archive. SQLite's final `VACUUM` can need up to twice the archive's size
-in additional free disk space for its temporary copy and journal.
+read compressed source records or tool results. Keep a consistent backup before
+maintaining a large archive. SQLite's final `VACUUM` can need up to twice the
+archive's size in additional free disk space for its temporary copy and journal.
 
 `db compact` never syncs source directories. It verifies that every compressed
-record decodes to exactly the stored text before saving it, commits bounded
-batches, and then runs `VACUUM` to return freed pages to the filesystem. It
-prints progress while compressing and before vacuuming. If interrupted, run it
-again. Completed batches stay committed, already compressed records are
-skipped, and a failed vacuum can be retried with `decant --no-sync db vacuum`.
-Session IDs, user state, normalized content, and search results are preserved.
+source record and tool result decodes to exactly the stored text before saving
+it, commits bounded batches, and then runs `VACUUM` to return freed pages to
+the filesystem. It prints progress while compressing and before vacuuming. If
+interrupted, run it again. Completed batches stay committed, already compressed
+rows are skipped, and a failed vacuum can be retried with
+`decant --no-sync db vacuum`. Session IDs, user state, normalized content, and
+search results are preserved.
 
 Delete one session tree from the CLI, or use **Delete session** in the web UI:
 

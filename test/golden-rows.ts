@@ -1,13 +1,21 @@
-import { decodeMessageRaw } from "../src/message-storage.ts";
+import { decodeBlockToolResult, decodeMessageRaw } from "../src/message-storage.ts";
 
 export const GOLDEN_NOW = new Date("2026-11-04T22:00:00.000Z");
 
 export function decodeGoldenRows(rows: unknown[]): unknown[] {
   return rows.map((row) => {
-    if (row != null && typeof row === "object" && "raw" in row && row.raw instanceof Uint8Array) {
-      return { ...row, raw: decodeMessageRaw(row.raw) };
+    if (row == null || typeof row !== "object") return row;
+    let next: Record<string, unknown> | null = null;
+    if ("raw" in row && row.raw instanceof Uint8Array) {
+      next = { ...(row as Record<string, unknown>), raw: decodeMessageRaw(row.raw) };
     }
-    return row;
+    if ("tool_result" in row && row.tool_result instanceof Uint8Array) {
+      next = {
+        ...(next ?? (row as Record<string, unknown>)),
+        tool_result: decodeBlockToolResult(row.tool_result),
+      };
+    }
+    return next ?? row;
   });
 }
 

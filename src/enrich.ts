@@ -29,6 +29,35 @@ export interface Facets {
 
 export const ACTIVE_GAP_CAP_SECONDS = 300;
 
+export function isRenderableReply(msg: NormalizedMessage): boolean {
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  for (const blk of msg.blocks) {
+    if (blk.blockType === "tool_use" || blk.blockType === "tool_result") {
+      return true;
+    }
+    if ((blk.blockType === "text" || blk.blockType === "thinking") && blk.text != null) {
+      for (let i = 0; i < blk.text.length; i += 1) {
+        if (blk.text.charCodeAt(i) !== 0x20) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export function countToolUseBlocks(msg: NormalizedMessage): number {
+  let count = 0;
+  for (const blk of msg.blocks) {
+    if (blk.blockType === "tool_use") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** A Pi fork starts at its own header but keeps the history it copied from
  * its parent, dated when the parent wrote it. That time was spent there. */
 export function copiedBeforeStart(
@@ -72,6 +101,35 @@ function isAgentSpawn(tool: NormalizedSession["tool"], toolName: string | null):
 
 function namingTool(session: NormalizedSession): Tool {
   return session.tool === "atif" ? (atifNativeTool(session.rawMeta) ?? "atif") : session.tool;
+}
+
+export function isAgentSpawnTool(
+  tool: NormalizedSession["tool"],
+  toolName: string | null,
+): boolean {
+  return isAgentSpawn(tool, toolName);
+}
+
+export function fileRefsForMessage(
+  tool: Tool,
+  messageIdx: number,
+  message: NormalizedMessage,
+  cwd: string | null,
+): FileRef[] {
+  const refs: FileRef[] = [];
+  for (const block of message.blocks) {
+    if (block.blockType !== "tool_use") {
+      continue;
+    }
+    if (tool === "claude_code") {
+      keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+    } else if (tool === "pi") {
+      keyedRef(PI_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+    } else if (tool === "codex") {
+      codexRefs(messageIdx, message, block, cwd, refs);
+    }
+  }
+  return refs;
 }
 
 export function fileRefs(session: NormalizedSession): FileRef[] {

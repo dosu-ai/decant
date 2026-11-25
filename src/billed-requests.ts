@@ -144,6 +144,66 @@ export function reconcileBilledRequests(
   applyChanges(db, changes, (affected) => affected !== sessionId || refreshReconciledSession);
 }
 
+export interface IncrementalBilledEntry {
+  messageId: number;
+  requestId: string;
+}
+
+export interface IncrementalBilledResult {
+  ownSessionModified: boolean;
+}
+
+export function reconcileBilledRequestsIncremental(
+  db: Database,
+  sessionId: number,
+  entries: readonly IncrementalBilledEntry[],
+  replacedOldMessageIds: ReadonlySet<number>,
+): IncrementalBilledResult {
+  if (entries.length === 0 && replacedOldMessageIds.size === 0) {
+    return { ownSessionModified: false };
+  }
+  const changes: Changes = { removed: new Map(), restored: new Map() };
+  const findOwner = db.prepare<OwnerRow, [string]>(
+    "SELECT session_id, message_id FROM billed_request WHERE request_id = ?1",
+  );
+  const claim = db.prepare(
+    `INSERT INTO billed_request(request_id, session_id, message_id) VALUES (?1, ?2, ?3)
+     ON CONFLICT(request_id) DO UPDATE SET session_id = ?2, message_id = ?3`,
+  );
+  const delUnbilled = db.prepare(
+    "DELETE FROM unbilled_request WHERE session_id = ?1 AND message_id = ?2",
+  );
+  try {
+    for (const oldId of replacedOldMessageIds) {
+      delUnbilled.run(sessionId, oldId);
+    }
+    for (const entry of entries) {
+      if (entry.requestId === "") {
+        continue;
+      }
+      const owner = findOwner.get(entry.requestId);
+      if (owner == null) {
+        claim.run(entry.requestId, sessionId, entry.messageId);
+        continue;
+      }
+      if (owner.session_id === sessionId) {
+        if (owner.message_id !== entry.messageId) {
+          claim.run(entry.requestId, sessionId, entry.messageId);
+        }
+        continue;
+      }
+      settle(db, entry.requestId, { sessionId, messageId: entry.messageId }, NO_SESSIONS, changes);
+    }
+  } finally {
+    delUnbilled.finalize();
+    claim.finalize();
+    findOwner.finalize();
+  }
+  const ownSessionModified = changes.removed.has(sessionId) || changes.restored.has(sessionId);
+  applyChanges(db, changes, (affected) => affected !== sessionId);
+  return { ownSessionModified };
+}
+
 export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): void {
   const gone = new Set(sessionIds);
   const requests = new Set<string>();

@@ -29,169 +29,289 @@ const IGNORED_TOP_LEVEL = new Set([
   "inter_agent_communication_metadata",
 ]);
 
+export interface CodexStepperState {
+  sourceSessionId: string;
+  cwd: string | null;
+  cliVersion: string | null;
+  gitBranch: string | null;
+  model: string | null;
+  reasoningEfforts: string[];
+  startedAt: string | null;
+  endedAt: string | null;
+  title: string | null;
+  isSubagent: boolean;
+  parentThreadId: string | null;
+  agentId: string | null;
+  agentType: string | null;
+  spawnDepth: number | null;
+  totals: TokenUsage;
+  sawTokenCount: boolean;
+  contextWindow: number | null;
+  rawMeta: Json;
+  seq: number;
+  ownSessionId: string | null;
+  historyStartOrdinal: number | null;
+  unknownTypes: Record<string, { count: number; firstLine: number }>;
+  latestAssistant: { seq: number; usage: TokenUsage | null } | null;
+}
+
+export interface CodexLineStepResult {
+  messages: NormalizedMessage[];
+  stampedAssistant?: {
+    seq: number;
+    usage: TokenUsage;
+    previousUsage: TokenUsage | null;
+  };
+}
+
+export function createCodexStepper(fallbackId: string): CodexStepperState {
+  return {
+    sourceSessionId: fallbackId,
+    cwd: null,
+    cliVersion: null,
+    gitBranch: null,
+    model: null,
+    reasoningEfforts: [],
+    startedAt: null,
+    endedAt: null,
+    title: null,
+    isSubagent: false,
+    parentThreadId: null,
+    agentId: null,
+    agentType: null,
+    spawnDepth: null,
+    totals: emptyUsage(),
+    sawTokenCount: false,
+    contextWindow: null,
+    rawMeta: null,
+    seq: 0,
+    ownSessionId: null,
+    historyStartOrdinal: null,
+    unknownTypes: {},
+    latestAssistant: null,
+  };
+}
+
+function trackLatestAssistant(state: CodexStepperState, message: NormalizedMessage): void {
+  if (message.role === "user" || message.role === "system") {
+    state.latestAssistant = null;
+  } else if (message.role === "assistant") {
+    state.latestAssistant = {
+      seq: message.seq,
+      usage: message.usage == null ? null : { ...message.usage },
+    };
+  }
+}
+
+export function stepCodexLine(
+  state: CodexStepperState,
+  line: string,
+  lineNo: number,
+  issues: ParsedSession["issues"],
+): CodexLineStepResult {
+  const value = parseJsonLine(line, lineNo, issues);
+  if (value === undefined) {
+    return { messages: [] };
+  }
+
+  const typ = asString(get(value, "type")) ?? "";
+  const payload = get(value, "payload") ?? null;
+  // A forked subagent's rollout opens with its own session_meta, then
+  // replays the thread it forked from, sometimes with that thread's
+  // session_meta.
+  const metaId = typ === "session_meta" ? asString(get(payload, "id")) : null;
+  const ordinal = asInteger(get(value, "ordinal"));
+  if (
+    (state.ownSessionId != null && metaId != null && metaId !== state.ownSessionId) ||
+    (state.historyStartOrdinal != null && ordinal != null && ordinal < state.historyStartOrdinal)
+  ) {
+    return { messages: [] };
+  }
+
+  const timestamp = asString(get(value, "timestamp"));
+  if (timestamp != null) {
+    state.startedAt ??= timestamp;
+    state.endedAt = timestamp;
+  }
+
+  if (typ === "session_meta") {
+    if (state.ownSessionId == null) {
+      state.historyStartOrdinal = forkHistoryStart(payload);
+    }
+    state.ownSessionId ??= metaId;
+    state.sourceSessionId = metaId ?? state.sourceSessionId;
+    state.gitBranch = asString(get(get(payload, "git"), "branch")) ?? state.gitBranch;
+    state.cwd = asString(get(payload, "cwd")) ?? state.cwd;
+    state.cliVersion = asString(get(payload, "cli_version")) ?? state.cliVersion;
+    const source = get(payload, "source");
+    const subagentSource = get(source, "subagent");
+    const threadSpawn = get(subagentSource, "thread_spawn");
+    state.parentThreadId =
+      asString(get(payload, "parent_thread_id")) ??
+      asString(get(threadSpawn, "parent_thread_id")) ??
+      state.parentThreadId;
+    state.isSubagent =
+      state.isSubagent || subagentSource !== undefined || state.parentThreadId != null;
+    const nickname =
+      asString(get(payload, "agent_nickname")) ?? asString(get(threadSpawn, "agent_nickname"));
+    const role =
+      asString(get(payload, "agent_role")) ??
+      asString(get(threadSpawn, "agent_role")) ??
+      asString(subagentSource);
+    state.agentId = nickname ?? state.agentId;
+    state.agentType = role ?? state.agentType;
+    state.spawnDepth =
+      asInteger(get(threadSpawn, "depth")) ??
+      asInteger(get(payload, "spawn_depth")) ??
+      state.spawnDepth;
+    state.rawMeta = payload;
+    return { messages: [] };
+  }
+
+  if (typ === "turn_context") {
+    state.model = asString(get(payload, "model")) ?? state.model;
+    const effort = recordedReasoningEffort(get(payload, "effort"));
+    if (effort != null && !state.reasoningEfforts.includes(effort)) {
+      state.reasoningEfforts.push(effort);
+    }
+    state.cwd ??= asString(get(payload, "cwd"));
+    return { messages: [] };
+  }
+
+  if (typ === "event_msg" && asString(get(payload, "type")) === "token_count") {
+    const info = get(payload, "info");
+    const nested = get(info, "total_token_usage");
+    const source = nested ?? payload;
+    state.sawTokenCount = true;
+    state.totals = usageFrom(source);
+    state.contextWindow = asInteger(get(info, "model_context_window")) ?? state.contextWindow;
+    const last = get(info, "last_token_usage");
+    if (isObject(last) && state.latestAssistant != null) {
+      const nextUsage = usageFrom(last);
+      const stampedAssistant = {
+        seq: state.latestAssistant.seq,
+        usage: nextUsage,
+        previousUsage: state.latestAssistant.usage,
+      };
+      state.latestAssistant = { seq: state.latestAssistant.seq, usage: { ...nextUsage } };
+      return { messages: [], stampedAssistant };
+    }
+    return { messages: [] };
+  }
+
+  if (typ === "event_msg" && asString(get(payload, "type")) === "mcp_tool_call_end") {
+    // Current Codex rollouts record MCP calls only here: there is no
+    // response_item counterpart, so this event IS the durable copy.
+    const pair = mcpEventMessages(value, payload, state.seq, timestamp);
+    if (pair != null) {
+      state.seq += 2;
+      trackLatestAssistant(state, pair.call);
+      trackLatestAssistant(state, pair.result);
+      return { messages: [pair.call, pair.result] };
+    }
+    return { messages: [] };
+  }
+
+  if (typ === "compacted") {
+    const message = compactedMessage(value, payload, state.seq, timestamp);
+    state.seq += 1;
+    trackLatestAssistant(state, message);
+    return { messages: [message] };
+  }
+
+  if (typ === "response_item") {
+    const message = parseItem(value, payload, state.seq, state.title);
+    if (message != null) {
+      if (message.nextTitle != null) {
+        state.title = message.nextTitle;
+      }
+      state.seq += 1;
+      trackLatestAssistant(state, message.message);
+      return { messages: [message.message] };
+    }
+    return { messages: [] };
+  }
+
+  if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
+    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
+    countUnknown(unknownMap, typ, lineNo);
+    state.unknownTypes = Object.fromEntries(unknownMap);
+  }
+  return { messages: [] };
+}
+
+export function codexSessionFromState(
+  state: CodexStepperState,
+  titles: ReadonlyMap<string, string>,
+  messages: NormalizedMessage[] = [],
+  isArchived = false,
+): NormalizedSession {
+  const title = titles.get(state.sourceSessionId) ?? state.title;
+  const rawMeta =
+    state.contextWindow != null
+      ? {
+          ...(isObject(state.rawMeta) ? state.rawMeta : {}),
+          model_context_window: state.contextWindow,
+        }
+      : state.rawMeta;
+  const effortLevels = reasoningEffortLevels(state.reasoningEfforts);
+
+  return {
+    tool: "codex",
+    sourceSessionId: state.sourceSessionId,
+    projectPath: state.cwd,
+    title,
+    cwd: state.cwd,
+    gitBranch: state.gitBranch,
+    model: state.model,
+    reasoningEffort: summarizeReasoningEfforts(effortLevels),
+    reasoningEffortLevels: effortLevels,
+    cliVersion: state.cliVersion,
+    startedAt: state.startedAt,
+    endedAt: state.endedAt,
+    isArchived,
+    isSubagent: state.isSubagent,
+    rootSourceSessionId: state.parentThreadId,
+    spawnToolUseId: null,
+    agentId: state.agentId ?? (state.isSubagent ? state.sourceSessionId : null),
+    agentType: state.agentType,
+    spawnDepth: state.spawnDepth,
+    rawMeta,
+    totals: state.totals,
+    estReasoningTokens: 0,
+    reasoningSource: state.sawTokenCount ? "reported" : "none",
+    messages,
+  };
+}
+
+export function codexUnknownTypeIssues(state: CodexStepperState): ParsedSession["issues"] {
+  return unknownTypeIssues(new Map(Object.entries(state.unknownTypes)), "ignored");
+}
+
 export function parseCodexSession(
   fallbackId: string,
   content: string,
   titles: ReadonlyMap<string, string>,
 ): ParsedSession {
+  const state = createCodexStepper(fallbackId);
   const issues: ParsedSession["issues"] = [];
   const messages: NormalizedMessage[] = [];
-  let sourceSessionId = fallbackId;
-  let cwd: string | null = null;
-  let cliVersion: string | null = null;
-  let gitBranch: string | null = null;
-  let model: string | null = null;
-  const reasoningEfforts = new Set<string>();
-  let startedAt: string | null = null;
-  let endedAt: string | null = null;
-  let title: string | null = null;
-  let isSubagent = false;
-  let parentThreadId: string | null = null;
-  let agentId: string | null = null;
-  let agentType: string | null = null;
-  let spawnDepth: number | null = null;
-  let totals = emptyUsage();
-  let sawTokenCount = false;
-  let contextWindow: number | null = null;
-  let rawMeta: Json = null;
-  let seq = 0;
-  let ownSessionId: string | null = null;
-  let historyStartOrdinal: number | null = null;
-  const unknownTypes: UnknownTypes = new Map();
 
   for (const [index, line] of content.split(/\n/).entries()) {
-    const value = parseJsonLine(line, index + 1, issues);
-    if (value === undefined) {
-      continue;
+    const step = stepCodexLine(state, line, index + 1, issues);
+    if (step.stampedAssistant != null) {
+      const target = messages[step.stampedAssistant.seq];
+      if (target != null) {
+        messages[step.stampedAssistant.seq] = { ...target, usage: step.stampedAssistant.usage };
+      }
     }
-
-    const typ = asString(get(value, "type")) ?? "";
-    const payload = get(value, "payload") ?? null;
-    // A forked subagent's rollout opens with its own session_meta, then
-    // replays the thread it forked from, sometimes with that thread's
-    // session_meta.
-    const metaId = typ === "session_meta" ? asString(get(payload, "id")) : null;
-    const ordinal = asInteger(get(value, "ordinal"));
-    if (
-      (ownSessionId != null && metaId != null && metaId !== ownSessionId) ||
-      (historyStartOrdinal != null && ordinal != null && ordinal < historyStartOrdinal)
-    ) {
-      continue;
-    }
-
-    const timestamp = asString(get(value, "timestamp"));
-    if (timestamp != null) {
-      startedAt ??= timestamp;
-      endedAt = timestamp;
-    }
-
-    if (typ === "session_meta") {
-      if (ownSessionId == null) {
-        historyStartOrdinal = forkHistoryStart(payload);
-      }
-      ownSessionId ??= metaId;
-      sourceSessionId = metaId ?? sourceSessionId;
-      gitBranch = asString(get(get(payload, "git"), "branch")) ?? gitBranch;
-      cwd = asString(get(payload, "cwd")) ?? cwd;
-      cliVersion = asString(get(payload, "cli_version")) ?? cliVersion;
-      const source = get(payload, "source");
-      const subagentSource = get(source, "subagent");
-      const threadSpawn = get(subagentSource, "thread_spawn");
-      parentThreadId =
-        asString(get(payload, "parent_thread_id")) ??
-        asString(get(threadSpawn, "parent_thread_id")) ??
-        parentThreadId;
-      isSubagent = isSubagent || subagentSource !== undefined || parentThreadId != null;
-      const nickname =
-        asString(get(payload, "agent_nickname")) ?? asString(get(threadSpawn, "agent_nickname"));
-      const role =
-        asString(get(payload, "agent_role")) ??
-        asString(get(threadSpawn, "agent_role")) ??
-        asString(subagentSource);
-      agentId = nickname ?? agentId;
-      agentType = role ?? agentType;
-      spawnDepth =
-        asInteger(get(threadSpawn, "depth")) ??
-        asInteger(get(payload, "spawn_depth")) ??
-        spawnDepth;
-      rawMeta = payload;
-    } else if (typ === "turn_context") {
-      model = asString(get(payload, "model")) ?? model;
-      const effort = recordedReasoningEffort(get(payload, "effort"));
-      if (effort != null) {
-        reasoningEfforts.add(effort);
-      }
-      cwd ??= asString(get(payload, "cwd"));
-    } else if (typ === "event_msg" && asString(get(payload, "type")) === "token_count") {
-      const info = get(payload, "info");
-      const nested = get(info, "total_token_usage");
-      const source = nested ?? payload;
-      sawTokenCount = true;
-      totals = usageFrom(source);
-      contextWindow = asInteger(get(info, "model_context_window")) ?? contextWindow;
-      const last = get(info, "last_token_usage");
-      if (isObject(last)) {
-        stampLatestAssistant(messages, usageFrom(last));
-      }
-    } else if (typ === "event_msg" && asString(get(payload, "type")) === "mcp_tool_call_end") {
-      // Current Codex rollouts record MCP calls only here: there is no
-      // response_item counterpart, so this event IS the durable copy.
-      const pair = mcpEventMessages(value, payload, seq, timestamp);
-      if (pair != null) {
-        messages.push(pair.call, pair.result);
-        seq += 2;
-      }
-    } else if (typ === "compacted") {
-      messages.push(compactedMessage(value, payload, seq, timestamp));
-      seq += 1;
-    } else if (typ === "response_item") {
-      const message = parseItem(value, payload, seq, title);
-      if (message != null) {
-        if (message.nextTitle != null) {
-          title = message.nextTitle;
-        }
-        messages.push(message.message);
-        seq += 1;
-      }
-    } else if (typ !== "event_msg" && !IGNORED_TOP_LEVEL.has(typ)) {
-      countUnknown(unknownTypes, typ, index + 1);
+    for (const message of step.messages) {
+      messages.push(message);
     }
   }
 
-  issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
-
-  title = titles.get(sourceSessionId) ?? title;
-  if (contextWindow != null) {
-    rawMeta = { ...(isObject(rawMeta) ? rawMeta : {}), model_context_window: contextWindow };
-  }
-  const effortLevels = reasoningEffortLevels(reasoningEfforts);
-
-  const normalized: NormalizedSession = {
-    tool: "codex",
-    sourceSessionId,
-    projectPath: cwd,
-    title,
-    cwd,
-    gitBranch,
-    model,
-    reasoningEffort: summarizeReasoningEfforts(effortLevels),
-    reasoningEffortLevels: effortLevels,
-    cliVersion,
-    startedAt,
-    endedAt,
-    isArchived: false,
-    isSubagent,
-    rootSourceSessionId: parentThreadId,
-    spawnToolUseId: null,
-    agentId: agentId ?? (isSubagent ? sourceSessionId : null),
-    agentType,
-    spawnDepth,
-    rawMeta,
-    totals,
-    estReasoningTokens: 0,
-    reasoningSource: sawTokenCount ? "reported" : "none",
-    messages,
-  };
+  issues.push(...codexUnknownTypeIssues(state));
+  const normalized = codexSessionFromState(state, titles, messages);
   issues.push(...linkageIssues(normalized));
 
   return { session: normalized, issues };
@@ -220,21 +340,6 @@ function usageFrom(source: Json | undefined): TokenUsage {
     cacheCreation1h: 0,
     reasoning: getInteger(source, "reasoning_output_tokens"),
   };
-}
-
-/** Readings land after the response items they describe, and the reading
- * right after a compaction is zero. */
-function stampLatestAssistant(messages: NormalizedMessage[], usage: TokenUsage): void {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message == null || message.role === "user" || message.role === "system") {
-      return;
-    }
-    if (message.role === "assistant") {
-      messages[index] = { ...message, usage };
-      return;
-    }
-  }
 }
 
 function compactedMessage(

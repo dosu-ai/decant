@@ -35,37 +35,100 @@ export function piSessionIdFromStem(stem: string): string {
   return separator < 0 || separator === stem.length - 1 ? stem : stem.slice(separator + 1);
 }
 
-export function parsePiSession(fallbackId: string, content: string): ParsedSession {
-  const issues: ParsedSession["issues"] = [];
-  const unknownTypes: UnknownTypes = new Map();
-  const messages: NormalizedMessage[] = [];
-  const toolUses = new Map<string, NormalizedBlock>();
-  const efforts: string[] = [];
-  const outputByModel = new Map<string, number>();
-  const totals = emptyUsage();
+export interface PiStepperState {
+  fallbackId: string;
+  headerRecord: JsonObject | null;
+  sourceSessionId: string | null;
+  cwd: string | null;
+  name: string | null;
+  firstUserText: string | null;
+  currentModel: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  efforts: string[];
+  outputByModel: Record<string, number>;
+  totals: TokenUsage;
+  reasoningReported: boolean;
+  copiedEntries: number;
+  forkedAt: number | null;
+  seq: number;
+  unknownTypes: Record<string, { count: number; firstLine: number }>;
+}
 
-  let headerRecord: JsonObject | null = null;
-  let sourceSessionId: string | null = null;
-  let cwd: string | null = null;
-  let name: string | null = null;
-  let firstUserText: string | null = null;
-  let currentModel: string | null = null;
-  let startedAt: string | null = null;
-  let endedAt: string | null = null;
-  let reasoningReported = false;
-  let copiedEntries = 0;
-  let forkedAt: number | null = null;
+export interface PiLineStepResult {
+  message?: NormalizedMessage;
+  nestedCalls?: {
+    toolCallId: string;
+    inner: NormalizedInnerToolCall[];
+  };
+}
+
+export function createPiStepper(fallbackId: string): PiStepperState {
+  return {
+    fallbackId,
+    headerRecord: null,
+    sourceSessionId: null,
+    cwd: null,
+    name: null,
+    firstUserText: null,
+    currentModel: null,
+    startedAt: null,
+    endedAt: null,
+    efforts: [],
+    outputByModel: {},
+    totals: emptyUsage(),
+    reasoningReported: false,
+    copiedEntries: 0,
+    forkedAt: null,
+    seq: 0,
+    unknownTypes: {},
+  };
+}
+
+export function stepPiLine(
+  state: PiStepperState,
+  line: string,
+  lineNo: number,
+  issues: ParsedSession["issues"],
+): PiLineStepResult {
+  const entry = parseJsonLine(line, lineNo, issues);
+  if (entry === undefined) {
+    return {};
+  }
+  const noteUnknown = (typ: string): void => {
+    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
+    countUnknown(unknownMap, typ, lineNo);
+    state.unknownTypes = Object.fromEntries(unknownMap);
+  };
+  if (!isObject(entry)) {
+    noteUnknown("entry.non_object");
+    return {};
+  }
+  const typ = asString(entry.type);
+  if (typ == null) {
+    noteUnknown("entry.untyped");
+    return {};
+  }
+  const timestamp = entryTimestamp(entry);
   let entryIsCopy = false;
-  let seq = 0;
+  if (typ !== "session") {
+    entryIsCopy = state.forkedAt != null && isCopiedFromParent(timestamp, state.forkedAt);
+    if (!entryIsCopy) {
+      state.forkedAt = null;
+    }
+  }
+  if (timestamp != null && typ !== "session" && !entryIsCopy) {
+    state.startedAt = earlier(state.startedAt, timestamp);
+    state.endedAt = later(state.endedAt, timestamp);
+  }
 
-  const push = (
+  const makeMessage = (
     role: Role,
-    entry: JsonObject,
     blocks: NormalizedBlock[],
     fields: { model?: string | null; usage?: TokenUsage | null; stopReason?: string | null } = {},
-  ): void => {
-    messages.push({
-      seq,
+  ): NormalizedMessage => {
+    const message: NormalizedMessage = {
+      seq: state.seq,
       sourceUuid: asString(entry.id),
       parentSourceUuid: asString(entry.parentId),
       role,
@@ -75,230 +138,241 @@ export function parsePiSession(fallbackId: string, content: string): ParsedSessi
       usage: fields.usage ?? null,
       raw: entry,
       blocks,
-    });
-    seq += 1;
+    };
+    state.seq += 1;
+    return message;
   };
 
-  /** Usage on an entry the session copied from its parent was billed there. */
   const billed = (usage: Json | undefined): TokenUsage | null => {
     const converted = piUsage(usage);
     if (converted == null) {
       return null;
     }
     if (entryIsCopy) {
-      copiedEntries += 1;
+      state.copiedEntries += 1;
       return null;
     }
-    addInto(totals, converted);
-    reasoningReported ||= converted.reasoning > 0;
+    addInto(state.totals, converted);
+    state.reasoningReported ||= converted.reasoning > 0;
     return converted;
   };
 
-  for (const [index, line] of content.split(/\n/).entries()) {
-    const lineNo = index + 1;
-    const entry = parseJsonLine(line, lineNo, issues);
-    if (entry === undefined) {
-      continue;
-    }
-    if (!isObject(entry)) {
-      countUnknown(unknownTypes, "entry.non_object", lineNo);
-      continue;
-    }
-    const typ = asString(entry.type);
-    if (typ == null) {
-      countUnknown(unknownTypes, "entry.untyped", lineNo);
-      continue;
-    }
-    const timestamp = entryTimestamp(entry);
-    if (typ !== "session") {
-      entryIsCopy = forkedAt != null && isCopiedFromParent(timestamp, forkedAt);
-      if (!entryIsCopy) {
-        forkedAt = null;
+  switch (typ) {
+    case "session": {
+      if (state.headerRecord != null) {
+        return {};
       }
-    }
-    if (timestamp != null && typ !== "session" && !entryIsCopy) {
-      startedAt = earlier(startedAt, timestamp);
-      endedAt = later(endedAt, timestamp);
-    }
-
-    switch (typ) {
-      case "session": {
-        if (headerRecord != null) {
-          break;
-        }
-        headerRecord = entry;
-        const headerTime = asString(entry.timestamp);
-        sourceSessionId = asString(entry.id);
-        cwd = asString(entry.cwd);
-        if (headerTime != null) {
-          startedAt = earlier(startedAt, headerTime);
-        }
-        const forked = asString(entry.parentSession) == null ? Number.NaN : timeOf(headerTime);
-        forkedAt = Number.isFinite(forked) ? forked : null;
-        break;
+      state.headerRecord = entry;
+      const headerTime = asString(entry.timestamp);
+      state.sourceSessionId = asString(entry.id);
+      state.cwd = asString(entry.cwd);
+      if (headerTime != null) {
+        state.startedAt = earlier(state.startedAt, headerTime);
       }
-      case "message": {
-        const message = isObject(entry.message) ? entry.message : null;
-        if (message == null) {
-          countUnknown(unknownTypes, "message.missing", lineNo);
-          break;
-        }
-        const role = asString(message.role);
-        switch (role) {
-          case "user": {
-            const blocks = contentBlocks(message.content);
-            const text = firstText(blocks);
-            if (text != null) {
-              firstUserText ??= text;
-            }
-            push("user", entry, blocks);
-            break;
+      const forked = asString(entry.parentSession) == null ? Number.NaN : timeOf(headerTime);
+      state.forkedAt = Number.isFinite(forked) ? forked : null;
+      return {};
+    }
+    case "message": {
+      const message = isObject(entry.message) ? entry.message : null;
+      if (message == null) {
+        noteUnknown("message.missing");
+        return {};
+      }
+      const role = asString(message.role);
+      switch (role) {
+        case "user": {
+          const blocks = contentBlocks(message.content);
+          const text = firstText(blocks);
+          if (text != null) {
+            state.firstUserText ??= text;
           }
-          case "assistant": {
-            const model = asString(message.model) ?? currentModel;
-            const blocks = assistantBlocks(message.content, toolUses);
-            const usage = billed(message.usage);
-            if (model != null && usage != null) {
-              outputByModel.set(model, (outputByModel.get(model) ?? 0) + usage.output);
-            }
-            const error = asString(message.errorMessage);
-            if (error != null && error !== "") {
-              blocks.push(block(blocks.length, "text", { text: error }));
-            }
-            collectEffort(efforts, message.thinkingLevel);
-            push("assistant", entry, blocks, {
+          return { message: makeMessage("user", blocks) };
+        }
+        case "assistant": {
+          const model = asString(message.model) ?? state.currentModel;
+          const blocks = assistantBlocks(message.content);
+          const usage = billed(message.usage);
+          if (model != null && usage != null) {
+            state.outputByModel[model] = (state.outputByModel[model] ?? 0) + usage.output;
+          }
+          const error = asString(message.errorMessage);
+          if (error != null && error !== "") {
+            blocks.push(block(blocks.length, "text", { text: error }));
+          }
+          collectEffort(state.efforts, message.thinkingLevel);
+          return {
+            message: makeMessage("assistant", blocks, {
               model,
               usage,
               stopReason: asString(message.stopReason),
-            });
-            break;
-          }
-          case "toolResult": {
-            const toolCallId = asString(message.toolCallId);
-            const result = block(0, "tool_result", {
-              toolName: asString(message.toolName),
-              toolUseId: toolCallId,
-              toolResult: resultText(message.content),
-              isError: message.isError === true,
-            });
-            const wrapper = toolCallId == null ? undefined : toolUses.get(toolCallId);
-            if (wrapper != null) {
-              const inner = nestedToolCalls(message.nestedCalls, toolCallId);
-              if (inner.length > 0) {
-                wrapper.innerToolCalls = inner;
-              }
-            }
-            push("tool", entry, [result], { usage: billed(message.usage) });
-            break;
-          }
-          case "system": {
-            const text = textOf(message.content);
-            push("system", entry, text === "" ? [] : [block(0, "text", { text })]);
-            break;
-          }
-          case "bashExecution": {
-            push("other", entry, [block(0, "text", { text: bashText(message) })]);
-            break;
-          }
-          // Version 2 named the role `hookMessage`; version 3 renamed it.
-          case "custom":
-          case "hookMessage": {
-            push("other", entry, contentBlocks(message.content));
-            break;
-          }
-          case "branchSummary":
-          case "compactionSummary": {
-            const summary = asString(message.summary) ?? "";
-            push("system", entry, summary === "" ? [] : [block(0, "text", { text: summary })]);
-            break;
-          }
-          default: {
-            countUnknown(
-              unknownTypes,
-              role == null ? "message.no_role" : `message:${role}`,
-              lineNo,
-            );
-            push("other", entry, contentBlocks(message.content));
-          }
+            }),
+          };
         }
-        break;
-      }
-      case "model_change": {
-        currentModel = asString(entry.modelId) ?? currentModel;
-        break;
-      }
-      case "thinking_level_change": {
-        collectEffort(efforts, entry.thinkingLevel);
-        break;
-      }
-      case "usage": {
-        const model = asString(entry.model) ?? currentModel;
-        const usage = billed(entry.usage);
-        if (usage == null) {
-          break;
+        case "toolResult": {
+          const toolCallId = asString(message.toolCallId);
+          const result = block(0, "tool_result", {
+            toolName: asString(message.toolName),
+            toolUseId: toolCallId,
+            toolResult: resultText(message.content),
+            isError: message.isError === true,
+          });
+          const inner = toolCallId == null ? [] : nestedToolCalls(message.nestedCalls, toolCallId);
+          return {
+            message: makeMessage("tool", [result], { usage: billed(message.usage) }),
+            ...(toolCallId != null && inner.length > 0
+              ? { nestedCalls: { toolCallId, inner } }
+              : {}),
+          };
         }
-        if (model != null) {
-          outputByModel.set(model, (outputByModel.get(model) ?? 0) + usage.output);
+        case "system": {
+          const text = textOf(message.content);
+          return {
+            message: makeMessage("system", text === "" ? [] : [block(0, "text", { text })]),
+          };
         }
-        push("other", entry, [], { model, usage });
-        break;
-      }
-      case "compaction":
-      case "branch_summary": {
-        // Pi writes the summary with the session's selected model and records
-        // usage without naming it.
-        const summary = asString(entry.summary) ?? "";
-        push("system", entry, summary === "" ? [] : [block(0, "text", { text: summary })], {
-          model: currentModel,
-          usage: billed(entry.usage),
-        });
-        break;
-      }
-      case "custom_message": {
-        push("other", entry, contentBlocks(entry.content));
-        break;
-      }
-      case "session_info": {
-        const value = asString(entry.name);
-        name = value == null || value.trim() === "" ? null : value.trim();
-        break;
-      }
-      default: {
-        if (!IGNORED_TYPES.has(typ)) {
-          countUnknown(unknownTypes, typ, lineNo);
+        case "bashExecution": {
+          return {
+            message: makeMessage("other", [block(0, "text", { text: bashText(message) })]),
+          };
+        }
+        // Version 2 named the role `hookMessage`; version 3 renamed it.
+        case "custom":
+        case "hookMessage": {
+          return { message: makeMessage("other", contentBlocks(message.content)) };
+        }
+        case "branchSummary":
+        case "compactionSummary": {
+          const summary = asString(message.summary) ?? "";
+          return {
+            message: makeMessage(
+              "system",
+              summary === "" ? [] : [block(0, "text", { text: summary })],
+            ),
+          };
+        }
+        default: {
+          noteUnknown(role == null ? "message.no_role" : `message:${role}`);
+          return { message: makeMessage("other", contentBlocks(message.content)) };
         }
       }
     }
+    case "model_change": {
+      state.currentModel = asString(entry.modelId) ?? state.currentModel;
+      return {};
+    }
+    case "thinking_level_change": {
+      collectEffort(state.efforts, entry.thinkingLevel);
+      return {};
+    }
+    case "usage": {
+      const model = asString(entry.model) ?? state.currentModel;
+      const usage = billed(entry.usage);
+      if (usage == null) {
+        return {};
+      }
+      if (model != null) {
+        state.outputByModel[model] = (state.outputByModel[model] ?? 0) + usage.output;
+      }
+      return { message: makeMessage("other", [], { model, usage }) };
+    }
+    case "compaction":
+    case "branch_summary": {
+      // Pi writes the summary with the session's selected model and records
+      // usage without naming it.
+      const summary = asString(entry.summary) ?? "";
+      return {
+        message: makeMessage(
+          "system",
+          summary === "" ? [] : [block(0, "text", { text: summary })],
+          {
+            model: state.currentModel,
+            usage: billed(entry.usage),
+          },
+        ),
+      };
+    }
+    case "custom_message": {
+      return { message: makeMessage("other", contentBlocks(entry.content)) };
+    }
+    case "session_info": {
+      const value = asString(entry.name);
+      state.name = value == null || value.trim() === "" ? null : value.trim();
+      return {};
+    }
+    default: {
+      if (!IGNORED_TYPES.has(typ)) {
+        noteUnknown(typ);
+      }
+      return {};
+    }
   }
+}
 
-  issues.push(...unknownTypeIssues(unknownTypes, "ignored"));
-
-  const normalized: NormalizedSession = {
+export function piSessionFromState(
+  state: PiStepperState,
+  messages: NormalizedMessage[] = [],
+  isArchived = false,
+): NormalizedSession {
+  return {
     tool: "pi",
-    sourceSessionId: sourceSessionId ?? fallbackId,
-    projectPath: cwd,
-    title: name ?? (firstUserText == null ? null : preview(firstUserText.trim(), 120)),
-    cwd,
+    sourceSessionId: state.sourceSessionId ?? state.fallbackId,
+    projectPath: state.cwd,
+    title:
+      state.name ?? (state.firstUserText == null ? null : preview(state.firstUserText.trim(), 120)),
+    cwd: state.cwd,
     gitBranch: null,
-    model: heaviestModel(outputByModel) ?? currentModel,
-    reasoningEffort: summarizeReasoningEfforts(efforts),
-    reasoningEffortLevels: reasoningEffortLevels(efforts),
+    model: heaviestModel(new Map(Object.entries(state.outputByModel))) ?? state.currentModel,
+    reasoningEffort: summarizeReasoningEfforts(state.efforts),
+    reasoningEffortLevels: reasoningEffortLevels(state.efforts),
     cliVersion: null,
-    startedAt,
-    endedAt,
-    isArchived: false,
+    startedAt: state.startedAt,
+    endedAt: state.endedAt,
+    isArchived,
     isSubagent: false,
     rootSourceSessionId: null,
     spawnToolUseId: null,
     agentId: null,
     agentType: null,
     spawnDepth: null,
-    rawMeta: rawMetaFrom(headerRecord, copiedEntries),
-    totals,
+    rawMeta: rawMetaFrom(state.headerRecord, state.copiedEntries),
+    totals: state.totals,
     estReasoningTokens: 0,
-    reasoningSource: reasoningReported ? "reported" : "none",
+    reasoningSource: state.reasoningReported ? "reported" : "none",
     messages,
   };
+}
+
+export function piUnknownTypeIssues(state: PiStepperState): ParsedSession["issues"] {
+  return unknownTypeIssues(new Map(Object.entries(state.unknownTypes)), "ignored");
+}
+
+export function parsePiSession(fallbackId: string, content: string): ParsedSession {
+  const state = createPiStepper(fallbackId);
+  const issues: ParsedSession["issues"] = [];
+  const messages: NormalizedMessage[] = [];
+  const toolUses = new Map<string, NormalizedBlock>();
+
+  for (const [index, line] of content.split(/\n/).entries()) {
+    const step = stepPiLine(state, line, index + 1, issues);
+    if (step.nestedCalls != null) {
+      const wrapper = toolUses.get(step.nestedCalls.toolCallId);
+      if (wrapper != null) {
+        wrapper.innerToolCalls = step.nestedCalls.inner;
+      }
+    }
+    if (step.message != null) {
+      for (const blk of step.message.blocks) {
+        if (blk.blockType === "tool_use" && blk.toolUseId != null) {
+          toolUses.set(blk.toolUseId, blk);
+        }
+      }
+      messages.push(step.message);
+    }
+  }
+
+  issues.push(...piUnknownTypeIssues(state));
+  const normalized = piSessionFromState(state, messages);
   issues.push(...linkageIssues(normalized));
   return { session: normalized, issues };
 }
@@ -369,10 +443,7 @@ function contentBlocks(content: Json | undefined): NormalizedBlock[] {
   return blocks;
 }
 
-function assistantBlocks(
-  content: Json | undefined,
-  toolUses: Map<string, NormalizedBlock>,
-): NormalizedBlock[] {
+function assistantBlocks(content: Json | undefined): NormalizedBlock[] {
   const blocks: NormalizedBlock[] = [];
   for (const item of Array.isArray(content) ? content : []) {
     const type = asString(get(item, "type"));
@@ -394,9 +465,6 @@ function assistantBlocks(
         toolInput: get(item, "arguments"),
       });
       blocks.push(toolUse);
-      if (id != null) {
-        toolUses.set(id, toolUse);
-      }
     } else if (item != null) {
       blocks.push(block(blocks.length, "other", { text: type }));
     }

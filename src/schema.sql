@@ -1,4 +1,4 @@
--- decant:schema_version=31
+-- decant:schema_version=32
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -69,6 +69,9 @@ CREATE TABLE session (
   work_type TEXT,
   context_window_tokens INTEGER,
   peak_context_tokens INTEGER,
+  reply_count INTEGER,
+  tool_call_count INTEGER,
+  search_count INTEGER,
   UNIQUE(tool, source_session_id)
 );
 CREATE TABLE message (
@@ -145,6 +148,13 @@ CREATE TABLE ingest_source (
   status TEXT,
   error TEXT,
   last_ingested_at TEXT
+);
+CREATE TABLE ingest_checkpoint (
+  path TEXT PRIMARY KEY REFERENCES ingest_source(path) ON DELETE CASCADE,
+  parsed_offset INTEGER NOT NULL,
+  parsed_line_count INTEGER NOT NULL,
+  prefix_hash TEXT NOT NULL,
+  state_blob BLOB NOT NULL
 );
 CREATE TABLE ingest_issue (
   id INTEGER PRIMARY KEY,

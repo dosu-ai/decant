@@ -84,163 +84,325 @@ export interface ClaudeParseOptions {
   sidecarMeta?: Json;
 }
 
-export function parseClaudeSession(
+export interface ClaudeBilledEntry {
+  seq: number;
+  output: number;
+  usage: TokenUsage;
+}
+
+export interface ClaudeStepperState {
+  sourceSessionId: string;
+  rootSourceSessionId: string | null;
+  pathIndicatesSubagent: boolean;
+  sawSidechainRecord: boolean;
+  sawMainRecord: boolean;
+  agentId: string | null;
+  cwd: string | null;
+  gitBranch: string | null;
+  cliVersion: string | null;
+  sessionModel: string | null;
+  reasoningEfforts: string[];
+  resultTotals: TokenUsage | null;
+  messageTotals: TokenUsage;
+  startedAt: string | null;
+  endedAt: string | null;
+  promptTitle: string | null;
+  metadataTitle: string | null;
+  customTitle: string | null;
+  seq: number;
+  modelCounts: Record<string, number>;
+  billed: Record<string, ClaudeBilledEntry>;
+  turns: Record<string, TurnAcc>;
+  settledEstReasoningTokens: number;
+  settledHasThinking: boolean;
+  unknownTypes: Record<string, { count: number; firstLine: number }>;
+  sidecarMeta: Json | null;
+}
+
+export interface ClaudeLineStepResult {
+  message?: NormalizedMessage;
+  requestId?: string | null;
+  unbilledPrevious?: {
+    seq: number;
+    requestId: string;
+    usage: TokenUsage;
+  };
+}
+
+export function createClaudeStepper(
   sourceSessionId: string,
-  content: string,
   options: ClaudeParseOptions = {},
-): ParsedSession {
-  const messages: NormalizedMessage[] = [];
-  const issues: ParsedSession["issues"] = [];
-  const billed = new Map<string, number>();
-  const turns: ReasoningTurns = new Map();
+): ClaudeStepperState {
+  return {
+    sourceSessionId,
+    rootSourceSessionId: null,
+    pathIndicatesSubagent: isSubagentPath(options.sourcePath) || isObject(options.sidecarMeta),
+    sawSidechainRecord: false,
+    sawMainRecord: false,
+    agentId: agentIdFromPath(options.sourcePath),
+    cwd: null,
+    gitBranch: null,
+    cliVersion: null,
+    sessionModel: null,
+    reasoningEfforts: [],
+    resultTotals: null,
+    messageTotals: emptyUsage(),
+    startedAt: null,
+    endedAt: null,
+    promptTitle: null,
+    metadataTitle: null,
+    customTitle: null,
+    seq: 0,
+    modelCounts: {},
+    billed: {},
+    turns: {},
+    settledEstReasoningTokens: 0,
+    settledHasThinking: false,
+    unknownTypes: {},
+    sidecarMeta: options.sidecarMeta ?? null,
+  };
+}
 
-  let rootSourceSessionId: string | null = null;
-  const pathIndicatesSubagent = isSubagentPath(options.sourcePath) || isObject(options.sidecarMeta);
-  let sawSidechainRecord = false;
-  let sawMainRecord = false;
-  let agentId = agentIdFromPath(options.sourcePath);
-  let cwd: string | null = null;
-  let gitBranch: string | null = null;
-  let cliVersion: string | null = null;
-  let sessionModel: string | null = null;
-  const reasoningEfforts = new Set<string>();
-  let resultTotals: TokenUsage | null = null;
-  let startedAt: string | null = null;
-  let endedAt: string | null = null;
-  let promptTitle: string | null = null;
-  let metadataTitle: string | null = null;
-  let customTitle: string | null = null;
-  let seq = 0;
-  const unknownTypes: UnknownTypes = new Map();
-
-  for (const [index, line] of content.split(/\n/).entries()) {
-    const value = parseJsonLine(line, index + 1, issues);
-    if (value === undefined) {
-      continue;
-    }
-
-    const typ = stringAt(value, "type") ?? "";
-    rootSourceSessionId ??= stringAt(value, "sessionId", "session_id");
-    if (asBoolean(get(value, "isSidechain")) === true) {
-      sawSidechainRecord = true;
-    } else if (typ === "user" || typ === "assistant" || typ === "system") {
-      sawMainRecord = true;
-    }
-    agentId ??= stringAt(value, "agentId", "agent_id");
-    const timestamp = stringAt(value, "timestamp");
-    if (timestamp != null) {
-      startedAt ??= timestamp;
-      endedAt = timestamp;
-    }
-    cwd ??= stringAt(value, "cwd");
-    gitBranch ??= stringAt(value, "gitBranch", "git_branch");
-    cliVersion ??= stringAt(value, "version", "cli_version");
-    sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
-    const effort = recordedReasoningEffort(get(value, "effort"));
-    if (effort != null) {
-      reasoningEfforts.add(effort);
-    }
-
-    if (typ === "user") {
-      const message = parseUser(value, seq);
-      if (promptTitle == null && message.role === "user") {
-        const text = firstText(message);
-        if (text != null) {
-          promptTitle = truncate(text, 120);
+export function compactClaudeStepper(
+  state: ClaudeStepperState,
+  maxRecent: number,
+  onEvictRequestId: (requestId: string) => void,
+): void {
+  const turnKeys = Object.keys(state.turns);
+  if (turnKeys.length > maxRecent) {
+    const evictCount = turnKeys.length - maxRecent;
+    for (let i = 0; i < evictCount; i += 1) {
+      const key = turnKeys[i];
+      if (key == null) continue;
+      const turn = state.turns[key];
+      if (turn != null) {
+        if (turn.hasThinking) {
+          state.settledHasThinking = true;
+          state.settledEstReasoningTokens += Math.max(
+            0,
+            turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN),
+          );
+        }
+        delete state.turns[key];
+        if (!key.startsWith("\0seq")) {
+          onEvictRequestId(key);
         }
       }
-      messages.push(message);
-      seq += 1;
-    } else if (typ === "assistant") {
-      const message = parseAssistant(value, seq);
-      const requestId = assistantRequestId(value);
-      addReasoningRecord(turns, requestId ?? `\0seq${seq}`, message);
-      billAssistant(messages, billed, message, requestId);
-      seq += 1;
-    } else if (typ === "system") {
-      messages.push(simpleMessage(value, "system", seq));
-      seq += 1;
-    } else if (typ === "result") {
-      resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
-    } else if (typ === "custom-title") {
-      const renamed = stringAt(value, "customTitle", "title");
-      if (renamed != null && renamed.trim() !== "") {
-        customTitle = truncate(renamed, 120);
-      }
-    } else if (TITLE_META.has(typ)) {
-      if (metadataTitle == null) {
-        const metaTitle = stringAt(value, "summary", "title");
-        if (metaTitle != null) {
-          metadataTitle = truncate(metaTitle, 120);
-        }
-      }
-    } else if (
-      !IGNORED_JOURNAL_META.has(typ) &&
-      !IGNORED_JOURNAL_PREFIXES.some((prefix) => typ.startsWith(prefix))
-    ) {
-      countUnknown(unknownTypes, typ, index + 1);
-      messages.push(simpleMessage(value, "other", seq));
-      seq += 1;
     }
   }
-
-  issues.push(...unknownTypeIssues(unknownTypes, 'kept as role "other"'));
-
-  const messageTotals = emptyUsage();
-  for (const message of messages) {
-    if (message.usage == null) {
-      continue;
+  const billedKeys = Object.keys(state.billed);
+  if (billedKeys.length > maxRecent) {
+    const evictCount = billedKeys.length - maxRecent;
+    for (let i = 0; i < evictCount; i += 1) {
+      const key = billedKeys[i];
+      if (key == null) continue;
+      delete state.billed[key];
+      onEvictRequestId(key);
     }
-    messageTotals.input += message.usage.input;
-    messageTotals.output += message.usage.output;
-    messageTotals.cacheRead += message.usage.cacheRead;
-    messageTotals.cacheCreation += message.usage.cacheCreation;
-    messageTotals.cacheCreation1h += message.usage.cacheCreation1h;
-    messageTotals.reasoning += message.usage.reasoning;
   }
-  const totals = resultTotals ?? messageTotals;
+}
 
-  let estReasoningTokens = reasoningEstimate(turns);
-  if (resultTotals != null) {
-    estReasoningTokens = Math.min(estReasoningTokens, resultTotals.output);
+function addUsageInto(target: TokenUsage, delta: TokenUsage, sign: 1 | -1): void {
+  target.input += sign * delta.input;
+  target.output += sign * delta.output;
+  target.cacheRead += sign * delta.cacheRead;
+  target.cacheCreation += sign * delta.cacheCreation;
+  target.cacheCreation1h += sign * delta.cacheCreation1h;
+  target.reasoning += sign * delta.reasoning;
+}
+
+function noteModelCount(counts: Record<string, number>, model: string | null): void {
+  if (model != null) {
+    counts[model] = (counts[model] ?? 0) + 1;
   }
-  const anyThinking = [...turns.values()].some((turn) => turn.hasThinking);
+}
 
-  const model = primaryModel(messages) ?? sessionModel;
-  const meta = isObject(options.sidecarMeta) ? options.sidecarMeta : {};
+export function stepClaudeLine(
+  state: ClaudeStepperState,
+  line: string,
+  lineNo: number,
+  issues: ParsedSession["issues"],
+): ClaudeLineStepResult {
+  const value = parseJsonLine(line, lineNo, issues);
+  if (value === undefined) {
+    return {};
+  }
+
+  const typ = stringAt(value, "type") ?? "";
+  state.rootSourceSessionId ??= stringAt(value, "sessionId", "session_id");
+  if (asBoolean(get(value, "isSidechain")) === true) {
+    state.sawSidechainRecord = true;
+  } else if (typ === "user" || typ === "assistant" || typ === "system") {
+    state.sawMainRecord = true;
+  }
+  state.agentId ??= stringAt(value, "agentId", "agent_id");
+  const timestamp = stringAt(value, "timestamp");
+  if (timestamp != null) {
+    state.startedAt ??= timestamp;
+    state.endedAt = timestamp;
+  }
+  state.cwd ??= stringAt(value, "cwd");
+  state.gitBranch ??= stringAt(value, "gitBranch", "git_branch");
+  state.cliVersion ??= stringAt(value, "version", "cli_version");
+  state.sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
+  const effort = recordedReasoningEffort(get(value, "effort"));
+  if (effort != null && !state.reasoningEfforts.includes(effort)) {
+    state.reasoningEfforts.push(effort);
+  }
+
+  if (typ === "user") {
+    const message = parseUser(value, state.seq);
+    if (state.promptTitle == null && message.role === "user") {
+      const text = firstText(message);
+      if (text != null) {
+        state.promptTitle = truncate(text, 120);
+      }
+    }
+    state.seq += 1;
+    noteModelCount(state.modelCounts, message.model);
+    return { message };
+  }
+
+  if (typ === "assistant") {
+    const rawMessage = parseAssistant(value, state.seq);
+    const requestId = assistantRequestId(value);
+    const turnKey = requestId ?? `\0seq${state.seq}`;
+    const [output, visible, hasThinking] = lineReasoningInputs(rawMessage);
+    const acc = state.turns[turnKey] ?? { output: 0, visible: 0, hasThinking: false };
+    acc.output = Math.max(acc.output, output);
+    acc.visible += visible;
+    acc.hasThinking ||= hasThinking;
+    state.turns[turnKey] = acc;
+
+    let message = rawMessage;
+    let unbilledPrevious: ClaudeLineStepResult["unbilledPrevious"];
+    if (message.usage != null && requestId != null) {
+      const previous = state.billed[requestId];
+      if (previous == null) {
+        state.billed[requestId] = {
+          seq: message.seq,
+          output: message.usage.output,
+          usage: { ...message.usage },
+        };
+        addUsageInto(state.messageTotals, message.usage, 1);
+      } else if (message.usage.output <= previous.output) {
+        message = { ...message, usage: null };
+      } else {
+        unbilledPrevious = {
+          seq: previous.seq,
+          requestId,
+          usage: { ...previous.usage },
+        };
+        addUsageInto(state.messageTotals, previous.usage, -1);
+        addUsageInto(state.messageTotals, message.usage, 1);
+        state.billed[requestId] = {
+          seq: message.seq,
+          output: message.usage.output,
+          usage: { ...message.usage },
+        };
+      }
+    } else if (message.usage != null) {
+      addUsageInto(state.messageTotals, message.usage, 1);
+    }
+    state.seq += 1;
+    noteModelCount(state.modelCounts, message.model);
+    return { message, requestId, unbilledPrevious };
+  }
+
+  if (typ === "system") {
+    const message = simpleMessage(value, "system", state.seq);
+    state.seq += 1;
+    return { message };
+  }
+
+  if (typ === "result") {
+    state.resultTotals = parseUsage(get(value, "usage")) ?? state.resultTotals;
+    return {};
+  }
+
+  if (typ === "custom-title") {
+    const renamed = stringAt(value, "customTitle", "title");
+    if (renamed != null && renamed.trim() !== "") {
+      state.customTitle = truncate(renamed, 120);
+    }
+    return {};
+  }
+
+  if (TITLE_META.has(typ)) {
+    if (state.metadataTitle == null) {
+      const metaTitle = stringAt(value, "summary", "title");
+      if (metaTitle != null) {
+        state.metadataTitle = truncate(metaTitle, 120);
+      }
+    }
+    return {};
+  }
+
+  if (
+    !IGNORED_JOURNAL_META.has(typ) &&
+    !IGNORED_JOURNAL_PREFIXES.some((prefix) => typ.startsWith(prefix))
+  ) {
+    const unknownMap: UnknownTypes = new Map(Object.entries(state.unknownTypes));
+    countUnknown(unknownMap, typ, lineNo);
+    state.unknownTypes = Object.fromEntries(unknownMap);
+    const message = simpleMessage(value, "other", state.seq);
+    state.seq += 1;
+    return { message };
+  }
+
+  return {};
+}
+
+export function claudeSessionFromState(
+  state: ClaudeStepperState,
+  messages: NormalizedMessage[] = [],
+  isArchived = false,
+): NormalizedSession {
+  const totals = state.resultTotals ?? state.messageTotals;
+  const turnsMap = new Map(Object.entries(state.turns));
+  let estReasoningTokens = state.settledEstReasoningTokens + reasoningEstimate(turnsMap);
+  if (state.resultTotals != null) {
+    estReasoningTokens = Math.min(estReasoningTokens, state.resultTotals.output);
+  }
+  const anyThinking =
+    state.settledHasThinking || [...turnsMap.values()].some((turn) => turn.hasThinking);
+
+  const model = primaryModelFromCounts(state.modelCounts) ?? state.sessionModel;
+  const meta = isObject(state.sidecarMeta) ? state.sidecarMeta : {};
   const spawnToolUseId = asString(meta.toolUseId);
   const agentType =
     asString(meta.subagent_type) ?? asString(meta.subagentType) ?? asString(meta.agentType);
   const spawnDepth = asInteger(meta.spawnDepth);
-  const isSubagent = pathIndicatesSubagent || (sawSidechainRecord && !sawMainRecord);
+  const isSubagent =
+    state.pathIndicatesSubagent || (state.sawSidechainRecord && !state.sawMainRecord);
   const rawMeta: Json = {
-    sessionId: rootSourceSessionId,
+    sessionId: state.rootSourceSessionId,
     isSubagent,
-    agentId,
+    agentId: state.agentId,
     agentType,
     spawnToolUseId,
     spawnDepth,
   };
-  const effortLevels = reasoningEffortLevels(reasoningEfforts);
+  const effortLevels = reasoningEffortLevels(state.reasoningEfforts);
 
-  const normalized: NormalizedSession = {
+  return {
     tool: "claude_code",
-    sourceSessionId,
-    projectPath: cwd,
-    title: customTitle ?? promptTitle ?? metadataTitle,
-    cwd,
-    gitBranch,
+    sourceSessionId: state.sourceSessionId,
+    projectPath: state.cwd,
+    title: state.customTitle ?? state.promptTitle ?? state.metadataTitle,
+    cwd: state.cwd,
+    gitBranch: state.gitBranch,
     model,
     reasoningEffort: summarizeReasoningEfforts(effortLevels),
     reasoningEffortLevels: effortLevels,
-    cliVersion,
-    startedAt,
-    endedAt,
-    isArchived: false,
+    cliVersion: state.cliVersion,
+    startedAt: state.startedAt,
+    endedAt: state.endedAt,
+    isArchived,
     isSubagent,
-    rootSourceSessionId,
+    rootSourceSessionId: state.rootSourceSessionId,
     spawnToolUseId,
-    agentId,
+    agentId: state.agentId,
     agentType,
     spawnDepth,
     rawMeta,
@@ -249,6 +411,36 @@ export function parseClaudeSession(
     reasoningSource: anyThinking ? "inferred" : "none",
     messages,
   };
+}
+
+export function claudeUnknownTypeIssues(state: ClaudeStepperState): ParsedSession["issues"] {
+  return unknownTypeIssues(new Map(Object.entries(state.unknownTypes)), 'kept as role "other"');
+}
+
+export function parseClaudeSession(
+  sourceSessionId: string,
+  content: string,
+  options: ClaudeParseOptions = {},
+): ParsedSession {
+  const state = createClaudeStepper(sourceSessionId, options);
+  const messages: NormalizedMessage[] = [];
+  const issues: ParsedSession["issues"] = [];
+
+  for (const [index, line] of content.split(/\n/).entries()) {
+    const step = stepClaudeLine(state, line, index + 1, issues);
+    if (step.unbilledPrevious != null) {
+      const prev = messages[step.unbilledPrevious.seq];
+      if (prev != null) {
+        messages[step.unbilledPrevious.seq] = { ...prev, usage: null };
+      }
+    }
+    if (step.message != null) {
+      messages.push(step.message);
+    }
+  }
+
+  issues.push(...claudeUnknownTypeIssues(state));
+  const normalized = claudeSessionFromState(state, messages);
   issues.push(...linkageIssues(normalized));
 
   return { session: normalized, issues };
@@ -320,16 +512,9 @@ function firstText(message: NormalizedMessage): string | null {
   return message.blocks.find((block) => block.blockType === "text")?.text ?? null;
 }
 
-function primaryModel(messages: NormalizedMessage[]): string | null {
-  const counts = new Map<string, number>();
-  for (const message of messages) {
-    if (message.model != null) {
-      counts.set(message.model, (counts.get(message.model) ?? 0) + 1);
-    }
-  }
-
+function primaryModelFromCounts(counts: Record<string, number>): string | null {
   let best: { model: string; count: number } | null = null;
-  for (const [model, count] of counts) {
+  for (const [model, count] of Object.entries(counts)) {
     if (best == null || compareModelCandidate(model, count, best.model, best.count) > 0) {
       best = { model, count };
     }
@@ -470,41 +655,6 @@ function parseUsage(value: Json | undefined): TokenUsage | null {
 
 function sourceUuid(value: Json): string | null {
   return stringAt(value, "uuid") ?? stringAt(get(value, "message"), "id");
-}
-
-function billAssistant(
-  messages: NormalizedMessage[],
-  billed: Map<string, number>,
-  message: NormalizedMessage,
-  requestId: string | null,
-): void {
-  if (message.usage == null || requestId == null) {
-    messages.push(message);
-    return;
-  }
-
-  const previous = billed.get(requestId);
-  if (previous == null) {
-    billed.set(requestId, messages.length);
-    messages.push(message);
-    return;
-  }
-
-  if (message.usage.output <= previousOutput(messages, previous)) {
-    messages.push({ ...message, usage: null });
-    return;
-  }
-
-  const previousMessage = messages[previous];
-  if (previousMessage != null) {
-    messages[previous] = { ...previousMessage, usage: null };
-  }
-  billed.set(requestId, messages.length);
-  messages.push(message);
-}
-
-function previousOutput(messages: NormalizedMessage[], index: number): number {
-  return messages[index]?.usage?.output ?? 0;
 }
 
 function textBlock(ordinal: number, text: string): NormalizedBlock {

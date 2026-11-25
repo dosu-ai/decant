@@ -187,6 +187,26 @@ export function computeSessionEconomicsVectors(
   );
 }
 
+export function computeSessionEconomicsVectorsByIds(
+  db: Database,
+  sessionIds: readonly number[],
+): SessionEconomicsVector[] {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
+  const placeholders = sessionIds.map((_, index) => `?${index + 1}`).join(", ");
+  return cachedVectorsForScope(
+    db,
+    `WITH scoped_session AS (
+       SELECT s.id
+       FROM session s
+       WHERE s.id IN (${placeholders}) AND ${visibleSession}
+     )`,
+    [...sessionIds],
+  );
+}
+
 export function economicsVectorMatchesFilter(
   vector: SessionEconomicsVector,
   filter?: DateFilter | null,
@@ -564,7 +584,7 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
   }
 }
 
-function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
+export function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
   runStatement(
     db,
     `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)

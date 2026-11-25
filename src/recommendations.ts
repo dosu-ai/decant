@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
-import { countSearches } from "./buckets.ts";
+import { countSearches, SEARCH_CANDIDATE_TOOLS } from "./buckets.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { mcpServerLabel, mcpServerLabels, mcpServerOrigin } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
@@ -1149,29 +1149,51 @@ function churnFiles(
   });
 }
 
-const SEARCH_CANDIDATE_TOOLS = ["grep", "glob", "bash", "shell", "exec_command", "local_shell"];
-
 function searchHeavy(
   db: Database,
   visibleSession: string,
   since: string,
   projects: Map<string, ProjectRef>,
 ): Candidate[] {
-  const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
-    (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
-  ).join(" OR ");
-  const rows = queryRows<{ root: string; tool_name: string; input: string | null }>(
+  const searchesByRoot = new Map<string, number>();
+  const materialized = queryRows<{ root: string; searches: number }>(
     db,
-    `SELECT ${REPO_KEY} AS root, tc.tool_name AS tool_name, tc.input AS input
-       FROM tool_call tc JOIN session s ON s.id = tc.session_id ${PROJECT_JOIN}
-      WHERE ${WINDOW} AND ${visibleSession} AND (${namePredicate})`,
+    `SELECT ${REPO_KEY} AS root, SUM(s.search_count) AS searches
+       FROM session s ${PROJECT_JOIN}
+      WHERE ${WINDOW} AND ${visibleSession} AND s.search_count IS NOT NULL AND s.search_count > 0
+      GROUP BY root`,
     [since],
   );
-  const searchesByRoot = new Map<string, number>();
-  for (const row of rows) {
-    const found = countSearches(row.tool_name, row.input);
-    if (found > 0) {
-      searchesByRoot.set(row.root, (searchesByRoot.get(row.root) ?? 0) + found);
+  for (const row of materialized) {
+    if (row.searches > 0) {
+      searchesByRoot.set(row.root, row.searches);
+    }
+  }
+  const hasUnmaterialized =
+    queryOne<{ present: number } | null>(
+      db,
+      `SELECT 1 AS present
+         FROM session s ${PROJECT_JOIN}
+        WHERE ${WINDOW} AND ${visibleSession} AND s.search_count IS NULL
+        LIMIT 1`,
+      [since],
+    ) != null;
+  if (hasUnmaterialized) {
+    const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
+      (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
+    ).join(" OR ");
+    const rows = queryRows<{ root: string; tool_name: string; input: string | null }>(
+      db,
+      `SELECT ${REPO_KEY} AS root, tc.tool_name AS tool_name, tc.input AS input
+         FROM tool_call tc JOIN session s ON s.id = tc.session_id ${PROJECT_JOIN}
+        WHERE ${WINDOW} AND ${visibleSession} AND s.search_count IS NULL AND (${namePredicate})`,
+      [since],
+    );
+    for (const row of rows) {
+      const found = countSearches(row.tool_name, row.input);
+      if (found > 0) {
+        searchesByRoot.set(row.root, (searchesByRoot.get(row.root) ?? 0) + found);
+      }
     }
   }
   if (searchesByRoot.size === 0) {

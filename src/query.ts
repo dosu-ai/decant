@@ -888,27 +888,39 @@ export function getSession(
 }
 
 function getSessionTotals(db: Database, id: number): SessionTotals {
-  const row = db
-    .query(
-      `SELECT
-         (SELECT COUNT(*) FROM message m
-           WHERE m.session_id = ?1 AND m.role = 'assistant'
-             AND EXISTS (
-               SELECT 1 FROM block b
-               WHERE b.message_id = m.id
-                 AND (b.type IN ('tool_use', 'tool_result')
-                      OR (b.type IN ('text', 'thinking') AND TRIM(COALESCE(b.text, '')) <> ''))
-             )
-         ) AS reply_count,
-         (SELECT COUNT(*) FROM block b
-           WHERE b.session_id = ?1 AND b.type = 'tool_use'
-         ) AS tool_call_count`,
-    )
-    .get(id) as { reply_count: number; tool_call_count: number } | null;
-  return {
-    reply_count: row?.reply_count ?? 0,
-    tool_call_count: row?.tool_call_count ?? 0,
-  };
+  const stored = db
+    .query("SELECT reply_count, tool_call_count FROM session WHERE id = ?1")
+    .get(id) as { reply_count: number | null; tool_call_count: number | null } | null;
+  if (stored != null && stored.reply_count != null && stored.tool_call_count != null) {
+    return {
+      reply_count: stored.reply_count,
+      tool_call_count: stored.tool_call_count,
+    };
+  }
+  const cached = cachedRead(db, statementKey("sessionTotals", [id]), () => {
+    const row = db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM message m
+             WHERE m.session_id = ?1 AND m.role = 'assistant'
+               AND EXISTS (
+                 SELECT 1 FROM block b
+                 WHERE b.message_id = m.id
+                   AND (b.type IN ('tool_use', 'tool_result')
+                        OR (b.type IN ('text', 'thinking') AND TRIM(COALESCE(b.text, '')) <> ''))
+               )
+           ) AS reply_count,
+           (SELECT COUNT(*) FROM block b
+             WHERE b.session_id = ?1 AND b.type = 'tool_use'
+           ) AS tool_call_count`,
+      )
+      .get(id) as { reply_count: number; tool_call_count: number } | null;
+    return {
+      reply_count: row?.reply_count ?? 0,
+      tool_call_count: row?.tool_call_count ?? 0,
+    };
+  });
+  return { ...cached };
 }
 
 export function getSessionOutline(db: Database, id: number): SessionOutlineItem[] | null {

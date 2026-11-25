@@ -156,8 +156,11 @@ export function deriveModelUsage(db: Database, sessionId: number): ModelUsageRow
     .sort(compareRows);
 }
 
-export function materializeModelUsage(db: Database, sessionId: number): ModelUsageRow[] {
-  const rows = deriveModelUsage(db, sessionId) ?? [];
+export function writeModelUsageRows(
+  db: Database,
+  sessionId: number,
+  rows: readonly ModelUsageRow[],
+): void {
   runStatement(db, "DELETE FROM session_model_usage WHERE session_id = ?1", [sessionId]);
   const insert = db.prepare(
     `INSERT INTO session_model_usage(
@@ -185,6 +188,11 @@ export function materializeModelUsage(db: Database, sessionId: number): ModelUsa
   } finally {
     insert.finalize();
   }
+}
+
+export function materializeModelUsage(db: Database, sessionId: number): ModelUsageRow[] {
+  const rows = deriveModelUsage(db, sessionId) ?? [];
+  writeModelUsageRows(db, sessionId, rows);
   return rows;
 }
 

@@ -17,7 +17,7 @@ import {
   type SchemaManifest,
 } from "./schema-manifest.ts";
 
-export const LATEST_SCHEMA_VERSION = 31;
+export const LATEST_SCHEMA_VERSION = 32;
 
 const logger = getDecantLogger("db");
 let expectedSchemaManifest: SchemaManifest | null = null;
@@ -187,6 +187,21 @@ function isOwnedRegularFile(stats: Stats, uid: number): boolean {
   return stats.isFile() && stats.uid === uid && stats.nlink === 1;
 }
 
+const WRITER_CACHE_SIZE_KB = -8_000;
+const READER_CACHE_SIZE_KB = -4_000;
+const WAL_AUTOCHECKPOINT_PAGES = 4_000;
+const JOURNAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+
+export function configureConnectionPragmas(db: Database, mode: "rw" | "ro"): void {
+  db.exec("PRAGMA mmap_size = 0;");
+  db.exec(`PRAGMA cache_size = ${mode === "rw" ? WRITER_CACHE_SIZE_KB : READER_CACHE_SIZE_KB};`);
+  db.exec("PRAGMA temp_store = MEMORY;");
+  if (mode === "rw") {
+    db.exec(`PRAGMA wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES};`);
+    db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT_BYTES};`);
+  }
+}
+
 export function openDb(path: string): Database {
   // Own the file modes before SQLite touches the path: it creates a database at
   // 0644 and then copies the database file's mode onto every -wal/-shm sidecar
@@ -201,7 +216,7 @@ export function openDb(path: string): Database {
     db.exec("PRAGMA foreign_keys = ON;");
     db.exec("PRAGMA synchronous = NORMAL;");
     negotiateWalMode(db);
-    db.exec("PRAGMA mmap_size = 1073741824;");
+    configureConnectionPragmas(db, "rw");
     ensureSchema(db);
   } catch (error) {
     closeDb(db);
@@ -881,6 +896,27 @@ function migrate(db: Database, current: number): void {
       );
       db.query(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (31, datetime('now'))",
+      ).run();
+    }
+    if (current < 32) {
+      db.exec(`CREATE TABLE IF NOT EXISTS ingest_checkpoint (
+  path TEXT PRIMARY KEY REFERENCES ingest_source(path) ON DELETE CASCADE,
+  parsed_offset INTEGER NOT NULL,
+  parsed_line_count INTEGER NOT NULL,
+  prefix_hash TEXT NOT NULL,
+  state_blob BLOB NOT NULL
+)`);
+      if (!hasColumn(db, "session", "reply_count")) {
+        db.exec("ALTER TABLE session ADD COLUMN reply_count INTEGER");
+      }
+      if (!hasColumn(db, "session", "tool_call_count")) {
+        db.exec("ALTER TABLE session ADD COLUMN tool_call_count INTEGER");
+      }
+      if (!hasColumn(db, "session", "search_count")) {
+        db.exec("ALTER TABLE session ADD COLUMN search_count INTEGER");
+      }
+      db.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (32, datetime('now'))",
       ).run();
     }
     assertSchemaMatchesBaseline(db);

@@ -112,6 +112,7 @@ const BASELINE_TABLES = [
   "block",
   "block_fts",
   "file_ref",
+  "ingest_checkpoint",
   "ingest_issue",
   "ingest_source",
   "message",

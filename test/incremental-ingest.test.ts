@@ -2624,13 +2624,13 @@ describe("Sol review regression coverage (F1-F13)", () => {
       ) as { economics: { valid: boolean } };
       expect(parsedCp.economics.valid).toBe(true);
 
-      // Now append a late thinking block for msg_req-1 (3,025 turns back) and verify it triggers rematerialization.
+      // Now append a late thinking block with msg_req-1 and no requestId so it exercises
+      // foldEconomicsDelta's seenResponseKeys Bloom lookup directly (not claudeEvictedRequests).
       appendFileSync(
         file,
         `${JSON.stringify({
           type: "assistant",
           uuid: "a-1-late-bloom",
-          requestId: "req-1",
           sessionId: "c-bloom-scale",
           cwd: "/home/dev/work/app",
           timestamp: "2026-11-01T11:30:00.000Z",
@@ -2650,6 +2650,16 @@ describe("Sol review regression coverage (F1-F13)", () => {
         })}\n`,
       );
       expect(sync(db, config).ingested).toBe(1);
+      const afterRepeatRow = db
+        .query("SELECT state_blob FROM ingest_checkpoint WHERE path = ?1")
+        .get(file) as { state_blob: Uint8Array } | null;
+      if (afterRepeatRow == null) {
+        throw new Error("expected checkpoint row after repeat");
+      }
+      const afterRepeatCp = JSON.parse(
+        new TextDecoder().decode(Bun.zstdDecompressSync(afterRepeatRow.state_blob)),
+      ) as { economics: { valid: boolean } };
+      expect(afterRepeatCp.economics.valid).toBe(false);
       expect(sync(freshDb, config).ingested).toBe(1);
       assertDatabaseIntegrity(db);
       expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));

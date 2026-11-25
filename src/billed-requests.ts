@@ -196,7 +196,7 @@ export function reconcileBilledRequestsIncremental(
         continue;
       }
       if (owner.session_id === sessionId) {
-        if (owner.message_id !== entry.messageId) {
+        if (replacedOldMessageIds.has(owner.message_id) && owner.message_id !== entry.messageId) {
           claim.run(entry.requestId, sessionId, entry.messageId);
         }
         continue;

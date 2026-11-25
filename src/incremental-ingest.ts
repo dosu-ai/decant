@@ -1515,7 +1515,11 @@ function foldEconomicsDelta(
     }
     if (seenResponses == null) {
       if (deltaRespKeys.size > 0) {
-        econ.seenResponseKeys = buildCompactSet(deltaRespKeys, deltaRespKeys.size);
+        const expected =
+          deltaRespKeys.size > COMPACT_SET_EXACT_LIMIT
+            ? Math.max(deltaRespKeys.size, 2_048)
+            : deltaRespKeys.size;
+        econ.seenResponseKeys = buildCompactSet(deltaRespKeys, expected);
       }
     } else if (deltaRespKeys.size > 0) {
       if (
@@ -1525,7 +1529,10 @@ function foldEconomicsDelta(
         for (const rk of deltaRespKeys) {
           seenResponses.exact.add(rk);
         }
-        econ.seenResponseKeys = buildCompactSet(seenResponses.exact, seenResponses.exact.size);
+        econ.seenResponseKeys = buildCompactSet(
+          seenResponses.exact,
+          Math.max(seenResponses.exact.size, 2_048),
+        );
       } else {
         for (const rk of deltaRespKeys) {
           compactSetAdd(seenResponses, rk);

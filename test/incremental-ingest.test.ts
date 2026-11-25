@@ -2576,4 +2576,69 @@ describe("Sol review regression coverage (F1-F13)", () => {
       closeDb(freshDb);
     }
   });
+
+  test("seenResponseKeys Bloom filter stays unsaturated on large sessions while still catching late response repeats", () => {
+    const { dir, dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-bloom-scale.jsonl");
+    let content = "";
+    for (let i = 1; i <= 250; i += 1) {
+      content += claudeTurn("c-bloom-scale", i, `req-${i}`, 40);
+    }
+    writeFileSync(file, content);
+
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+
+      // Append 20 distinct turns: economics fold must stay valid (not saturate Bloom and disable itself).
+      for (let i = 251; i <= 270; i += 1) {
+        appendFileSync(file, claudeTurn("c-bloom-scale", i, `req-${i}`, 40));
+        expect(sync(db, config).ingested).toBe(1);
+      }
+      const cpRow = db
+        .query("SELECT state_blob FROM ingest_checkpoint WHERE path = ?1")
+        .get(file) as { state_blob: Uint8Array } | null;
+      if (cpRow == null) {
+        throw new Error("expected checkpoint row");
+      }
+      const parsedCp = JSON.parse(
+        new TextDecoder().decode(Bun.zstdDecompressSync(cpRow.state_blob)),
+      ) as { economics: { valid: boolean } };
+      expect(parsedCp.economics.valid).toBe(true);
+
+      // Now append a late thinking block for msg_req-1 (270 turns back) and verify it still triggers rematerialization.
+      appendFileSync(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "a-1-late-bloom",
+          requestId: "req-1",
+          sessionId: "c-bloom-scale",
+          cwd: "/home/dev/work/app",
+          timestamp: "2026-11-01T11:30:00.000Z",
+          message: {
+            id: "msg_req-1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            stop_reason: null,
+            usage: {
+              input_tokens: 101,
+              output_tokens: 40,
+              cache_read_input_tokens: 500,
+              cache_creation_input_tokens: 0,
+            },
+            content: [{ type: "thinking", thinking: "Late thinking after 270 turns" }],
+          },
+        })}\n`,
+      );
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      assertDatabaseIntegrity(db);
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
 });

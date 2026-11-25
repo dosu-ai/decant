@@ -245,7 +245,7 @@ function compactSetAdd(set: MutableCompactKeySet, key: string): void {
   if (set.exact != null) {
     set.exact.add(key);
     if (set.exact.size > COMPACT_SET_EXACT_LIMIT) {
-      const bitCount = bloomBitsForCount(set.exact.size * 4);
+      const bitCount = bloomBitsForCount(Math.max(set.exact.size * 4, 2_048));
       const bits = new Uint8Array(bitCount >> 3);
       const mask = bitCount - 1;
       for (const existing of set.exact) {
@@ -1461,14 +1461,19 @@ function foldEconomicsDelta(
       }
     }
   } else {
-    const seenResponses = openCompactSet(econ.seenResponseKeys);
+    const seenResponses =
+      econ.seenResponseKeys == null ? null : openCompactSet(econ.seenResponseKeys);
+    const deltaRespIds = new Set<string>();
     const byResp = new Map<string, EconBlockInput[]>();
     const respOutput = new Map<string, number>();
     for (const blk of active) {
-      const rk = econResponseKey(blk);
-      if (compactSetHas(seenResponses, rk)) {
-        return false;
+      if (blk.responseId != null) {
+        if (seenResponses != null && compactSetHas(seenResponses, blk.responseId)) {
+          return false;
+        }
+        deltaRespIds.add(blk.responseId);
       }
+      const rk = econResponseKey(blk);
       const list = byResp.get(rk) ?? [];
       list.push(blk);
       byResp.set(rk, list);
@@ -1506,10 +1511,16 @@ function foldEconomicsDelta(
     } else if (!econ.sawMessageOutput && active.length > 0) {
       return false;
     }
-    for (const rk of byResp.keys()) {
-      compactSetAdd(seenResponses, rk);
+    if (seenResponses == null) {
+      if (deltaRespIds.size > 0) {
+        econ.seenResponseKeys = buildCompactSet(deltaRespIds, deltaRespIds.size);
+      }
+    } else if (deltaRespIds.size > 0) {
+      for (const rid of deltaRespIds) {
+        compactSetAdd(seenResponses, rid);
+      }
+      econ.seenResponseKeys = sealCompactSet(seenResponses);
     }
-    econ.seenResponseKeys = sealCompactSet(seenResponses);
   }
 
   for (const id of msgOrder) {

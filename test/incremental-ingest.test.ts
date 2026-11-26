@@ -2624,7 +2624,11 @@ describe("Sol review regression coverage (F1-F13)", () => {
                 buffer.byteOffset + offset,
                 count,
               ).toString();
-              if (attempt === 0) {
+              if (
+                attempt === 0 &&
+                Atomics.load(gate, 0) === 0 &&
+                attempts[0]?.includes("OLDVAL99")
+              ) {
                 Atomics.store(gate, 0, 1);
                 Atomics.notify(gate, 0);
               }

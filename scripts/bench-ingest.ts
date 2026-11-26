@@ -1691,9 +1691,9 @@ async function runReplay(ctx: ReplayContext) {
   const logDir = allocatePrivateDir(logsRoot, `${runStamp}-${options.profile}`);
   const runDir = allocatePrivateDir(options.runDir ?? logsRoot, `${runStamp}-replay`);
   const dbPath = join(runDir, "decant.db");
-  copyDb(ctx.seed.path, dbPath);
   let serveMayBeRunning = false;
   try {
+    copyDb(ctx.seed.path, dbPath);
     return await replayOnCopy(ctx, logDir, runDir, dbPath, (running) => {
       serveMayBeRunning = running;
     });
@@ -2130,16 +2130,16 @@ async function runScaling(options: Options, corpus: CorpusInfo, tag: string) {
     const logDir = allocatePrivateDir(logsRoot, `${runStamp}-scaling-${file.label}`);
     const runDir = allocatePrivateDir(scratchRoot, `${runStamp}-scaling-${file.label}`);
     const dbPath = join(runDir, "decant.db");
-    copyDb(seed.path, dbPath);
-    restore();
-    const env = isolatedEnv(runDir, dbPath, { claude: file.claudeDir }, options.env);
     const strace = (name: string): string | null =>
       options.strace === "off" ? null : join(logDir, `strace-${name}.txt`);
-    console.error(`[bench] scaling ${file.label}: no-op sync + ${SCALING_APPENDS} appends`);
     const appends: Array<SyncMeasurement & { appendBytes: number; fileBytes: number }> = [];
     let noop: SyncMeasurement;
     let files: FileSizes;
     try {
+      copyDb(seed.path, dbPath);
+      restore();
+      const env = isolatedEnv(runDir, dbPath, { claude: file.claudeDir }, options.env);
+      console.error(`[bench] scaling ${file.label}: no-op sync + ${SCALING_APPENDS} appends`);
       noop = await measureSync(env, runDir, strace("noop"));
       requireSyncSucceeded(`scaling ${file.label} no-op sync`, noop);
       let state: LiveAppenderState = {

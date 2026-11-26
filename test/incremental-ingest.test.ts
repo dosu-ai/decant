@@ -3537,4 +3537,92 @@ describe("EconomicsCache across a worker and a server connection", () => {
       closeDb(workerDb);
     }
   });
+
+  test("incremental commit check preserves exact 64-bit bigint device and inode values", () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir as string, "proj", "c-bigint-ino.jsonl");
+    writeFileSync(file, claudeTurn("c-bigint-ino", 1, "req-1"));
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const prior = priorSource(db, file);
+      appendFileSync(file, claudeTurn("c-bigint-ino", 2, "req-2"));
+
+      const devBig = 9007199254740995n;
+      const inoBig = 9007199254740993n;
+      const roundedCollisionIno = 9007199254740992n;
+      expect(Number(inoBig)).toBe(Number(roundedCollisionIno));
+
+      const realStatSync = fs.statSync;
+      const fd = openSync(file, "r");
+      try {
+        const realBig = fstatSync(fd, { bigint: true });
+        const statsBig = Object.assign(Object.create(Object.getPrototypeOf(realBig)), realBig, {
+          dev: devBig,
+          ino: inoBig,
+        });
+        const projected = sourceFileStats(statsBig);
+        expect(projected.dev).toBe(devBig);
+        expect(projected.ino).toBe(inoBig);
+
+        let liveIno = roundedCollisionIno;
+        const statSpy = spyOn(fs, "statSync").mockImplementation(((...args: unknown[]) => {
+          const result = (realStatSync as (...a: unknown[]) => unknown)(...args);
+          if (args[0] === file && typeof (result as { ino?: unknown })?.ino === "bigint") {
+            return Object.assign(Object.create(Object.getPrototypeOf(result)), result, {
+              dev: devBig,
+              ino: liveIno,
+            });
+          }
+          return result;
+        }) as typeof fs.statSync);
+        try {
+          const mismatch = tryIncrementalIngest({
+            db,
+            fd,
+            stats: projected,
+            mtimeNs: statsBig.mtimeNs,
+            ctimeNs: statsBig.ctimeNs,
+            sourcePath: file,
+            tool: "claude_code",
+            archived: false,
+            priorSize: prior.size,
+            priorMtime: prior.mtime,
+            priorSessionId: prior.session_id,
+            ingestRevision: INGEST_PIPELINE_REVISION,
+            expectedRevision: INGEST_PIPELINE_REVISION,
+            sidecarMeta: null,
+            codexTitles: new Map(),
+          });
+          expect(mismatch.kind).toBe("conflict");
+
+          liveIno = inoBig;
+          const match = tryIncrementalIngest({
+            db,
+            fd,
+            stats: projected,
+            mtimeNs: statsBig.mtimeNs,
+            ctimeNs: statsBig.ctimeNs,
+            sourcePath: file,
+            tool: "claude_code",
+            archived: false,
+            priorSize: prior.size,
+            priorMtime: prior.mtime,
+            priorSessionId: prior.session_id,
+            ingestRevision: INGEST_PIPELINE_REVISION,
+            expectedRevision: INGEST_PIPELINE_REVISION,
+            sidecarMeta: null,
+            codexTitles: new Map(),
+          });
+          expect(match.kind).toBe("ingested");
+        } finally {
+          statSpy.mockRestore();
+        }
+      } finally {
+        closeSync(fd);
+      }
+    } finally {
+      closeDb(db);
+    }
+  });
 });

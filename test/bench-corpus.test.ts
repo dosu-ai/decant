@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,10 +20,13 @@ import {
 } from "../scripts/bench-corpus.ts";
 import {
   acquireCorpusLock,
+  allocatePrivateDir,
   cachedCorpusManifest,
   corpusDirFor,
   corpusLockPath,
   corpusNamespace,
+  dockerUserArgs,
+  ensurePrivateDir,
   portableCorpusManifest,
   prepareLockedCorpus,
   readSessionRow,
@@ -173,12 +177,25 @@ describe("bench corpus cache", () => {
     claudeDir: `${dir}/claude`,
     codexDir: `${dir}/codex`,
     copilotDir: `${dir}/copilot`,
-    liveSession: { filePath: `${dir}/claude/-home-dev-work-atlas/live.jsonl` },
+    liveSession: {
+      filePath: `${dir}/claude/-home-dev-work-atlas/live.jsonl`,
+      sessionId: "00000000-0000-4000-8000-00000000live",
+      projectDir: "-home-dev-work-atlas",
+      initialBytes: 1024,
+      lastUuid: "00000000-0000-4000-8000-000000000001",
+      lastTimestampMs: Date.UTC(2026, 10, 1),
+      turnIndex: 1,
+    },
     scalingFiles: [
       {
         label: "1mb",
+        targetMb: 1,
         claudeDir: `${dir}/scaling/1mb/claude`,
         filePath: `${dir}/scaling/1mb/claude/-home-dev-work-atlas/s.jsonl`,
+        sessionId: "00000000-0000-4000-8000-0000000001mb",
+        lastUuid: "00000000-0000-4000-8000-000000000002",
+        lastTimestampMs: Date.UTC(2026, 10, 1),
+        bytes: 1_000_000,
       },
     ],
   };
@@ -189,8 +206,34 @@ describe("bench corpus cache", () => {
 
   test.each([
     ["outDir", { ...manifest, outDir: "/etc" }],
-    ["liveSession", { ...manifest, liveSession: { filePath: "/etc/passwd" } }],
-    ["traversal", { ...manifest, liveSession: { filePath: `${dir}/claude/../../../x.jsonl` } }],
+    [
+      "liveSession",
+      { ...manifest, liveSession: { ...manifest.liveSession, filePath: "/etc/passwd" } },
+    ],
+    [
+      "traversal",
+      {
+        ...manifest,
+        liveSession: {
+          ...manifest.liveSession,
+          filePath: `${dir}/claude/../../../x.jsonl`,
+        },
+      },
+    ],
+    [
+      "missing live timestamp",
+      {
+        ...manifest,
+        liveSession: { ...manifest.liveSession, lastTimestampMs: undefined },
+      },
+    ],
+    [
+      "empty live sessionId",
+      {
+        ...manifest,
+        liveSession: { ...manifest.liveSession, sessionId: "" },
+      },
+    ],
     [
       "scaling file",
       {
@@ -201,6 +244,13 @@ describe("bench corpus cache", () => {
     [
       "scaling label",
       { ...manifest, scalingFiles: [{ ...manifest.scalingFiles[0], label: "../x" }] },
+    ],
+    [
+      "missing scaling timestamp",
+      {
+        ...manifest,
+        scalingFiles: [{ ...manifest.scalingFiles[0], lastTimestampMs: undefined }],
+      },
     ],
     ["missing scaling", { ...manifest, scalingFiles: undefined }],
   ])("rejects a cached manifest with an untrusted %s", (_label, tampered) => {
@@ -270,5 +320,62 @@ describe("bench corpus lock", () => {
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  test("removes a newly created lock if writing the pid fails, without removing an existing lock", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "decant-bench-lock-init-"));
+    try {
+      const lockPath = corpusLockPath(tmp, "pi", 11);
+      expect(() =>
+        acquireCorpusLock(lockPath, () => {
+          throw new Error("disk full");
+        }),
+      ).toThrow(/disk full/);
+      expect(existsSync(lockPath)).toBe(false);
+
+      const release = acquireCorpusLock(lockPath);
+      try {
+        expect(() => acquireCorpusLock(lockPath)).toThrow(/another bench run/);
+        expect(existsSync(lockPath)).toBe(true);
+      } finally {
+        release();
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bench directory and docker helpers", () => {
+  test("rejects an existing non-private work directory without changing its permissions", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "decant-bench-perms-"));
+    try {
+      const shared = join(tmp, "shared");
+      mkdirSync(shared, { mode: 0o770 });
+      chmodSync(shared, 0o770);
+      expect(() => ensurePrivateDir(shared)).toThrow(/private \(0700\)/);
+      expect(statSync(shared).mode & 0o777).toBe(0o770);
+
+      const first = allocatePrivateDir(shared, "run");
+      const second = allocatePrivateDir(shared, "run");
+      expect(first).not.toBe(second);
+      expect(statSync(shared).mode & 0o777).toBe(0o770);
+      expect(statSync(first).mode & 0o777).toBe(0o700);
+      expect(statSync(second).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("maps host uid/gid only for non-root rootful Linux Docker", () => {
+    expect(dockerUserArgs("linux", 1000, 1000, "[name=seccomp]")).toEqual([
+      "-u",
+      "1000:1000",
+      "-e",
+      "HOME=/tmp",
+    ]);
+    expect(dockerUserArgs("linux", 1000, 1000, "[name=rootless]")).toEqual([]);
+    expect(dockerUserArgs("linux", 0, 0, "[name=seccomp]")).toEqual([]);
+    expect(dockerUserArgs("darwin", 501, 20, "[name=seccomp]")).toEqual([]);
   });
 });

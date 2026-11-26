@@ -1987,12 +1987,20 @@ components:
           type: [integer, "null"]
           minimum: 0
         reason:
-          description: What started the running sync. Null when idle and until the sync reports its first progress.
+          description: >-
+            What started the running sync. Null when idle and until a sync started
+            from idle reports its first progress; when a queued sync takes over,
+            may briefly retain the preceding sync's reason until the new sync
+            reports its first update.
           oneOf:
             - $ref: "#/components/schemas/SyncReason"
             - type: "null"
         progress:
-          description: The latest progress of the running sync. Null when idle and until source discovery finishes.
+          description: >-
+            The latest progress of the running sync. Null when idle and until a
+            sync started from idle finishes source discovery; when a queued sync
+            takes over, may briefly retain the preceding sync's progress until the
+            new sync reports its first update.
           oneOf:
             - $ref: "#/components/schemas/SyncProgress"
             - type: "null"

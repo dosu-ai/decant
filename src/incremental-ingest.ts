@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { type BigIntStats, readSync, type Stats, statSync } from "node:fs";
+import { type BigIntStats, readSync, statSync } from "node:fs";
 import { zstdCompressSync, zstdDecompressSync } from "bun";
 import {
   type IncrementalBilledEntry,
@@ -2329,18 +2329,27 @@ function isLiveFileStale(
   ctimeNs?: bigint,
 ): boolean {
   try {
-    if (mtimeNs != null || ctimeNs != null) {
+    if (
+      mtimeNs != null ||
+      ctimeNs != null ||
+      typeof stats.dev === "bigint" ||
+      typeof stats.ino === "bigint"
+    ) {
       const live = statSync(sourcePath, { bigint: true });
-      const dev = BigInt(stats.dev);
-      const ino = BigInt(stats.ino);
+      const dev = typeof stats.dev === "bigint" ? stats.dev : BigInt(stats.dev);
+      const ino = typeof stats.ino === "bigint" ? stats.ino : BigInt(stats.ino);
       const size = BigInt(stats.size);
+      const sameTime =
+        mtimeNs != null || ctimeNs != null
+          ? (mtimeNs == null || live.mtimeNs === mtimeNs) &&
+            (ctimeNs == null || live.ctimeNs === ctimeNs)
+          : Number(live.mtimeNs / 1000n) / 1000 === stats.mtimeMs &&
+            Number(live.ctimeNs / 1000n) / 1000 === stats.ctimeMs;
       return (
         live.dev !== dev ||
         live.ino !== ino ||
         live.size < size ||
-        (live.size === size &&
-          ((mtimeNs != null && live.mtimeNs !== mtimeNs) ||
-            (ctimeNs != null && live.ctimeNs !== ctimeNs)))
+        (live.size === size && !sameTime)
       );
     }
     const live = statSync(sourcePath);
@@ -2356,12 +2365,18 @@ function isLiveFileStale(
   }
 }
 
-export type SourceFileStats = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
+export type SourceFileStats = {
+  dev: number | bigint;
+  ino: number | bigint;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
 
 export function sourceFileStats(stats: BigIntStats): SourceFileStats {
   return {
-    dev: Number(stats.dev),
-    ino: Number(stats.ino),
+    dev: stats.dev,
+    ino: stats.ino,
     size: Number(stats.size),
     mtimeMs: Number(stats.mtimeNs / 1000n) / 1000,
     ctimeMs: Number(stats.ctimeNs / 1000n) / 1000,

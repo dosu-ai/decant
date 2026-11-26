@@ -1,10 +1,19 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeDb, openDb } from "../src/db.ts";
 import { sync } from "../src/ingest.ts";
+import { search } from "../src/query.ts";
 import {
   assertDatabaseIntegrity,
   type CanonicalSnapshot,
@@ -1575,20 +1584,34 @@ describe("incremental ingest and whole-second change detection", () => {
   });
 
   test("a same-size rewrite within the recorded second keeps the archived text because size and whole-second mtime both match", () => {
-    expect(() =>
-      runDifferentialScenario({
-        name: "same-second-same-size",
-        steps: [
-          { label: "first turn", mutations: [write(path, turn(1, "apple"))] },
-          {
-            label: "same-size rewrite in the same second",
-            clock: "hold",
-            mutations: [{ op: "rewrite", path, content: jsonl(turn(1, "grape")) }],
-          },
-        ],
-        queries: ["apple", "grape"],
-      }),
-    ).toThrow();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "decant-same-second-")));
+    const db = openDb(join(dir, "archive.db"));
+    try {
+      const config = isolatedConfig(dir);
+      const file = join(dir, path);
+      mkdirSync(dirname(file), { recursive: true });
+      const firstContent = jsonl(turn(1, "apple"));
+      const secondContent = jsonl(turn(1, "grape"));
+      expect(Buffer.byteLength(secondContent)).toBe(Buffer.byteLength(firstContent));
+      const pinnedSeconds = Math.floor(Date.UTC(2026, 10, 1, 12, 0, 0) / 1000);
+
+      writeFileSync(file, firstContent);
+      utimesSync(file, pinnedSeconds, pinnedSeconds);
+      expect(sync(db, config).ingested).toBe(1);
+
+      writeFileSync(file, secondContent);
+      utimesSync(file, pinnedSeconds, pinnedSeconds);
+      const second = sync(db, config);
+      expect(second.ingested).toBe(0);
+      expect(second.skipped).toBe(1);
+      expect(readFileSync(file, "utf8")).toContain("grape");
+      expect(search(db, "apple").length).toBeGreaterThan(0);
+      expect(search(db, "grape").length).toBe(0);
+      assertDatabaseIntegrity(db);
+    } finally {
+      closeDb(db);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

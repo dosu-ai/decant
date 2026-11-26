@@ -10,6 +10,7 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -106,13 +107,23 @@ interface Options {
   dockerImage: string;
   strace: StraceMode;
   keepRunDb: boolean;
+  lockHeld: boolean;
   serveArgs: string[];
   env: Record<string, string>;
 }
 
 class UsageError extends Error {}
 
-function ensurePrivateDir(dir: string): string {
+export function ensureParentDir(dir: string): string {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stats = lstatSync(dir);
+  if (!stats.isDirectory()) {
+    throw new Error(`${dir} is not a directory`);
+  }
+  return dir;
+}
+
+export function ensurePrivateDir(dir: string): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stats = lstatSync(dir);
   if (!stats.isDirectory()) {
@@ -122,10 +133,19 @@ function ensurePrivateDir(dir: string): string {
   if (uid !== undefined && uid !== 0 && stats.uid !== uid) {
     throw new Error(`${dir} is not owned by the current user`);
   }
-  if ((stats.mode & 0o077) !== 0) {
-    chmodSync(dir, 0o700);
+  const dockerBindMount = dir === CONTAINER_WORK_DIR && existsSync("/.dockerenv");
+  if (!dockerBindMount && (stats.mode & 0o077) !== 0) {
+    const mode = (stats.mode & 0o777).toString(8).padStart(4, "0");
+    throw new Error(
+      `${dir} has permissions ${mode}; pass a private (0700) directory or a new path`,
+    );
   }
   return dir;
+}
+
+export function allocatePrivateDir(parent: string, prefix: string): string {
+  ensureParentDir(parent);
+  return mkdtempSync(join(parent, `${prefix}-`));
 }
 
 function siblingTempPath(target: string): string {
@@ -185,6 +205,7 @@ function parseArgs(argv: string[]): Options | null {
     dockerImage: DEFAULT_IMAGE,
     strace: "launch",
     keepRunDb: false,
+    lockHeld: false,
     serveArgs: [],
     env: {},
   };
@@ -278,6 +299,9 @@ function parseArgs(argv: string[]): Options | null {
       case "--keep-run-db":
         options.keepRunDb = true;
         break;
+      case "--lock-held":
+        options.lockHeld = true;
+        break;
       case "--serve-arg":
         options.serveArgs.push(value());
         break;
@@ -333,6 +357,7 @@ async function ensureDockerImage(image: string): Promise<void> {
 function forwardedArgs(options: Options, outJson: string | null, runDir: string): string[] {
   const args = [
     "--native",
+    "--lock-held",
     "--work-dir",
     CONTAINER_WORK_DIR,
     "--run-dir",
@@ -358,19 +383,49 @@ function forwardedArgs(options: Options, outJson: string | null, runDir: string)
   return args;
 }
 
+export function dockerUserArgs(
+  platform: NodeJS.Platform,
+  uid: number | undefined,
+  gid: number | undefined,
+  securityOptions: string,
+): string[] {
+  if (
+    platform !== "linux" ||
+    uid === undefined ||
+    gid === undefined ||
+    uid === 0 ||
+    securityOptions.includes("name=rootless")
+  ) {
+    return [];
+  }
+  return ["-u", `${uid}:${gid}`, "-e", "HOME=/tmp"];
+}
+
+async function resolveDockerUserArgs(): Promise<string[]> {
+  if (process.platform !== "linux") return [];
+  const info = await runCommand(["docker", "info", "--format", "{{.SecurityOptions}}"]);
+  return dockerUserArgs(
+    process.platform,
+    process.getuid?.(),
+    process.getgid?.(),
+    info.code === 0 ? info.stdout : "",
+  );
+}
+
 async function runInDocker(options: Options): Promise<number> {
   await ensureDockerImage(options.dockerImage);
   ensurePrivateDir(options.workDir);
   const hostWorkDir = realpathSync(options.workDir);
-  const hostRunDir =
-    options.runDir === null ? null : realpathSync(ensurePrivateDir(options.runDir));
+  const hostRunDir = options.runDir === null ? null : realpathSync(ensureParentDir(options.runDir));
   const containerRunDir =
     hostRunDir !== null
       ? CONTAINER_RUN_DIR_MOUNT
       : options.keepRunDb
         ? `${CONTAINER_WORK_DIR}/runs`
         : CONTAINER_RUN_ROOT;
-  const reportName = `report-${Date.now()}.json`;
+  const userArgs = await resolveDockerUserArgs();
+  const releaseLock = acquireCorpusLock(corpusLockPath(hostWorkDir, options.profile, options.seed));
+  const reportName = `report-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}.json`;
   const containerOut =
     options.outJson === null ? null : `${CONTAINER_WORK_DIR}/reports/${reportName}`;
   const name = `decant-bench-${process.pid}-${Date.now()}`;
@@ -380,6 +435,7 @@ async function runInDocker(options: Options): Promise<number> {
     "--rm",
     "--name",
     name,
+    ...userArgs,
     "--cap-add=SYS_PTRACE",
     "--security-opt",
     "seccomp=unconfined",
@@ -397,24 +453,43 @@ async function runInDocker(options: Options): Promise<number> {
     ...forwardedArgs(options, containerOut, containerRunDir),
   ];
   const proc = Bun.spawn(cmd, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+  let exited = false;
+  let stopped = false;
   const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
     Bun.spawnSync(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  const code = await proc.exited;
-  if (options.outJson !== null) {
-    const produced = join(hostWorkDir, "reports", reportName);
-    if (existsSync(produced)) {
-      mkdirSync(dirname(options.outJson), { recursive: true, mode: 0o700 });
-      publishText(options.outJson, readFileSync(produced, "utf8"));
-      unlinkSync(produced);
-      console.error(`[bench] wrote ${options.outJson}`);
-    } else {
-      console.error(`[bench] container did not produce ${produced}`);
+  let code = 1;
+  try {
+    code = await proc.exited;
+    exited = true;
+    if (options.outJson !== null && !stopped) {
+      const produced = join(hostWorkDir, "reports", reportName);
+      try {
+        const contents = readFileSync(produced, "utf8");
+        mkdirSync(dirname(options.outJson), { recursive: true, mode: 0o700 });
+        publishText(options.outJson, contents);
+        unlinkSync(produced);
+        console.error(`[bench] wrote ${options.outJson}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[bench] container did not produce readable report ${produced}: ${message}`);
+        if (code === 0) code = 1;
+      }
     }
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    if (!exited) {
+      stop();
+      await proc.exited.catch(() => {});
+    }
+    releaseLock();
   }
-  return code;
+  return stopped && code === 0 ? 130 : code;
 }
 
 interface ProcIo {
@@ -752,7 +827,12 @@ export function corpusLockPath(workDir: string, profile: string, seed: number): 
   return join(workDir, `.bench-${profile}-${seed}.lock`);
 }
 
-export function acquireCorpusLock(lockPath: string): () => void {
+export function acquireCorpusLock(
+  lockPath: string,
+  writePid: (fd: number) => void = (fd) => {
+    writeSync(fd, `${process.pid}\n`);
+  },
+): () => void {
   let fd: number;
   try {
     fd = openSync(lockPath, "wx", 0o600);
@@ -763,22 +843,27 @@ export function acquireCorpusLock(lockPath: string): () => void {
     throw error;
   }
   try {
-    writeSync(fd, `${process.pid}\n`);
-  } finally {
+    writePid(fd);
+  } catch (error) {
     closeSync(fd);
+    rmSync(lockPath, { force: true });
+    throw error;
   }
+  closeSync(fd);
   return () => rmSync(lockPath, { force: true });
 }
 
-type CorpusOptions = Pick<Options, "workDir" | "profile" | "seed" | "rebuildSeed">;
+type CorpusOptions = Pick<Options, "workDir" | "profile" | "seed" | "rebuildSeed"> & {
+  lockHeld?: boolean;
+};
 
 export async function prepareLockedCorpus(
   options: CorpusOptions,
 ): Promise<{ corpus: CorpusInfo; releaseLock: () => void }> {
   ensurePrivateDir(options.workDir);
-  const releaseLock = acquireCorpusLock(
-    corpusLockPath(options.workDir, options.profile, options.seed),
-  );
+  const releaseLock = options.lockHeld
+    ? () => {}
+    : acquireCorpusLock(corpusLockPath(options.workDir, options.profile, options.seed));
   try {
     return { corpus: await ensureCorpus(options), releaseLock };
   } catch (error) {
@@ -791,6 +876,18 @@ function assertInside(parent: string, child: string): void {
   if (!isInside(parent, child)) {
     throw new Error(`refusing to delete ${child}: outside ${parent}`);
   }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonNegativeInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function trustedCorpusManifest(value: unknown, dir: string): CorpusManifest | null {
@@ -807,8 +904,14 @@ export function trustedCorpusManifest(value: unknown, dir: string): CorpusManife
   const live = value.liveSession;
   if (
     !isRecord(live) ||
-    typeof live.filePath !== "string" ||
-    !isInside(expectedDirs.claudeDir as string, live.filePath)
+    !isNonEmptyString(live.filePath) ||
+    !isInside(expectedDirs.claudeDir as string, live.filePath) ||
+    !isNonEmptyString(live.sessionId) ||
+    !isNonEmptyString(live.projectDir) ||
+    !isNonEmptyString(live.lastUuid) ||
+    !isFiniteNumber(live.lastTimestampMs) ||
+    !isNonNegativeInt(live.initialBytes) ||
+    !isNonNegativeInt(live.turnIndex)
   ) {
     return null;
   }
@@ -819,10 +922,16 @@ export function trustedCorpusManifest(value: unknown, dir: string): CorpusManife
       !isRecord(file) ||
       typeof file.label !== "string" ||
       !/^[a-z0-9]+$/.test(file.label) ||
-      typeof file.claudeDir !== "string" ||
-      typeof file.filePath !== "string" ||
+      !isFiniteNumber(file.targetMb) ||
+      file.targetMb <= 0 ||
+      !isNonEmptyString(file.claudeDir) ||
+      !isNonEmptyString(file.filePath) ||
       !isInside(dir, file.claudeDir) ||
-      !isInside(file.claudeDir, file.filePath)
+      !isInside(file.claudeDir, file.filePath) ||
+      !isNonEmptyString(file.sessionId) ||
+      !isNonEmptyString(file.lastUuid) ||
+      !isFiniteNumber(file.lastTimestampMs) ||
+      !isNonNegativeInt(file.bytes)
     ) {
       return null;
     }
@@ -1137,47 +1246,54 @@ async function ensureSeed(
   }
   console.error(`[bench] seeding ${label} database`);
   restore();
-  const buildDir = join(scratchRoot, `seed-build-${label}-${Date.now()}`);
-  ensurePrivateDir(buildDir);
-  const buildDb = join(buildDir, "decant.db");
-  const env = isolatedEnv(buildDir, buildDb, sources);
-  const measured = await measureSync(env, buildDir, null);
-  const failure = syncFailure(measured);
-  if (failure !== null) {
-    throw new Error(`seed sync for ${label} ${failure}; not caching its database`);
+  const buildDir = allocatePrivateDir(scratchRoot, `seed-build-${label}-${Date.now()}`);
+  try {
+    const buildDb = join(buildDir, "decant.db");
+    const env = isolatedEnv(buildDir, buildDb, sources);
+    const measured = await measureSync(env, buildDir, null);
+    const failure = syncFailure(measured);
+    if (failure !== null) {
+      throw new Error(`seed sync for ${label} ${failure}; not caching its database`);
+    }
+    checkpointAndClose(buildDb);
+    const info: SeedInfo = {
+      path: cachePath,
+      cached: false,
+      durationMs: measured.wallMs,
+      exitCode: measured.exitCode,
+      report: measured.report,
+      files: fileSizes(buildDb),
+      inspection: inspectDb(buildDb, { integrity: false }),
+    };
+    publishCopy(buildDb, cachePath);
+    publishText(metaPath, `${JSON.stringify(info, null, 2)}\n`);
+    return info;
+  } finally {
+    assertInside(scratchRoot, buildDir);
+    rmSync(buildDir, { recursive: true, force: true });
   }
-  checkpointAndClose(buildDb);
-  const info: SeedInfo = {
-    path: cachePath,
-    cached: false,
-    durationMs: measured.wallMs,
-    exitCode: measured.exitCode,
-    report: measured.report,
-    files: fileSizes(buildDb),
-    inspection: inspectDb(buildDb, { integrity: false }),
-  };
-  publishCopy(buildDb, cachePath);
-  publishText(metaPath, `${JSON.stringify(info, null, 2)}\n`);
-  assertInside(scratchRoot, buildDir);
-  rmSync(buildDir, { recursive: true, force: true });
-  return info;
 }
 
 class Api {
   constructor(readonly base: string) {}
 
-  async get(path: string): Promise<unknown> {
-    const response = await fetch(`${this.base}${path}`, { signal: AbortSignal.timeout(15_000) });
+  private signal(cancel?: AbortSignal): AbortSignal {
+    const timeout = AbortSignal.timeout(15_000);
+    return cancel === undefined ? timeout : AbortSignal.any([timeout, cancel]);
+  }
+
+  async get(path: string, cancel?: AbortSignal): Promise<unknown> {
+    const response = await fetch(`${this.base}${path}`, { signal: this.signal(cancel) });
     if (!response.ok) throw new Error(`GET ${path} -> ${response.status}`);
     return (await response.json()) as unknown;
   }
 
-  async post(path: string, body: unknown): Promise<unknown> {
+  async post(path: string, body: unknown, cancel?: AbortSignal): Promise<unknown> {
     const response = await fetch(`${this.base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      signal: this.signal(cancel),
     });
     if (!response.ok) throw new Error(`POST ${path} -> ${response.status}`);
     return (await response.json()) as unknown;
@@ -1383,10 +1499,9 @@ async function runReplay(ctx: ReplayContext) {
   const { options, corpus } = ctx;
   const live = corpus.manifest.liveSession;
   const runStamp = stamp();
-  const logDir = join(options.workDir, "runs", `${runStamp}-${options.profile}`);
-  const runDir = join(options.runDir ?? join(options.workDir, "runs"), `${runStamp}-replay`);
-  ensurePrivateDir(logDir);
-  ensurePrivateDir(runDir);
+  const logsRoot = ensurePrivateDir(join(options.workDir, "runs"));
+  const logDir = allocatePrivateDir(logsRoot, `${runStamp}-${options.profile}`);
+  const runDir = allocatePrivateDir(options.runDir ?? logsRoot, `${runStamp}-replay`);
   const dbPath = join(runDir, "decant.db");
   copyDb(ctx.seed.path, dbPath);
   restoreSource(liveOrigPath(corpus.dir), live.filePath, pinnedMtimeSec(live.lastTimestampMs));
@@ -1434,171 +1549,246 @@ async function runReplay(ctx: ReplayContext) {
     } catch {}
   };
   process.on("exit", cleanup);
-  const servePid = options.strace === "launch" ? await childPid(proc.pid) : proc.pid;
-  const api = new Api(`http://127.0.0.1:${port}`);
-
-  await waitFor("GET /api/health", 120_000, async () =>
-    (await fetch(`${api.base}/api/health`)).ok ? true : null,
-  );
-  const healthMs = performance.now() - spawnedAt;
-  await waitFor("startup sync", 1_800_000, async () =>
-    syncIdle(await api.get("/api/sync-status")) ? true : null,
-  );
-  const startupSyncMs = performance.now() - spawnedAt;
-  const initialSession = readSessionRow(dbPath, live.sessionId);
-  const sessionId = initialSession.id;
-  const initialMessageCount = initialSession.messageCount;
-  let scannedOffset = initialMessageCount;
-
-  const events: SseEvent[] = [];
-  let triggerCheck: () => void = () => undefined;
-  const sse = streamEvents(api, (event) => {
-    events.push(event);
-    if (event.type === "archive_updated") triggerCheck();
-  });
-
+  let servePid = proc.pid;
+  let sampler: ReturnType<typeof setInterval> | null = null;
+  let poller: ReturnType<typeof setInterval> | null = null;
+  let sse: AbortController | null = null;
   let attachProc: ReturnType<typeof Bun.spawn> | null = null;
-  if (options.strace === "attach") {
-    attachProc = Bun.spawn([...straceArgs(straceFile), "-p", String(servePid)], {
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: Bun.file(join(logDir, "strace.attach.log")),
-    });
-    await Bun.sleep(1_000);
-  }
-
-  const markers: MarkerRecord[] = [];
-  let acceptResults = true;
-  let checking = false;
-  let rerun = false;
-  let checksRun = 0;
-  const check = async (): Promise<void> => {
-    if (checking) {
-      rerun = true;
-      return;
+  const drainAbort = new AbortController();
+  let serverStopped = false;
+  const stopServer = async (): Promise<{ shutdownMs: number; exitCode: number | null }> => {
+    if (sampler !== null) {
+      clearInterval(sampler);
+      sampler = null;
     }
-    checking = true;
+    if (poller !== null) {
+      clearInterval(poller);
+      poller = null;
+    }
+    sse?.abort();
+    sse = null;
+    drainAbort.abort();
+    if (attachProc !== null) {
+      try {
+        attachProc.kill("SIGINT");
+      } catch {}
+      await attachProc.exited.catch(() => {});
+      attachProc = null;
+    }
+    const stopAt = performance.now();
     try {
-      do {
-        rerun = false;
-        const pendingApi = markers.filter((m) => m.apiMs === null);
-        const pendingFts = markers.filter((m) => m.ftsMs === null);
-        if (pendingApi.length === 0 && pendingFts.length === 0) break;
-        checksRun += 1;
-        if (pendingApi.length > 0) {
-          let offset = Math.max(0, scannedOffset - 20);
-          for (let page = 0; page < 10; page += 1) {
-            const detail = sessionDetailPage(
-              await api.get(
-                `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
-              ),
-            );
-            if (!acceptResults) return;
-            const seenAt = performance.now();
-            const text = detail.searchableText;
-            for (const marker of pendingApi) {
-              if (marker.apiMs === null && text.includes(`${marker.marker} `)) {
-                marker.apiMs = seenAt - marker.appendedAtMs;
+      process.kill(servePid, "SIGTERM");
+    } catch {}
+    const exitCode = await Promise.race([proc.exited, Bun.sleep(30_000).then(() => null)]);
+    const shutdownMs = performance.now() - stopAt;
+    if (exitCode === null) {
+      cleanup();
+      await proc.exited.catch(() => {});
+    }
+    process.off("exit", cleanup);
+    serverStopped = true;
+    return { shutdownMs, exitCode };
+  };
+
+  let healthMs = 0;
+  let startupSyncMs = 0;
+  let sessionId = 0;
+  let initialMessageCount = 0;
+  const events: SseEvent[] = [];
+  const markers: MarkerRecord[] = [];
+  let checksRun = 0;
+  const samples: Array<ProcSnapshot & { tSec: number }> = [];
+  let start!: ProcSnapshot;
+  let end!: ProcSnapshot;
+  let t0 = 0;
+  let t0Wall = 0;
+  let t1Wall = 0;
+  let appendedBytes = 0;
+  let resolvedInWindow = 0;
+  let shutdownMs = 0;
+  let exitCode: number | null = null;
+
+  try {
+    servePid = options.strace === "launch" ? await childPid(proc.pid) : proc.pid;
+    const api = new Api(`http://127.0.0.1:${port}`);
+
+    await waitFor("GET /api/health", 120_000, async () =>
+      (await fetch(`${api.base}/api/health`)).ok ? true : null,
+    );
+    healthMs = performance.now() - spawnedAt;
+    await waitFor("startup sync", 1_800_000, async () =>
+      syncIdle(await api.get("/api/sync-status")) ? true : null,
+    );
+    startupSyncMs = performance.now() - spawnedAt;
+    const initialSession = readSessionRow(dbPath, live.sessionId);
+    sessionId = initialSession.id;
+    initialMessageCount = initialSession.messageCount;
+    let scannedOffset = initialMessageCount;
+
+    let triggerCheck: () => void = () => undefined;
+    sse = streamEvents(api, (event) => {
+      events.push(event);
+      if (event.type === "archive_updated") triggerCheck();
+    });
+
+    if (options.strace === "attach") {
+      attachProc = Bun.spawn([...straceArgs(straceFile), "-p", String(servePid)], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: Bun.file(join(logDir, "strace.attach.log")),
+      });
+      await Bun.sleep(1_000);
+    }
+
+    let acceptResults = true;
+    let activeCheck: Promise<void> | null = null;
+    let rerun = false;
+    const check = (): Promise<void> => {
+      if (activeCheck !== null) {
+        rerun = true;
+        return activeCheck;
+      }
+      activeCheck = (async () => {
+        try {
+          do {
+            rerun = false;
+            if (!acceptResults || drainAbort.signal.aborted) break;
+            const hasPendingApi = markers.some((m) => m.apiMs === null);
+            const pendingFts = markers.filter((m) => m.ftsMs === null);
+            if (!hasPendingApi && pendingFts.length === 0) break;
+            checksRun += 1;
+            if (hasPendingApi) {
+              let offset = Math.max(0, scannedOffset - 20);
+              for (let page = 0; page < 10; page += 1) {
+                if (!acceptResults || drainAbort.signal.aborted) return;
+                const detail = sessionDetailPage(
+                  await api.get(
+                    `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
+                    drainAbort.signal,
+                  ),
+                );
+                if (!acceptResults || drainAbort.signal.aborted) return;
+                const seenAt = performance.now();
+                const text = detail.searchableText;
+                for (const marker of markers) {
+                  if (marker.apiMs === null && text.includes(`${marker.marker} `)) {
+                    marker.apiMs = seenAt - marker.appendedAtMs;
+                  }
+                }
+                offset += detail.messageCountOnPage;
+                scannedOffset = Math.max(scannedOffset, offset);
+                if (!detail.hasMoreMessages) break;
               }
             }
-            offset += detail.messageCountOnPage;
-            scannedOffset = Math.max(scannedOffset, offset);
-            if (!detail.hasMoreMessages) break;
+            for (const marker of pendingFts) {
+              if (!acceptResults || drainAbort.signal.aborted) return;
+              const result = await api.post(
+                "/api/search",
+                {
+                  query: marker.marker,
+                  include_subagents: true,
+                  include_total: false,
+                  limit: 5,
+                },
+                drainAbort.signal,
+              );
+              if (!acceptResults || drainAbort.signal.aborted) return;
+              if (searchHitCount(result) > 0)
+                marker.ftsMs = performance.now() - marker.appendedAtMs;
+            }
+          } while (rerun && acceptResults && !drainAbort.signal.aborted);
+        } catch (error) {
+          if (acceptResults && !drainAbort.signal.aborted) {
+            console.error(`[bench] freshness check failed: ${error}`);
           }
+        } finally {
+          activeCheck = null;
         }
-        for (const marker of pendingFts) {
-          const result = await api.post("/api/search", {
-            query: marker.marker,
-            include_subagents: true,
-            include_total: false,
-            limit: 5,
-          });
-          if (!acceptResults) return;
-          if (searchHitCount(result) > 0) marker.ftsMs = performance.now() - marker.appendedAtMs;
-        }
-      } while (rerun);
-    } catch (error) {
-      console.error(`[bench] freshness check failed: ${error}`);
-    } finally {
-      checking = false;
+      })();
+      return activeCheck;
+    };
+    triggerCheck = () => void check();
+
+    start = snapshot(servePid, dbPath);
+    t0 = start.tMs;
+    t0Wall = Date.now() / 1000;
+    const t1 = t0 + options.durationSec * 1000;
+    samples.push({ ...start, tSec: 0 });
+    sampler = setInterval(() => {
+      try {
+        const sample = snapshot(servePid, dbPath);
+        samples.push({ ...sample, tSec: round((sample.tMs - t0) / 1000) });
+      } catch {}
+    }, SAMPLE_INTERVAL_MS);
+    poller = setInterval(() => void check(), FRESHNESS_POLL_MS);
+
+    console.error(
+      `[bench] replay window ${options.durationSec}s, one append every ${options.cadenceMs} ms (serve pid ${servePid}, port ${port})`,
+    );
+    let state: LiveAppenderState = {
+      sessionId: live.sessionId,
+      projectDir: live.projectDir,
+      lastUuid: live.lastUuid,
+      lastTimestampMs: live.lastTimestampMs,
+      turnIndex: live.turnIndex,
+    };
+    for (let seq = 0; ; seq += 1) {
+      const due = t0 + seq * options.cadenceMs;
+      if (due >= t1) break;
+      const wait = due - performance.now();
+      if (wait > 0) await Bun.sleep(wait);
+      const kind = LIVE_CHUNK_PATTERN[seq % LIVE_CHUNK_PATTERN.length] ?? "tool_burst";
+      const marker = `${MARKER_PREFIX}${String(seq + 1).padStart(6, "0")}`;
+      const chunk = generateLiveAppendChunk(state, { kind, marker });
+      const body = `${seq === 0 && needsLeadingNewline ? "\n" : ""}${chunk.lines.join("\n")}\n`;
+      appendFileSync(live.filePath, body);
+      const appendedAtMs = performance.now();
+      const bytes = Buffer.byteLength(body);
+      appendedBytes += bytes;
+      state = chunk.nextState;
+      markers.push({ seq: seq + 1, marker, kind, bytes, appendedAtMs, apiMs: null, ftsMs: null });
     }
-  };
-  triggerCheck = () => void check();
+    const remaining = t1 - performance.now();
+    if (remaining > 0) await Bun.sleep(remaining);
+    end = snapshot(servePid, dbPath);
+    t1Wall = Date.now() / 1000;
+    clearInterval(sampler);
+    sampler = null;
+    samples.push({ ...end, tSec: round((end.tMs - t0) / 1000) });
+    resolvedInWindow = markers.filter(
+      (m) =>
+        m.apiMs !== null && m.ftsMs !== null && m.appendedAtMs + Math.max(m.apiMs, m.ftsMs) <= t1,
+    ).length;
 
-  const samples: Array<ProcSnapshot & { tSec: number }> = [];
-  const start = snapshot(servePid, dbPath);
-  const t0 = start.tMs;
-  const t0Wall = Date.now() / 1000;
-  const t1 = t0 + options.durationSec * 1000;
-  samples.push({ ...start, tSec: 0 });
-  const sampler = setInterval(() => {
+    const drainDeadline = performance.now() + DRAIN_TIMEOUT_MS;
+    const drainTimer = setTimeout(() => {
+      acceptResults = false;
+      drainAbort.abort();
+    }, DRAIN_TIMEOUT_MS);
     try {
-      const sample = snapshot(servePid, dbPath);
-      samples.push({ ...sample, tSec: round((sample.tMs - t0) / 1000) });
-    } catch {}
-  }, SAMPLE_INTERVAL_MS);
-  const poller = setInterval(() => void check(), FRESHNESS_POLL_MS);
+      while (
+        performance.now() < drainDeadline &&
+        markers.some((m) => m.apiMs === null || m.ftsMs === null)
+      ) {
+        await check();
+        const left = drainDeadline - performance.now();
+        if (left <= 0 || markers.every((m) => m.apiMs !== null && m.ftsMs !== null)) break;
+        await Bun.sleep(Math.min(FRESHNESS_POLL_MS, left));
+      }
+    } finally {
+      clearTimeout(drainTimer);
+      acceptResults = false;
+      drainAbort.abort();
+    }
 
-  console.error(
-    `[bench] replay window ${options.durationSec}s, one append every ${options.cadenceMs} ms (serve pid ${servePid}, port ${port})`,
-  );
-  let state: LiveAppenderState = {
-    sessionId: live.sessionId,
-    projectDir: live.projectDir,
-    lastUuid: live.lastUuid,
-    lastTimestampMs: live.lastTimestampMs,
-    turnIndex: live.turnIndex,
-  };
-  let appendedBytes = 0;
-  for (let seq = 0; ; seq += 1) {
-    const due = t0 + seq * options.cadenceMs;
-    if (due >= t1) break;
-    const wait = due - performance.now();
-    if (wait > 0) await Bun.sleep(wait);
-    const kind = LIVE_CHUNK_PATTERN[seq % LIVE_CHUNK_PATTERN.length] ?? "tool_burst";
-    const marker = `${MARKER_PREFIX}${String(seq + 1).padStart(6, "0")}`;
-    const chunk = generateLiveAppendChunk(state, { kind, marker });
-    const body = `${seq === 0 && needsLeadingNewline ? "\n" : ""}${chunk.lines.join("\n")}\n`;
-    appendFileSync(live.filePath, body);
-    const appendedAtMs = performance.now();
-    const bytes = Buffer.byteLength(body);
-    appendedBytes += bytes;
-    state = chunk.nextState;
-    markers.push({ seq: seq + 1, marker, kind, bytes, appendedAtMs, apiMs: null, ftsMs: null });
+    const stopped = await stopServer();
+    shutdownMs = stopped.shutdownMs;
+    exitCode = stopped.exitCode;
+  } finally {
+    if (!serverStopped) {
+      await stopServer();
+    }
   }
-  const remaining = t1 - performance.now();
-  if (remaining > 0) await Bun.sleep(remaining);
-  const end = snapshot(servePid, dbPath);
-  const t1Wall = Date.now() / 1000;
-  clearInterval(sampler);
-  samples.push({ ...end, tSec: round((end.tMs - t0) / 1000) });
-  const resolvedInWindow = markers.filter(
-    (m) =>
-      m.apiMs !== null && m.ftsMs !== null && m.appendedAtMs + Math.max(m.apiMs, m.ftsMs) <= t1,
-  ).length;
-
-  const drainDeadline = performance.now() + DRAIN_TIMEOUT_MS;
-  while (
-    performance.now() < drainDeadline &&
-    markers.some((m) => m.apiMs === null || m.ftsMs === null)
-  ) {
-    await check();
-    await Bun.sleep(FRESHNESS_POLL_MS);
-  }
-  acceptResults = false;
-  clearInterval(poller);
-  sse.abort();
-
-  if (attachProc !== null) {
-    attachProc.kill("SIGINT");
-    await attachProc.exited;
-  }
-  const stopAt = performance.now();
-  process.kill(servePid, "SIGTERM");
-  const exitCode = await Promise.race([proc.exited, Bun.sleep(30_000).then(() => null)]);
-  const shutdownMs = performance.now() - stopAt;
-  if (exitCode === null) cleanup();
-  process.off("exit", cleanup);
 
   const windowFsync =
     options.strace === "off" ? null : countFsyncs(straceFile, servePid, t0Wall, t1Wall);
@@ -1732,10 +1922,9 @@ async function runScaling(options: Options, corpus: CorpusInfo, tag: string) {
       scratchRoot,
     );
     const runStamp = stamp();
-    const logDir = join(options.workDir, "runs", `${runStamp}-scaling-${file.label}`);
-    const runDir = join(scratchRoot, `${runStamp}-scaling-${file.label}`);
-    ensurePrivateDir(logDir);
-    ensurePrivateDir(runDir);
+    const logsRoot = ensurePrivateDir(join(options.workDir, "runs"));
+    const logDir = allocatePrivateDir(logsRoot, `${runStamp}-scaling-${file.label}`);
+    const runDir = allocatePrivateDir(scratchRoot, `${runStamp}-scaling-${file.label}`);
     const dbPath = join(runDir, "decant.db");
     copyDb(seed.path, dbPath);
     restore();
@@ -1926,7 +2115,11 @@ async function runNative(options: Options): Promise<number> {
   }
   ensurePrivateDir(options.workDir);
   const scratchRoot = options.runDir ?? join(options.workDir, "runs");
-  ensurePrivateDir(scratchRoot);
+  if (options.runDir === null) {
+    ensurePrivateDir(scratchRoot);
+  } else {
+    ensureParentDir(scratchRoot);
+  }
   const tag = await schemaTag();
   const { corpus, releaseLock } = await prepareLockedCorpus(options);
   const live = corpus.manifest.liveSession;
@@ -1964,6 +2157,7 @@ async function runNative(options: Options): Promise<number> {
     releaseLock();
   }
 
+  const { lockHeld: _lockHeld, ...publicOptions } = options;
   const report = {
     tool: "decant-bench-ingest",
     reportVersion: 1,
@@ -1978,7 +2172,7 @@ async function runNative(options: Options): Promise<number> {
       bunVersion: Bun.version,
       inContainer: existsSync("/.dockerenv"),
     },
-    options: { ...options, env: Object.keys(options.env).sort() },
+    options: { ...publicOptions, env: Object.keys(options.env).sort() },
     schemaTag: tag,
     corpus: {
       dir: corpus.dir,

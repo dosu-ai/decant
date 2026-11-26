@@ -3881,9 +3881,9 @@ describe("Codex spawn candidate order", () => {
       join(day, `rollout-2026-11-01T10-00-00-${parentId}.jsonl`),
       line("2026-11-01T10:00:00.000Z", "session_meta", { id: parentId, cwd: "/home/dev/app" }) +
         call("call_early", "2026-11-01T10:00:02.000Z") +
-        output("call_early", "2026-11-01T10:00:03.000Z") +
-        call("call_late", "2026-11-01T10:00:04.000Z") +
-        output("call_late", "2026-11-01T10:00:05.000Z"),
+        call("call_late", "2026-11-01T10:00:03.000Z") +
+        output("call_late", "2026-11-01T10:00:04.000Z") +
+        output("call_early", "2026-11-01T10:00:05.000Z"),
     );
     writeFileSync(
       join(day, `rollout-2026-11-01T10-00-09-${childId}.jsonl`),
@@ -3921,7 +3921,7 @@ describe("Codex spawn candidate order", () => {
       const earlyResult = blockId("call_early", "tool_result");
       const top = (db.query("SELECT MAX(id) AS id FROM block").get() as { id: number }).id;
       expect(earlyCall).toBeLessThan(blockId("call_late", "tool_use"));
-      expect(earlyResult).toBeLessThan(blockId("call_late", "tool_result"));
+      expect(earlyResult).toBeGreaterThan(blockId("call_late", "tool_result"));
       db.exec("PRAGMA foreign_keys = OFF;");
       try {
         withImmediateTransaction(db, () => {
@@ -3929,12 +3929,7 @@ describe("Codex spawn candidate order", () => {
             earlyCall,
             top + 1000,
           );
-          db.query("UPDATE tool_call SET result_block_id = ?2 WHERE result_block_id = ?1").run(
-            earlyResult,
-            top + 1001,
-          );
           db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(earlyCall, top + 1000);
-          db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(earlyResult, top + 1001);
           db.query(
             "UPDATE session SET spawn_tool_use_id = NULL, parent_session_id = NULL WHERE source_session_id = ?1",
           ).run(childId);
@@ -3942,6 +3937,10 @@ describe("Codex spawn candidate order", () => {
       } finally {
         db.exec("PRAGMA foreign_keys = ON;");
       }
+      expect(blockId("call_early", "tool_use")).toBeGreaterThan(blockId("call_late", "tool_use"));
+      expect(blockId("call_early", "tool_result")).toBeGreaterThan(
+        blockId("call_late", "tool_result"),
+      );
 
       resolveSubagentParents(db);
       expect(spawnToolUseId()).toBe("call_late");
@@ -4248,6 +4247,95 @@ describe("Codex parent thread on append", () => {
       expect((db.query("SELECT COUNT(*) AS n FROM message").get() as { n: number }).n).toBe(2);
     } finally {
       closeDb(db);
+    }
+  });
+
+  test("parentSessionId changes trigger fallback and a trailing parentless session_meta preserves the new parent", () => {
+    const { dir, dbPath, config } = freshCase();
+    const parentA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const parentB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const childId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    const parentRollout = (parentId: string, callId: string, startSec: string) =>
+      line(`2026-11-01T10:00:${startSec}.000Z`, "session_meta", {
+        id: parentId,
+        cwd: "/home/dev/app",
+      }) +
+      line(`2026-11-01T10:00:${startSec}.100Z`, "response_item", {
+        type: "function_call",
+        name: "spawn_agent",
+        arguments: "{}",
+        call_id: callId,
+      }) +
+      line(`2026-11-01T10:00:${startSec}.200Z`, "response_item", {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({ agent_id: childId, status: "spawned" }),
+      });
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-01-${parentA}.jsonl`),
+      parentRollout(parentA, "call_a", "01"),
+    );
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-02-${parentB}.jsonl`),
+      parentRollout(parentB, "call_b", "02"),
+    );
+    const childFile = join(day, `rollout-2026-11-01T10-00-05-${childId}.jsonl`);
+    writeFileSync(
+      childFile,
+      line("2026-11-01T10:00:05.000Z", "session_meta", {
+        id: childId,
+        cwd: "/home/dev/app",
+        parentSessionId: parentA,
+      }) +
+        line("2026-11-01T10:00:06.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "go" }],
+        }),
+    );
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 3, failed: 0 });
+      const link = (target: Database) =>
+        target
+          .query(
+            `SELECT c.spawn_tool_use_id, p.source_session_id AS parent
+               FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+              WHERE c.source_session_id = ?1`,
+          )
+          .get(childId);
+      expect(link(db)).toEqual({ spawn_tool_use_id: "call_a", parent: parentA });
+
+      appendFileSync(
+        childFile,
+        line("2026-11-01T10:00:07.000Z", "session_meta", {
+          id: childId,
+          cwd: "/home/dev/app",
+          parentSessionId: parentB,
+        }) +
+          line("2026-11-01T10:00:08.000Z", "session_meta", {
+            id: childId,
+            cwd: "/home/dev/app",
+          }) +
+          line("2026-11-01T10:00:09.000Z", "response_item", {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "done" }],
+          }),
+      );
+      expect(attemptIncremental(db, childFile)).toBe("fallback");
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(sync(freshDb, config)).toMatchObject({ ingested: 3, failed: 0 });
+      expect(link(freshDb)).toEqual({ spawn_tool_use_id: "call_b", parent: parentB });
+      expect(link(db)).toEqual(link(freshDb));
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
     }
   });
 });

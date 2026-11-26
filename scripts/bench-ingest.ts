@@ -1910,7 +1910,7 @@ async function replayOnCopy(
         if (!checksHalted()) {
           console.error(`[bench] freshness check failed: ${error}`);
         }
-        return false;
+        return !checksHalted();
       }
     });
     triggerCheck = () => void check();

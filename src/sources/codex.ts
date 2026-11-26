@@ -149,6 +149,7 @@ export function stepCodexLine(
     state.parentThreadId =
       asString(get(payload, "parent_thread_id")) ??
       asString(get(threadSpawn, "parent_thread_id")) ??
+      asString(get(payload, "parentSessionId")) ??
       state.parentThreadId;
     state.isSubagent =
       state.isSubagent || subagentSource !== undefined || state.parentThreadId != null;
@@ -245,11 +246,23 @@ export function codexSessionFromState(
   isArchived = false,
 ): NormalizedSession {
   const title = titles.get(state.sourceSessionId) ?? state.title;
+  const metaObj = isObject(state.rawMeta) ? state.rawMeta : null;
+  const metaParent =
+    metaObj == null
+      ? null
+      : (asString(get(metaObj, "parent_thread_id")) ??
+        asString(
+          get(get(get(get(metaObj, "source"), "subagent"), "thread_spawn"), "parent_thread_id"),
+        ) ??
+        asString(get(metaObj, "parentSessionId")));
+  const needsContextWindow = state.contextWindow != null;
+  const needsParent = state.parentThreadId != null && metaParent == null;
   const rawMeta =
-    state.contextWindow != null
+    needsContextWindow || needsParent
       ? {
-          ...(isObject(state.rawMeta) ? state.rawMeta : {}),
-          model_context_window: state.contextWindow,
+          ...(metaObj ?? {}),
+          ...(needsContextWindow ? { model_context_window: state.contextWindow } : {}),
+          ...(needsParent ? { parent_thread_id: state.parentThreadId } : {}),
         }
       : state.rawMeta;
   const effortLevels = reasoningEffortLevels(state.reasoningEfforts);

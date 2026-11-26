@@ -1714,8 +1714,17 @@ describe("search parity across the result cutoff", () => {
     });
     const hits = result.fts[0]?.search.hits ?? [];
     expect(hits).toEqual([
-      { cutoff_tie: { score: expect.any(Number), returned: 100, group_size: 120 } },
+      {
+        cutoff_tie: {
+          score: expect.any(Number),
+          returned: 100,
+          group_size: 120,
+          candidates: expect.any(Array),
+        },
+      },
     ]);
+    const cutoff = (hits[0] as { cutoff_tie: { candidates: string[] } }).cutoff_tie;
+    expect(cutoff.candidates).toHaveLength(120);
   });
 });
 
@@ -1741,5 +1750,33 @@ describe("scenario hooks", () => {
         ],
       }),
     ).toThrow("afterSync must be synchronous");
+  });
+
+  test("a rejecting async afterSync hook fails cleanly without an unhandled rejection", async () => {
+    const rejectingHook = (async () => {
+      throw new Error("boom");
+    }) as unknown as (db: Database) => undefined;
+    expect(() =>
+      runDifferentialScenario({
+        name: "rejecting async hook",
+        queries: [],
+        steps: [
+          {
+            label: "write",
+            mutations: [
+              {
+                op: "write",
+                path: claudePath("hook-reject"),
+                content: jsonl([
+                  cUser("hook-reject", "u1", null, "2026-11-01T10:00:00.000Z", "hi"),
+                ]),
+              },
+            ],
+            afterSync: rejectingHook,
+          },
+        ],
+      }),
+    ).toThrow("afterSync must be synchronous");
+    await Bun.sleep(10);
   });
 });

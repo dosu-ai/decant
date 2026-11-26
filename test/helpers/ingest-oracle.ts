@@ -22,6 +22,8 @@ import { type SyncReport, sync } from "../../src/ingest.ts";
 import { decodeBlockToolResult, decodeMessageRaw } from "../../src/message-storage.ts";
 import { searchPage } from "../../src/query.ts";
 import { buildFtsQuery } from "../../src/search-query.ts";
+import { sessionUserStatePredicateForDatabase } from "../../src/session-user-state.ts";
+import { visibleSessionPredicate } from "../../src/session-visibility.ts";
 
 type Scalar = string | number | null;
 type Row = Record<string, unknown>;
@@ -245,13 +247,30 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
         score: match?.score ?? null,
       };
     });
+    const eligible = rows(
+      db,
+      `SELECT b.id AS block_id, ${SESSION_KEY_SQL} AS session_key, m.seq AS message_seq,
+              b.ordinal AS block_ordinal,
+              bm25(block_fts, 4.0, 2.0, 1.0) AS raw_score,
+              ROUND(bm25(block_fts, 4.0, 2.0, 1.0), 9) AS score
+         FROM block_fts
+         JOIN block b ON b.id = block_fts.rowid
+         JOIN message m ON m.id = b.message_id
+         JOIN session s ON s.id = b.session_id
+        WHERE block_fts MATCH ?1
+          AND ${visibleSessionPredicate("s")}
+          AND ${sessionUserStatePredicateForDatabase(db, "s")}`,
+      [buildFtsQuery(query)],
+    );
     const cutoff = ranked.length >= SEARCH_PAGE_LIMIT ? ranked.at(-1)?.raw_score : undefined;
-    const tieGroup = scored.filter((row) => cutoff !== undefined && row.raw_score === cutoff);
+    const tieGroup = eligible.filter((row) => cutoff !== undefined && row.raw_score === cutoff);
     const returnedAtCutoff = ranked.filter((row) => row.raw_score === cutoff);
     const cutoffSplitsTie = cutoff !== undefined && tieGroup.length > returnedAtCutoff.length;
+    const candidates = cutoffSplitsTie ? tieGroup.map(identity).sort() : [];
     if (cutoffSplitsTie) {
-      const members = new Set(tieGroup.map(identity));
+      const members = new Set(candidates);
       expect(returnedAtCutoff.filter((row) => !members.has(identity(row)))).toEqual([]);
+      expect(new Set(returnedAtCutoff.map(identity)).size).toBe(returnedAtCutoff.length);
     }
     const kept = cutoffSplitsTie ? ranked.filter((row) => row.raw_score !== cutoff) : ranked;
     const hits = sortedWithinTies(kept, (row) => row.raw_score, tieKey).map((row) =>
@@ -263,6 +282,7 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
           score: returnedAtCutoff[0]?.score ?? null,
           returned: returnedAtCutoff.length,
           group_size: tieGroup.length,
+          candidates,
         },
       });
     }
@@ -375,6 +395,14 @@ export function runDifferentialScenario(scenario: DifferentialScenario): Differe
       if (afterSync !== undefined) {
         const returned: unknown = afterSync(incremental);
         if (returned !== undefined) {
+          if (
+            typeof returned === "object" &&
+            returned !== null &&
+            "catch" in returned &&
+            typeof (returned as { catch?: unknown }).catch === "function"
+          ) {
+            (returned as Promise<unknown>).catch(() => {});
+          }
           throw new Error(`${stepName}: afterSync must be synchronous and return nothing`);
         }
         assertDatabaseIntegrity(incremental);

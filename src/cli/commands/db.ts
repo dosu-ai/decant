@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { compactMessageStorage } from "../../message-storage.ts";
+import { compactBlockToolResultStorage, compactMessageStorage } from "../../message-storage.ts";
 import type { Archive, CliContext } from "../context.ts";
 
 interface DbInfo {
@@ -16,6 +16,8 @@ interface DbInfo {
   text_bytes?: number;
   compressed_messages?: number;
   raw_stored_bytes?: number;
+  compressed_tool_results?: number;
+  tool_result_stored_bytes?: number;
 }
 
 export function registerDbCommands(ctx: CliContext): void {
@@ -53,6 +55,12 @@ export function registerDbCommands(ctx: CliContext): void {
           if (row.raw_stored_bytes != null) {
             fields.push(["raw_stored_bytes", row.raw_stored_bytes]);
           }
+          if (row.compressed_tool_results != null) {
+            fields.push(["compressed_tool_results", row.compressed_tool_results]);
+          }
+          if (row.tool_result_stored_bytes != null) {
+            fields.push(["tool_result_stored_bytes", row.tool_result_stored_bytes]);
+          }
           ctx.output(row, () =>
             fields.map(([label, value]) => `${`${label}:`.padEnd(16)}${value}\n`).join(""),
           );
@@ -74,26 +82,43 @@ export function registerDbCommands(ctx: CliContext): void {
     );
   dbCommand
     .command("compact")
-    .description("losslessly compress retained source records and reclaim free space")
+    .description(
+      "losslessly compress retained source records and tool results and reclaim free space",
+    )
     .action(() =>
       ctx.run(() =>
         ctx.withArchive(
           (archive) => {
             io.writeErr("compressing retained source records\n");
             let lastProgress = Date.now();
-            const result = compactMessageStorage(archive.db, (progress) => {
+            const messages = compactMessageStorage(archive.db, (progress) => {
               if (Date.now() - lastProgress < 1_000) return;
               io.writeErr(
                 `compressed ${progress.compressed} messages, saved ${progress.saved_bytes} bytes\n`,
               );
               lastProgress = Date.now();
             });
+            io.writeErr("compressing tool results\n");
+            lastProgress = Date.now();
+            const toolResults = compactBlockToolResultStorage(archive.db, (progress) => {
+              if (Date.now() - lastProgress < 1_000) return;
+              io.writeErr(
+                `compressed ${progress.compressed} tool results, saved ${progress.saved_bytes} bytes\n`,
+              );
+              lastProgress = Date.now();
+            });
             io.writeErr("vacuuming archive to reclaim free pages\n");
             archive.db.exec("VACUUM;");
+            const result = {
+              ...messages,
+              tool_results_scanned: toolResults.scanned,
+              tool_results_compressed: toolResults.compressed,
+              tool_results_saved_bytes: toolResults.saved_bytes,
+            };
             ctx.output(
               result,
               () =>
-                `compressed ${result.compressed} messages, saved ${result.saved_bytes} source-record bytes\n`,
+                `compressed ${messages.compressed} messages (saved ${messages.saved_bytes} bytes) and ${toolResults.compressed} tool results (saved ${toolResults.saved_bytes} bytes)\n`,
             );
           },
           { sync: false },
@@ -147,17 +172,22 @@ function dbInfo(archive: Archive, options: { includeFullScanTotals?: boolean } =
                     (SELECT COALESCE(SUM(COALESCE(raw_bytes, OCTET_LENGTH(raw))), 0) FROM message)
                     + (SELECT COALESCE(SUM(OCTET_LENGTH(COALESCE(text, ''))
                                           + OCTET_LENGTH(COALESCE(tool_input, ''))
-                                          + OCTET_LENGTH(COALESCE(tool_result, ''))), 0)
+                                          + COALESCE(tool_result_bytes, OCTET_LENGTH(COALESCE(tool_result, '')))), 0)
                        FROM block) AS text_bytes,
                     (SELECT COUNT(*) FROM message WHERE typeof(raw) = 'blob') AS compressed_messages,
                     (SELECT COALESCE(SUM(OCTET_LENGTH(raw) + COALESCE(OCTET_LENGTH(raw_meta), 0)), 0)
-                       FROM message) AS raw_stored_bytes`,
+                       FROM message) AS raw_stored_bytes,
+                    (SELECT COUNT(*) FROM block WHERE typeof(tool_result) = 'blob') AS compressed_tool_results,
+                    (SELECT COALESCE(SUM(OCTET_LENGTH(tool_result)), 0)
+                       FROM block WHERE tool_result IS NOT NULL) AS tool_result_stored_bytes`,
           )
           .get() as {
           fts_rows: number;
           text_bytes: number;
           compressed_messages: number;
           raw_stored_bytes: number;
+          compressed_tool_results: number;
+          tool_result_stored_bytes: number;
         })
       : null;
   return {

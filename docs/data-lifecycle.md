@@ -136,14 +136,44 @@ By default Decant discovers:
 - Pi session files under `~/.pi/agent/sessions/--<cwd>--/`, or the directory
   from `--pi-dir`, `DECANT_PI_DIR`, or the `sessions` directory under
   `PI_CODING_AGENT_DIR`, in that order. Each file is one session, read
-  read-only, and Decant re-reads the whole file when it changes.
+  read-only.
 
 VS Code mutation logs are replayed in order. Malformed initial states, paths,
 and array updates produce diagnostics and are skipped without discarding the
 last valid state, and later valid updates still apply. Mutation paths cannot
 replace an object's prototype.
 
-`decant sync` inserts new sessions and replaces changed ones transactionally.
+`decant sync` inserts new sessions and updates changed ones transactionally.
+For append-only JSONL logs (Claude Code, Codex, and Pi), Decant stores a
+bounded per-file parser and fold checkpoint in `ingest_checkpoint` alongside a
+sampled hash of the already-ingested prefix (its first 32 KiB and its last
+32 KiB). When a file grows past its previously ingested byte size and its
+sampled prefix hash still matches, Decant reads and writes only the newly
+appended lines, matching open tool calls, usage totals, context windows, and
+economics vectors in place. The new checkpoint's hash comes from the verified
+head and tail samples plus the appended bytes it just parsed, never from a
+second read of the file, so bytes Decant has not ingested never enter it. Truncation, same-size rewrites that change the
+file's size or whole-second modification time, prefix rewrites within the
+sampled regions, torn-line corrections that alter prior state, and
+cross-session billed-request adjustments fall back automatically to a full
+re-parse of that file. Two edits go unseen until something else changes the
+file. A rewrite that keeps the size and lands in the whole second the archive
+already recorded is skipped, because size and whole-second modification time
+both match. An in-place edit that grows a file and changes bytes only outside
+the sampled prefix regions is read as an append, so the archive keeps the old
+prefix. A later full re-parse of that file corrects either one, and no archive
+rebuild is needed. A later edit inside the sampled regions, a truncation, or a
+new ingest pipeline revision triggers that re-parse. A file whose checkpoint
+would hold more than 512 unanswered tool calls, more than 512 tool results
+without a matching call, or more than 256 KiB of pending call data keeps no
+checkpoint and is re-parsed in full each time it changes. Full re-parses
+(including Copilot CLI, Gemini CLI, VS Code
+Copilot Chat, OpenCode, Cursor CLI, Hermes Agent, and ATIF) diff existing
+messages, blocks, tool calls, and file references in place so unchanged blocks
+keep their row IDs and avoid churning the full-text index. Both paths also
+materialize per-session reply, tool-call, and search counts on the `session`
+row (with SQL fallback for pre-existing rows that leave them null) so paginated
+session reads and recommendation scans do not re-scan full transcripts.
 Unchanged files are skipped by size and modification-time checks (for a Cursor
 chat, the existence, size, and nanosecond modification time of each of
 `store.db`, `store.db-wal`, and `meta.json` if present, since a running chat appends to
@@ -182,7 +212,20 @@ archive stays linear in its size; see
 combines native filesystem events with a periodic sweep so missed notifications
 do not leave the archive stale. Events are debounced so a burst of writes becomes
 one sync, and a log an agent keeps writing still syncs about every 5 seconds
-instead of waiting for the agent to pause. OpenCode database directories are watched
+instead of waiting for the agent to pause. When a native event names an
+individual transcript file, the watch sync inspects only the changed paths and
+defers archive-wide recommendation refreshes to the periodic sweep or to manual
+and startup syncs. `decant serve` keeps one sync connection, so its sweep
+refreshes recommendations at most once every 5 minutes during continuous
+background activity. `decant watch` opens a fresh connection for each run, so
+each of its sweeps refreshes recommendations whenever an earlier sync left them
+pending. A recommendation refresh that runs while another sync's lineage and
+worktree updates are still pending keeps the refresh pending, so the sync that
+settles those updates refreshes recommendations again. Once a server's sync connection has finished its first full sync, its
+watch syncs skip the archive-wide repricing pass and its periodic sweeps run it
+at most once every 5 minutes. Startup, manual, and CLI syncs always run it. A filesystem event that arrives while another
+sync is running waits for the next run instead of joining the running one,
+which may already have read that file. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
 file event, the watcher also checks each database and its `-wal` file every 2
 seconds by size and modification time, even with `--no-fs-watch`. The watcher
@@ -202,7 +245,9 @@ A profile created later is found by the periodic sweep.
 Sync repairs Copilot compaction metadata from retained message records and
 recomputes affected context peaks. This also works for compressed messages
 whose original journals are gone. Records without a pre-compaction token count
-keep it unavailable, and completed repairs are skipped on later syncs.
+keep it unavailable, and completed repairs are skipped on later syncs. A
+retained record that cannot be decoded is left as it is and logged by message
+ID without its content, and the repair continues with the remaining records.
 
 The archive stores normalized messages and blocks, canonical raw records,
 tools, files, costs, context rollups, diagnostics, recommendations, and local
@@ -424,7 +469,7 @@ that duplicate retained messages or contain only stream metadata.
 | Prompt, response, and reasoning text | `block.text` |
 | A display title, normally the first 120 characters of the opening prompt or a provider title | `session.title` |
 | Tool arguments, including shell commands, file paths, and patch bodies | `block.tool_input`, `tool_call.input` |
-| Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
+| Tool output, including the contents of files an agent read, optionally compressed losslessly | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
 | Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
 | The remote of each project's repository, as a host and path with any credentials removed | `project.repo_remote` |
@@ -436,15 +481,23 @@ which makes them harder to find, not absent.
 
 Large source records use standard Zstandard BLOBs in `message.raw` when the
 compressed record and its metadata take less space than the original JSON.
-Small records stay as JSON text. Compression preserves the complete canonical
-JSON, including fields Decant does not recognize. It does not truncate or redact
-content. Normalized transcript blocks and the full-text index stay unchanged.
+Large tool outputs in `block.tool_result` use standard Zstandard BLOBs under
+the same threshold when compression saves space, with `block.tool_result_bytes`
+recording the original UTF-8 byte count so economics and size queries avoid
+decompression. Small records and tool results stay as text. Compression
+preserves the complete canonical JSON and complete tool output without
+truncating or redacting content. Searchable transcript blocks (`block.text`,
+`block.tool_name`, and `block.tool_input`) stay unchanged, so search returns the
+same results. Rewriting only a block's tool result, as compression does, leaves
+the full-text index untouched.
 
-For compressed records, `message.raw_meta` holds the small JSON projection that
-transcript and accounting queries need, and `message.raw_bytes` records the
-original UTF-8 byte count. These queries read the projection without inflating
-the full source record. Code reading complete source records should use
-`decodeMessageRaw` from `src/message-storage.ts` for both TEXT and BLOB rows.
+For compressed source records, `message.raw_meta` holds the small JSON
+projection that transcript and accounting queries need, and `message.raw_bytes`
+records the original UTF-8 byte count. These queries read the projection without
+inflating the full source record. Code reading complete source records or tool
+results directly from SQLite should use `decodeMessageRaw` and
+`decodeBlockToolResult` from `src/message-storage.ts` for both TEXT and BLOB
+rows.
 
 There is no redaction step. Decant does not detect, mask, or strip secrets,
 tokens, keys, or personal data. Whatever your agents read, and whatever was
@@ -489,15 +542,18 @@ decant db info
 decant db info --full   # adds fts_rows and text_bytes: a full scan, slow on a large archive
 ```
 
-`--full` also reports `compressed_messages` and `raw_stored_bytes`. The latter
-counts stored source-record bytes plus their metadata. `text_bytes` still
-counts the original uncompressed source records and normalized transcript text.
+`--full` also reports `compressed_messages`, `raw_stored_bytes`,
+`compressed_tool_results`, and `tool_result_stored_bytes`. The stored-byte
+totals count compressed and uncompressed payload bytes on disk (including
+`message.raw_meta` for messages), while `text_bytes` still counts the original
+uncompressed source records and normalized transcript text.
 
 ### Compressing an existing archive
 
-New and changed sessions use lossless source-record compression when they are
-ingested. Opening an existing archive adds the storage columns without
-rewriting its retained records. Compress those records explicitly with
+New and changed sessions use lossless compression for `message.raw` and
+`block.tool_result` when they are ingested. Opening an existing archive adds
+the storage columns without rewriting its retained records. Compress those
+records explicitly with
 
 ```sh
 decant --no-sync db compact
@@ -505,17 +561,18 @@ decant --no-sync db compact
 
 Stop any running Decant server before upgrading and compacting the archive,
 then restart it with the new build. A process running an older build cannot
-read compressed source records. Keep a consistent backup before maintaining a
-large archive. SQLite's final `VACUUM` can need up to twice the archive's size
-in additional free disk space for its temporary copy and journal.
+read compressed source records or tool results. Keep a consistent backup before
+maintaining a large archive. SQLite's final `VACUUM` can need up to twice the
+archive's size in additional free disk space for its temporary copy and journal.
 
 `db compact` never syncs source directories. It verifies that every compressed
-record decodes to exactly the stored text before saving it, commits bounded
-batches, and then runs `VACUUM` to return freed pages to the filesystem. It
-prints progress while compressing and before vacuuming. If interrupted, run it
-again. Completed batches stay committed, already compressed records are
-skipped, and a failed vacuum can be retried with `decant --no-sync db vacuum`.
-Session IDs, user state, normalized content, and search results are preserved.
+source record and tool result decodes to exactly the stored text before saving
+it, commits bounded batches, and then runs `VACUUM` to return freed pages to
+the filesystem. It prints progress while compressing and before vacuuming. If
+interrupted, run it again. Completed batches stay committed, already compressed
+rows are skipped, and a failed vacuum can be retried with
+`decant --no-sync db vacuum`. Session IDs, user state, normalized content, and
+search results are preserved.
 
 Delete one session tree from the CLI, or use **Delete session** in the web UI:
 
@@ -736,7 +793,19 @@ The service checks its binary once a minute. After `decant update`, a Homebrew
 upgrade, or an npm update replaces it, the service waits until the new file
 stops changing, then exits and the OS starts the new version. If a sync is
 stuck and the service has not stopped 10 seconds after it began, it exits
-anyway so the OS can restart it. Homebrew installs register the stable
+anyway so the OS can restart it.
+
+Stopping `decant serve` or the service cancels a sync in progress. The sync
+finishes the file it is reading and stops. It skips the work that normally ends
+a sync, such as linking subagents to their parents and refreshing signals. The
+archive records that work as pending, and the next sync that does not defer
+derived refresh does it for the whole archive, whether or not it ingests
+anything. Startup, manual, CLI, and periodic sweep syncs run it. A watch sync
+started by a file event defers derived refresh, so it leaves the work pending
+even when it ingests the changed file. A sync
+that is still running 5 seconds after it was cancelled is terminated. SQLite
+discards any write it had not committed, so the archive stays consistent and
+the next sync picks up where it left off. Homebrew installs register the stable
 `$(brew --prefix)/opt/decant/bin/decant` path, so upgrades keep working. Source
 checkouts, `npx`, and the container cannot register a service.
 
@@ -846,8 +915,10 @@ archived rows, so it also corrects sessions whose source files are gone, and
 no source is re-read for it.
 
 Costs are materialized at ingest and reconciled with current pricing on every
-sync. This includes unchanged and archived sessions, even when their source
-files are no longer available. Session costs and cached activity cost components
+CLI sync and on each server's startup and manual syncs. Background watch and
+sweep syncs on a server whose sync connection has already finished a full sync
+skip this pass. Reconciliation includes unchanged and archived sessions, even
+when their source files are no longer available. Session costs and cached activity cost components
 update in one transaction. Recommendations and server caches refresh after
 repricing. No archive rebuild is needed, and user state is preserved.
 

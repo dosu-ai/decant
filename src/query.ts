@@ -7,7 +7,7 @@ import {
 } from "./context-window.ts";
 import { dayRangePredicate, sessionDatePredicate } from "./date-filter.ts";
 import { CONFIRMED_DOSU_SERVER_IDS } from "./dosu.ts";
-import { MESSAGE_METADATA_SQL } from "./message-storage.ts";
+import { decodeBlockToolResult, MESSAGE_METADATA_SQL } from "./message-storage.ts";
 import type { CostSource, Tool } from "./model.ts";
 import { costSourceFor } from "./model-usage.ts";
 import { cachedRead, statementKey } from "./read-cache.ts";
@@ -685,7 +685,8 @@ interface MessageBlockRow {
   tool_name: string | null;
   tool_use_id: string | null;
   tool_input: string | null;
-  tool_result: string | null;
+  tool_result: string | Uint8Array | null;
+  tool_result_bytes: number | null;
 }
 
 const RESOLVED_BLOCK_TOOL_NAME_SQL = `COALESCE(
@@ -798,7 +799,7 @@ export function getSession(
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
-                    b.tool_use_id, b.tool_input, b.tool_result
+                    b.tool_use_id, b.tool_input, b.tool_result, b.tool_result_bytes
              FROM message m
              LEFT JOIN block b ON b.message_id = m.id
              WHERE m.session_id = ?1
@@ -819,7 +820,7 @@ export function getSession(
                     ${MESSAGE_RAW_META_SQL} AS raw_meta,
                     b.ordinal AS block_ordinal, b.type AS block_type, b.text,
                     ${RESOLVED_BLOCK_TOOL_NAME_SQL} AS tool_name,
-                    b.tool_use_id, b.tool_input, b.tool_result
+                    b.tool_use_id, b.tool_input, b.tool_result, b.tool_result_bytes
              FROM page_message pm
              JOIN message m ON m.id = pm.id
              LEFT JOIN block b ON b.message_id = m.id
@@ -855,7 +856,7 @@ export function getSession(
         tool_name: row.tool_name,
         tool_use_id: row.tool_use_id,
         tool_input: row.tool_input,
-        tool_result: row.tool_result,
+        tool_result: decodeBlockToolResult(row.tool_result, row.tool_result_bytes),
       });
     }
   }
@@ -888,27 +889,39 @@ export function getSession(
 }
 
 function getSessionTotals(db: Database, id: number): SessionTotals {
-  const row = db
-    .query(
-      `SELECT
-         (SELECT COUNT(*) FROM message m
-           WHERE m.session_id = ?1 AND m.role = 'assistant'
-             AND EXISTS (
-               SELECT 1 FROM block b
-               WHERE b.message_id = m.id
-                 AND (b.type IN ('tool_use', 'tool_result')
-                      OR (b.type IN ('text', 'thinking') AND TRIM(COALESCE(b.text, '')) <> ''))
-             )
-         ) AS reply_count,
-         (SELECT COUNT(*) FROM block b
-           WHERE b.session_id = ?1 AND b.type = 'tool_use'
-         ) AS tool_call_count`,
-    )
-    .get(id) as { reply_count: number; tool_call_count: number } | null;
-  return {
-    reply_count: row?.reply_count ?? 0,
-    tool_call_count: row?.tool_call_count ?? 0,
-  };
+  const stored = db
+    .query("SELECT reply_count, tool_call_count FROM session WHERE id = ?1")
+    .get(id) as { reply_count: number | null; tool_call_count: number | null } | null;
+  if (stored != null && stored.reply_count != null && stored.tool_call_count != null) {
+    return {
+      reply_count: stored.reply_count,
+      tool_call_count: stored.tool_call_count,
+    };
+  }
+  const cached = cachedRead(db, statementKey("sessionTotals", [id]), () => {
+    const row = db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM message m
+             WHERE m.session_id = ?1 AND m.role = 'assistant'
+               AND EXISTS (
+                 SELECT 1 FROM block b
+                 WHERE b.message_id = m.id
+                   AND (b.type IN ('tool_use', 'tool_result')
+                        OR (b.type IN ('text', 'thinking') AND TRIM(COALESCE(b.text, '')) <> ''))
+               )
+           ) AS reply_count,
+           (SELECT COUNT(*) FROM block b
+             WHERE b.session_id = ?1 AND b.type = 'tool_use'
+           ) AS tool_call_count`,
+      )
+      .get(id) as { reply_count: number; tool_call_count: number } | null;
+    return {
+      reply_count: row?.reply_count ?? 0,
+      tool_call_count: row?.tool_call_count ?? 0,
+    };
+  });
+  return { ...cached };
 }
 
 export function getSessionOutline(db: Database, id: number): SessionOutlineItem[] | null {

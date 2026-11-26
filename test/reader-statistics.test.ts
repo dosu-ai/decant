@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +66,65 @@ describe("planner statistics helpers", () => {
       expect(first).toContain("t_grp");
       expect(storedPlannerStatistics(reader)).toBe(first);
       writer.exec("DELETE FROM t WHERE grp >= 100; ANALYZE");
+      expect(storedPlannerStatistics(reader)).not.toBe(first);
+    } finally {
+      reader.close();
+      writer.close();
+    }
+  });
+
+  test("stored statistics come from one snapshot even when ANALYZE commits between reads", () => {
+    const { path, writer } = statsArchive();
+    writer.exec("ANALYZE");
+    const reader = new Database(path, { readonly: true });
+    try {
+      const before = storedPlannerStatistics(reader);
+      const realQuery = reader.query.bind(reader);
+      let reanalyzed = false;
+      const querySpy = spyOn(reader, "query").mockImplementation(((sql: string) => {
+        const statement = realQuery(sql);
+        if (!reanalyzed && sql.includes("sqlite_master")) {
+          reanalyzed = true;
+          const get = statement.get.bind(statement);
+          let armed = true;
+          statement.get = ((...args: []) => {
+            const row = get(...args);
+            if (armed) {
+              armed = false;
+              writer.exec("DELETE FROM t WHERE grp >= 100; ANALYZE");
+            }
+            return row;
+          }) as typeof statement.get;
+        }
+        return statement;
+      }) as typeof reader.query);
+      let during: string;
+      try {
+        during = storedPlannerStatistics(reader);
+      } finally {
+        querySpy.mockRestore();
+      }
+      expect(reanalyzed).toBe(true);
+      expect(during).toBe(before);
+      expect(reader.inTransaction).toBe(false);
+      expect(storedPlannerStatistics(reader)).not.toBe(before);
+    } finally {
+      reader.close();
+      writer.close();
+    }
+  });
+
+  test("stored statistics leave a caller's read transaction open", () => {
+    const { path, writer } = statsArchive();
+    writer.exec("ANALYZE");
+    const reader = new Database(path, { readonly: true });
+    try {
+      reader.exec("BEGIN");
+      const first = storedPlannerStatistics(reader);
+      expect(reader.inTransaction).toBe(true);
+      writer.exec("DELETE FROM t WHERE grp >= 100; ANALYZE");
+      expect(storedPlannerStatistics(reader)).toBe(first);
+      reader.exec("COMMIT");
       expect(storedPlannerStatistics(reader)).not.toBe(first);
     } finally {
       reader.close();

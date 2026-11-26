@@ -263,98 +263,98 @@ export function resolveWorktreeRoots(
   db: Database,
   fs: Pick<ProbeFs, "readText"> = boundedFs,
 ): void {
-  const projectStatement = db.prepare(
-    `SELECT p.id, p.path, p.is_worktree AS isWorktree, p.root_path AS rootPath,
-              p.root_source AS source, p.worktree_label AS worktreeLabel,
-              p.worktree_tool AS worktreeTool, COUNT(s.id) AS sessions,
-              MAX(s.started_at) AS lastSeen
-       FROM project p LEFT JOIN session s ON s.project_id = p.id
-       GROUP BY p.id`,
-  );
-  let projects: ProjectRow[];
-  try {
-    projects = projectStatement.all() as ProjectRow[];
-  } finally {
-    projectStatement.finalize();
-  }
+  withImmediateTransaction(db, () => {
+    const projectStatement = db.prepare(
+      `SELECT p.id, p.path, p.is_worktree AS isWorktree, p.root_path AS rootPath,
+                p.root_source AS source, p.worktree_label AS worktreeLabel,
+                p.worktree_tool AS worktreeTool, COUNT(s.id) AS sessions,
+                MAX(s.started_at) AS lastSeen
+         FROM project p LEFT JOIN session s ON s.project_id = p.id
+         GROUP BY p.id`,
+    );
+    let projects: ProjectRow[];
+    try {
+      projects = projectStatement.all() as ProjectRow[];
+    } finally {
+      projectStatement.finalize();
+    }
 
-  const writes: { id: number; resolution: Resolution }[] = [];
-  const deferred: { id: number; path: string; tool: string; leaf: string; repo?: string }[] = [];
-  const roots = new Map<string, { sessions: number; lastSeen: string | null }>();
-  const noteRoot = (rootPath: string, sessions: number, lastSeen: string | null): void => {
-    const entry = roots.get(rootPath) ?? { sessions: 0, lastSeen: null };
-    entry.sessions += sessions;
-    if (compareNullableString(lastSeen, entry.lastSeen) > 0) {
-      entry.lastSeen = lastSeen;
-    }
-    roots.set(rootPath, entry);
-  };
+    const writes: { id: number; resolution: Resolution }[] = [];
+    const deferred: { id: number; path: string; tool: string; leaf: string; repo?: string }[] = [];
+    const roots = new Map<string, { sessions: number; lastSeen: string | null }>();
+    const noteRoot = (rootPath: string, sessions: number, lastSeen: string | null): void => {
+      const entry = roots.get(rootPath) ?? { sessions: 0, lastSeen: null };
+      entry.sessions += sessions;
+      if (compareNullableString(lastSeen, entry.lastSeen) > 0) {
+        entry.lastSeen = lastSeen;
+      }
+      roots.set(rootPath, entry);
+    };
 
-  for (const project of projects) {
-    if (project.source === "git") {
-      noteRoot(project.rootPath ?? project.path, project.sessions, project.lastSeen);
-      continue;
+    for (const project of projects) {
+      if (project.source === "git") {
+        noteRoot(project.rootPath ?? project.path, project.sessions, project.lastSeen);
+        continue;
+      }
+      const git = resolveGitRoot(project.path, fs);
+      if (git != null) {
+        noteRoot(git.rootPath, project.sessions, project.lastSeen);
+        writes.push({ id: project.id, resolution: git });
+        continue;
+      }
+      const intree = classifyIntree(project.path);
+      if (intree != null) {
+        noteRoot(intree.rootPath, project.sessions, project.lastSeen);
+        writes.push({ id: project.id, resolution: intree });
+        continue;
+      }
+      const external = externalContainer(project.path);
+      if (external != null) {
+        deferred.push({ id: project.id, path: project.path, ...external });
+        continue;
+      }
+      noteRoot(project.path, project.sessions, project.lastSeen);
+      writes.push({
+        id: project.id,
+        resolution: {
+          isWorktree: false,
+          rootPath: project.path,
+          worktreeLabel: null,
+          worktreeTool: null,
+          source: "self",
+        },
+      });
     }
-    const git = resolveGitRoot(project.path, fs);
-    if (git != null) {
-      noteRoot(git.rootPath, project.sessions, project.lastSeen);
-      writes.push({ id: project.id, resolution: git });
-      continue;
-    }
-    const intree = classifyIntree(project.path);
-    if (intree != null) {
-      noteRoot(intree.rootPath, project.sessions, project.lastSeen);
-      writes.push({ id: project.id, resolution: intree });
-      continue;
-    }
-    const external = externalContainer(project.path);
-    if (external != null) {
-      deferred.push({ id: project.id, path: project.path, ...external });
-      continue;
-    }
-    noteRoot(project.path, project.sessions, project.lastSeen);
-    writes.push({
-      id: project.id,
-      resolution: {
-        isWorktree: false,
-        rootPath: project.path,
-        worktreeLabel: null,
-        worktreeTool: null,
-        source: "self",
-      },
-    });
-  }
 
-  const knownRoots = [...roots.entries()].map(
-    ([path, value]): KnownRoot => ({
-      path,
-      basename: basename(path),
-      sessions: value.sessions,
-      lastSeen: value.lastSeen,
-    }),
-  );
-  for (const deferredProject of deferred) {
-    writes.push({
-      id: deferredProject.id,
-      resolution: classifyExternal(
-        deferredProject.tool,
-        deferredProject.leaf,
-        deferredProject.path,
-        knownRoots,
-        deferredProject.repo,
-      ),
-    });
-  }
+    const knownRoots = [...roots.entries()].map(
+      ([path, value]): KnownRoot => ({
+        path,
+        basename: basename(path),
+        sessions: value.sessions,
+        lastSeen: value.lastSeen,
+      }),
+    );
+    for (const deferredProject of deferred) {
+      writes.push({
+        id: deferredProject.id,
+        resolution: classifyExternal(
+          deferredProject.tool,
+          deferredProject.leaf,
+          deferredProject.path,
+          knownRoots,
+          deferredProject.repo,
+        ),
+      });
+    }
 
-  const update = db.prepare(
-    `UPDATE project
-       SET is_worktree = ?2, root_path = ?3, worktree_label = ?4,
-           worktree_tool = ?5, root_source = ?6
-     WHERE id = ?1`,
-  );
-  const byId = new Map(projects.map((project) => [project.id, project]));
-  try {
-    withImmediateTransaction(db, () => {
+    const update = db.prepare(
+      `UPDATE project
+         SET is_worktree = ?2, root_path = ?3, worktree_label = ?4,
+             worktree_tool = ?5, root_source = ?6
+       WHERE id = ?1`,
+    );
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    try {
       for (const { id, resolution } of writes) {
         const project = byId.get(id);
         if (project == null || unchanged(project, resolution)) {
@@ -369,10 +369,10 @@ export function resolveWorktreeRoots(
           resolution.source,
         );
       }
-    });
-  } finally {
-    update.finalize();
-  }
+    } finally {
+      update.finalize();
+    }
+  });
 }
 
 function unchanged(project: ProjectRow, resolution: Resolution): boolean {

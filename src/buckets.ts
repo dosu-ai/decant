@@ -175,6 +175,21 @@ const SEARCH_COMMANDS = new Set([
   "fd",
 ]);
 const SEARCH_TOOLS = new Set(["grep", "glob"]);
+export const SEARCH_CANDIDATE_TOOLS: readonly string[] = [...SEARCH_TOOLS, ...SHELL_TOOLS];
+const SEARCH_CANDIDATE_TOOL_SET = new Set(SEARCH_CANDIDATE_TOOLS);
+
+export function isSearchCandidateTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase();
+  if (SEARCH_CANDIDATE_TOOL_SET.has(lower)) {
+    return true;
+  }
+  const dot = lower.lastIndexOf(".");
+  return dot !== -1 && SEARCH_CANDIDATE_TOOL_SET.has(lower.slice(dot + 1));
+}
+
+export function countSearchCandidateToolCall(toolName: string, input: string | null): number {
+  return isSearchCandidateTool(toolName) ? countSearches(toolName, input) : 0;
+}
 
 export function countSearches(toolName: string, input: string | null): number {
   if (toolName.startsWith("mcp__")) {

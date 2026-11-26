@@ -81,15 +81,17 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let watchHandle: WatchHandle | null = null;
   let readerStatistics: ReaderStatistics | null = null;
   const syncCoordinator = createSyncCoordinator(options.syncRunner, {
+    readDataVersion: () => economics?.dataVersion() ?? null,
     onProgress: (progress) => readerStatistics?.onProgress(progress),
     // The worker ends each ingesting sync with PRAGMA optimize on its own
     // connection. This connection keeps the statistics it loaded until told to
     // reread them, so on a first run it would plan every request without any.
     onCompleted: (report) => {
       if (db != null && report.ingested > 0) {
-        rereadPlannerStatistics(db);
-        readPool?.reloadStatistics();
-        readerStatistics?.markLoaded();
+        const reloaded = readerStatistics?.onCompleted() ?? false;
+        if (!reloaded) {
+          readPool?.reloadStatistics();
+        }
       }
     },
   });
@@ -213,11 +215,18 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
         intervalMs: options.watch.intervalMs,
         debounceMs: options.watch.debounceMs,
         enableWatch: options.watch.enableWatch,
-        runner: (config, status, cancel, onProgress) =>
-          workerSyncRunner(config, status, cancel, onProgress, syncCoordinator.runWithOwnership),
+        runner: (config, status, cancel, onProgress, syncOptions) =>
+          workerSyncRunner(
+            config,
+            status,
+            cancel,
+            onProgress,
+            syncCoordinator.runWithOwnership,
+            syncOptions,
+          ),
         onEvent: (event) => {
           if (economics != null) {
-            applyWatchEvent(event, economics);
+            applyWatchEvent(event, economics, syncCoordinator.isBusy);
           }
           onEvent?.(event);
         },

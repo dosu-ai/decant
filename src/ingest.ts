@@ -5,6 +5,7 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  lstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -19,16 +20,31 @@ import {
   releaseBilledRequests,
   unsettledRequests,
 } from "./billed-requests.ts";
+import { countSearchCandidateToolCall, isSearchCandidateTool } from "./buckets.ts";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
 import { defaultPricing } from "./cost.ts";
 import { refreshPlannerStatistics, withImmediateTransaction } from "./db.ts";
-import { facets, fileRefs } from "./enrich.ts";
+import { countToolUseBlocks, facets, fileRefs, isRenderableReply } from "./enrich.ts";
+import {
+  buildAndPersistCheckpointAfterFullWrite,
+  type FullParseWithCheckpointResult,
+  type FullWriteArtifact,
+  isIncrementalTool,
+  parseFullForCheckpoint,
+  readSourceBuffer,
+  type SourceFileStats,
+  sourceFileStats,
+  tryIncrementalIngest,
+} from "./incremental-ingest.ts";
 import { FILE_LIMIT_MESSAGE, readSourceFile } from "./ingest-limits.ts";
 import { asBoolean, asInteger, asString, byteLength, canonicalJson, get } from "./json.ts";
 import { getDecantLogger } from "./logging.ts";
 import {
   backfillCopilotCompactionMetadata,
+  decodeBlockToolResult,
+  decodeMessageRaw,
+  encodeBlockToolResult,
   encodeMessageRaw,
   MESSAGE_METADATA_SQL,
 } from "./message-storage.ts";
@@ -85,6 +101,16 @@ import { parsePiSession, piSessionIdFromStem } from "./sources/pi.ts";
 import { parseVscodeCopilotSession } from "./sources/vscode-copilot.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
+  bumpEconomicsSeq,
+  bumpSyncStateGeneration,
+  markSyncStateCleared,
+  readSyncStateGeneration,
+  SYNC_STATE_DERIVED_CLEARED,
+  SYNC_STATE_DERIVED_PENDING,
+  SYNC_STATE_RECOMMENDATIONS_CLEARED,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "./sync-state.ts";
+import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
   refreshSessionCosts,
@@ -119,7 +145,7 @@ export interface IngestConfig {
   sourcePaths?: string[];
 }
 
-export const INGEST_PIPELINE_REVISION = 22;
+export const INGEST_PIPELINE_REVISION = 24;
 
 export interface SyncReport {
   repriced?: number;
@@ -142,6 +168,16 @@ export interface SyncProgress {
 
 export type SyncProgressListener = (progress: SyncProgress) => void;
 
+export interface SyncOptions {
+  candidatePaths?: readonly string[];
+  deferDerivedRefresh?: boolean;
+  recommendationMinIntervalMs?: number;
+  onSessionChanged?: (sessionId: number) => void;
+  onTombstoned?: () => void;
+  onEconomicsBulkChanged?: () => void;
+  onRecommendationsRefreshed?: () => void;
+}
+
 export interface SourceFile {
   tool: Tool;
   path: string;
@@ -162,7 +198,9 @@ interface Prepared {
 
 interface ToolUseBlock {
   messageId: number;
+  messageSeq: number;
   callBlockId: number;
+  order: number;
   timestamp: string | null;
   block: NormalizedBlock;
 }
@@ -209,6 +247,104 @@ export function discover(
       (file.tool !== "cursor" || isCursorConversationStore(file.path)) &&
       (file.tool !== "atif" || isAtifDocument(file.path)),
   );
+}
+
+function isRegularFileNoSymlinks(rootDir: string, candidatePath: string): boolean {
+  const absRoot = resolve(rootDir);
+  const absPath = resolve(candidatePath);
+  if (!isInside(absRoot, absPath)) {
+    return false;
+  }
+  const rel = absPath.slice(absRoot.endsWith(sep) ? absRoot.length : absRoot.length + 1);
+  if (rel === "") {
+    return false;
+  }
+  const parts = sep === "/" ? rel.split("/") : rel.split(/[\\/]+/);
+  let current = absRoot;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (part == null || part === "" || part === "." || part === "..") {
+      return false;
+    }
+    current = join(current, part);
+    let st: Stats;
+    try {
+      st = lstatSync(current);
+    } catch {
+      return false;
+    }
+    if (st.isSymbolicLink()) {
+      return false;
+    }
+    if (i < parts.length - 1) {
+      if (!st.isDirectory()) {
+        return false;
+      }
+    } else if (!st.isFile()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function discoverConfiguredCandidatePaths(
+  config: IngestConfig,
+  candidatePaths: readonly string[],
+): SourceFile[] {
+  if (config.sourcePaths != null && config.sourcePaths.length > 0) {
+    return discover(config);
+  }
+  const codexSessionsDir = join(config.codexDir, "sessions");
+  const codexArchivedDir = join(config.codexDir, "archived_sessions");
+  const out: SourceFile[] = [];
+  for (const rawPath of candidatePaths) {
+    const name = pathBasename(rawPath);
+    if (isRegularFileNoSymlinks(config.claudeDir, rawPath) && isSessionJsonl(name)) {
+      out.push({ tool: "claude_code", path: rawPath, archived: false });
+      continue;
+    }
+    if (isRegularFileNoSymlinks(codexSessionsDir, rawPath) && isCodexRollout(name)) {
+      out.push({ tool: "codex", path: rawPath, archived: false });
+      continue;
+    }
+    if (isRegularFileNoSymlinks(codexArchivedDir, rawPath) && isCodexRollout(name)) {
+      out.push({ tool: "codex", path: rawPath, archived: true });
+      continue;
+    }
+    if (
+      config.geminiDir != null &&
+      isRegularFileNoSymlinks(config.geminiDir, rawPath) &&
+      geminiSessionLayout(rawPath) != null
+    ) {
+      out.push({ tool: "gemini", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.copilotDir != null &&
+      name === COPILOT_EVENTS_NAME &&
+      resolve(dirname(dirname(rawPath))) === resolve(config.copilotDir) &&
+      isRegularFileNoSymlinks(config.copilotDir, rawPath)
+    ) {
+      out.push({ tool: "copilot", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.atifDir != null &&
+      isRegularFileNoSymlinks(config.atifDir, rawPath) &&
+      isAtifDocument(rawPath)
+    ) {
+      out.push({ tool: "atif", path: rawPath, archived: false });
+      continue;
+    }
+    if (
+      config.piDir != null &&
+      isRegularFileNoSymlinks(config.piDir, rawPath) &&
+      isSessionJsonl(name)
+    ) {
+      out.push({ tool: "pi", path: rawPath, archived: false });
+    }
+  }
+  return dedupeSourceFiles(out);
 }
 
 export function discoverSourcePaths(
@@ -502,19 +638,61 @@ function canonicalPath(path: string): string {
  */
 const PLANNER_STATISTICS_INTERVAL = 25;
 
+const initializedSyncConnections = new WeakSet<Database>();
+const lastRecommendationRefreshByDb = new WeakMap<Database, number>();
+const lastRepriceByDb = new WeakMap<Database, number>();
+const ingestsSinceOptimizeByDb = new WeakMap<Database, number>();
+const MAX_FILE_CONFLICT_ATTEMPTS = 4;
+
+type ExpectedIngestSourcePrior =
+  | { exists: false }
+  | {
+      exists: true;
+      size: number;
+      mtime: number;
+      ingestRevision: number;
+      sessionId: number | null;
+      hash: string | null;
+    };
+
 export function sync(
   db: Database,
   config: IngestConfig,
   cancel?: { aborted: boolean },
   onProgress?: SyncProgressListener,
+  options?: SyncOptions,
 ): SyncReport {
-  seedModelPricing(db);
-  materializeMissingModelUsage(db, (id) =>
-    reconcileBilledRequests(db, id, { refreshReconciledSession: true }),
-  );
-  const repriced = refreshSessionCosts(db);
-  const files = discover(config);
-  const titles = codexTitles(config);
+  const alreadyInitialized = initializedSyncConnections.has(db);
+  const sweepIntervalMs = options?.recommendationMinIntervalMs ?? 0;
+  const backgroundRefresh =
+    alreadyInitialized && (options?.deferDerivedRefresh === true || sweepIntervalMs > 0);
+  const repriceStartedAt = Date.now();
+  const sweepRepriceDue =
+    backgroundRefresh &&
+    options?.deferDerivedRefresh !== true &&
+    (options?.candidatePaths?.length ?? 0) === 0 &&
+    repriceStartedAt - (lastRepriceByDb.get(db) ?? 0) >= sweepIntervalMs;
+  let repriced = 0;
+  if (!backgroundRefresh || sweepRepriceDue) {
+    lastRepriceByDb.set(db, repriceStartedAt);
+    seedModelPricing(db);
+    let reconciledBackfill = false;
+    materializeMissingModelUsage(db, (id) => {
+      reconciledBackfill = true;
+      reconcileBilledRequests(db, id, { refreshReconciledSession: true });
+    });
+    if (reconciledBackfill) {
+      options?.onEconomicsBulkChanged?.();
+    }
+    repriced = refreshSessionCosts(db);
+  }
+  const candidatePaths = options?.candidatePaths;
+  const targeted = candidatePaths != null && candidatePaths.length > 0;
+  const files = targeted
+    ? discoverConfiguredCandidatePaths(config, candidatePaths)
+    : discover(config);
+  const needsCodexTitles = files.some((file) => file.tool === "codex");
+  const titles = needsCodexTitles ? codexTitles(config) : new Map<string, string>();
   const mcpServers = new OpenCodeMcpServerNames({
     globalDir: config.opencodeConfigDir,
     globalFile: config.opencodeConfigPath,
@@ -534,6 +712,9 @@ export function sync(
   };
   let inspected = 0;
   let lineageMayHaveChanged = false;
+  let touchedCopilot = false;
+  let touchedOpenCode = false;
+  let touchedProject = false;
   let ingestedAtStatisticsRefresh = 0;
   const emitProgress = (): void =>
     onProgress?.({
@@ -555,6 +736,7 @@ export function sync(
       if (report.ingested - ingestedAtStatisticsRefresh >= PLANNER_STATISTICS_INTERVAL) {
         refreshPlannerStatistics(db);
         ingestedAtStatisticsRefresh = report.ingested;
+        ingestsSinceOptimizeByDb.set(db, 0);
       }
 
       try {
@@ -578,114 +760,328 @@ export function sync(
             for (const issue of outcome.issues) {
               report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
             }
+            lineageMayHaveChanged = true;
+            touchedProject = true;
+            if (file.opencode != null) {
+              touchedOpenCode = true;
+            }
+            for (const sid of outcome.sessionIds) {
+              options?.onSessionChanged?.(sid);
+            }
           } else if (outcome.kind === "failed") {
             report.failed += 1;
+            if (outcome.sessionIds != null && outcome.sessionIds.length > 0) {
+              for (const sid of outcome.sessionIds) {
+                options?.onSessionChanged?.(sid);
+              }
+              options?.onEconomicsBulkChanged?.();
+            }
           } else {
             report.skipped += 1;
-            lineageMayHaveChanged ||= outcome.kind === "tombstoned";
+            if (outcome.kind === "tombstoned") {
+              lineageMayHaveChanged = true;
+              if (file.opencode != null) {
+                touchedOpenCode = true;
+              }
+              if (outcome.sessionIds != null) {
+                for (const sid of outcome.sessionIds) {
+                  options?.onSessionChanged?.(sid);
+                }
+              }
+              options?.onTombstoned?.();
+            }
           }
           continue;
         }
-        let fd: number;
-        try {
-          fd = openSync(file.path, "r");
-        } catch (error) {
-          if ((error as { code?: string }).code !== "ENOENT") {
-            report.failed += 1;
+        let bypassCoarseSkip = false;
+        for (let fileAttempt = 0; fileAttempt < MAX_FILE_CONFLICT_ATTEMPTS; fileAttempt += 1) {
+          const skipCoarseCheck = bypassCoarseSkip;
+          bypassCoarseSkip = false;
+          let fd: number;
+          try {
+            fd = openSync(file.path, "r");
+          } catch (error) {
+            if ((error as { code?: string }).code !== "ENOENT") {
+              report.failed += 1;
+            }
+            break;
           }
-          continue;
-        }
-        let stats: Stats;
-        let content: string;
-        try {
-          stats = fstatSync(fd);
-          const prior = queryRow<{ size: number; mtime: number; ingest_revision: number }>(
-            db,
-            "SELECT size, mtime, ingest_revision FROM ingest_source WHERE path = ?1",
-            [file.path],
-          );
-          if (
-            prior != null &&
-            prior.size === stats.size &&
-            prior.mtime === mtimeSecs(stats) &&
-            prior.ingest_revision === INGEST_PIPELINE_REVISION
-          ) {
-            report.skipped += 1;
-            continue;
-          }
-          const limited = readSourceFile(fd);
-          if (limited === null) {
+          let stats: SourceFileStats | null = null;
+          let statsBig: BigIntStats | null = null;
+          let priorSnapshot: ExpectedIngestSourcePrior = { exists: false };
+          let content: string | null = null;
+          let rawBuffer: Buffer | null = null;
+          let sidecarMeta: Json | null = null;
+          let fileAction: "parse" | "done" | "retry" = "parse";
+          try {
+            statsBig = fstatSync(fd, { bigint: true });
+            stats = sourceFileStats(statsBig);
+            const prior = queryRow<{
+              size: number;
+              mtime: number;
+              ingest_revision: number;
+              session_id: number | null;
+              hash: string | null;
+            }>(
+              db,
+              "SELECT size, mtime, ingest_revision, session_id, hash FROM ingest_source WHERE path = ?1",
+              [file.path],
+            );
+            priorSnapshot =
+              prior == null
+                ? { exists: false }
+                : {
+                    exists: true,
+                    size: prior.size,
+                    mtime: prior.mtime,
+                    ingestRevision: prior.ingest_revision,
+                    sessionId: prior.session_id,
+                    hash: prior.hash,
+                  };
+            if (
+              !skipCoarseCheck &&
+              prior != null &&
+              prior.size === stats.size &&
+              prior.mtime === mtimeSecs(stats) &&
+              prior.ingest_revision === INGEST_PIPELINE_REVISION
+            ) {
+              report.skipped += 1;
+              fileAction = "done";
+            } else if (isIncrementalTool(file.tool)) {
+              if (file.tool === "claude_code") {
+                sidecarMeta = readClaudeSidecarMeta(file.path);
+              }
+              if (
+                prior != null &&
+                prior.session_id != null &&
+                prior.ingest_revision === INGEST_PIPELINE_REVISION
+              ) {
+                const inc = tryIncrementalIngest({
+                  db,
+                  fd,
+                  stats,
+                  mtimeNs: statsBig.mtimeNs,
+                  ctimeNs: statsBig.ctimeNs,
+                  sourcePath: file.path,
+                  tool: file.tool,
+                  archived: file.archived,
+                  priorSize: prior.size,
+                  priorMtime: prior.mtime,
+                  priorSessionId: prior.session_id,
+                  ingestRevision: prior.ingest_revision,
+                  expectedRevision: INGEST_PIPELINE_REVISION,
+                  sidecarMeta,
+                  codexTitles: titles,
+                });
+                if (inc.kind === "conflict") {
+                  if (inc.liveChanged) {
+                    bypassCoarseSkip = true;
+                  }
+                  fileAction = "retry";
+                } else if (inc.kind === "oversized") {
+                  report.failed += 1;
+                  logger.warning("Source file could not be read.", {
+                    "event.name": "decant.ingest.source_read_failed",
+                    "file.path": file.path,
+                    "error.message": FILE_LIMIT_MESSAGE,
+                  });
+                  fileAction = "done";
+                } else if (inc.kind === "skipped") {
+                  report.skipped += 1;
+                  fileAction = "done";
+                } else if (inc.kind === "ingested") {
+                  report.ingested += 1;
+                  report.issues += inc.issues.length;
+                  for (const issue of inc.issues) {
+                    report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+                  }
+                  lineageMayHaveChanged ||= inc.lineageDirty;
+                  touchedProject ||= inc.projectCreated;
+                  options?.onSessionChanged?.(inc.sessionId);
+                  for (const peerId of inc.affectedSessionIds) {
+                    options?.onSessionChanged?.(peerId);
+                  }
+                  fileAction = "done";
+                }
+              }
+              if (fileAction === "parse") {
+                const limitedBuf = readSourceBuffer(fd, stats.size);
+                if (limitedBuf === null) {
+                  report.failed += 1;
+                  logger.warning("Source file could not be read.", {
+                    "event.name": "decant.ingest.source_read_failed",
+                    "file.path": file.path,
+                    "error.message": FILE_LIMIT_MESSAGE,
+                  });
+                  fileAction = "done";
+                } else {
+                  rawBuffer = limitedBuf;
+                }
+              }
+            } else {
+              const limited = readSourceFile(fd);
+              if (limited === null) {
+                report.failed += 1;
+                logger.warning("Source file could not be read.", {
+                  "event.name": "decant.ingest.source_read_failed",
+                  "file.path": file.path,
+                  "error.message": FILE_LIMIT_MESSAGE,
+                });
+                fileAction = "done";
+              } else {
+                content = limited;
+              }
+            }
+          } catch (error) {
             report.failed += 1;
             logger.warning("Source file could not be read.", {
               "event.name": "decant.ingest.source_read_failed",
               "file.path": file.path,
-              "error.message": FILE_LIMIT_MESSAGE,
+              "error.type": (error as { code?: string }).code ?? "unknown",
+              "error.message": error instanceof Error ? error.message : String(error),
             });
+            fileAction = "done";
+          } finally {
+            try {
+              closeSync(fd);
+            } catch {
+              // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+              // read that already succeeded, and a throw here would mask the real
+              // error on the failure path.
+            }
+          }
+          if (fileAction === "done" || stats == null || statsBig == null) {
+            break;
+          }
+          if (fileAction === "retry") {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
             continue;
           }
-          content = limited;
-        } catch (error) {
-          report.failed += 1;
-          logger.warning("Source file could not be read.", {
-            "event.name": "decant.ingest.source_read_failed",
-            "file.path": file.path,
-            "error.type": (error as { code?: string }).code ?? "unknown",
-            "error.message": error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        } finally {
+
+          let pathStillMatches = true;
           try {
-            closeSync(fd);
-          } catch {
-            // A close failure (EIO on network/FUSE mounts) cannot invalidate a
-            // read that already succeeded, and a throw here would mask the real
-            // error on the failure path.
+            const live = statSync(file.path, { bigint: true });
+            if (
+              live.dev !== statsBig.dev ||
+              live.ino !== statsBig.ino ||
+              live.size < statsBig.size ||
+              (live.size === statsBig.size &&
+                (live.mtimeNs !== statsBig.mtimeNs || live.ctimeNs !== statsBig.ctimeNs))
+            ) {
+              pathStillMatches = false;
+            } else if (
+              fileAttempt + 1 < MAX_FILE_CONFLICT_ATTEMPTS &&
+              (live.size !== statsBig.size || live.mtimeNs !== statsBig.mtimeNs)
+            ) {
+              pathStillMatches = false;
+            }
+          } catch (error) {
+            if ((error as { code?: string }).code === "ENOENT") {
+              break;
+            }
           }
-        }
-
-        const stem = fileStem(file.path);
-        let parsed: ParsedSession;
-        if (file.tool === "claude_code") {
-          parsed = parseClaudeSession(stem, content, {
-            sourcePath: file.path,
-            sidecarMeta: readClaudeSidecarMeta(file.path),
-          });
-        } else if (file.tool === "copilot") {
-          // Every Copilot log is named events.jsonl; its directory names the session.
-          parsed = parseCopilotSession(pathBasename(dirname(file.path)), content);
-        } else if (file.tool === "vscode_copilot") {
-          parsed = parseVscodeCopilotSession(stem, content, {
-            workspace: readVscodeWorkspace(file.path),
-          });
-        } else if (file.tool === "pi") {
-          parsed = parsePiSession(piSessionIdFromStem(stem), content);
-        } else if (file.tool === "gemini") {
-          const layout = geminiSessionLayout(file.path);
-          parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
-            parentSessionId: layout?.parentSessionId ?? null,
-          });
-        } else {
-          parsed = parseCodexSession(stem, content, titles);
-        }
-        parsed.session.isArchived = file.archived;
-
-        const prepared: Prepared = {
-          file,
-          lineCount: lineCount(content),
-          mtime: mtimeSecs(stats),
-          size: stats.size,
-        };
-
-        const outcome = writeIngestedFile(db, prepared, parsed);
-        if (outcome === "tombstoned") {
-          report.skipped += 1;
-          lineageMayHaveChanged = true;
-        } else {
-          report.ingested += 1;
-          report.issues += parsed.issues.length;
-          for (const issue of parsed.issues) {
-            report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+          if (!pathStillMatches) {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
+            bypassCoarseSkip = true;
+            continue;
           }
+
+          const stem = fileStem(file.path);
+          let parsed: ParsedSession;
+          let checkpointFull: FullParseWithCheckpointResult | undefined;
+          let totalLineCount: number;
+          if (isIncrementalTool(file.tool) && rawBuffer != null) {
+            checkpointFull = parseFullForCheckpoint({
+              tool: file.tool,
+              sourcePath: file.path,
+              stem: file.tool === "pi" ? piSessionIdFromStem(stem) : stem,
+              rawBuffer,
+              archived: file.archived,
+              sidecarMeta,
+              codexTitles: titles,
+            });
+            parsed = checkpointFull.parsed;
+            totalLineCount = checkpointFull.scanned.totalLines;
+          } else {
+            const textContent = content ?? "";
+            if (file.tool === "claude_code") {
+              parsed = parseClaudeSession(stem, textContent, {
+                sourcePath: file.path,
+                sidecarMeta: readClaudeSidecarMeta(file.path),
+              });
+            } else if (file.tool === "copilot") {
+              // Every Copilot log is named events.jsonl; its directory names the session.
+              parsed = parseCopilotSession(pathBasename(dirname(file.path)), textContent);
+            } else if (file.tool === "vscode_copilot") {
+              parsed = parseVscodeCopilotSession(stem, textContent, {
+                workspace: readVscodeWorkspace(file.path),
+              });
+            } else if (file.tool === "pi") {
+              parsed = parsePiSession(piSessionIdFromStem(stem), textContent);
+            } else if (file.tool === "gemini") {
+              const layout = geminiSessionLayout(file.path);
+              parsed = parseGeminiSession(stem, textContent, geminiProjectPath(layout), {
+                parentSessionId: layout?.parentSessionId ?? null,
+              });
+            } else {
+              parsed = parseCodexSession(stem, textContent, titles);
+            }
+            parsed.session.isArchived = file.archived;
+            totalLineCount = lineCount(textContent);
+          }
+
+          const prepared: Prepared = {
+            file,
+            lineCount: totalLineCount,
+            mtime: mtimeSecs(stats),
+            size: stats.size,
+          };
+
+          const outcome = writeIngestedFileIfPriorMatches(
+            db,
+            prepared,
+            parsed,
+            priorSnapshot,
+            statsBig,
+            checkpointFull,
+          );
+          if (outcome.kind === "conflict") {
+            if (fileAttempt + 1 >= MAX_FILE_CONFLICT_ATTEMPTS) {
+              report.skipped += 1;
+              break;
+            }
+            if (outcome.liveChanged) {
+              bypassCoarseSkip = true;
+            }
+            continue;
+          }
+          if (outcome.kind === "tombstoned") {
+            report.skipped += 1;
+            lineageMayHaveChanged = true;
+            options?.onTombstoned?.();
+          } else {
+            report.ingested += 1;
+            report.issues += parsed.issues.length;
+            for (const issue of parsed.issues) {
+              report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+            }
+            lineageMayHaveChanged = true;
+            touchedProject = true;
+            if (file.tool === "copilot") {
+              touchedCopilot = true;
+            }
+            options?.onSessionChanged?.(outcome.sessionId);
+            for (const peerId of outcome.affectedSessionIds) {
+              options?.onSessionChanged?.(peerId);
+            }
+          }
+          break;
         }
       } finally {
         inspected += 1;
@@ -697,48 +1093,145 @@ export function sync(
     hermes.close();
   }
 
-  refreshDerivedState(db, report, repriced, lineageMayHaveChanged);
+  if (!report.cancelled && cancel?.aborted === true) {
+    report.cancelled = true;
+  }
+
+  if (!report.cancelled) {
+    refreshDerivedState(db, report, repriced, {
+      lineageMayHaveChanged,
+      touchedCopilot,
+      touchedOpenCode,
+      touchedProject,
+      alreadyInitialized,
+      deferDerivedRefresh: options?.deferDerivedRefresh === true,
+      recommendationMinIntervalMs: options?.recommendationMinIntervalMs ?? 0,
+      onEconomicsBulkChanged: options?.onEconomicsBulkChanged,
+      onRecommendationsRefreshed: options?.onRecommendationsRefreshed,
+    });
+    if (!targeted && options?.deferDerivedRefresh !== true) {
+      initializedSyncConnections.add(db);
+    }
+  }
 
   return report;
+}
+
+interface DerivedRefreshFlags {
+  lineageMayHaveChanged: boolean;
+  touchedCopilot: boolean;
+  touchedOpenCode: boolean;
+  touchedProject: boolean;
+  alreadyInitialized: boolean;
+  deferDerivedRefresh: boolean;
+  recommendationMinIntervalMs: number;
+  onEconomicsBulkChanged?: () => void;
+  onRecommendationsRefreshed?: () => void;
 }
 
 function refreshDerivedState(
   db: Database,
   report: SyncReport,
-  repriced: number,
-  lineageMayHaveChanged: boolean,
+  _repriced: number,
+  flags: DerivedRefreshFlags,
 ): void {
-  if (report.ingested > 0 || lineageMayHaveChanged) {
+  const derivedGenBefore = readSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+  const derivedCleared = readSyncStateGeneration(db, SYNC_STATE_DERIVED_CLEARED);
+  const derivedPending = derivedGenBefore > derivedCleared;
+  const background =
+    flags.alreadyInitialized &&
+    (flags.deferDerivedRefresh || flags.recommendationMinIntervalMs > 0);
+  const fullPass = !background || (!flags.deferDerivedRefresh && derivedPending);
+  if (
+    flags.touchedOpenCode ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && (report.ingested > 0 || flags.lineageMayHaveChanged))
+  ) {
     resolveOpenCodeSpawnLinks(db);
-    resolveSubagentParents(db);
   }
-  const materializedEconomics = materializeMissingSessionEconomics(db);
-  backfillCopilotCompactionMetadata(db);
-  const materializedWindows = materializeMissingContextWindows(db);
-  const materializedEfforts = materializeMissingReasoningEfforts(db);
-  if (report.ingested > 0) {
+  if (
+    flags.lineageMayHaveChanged ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && report.ingested > 0)
+  ) {
+    if (resolveSubagentParents(db)) {
+      flags.onEconomicsBulkChanged?.();
+    }
+  }
+  const materializedEconomics = fullPass ? materializeMissingSessionEconomics(db) : 0;
+  if (materializedEconomics > 0) {
+    flags.onEconomicsBulkChanged?.();
+  }
+  if (
+    flags.touchedCopilot ||
+    !flags.alreadyInitialized ||
+    (!flags.deferDerivedRefresh && derivedPending)
+  ) {
+    const backfill = backfillCopilotCompactionMetadata(db);
+    if (backfill.unreadableMessageIds.length > 0) {
+      logger.warning("Stored Copilot compaction records could not be decoded.", {
+        "event.name": "decant.ingest.copilot_compaction_unreadable",
+        "message.unreadable.count": backfill.unreadableMessageIds.length,
+        "message.unreadable.ids": backfill.unreadableMessageIds.slice(0, 20),
+      });
+    }
+  }
+  const materializedWindows =
+    fullPass || flags.touchedCopilot ? materializeMissingContextWindows(db) : 0;
+  const materializedEfforts = fullPass ? materializeMissingReasoningEfforts(db) : 0;
+  if (
+    (report.ingested > 0 && flags.touchedProject) ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (fullPass && report.ingested > 0)
+  ) {
     resolveWorktreeRoots(db);
     resolveProjectRemotes(db);
   }
-  const uncheckedRecommendationImpactLabels =
-    db
-      .query(
-        `SELECT 1
-           FROM recommendation
-          WHERE kind = 'signal' AND impact_label_checked = 0
-          LIMIT 1`,
-      )
-      .get() != null;
-  if (report.ingested > 0 || repriced > 0 || uncheckedRecommendationImpactLabels) {
-    regenerateRecommendations(db);
+  if (!flags.deferDerivedRefresh && derivedPending) {
+    markSyncStateCleared(db, SYNC_STATE_DERIVED_CLEARED, derivedGenBefore);
   }
-  if (
-    report.ingested > 0 ||
+  if (!flags.deferDerivedRefresh) {
+    const now = Date.now();
+    const lastRefresh = lastRecommendationRefreshByDb.get(db) ?? 0;
+    const dueForSweepRefresh =
+      flags.recommendationMinIntervalMs <= 0 ||
+      lastRefresh === 0 ||
+      now - lastRefresh >= flags.recommendationMinIntervalMs;
+    const recGenBefore = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    const recCleared = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED);
+    const dirty = recGenBefore > recCleared;
+    const uncheckedRecommendationImpactLabels =
+      !background &&
+      db
+        .query(
+          `SELECT 1
+             FROM recommendation
+            WHERE kind = 'signal' AND impact_label_checked = 0
+            LIMIT 1`,
+        )
+        .get() != null;
+    if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
+      if (regenerateRecommendations(db)) {
+        lastRecommendationRefreshByDb.set(db, now);
+        flags.onRecommendationsRefreshed?.();
+      }
+    } else if (!background && lastRefresh === 0) {
+      lastRecommendationRefreshByDb.set(db, now);
+    }
+  }
+  const pendingIngests = (ingestsSinceOptimizeByDb.get(db) ?? 0) + report.ingested;
+  const shouldOptimize =
     materializedEconomics > 0 ||
     materializedWindows > 0 ||
-    materializedEfforts > 0
-  ) {
+    materializedEfforts > 0 ||
+    (!flags.deferDerivedRefresh && derivedPending) ||
+    (!flags.alreadyInitialized && report.ingested > 0) ||
+    pendingIngests >= PLANNER_STATISTICS_INTERVAL;
+  if (shouldOptimize) {
     refreshPlannerStatistics(db);
+    ingestsSinceOptimizeByDb.set(db, 0);
+  } else if (report.ingested > 0) {
+    ingestsSinceOptimizeByDb.set(db, pendingIngests);
   }
 }
 
@@ -756,8 +1249,9 @@ export function upsertSession(
 }
 
 type SessionSyncOutcome =
-  | { kind: "skipped" | "tombstoned" | "failed" }
-  | { kind: "ingested"; issues: Issue[] };
+  | { kind: "skipped" }
+  | { kind: "tombstoned" | "failed"; sessionIds?: number[] }
+  | { kind: "ingested"; issues: Issue[]; sessionIds: number[] };
 
 const WITHOUT_CATALOG = "|no-catalog";
 
@@ -932,9 +1426,13 @@ function syncOpenCodeSession(
     hash: catalog.available ? changeKey : `${changeKey}${WITHOUT_CATALOG}`,
   };
   const outcome = writeIngestedFile(db, prepared, parsed, opencode);
-  return outcome === "tombstoned"
+  return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function knownSourceDatabases(db: Database, tool: "opencode" | "hermes"): Set<string> {
@@ -1050,9 +1548,13 @@ function syncHermesSession(
     hash: ref.fingerprint,
   };
   const outcome = writeIngestedFile(db, prepared, parsed, hermes);
-  return outcome === "tombstoned"
+  return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function unreadableArchivedCopy(
@@ -1135,9 +1637,13 @@ function syncCursorStore(db: Database, file: SourceFile): SessionSyncOutcome {
     hash: `${signature.key}#${parsed.session.sourceSessionId}`,
   };
   const outcome = writeIngestedFile(db, prepared, parsed);
-  return outcome === "tombstoned"
+  return outcome.kind === "tombstoned"
     ? { kind: "tombstoned" }
-    : { kind: "ingested", issues: parsed.issues };
+    : {
+        kind: "ingested",
+        issues: parsed.issues,
+        sessionIds: [outcome.sessionId, ...outcome.affectedSessionIds],
+      };
 }
 
 function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
@@ -1202,6 +1708,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
   });
   const mtime = mtimeSecs(stats);
   const issues: Issue[] = [];
+  const subSessionIds: number[] = [];
   const subagentPaths = new Set<string>();
   let root: ParsedSession | null = null;
   const rootId = document.sessions.find((session) => session.key == null)?.parsed.session
@@ -1215,7 +1722,7 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
           [rootId],
         )?.source_path;
   if (superseded != null && superseded !== file.path) {
-    releaseRemovedAtifSubagents(db, superseded, new Set());
+    releaseRemovedAtifSubagents(db, superseded, new Set(), subSessionIds);
   }
   for (const { key, parsed } of document.sessions) {
     if (key == null) {
@@ -1231,13 +1738,17 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
       size: stats.size,
       hash: changeKey,
     };
-    if (writeIngestedFile(db, prepared, parsed) === "ingested") {
+    const subOutcome = writeIngestedFile(db, prepared, parsed);
+    if (subOutcome.kind === "ingested") {
       issues.push(...parsed.issues);
+      subSessionIds.push(subOutcome.sessionId, ...subOutcome.affectedSessionIds);
     }
   }
-  releaseRemovedAtifSubagents(db, file.path, subagentPaths);
+  releaseRemovedAtifSubagents(db, file.path, subagentPaths, subSessionIds);
   if (root == null) {
-    return { kind: "failed" };
+    return subSessionIds.length > 0
+      ? { kind: "failed", sessionIds: subSessionIds }
+      : { kind: "failed" };
   }
   const prepared: Prepared = {
     file,
@@ -1246,13 +1757,25 @@ function syncAtifFile(db: Database, file: SourceFile): SessionSyncOutcome {
     size: stats.size,
     hash: changeKey,
   };
-  if (writeIngestedFile(db, prepared, root) === "tombstoned") {
-    return { kind: "tombstoned" };
+  const rootOutcome = writeIngestedFile(db, prepared, root);
+  if (rootOutcome.kind === "tombstoned") {
+    return subSessionIds.length > 0
+      ? { kind: "tombstoned", sessionIds: subSessionIds }
+      : { kind: "tombstoned" };
   }
-  return { kind: "ingested", issues: [...root.issues, ...issues] };
+  return {
+    kind: "ingested",
+    issues: [...root.issues, ...issues],
+    sessionIds: [rootOutcome.sessionId, ...rootOutcome.affectedSessionIds, ...subSessionIds],
+  };
 }
 
-function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<string>): void {
+function releaseRemovedAtifSubagents(
+  db: Database,
+  path: string,
+  current: Set<string>,
+  affectedOut?: number[],
+): void {
   const prefix = `${path}#`;
   const escaped = prefix.replace(/[\\%_]/g, (char) => `\\${char}`);
   // LIKE ignores ASCII case, so the prefix is checked again exactly.
@@ -1267,11 +1790,13 @@ function releaseRemovedAtifSubagents(db: Database, path: string, current: Set<st
   withImmediateTransaction(db, () => {
     for (const row of stale) {
       if (row.session_id != null) {
-        deleteSessionRow(db, row.session_id);
+        deleteSessionRow(db, row.session_id, affectedOut);
       }
       runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [row.path]);
       runStatement(db, "DELETE FROM ingest_source WHERE path = ?1", [row.path]);
     }
+    bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+    bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
   });
 }
 
@@ -1527,7 +2052,7 @@ export function seedModelPricing(db: Database): void {
   }
 }
 
-export function resolveSubagentParents(db: Database): void {
+export function resolveSubagentParents(db: Database): boolean {
   const rows = queryRows<{
     id: number;
     tool: Tool;
@@ -1596,9 +2121,12 @@ export function resolveSubagentParents(db: Database): void {
      ORDER BY s.is_subagent DESC, b.id DESC
      LIMIT 1`,
   );
-  const findCodexSpawner = db.prepare(
-    `SELECT call.tool_use_id AS tool_use_id
+  const findCodexSpawners = db.prepare(
+    `SELECT call.tool_use_id AS tool_use_id,
+            result.tool_result AS tool_result,
+            result.tool_result_bytes AS tool_result_bytes
      FROM block call INDEXED BY idx_block_tool
+     JOIN message call_message ON call_message.id = call.message_id
      JOIN block result
        ON result.session_id = call.session_id
       AND result.tool_use_id = call.tool_use_id
@@ -1606,10 +2134,16 @@ export function resolveSubagentParents(db: Database): void {
      WHERE call.session_id = ?1
        AND call.type = 'tool_use'
        AND call.tool_name = 'spawn_agent'
-       AND result.tool_result LIKE ?2
-     ORDER BY call.id DESC
-     LIMIT 1`,
+       AND result.tool_result IS NOT NULL
+     ORDER BY call_message.seq DESC, call.ordinal DESC, call.id DESC`,
   );
+  interface CodexSpawnerCandidate {
+    toolUseId: string;
+    rawResult: string | Uint8Array | null;
+    rawBytes: number | null;
+    lowerResult?: string | null;
+  }
+  const codexSpawnersByRoot = new Map<number, CodexSpawnerCandidate[]>();
   const clearAtif = db.prepare(
     `UPDATE session
      SET is_subagent = 0, parent_session_id = NULL, spawn_tool_use_id = NULL,
@@ -1626,6 +2160,7 @@ export function resolveSubagentParents(db: Database): void {
          spawn_depth = COALESCE(spawn_depth, ?6)
      WHERE id = ?7`,
   );
+  let parentChanged = false;
   try {
     withImmediateTransaction(db, () => {
       for (const row of rows) {
@@ -1633,6 +2168,7 @@ export function resolveSubagentParents(db: Database): void {
         if (info == null || !info.isSubagent) {
           if (row.tool === "atif" && row.is_subagent !== 0) {
             clearAtif.run(row.id);
+            parentChanged = true;
           }
           continue;
         }
@@ -1640,10 +2176,36 @@ export function resolveSubagentParents(db: Database): void {
         let parentId: number | null = null;
         let spawnToolUseId = info.spawnToolUseId;
         if (spawnToolUseId == null && row.tool === "codex" && rootId != null) {
-          const spawner = findCodexSpawner.get(rootId, `%${row.source_session_id}%`) as {
-            tool_use_id: string;
-          } | null;
-          spawnToolUseId = spawner?.tool_use_id ?? null;
+          let candidates = codexSpawnersByRoot.get(rootId);
+          if (candidates == null) {
+            candidates = (
+              findCodexSpawners.all(rootId) as {
+                tool_use_id: string;
+                tool_result: string | Uint8Array | null;
+                tool_result_bytes: number | null;
+              }[]
+            ).map((candidate) => ({
+              toolUseId: candidate.tool_use_id,
+              rawResult: candidate.tool_result,
+              rawBytes: candidate.tool_result_bytes,
+            }));
+            codexSpawnersByRoot.set(rootId, candidates);
+          }
+          const needle = row.source_session_id.toLowerCase();
+          for (const candidate of candidates) {
+            if (candidate.lowerResult === undefined) {
+              try {
+                const decoded = decodeBlockToolResult(candidate.rawResult, candidate.rawBytes);
+                candidate.lowerResult = decoded == null ? null : decoded.toLowerCase();
+              } catch {
+                candidate.lowerResult = null;
+              }
+            }
+            if (candidate.lowerResult?.includes(needle)) {
+              spawnToolUseId = candidate.toolUseId;
+              break;
+            }
+          }
         }
         // ATIF call IDs are only unique within a document, so an archive-wide
         // lookup could name another trial's session. The parser already
@@ -1668,6 +2230,9 @@ export function resolveSubagentParents(db: Database): void {
         ) {
           continue;
         }
+        if (row.parent_session_id !== nextParent) {
+          parentChanged = true;
+        }
         update.run(
           1,
           nextParent,
@@ -1678,13 +2243,17 @@ export function resolveSubagentParents(db: Database): void {
           row.id,
         );
       }
+      if (parentChanged) {
+        bumpEconomicsSeq(db);
+      }
     });
   } finally {
     clearAtif.finalize();
     update.finalize();
-    findCodexSpawner.finalize();
+    findCodexSpawners.finalize();
     findSpawner.finalize();
   }
+  return parentChanged;
 }
 
 export function materializeMissingReasoningEfforts(db: Database): number {
@@ -1954,62 +2523,154 @@ function inferAtifSubagent(
   };
 }
 
+function ingestSourceMatchesPrior(
+  db: Database,
+  path: string,
+  expected: ExpectedIngestSourcePrior,
+): boolean {
+  const current = queryRow<{
+    size: number;
+    mtime: number;
+    ingest_revision: number;
+    session_id: number | null;
+    hash: string | null;
+  }>(
+    db,
+    "SELECT size, mtime, ingest_revision, session_id, hash FROM ingest_source WHERE path = ?1",
+    [path],
+  );
+  if (!expected.exists) {
+    return current == null;
+  }
+  return (
+    current != null &&
+    current.size === expected.size &&
+    current.mtime === expected.mtime &&
+    current.ingest_revision === expected.ingestRevision &&
+    current.session_id === expected.sessionId &&
+    current.hash === expected.hash
+  );
+}
+
+function writeIngestedFileIfPriorMatches(
+  db: Database,
+  prepared: Prepared,
+  parsed: ParsedSession,
+  expectedPrior: ExpectedIngestSourcePrior,
+  sourceStats: BigIntStats,
+  checkpointFull?: FullParseWithCheckpointResult,
+):
+  | { kind: "ingested"; sessionId: number; affectedSessionIds: number[] }
+  | { kind: "tombstoned" }
+  | { kind: "conflict"; liveChanged?: boolean } {
+  return withImmediateTransaction(db, () => {
+    try {
+      const live = statSync(prepared.file.path, { bigint: true });
+      if (
+        live.dev !== sourceStats.dev ||
+        live.ino !== sourceStats.ino ||
+        live.size < sourceStats.size ||
+        (live.size === sourceStats.size &&
+          (live.mtimeNs !== sourceStats.mtimeNs || live.ctimeNs !== sourceStats.ctimeNs))
+      ) {
+        return { kind: "conflict", liveChanged: true };
+      }
+    } catch {
+      return { kind: "conflict", liveChanged: true };
+    }
+    if (!ingestSourceMatchesPrior(db, prepared.file.path, expectedPrior)) {
+      return { kind: "conflict" };
+    }
+    return writeIngestedFileInTx(db, prepared, parsed, undefined, checkpointFull);
+  });
+}
+
 function writeIngestedFile(
   db: Database,
   prepared: Prepared,
   parsed: ParsedSession,
   sources?: SourceDatabaseRun,
-): "ingested" | "tombstoned" {
-  return withImmediateTransaction(db, () => {
-    releaseMisfiledFork(db, prepared.file.path, parsed);
-    releaseReplacedCursorIdentity(db, prepared.file.path, parsed);
-    const ref = prepared.file.opencode ?? prepared.file.hermes;
-    if (ref != null && sources != null) {
-      const databases = sources.sourceDatabases();
-      releaseSupersededSources(
-        db,
-        prepared.file.tool,
-        prepared.file.path,
-        ref.sessionId,
-        databases,
-      );
-      databases.add(ref.dbPath);
-    }
-    runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
-      prepared.file.path,
-    ]);
-    const sessionId = writeSession(
-      db,
-      parsed,
-      prepared.file.path,
-      prepared.mtime,
-      prepared.size,
-      prepared.hash ?? null,
-    );
-    if (sessionId == null) {
-      runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
-      writeIngestSource(db, prepared, null, "skipped_deleted");
-      return "tombstoned";
-    }
-    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
-    const insertIssue = db.prepare(
-      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
-    );
-    try {
-      for (const issue of parsed.issues) {
-        insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
-      }
-    } finally {
-      insertIssue.finalize();
-    }
-    const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
-    writeIngestSource(db, prepared, sessionId, status);
-    return "ingested";
-  });
+  checkpointFull?: FullParseWithCheckpointResult,
+): { kind: "ingested"; sessionId: number; affectedSessionIds: number[] } | { kind: "tombstoned" } {
+  return withImmediateTransaction(db, () =>
+    writeIngestedFileInTx(db, prepared, parsed, sources, checkpointFull),
+  );
 }
 
-function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession): void {
+function writeIngestedFileInTx(
+  db: Database,
+  prepared: Prepared,
+  parsed: ParsedSession,
+  sources?: SourceDatabaseRun,
+  checkpointFull?: FullParseWithCheckpointResult,
+): { kind: "ingested"; sessionId: number; affectedSessionIds: number[] } | { kind: "tombstoned" } {
+  const affectedSessionIds: number[] = [];
+  releaseMisfiledFork(db, prepared.file.path, parsed, affectedSessionIds);
+  releaseReplacedCursorIdentity(db, prepared.file.path, parsed, affectedSessionIds);
+  const ref = prepared.file.opencode ?? prepared.file.hermes;
+  if (ref != null && sources != null) {
+    const databases = sources.sourceDatabases();
+    releaseSupersededSources(db, prepared.file.tool, prepared.file.path, ref.sessionId, databases);
+    databases.add(ref.dbPath);
+  }
+  runStatement(db, "UPDATE ingest_source SET session_id = NULL WHERE path = ?1", [
+    prepared.file.path,
+  ]);
+  const artifactOut: { value?: FullWriteArtifact } | undefined =
+    checkpointFull != null ? {} : undefined;
+  const sessionId = writeSession(
+    db,
+    parsed,
+    prepared.file.path,
+    prepared.mtime,
+    prepared.size,
+    prepared.hash ?? null,
+    artifactOut,
+    true,
+    affectedSessionIds,
+  );
+  if (sessionId == null) {
+    runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
+    runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
+    writeIngestSource(db, prepared, null, "skipped_deleted");
+    bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+    return { kind: "tombstoned" };
+  }
+  runStatement(db, "DELETE FROM ingest_issue WHERE source_path = ?1", [prepared.file.path]);
+  const insertIssue = db.prepare(
+    `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
+  );
+  try {
+    for (const issue of parsed.issues) {
+      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
+    }
+  } finally {
+    insertIssue.finalize();
+  }
+  const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
+  writeIngestSource(db, prepared, sessionId, status);
+  if (checkpointFull != null && artifactOut?.value != null) {
+    buildAndPersistCheckpointAfterFullWrite(
+      db,
+      prepared.file.path,
+      checkpointFull,
+      artifactOut.value,
+    );
+  } else {
+    runStatement(db, "DELETE FROM ingest_checkpoint WHERE path = ?1", [prepared.file.path]);
+  }
+  bumpSyncStateGeneration(db, SYNC_STATE_DERIVED_PENDING);
+  bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+  return { kind: "ingested", sessionId, affectedSessionIds };
+}
+
+function releaseMisfiledFork(
+  db: Database,
+  path: string,
+  parsed: ParsedSession,
+  affectedOut?: number[],
+): void {
   const parent = parsed.session.rootSourceSessionId;
   if (parsed.session.tool !== "codex" || parent == null) {
     return;
@@ -2020,11 +2681,16 @@ function releaseMisfiledFork(db: Database, path: string, parsed: ParsedSession):
     [parent, path],
   );
   if (misfiled != null) {
-    deleteSessionRow(db, misfiled.id);
+    deleteSessionRow(db, misfiled.id, affectedOut);
   }
 }
 
-function releaseReplacedCursorIdentity(db: Database, path: string, parsed: ParsedSession): void {
+function releaseReplacedCursorIdentity(
+  db: Database,
+  path: string,
+  parsed: ParsedSession,
+  affectedOut?: number[],
+): void {
   if (parsed.session.tool !== "cursor") {
     return;
   }
@@ -2058,7 +2724,7 @@ function releaseReplacedCursorIdentity(db: Database, path: string, parsed: Parse
     [previous],
   );
   if (stale != null) {
-    deleteSessionRow(db, stale.id);
+    deleteSessionRow(db, stale.id, affectedOut);
   }
   runStatement(
     db,
@@ -2095,16 +2761,39 @@ function releaseSupersededSources(
   }
 }
 
-function deleteSessionRow(db: Database, id: number): void {
-  releaseBilledRequests(db, [id]);
-  deleteSessionRowKeepingBilledClaims(db, id);
+function deleteSessionRow(db: Database, id: number, affectedOut?: number[]): void {
+  const peers = releaseBilledRequests(db, [id]);
+  if (affectedOut != null) {
+    affectedOut.push(id, ...peers);
+  }
+  deleteSessionRowKeepingBilledClaims(db, id, affectedOut);
 }
 
-function deleteSessionRowKeepingBilledClaims(db: Database, id: number): void {
+function deleteSessionRowKeepingBilledClaims(
+  db: Database,
+  id: number,
+  affectedOut?: number[],
+): void {
+  if (affectedOut != null) {
+    const descendants = queryRows<{ id: number }>(
+      db,
+      `WITH RECURSIVE descendants(id) AS (
+         SELECT id FROM session WHERE parent_session_id = ?1
+         UNION
+         SELECT child.id FROM session child JOIN descendants ON child.parent_session_id = descendants.id
+       )
+       SELECT id FROM descendants`,
+      [id],
+    );
+    for (const descendant of descendants) {
+      affectedOut.push(descendant.id);
+    }
+  }
   runStatement(db, "UPDATE session SET parent_session_id = NULL WHERE parent_session_id = ?1", [
     id,
   ]);
   runStatement(db, "DELETE FROM session WHERE id = ?1", [id]);
+  bumpEconomicsSeq(db);
 }
 
 function writeIngestSource(
@@ -2138,6 +2827,58 @@ function writeIngestSource(
   );
 }
 
+function rawBytesEqual(a: string | Uint8Array | null, b: string | Uint8Array | null): boolean {
+  if (a == null || b == null) {
+    return a === b;
+  }
+  if (typeof a === "string" && typeof b === "string") {
+    return a === b;
+  }
+  if (typeof a !== "string" && typeof b !== "string") {
+    return a.byteLength === b.byteLength && Buffer.compare(a, b) === 0;
+  }
+  return false;
+}
+
+function matchesStoredMessageRaw(
+  stored: string | Uint8Array,
+  storedBytes: number | null,
+  expected: string,
+): boolean {
+  if (typeof stored === "string") {
+    return stored === expected;
+  }
+  if (storedBytes !== byteLength(expected)) {
+    return false;
+  }
+  try {
+    return decodeMessageRaw(stored) === expected;
+  } catch {
+    return false;
+  }
+}
+
+function matchesStoredBlockToolResult(
+  stored: string | Uint8Array | null,
+  storedBytes: number | null,
+  expected: string | null,
+): boolean {
+  if (stored == null || expected == null) {
+    return stored == null && expected == null && storedBytes == null;
+  }
+  if (typeof stored === "string") {
+    return storedBytes == null && stored === expected;
+  }
+  if (storedBytes !== byteLength(expected)) {
+    return false;
+  }
+  try {
+    return decodeBlockToolResult(stored, storedBytes) === expected;
+  } catch {
+    return false;
+  }
+}
+
 function writeSession(
   db: Database,
   parsed: ParsedSession,
@@ -2145,6 +2886,9 @@ function writeSession(
   mtime: number,
   size: number,
   hash: string | null = null,
+  artifactOut?: { value?: FullWriteArtifact },
+  diffExisting = false,
+  affectedOut?: number[],
 ): number | null {
   const s = parsed.session;
   if (
@@ -2181,97 +2925,390 @@ function writeSession(
     "SELECT id FROM session WHERE tool = ?1 AND source_session_id = ?2",
     [s.tool, s.sourceSessionId],
   );
+  const useDiff = existing != null && diffExisting;
   let unsettled: string[] = [];
   if (existing != null) {
     unsettled = unsettledRequests(db, existing.id);
-    deleteSessionRowKeepingBilledClaims(db, existing.id);
+    if (useDiff) {
+      runStatement(
+        db,
+        `DELETE FROM ingest_checkpoint
+          WHERE path IN (SELECT path FROM ingest_source WHERE session_id = ?1 AND path != ?2)`,
+        [existing.id, sourcePath],
+      );
+      runStatement(
+        db,
+        "UPDATE ingest_source SET session_id = NULL WHERE session_id = ?1 AND path != ?2",
+        [existing.id, sourcePath],
+      );
+      runStatement(db, "DELETE FROM billed_request WHERE session_id = ?1", [existing.id]);
+      runStatement(db, "DELETE FROM unbilled_request WHERE session_id = ?1", [existing.id]);
+    } else {
+      if (affectedOut != null) {
+        affectedOut.push(existing.id);
+      }
+      deleteSessionRowKeepingBilledClaims(db, existing.id, affectedOut);
+    }
   }
 
   const refs = fileRefs(s);
   const gotFacets = facets(s);
   const gotOutcome = outcome(s);
   const gotWorkType = workType(s, refs);
+  let replyCount = 0;
+  let toolCallCount = 0;
+  let searchCount = 0;
+  for (const msg of s.messages) {
+    if (isRenderableReply(msg)) replyCount += 1;
+    toolCallCount += countToolUseBlocks(msg);
+    for (const blk of msg.blocks) {
+      if (blk.blockType === "tool_use") {
+        const name = blk.toolName ?? "";
+        if (isSearchCandidateTool(name)) {
+          const inputStr = blk.toolInput === undefined ? null : canonicalJson(blk.toolInput);
+          searchCount += countSearchCandidateToolCall(name, inputStr);
+        }
+        for (const inner of blk.innerToolCalls ?? []) {
+          if (isSearchCandidateTool(inner.toolName)) {
+            const innerInput =
+              inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
+            searchCount += countSearchCandidateToolCall(inner.toolName, innerInput);
+          }
+        }
+      }
+    }
+  }
 
-  const sessionId = runStatement(
-    db,
-    `INSERT INTO session(
-       tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
-       started_at, ended_at, message_count,
-       total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens,
-       total_reasoning_tokens,
-       estimated_cost_usd, is_archived,
-       is_subagent, parent_session_id, spawn_tool_use_id, agent_id, agent_type, spawn_depth,
-       source_path, raw_meta,
-       ingested_at, source_mtime, source_size, source_hash,
-       turn_count, error_count, interruption_count, compaction_count, sidechain_message_count,
-       agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
-       active_seconds, outcome, work_type,
-       est_reasoning_tokens, reasoning_source,
-       id,
-       total_cache_creation_1h_tokens,
-       reasoning_effort, reasoning_effort_levels, reasoning_effort_checked
-     )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-             ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
-             ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, 1)`,
-    [
-      s.tool,
-      s.sourceSessionId,
-      projectId,
-      s.title,
-      s.cwd,
-      s.gitBranch,
-      s.model,
-      s.cliVersion,
-      s.startedAt,
-      s.endedAt,
-      s.messages.length,
-      s.totals.input,
-      s.totals.output,
-      s.totals.cacheRead,
-      s.totals.cacheCreation,
-      s.totals.reasoning,
-      0,
-      Number(s.isArchived),
-      Number(s.isSubagent),
-      null,
-      s.spawnToolUseId,
-      s.agentId,
-      s.agentType,
-      s.spawnDepth,
-      sourcePath,
-      canonicalJson(s.rawMeta),
-      mtime,
-      size,
-      hash,
-      gotFacets.turnCount,
-      gotFacets.errorCount,
-      gotFacets.interruptionCount,
-      gotFacets.compactionCount,
-      gotFacets.sidechainMessageCount,
-      gotFacets.agentSpawnCount,
-      gotFacets.skillCount,
-      gotFacets.commandCount,
-      gotFacets.thinkingBlockCount,
-      gotFacets.thinkingChars,
-      gotFacets.activeSeconds,
-      gotOutcome,
-      gotWorkType,
-      s.estReasoningTokens,
-      s.reasoningSource,
-      existing?.id ?? null,
-      s.totals.cacheCreation1h,
-      s.reasoningEffort,
-      canonicalJson(s.reasoningEffortLevels),
-    ],
-  );
+  let sessionId: number;
+  if (useDiff && existing != null) {
+    sessionId = existing.id;
+    runStatement(
+      db,
+      `UPDATE session
+          SET project_id = ?2,
+              title = ?3,
+              cwd = ?4,
+              git_branch = ?5,
+              model = ?6,
+              cli_version = ?7,
+              started_at = ?8,
+              ended_at = ?9,
+              message_count = ?10,
+              total_input_tokens = ?11,
+              total_output_tokens = ?12,
+              total_cache_read_tokens = ?13,
+              total_cache_creation_tokens = ?14,
+              total_reasoning_tokens = ?15,
+              estimated_cost_usd = 0,
+              is_archived = ?16,
+              is_subagent = ?17,
+              parent_session_id = NULL,
+              spawn_tool_use_id = ?18,
+              agent_id = ?19,
+              agent_type = ?20,
+              spawn_depth = ?21,
+              source_path = ?22,
+              raw_meta = ?23,
+              ingested_at = datetime('now'),
+              source_mtime = ?24,
+              source_size = ?25,
+              source_hash = ?26,
+              turn_count = ?27,
+              error_count = ?28,
+              interruption_count = ?29,
+              compaction_count = ?30,
+              sidechain_message_count = ?31,
+              agent_spawn_count = ?32,
+              skill_count = ?33,
+              command_count = ?34,
+              thinking_block_count = ?35,
+              thinking_chars = ?36,
+              active_seconds = ?37,
+              outcome = ?38,
+              work_type = ?39,
+              est_reasoning_tokens = ?40,
+              reasoning_source = ?41,
+              total_cache_creation_1h_tokens = ?42,
+              reasoning_effort = ?43,
+              reasoning_effort_levels = ?44,
+              reasoning_effort_checked = 1,
+              context_window_tokens = NULL,
+              peak_context_tokens = NULL,
+              reply_count = ?45,
+              tool_call_count = ?46,
+              search_count = ?47
+        WHERE id = ?1`,
+      [
+        sessionId,
+        projectId,
+        s.title,
+        s.cwd,
+        s.gitBranch,
+        s.model,
+        s.cliVersion,
+        s.startedAt,
+        s.endedAt,
+        s.messages.length,
+        s.totals.input,
+        s.totals.output,
+        s.totals.cacheRead,
+        s.totals.cacheCreation,
+        s.totals.reasoning,
+        Number(s.isArchived),
+        Number(s.isSubagent),
+        s.spawnToolUseId,
+        s.agentId,
+        s.agentType,
+        s.spawnDepth,
+        sourcePath,
+        canonicalJson(s.rawMeta),
+        mtime,
+        size,
+        hash,
+        gotFacets.turnCount,
+        gotFacets.errorCount,
+        gotFacets.interruptionCount,
+        gotFacets.compactionCount,
+        gotFacets.sidechainMessageCount,
+        gotFacets.agentSpawnCount,
+        gotFacets.skillCount,
+        gotFacets.commandCount,
+        gotFacets.thinkingBlockCount,
+        gotFacets.thinkingChars,
+        gotFacets.activeSeconds,
+        gotOutcome,
+        gotWorkType,
+        s.estReasoningTokens,
+        s.reasoningSource,
+        s.totals.cacheCreation1h,
+        s.reasoningEffort,
+        canonicalJson(s.reasoningEffortLevels),
+        replyCount,
+        toolCallCount,
+        searchCount,
+      ],
+    );
+  } else {
+    sessionId = runStatement(
+      db,
+      `INSERT INTO session(
+         tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
+         started_at, ended_at, message_count,
+         total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens,
+         total_reasoning_tokens,
+         estimated_cost_usd, is_archived,
+         is_subagent, parent_session_id, spawn_tool_use_id, agent_id, agent_type, spawn_depth,
+         source_path, raw_meta,
+         ingested_at, source_mtime, source_size, source_hash,
+         turn_count, error_count, interruption_count, compaction_count, sidechain_message_count,
+         agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
+         active_seconds, outcome, work_type,
+         est_reasoning_tokens, reasoning_source,
+         id,
+         total_cache_creation_1h_tokens,
+         reasoning_effort, reasoning_effort_levels, reasoning_effort_checked,
+         reply_count, tool_call_count, search_count
+       )
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+               ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, datetime('now'), ?27, ?28, ?29, ?30, ?31,
+               ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, 1,
+               ?49, ?50, ?51)`,
+      [
+        s.tool,
+        s.sourceSessionId,
+        projectId,
+        s.title,
+        s.cwd,
+        s.gitBranch,
+        s.model,
+        s.cliVersion,
+        s.startedAt,
+        s.endedAt,
+        s.messages.length,
+        s.totals.input,
+        s.totals.output,
+        s.totals.cacheRead,
+        s.totals.cacheCreation,
+        s.totals.reasoning,
+        0,
+        Number(s.isArchived),
+        Number(s.isSubagent),
+        null,
+        s.spawnToolUseId,
+        s.agentId,
+        s.agentType,
+        s.spawnDepth,
+        sourcePath,
+        canonicalJson(s.rawMeta),
+        mtime,
+        size,
+        hash,
+        gotFacets.turnCount,
+        gotFacets.errorCount,
+        gotFacets.interruptionCount,
+        gotFacets.compactionCount,
+        gotFacets.sidechainMessageCount,
+        gotFacets.agentSpawnCount,
+        gotFacets.skillCount,
+        gotFacets.commandCount,
+        gotFacets.thinkingBlockCount,
+        gotFacets.thinkingChars,
+        gotFacets.activeSeconds,
+        gotOutcome,
+        gotWorkType,
+        s.estReasoningTokens,
+        s.reasoningSource,
+        existing?.id ?? null,
+        s.totals.cacheCreation1h,
+        s.reasoningEffort,
+        canonicalJson(s.reasoningEffortLevels),
+        replyCount,
+        toolCallCount,
+        searchCount,
+      ],
+    );
+  }
 
   const results = new Map<
     string,
-    { blockId: number; isError: boolean | null; text: string; timestamp: string | null }[]
+    {
+      blockId: number;
+      order: number;
+      isError: boolean | null;
+      text: string;
+      timestamp: string | null;
+    }[]
   >();
   const toolUseBlocks: ToolUseBlock[] = [];
   const messageIds: number[] = [];
+  const blockIdsByMsgAndOrd = artifactOut != null ? new Map<string, number>() : null;
+  const insertedCalls: FullWriteArtifact["insertedCalls"] | null = artifactOut != null ? [] : null;
+  const resultBlockCallInfo =
+    artifactOut != null ? new Map<number, { toolName: string; input: string | null }>() : null;
+
+  interface ExistingMsgRow {
+    id: number;
+    seq: number;
+    source_uuid: string | null;
+    parent_source_uuid: string | null;
+    role: string | null;
+    model: string | null;
+    stop_reason: string | null;
+    timestamp: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    cache_creation_tokens: number | null;
+    raw: string | Uint8Array;
+    raw_meta: string | null;
+    raw_bytes: number | null;
+  }
+  interface ExistingBlockRow {
+    id: number;
+    message_id: number;
+    ordinal: number;
+    type: string | null;
+    text: string | null;
+    tool_name: string | null;
+    tool_use_id: string | null;
+    tool_input: string | null;
+    tool_result: string | Uint8Array | null;
+    tool_result_bytes: number | null;
+  }
+  interface ExistingToolCallRow {
+    id: number;
+    message_id: number | null;
+    call_block_id: number | null;
+    result_block_id: number | null;
+    tool_kind: string | null;
+    tool_name: string | null;
+    mcp_server: string | null;
+    tool_base_name: string | null;
+    tool_use_id: string | null;
+    input: string | null;
+    input_bytes: number | null;
+    is_error: number | null;
+    has_result: number | null;
+    output_preview: string | null;
+    output_bytes: number | null;
+    duration_ms: number | null;
+    ordinal: number | null;
+    timestamp: string | null;
+  }
+  interface ExistingFileRefRow {
+    id: number;
+    message_id: number | null;
+    path: string;
+    rel_path: string | null;
+    ext: string | null;
+    operation: string;
+    timestamp: string | null;
+  }
+
+  let existingMsgBySeq: Map<number, ExistingMsgRow> | null = null;
+  let existingBlocksByMsg: Map<number, Map<number, ExistingBlockRow>> | null = null;
+  let existingCallsByCallBlock: Map<number | null, ExistingToolCallRow[]> | null = null;
+  let existingRefsByMsg: Map<number | null, ExistingFileRefRow[]> | null = null;
+  const blocksToDelete: number[] = [];
+  const messagesToDelete: number[] = [];
+
+  if (useDiff) {
+    existingMsgBySeq = new Map();
+    for (const row of queryRows<ExistingMsgRow>(
+      db,
+      `SELECT id, seq, source_uuid, parent_source_uuid, role, model, stop_reason, timestamp,
+              input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+              raw, raw_meta, raw_bytes
+         FROM message WHERE session_id = ?1 ORDER BY seq`,
+      [sessionId],
+    )) {
+      existingMsgBySeq.set(row.seq, row);
+    }
+    existingBlocksByMsg = new Map();
+    for (const row of queryRows<ExistingBlockRow>(
+      db,
+      `SELECT id, message_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result, tool_result_bytes
+         FROM block WHERE session_id = ?1 ORDER BY message_id, ordinal`,
+      [sessionId],
+    )) {
+      let byOrd = existingBlocksByMsg.get(row.message_id);
+      if (byOrd == null) {
+        byOrd = new Map();
+        existingBlocksByMsg.set(row.message_id, byOrd);
+      }
+      byOrd.set(row.ordinal, row);
+    }
+    existingCallsByCallBlock = new Map();
+    for (const row of queryRows<ExistingToolCallRow>(
+      db,
+      `SELECT id, message_id, call_block_id, result_block_id, tool_kind, tool_name,
+              mcp_server, tool_base_name, tool_use_id, input, input_bytes, is_error,
+              has_result, output_preview, output_bytes, duration_ms, ordinal, timestamp
+         FROM tool_call WHERE session_id = ?1 ORDER BY id`,
+      [sessionId],
+    )) {
+      let list = existingCallsByCallBlock.get(row.call_block_id);
+      if (list == null) {
+        list = [];
+        existingCallsByCallBlock.set(row.call_block_id, list);
+      }
+      list.push(row);
+    }
+    existingRefsByMsg = new Map();
+    for (const row of queryRows<ExistingFileRefRow>(
+      db,
+      `SELECT id, message_id, path, rel_path, ext, operation, timestamp
+         FROM file_ref WHERE session_id = ?1 ORDER BY id`,
+      [sessionId],
+    )) {
+      let list = existingRefsByMsg.get(row.message_id);
+      if (list == null) {
+        list = [];
+        existingRefsByMsg.set(row.message_id, list);
+      }
+      list.push(row);
+    }
+  }
 
   const insertMessage = db.prepare(
     `INSERT INTO message(
@@ -2280,55 +3317,179 @@ function writeSession(
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
   );
+  const updateMessage = useDiff
+    ? db.prepare(
+        `UPDATE message
+            SET source_uuid = ?2, parent_source_uuid = ?3, role = ?4, model = ?5,
+                stop_reason = ?6, timestamp = ?7, input_tokens = ?8, output_tokens = ?9,
+                cache_read_tokens = ?10, cache_creation_tokens = ?11,
+                raw = ?12, raw_meta = ?13, raw_bytes = ?14
+          WHERE id = ?1`,
+      )
+    : null;
   const insertBlock = db.prepare(
     `INSERT INTO block(
-       message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result
+       message_id, session_id, ordinal, type, text, tool_name, tool_use_id, tool_input, tool_result, tool_result_bytes
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
   );
+  const updateBlock = useDiff
+    ? db.prepare(
+        `UPDATE block
+            SET type = ?2, text = ?3, tool_name = ?4, tool_use_id = ?5,
+                tool_input = ?6, tool_result = ?7, tool_result_bytes = ?8
+          WHERE id = ?1`,
+      )
+    : null;
 
+  let blockOrder = 0;
   try {
     for (const message of s.messages) {
-      const storedRaw = encodeMessageRaw(canonicalJson(message.raw), message.raw);
-      const messageId = Number(
-        insertMessage.run(
-          sessionId,
-          message.seq,
-          message.sourceUuid,
-          message.parentSourceUuid,
-          message.role,
-          message.model,
-          message.stopReason,
-          message.timestamp,
-          message.usage?.input ?? null,
-          message.usage?.output ?? null,
-          message.usage?.cacheRead ?? null,
-          message.usage?.cacheCreation ?? null,
-          storedRaw.raw,
-          storedRaw.rawMeta,
-          storedRaw.rawBytes,
-        ).lastInsertRowid,
-      );
-      messageIds.push(messageId);
-
-      for (const block of message.blocks) {
-        const blockId = Number(
-          insertBlock.run(
-            messageId,
+      const rawJson = canonicalJson(message.raw);
+      const inTok = message.usage?.input ?? null;
+      const outTok = message.usage?.output ?? null;
+      const cacheReadTok = message.usage?.cacheRead ?? null;
+      const cacheCreateTok = message.usage?.cacheCreation ?? null;
+      const oldMsg = existingMsgBySeq?.get(message.seq);
+      let messageId: number;
+      if (oldMsg != null && existingMsgBySeq != null) {
+        existingMsgBySeq.delete(message.seq);
+        messageId = oldMsg.id;
+        const rawUnchanged = matchesStoredMessageRaw(oldMsg.raw, oldMsg.raw_bytes, rawJson);
+        const metaChanged =
+          oldMsg.source_uuid !== message.sourceUuid ||
+          oldMsg.parent_source_uuid !== message.parentSourceUuid ||
+          oldMsg.role !== message.role ||
+          oldMsg.model !== message.model ||
+          oldMsg.stop_reason !== message.stopReason ||
+          oldMsg.timestamp !== message.timestamp ||
+          oldMsg.input_tokens !== inTok ||
+          oldMsg.output_tokens !== outTok ||
+          oldMsg.cache_read_tokens !== cacheReadTok ||
+          oldMsg.cache_creation_tokens !== cacheCreateTok;
+        if (metaChanged || !rawUnchanged) {
+          const storedRaw = rawUnchanged
+            ? { raw: oldMsg.raw, rawMeta: oldMsg.raw_meta, rawBytes: oldMsg.raw_bytes }
+            : encodeMessageRaw(rawJson, message.raw);
+          const changed =
+            metaChanged ||
+            oldMsg.raw_meta !== storedRaw.rawMeta ||
+            oldMsg.raw_bytes !== storedRaw.rawBytes ||
+            !rawBytesEqual(oldMsg.raw, storedRaw.raw);
+          if (changed && updateMessage != null) {
+            updateMessage.run(
+              messageId,
+              message.sourceUuid,
+              message.parentSourceUuid,
+              message.role,
+              message.model,
+              message.stopReason,
+              message.timestamp,
+              inTok,
+              outTok,
+              cacheReadTok,
+              cacheCreateTok,
+              storedRaw.raw,
+              storedRaw.rawMeta,
+              storedRaw.rawBytes,
+            );
+          }
+        }
+      } else {
+        const storedRaw = encodeMessageRaw(rawJson, message.raw);
+        messageId = Number(
+          insertMessage.run(
             sessionId,
-            block.ordinal,
-            block.blockType,
-            block.text,
-            block.toolName,
-            block.toolUseId,
-            block.toolInput === undefined ? null : canonicalJson(block.toolInput),
-            block.toolResult,
+            message.seq,
+            message.sourceUuid,
+            message.parentSourceUuid,
+            message.role,
+            message.model,
+            message.stopReason,
+            message.timestamp,
+            inTok,
+            outTok,
+            cacheReadTok,
+            cacheCreateTok,
+            storedRaw.raw,
+            storedRaw.rawMeta,
+            storedRaw.rawBytes,
           ).lastInsertRowid,
         );
+      }
+      messageIds.push(messageId);
+
+      const oldBlocksForMsg = existingBlocksByMsg?.get(messageId);
+      if (oldBlocksForMsg != null && existingBlocksByMsg != null) {
+        existingBlocksByMsg.delete(messageId);
+      }
+
+      for (const block of message.blocks) {
+        const order = blockOrder++;
+        const toolInputStr = block.toolInput === undefined ? null : canonicalJson(block.toolInput);
+        const oldBlk = oldBlocksForMsg?.get(block.ordinal);
+        let blockId: number;
+        if (oldBlk != null && oldBlocksForMsg != null) {
+          oldBlocksForMsg.delete(block.ordinal);
+          blockId = oldBlk.id;
+          const blockMetaChanged =
+            oldBlk.type !== block.blockType ||
+            oldBlk.text !== block.text ||
+            oldBlk.tool_name !== block.toolName ||
+            oldBlk.tool_use_id !== block.toolUseId ||
+            oldBlk.tool_input !== toolInputStr;
+          const toolResultUnchanged = matchesStoredBlockToolResult(
+            oldBlk.tool_result,
+            oldBlk.tool_result_bytes,
+            block.toolResult,
+          );
+          if (blockMetaChanged || !toolResultUnchanged) {
+            const storedToolResult = toolResultUnchanged
+              ? { toolResult: oldBlk.tool_result, toolResultBytes: oldBlk.tool_result_bytes }
+              : encodeBlockToolResult(block.toolResult);
+            const changed =
+              blockMetaChanged ||
+              oldBlk.tool_result_bytes !== storedToolResult.toolResultBytes ||
+              !rawBytesEqual(oldBlk.tool_result, storedToolResult.toolResult);
+            if (changed && updateBlock != null) {
+              updateBlock.run(
+                blockId,
+                block.blockType,
+                block.text,
+                block.toolName,
+                block.toolUseId,
+                toolInputStr,
+                storedToolResult.toolResult,
+                storedToolResult.toolResultBytes,
+              );
+            }
+          }
+        } else {
+          const storedToolResult = encodeBlockToolResult(block.toolResult);
+          blockId = Number(
+            insertBlock.run(
+              messageId,
+              sessionId,
+              block.ordinal,
+              block.blockType,
+              block.text,
+              block.toolName,
+              block.toolUseId,
+              toolInputStr,
+              storedToolResult.toolResult,
+              storedToolResult.toolResultBytes,
+            ).lastInsertRowid,
+          );
+        }
+        if (blockIdsByMsgAndOrd != null) {
+          blockIdsByMsgAndOrd.set(`${messageId}:${block.ordinal}`, blockId);
+        }
         if (block.blockType === "tool_use") {
           toolUseBlocks.push({
             messageId,
+            messageSeq: message.seq,
             callBlockId: blockId,
+            order,
             timestamp: block.calledAt ?? message.timestamp,
             block,
           });
@@ -2336,6 +3497,7 @@ function writeSession(
           const queue = results.get(block.toolUseId) ?? [];
           queue.push({
             blockId,
+            order,
             isError: block.isError,
             text: block.toolResult ?? "",
             timestamp: message.timestamp,
@@ -2343,9 +3505,22 @@ function writeSession(
           results.set(block.toolUseId, queue);
         }
       }
+
+      if (oldBlocksForMsg != null) {
+        for (const leftover of oldBlocksForMsg.values()) {
+          blocksToDelete.push(leftover.id);
+        }
+      }
+    }
+    if (existingMsgBySeq != null) {
+      for (const leftover of existingMsgBySeq.values()) {
+        messagesToDelete.push(leftover.id);
+      }
     }
   } finally {
+    updateBlock?.finalize();
     insertBlock.finalize();
+    updateMessage?.finalize();
     insertMessage.finalize();
   }
 
@@ -2357,6 +3532,18 @@ function writeSession(
      )
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
   );
+  const updateToolCall = useDiff
+    ? db.prepare(
+        `UPDATE tool_call
+            SET message_id = ?2, call_block_id = ?3, result_block_id = ?4, tool_kind = ?5,
+                tool_name = ?6, mcp_server = ?7, tool_base_name = ?8, tool_use_id = ?9,
+                input = ?10, input_bytes = ?11, is_error = ?12, has_result = ?13,
+                output_preview = ?14, output_bytes = ?15, duration_ms = ?16, ordinal = ?17,
+                timestamp = ?18
+          WHERE id = ?1`,
+      )
+    : null;
+  const deleteToolCall = useDiff ? db.prepare("DELETE FROM tool_call WHERE id = ?1") : null;
   const resultTaken = new Map<string, number>();
   try {
     for (const call of toolUseBlocks) {
@@ -2365,7 +3552,7 @@ function writeSession(
       const id = call.block.toolUseId;
       let taken = id == null ? 0 : (resultTaken.get(id) ?? 0);
       const queue = id == null ? undefined : results.get(id);
-      while (queue?.[taken] != null && (queue[taken]?.blockId ?? 0) < call.callBlockId) {
+      while (queue?.[taken] != null && (queue[taken]?.order ?? 0) < call.order) {
         taken += 1;
       }
       const result = queue?.[taken];
@@ -2374,9 +3561,108 @@ function writeSession(
       const isError = result?.isError ?? null;
       const output = result?.text ?? null;
       const input = call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput);
+      const inputBytes = input == null ? null : byteLength(input);
+      const isErrorNum = isError == null ? null : Number(isError);
+      const hasResult = Number(resultBlockId != null);
+      const outputPreview = output == null ? null : previewHeadTail(output, 500);
+      const outputBytes = output == null ? null : byteLength(output);
       const resultTimestamp = result?.timestamp ?? null;
-      insertToolCall.run(
-        sessionId,
+      const durationMs = durationBetween(call.timestamp, resultTimestamp);
+
+      const oldCalls = existingCallsByCallBlock?.get(call.callBlockId);
+      if (oldCalls != null && existingCallsByCallBlock != null) {
+        existingCallsByCallBlock.delete(call.callBlockId);
+      }
+
+      let oldIdx = 0;
+      const syncCallRow = (
+        msgId: number,
+        callBlockId: number,
+        resBlockId: number | null,
+        toolKind: string,
+        toolName: string,
+        mcpServer: string | null,
+        toolBaseName: string,
+        toolUseId: string | null,
+        inStr: string | null,
+        inBytes: number | null,
+        errNum: number | null,
+        hasRes: number,
+        outPrev: string | null,
+        outBytes: number | null,
+        durMs: number | null,
+        ord: number,
+        ts: string | null,
+      ): number => {
+        const oldRow = oldCalls?.[oldIdx++];
+        if (oldRow != null) {
+          const same =
+            oldRow.message_id === msgId &&
+            oldRow.call_block_id === callBlockId &&
+            oldRow.result_block_id === resBlockId &&
+            oldRow.tool_kind === toolKind &&
+            oldRow.tool_name === toolName &&
+            oldRow.mcp_server === mcpServer &&
+            oldRow.tool_base_name === toolBaseName &&
+            oldRow.tool_use_id === toolUseId &&
+            oldRow.input === inStr &&
+            oldRow.input_bytes === inBytes &&
+            oldRow.is_error === errNum &&
+            oldRow.has_result === hasRes &&
+            oldRow.output_preview === outPrev &&
+            oldRow.output_bytes === outBytes &&
+            oldRow.duration_ms === durMs &&
+            oldRow.ordinal === ord &&
+            oldRow.timestamp === ts;
+          if (!same && updateToolCall != null) {
+            updateToolCall.run(
+              oldRow.id,
+              msgId,
+              callBlockId,
+              resBlockId,
+              toolKind,
+              toolName,
+              mcpServer,
+              toolBaseName,
+              toolUseId,
+              inStr,
+              inBytes,
+              errNum,
+              hasRes,
+              outPrev,
+              outBytes,
+              durMs,
+              ord,
+              ts,
+            );
+          }
+          return oldRow.id;
+        }
+        return Number(
+          insertToolCall.run(
+            sessionId,
+            msgId,
+            callBlockId,
+            resBlockId,
+            toolKind,
+            toolName,
+            mcpServer,
+            toolBaseName,
+            toolUseId,
+            inStr,
+            inBytes,
+            errNum,
+            hasRes,
+            outPrev,
+            outBytes,
+            durMs,
+            ord,
+            ts,
+          ).lastInsertRowid,
+        );
+      };
+
+      const toolCallId = syncCallRow(
         call.messageId,
         call.callBlockId,
         resultBlockId,
@@ -2386,20 +3672,41 @@ function writeSession(
         classified.baseName,
         call.block.toolUseId,
         input,
-        input == null ? null : byteLength(input),
-        isError == null ? null : Number(isError),
-        Number(resultBlockId != null),
-        output == null ? null : previewHeadTail(output, 500),
-        output == null ? null : byteLength(output),
-        durationBetween(call.timestamp, resultTimestamp),
+        inputBytes,
+        isErrorNum,
+        hasResult,
+        outputPreview,
+        outputBytes,
+        durationMs,
         call.block.ordinal,
         call.timestamp,
       );
+      if (resultBlockId != null && resultBlockCallInfo != null) {
+        resultBlockCallInfo.set(resultBlockId, { toolName: name, input });
+      }
+      if (insertedCalls != null) {
+        insertedCalls.push({
+          toolCallId,
+          messageId: call.messageId,
+          callBlockId: call.callBlockId,
+          callSeq: call.messageSeq,
+          ordinal: call.block.ordinal,
+          toolName: name,
+          toolUseId: call.block.toolUseId,
+          input,
+          timestamp: call.timestamp,
+          matched: resultBlockId != null,
+          outputBytes: outputBytes ?? 0,
+          hasInner: (call.block.innerToolCalls?.length ?? 0) > 0,
+          isInner: false,
+        });
+      }
       for (const inner of call.block.innerToolCalls ?? []) {
         const innerClassified = classifyTool(inner.toolName);
         const innerInput = inner.toolInput === undefined ? null : canonicalJson(inner.toolInput);
-        insertToolCall.run(
-          sessionId,
+        const innerInputBytes = innerInput == null ? null : byteLength(innerInput);
+        const innerErrNum = inner.isError == null ? null : Number(inner.isError);
+        const innerCallId = syncCallRow(
           call.messageId,
           call.callBlockId,
           null,
@@ -2409,8 +3716,8 @@ function writeSession(
           innerClassified.baseName,
           inner.toolUseId,
           innerInput,
-          innerInput == null ? null : byteLength(innerInput),
-          inner.isError == null ? null : Number(inner.isError),
+          innerInputBytes,
+          innerErrNum,
           0,
           null,
           null,
@@ -2418,9 +3725,41 @@ function writeSession(
           call.block.ordinal,
           call.timestamp,
         );
+        if (insertedCalls != null) {
+          insertedCalls.push({
+            toolCallId: innerCallId,
+            messageId: call.messageId,
+            callBlockId: call.callBlockId,
+            callSeq: call.messageSeq,
+            ordinal: call.block.ordinal,
+            toolName: inner.toolName,
+            toolUseId: inner.toolUseId,
+            input: innerInput,
+            timestamp: call.timestamp,
+            matched: false,
+            outputBytes: 0,
+            hasInner: false,
+            isInner: true,
+          });
+        }
+      }
+      if (oldCalls != null && deleteToolCall != null) {
+        for (let i = oldIdx; i < oldCalls.length; i += 1) {
+          const oldCall = oldCalls[i];
+          if (oldCall != null) deleteToolCall.run(oldCall.id);
+        }
+      }
+    }
+    if (existingCallsByCallBlock != null && deleteToolCall != null) {
+      for (const leftoverList of existingCallsByCallBlock.values()) {
+        for (const leftover of leftoverList) {
+          deleteToolCall.run(leftover.id);
+        }
       }
     }
   } finally {
+    deleteToolCall?.finalize();
+    updateToolCall?.finalize();
     insertToolCall.finalize();
   }
 
@@ -2428,23 +3767,106 @@ function writeSession(
     `INSERT INTO file_ref(session_id, message_id, path, rel_path, ext, operation, timestamp)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
   );
+  const updateFileRef = useDiff
+    ? db.prepare(
+        `UPDATE file_ref
+            SET path = ?2, rel_path = ?3, ext = ?4, operation = ?5, timestamp = ?6
+          WHERE id = ?1`,
+      )
+    : null;
+  const deleteFileRef = useDiff ? db.prepare("DELETE FROM file_ref WHERE id = ?1") : null;
   try {
-    for (const ref of refs) {
-      insertFileRef.run(
-        sessionId,
-        messageIds[ref.messageIdx] ?? null,
-        ref.path,
-        ref.relPath,
-        ref.ext,
-        ref.operation,
-        ref.timestamp,
-      );
+    if (useDiff && existingRefsByMsg != null) {
+      const refsByMsg = new Map<number | null, typeof refs>();
+      for (const ref of refs) {
+        const msgId = messageIds[ref.messageIdx] ?? null;
+        let list = refsByMsg.get(msgId);
+        if (list == null) {
+          list = [];
+          refsByMsg.set(msgId, list);
+        }
+        list.push(ref);
+      }
+      for (const [msgId, desiredList] of refsByMsg) {
+        const oldList = existingRefsByMsg.get(msgId) ?? [];
+        existingRefsByMsg.delete(msgId);
+        const minLen = Math.min(desiredList.length, oldList.length);
+        for (let i = 0; i < minLen; i += 1) {
+          const d = desiredList[i];
+          const o = oldList[i];
+          if (d == null || o == null) continue;
+          if (
+            o.path !== d.path ||
+            o.rel_path !== d.relPath ||
+            o.ext !== d.ext ||
+            o.operation !== d.operation ||
+            o.timestamp !== d.timestamp
+          ) {
+            updateFileRef?.run(o.id, d.path, d.relPath, d.ext, d.operation, d.timestamp);
+          }
+        }
+        for (let i = minLen; i < desiredList.length; i += 1) {
+          const d = desiredList[i];
+          if (d == null) continue;
+          insertFileRef.run(sessionId, msgId, d.path, d.relPath, d.ext, d.operation, d.timestamp);
+        }
+        for (let i = minLen; i < oldList.length; i += 1) {
+          const o = oldList[i];
+          if (o != null) deleteFileRef?.run(o.id);
+        }
+      }
+      for (const leftoverList of existingRefsByMsg.values()) {
+        for (const leftover of leftoverList) {
+          deleteFileRef?.run(leftover.id);
+        }
+      }
+    } else {
+      for (const ref of refs) {
+        insertFileRef.run(
+          sessionId,
+          messageIds[ref.messageIdx] ?? null,
+          ref.path,
+          ref.relPath,
+          ref.ext,
+          ref.operation,
+          ref.timestamp,
+        );
+      }
     }
   } finally {
+    deleteFileRef?.finalize();
+    updateFileRef?.finalize();
     insertFileRef.finalize();
   }
 
-  reconcileBilledRequests(db, sessionId, { refreshReconciledSession: false, unsettled });
+  if (blocksToDelete.length > 0) {
+    const deleteBlock = db.prepare("DELETE FROM block WHERE id = ?1");
+    try {
+      for (const id of blocksToDelete) {
+        deleteBlock.run(id);
+      }
+    } finally {
+      deleteBlock.finalize();
+    }
+  }
+  if (messagesToDelete.length > 0) {
+    const deleteMessage = db.prepare("DELETE FROM message WHERE id = ?1");
+    try {
+      for (const id of messagesToDelete) {
+        deleteMessage.run(id);
+      }
+    } finally {
+      deleteMessage.finalize();
+    }
+  }
+
+  const affectedPeers = reconcileBilledRequests(db, sessionId, {
+    refreshReconciledSession: false,
+    unsettled,
+  });
+  if (affectedOut != null && affectedPeers.length > 0) {
+    affectedOut.push(...affectedPeers);
+  }
   const usage = materializeModelUsage(db, sessionId);
   runStatement(db, "UPDATE session SET estimated_cost_usd = ?1 WHERE id = ?2", [
     totalCost(sessionCostParts(usage, { model: s.model, usage: s.totals })),
@@ -2452,6 +3874,21 @@ function writeSession(
   ]);
   materializeSessionEconomics(db, sessionId);
   materializeContextWindow(db, sessionId);
+
+  if (
+    artifactOut != null &&
+    insertedCalls != null &&
+    blockIdsByMsgAndOrd != null &&
+    resultBlockCallInfo != null
+  ) {
+    artifactOut.value = {
+      sessionId,
+      messageIds,
+      insertedCalls,
+      blockIdsByMsgAndOrd,
+      resultBlockCallInfo,
+    };
+  }
 
   return sessionId;
 }
@@ -2965,7 +4402,7 @@ export function lineCount(content: string): number {
   return content.endsWith("\n") ? newlines : newlines + 1;
 }
 
-function mtimeSecs(stats: Stats): number {
+function mtimeSecs(stats: Pick<Stats, "mtimeMs">): number {
   return Math.trunc(stats.mtimeMs / 1000);
 }
 

@@ -13,7 +13,7 @@ import {
   sync,
   upsertSession,
 } from "../src/ingest.ts";
-import { decodeMessageRaw } from "../src/message-storage.ts";
+import { backfillCopilotCompactionMetadata, decodeMessageRaw } from "../src/message-storage.ts";
 import { emptyUsage } from "../src/model.ts";
 import { sessionCostParts } from "../src/model-usage.ts";
 import { getSession } from "../src/query.ts";
@@ -897,6 +897,67 @@ describe("Copilot ingest", () => {
       expect(db.query("SELECT total_changes() AS n").get()).toEqual(writes);
       closeDb(db);
     }
+  });
+
+  test("a stored compaction record with malformed UTF-8 does not block repairing the others", () => {
+    const dir = freshDir();
+    const db = open(dir);
+    for (const name of ["broken", "healthy"]) {
+      upsertSession(
+        db,
+        parseCopilotSession(
+          name,
+          event(
+            "session.compaction_complete",
+            {
+              success: true,
+              summaryContent: "synthetic summary ".repeat(200),
+              preCompactionTokens: 7000,
+            },
+            `compact-${name}`,
+          ),
+        ),
+        join(dir, `${name}.jsonl`),
+        1,
+        2,
+      );
+    }
+    const rows = db
+      .query(
+        "SELECT m.id AS id, s.source_session_id AS name, typeof(m.raw) AS kind FROM message m JOIN session s ON s.id = m.session_id ORDER BY m.id",
+      )
+      .all() as { id: number; name: string; kind: string }[];
+    expect(rows.map((row) => row.kind)).toEqual(["blob", "blob"]);
+    const broken = rows.find((row) => row.name === "broken")?.id ?? -1;
+    const malformed = Buffer.concat([
+      Buffer.from('{"type":"session.compaction_complete","data":{"summaryContent":"'),
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('"}}'),
+    ]);
+    db.run("UPDATE message SET raw = ?1 WHERE id = ?2", [Bun.zstdCompressSync(malformed), broken]);
+    db.exec(
+      `UPDATE message SET raw_meta = '{"type":"session.compaction_complete"}'; UPDATE session SET peak_context_tokens = 0`,
+    );
+
+    const config = { claudeDir: join(dir, "none"), codexDir: join(dir, "none") };
+    expect(() => sync(db, config)).not.toThrow();
+    const peaks = db
+      .query(
+        "SELECT source_session_id AS name, peak_context_tokens AS peak FROM session ORDER BY name",
+      )
+      .all();
+    expect(peaks).toEqual([
+      { name: "broken", peak: 0 },
+      { name: "healthy", peak: 7000 },
+    ]);
+    expect(db.query("SELECT raw_meta FROM message WHERE id = ?1").get(broken)).toEqual({
+      raw_meta: '{"type":"session.compaction_complete"}',
+    });
+    expect(backfillCopilotCompactionMetadata(db)).toEqual({
+      repaired: 0,
+      unreadableMessageIds: [broken],
+    });
+    closeDb(db);
   });
 
   test("files a subagent's inline events as sidechain rows outside the parent's turns and context", () => {

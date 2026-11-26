@@ -222,8 +222,8 @@ each of its sweeps refreshes recommendations whenever an earlier sync left them
 pending. A recommendation refresh that runs while another sync's lineage and
 worktree updates are still pending keeps the refresh pending, so the sync that
 settles those updates refreshes recommendations again. Once a server's sync connection has finished its first full sync, its
-watch and sweep syncs skip the archive-wide repricing pass, which startup,
-manual, and CLI syncs still run. A filesystem event that arrives while another
+watch syncs skip the archive-wide repricing pass and its periodic sweeps run it
+at most once every 5 minutes. Startup, manual, and CLI syncs always run it. A filesystem event that arrives while another
 sync is running waits for the next run instead of joining the running one,
 which may already have read that file. OpenCode database directories are watched
 non-recursively, and because a running OpenCode's later writes may raise no
@@ -798,9 +798,11 @@ anyway so the OS can restart it.
 Stopping `decant serve` or the service cancels a sync in progress. The sync
 finishes the file it is reading and stops. It skips the work that normally ends
 a sync, such as linking subagents to their parents and refreshing signals. The
-archive records that work as pending, so the next sync that ingests a file, or
-a later startup, manual, or sweep sync that ingests nothing, does it for the
-whole archive. A sync
+archive records that work as pending, and the next sync that does not defer
+derived refresh does it for the whole archive, whether or not it ingests
+anything. Startup, manual, CLI, and periodic sweep syncs run it. A watch sync
+started by a file event defers derived refresh, so it leaves the work pending
+even when it ingests the changed file. A sync
 that is still running 5 seconds after it was cancelled is terminated. SQLite
 discards any write it had not committed, so the archive stays consistent and
 the next sync picks up where it left off. Homebrew installs register the stable

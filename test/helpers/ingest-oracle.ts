@@ -36,6 +36,7 @@ export interface CanonicalSnapshot {
   unbilled_request: Row[];
   session_model_usage: Row[];
   session_economics: Row[];
+  ingest_issue: Row[];
 }
 
 const SESSION_KEY_SQL = "s.tool || ':' || s.source_session_id";
@@ -153,6 +154,10 @@ export function captureCanonicalSnapshot(db: Database): CanonicalSnapshot {
       }),
       (row) => [row.session_key],
     ),
+    ingest_issue: sorted(
+      rows(db, "SELECT source_path, line_no, code, error, raw_line FROM ingest_issue"),
+      (row) => [row.source_path, row.line_no, row.code, row.error, row.raw_line],
+    ),
   };
 }
 
@@ -198,24 +203,27 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
   const sessionKeyOf = db.query(
     "SELECT tool || ':' || source_session_id AS session_key FROM session WHERE id = ?1",
   );
+  const tieKey = (row: Row) => [row.session_key, row.message_seq, row.block_ordinal];
   return queries.map((query) => {
+    const scored = rows(
+      db,
+      `SELECT b.id AS block_id, ${SESSION_KEY_SQL} AS session_key, m.seq AS message_seq,
+              b.ordinal AS block_ordinal,
+              ROUND(bm25(block_fts, 4.0, 2.0, 1.0), 9) AS score
+         FROM block_fts
+         JOIN block b ON b.id = block_fts.rowid
+         JOIN message m ON m.id = b.message_id
+         JOIN session s ON s.id = b.session_id
+        WHERE block_fts MATCH ?1`,
+      [buildFtsQuery(query)],
+    );
+    const scoreByBlock = new Map(scored.map((row) => [row.block_id, row.score]));
     const direct = sorted(
-      rows(
-        db,
-        `SELECT ${SESSION_KEY_SQL} AS session_key, m.seq AS message_seq,
-                b.ordinal AS block_ordinal,
-                ROUND(bm25(block_fts, 4.0, 2.0, 1.0), 9) AS score
-           FROM block_fts
-           JOIN block b ON b.id = block_fts.rowid
-           JOIN message m ON m.id = b.message_id
-           JOIN session s ON s.id = b.session_id
-          WHERE block_fts MATCH ?1`,
-        [buildFtsQuery(query)],
-      ),
-      (row) => [row.session_key, row.message_seq, row.block_ordinal],
+      scored.map((row) => omit(row, ["block_id"])),
+      (row) => [row.score, ...tieKey(row)],
     );
     const page = searchPage(db, query, { includeSubagents: true, limit: 100 });
-    const hits = sorted(
+    const hits = sortedWithinTies(
       page.results.map((hit) => ({
         session_key: (sessionKeyOf.get(hit.session_id) as { session_key: string } | null)
           ?.session_key,
@@ -228,11 +236,28 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
         timestamp: hit.timestamp,
         snippet: hit.snippet,
         has_snippet: hit.snippet !== "",
+        score: scoreByBlock.get(hit.block_id) ?? null,
       })),
-      (row) => [row.session_key, row.message_seq, row.block_ordinal],
+      (row) => row.score,
+      tieKey,
     );
     return { query, direct, search: { total: page.total, hits } };
   });
+}
+
+function sortedWithinTies(
+  list: Row[],
+  score: (row: Row) => unknown,
+  key: (row: Row) => unknown[],
+): Row[] {
+  const out: Row[] = [];
+  for (let start = 0; start < list.length; ) {
+    let end = start + 1;
+    while (end < list.length && score(list[end] as Row) === score(list[start] as Row)) end += 1;
+    out.push(...sorted(list.slice(start, end), key));
+    start = end;
+  }
+  return out;
 }
 
 /** SQLite's own page-level check plus FTS5's external-content cross-check,
@@ -265,6 +290,7 @@ export interface ScenarioStep {
   label: string;
   mutations: FileMutation[];
   clock?: "advance" | "hold";
+  afterSync?: (incremental: Database) => void;
 }
 
 export interface DifferentialScenario {
@@ -299,7 +325,7 @@ export function runDifferentialScenario(scenario: DifferentialScenario): Differe
     incremental = openDb(join(workspace, "archive", "incremental.db"));
     const reports: SyncReport[] = [];
     let clock = CLOCK_START_SECONDS;
-    for (const { label, ...step } of scenario.steps) {
+    for (const { label, afterSync, ...step } of scenario.steps) {
       const stepName = `${scenario.name}: ${label}`;
       if (step.clock !== "hold") {
         clock += CLOCK_STEP_SECONDS;
@@ -321,6 +347,7 @@ export function runDifferentialScenario(scenario: DifferentialScenario): Differe
       }
       reports.push(report);
       assertDatabaseIntegrity(incremental);
+      afterSync?.(incremental);
     }
 
     fresh = openDb(join(workspace, "archive", "fresh.db"));

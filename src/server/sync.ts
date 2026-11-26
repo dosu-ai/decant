@@ -112,6 +112,16 @@ function endSyncActivity(report?: SyncReport): void {
   }
 }
 
+function handOffSyncActivity(finished: SyncReason, report?: SyncReport): void {
+  if (syncActivity.reason === finished) {
+    syncActivity.reason = null;
+    syncActivity.progress = null;
+  }
+  if (report != null && !report.cancelled) {
+    syncActivity.archiveSynced = true;
+  }
+}
+
 export function syncStatusBody() {
   return {
     ...syncStatus,
@@ -205,9 +215,7 @@ export async function syncNow(
       `issues ${report.issues}, failed ${report.failed}`;
     syncStatus.ingested_count = report.ingested;
     if (stillBusy) {
-      if (!report.cancelled) {
-        syncActivity.archiveSynced = true;
-      }
+      handOffSyncActivity("manual", report);
     } else {
       endSyncActivity(report);
     }
@@ -231,7 +239,9 @@ export async function syncNow(
       syncStatus.in_progress = stillBusy;
       syncStatus.last_sync_at = new Date().toISOString();
       syncStatus.last_error = stillBusy ? null : errorMessage;
-      if (!stillBusy) {
+      if (stillBusy) {
+        handOffSyncActivity("manual");
+      } else {
         endSyncActivity();
       }
       publishServerEvent({
@@ -885,8 +895,8 @@ export function applyWatchEvent(
     syncActivity.progress = event.progress;
   } else if (!syncStatus.in_progress) {
     endSyncActivity(event.type === "sync" ? event.report : undefined);
-  } else if (event.type === "sync" && !event.report.cancelled) {
-    syncActivity.archiveSynced = true;
+  } else if (event.type === "sync" || event.type === "error") {
+    handOffSyncActivity(event.reason, event.type === "sync" ? event.report : undefined);
   }
   const published =
     stillBusy && "status" in event && event.status != null && !event.status.in_progress

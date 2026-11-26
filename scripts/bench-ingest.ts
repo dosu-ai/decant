@@ -724,6 +724,92 @@ function decantChild(parentPid: number): number | null {
   }
 }
 
+function processAlive(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+    return state !== "Z" && state !== "X";
+  } catch {}
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+export interface LaunchedServe {
+  readonly pid: number;
+  readonly exited: Promise<number>;
+}
+
+export interface ServeStopOps {
+  findServePid(launcherPid: number): number | null;
+  isAlive(pid: number): boolean;
+  signal(pid: number, signal: "SIGTERM" | "SIGKILL"): void;
+  sleep(ms: number): Promise<void>;
+}
+
+export const SERVE_STOP_POLL_MS = 20;
+
+const liveServeStopOps: ServeStopOps = {
+  findServePid: decantChild,
+  isAlive: processAlive,
+  signal: (pid, signal) => {
+    try {
+      process.kill(pid, signal);
+    } catch {}
+  },
+  sleep: (ms) => Bun.sleep(ms),
+};
+
+export async function stopLaunchedServe(
+  launcher: LaunchedServe,
+  knownServePid: number | null,
+  graceMs: number,
+  ops: ServeStopOps = liveServeStopOps,
+): Promise<{ exitCode: number | null; servePid: number | null; killed: boolean }> {
+  let servePid = knownServePid ?? ops.findServePid(launcher.pid);
+  let launcherExited = false;
+  let exitCode: number | null = null;
+  void launcher.exited.then(
+    (code) => {
+      exitCode = code;
+      launcherExited = true;
+    },
+    () => {
+      launcherExited = true;
+    },
+  );
+  const allGone = (): boolean => launcherExited && (servePid === null || !ops.isAlive(servePid));
+  const waitGone = async (budgetMs: number): Promise<boolean> => {
+    for (let waited = 0; !allGone(); waited += SERVE_STOP_POLL_MS) {
+      if (waited >= budgetMs) return false;
+      await ops.sleep(SERVE_STOP_POLL_MS);
+    }
+    return true;
+  };
+
+  ops.signal(servePid ?? launcher.pid, "SIGTERM");
+  if (await waitGone(graceMs)) return { exitCode, servePid, killed: false };
+
+  if (!launcherExited) servePid ??= ops.findServePid(launcher.pid);
+  if (servePid !== null && servePid !== launcher.pid) ops.signal(servePid, "SIGKILL");
+  if (!launcherExited) ops.signal(launcher.pid, "SIGKILL");
+  await waitGone(Number.POSITIVE_INFINITY);
+  return { exitCode: null, servePid, killed: true };
+}
+
+export function requireTracerRunning(
+  tracer: { readonly exitCode: number | null },
+  logDir: string,
+): void {
+  if (tracer.exitCode === null) return;
+  throw new Error(
+    `strace -p exited with code ${tracer.exitCode} before the replay window ended, so fsync counts would be incomplete; see ${join(logDir, "strace.attach.log")}`,
+  );
+}
+
 async function childPid(parentPid: number, timeoutMs = 10_000): Promise<number> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -1543,13 +1629,16 @@ async function runReplay(ctx: ReplayContext) {
     stdout: Bun.file(join(logDir, "serve.stdout.log")),
     stderr: Bun.file(join(logDir, "serve.stderr.log")),
   });
+  let servePid = proc.pid;
+  let servePidKnown = options.strace !== "launch";
   const cleanup = (): void => {
-    try {
-      proc.kill("SIGKILL");
-    } catch {}
+    for (const pid of new Set(servePidKnown ? [servePid, proc.pid] : [proc.pid])) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
   };
   process.on("exit", cleanup);
-  let servePid = proc.pid;
   let sampler: ReturnType<typeof setInterval> | null = null;
   let poller: ReturnType<typeof setInterval> | null = null;
   let sse: AbortController | null = null;
@@ -1576,15 +1665,9 @@ async function runReplay(ctx: ReplayContext) {
       attachProc = null;
     }
     const stopAt = performance.now();
-    try {
-      process.kill(servePid, "SIGTERM");
-    } catch {}
-    const exitCode = await Promise.race([proc.exited, Bun.sleep(30_000).then(() => null)]);
+    const stopped = await stopLaunchedServe(proc, servePidKnown ? servePid : null, 30_000);
     const shutdownMs = performance.now() - stopAt;
-    if (exitCode === null) {
-      cleanup();
-      await proc.exited.catch(() => {});
-    }
+    const exitCode = stopped.killed ? null : stopped.exitCode;
     process.off("exit", cleanup);
     serverStopped = true;
     return { shutdownMs, exitCode };
@@ -1609,7 +1692,10 @@ async function runReplay(ctx: ReplayContext) {
   let exitCode: number | null = null;
 
   try {
-    servePid = options.strace === "launch" ? await childPid(proc.pid) : proc.pid;
+    if (!servePidKnown) {
+      servePid = await childPid(proc.pid);
+      servePidKnown = true;
+    }
     const api = new Api(`http://127.0.0.1:${port}`);
 
     await waitFor("GET /api/health", 120_000, async () =>
@@ -1638,6 +1724,7 @@ async function runReplay(ctx: ReplayContext) {
         stderr: Bun.file(join(logDir, "strace.attach.log")),
       });
       await Bun.sleep(1_000);
+      requireTracerRunning(attachProc, logDir);
     }
 
     let acceptResults = true;
@@ -1781,6 +1868,7 @@ async function runReplay(ctx: ReplayContext) {
       drainAbort.abort();
     }
 
+    if (attachProc !== null) requireTracerRunning(attachProc, logDir);
     const stopped = await stopServer();
     shutdownMs = stopped.shutdownMs;
     exitCode = stopped.exitCode;

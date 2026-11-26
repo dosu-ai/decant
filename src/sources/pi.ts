@@ -18,7 +18,6 @@ import {
   block,
   countUnknownInRecord,
   nullRecord,
-  ownGet,
   parseJsonLine,
   unknownTypeIssues,
 } from "./shared.ts";
@@ -47,7 +46,7 @@ export interface PiStepperState {
   startedAt: string | null;
   endedAt: string | null;
   efforts: string[];
-  outputByModel: Record<string, number>;
+  outputByModel: [model: string, output: number][];
   totals: TokenUsage;
   reasoningReported: boolean;
   copiedEntries: number;
@@ -76,7 +75,7 @@ export function createPiStepper(fallbackId: string): PiStepperState {
     startedAt: null,
     endedAt: null,
     efforts: [],
-    outputByModel: nullRecord<number>(),
+    outputByModel: [],
     totals: emptyUsage(),
     reasoningReported: false,
     copiedEntries: 0,
@@ -193,7 +192,7 @@ export function stepPiLine(
           const blocks = assistantBlocks(message.content);
           const usage = billed(message.usage);
           if (model != null && usage != null) {
-            state.outputByModel[model] = (ownGet(state.outputByModel, model) ?? 0) + usage.output;
+            addModelOutput(state.outputByModel, model, usage.output);
           }
           const error = asString(message.errorMessage);
           if (error != null && error !== "") {
@@ -271,7 +270,7 @@ export function stepPiLine(
         return {};
       }
       if (model != null) {
-        state.outputByModel[model] = (ownGet(state.outputByModel, model) ?? 0) + usage.output;
+        addModelOutput(state.outputByModel, model, usage.output);
       }
       return { message: makeMessage("other", [], { model, usage }) };
     }
@@ -321,7 +320,7 @@ export function piSessionFromState(
       state.name ?? (state.firstUserText == null ? null : preview(state.firstUserText.trim(), 120)),
     cwd: state.cwd,
     gitBranch: null,
-    model: heaviestModel(new Map(Object.entries(state.outputByModel))) ?? state.currentModel,
+    model: heaviestModel(state.outputByModel) ?? state.currentModel,
     reasoningEffort: summarizeReasoningEfforts(state.efforts),
     reasoningEffortLevels: reasoningEffortLevels(state.efforts),
     cliVersion: null,
@@ -552,7 +551,20 @@ function later(current: string | null, candidate: string): string {
   return current == null || candidate > current ? candidate : current;
 }
 
-function heaviestModel(outputByModel: Map<string, number>): string | null {
+function addModelOutput(
+  outputByModel: [model: string, output: number][],
+  model: string,
+  output: number,
+): void {
+  const entry = outputByModel.find(([seen]) => seen === model);
+  if (entry == null) {
+    outputByModel.push([model, output]);
+  } else {
+    entry[1] += output;
+  }
+}
+
+function heaviestModel(outputByModel: Iterable<[string, number]>): string | null {
   let best: { model: string; output: number } | null = null;
   for (const [model, output] of outputByModel) {
     if (best == null || output > best.output) {

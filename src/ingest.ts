@@ -640,6 +640,7 @@ const PLANNER_STATISTICS_INTERVAL = 25;
 
 const initializedSyncConnections = new WeakSet<Database>();
 const lastRecommendationRefreshByDb = new WeakMap<Database, number>();
+const lastRepriceByDb = new WeakMap<Database, number>();
 const ingestsSinceOptimizeByDb = new WeakMap<Database, number>();
 const MAX_FILE_CONFLICT_ATTEMPTS = 4;
 
@@ -662,11 +663,18 @@ export function sync(
   options?: SyncOptions,
 ): SyncReport {
   const alreadyInitialized = initializedSyncConnections.has(db);
+  const sweepIntervalMs = options?.recommendationMinIntervalMs ?? 0;
   const backgroundRefresh =
-    alreadyInitialized &&
-    (options?.deferDerivedRefresh === true || (options?.recommendationMinIntervalMs ?? 0) > 0);
+    alreadyInitialized && (options?.deferDerivedRefresh === true || sweepIntervalMs > 0);
+  const repriceStartedAt = Date.now();
+  const sweepRepriceDue =
+    backgroundRefresh &&
+    options?.deferDerivedRefresh !== true &&
+    (options?.candidatePaths?.length ?? 0) === 0 &&
+    repriceStartedAt - (lastRepriceByDb.get(db) ?? 0) >= sweepIntervalMs;
   let repriced = 0;
-  if (!backgroundRefresh) {
+  if (!backgroundRefresh || sweepRepriceDue) {
+    lastRepriceByDb.set(db, repriceStartedAt);
     seedModelPricing(db);
     let reconciledBackfill = false;
     materializeMissingModelUsage(db, (id) => {
@@ -1203,9 +1211,8 @@ function refreshDerivedState(
         )
         .get() != null;
     if ((dirty && dueForSweepRefresh) || uncheckedRecommendationImpactLabels) {
-      const committed = regenerateRecommendations(db);
-      lastRecommendationRefreshByDb.set(db, now);
-      if (committed) {
+      if (regenerateRecommendations(db)) {
+        lastRecommendationRefreshByDb.set(db, now);
         flags.onRecommendationsRefreshed?.();
       }
     } else if (!background && lastRefresh === 0) {
@@ -2119,6 +2126,7 @@ export function resolveSubagentParents(db: Database): boolean {
             result.tool_result AS tool_result,
             result.tool_result_bytes AS tool_result_bytes
      FROM block call INDEXED BY idx_block_tool
+     JOIN message call_message ON call_message.id = call.message_id
      JOIN block result
        ON result.session_id = call.session_id
       AND result.tool_use_id = call.tool_use_id
@@ -2127,7 +2135,7 @@ export function resolveSubagentParents(db: Database): boolean {
        AND call.type = 'tool_use'
        AND call.tool_name = 'spawn_agent'
        AND result.tool_result IS NOT NULL
-     ORDER BY call.id DESC`,
+     ORDER BY call_message.seq DESC, call.ordinal DESC, call.id DESC`,
   );
   interface CodexSpawnerCandidate {
     toolUseId: string;

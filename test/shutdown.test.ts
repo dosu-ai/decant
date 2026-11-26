@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,6 +13,28 @@ import { startWatch, type WatchEvent } from "../src/watch.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-shutdown-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+
+const liveWorkers = new Set<Worker>();
+const cleanups: Array<() => unknown> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    await Promise.resolve()
+      .then(cleanup)
+      .catch(() => {});
+  }
+  for (const worker of liveWorkers) {
+    worker.terminate();
+  }
+  liveWorkers.clear();
+});
+
+function once<T>(run: () => T): () => T {
+  let result: { value: T } | null = null;
+  return () => {
+    result ??= { value: run() };
+    return result.value;
+  };
+}
 
 const fixtureRoot = join(import.meta.dir, "..", "fixtures");
 
@@ -91,9 +113,13 @@ function trackedSpawner(name: keyof typeof workerSources) {
     exits,
     spawn: (): Worker => {
       const worker = new Worker(path, { type: "module" });
+      liveWorkers.add(worker);
       exits.push(
         new Promise<number>((resolve) => {
-          worker.addEventListener("close", (event) => resolve((event as CloseEvent).code));
+          worker.addEventListener("close", (event) => {
+            liveWorkers.delete(worker);
+            resolve((event as CloseEvent).code);
+          });
         }),
       );
       return worker;
@@ -201,8 +227,12 @@ describe("sync worker shutdown", () => {
       syncRunner: (workerConfig, cancel, onProgress) =>
         runSyncWorker(workerConfig, cancel, onProgress, { spawn, cancelGraceMs: 200 }),
     });
+    const stopServer = once(() => server.stop(true));
+    cleanups.push(stopServer);
     const events = await fetch(`http://127.0.0.1:${server.port}/api/events`);
     const reader = events.body?.getReader();
+    const cancelReader = once(() => reader?.cancel().catch(() => {}));
+    cleanups.push(cancelReader);
     await reader?.read();
     const pendingRequest = fetch(`http://127.0.0.1:${server.port}/api/sync`, {
       method: "POST",
@@ -214,14 +244,14 @@ describe("sync worker shutdown", () => {
     }
     expect(eventClientCount()).toBe(1);
 
-    const stopping = server.stop(true);
+    const stopping = stopServer();
 
     expect(await settlesWithin(stopping, 3_000)).toBe(true);
     await stopping;
     expect(await settlesWithin(exits[0] as Promise<number>, 2_000)).toBe(true);
     expect(eventClientCount()).toBe(0);
     await pendingRequest;
-    await reader?.cancel().catch(() => {});
+    await cancelReader();
   });
 
   test("watch stop() is bounded by the grace and still reports that it stopped", async () => {
@@ -239,11 +269,13 @@ describe("sync worker shutdown", () => {
           owned: true,
         })),
     });
+    const stopWatch = once(() => handle.stop());
+    cleanups.push(stopWatch);
     while (exits.length === 0) {
       await Bun.sleep(5);
     }
 
-    const stopping = handle.stop();
+    const stopping = stopWatch();
 
     expect(await settlesWithin(stopping, 3_000)).toBe(true);
     expect(events.at(-1)?.type).toBe("stopped");

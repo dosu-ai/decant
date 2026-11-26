@@ -109,6 +109,20 @@ export function withImmediateTransaction<T>(db: Database, operation: () => T): T
   }
 }
 
+export function withReadSnapshot<T>(db: Database, read: () => T): T {
+  if (db.inTransaction) {
+    return read();
+  }
+  db.exec("BEGIN;");
+  try {
+    return read();
+  } finally {
+    if (db.inTransaction) {
+      db.exec("COMMIT;");
+    }
+  }
+}
+
 /**
  * Drop Bun's cached `db.query()` statements, then close the connection.
  *

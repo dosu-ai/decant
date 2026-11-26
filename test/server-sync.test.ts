@@ -477,6 +477,117 @@ describe("sync status", () => {
     });
   });
 
+  test("a queued manual sync that takes over from a watch run starts with no reason or progress", async () => {
+    const config = freshConfig();
+    const watchProgress = { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 4 };
+    const manualProgress = { scanned: 3, ingested: 0, skipped: 3, failed: 0, total: 3 };
+    const watchEntered = Promise.withResolvers<void>();
+    const releaseWatch = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<void>();
+    const reportManualProgress = Promise.withResolvers<void>();
+    const manualReported = Promise.withResolvers<void>();
+    const releaseManual = Promise.withResolvers<void>();
+    let calls = 0;
+    const runner: SyncWorkerRunner = async (_config, _cancel, onProgress) => {
+      calls += 1;
+      if (calls === 1) {
+        onProgress?.(watchProgress);
+        watchEntered.resolve();
+        await releaseWatch.promise;
+        return report;
+      }
+      manualStarted.resolve();
+      await reportManualProgress.promise;
+      onProgress?.(manualProgress);
+      manualReported.resolve();
+      await releaseManual.promise;
+      return report;
+    };
+    const coordinator = createSyncCoordinator(runner);
+    try {
+      const status = new SyncStatusStore();
+      const watch = workerSyncRunner(
+        config,
+        status,
+        { aborted: false },
+        (progress) =>
+          applyWatchEvent(
+            { type: "sync_progress", reason: "watch", progress, status: status.snapshot() },
+            economics,
+            coordinator.isBusy,
+          ),
+        coordinator.runWithOwnership,
+        { candidatePaths: ["/claude/a.jsonl"], deferDerivedRefresh: true },
+      );
+      await watchEntered.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: "watch",
+        progress: watchProgress,
+      });
+
+      const manual = syncNow(config, economics, coordinator.run, coordinator.runWithOwnership);
+      releaseWatch.resolve();
+      const watchResult = await watch;
+      if (!("report" in watchResult)) {
+        throw new Error("watch run failed");
+      }
+      applyWatchEvent(
+        { type: "sync", reason: "watch", report: watchResult.report, status: status.snapshot() },
+        economics,
+        coordinator.isBusy,
+      );
+      await manualStarted.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: null,
+        progress: null,
+      });
+
+      reportManualProgress.resolve();
+      await manualReported.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: "manual",
+        progress: manualProgress,
+      });
+
+      releaseManual.resolve();
+      expect((await manual).status).toBe(200);
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: false,
+        reason: null,
+        progress: null,
+      });
+    } finally {
+      releaseWatch.resolve();
+      reportManualProgress.resolve();
+      releaseManual.resolve();
+      await coordinator.close();
+    }
+  });
+
+  test("a finished watch run does not clear a successor that already reported progress", async () => {
+    const config = freshConfig();
+    const manualProgress = { scanned: 2, ingested: 1, skipped: 1, failed: 0, total: 2 };
+    applyWatchEvent(
+      { type: "sync_progress", reason: "manual", progress: manualProgress, status: idle },
+      economics,
+    );
+    applyWatchEvent({ type: "sync", reason: "watch", report, status: idle }, economics, () => true);
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: true,
+      reason: "manual",
+      progress: manualProgress,
+    });
+    applyWatchEvent({ type: "sync", reason: "manual", report, status: idle }, economics);
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: false,
+      reason: null,
+      progress: null,
+    });
+  });
+
   test("a watcher run that joined another sync does not leave the status busy", async () => {
     const config = freshConfig();
     await workerSyncRunner(

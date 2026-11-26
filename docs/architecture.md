@@ -98,14 +98,16 @@ see
 [data lifecycle](data-lifecycle.md). A changed session is updated
 transactionally: append-only JSONL tools (Claude Code, Codex, and Pi) advance
 from their `ingest_checkpoint` row when the recorded prefix hash still matches.
-They add rows for the appended lines and update the rows those lines complete,
-such as a tool call answered by a new result, plus the session's rollups. Other
+They insert transcript rows for the appended lines without replacing unchanged
+ones, update an existing `tool_call` row with its result, output size, and
+duration when an appended line answers it, and update the session summary. Other
 tools and fallback re-parses diff
 existing messages, blocks, tool calls, and file references in place so
 unchanged blocks keep their row IDs and FTS entries. Decant then updates
 context-window rollups and versioned per-session economics vectors. Costs are
 stored at ingest and reconciled with current rates on startup, manual, and CLI
-syncs while transcripts and user state remain intact. Reading a foreign database
+syncs, and at most once every 5 minutes on a server's periodic sweeps, while
+transcripts and user state remain intact. Reading a foreign database
 does not change Decant's own rule that one process owns the archive; the
 OpenCode database stays OpenCode's.
 

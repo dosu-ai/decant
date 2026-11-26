@@ -179,10 +179,7 @@ export function compactClaudeStepper(
       if (turn != null) {
         if (turn.hasThinking) {
           state.settledHasThinking = true;
-          state.settledEstReasoningTokens += Math.max(
-            0,
-            turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN),
-          );
+          state.settledEstReasoningTokens += turnReasoningTokens(turn);
         }
         delete state.turns[key];
         if (!key.startsWith("\0seq")) {
@@ -268,12 +265,7 @@ export function stepClaudeLine(
     const rawMessage = parseAssistant(value, state.seq);
     const requestId = assistantRequestId(value);
     const turnKey = requestId ?? `\0seq${state.seq}`;
-    const [output, visible, hasThinking] = lineReasoningInputs(rawMessage);
-    const acc = ownGet(state.turns, turnKey) ?? { output: 0, visible: 0, hasThinking: false };
-    acc.output = Math.max(acc.output, output);
-    acc.visible += visible;
-    acc.hasThinking ||= hasThinking;
-    state.turns[turnKey] = acc;
+    state.turns[turnKey] = accumulateReasoning(ownGet(state.turns, turnKey), rawMessage);
 
     let message = rawMessage;
     let unbilledPrevious: ClaudeLineStepResult["unbilledPrevious"];
@@ -358,13 +350,12 @@ export function claudeSessionFromState(
   isArchived = false,
 ): NormalizedSession {
   const totals = state.resultTotals ?? state.messageTotals;
-  const turnsMap = new Map(Object.entries(state.turns));
-  let estReasoningTokens = state.settledEstReasoningTokens + reasoningEstimate(turnsMap);
+  const turns = Object.values(state.turns);
+  let estReasoningTokens = state.settledEstReasoningTokens + reasoningEstimate(turns);
   if (state.resultTotals != null) {
     estReasoningTokens = Math.min(estReasoningTokens, state.resultTotals.output);
   }
-  const anyThinking =
-    state.settledHasThinking || [...turnsMap.values()].some((turn) => turn.hasThinking);
+  const anyThinking = state.settledHasThinking || turns.some((turn) => turn.hasThinking);
 
   const model = primaryModelFromCounts(state.modelCounts) ?? state.sessionModel;
   const meta = isObject(state.sidecarMeta) ? state.sidecarMeta : {};
@@ -451,21 +442,31 @@ function assistantRequestId(value: Json): string | null {
   return stringAt(value, "requestId", "request_id") ?? stringAt(get(value, "message"), "id");
 }
 
-function addReasoningRecord(turns: ReasoningTurns, key: string, message: NormalizedMessage): void {
-  const [output, visible, hasThinking] = lineReasoningInputs(message);
-  const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
-  acc.output = Math.max(acc.output, output);
-  acc.visible += visible;
-  acc.hasThinking ||= hasThinking;
-  turns.set(key, acc);
+function accumulateReasoning(turn: TurnAcc | undefined, message: NormalizedMessage): TurnAcc {
+  const acc = turn ?? { output: 0, visible: 0, hasThinking: false };
+  acc.output = Math.max(acc.output, message.usage?.output ?? 0);
+  for (const block of message.blocks) {
+    if (block.blockType === "thinking") {
+      acc.hasThinking = true;
+    } else if (block.blockType === "text") {
+      acc.visible += byteLength(block.text ?? "");
+    } else if (block.blockType === "tool_use" && block.toolInput !== undefined) {
+      acc.visible += byteLength(canonicalJson(block.toolInput));
+    }
+  }
+  return acc;
 }
 
-function reasoningEstimate(turns: ReasoningTurns): number {
+function turnReasoningTokens(turn: TurnAcc): number {
+  return turn.hasThinking
+    ? Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN))
+    : 0;
+}
+
+function reasoningEstimate(turns: Iterable<TurnAcc>): number {
   let tokens = 0;
-  for (const turn of turns.values()) {
-    if (turn.hasThinking) {
-      tokens += Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN));
-    }
+  for (const turn of turns) {
+    tokens += turnReasoningTokens(turn);
   }
   return tokens;
 }
@@ -477,30 +478,11 @@ export function inferredReasoningTokens(
   const turns: ReasoningTurns = new Map();
   let index = 0;
   for (const record of records) {
-    addReasoningRecord(
-      turns,
-      assistantRequestId(record) ?? `\0record${index}`,
-      parseAssistant(record, index),
-    );
+    const key = assistantRequestId(record) ?? `\0record${index}`;
+    turns.set(key, accumulateReasoning(turns.get(key), parseAssistant(record, index)));
     index += 1;
   }
-  return Math.min(reasoningEstimate(turns), resultRecordOutputTokens);
-}
-
-function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {
-  const output = message.usage?.output ?? 0;
-  let visible = 0;
-  let hasThinking = false;
-  for (const block of message.blocks) {
-    if (block.blockType === "thinking") {
-      hasThinking = true;
-    } else if (block.blockType === "text") {
-      visible += byteLength(block.text ?? "");
-    } else if (block.blockType === "tool_use" && block.toolInput !== undefined) {
-      visible += byteLength(canonicalJson(block.toolInput));
-    }
-  }
-  return [output, visible, hasThinking];
+  return Math.min(reasoningEstimate(turns.values()), resultRecordOutputTokens);
 }
 
 function truncate(value: string, max: number): string {

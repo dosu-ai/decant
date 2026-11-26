@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { countSearches, SEARCH_CANDIDATE_TOOLS } from "./buckets.ts";
-import { withImmediateTransaction } from "./db.ts";
+import { withImmediateTransaction, withReadSnapshot } from "./db.ts";
 import { mcpServerLabel, mcpServerLabels, mcpServerOrigin } from "./mcp-names.ts";
 import { compareCodePoints } from "./order.ts";
 import { RECOMMENDATION_KEY_CHARS } from "./recommendation-key.ts";
@@ -1190,6 +1190,15 @@ function churnFiles(
 }
 
 function searchHeavy(
+  db: Database,
+  visibleSession: string,
+  since: string,
+  projects: Map<string, ProjectRef>,
+): Candidate[] {
+  return withReadSnapshot(db, () => searchHeavyInSnapshot(db, visibleSession, since, projects));
+}
+
+function searchHeavyInSnapshot(
   db: Database,
   visibleSession: string,
   since: string,

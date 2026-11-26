@@ -23,6 +23,7 @@ import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import { tokenEconomicsForSession } from "../src/token-economics.ts";
+import { decodeGoldenRows } from "./golden-rows.ts";
 import { isolatedConfig, runDifferentialScenario, SOURCE_ROOTS } from "./helpers/ingest-oracle.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-message-storage-"));
@@ -579,6 +580,40 @@ describe("block tool_result storage", () => {
         {
           label: "incremental append with second large tool_result",
           mutations: [{ op: "append", path, content: appendTurn }],
+          afterSync: (db) => {
+            const stored = db
+              .query(
+                `SELECT tool_use_id, typeof(tool_result) AS kind, tool_result, tool_result_bytes
+                   FROM block WHERE type = 'tool_result' ORDER BY tool_use_id`,
+              )
+              .all() as {
+              tool_use_id: string;
+              kind: string;
+              tool_result: Uint8Array;
+              tool_result_bytes: number;
+            }[];
+            expect(
+              stored.map((row) => ({
+                tool_use_id: row.tool_use_id,
+                kind: row.kind,
+                bytes: row.tool_result_bytes,
+                decoded: decodeBlockToolResult(row.tool_result, row.tool_result_bytes),
+              })),
+            ).toEqual([
+              {
+                tool_use_id: "tu_1",
+                kind: "blob",
+                bytes: Buffer.byteLength(bigResultA),
+                decoded: bigResultA,
+              },
+              {
+                tool_use_id: "tu_2",
+                kind: "blob",
+                bytes: Buffer.byteLength(bigResultB),
+                decoded: bigResultB,
+              },
+            ]);
+          },
         },
         {
           label: "in-place rewrite modifying first compressed tool_result",
@@ -1032,13 +1067,63 @@ describe("SQL readers of message source records", () => {
     expect(offenders).toEqual([]);
   });
 
+  const toolResultLength = /\blength\(\s*(?:CAST\(\s*)?(?:(\w+)\.)?tool_result\b/gi;
+  const bytesFallback = /\bCOALESCE\(\s*(?:[^(),]+,\s*)*(?:(\w+)\.)?tool_result_bytes\s*,\s*$/i;
+
+  function unguardedToolResultLengths(source: string): string[] {
+    const offenders: string[] = [];
+    for (const match of source.matchAll(toolResultLength)) {
+      const fallback = bytesFallback.exec(source.slice(0, match.index));
+      if (fallback == null || (fallback[1] ?? "") !== (match[1] ?? "")) {
+        offenders.push(match[0]);
+      }
+    }
+    return offenders;
+  }
+
+  test("golden rows check the recorded tool_result byte count and leave it out of the row", () => {
+    const payload = "golden tool output\n".repeat(400);
+    const { toolResult, toolResultBytes } = encodeBlockToolResult(payload);
+    expect(toolResult).toBeInstanceOf(Uint8Array);
+    expect(
+      decodeGoldenRows([
+        { ordinal: 0, tool_result: toolResult, tool_result_bytes: toolResultBytes },
+        { ordinal: 1, tool_result: "small", tool_result_bytes: null },
+      ]),
+    ).toEqual([
+      { ordinal: 0, tool_result: payload },
+      { ordinal: 1, tool_result: "small" },
+    ]);
+    expect(() =>
+      decodeGoldenRows([
+        { tool_result: toolResult, tool_result_bytes: (toolResultBytes ?? 0) + 1 },
+      ]),
+    ).toThrow(/does not match recorded/);
+  });
+
+  test("the tool_result length guard only exempts a same-row tool_result_bytes fallback", () => {
+    expect(
+      unguardedToolResultLengths(
+        "COALESCE(b.tool_result_bytes, length(CAST(b.tool_result AS BLOB)), 0)" +
+          " COALESCE(t.output_bytes, rb.tool_result_bytes, length(CAST(rb.tool_result AS BLOB)), 0)" +
+          " COALESCE(tool_result_bytes, length(CAST(tool_result AS BLOB)))",
+      ),
+    ).toEqual([]);
+    expect(
+      unguardedToolResultLengths(
+        "SELECT tool_result_bytes, length(CAST(tool_result AS BLOB)) FROM block" +
+          " COALESCE(a.tool_result_bytes, length(CAST(b.tool_result AS BLOB)))" +
+          " SUM(length(tool_result))",
+      ),
+    ).toEqual(["length(CAST(tool_result", "length(CAST(b.tool_result", "length(tool_result"]);
+  });
+
   test("never apply SQL LIKE, GLOB, JSON, or unguarded length() directly to block.tool_result", async () => {
     const root = join(import.meta.dir, "..");
     const offenders: string[] = [];
     const forbidden = [
       /\b(?:\w+\.)?tool_result\s+(?:LIKE|GLOB)\b/gi,
       /\bjson_\w+\(\s*(?:\w+\.)?tool_result\s*[,)]/gi,
-      /(?<!tool_result_bytes,\s*)\blength\(\s*(?:CAST\(\s*)?(?:\w+\.)?tool_result\b/gi,
     ];
     for (const pattern of ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"]) {
       for await (const file of new Bun.Glob(pattern).scan(root)) {
@@ -1047,6 +1132,9 @@ describe("SQL readers of message source records", () => {
           for (const match of source.matchAll(regex)) {
             offenders.push(`${file}: ${match[0]}`);
           }
+        }
+        for (const match of unguardedToolResultLengths(source)) {
+          offenders.push(`${file}: ${match}`);
         }
       }
     }

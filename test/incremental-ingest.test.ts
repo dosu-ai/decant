@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.ts";
 import { contextWindowForSession } from "../src/context-window.ts";
-import { closeDb, LATEST_SCHEMA_VERSION, openDb } from "../src/db.ts";
+import { closeDb, LATEST_SCHEMA_VERSION, openDb, withImmediateTransaction } from "../src/db.ts";
 import { EconomicsCache } from "../src/economics-cache.ts";
 import {
   ANCHOR_SAMPLE_BYTES,
@@ -31,15 +31,18 @@ import {
   MAX_CHECKPOINT_ORPHAN_RESULT_IDS,
   MAX_CHECKPOINT_UNMATCHED_CALLS,
   readSourceBuffer,
+  scanLinesFromBuffer,
   sourceFileStats,
   tryIncrementalIngest,
 } from "../src/incremental-ingest.ts";
 import {
   INGEST_PIPELINE_REVISION,
   type IngestConfig,
+  resolveSubagentParents,
   type SyncReport,
   sync,
 } from "../src/ingest.ts";
+import type { Issue } from "../src/model.ts";
 import { getSession, search } from "../src/query.ts";
 import { ReadConnection } from "../src/read-connection.ts";
 import { regenerate as regenerateRecommendations } from "../src/recommendations.ts";
@@ -58,8 +61,14 @@ import {
   stepClaudeLine,
 } from "../src/sources/claude.ts";
 import { codexUnknownTypeIssues, createCodexStepper, stepCodexLine } from "../src/sources/codex.ts";
-import { createPiStepper, piUnknownTypeIssues, stepPiLine } from "../src/sources/pi.ts";
-import { printableType } from "../src/sources/shared.ts";
+import {
+  createPiStepper,
+  piSessionFromState,
+  piUnknownTypeIssues,
+  stepPiLine,
+} from "../src/sources/pi.ts";
+import { MAX_RECORD_BYTES, printableType, RECORD_LIMIT_MESSAGE } from "../src/sources/shared.ts";
+import * as stats from "../src/stats.ts";
 import {
   bumpSyncStateGeneration,
   committedEconomicsWrites,
@@ -388,16 +397,24 @@ describe("serve watch & cache incremental helpers", () => {
     try {
       expect(sync(db, config).ingested).toBe(1);
       const sessionId = (db.query("SELECT id FROM session LIMIT 1").get() as { id: number }).id;
-      const cache = new EconomicsCache({ dbPath, db });
+      let rebuilds = 0;
+      const cache = new EconomicsCache({ dbPath, db, onRebuilt: () => rebuilds++ });
       try {
         const before = await cache.get();
         expect(before).toEqual(tokenEconomics(db));
 
+        const versionBefore = cache.dataVersion();
+        const writesBefore = committedEconomicsWrites(db);
         appendFileSync(claudeFile, claudeTurn("c-econ", 2, "req-2", 120));
         expect(sync(db, config).ingested).toBe(1);
+        const ownWrites = committedEconomicsWrites(db) - writesBefore;
+        expect(ownWrites).toBeGreaterThan(0);
 
-        cache.refreshSessions([sessionId]);
+        cache.refreshSessions([sessionId], versionBefore, ownWrites);
+        await cache.settled();
         const after = await cache.get();
+        await cache.settled();
+        expect(rebuilds).toBe(0);
         expect(after).toEqual(tokenEconomics(db));
         expect(after.totals.generation_tokens).toBeGreaterThan(before.totals.generation_tokens);
       } finally {
@@ -704,7 +721,8 @@ describe("Sol review regression coverage (F1-F13)", () => {
     const db = openDb(dbPath);
     try {
       expect(sync(db, config).ingested).toBe(1);
-      const cache = new EconomicsCache({ dbPath, db });
+      let rebuilds = 0;
+      const cache = new EconomicsCache({ dbPath, db, onRebuilt: () => rebuilds++ });
       try {
         const before = await cache.get();
         expect(before).toEqual(tokenEconomics(db));
@@ -712,17 +730,22 @@ describe("Sol review regression coverage (F1-F13)", () => {
         writeFileSync(original, sharedAssistant("c-orig"));
         const changed: number[] = [];
         const versionBefore = cache.dataVersion();
+        const writesBefore = committedEconomicsWrites(db);
         const report = sync(db, config, undefined, undefined, {
           onSessionChanged: (id) => changed.push(id),
         });
         expect(report.ingested).toBe(1);
         expect(new Set(changed).size).toBe(2);
+        const ownWrites = committedEconomicsWrites(db) - writesBefore;
 
-        cache.refreshSessions(changed, versionBefore);
+        cache.refreshSessions(changed, versionBefore, ownWrites);
+        await cache.settled();
+        expect(rebuilds).toBe(0);
         expect(await cache.get()).toEqual(tokenEconomics(db));
 
-        cache.refreshSessions(changed, (versionBefore ?? 0) - 999);
+        cache.refreshSessions(changed, (versionBefore ?? 0) - 999, 0);
         await cache.settled();
+        expect(rebuilds).toBe(1);
         expect(await cache.get()).toEqual(tokenEconomics(db));
       } finally {
         cache.dispose();
@@ -2036,30 +2059,59 @@ describe("Sol review regression coverage (F1-F13)", () => {
         refreshBefore + 1,
       );
 
-      const blocker = openDb(dbPath);
+      const commitNewerGeneration = (): void => {
+        const other = openDb(dbPath);
+        try {
+          other.exec("BEGIN IMMEDIATE;");
+          bumpSyncStateGeneration(other, SYNC_STATE_RECOMMENDATIONS_PENDING);
+          const newerGen = readSyncStateGeneration(other, SYNC_STATE_RECOMMENDATIONS_PENDING);
+          bumpSyncStateGeneration(other, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
+          markSyncStateCleared(other, SYNC_STATE_RECOMMENDATIONS_CLEARED, newerGen);
+          other
+            .query(
+              `UPDATE recommendation
+                  SET status = 'open', status_source = NULL, detail = 'newer-writer-result'
+                WHERE kind = 'catalog' AND key = (SELECT key FROM recommendation WHERE kind = 'catalog' LIMIT 1)`,
+            )
+            .run();
+          other.exec("COMMIT;");
+        } finally {
+          closeDb(other);
+        }
+      };
+      const sentinelRows = () =>
+        (
+          db
+            .query("SELECT COUNT(*) AS n FROM recommendation WHERE detail = 'newer-writer-result'")
+            .get() as { n: number }
+        ).n;
+
+      bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      const staleGen = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+      const realToolUsage = stats.toolUsage;
+      const paused: { at: number | null } = { at: null };
+      const pause = spyOn(stats, "toolUsage").mockImplementation(((
+        ...args: Parameters<typeof stats.toolUsage>
+      ) => {
+        if (paused.at === null) {
+          paused.at = readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+          commitNewerGeneration();
+        }
+        return realToolUsage(...args);
+      }) as typeof stats.toolUsage);
+      let committed: boolean;
       try {
-        blocker.exec("BEGIN IMMEDIATE;");
-        bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
-        const newerGen = readSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_PENDING);
-        bumpSyncStateGeneration(blocker, SYNC_STATE_RECOMMENDATIONS_REFRESH_SEQ);
-        markSyncStateCleared(blocker, SYNC_STATE_RECOMMENDATIONS_CLEARED, newerGen);
-        blocker
-          .query(
-            `UPDATE recommendation
-                SET status = 'open', status_source = NULL, detail = 'newer-writer-result'
-              WHERE kind = 'catalog' AND key = (SELECT key FROM recommendation WHERE kind = 'catalog' LIMIT 1)`,
-          )
-          .run();
-        blocker.exec("COMMIT;");
+        committed = regenerateRecommendations(db);
       } finally {
-        closeDb(blocker);
+        pause.mockRestore();
       }
+      expect(paused.at).toBe(staleGen);
+      expect(committed).toBe(false);
+      expect(readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING)).toBe(staleGen + 1);
+      expect(sentinelRows()).toBe(1);
 
       expect(sync(db, config).ingested).toBe(0);
-      const kept = db
-        .query("SELECT COUNT(*) AS n FROM recommendation WHERE detail = 'newer-writer-result'")
-        .get() as { n: number };
-      expect(kept.n).toBe(1);
+      expect(sentinelRows()).toBe(1);
     } finally {
       closeDb(db);
     }
@@ -2506,7 +2558,11 @@ describe("Sol review regression coverage (F1-F13)", () => {
             wdb.exec("PRAGMA busy_timeout = 5000;");
             wdb.exec("BEGIN IMMEDIATE;");
             self.postMessage("locked");
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 180);
+            if (Atomics.wait(new Int32Array(data.gate), 0, 0, 10000) === "timed-out") {
+              wdb.exec("ROLLBACK;");
+              wdb.close();
+              throw new Error("the first ingest attempt never read the file");
+            }
             wdb.query("UPDATE ingest_source SET size = ?1, mtime = ?2 WHERE path = ?3").run(data.size, data.mtimeSec, data.file);
             writeFileSync(data.file, data.newContent);
             const t2 = new Date(data.mtimeSec * 1000 + 500);
@@ -2520,27 +2576,61 @@ describe("Sol review regression coverage (F1-F13)", () => {
           new Blob([workerScript], { type: "application/javascript" }),
         );
         const w = new Worker(blobUrl);
-        const locked = Promise.withResolvers<void>();
-        const done = Promise.withResolvers<void>();
-        w.onmessage = (ev) => {
-          if (ev.data === "locked") locked.resolve();
-          if (ev.data === "done") done.resolve();
-        };
-        const stOld = statSync(file2);
-        w.postMessage({
-          dbPath,
-          file: file2,
-          size: stOld.size,
-          mtimeSec: sec2,
-          newContent: r1 + r2New,
-        });
-        await locked.promise;
-        const rep = sync(dbA, config, undefined, undefined, { candidatePaths: [file2] });
-        await done.promise;
-        w.terminate();
-        URL.revokeObjectURL(blobUrl);
+        try {
+          const locked = Promise.withResolvers<void>();
+          const done = Promise.withResolvers<void>();
+          w.onmessage = (ev) => {
+            if (ev.data === "locked") locked.resolve();
+            if (ev.data === "done") done.resolve();
+          };
+          w.onerror = (ev) => {
+            const error = new Error(`rewrite worker failed: ${ev.message}`);
+            locked.reject(error);
+            done.reject(error);
+          };
+          const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+          const stOld = statSync(file2);
+          w.postMessage({
+            dbPath,
+            file: file2,
+            size: stOld.size,
+            mtimeSec: sec2,
+            newContent: r1 + r2New,
+            gate: gate.buffer,
+          });
+          await locked.promise;
 
-        expect(rep.ingested).toBe(1);
+          const realReadSync = fs.readSync;
+          const reads: string[] = [];
+          const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+            const count = (realReadSync as (...a: unknown[]) => number)(...args);
+            const buffer = args[1] as Uint8Array;
+            const offset = typeof args[2] === "number" ? args[2] : 0;
+            const text = Buffer.from(buffer.buffer, buffer.byteOffset + offset, count).toString();
+            if (text.includes("VAL99")) {
+              reads.push(text);
+              if (reads.length === 1) {
+                Atomics.store(gate, 0, 1);
+                Atomics.notify(gate, 0);
+              }
+            }
+            return count;
+          }) as typeof fs.readSync);
+          let rep: SyncReport;
+          try {
+            rep = sync(dbA, config, undefined, undefined, { candidatePaths: [file2] });
+          } finally {
+            readSpy.mockRestore();
+          }
+          await done.promise;
+
+          expect(reads[0]).toContain("OLDVAL99");
+          expect(reads.slice(1).some((text) => text.includes("NEWVAL99"))).toBe(true);
+          expect(rep.ingested).toBe(1);
+        } finally {
+          w.terminate();
+          URL.revokeObjectURL(blobUrl);
+        }
         expect(search(dbA, "NEWVAL99").length).toBeGreaterThan(0);
         expect(search(dbA, "OLDVAL99").length).toBe(0);
       } finally {
@@ -3621,6 +3711,357 @@ describe("EconomicsCache across a worker and a server connection", () => {
       } finally {
         closeSync(fd);
       }
+    } finally {
+      closeDb(db);
+    }
+  });
+});
+
+describe("torn invalid UTF-8 tails", () => {
+  test("keep a small tail verbatim for diagnostics", () => {
+    const tail = Buffer.concat([Buffer.from('{"type":"user","x":"'), Buffer.from([0xff])]);
+    const scanned = scanLinesFromBuffer(Buffer.concat([Buffer.from("{}\n"), tail]), 0, 1);
+    expect(scanned.tornIssue).toEqual({
+      code: "unparsed_line",
+      lineNo: 2,
+      error: "record is not valid JSON",
+      rawLine: tail.toString("utf8"),
+    });
+  });
+
+  test("drop an oversized tail from the stored diagnostic", () => {
+    const tail = Buffer.alloc(MAX_RECORD_BYTES + 1, 0x61);
+    tail[0] = 0xff;
+    const scanned = scanLinesFromBuffer(Buffer.concat([Buffer.from("{}\n"), tail]), 0, 1);
+    expect(scanned.parsedOffset).toBe(3);
+    expect(scanned.tornIssue).toEqual({
+      code: "unparsed_line",
+      lineNo: 2,
+      error: RECORD_LIMIT_MESSAGE,
+      rawLine: null,
+    });
+  });
+});
+
+describe("Codex agent metadata on append", () => {
+  test("a later session_meta that renames the agent matches a fresh ingest", () => {
+    const { dir, dbPath, config } = freshCase();
+    const childId = "55555555-5555-4555-8555-555555555555";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const childFile = join(day, `rollout-2026-11-01T10-00-04-${childId}.jsonl`);
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    const meta = (nickname: string, role: string, depth: number) => ({
+      id: childId,
+      cwd: "/home/dev/app",
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: "66666666-6666-4666-8666-666666666666",
+            depth,
+            agent_nickname: nickname,
+            agent_role: role,
+          },
+        },
+      },
+    });
+    writeFileSync(
+      childFile,
+      line("2026-11-01T10:00:04.000Z", "session_meta", meta("scout", "explorer", 1)) +
+        line("2026-11-01T10:00:05.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "inspect tests" }],
+        }),
+    );
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      appendFileSync(
+        childFile,
+        line("2026-11-01T10:00:06.000Z", "session_meta", meta("ranger", "reviewer", 2)) +
+          line("2026-11-01T10:00:07.000Z", "response_item", {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "done" }],
+          }),
+      );
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(sync(freshDb, config)).toMatchObject({ ingested: 1, failed: 0 });
+      const agentColumns = (target: Database) =>
+        target.query("SELECT agent_id, agent_type, spawn_depth FROM session").all();
+      expect(agentColumns(db)).toEqual([
+        { agent_id: "ranger", agent_type: "reviewer", spawn_depth: 2 },
+      ]);
+      expect(agentColumns(db)).toEqual(agentColumns(freshDb));
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+});
+
+describe("EconomicsCache.refreshSessions without an own-write count", () => {
+  test("rebuilds instead of adopting an economics sequence it cannot verify", async () => {
+    const { dbPath, config } = freshCase();
+    const claudeFile = join(config.claudeDir, "proj", "c-unverified.jsonl");
+    writeFileSync(claudeFile, claudeTurn("c-unverified", 1, "req-1", 40));
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const sessionId = (db.query("SELECT id FROM session LIMIT 1").get() as { id: number }).id;
+      let rebuilds = 0;
+      const cache = new EconomicsCache({ dbPath, db, onRebuilt: () => rebuilds++ });
+      try {
+        await cache.get();
+        const seqBefore = readEconomicsSeq(db);
+        appendFileSync(claudeFile, claudeTurn("c-unverified", 2, "req-2", 120));
+        expect(sync(db, config).ingested).toBe(1);
+        expect(readEconomicsSeq(db)).not.toBe(seqBefore);
+
+        cache.refreshSessions([sessionId]);
+        await cache.settled();
+        expect(rebuilds).toBe(1);
+        expect(await cache.get()).toEqual(tokenEconomics(db));
+      } finally {
+        cache.dispose();
+        await cache.settled();
+      }
+    } finally {
+      closeDb(db);
+    }
+  });
+});
+
+describe("Codex spawn candidate order", () => {
+  test("the latest spawn_agent result by transcript position wins even when its block ID is older", () => {
+    const { dbPath, config } = freshCase();
+    const parentId = "77777777-7777-4777-8777-777777777777";
+    const childId = "88888888-8888-4888-8888-888888888888";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    const call = (callId: string, timestamp: string) =>
+      line(timestamp, "response_item", {
+        type: "function_call",
+        name: "spawn_agent",
+        arguments: "{}",
+        call_id: callId,
+      });
+    const output = (callId: string, timestamp: string) =>
+      line(timestamp, "response_item", {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({ agent_id: childId, status: "spawned" }),
+      });
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-00-${parentId}.jsonl`),
+      line("2026-11-01T10:00:00.000Z", "session_meta", { id: parentId, cwd: "/home/dev/app" }) +
+        call("call_early", "2026-11-01T10:00:02.000Z") +
+        output("call_early", "2026-11-01T10:00:03.000Z") +
+        call("call_late", "2026-11-01T10:00:04.000Z") +
+        output("call_late", "2026-11-01T10:00:05.000Z"),
+    );
+    writeFileSync(
+      join(day, `rollout-2026-11-01T10-00-09-${childId}.jsonl`),
+      line("2026-11-01T10:00:09.000Z", "session_meta", {
+        id: childId,
+        cwd: "/home/dev/app",
+        source: { subagent: { thread_spawn: { parent_thread_id: parentId, depth: 1 } } },
+      }) +
+        line("2026-11-01T10:00:10.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "go" }],
+        }),
+    );
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 2, failed: 0 });
+      const spawnToolUseId = () =>
+        (
+          db
+            .query("SELECT spawn_tool_use_id FROM session WHERE source_session_id = ?1")
+            .get(childId) as { spawn_tool_use_id: string | null }
+        ).spawn_tool_use_id;
+      expect(spawnToolUseId()).toBe("call_late");
+
+      const early = db
+        .query("SELECT id FROM block WHERE tool_use_id = 'call_early' AND type = 'tool_use'")
+        .get() as { id: number };
+      const renumbered = (
+        db.query("SELECT MAX(id) + 1000 AS id FROM block").get() as { id: number }
+      ).id;
+      db.exec("PRAGMA foreign_keys = OFF;");
+      try {
+        withImmediateTransaction(db, () => {
+          db.query("UPDATE tool_call SET call_block_id = ?2 WHERE call_block_id = ?1").run(
+            early.id,
+            renumbered,
+          );
+          db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(early.id, renumbered);
+          db.query(
+            "UPDATE session SET spawn_tool_use_id = NULL, parent_session_id = NULL WHERE source_session_id = ?1",
+          ).run(childId);
+        });
+      } finally {
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
+
+      resolveSubagentParents(db);
+      expect(spawnToolUseId()).toBe("call_late");
+    } finally {
+      closeDb(db);
+    }
+  });
+});
+
+describe("Pi session model on tied output", () => {
+  test("keeps the first model seen, including after an integer-like model name", () => {
+    const { dir, dbPath, config } = freshCase();
+    const piFile = join(config.piDir ?? "", "--work--", "2026-11-01T10-00-00-000Z_pi-tie.jsonl");
+    const assistant = (id: string, parentId: string, model: string, second: string) =>
+      `${JSON.stringify({
+        type: "message",
+        id,
+        parentId,
+        timestamp: `2026-11-01T10:00:${second}.000Z`,
+        message: {
+          role: "assistant",
+          model,
+          stopReason: "stop",
+          usage: { input: 10, output: 30, cacheRead: 0, cacheWrite: 0 },
+          content: [{ type: "text", text: `reply from ${model}` }],
+        },
+      })}\n`;
+    writeFileSync(
+      piFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "pi-tie",
+        timestamp: "2026-11-01T10:00:00.000Z",
+        cwd: "/home/dev/work/app",
+      })}\n${JSON.stringify({
+        type: "message",
+        id: "p1",
+        timestamp: "2026-11-01T10:00:01.000Z",
+        message: { role: "user", content: [{ type: "text", text: "Hello Pi" }] },
+      })}\n${assistant("p2", "p1", "example-model", "02")}`,
+    );
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      appendFileSync(piFile, assistant("p3", "p2", "7", "03"));
+      expect(sync(db, config).ingested).toBe(1);
+      expect(sync(freshDb, config).ingested).toBe(1);
+      const model = (target: Database) =>
+        (target.query("SELECT model FROM session").get() as { model: string | null }).model;
+      expect(model(db)).toBe("example-model");
+      expect(model(freshDb)).toBe("example-model");
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+
+      const state = createPiStepper("pi-tie");
+      const issues: Issue[] = [];
+      stepPiLine(state, assistant("q1", "q0", "example-model", "01").trim(), 1, issues);
+      stepPiLine(state, assistant("q2", "q1", "7", "02").trim(), 2, issues);
+      const restored = JSON.parse(JSON.stringify(state)) as typeof state;
+      expect(piSessionFromState(restored).model).toBe("example-model");
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+});
+
+describe("recommendation refresh retries", () => {
+  test("a refresh that exhausts its retries stays due on the next sweep", () => {
+    const { dbPath, config } = freshCase();
+    writeFileSync(
+      join(config.claudeDir, "proj", "c-retry.jsonl"),
+      claudeTurn("c-retry", 1, "req-1"),
+    );
+    const db = openDb(dbPath);
+    const other = openDb(dbPath);
+    try {
+      let attempts = 0;
+      const realToolUsage = stats.toolUsage;
+      const racing = spyOn(stats, "toolUsage").mockImplementation(((
+        ...args: Parameters<typeof stats.toolUsage>
+      ) => {
+        attempts += 1;
+        bumpSyncStateGeneration(other, SYNC_STATE_RECOMMENDATIONS_PENDING);
+        return realToolUsage(...args);
+      }) as typeof stats.toolUsage);
+      try {
+        expect(sync(db, config).ingested).toBe(1);
+      } finally {
+        racing.mockRestore();
+      }
+      expect(attempts).toBe(3);
+      expect(readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING)).toBeGreaterThan(
+        readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED),
+      );
+
+      let refreshed = 0;
+      expect(
+        sync(db, config, undefined, undefined, {
+          recommendationMinIntervalMs: 60_000,
+          onRecommendationsRefreshed: () => {
+            refreshed += 1;
+          },
+        }).ingested,
+      ).toBe(0);
+      expect(refreshed).toBe(1);
+      expect(readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING)).toBe(
+        readSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_CLEARED),
+      );
+    } finally {
+      closeDb(other);
+      closeDb(db);
+    }
+  });
+});
+
+describe("repricing on a reused sync connection", () => {
+  test("periodic sweeps still reconcile costs while targeted watch syncs skip it", async () => {
+    const { dbPath, config } = freshCase();
+    const file = join(config.claudeDir, "proj", "c-reprice.jsonl");
+    writeFileSync(file, claudeTurn("c-reprice", 1, "req-1"));
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      const cost = () =>
+        (db.query("SELECT estimated_cost_usd AS cost FROM session").get() as { cost: number }).cost;
+      const priced = cost();
+      expect(priced).toBeGreaterThan(0);
+      const tamper = () => db.query("UPDATE session SET estimated_cost_usd = 999").run();
+
+      tamper();
+      appendFileSync(file, claudeTurn("c-reprice", 2, "req-2"));
+      const watch = sync(db, config, undefined, undefined, {
+        candidatePaths: [file],
+        deferDerivedRefresh: true,
+      });
+      expect(watch.ingested).toBe(1);
+      expect(watch.repriced).toBeUndefined();
+      const afterWatch = cost();
+      tamper();
+
+      const notDue = sync(db, config, undefined, undefined, {
+        recommendationMinIntervalMs: 60_000,
+      });
+      expect(notDue.repriced).toBeUndefined();
+      expect(cost()).toBe(999);
+
+      await Bun.sleep(5);
+      const sweep = sync(db, config, undefined, undefined, { recommendationMinIntervalMs: 1 });
+      expect(sweep.repriced).toBe(1);
+      expect(cost()).toBe(afterWatch);
+      expect(afterWatch).toBeGreaterThan(priced);
     } finally {
       closeDb(db);
     }

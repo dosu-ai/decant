@@ -95,7 +95,7 @@ export class EconomicsCache {
           this.invalidate();
           return;
         }
-      } else if (dvBefore !== this.#builtDataVersion) {
+      } else if (dvBefore !== this.#builtDataVersion || seqBefore !== this.#builtEconomicsSeq) {
         this.invalidate();
         return;
       }

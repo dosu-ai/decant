@@ -9,7 +9,17 @@ export function decodeGoldenRows(rows: unknown[]): unknown[] {
     if ("raw" in row && row.raw instanceof Uint8Array) {
       next = { ...(row as Record<string, unknown>), raw: decodeMessageRaw(row.raw) };
     }
-    if ("tool_result" in row && row.tool_result instanceof Uint8Array) {
+    if ("tool_result_bytes" in row) {
+      const { tool_result_bytes: toolResultBytes, ...rest } =
+        next ?? (row as Record<string, unknown>);
+      next = {
+        ...rest,
+        tool_result: decodeBlockToolResult(
+          rest.tool_result as string | Uint8Array | null,
+          toolResultBytes as number | null,
+        ),
+      };
+    } else if ("tool_result" in row && row.tool_result instanceof Uint8Array) {
       next = {
         ...(next ?? (row as Record<string, unknown>)),
         tool_result: decodeBlockToolResult(row.tool_result),
@@ -40,7 +50,7 @@ export const ROW_QUERIES = {
     ORDER BY s.tool, s.source_session_id, m.seq`,
   blocks: `
     SELECT s.tool, s.source_session_id, m.seq, b.ordinal, b.type, b.text,
-           b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
+           b.tool_name, b.tool_use_id, b.tool_input, b.tool_result, b.tool_result_bytes
     FROM block b JOIN message m ON m.id = b.message_id JOIN session s ON s.id = b.session_id
     ORDER BY s.tool, s.source_session_id, m.seq, b.ordinal`,
   tool_calls: `

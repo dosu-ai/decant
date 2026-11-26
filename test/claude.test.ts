@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseClaudeSession } from "../src/sources/claude.ts";
+import type { Json } from "../src/model.ts";
+import {
+  claudeSessionFromState,
+  compactClaudeStepper,
+  createClaudeStepper,
+  inferredReasoningTokens,
+  parseClaudeSession,
+  stepClaudeLine,
+} from "../src/sources/claude.ts";
 
 async function fixture(): Promise<string> {
   return await Bun.file(join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl")).text();
@@ -460,5 +468,43 @@ describe("parseClaudeSession", () => {
       '{"type":"assistant","uuid":"a3","timestamp":"2026-05-01T10:00:02.000Z","message":{"role":"assistant","model":"kimi-k2.7-code","content":[]}}',
     ].join("\n");
     expect(parseClaudeSession("s", `${content}\n`).session.model).toBe("kimi-k2.7-code");
+  });
+});
+
+describe("Claude reasoning estimate", () => {
+  test("the stepper, compaction, and billed-request inference agree", () => {
+    const records = [1, 2, 3].map((turn) => ({
+      type: "assistant",
+      uuid: `a-${turn}`,
+      requestId: `req-${turn}`,
+      sessionId: "reasoning",
+      timestamp: `2026-11-01T10:00:0${turn}.000Z`,
+      message: {
+        id: `msg_${turn}`,
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        usage: { input_tokens: 10, output_tokens: 400 * turn },
+        content: [
+          { type: "thinking", thinking: "considering" },
+          { type: "text", text: "visible answer ".repeat(20 * turn) },
+          { type: "tool_use", id: `t-${turn}`, name: "Read", input: { file_path: "a.ts" } },
+        ],
+      },
+    }));
+    const stepped = (compact: boolean) => {
+      const state = createClaudeStepper("reasoning");
+      records.forEach((record, index) => {
+        stepClaudeLine(state, JSON.stringify(record), index + 1, []);
+      });
+      if (compact) compactClaudeStepper(state, 1, () => {});
+      return claudeSessionFromState(state).estReasoningTokens;
+    };
+    const inferred = inferredReasoningTokens(
+      records.map((record) => JSON.parse(JSON.stringify(record)) as Json),
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(inferred).toBeGreaterThan(0);
+    expect(stepped(false)).toBe(inferred);
+    expect(stepped(true)).toBe(inferred);
   });
 });

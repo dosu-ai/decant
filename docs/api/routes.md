@@ -147,9 +147,10 @@ the economics caches alone.
 `GET /api/sync-status` describes the server's current sync. `in_progress` turns
 true when a sync starts and stays true if a queued sync takes over. For a sync
 that starts on an idle server, `reason` and `progress` stay null until the sync
-has discovered its sources and reported its first counts. A queued sync that
-takes over can show the previous sync's `reason` and `progress` until it reports
-its own first update. Both reset to null when sync work ends. A queued manual sync
+has discovered its sources and reported its first counts. When a queued sync
+takes over, `in_progress` stays true while `reason` and `progress` reset to null
+until the new sync reports its first update. Both reset to null when sync work
+ends. A queued manual sync
 clears `last_error` when it starts and again when it succeeds.
 `archive_synced` is false only while a new archive waits for its first
 completed sync. That is a sync that returned a report and was not cancelled,

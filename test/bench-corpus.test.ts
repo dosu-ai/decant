@@ -30,6 +30,9 @@ import {
   portableCorpusManifest,
   prepareLockedCorpus,
   readSessionRow,
+  requireTracerRunning,
+  type ServeStopOps,
+  stopLaunchedServe,
   trustedCorpusManifest,
 } from "../scripts/bench-ingest.ts";
 import { closeDb, openDb } from "../src/db.ts";
@@ -377,5 +380,140 @@ describe("bench directory and docker helpers", () => {
     expect(dockerUserArgs("linux", 1000, 1000, "[name=rootless]")).toEqual([]);
     expect(dockerUserArgs("linux", 0, 0, "[name=seccomp]")).toEqual([]);
     expect(dockerUserArgs("darwin", 501, 20, "[name=seccomp]")).toEqual([]);
+  });
+});
+
+interface FakeTree {
+  launcher: { pid: number; exited: Promise<number> };
+  exitLauncher(code: number): void;
+  alive: Set<number>;
+  children: Map<number, number>;
+  signals: Array<[number, string]>;
+  ops: ServeStopOps;
+}
+
+function fakeTree(options: {
+  launcherPid: number;
+  servePid: number;
+  onSignal: (tree: FakeTree, pid: number, signal: string) => void;
+  childVisible?: boolean;
+}): FakeTree {
+  let exitLauncher!: (code: number) => void;
+  const exited = new Promise<number>((resolve) => {
+    exitLauncher = resolve;
+  });
+  const tree: FakeTree = {
+    launcher: { pid: options.launcherPid, exited },
+    exitLauncher: (code) => {
+      tree.alive.delete(options.launcherPid);
+      tree.children.delete(options.launcherPid);
+      exitLauncher(code);
+    },
+    alive: new Set([options.launcherPid, options.servePid]),
+    children: new Map(
+      options.childVisible === false ? [] : [[options.launcherPid, options.servePid]],
+    ),
+    signals: [],
+    ops: {
+      findServePid: (pid) => tree.children.get(pid) ?? null,
+      isAlive: (pid) => tree.alive.has(pid),
+      signal: (pid, signal) => {
+        tree.signals.push([pid, signal]);
+        options.onSignal(tree, pid, signal);
+      },
+      sleep: () => new Promise((resolve) => setTimeout(resolve, 0)),
+    },
+  };
+  return tree;
+}
+
+describe("bench serve shutdown", () => {
+  test("a graceful stop waits for both the tracer and the traced serve process", async () => {
+    const tree = fakeTree({
+      launcherPid: 10,
+      servePid: 11,
+      onSignal: (t, pid, signal) => {
+        if (pid === 11 && signal === "SIGTERM") {
+          t.alive.delete(11);
+          t.exitLauncher(0);
+        }
+      },
+    });
+    const stopped = await stopLaunchedServe(tree.launcher, 11, 1_000, tree.ops);
+    expect(stopped).toEqual({ exitCode: 0, servePid: 11, killed: false });
+    expect(tree.signals).toEqual([[11, "SIGTERM"]]);
+  });
+
+  test("a tracer that exits while serve keeps running does not count as stopped", async () => {
+    const tree = fakeTree({
+      launcherPid: 20,
+      servePid: 21,
+      onSignal: (t, pid, signal) => {
+        if (pid === 21 && signal === "SIGTERM") t.exitLauncher(0);
+        if (pid === 21 && signal === "SIGKILL") t.alive.delete(21);
+      },
+    });
+    const stopped = await stopLaunchedServe(tree.launcher, 21, 100, tree.ops);
+    expect(stopped.killed).toBe(true);
+    expect(tree.alive.size).toBe(0);
+    expect(tree.signals).toEqual([
+      [21, "SIGTERM"],
+      [21, "SIGKILL"],
+    ]);
+  });
+
+  test("an unknown serve pid is discovered at stop and both processes are killed on timeout", async () => {
+    let killedServe = false;
+    const tree = fakeTree({
+      launcherPid: 30,
+      servePid: 31,
+      onSignal: (t, pid, signal) => {
+        if (signal !== "SIGKILL") return;
+        if (pid === 31) {
+          killedServe = true;
+          setTimeout(() => t.alive.delete(31), 5);
+        }
+        if (pid === 30) t.exitLauncher(137);
+      },
+    });
+    const stopped = await stopLaunchedServe(tree.launcher, null, 100, tree.ops);
+    expect(killedServe).toBe(true);
+    expect(stopped).toEqual({ exitCode: null, servePid: 31, killed: true });
+    expect(tree.alive.size).toBe(0);
+    expect(tree.signals).toEqual([
+      [31, "SIGTERM"],
+      [31, "SIGKILL"],
+      [30, "SIGKILL"],
+    ]);
+  });
+
+  test("a serve child that appears only after the stop began is still killed", async () => {
+    const tree = fakeTree({
+      launcherPid: 40,
+      servePid: 41,
+      childVisible: false,
+      onSignal: (t, pid, signal) => {
+        if (pid === 40 && signal === "SIGTERM") t.children.set(40, 41);
+        if (signal === "SIGKILL") {
+          t.alive.delete(pid);
+          if (pid === 40) t.exitLauncher(137);
+        }
+      },
+    });
+    const stopped = await stopLaunchedServe(tree.launcher, null, 100, tree.ops);
+    expect(stopped.servePid).toBe(41);
+    expect(tree.signals).toEqual([
+      [40, "SIGTERM"],
+      [41, "SIGKILL"],
+      [40, "SIGKILL"],
+    ]);
+    expect(tree.alive.size).toBe(0);
+  });
+
+  test("an attach-mode tracer that already exited is rejected", () => {
+    expect(() => requireTracerRunning({ exitCode: null }, "/logs")).not.toThrow();
+    expect(() => requireTracerRunning({ exitCode: 1 }, "/logs")).toThrow(
+      /strace -p exited with code 1/,
+    );
   });
 });

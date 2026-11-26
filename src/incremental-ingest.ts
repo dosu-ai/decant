@@ -97,9 +97,11 @@ import {
 import {
   diagnosticRawLine,
   jsonProblem,
+  MAX_RECORD_BYTES,
   nullRecord,
   ownGet,
   parseSourceJson,
+  RECORD_LIMIT_MESSAGE,
 } from "./sources/shared.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
 import {
@@ -117,7 +119,7 @@ import { classifyTool, previewHeadTail } from "./tools.ts";
 
 export type IncrementalTool = "claude_code" | "codex" | "pi";
 
-const CHECKPOINT_VERSION = 7;
+const CHECKPOINT_VERSION = 8;
 export const ANCHOR_SAMPLE_BYTES = 32_768;
 const CHARS_PER_TOKEN = 4;
 const ACTIVE_GAP_CAP_MS = ACTIVE_GAP_CAP_SECONDS * 1000;
@@ -346,6 +348,7 @@ export function scanLinesFromBuffer(
     tailText = fatalUtf8.decode(tailBuf);
   } catch {
     const lossy = tailBuf.toString("utf8");
+    const overLimit = Buffer.byteLength(lossy, "utf8") > MAX_RECORD_BYTES;
     return {
       lines,
       parsedOffset,
@@ -354,8 +357,8 @@ export function scanLinesFromBuffer(
       tornIssue: {
         code: "unparsed_line",
         lineNo: nextLineNo,
-        error: "record is not valid JSON",
-        rawLine: lossy,
+        error: overLimit ? RECORD_LIMIT_MESSAGE : "record is not valid JSON",
+        rawLine: overLimit ? null : lossy,
       },
       totalLines: nextLineNo,
     };
@@ -1772,9 +1775,6 @@ function hydrateCheckpointDictionaries(state: IncrementalCheckpointState): void 
     p.modelCounts = nullRecord(p.modelCounts);
     p.billed = nullRecord(p.billed);
     p.turns = nullRecord(p.turns);
-  } else if (state.tool === "pi") {
-    const p = state.parser as PiStepperState;
-    p.outputByModel = nullRecord(p.outputByModel);
   }
 }
 
@@ -2678,7 +2678,12 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   if (nextSummary.sourceSessionId !== prevSessionSummary.sourceSessionId) {
     return { kind: "fallback" };
   }
-  if (nextSummary.isSubagent !== prevSessionSummary.isSubagent) {
+  if (
+    nextSummary.isSubagent !== prevSessionSummary.isSubagent ||
+    nextSummary.agentId !== prevSessionSummary.agentId ||
+    nextSummary.agentType !== prevSessionSummary.agentType ||
+    nextSummary.spawnDepth !== prevSessionSummary.spawnDepth
+  ) {
     return { kind: "fallback" };
   }
   if (nextSummary.projectPath !== prevSessionSummary.projectPath) {

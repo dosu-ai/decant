@@ -1185,7 +1185,7 @@ class Api {
 }
 
 interface SseEvent {
-  type: string;
+  type: "sync" | "archive_updated";
   atMs: number;
 }
 
@@ -1204,11 +1204,12 @@ function streamEvents(api: Api, onEvent: (event: SseEvent) => void): AbortContro
           const frame = buffer.slice(0, split);
           buffer = buffer.slice(split + 2);
           split = buffer.indexOf("\n\n");
-          let type = "message";
+          let type: SseEvent["type"] | null = null;
           for (const line of frame.split("\n")) {
-            if (line.startsWith("event: ")) type = line.slice(7);
+            if (line === "event: sync") type = "sync";
+            else if (line === "event: archive_updated") type = "archive_updated";
           }
-          onEvent({ type, atMs: performance.now() });
+          if (type !== null) onEvent({ type, atMs: performance.now() });
         }
       }
     } catch {}
@@ -1244,7 +1245,6 @@ async function waitFor<T>(
 }
 
 interface SessionDetailPage {
-  messageCount: number;
   messageCountOnPage: number;
   searchableText: string;
   hasMoreMessages: boolean;
@@ -1262,7 +1262,7 @@ function optionalString(value: unknown): string {
 }
 
 function sessionDetailPage(value: unknown): SessionDetailPage {
-  if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.messages)) {
+  if (!isRecord(value) || !Array.isArray(value.messages)) {
     throw new Error("session detail response has an unexpected shape");
   }
   const text: string[] = [];
@@ -1277,7 +1277,6 @@ function sessionDetailPage(value: unknown): SessionDetailPage {
     }
   }
   return {
-    messageCount: nonNegativeInteger(value.summary.message_count, "summary.message_count"),
     messageCountOnPage: value.messages.length,
     searchableText: text.join("\n"),
     hasMoreMessages: value.has_more_messages === true,
@@ -1296,18 +1295,27 @@ function searchHitCount(value: unknown): number {
   return isRecord(value) && Array.isArray(value.results) ? value.results.length : 0;
 }
 
-async function findSessionId(api: Api, sourceSessionId: string): Promise<number> {
-  for (let offset = 0; offset < 100_000; offset += 100) {
-    const rows = await api.get(`/api/sessions?limit=100&offset=${offset}`);
-    if (!Array.isArray(rows)) throw new Error("session list response is not an array");
-    const match = rows.find(
-      (row): row is Record<string, unknown> =>
-        isRecord(row) && row.source_session_id === sourceSessionId,
-    );
-    if (match !== undefined) return nonNegativeInteger(match.id, "session id");
-    if (rows.length < 100) break;
+export function readSessionRow(
+  dbPath: string,
+  sourceSessionId: string,
+): { id: number; messageCount: number } {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .query(
+        "SELECT id, message_count FROM session WHERE tool = 'claude_code' AND source_session_id = ?1",
+      )
+      .get(sourceSessionId) as { id: number; message_count: number } | null;
+    if (row === null) {
+      throw new Error(`live session ${sourceSessionId} is not in the archive`);
+    }
+    return {
+      id: nonNegativeInteger(row.id, "session.id"),
+      messageCount: nonNegativeInteger(row.message_count, "session.message_count"),
+    };
+  } finally {
+    db.close();
   }
-  throw new Error(`live session ${sourceSessionId} is not in the archive`);
 }
 
 interface Distribution {
@@ -1437,13 +1445,10 @@ async function runReplay(ctx: ReplayContext) {
     syncIdle(await api.get("/api/sync-status")) ? true : null,
   );
   const startupSyncMs = performance.now() - spawnedAt;
-  const sessionId = await findSessionId(api, live.sessionId);
-  const initialDetail = sessionDetailPage(
-    await api.get(`/api/sessions/${sessionId}?message_limit=1&message_offset=0`),
-  );
-  let knownMessageCount = initialDetail.messageCount;
-  let scannedOffset = knownMessageCount;
-  const initialMessageCount = knownMessageCount;
+  const initialSession = readSessionRow(dbPath, live.sessionId);
+  const sessionId = initialSession.id;
+  const initialMessageCount = initialSession.messageCount;
+  let scannedOffset = initialMessageCount;
 
   const events: SseEvent[] = [];
   let triggerCheck: () => void = () => undefined;
@@ -1496,7 +1501,6 @@ async function runReplay(ctx: ReplayContext) {
                 marker.apiMs = seenAt - marker.appendedAtMs;
               }
             }
-            knownMessageCount = Math.max(knownMessageCount, detail.messageCount);
             offset += detail.messageCountOnPage;
             scannedOffset = Math.max(scannedOffset, offset);
             if (!detail.hasMoreMessages) break;
@@ -1600,6 +1604,7 @@ async function runReplay(ctx: ReplayContext) {
     options.strace === "off" ? null : countFsyncs(straceFile, servePid, t0Wall, t1Wall);
   const totalFsync = options.strace === "off" ? null : countFsyncs(straceFile, servePid);
   const db = inspectDb(dbPath, { integrity: true });
+  const finalMessageCount = readSessionRow(dbPath, live.sessionId).messageCount;
   const endFiles = fileSizes(dbPath);
   if (!options.keepRunDb) removeDbFiles(dbPath);
 
@@ -1629,7 +1634,7 @@ async function runReplay(ctx: ReplayContext) {
       appends: markers.length,
       appendedBytes,
       initialMessageCount,
-      finalMessageCount: knownMessageCount,
+      finalMessageCount,
       syncEvents: events.filter((e) => e.type === "sync" && inWindow(e)).length,
       archiveUpdatedEvents: events.filter((e) => e.type === "archive_updated" && inWindow(e))
         .length,

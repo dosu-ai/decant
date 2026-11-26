@@ -25,6 +25,7 @@ import {
   corpusNamespace,
   portableCorpusManifest,
   prepareLockedCorpus,
+  readSessionRow,
   trustedCorpusManifest,
 } from "../scripts/bench-ingest.ts";
 import { closeDb, openDb } from "../src/db.ts";
@@ -51,7 +52,8 @@ describe("bench corpus generator", () => {
         outDir: join(tmp, "corpus"),
         profile: "small",
       });
-      const db = openDb(join(tmp, "archive.db"));
+      const dbPath = join(tmp, "archive.db");
+      const db = openDb(dbPath);
       try {
         const config = configFor(manifest);
         expectCleanSync(sync(db, config));
@@ -109,6 +111,11 @@ describe("bench corpus generator", () => {
           previous = current;
           state = chunk.nextState;
         }
+
+        const row = readSessionRow(dbPath, manifest.liveSession.sessionId);
+        expect(row.id).toBeGreaterThan(0);
+        expect(row.messageCount).toBe(previous);
+        expect(() => readSessionRow(dbPath, "missing-session-id")).toThrow(/not in the archive/);
       } finally {
         closeDb(db);
       }

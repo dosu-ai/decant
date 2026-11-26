@@ -3013,10 +3013,12 @@ describe("holistic audit regressions", () => {
     const { dir } = freshCase();
     const file = join(dir, "snapshot.jsonl");
     writeFileSync(file, '{"a":1}\n');
-    const fd = openSync(file, "r");
+    const fd = openSync(file, "r+");
     try {
       const stats = sourceFileStats(fstatSync(fd, { bigint: true }));
-      appendFileSync(file, '{"b":2}\n');
+      const extra = Buffer.from('{"b":2}\n');
+      writeSync(fd, extra, 0, extra.length, stats.size);
+      expect(fstatSync(fd).size).toBe(stats.size + extra.length);
       const buf = readSourceBuffer(fd, stats.size);
       expect(buf?.toString("utf8")).toBe('{"a":1}\n');
     } finally {
@@ -3192,31 +3194,33 @@ describe("checkpoint prefix hash samples only validated head and tail bytes", ()
       const realReadSync = fs.readSync;
       const reads: { start: number; end: number }[] = [];
       let mutated = false;
-      const fd = openSync(file, "r");
-      const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
-        const count = (realReadSync as (...a: unknown[]) => number)(...args);
-        const position = args[4];
-        if (args[0] === fd && typeof position === "number") {
-          reads.push({ start: position, end: position + count });
-          if (!mutated && position >= prior.size) {
-            mutated = true;
-            const writer = openSync(file, "r+");
-            try {
-              writeSync(writer, Buffer.from("yyyyyyyy"), 0, 8, editAt);
+      const fd = openSync(file, "r+");
+      let editedChunk = "";
+      try {
+        const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+          const count = (realReadSync as (...a: unknown[]) => number)(...args);
+          const position = args[4];
+          if (args[0] === fd && typeof position === "number") {
+            reads.push({ start: position, end: position + count });
+            if (!mutated && position >= prior.size) {
+              mutated = true;
+              writeSync(fd, Buffer.from("yyyyyyyy"), 0, 8, editAt);
               const appended = Buffer.from(claudeTurn("c-mid-race", 12, "req-12"));
-              writeSync(writer, appended, 0, appended.length, ingested.length);
-            } finally {
-              closeSync(writer);
+              writeSync(fd, appended, 0, appended.length, ingested.length);
             }
           }
+          return count;
+        }) as typeof fs.readSync);
+        try {
+          expect(tryIncrementalIngest(incrementalInput(db, fd, file, prior)).kind).toBe("ingested");
+          expect(mutated).toBe(true);
+        } finally {
+          readSpy.mockRestore();
         }
-        return count;
-      }) as typeof fs.readSync);
-      try {
-        expect(tryIncrementalIngest(incrementalInput(db, fd, file, prior)).kind).toBe("ingested");
-        expect(mutated).toBe(true);
+        const probe = Buffer.alloc(8);
+        expect(fs.readSync(fd, probe, 0, 8, editAt)).toBe(8);
+        editedChunk = probe.toString();
       } finally {
-        readSpy.mockRestore();
         closeSync(fd);
       }
 
@@ -3231,11 +3235,7 @@ describe("checkpoint prefix hash samples only validated head and tail bytes", ()
       expect(checkpoint.prefix_hash).toBe(
         computePrefixHashFromBuffer(ingested, checkpoint.parsed_offset),
       );
-      expect(
-        readFileSync(file)
-          .subarray(editAt, editAt + 8)
-          .toString(),
-      ).toBe("yyyyyyyy");
+      expect(editedChunk).toBe("yyyyyyyy");
     } finally {
       closeDb(db);
     }
@@ -3260,16 +3260,11 @@ describe("checkpoint prefix hash samples only validated head and tail bytes", ()
         } else {
           expect(at).toBeGreaterThan(prior.size - ANCHOR_SAMPLE_BYTES);
         }
-        const writer = openSync(file, "r+");
+        const fd = openSync(file, "r+");
         try {
-          writeSync(writer, Buffer.from(replacement), 0, replacement.length, at);
-        } finally {
-          closeSync(writer);
-        }
-        appendFileSync(file, claudeTurn(`c-${region}-edit`, 11, "req-11"));
-
-        const fd = openSync(file, "r");
-        try {
+          writeSync(fd, Buffer.from(replacement), 0, replacement.length, at);
+          const appended = Buffer.from(claudeTurn(`c-${region}-edit`, 11, "req-11"));
+          writeSync(fd, appended, 0, appended.length, original.length);
           expect(tryIncrementalIngest(incrementalInput(db, fd, file, prior)).kind).toBe("fallback");
         } finally {
           closeSync(fd);

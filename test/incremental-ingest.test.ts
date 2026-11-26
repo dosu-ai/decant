@@ -2598,18 +2598,33 @@ describe("Sol review regression coverage (F1-F13)", () => {
             newContent: r1 + r2New,
             gate: gate.buffer,
           });
+          done.promise.catch(() => {});
           await locked.promise;
 
+          const realOpenSync = fs.openSync;
           const realReadSync = fs.readSync;
-          const reads: string[] = [];
+          const attempts: string[] = [];
+          const attemptByFd = new Map<number, number>();
+          const openSpy = spyOn(fs, "openSync").mockImplementation(((...args: unknown[]) => {
+            const fd = (realOpenSync as (...a: unknown[]) => number)(...args);
+            if (String(args[0]).endsWith("c-f1-retry-bypass.jsonl")) {
+              attemptByFd.set(fd, attempts.length);
+              attempts.push("");
+            }
+            return fd;
+          }) as typeof fs.openSync);
           const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
             const count = (realReadSync as (...a: unknown[]) => number)(...args);
-            const buffer = args[1] as Uint8Array;
-            const offset = typeof args[2] === "number" ? args[2] : 0;
-            const text = Buffer.from(buffer.buffer, buffer.byteOffset + offset, count).toString();
-            if (text.includes("VAL99")) {
-              reads.push(text);
-              if (reads.length === 1) {
+            const attempt = attemptByFd.get(args[0] as number);
+            if (attempt !== undefined && count > 0) {
+              const buffer = args[1] as Uint8Array;
+              const offset = typeof args[2] === "number" ? args[2] : 0;
+              attempts[attempt] += Buffer.from(
+                buffer.buffer,
+                buffer.byteOffset + offset,
+                count,
+              ).toString();
+              if (attempt === 0) {
                 Atomics.store(gate, 0, 1);
                 Atomics.notify(gate, 0);
               }
@@ -2621,11 +2636,13 @@ describe("Sol review regression coverage (F1-F13)", () => {
             rep = sync(dbA, config, undefined, undefined, { candidatePaths: [file2] });
           } finally {
             readSpy.mockRestore();
+            openSpy.mockRestore();
           }
           await done.promise;
 
-          expect(reads[0]).toContain("OLDVAL99");
-          expect(reads.slice(1).some((text) => text.includes("NEWVAL99"))).toBe(true);
+          expect(attempts.length).toBeGreaterThanOrEqual(2);
+          expect(attempts[0]).toContain("OLDVAL99");
+          expect(attempts.slice(1).some((text) => text.includes("NEWVAL99"))).toBe(true);
           expect(rep.ingested).toBe(1);
         } finally {
           w.terminate();
@@ -3836,7 +3853,7 @@ describe("EconomicsCache.refreshSessions without an own-write count", () => {
 });
 
 describe("Codex spawn candidate order", () => {
-  test("the latest spawn_agent result by transcript position wins even when its block ID is older", () => {
+  test("the latest spawn_agent call by transcript position wins even when its call and result block IDs are older", () => {
     const { dbPath, config } = freshCase();
     const parentId = "77777777-7777-4777-8777-777777777777";
     const childId = "88888888-8888-4888-8888-888888888888";
@@ -3888,20 +3905,32 @@ describe("Codex spawn candidate order", () => {
         ).spawn_tool_use_id;
       expect(spawnToolUseId()).toBe("call_late");
 
-      const early = db
-        .query("SELECT id FROM block WHERE tool_use_id = 'call_early' AND type = 'tool_use'")
-        .get() as { id: number };
-      const renumbered = (
-        db.query("SELECT MAX(id) + 1000 AS id FROM block").get() as { id: number }
-      ).id;
+      const blockId = (callId: string, type: string) =>
+        (
+          db
+            .query("SELECT id FROM block WHERE tool_use_id = ?1 AND type = ?2")
+            .get(callId, type) as {
+            id: number;
+          }
+        ).id;
+      const earlyCall = blockId("call_early", "tool_use");
+      const earlyResult = blockId("call_early", "tool_result");
+      const top = (db.query("SELECT MAX(id) AS id FROM block").get() as { id: number }).id;
+      expect(earlyCall).toBeLessThan(blockId("call_late", "tool_use"));
+      expect(earlyResult).toBeLessThan(blockId("call_late", "tool_result"));
       db.exec("PRAGMA foreign_keys = OFF;");
       try {
         withImmediateTransaction(db, () => {
           db.query("UPDATE tool_call SET call_block_id = ?2 WHERE call_block_id = ?1").run(
-            early.id,
-            renumbered,
+            earlyCall,
+            top + 1000,
           );
-          db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(early.id, renumbered);
+          db.query("UPDATE tool_call SET result_block_id = ?2 WHERE result_block_id = ?1").run(
+            earlyResult,
+            top + 1001,
+          );
+          db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(earlyCall, top + 1000);
+          db.query("UPDATE block SET id = ?2 WHERE id = ?1").run(earlyResult, top + 1001);
           db.query(
             "UPDATE session SET spawn_tool_use_id = NULL, parent_session_id = NULL WHERE source_session_id = ?1",
           ).run(childId);
@@ -4062,6 +4091,157 @@ describe("repricing on a reused sync connection", () => {
       expect(sweep.repriced).toBe(1);
       expect(cost()).toBe(afterWatch);
       expect(afterWatch).toBeGreaterThan(priced);
+    } finally {
+      closeDb(db);
+    }
+  });
+});
+
+describe("Codex parent thread on append", () => {
+  const attemptIncremental = (db: Database, file: string) => {
+    const prior = db
+      .query("SELECT size, mtime, session_id FROM ingest_source WHERE path = ?1")
+      .get(file) as { size: number; mtime: number; session_id: number };
+    const fd = openSync(file, "r");
+    try {
+      return tryIncrementalIngest({
+        db,
+        fd,
+        stats: fstatSync(fd),
+        sourcePath: file,
+        tool: "codex",
+        archived: false,
+        priorSize: prior.size,
+        priorMtime: prior.mtime,
+        priorSessionId: prior.session_id,
+        ingestRevision: INGEST_PIPELINE_REVISION,
+        expectedRevision: INGEST_PIPELINE_REVISION,
+        sidecarMeta: null,
+        codexTitles: new Map(),
+      }).kind;
+    } finally {
+      closeSync(fd);
+    }
+  };
+
+  test("a later session_meta naming a different parent matches a fresh ingest", () => {
+    const { dir, dbPath, config } = freshCase();
+    const parentA = "99999999-9999-4999-8999-99999999999a";
+    const parentB = "99999999-9999-4999-8999-99999999999b";
+    const childId = "99999999-9999-4999-8999-99999999999c";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    const parent = (id: string, callId: string, second: string) =>
+      writeFileSync(
+        join(day, `rollout-2026-11-01T10-00-0${second}-${id}.jsonl`),
+        line(`2026-11-01T10:00:0${second}.000Z`, "session_meta", { id, cwd: "/home/dev/app" }) +
+          line(`2026-11-01T10:00:0${second}.100Z`, "response_item", {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: "{}",
+            call_id: callId,
+          }) +
+          line(`2026-11-01T10:00:0${second}.200Z`, "response_item", {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify({ agent_id: childId, status: "spawned" }),
+          }),
+      );
+    parent(parentA, "call_from_a", "1");
+    parent(parentB, "call_from_b", "2");
+    const meta = (parentThreadId: string) => ({
+      id: childId,
+      cwd: "/home/dev/app",
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: parentThreadId,
+            depth: 1,
+            agent_nickname: "scout",
+            agent_role: "explorer",
+          },
+        },
+      },
+    });
+    const childFile = join(day, `rollout-2026-11-01T10-00-05-${childId}.jsonl`);
+    writeFileSync(
+      childFile,
+      line("2026-11-01T10:00:05.000Z", "session_meta", meta(parentA)) +
+        line("2026-11-01T10:00:06.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "inspect tests" }],
+        }),
+    );
+    const db = openDb(dbPath);
+    const freshDb = openDb(join(dir, "fresh.db"));
+    try {
+      expect(sync(db, config)).toMatchObject({ ingested: 3, failed: 0 });
+      const link = (target: Database) =>
+        target
+          .query(
+            `SELECT c.spawn_tool_use_id, p.source_session_id AS parent
+               FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+              WHERE c.source_session_id = ?1`,
+          )
+          .get(childId);
+      expect(link(db)).toEqual({ spawn_tool_use_id: "call_from_a", parent: parentA });
+
+      appendFileSync(
+        childFile,
+        line("2026-11-01T10:00:07.000Z", "session_meta", meta(parentB)) +
+          line("2026-11-01T10:00:08.000Z", "response_item", {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "done" }],
+          }),
+      );
+      expect(attemptIncremental(db, childFile)).toBe("fallback");
+      expect(sync(db, config)).toMatchObject({ ingested: 1, failed: 0 });
+      expect(sync(freshDb, config)).toMatchObject({ ingested: 3, failed: 0 });
+      expect(link(freshDb)).toEqual({ spawn_tool_use_id: "call_from_b", parent: parentB });
+      expect(link(db)).toEqual(link(freshDb));
+      expect(captureCanonicalSnapshot(db)).toEqual(captureCanonicalSnapshot(freshDb));
+    } finally {
+      closeDb(db);
+      closeDb(freshDb);
+    }
+  });
+
+  test("an append that keeps the same parent stays incremental", () => {
+    const { dbPath, config } = freshCase();
+    const childId = "99999999-9999-4999-8999-99999999999d";
+    const day = join(config.codexDir as string, "sessions", "2026", "11", "01");
+    const line = (timestamp: string, type: string, payload: unknown) =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    const childFile = join(day, `rollout-2026-11-01T10-00-05-${childId}.jsonl`);
+    writeFileSync(
+      childFile,
+      line("2026-11-01T10:00:05.000Z", "session_meta", {
+        id: childId,
+        cwd: "/home/dev/app",
+        source: { subagent: { thread_spawn: { parent_thread_id: "p-same", depth: 1 } } },
+      }) +
+        line("2026-11-01T10:00:06.000Z", "response_item", {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "first" }],
+        }),
+    );
+    const db = openDb(dbPath);
+    try {
+      expect(sync(db, config).ingested).toBe(1);
+      appendFileSync(
+        childFile,
+        line("2026-11-01T10:00:07.000Z", "response_item", {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "second" }],
+        }),
+      );
+      expect(attemptIncremental(db, childFile)).toBe("ingested");
+      expect((db.query("SELECT COUNT(*) AS n FROM message").get() as { n: number }).n).toBe(2);
     } finally {
       closeDb(db);
     }

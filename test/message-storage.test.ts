@@ -1068,13 +1068,23 @@ describe("SQL readers of message source records", () => {
   });
 
   const toolResultLength = /\blength\(\s*(?:CAST\(\s*)?(?:(\w+)\.)?tool_result\b/gi;
-  const bytesFallback = /\bCOALESCE\(\s*(?:[^(),]+,\s*)*(?:(\w+)\.)?tool_result_bytes\s*,\s*$/i;
+  const COALESCE_OPEN = "COALESCE(";
+
+  function bytesFallbackAlias(prefix: string): string | null {
+    const open = prefix.toUpperCase().lastIndexOf(COALESCE_OPEN);
+    if (open === -1 || /\w/.test(prefix[open - 1] ?? "")) return null;
+    const args = prefix.slice(open + COALESCE_OPEN.length);
+    if (args.includes("(") || args.includes(")")) return null;
+    const parts = args.split(",");
+    if (parts.length < 2 || parts.at(-1)?.trim() !== "") return null;
+    const column = /^(?:(\w+)\.)?tool_result_bytes$/i.exec(parts.at(-2)?.trim() ?? "");
+    return column == null ? null : (column[1] ?? "");
+  }
 
   function unguardedToolResultLengths(source: string): string[] {
     const offenders: string[] = [];
     for (const match of source.matchAll(toolResultLength)) {
-      const fallback = bytesFallback.exec(source.slice(0, match.index));
-      if (fallback == null || (fallback[1] ?? "") !== (match[1] ?? "")) {
+      if (bytesFallbackAlias(source.slice(0, match.index)) !== (match[1] ?? "")) {
         offenders.push(match[0]);
       }
     }
@@ -1113,9 +1123,17 @@ describe("SQL readers of message source records", () => {
       unguardedToolResultLengths(
         "SELECT tool_result_bytes, length(CAST(tool_result AS BLOB)) FROM block" +
           " COALESCE(a.tool_result_bytes, length(CAST(b.tool_result AS BLOB)))" +
-          " SUM(length(tool_result))",
+          " SUM(length(tool_result))" +
+          " COALESCE(f(x), tool_result_bytes, length(CAST(tool_result AS BLOB)))" +
+          " XCOALESCE(tool_result_bytes, length(CAST(tool_result AS BLOB)))",
       ),
-    ).toEqual(["length(CAST(tool_result", "length(CAST(b.tool_result", "length(tool_result"]);
+    ).toEqual([
+      "length(CAST(tool_result",
+      "length(CAST(b.tool_result",
+      "length(tool_result",
+      "length(CAST(tool_result",
+      "length(CAST(tool_result",
+    ]);
   });
 
   test("never apply SQL LIKE, GLOB, JSON, or unguarded length() directly to block.tool_result", async () => {

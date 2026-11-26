@@ -2680,6 +2680,7 @@ export function tryIncrementalIngest(input: TryIncrementalInput): IncrementalAtt
   }
   if (
     nextSummary.isSubagent !== prevSessionSummary.isSubagent ||
+    nextSummary.rootSourceSessionId !== prevSessionSummary.rootSourceSessionId ||
     nextSummary.agentId !== prevSessionSummary.agentId ||
     nextSummary.agentType !== prevSessionSummary.agentType ||
     nextSummary.spawnDepth !== prevSessionSummary.spawnDepth

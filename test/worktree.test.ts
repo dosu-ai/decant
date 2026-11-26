@@ -483,7 +483,7 @@ describe("resolveWorktreeRoots", () => {
     const dbA = openDb(dbPath);
     const dbB = openDb(dbPath);
     try {
-      dbA.query("INSERT INTO project(path, name) VALUES (?1, 'app')").run("/home/x/app");
+      dbA.query("INSERT INTO project(path, name) VALUES (?1, 'app')").run("/home/dev/app");
       dbB.exec("PRAGMA busy_timeout = 0");
       let sawWriteLock = false;
       resolveWorktreeRoots(dbA, {

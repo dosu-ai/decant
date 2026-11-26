@@ -1683,3 +1683,63 @@ describe("the differential oracle", () => {
     }
   });
 });
+
+describe("search parity across the result cutoff", () => {
+  test("a tie split by the 100-hit cutoff compares by group, not by block IDs", () => {
+    const tiedSession = (session: string) =>
+      jsonl(
+        Array.from({ length: 60 }, (_, index) =>
+          cUser(
+            session,
+            `${session}-u${index}`,
+            index === 0 ? null : `${session}-u${index - 1}`,
+            `2026-11-01T10:${String(index).padStart(2, "0")}:00.000Z`,
+            "cutoffneedle",
+          ),
+        ),
+      );
+    const result = runDifferentialScenario({
+      name: "cutoff tie",
+      queries: ["cutoffneedle"],
+      steps: [
+        {
+          label: "later session first",
+          mutations: [{ op: "write", path: claudePath("tie-b"), content: tiedSession("tie-b") }],
+        },
+        {
+          label: "earlier session second",
+          mutations: [{ op: "write", path: claudePath("tie-a"), content: tiedSession("tie-a") }],
+        },
+      ],
+    });
+    const hits = result.fts[0]?.search.hits ?? [];
+    expect(hits).toEqual([
+      { cutoff_tie: { score: expect.any(Number), returned: 100, group_size: 120 } },
+    ]);
+  });
+});
+
+describe("scenario hooks", () => {
+  test("an async afterSync hook fails the scenario instead of being ignored", () => {
+    const asyncHook = (async () => {}) as unknown as (db: Database) => undefined;
+    expect(() =>
+      runDifferentialScenario({
+        name: "async hook",
+        queries: [],
+        steps: [
+          {
+            label: "write",
+            mutations: [
+              {
+                op: "write",
+                path: claudePath("hook"),
+                content: jsonl([cUser("hook", "u1", null, "2026-11-01T10:00:00.000Z", "hi")]),
+              },
+            ],
+            afterSync: asyncHook,
+          },
+        ],
+      }),
+    ).toThrow("afterSync must be synchronous");
+  });
+});

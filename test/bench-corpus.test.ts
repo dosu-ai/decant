@@ -22,18 +22,22 @@ import {
   acquireCorpusLock,
   allocatePrivateDir,
   cachedCorpusManifest,
+  coalescingCheck,
   corpusDirFor,
   corpusLockPath,
   corpusNamespace,
   dockerUserArgs,
   ensurePrivateDir,
+  isServeCommand,
   portableCorpusManifest,
   prepareLockedCorpus,
   readSessionRow,
   requireTracerRunning,
   type ServeStopOps,
+  ServeSurvivedKillError,
   stopLaunchedServe,
   trustedCorpusManifest,
+  withCorpusLock,
 } from "../scripts/bench-ingest.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import { type IngestConfig, type SyncReport, sync } from "../src/ingest.ts";
@@ -397,6 +401,7 @@ function fakeTree(options: {
   servePid: number;
   onSignal: (tree: FakeTree, pid: number, signal: string) => void;
   childVisible?: boolean;
+  orphanVisibleAfterExit?: boolean;
 }): FakeTree {
   let exitLauncher!: (code: number) => void;
   const exited = new Promise<number>((resolve) => {
@@ -415,7 +420,13 @@ function fakeTree(options: {
     ),
     signals: [],
     ops: {
-      findServePid: (pid) => tree.children.get(pid) ?? null,
+      findServePid: (pid) =>
+        tree.children.get(pid) ??
+        (options.orphanVisibleAfterExit === true &&
+        !tree.alive.has(options.launcherPid) &&
+        tree.alive.has(options.servePid)
+          ? options.servePid
+          : null),
       isAlive: (pid) => tree.alive.has(pid),
       signal: (pid, signal) => {
         tree.signals.push([pid, signal]);
@@ -504,10 +515,75 @@ describe("bench serve shutdown", () => {
     expect(stopped.servePid).toBe(41);
     expect(tree.signals).toEqual([
       [40, "SIGTERM"],
+      [41, "SIGTERM"],
       [41, "SIGKILL"],
       [40, "SIGKILL"],
     ]);
     expect(tree.alive.size).toBe(0);
+  });
+
+  test("a serve process orphaned by a tracer that exited is found, stopped, and awaited", async () => {
+    const tree = fakeTree({
+      launcherPid: 50,
+      servePid: 51,
+      childVisible: false,
+      orphanVisibleAfterExit: true,
+      onSignal: (t, pid, signal) => {
+        if (pid === 50 && signal === "SIGTERM") t.exitLauncher(0);
+        if (pid === 51 && signal === "SIGTERM") setTimeout(() => t.alive.delete(51), 5);
+      },
+    });
+    const stopped = await stopLaunchedServe(tree.launcher, null, 1_000, tree.ops);
+    expect(stopped).toEqual({ exitCode: 0, servePid: 51, killed: false });
+    expect(tree.signals).toEqual([
+      [50, "SIGTERM"],
+      [51, "SIGTERM"],
+    ]);
+    expect(tree.alive.size).toBe(0);
+  });
+
+  test("processes that survive SIGKILL past the deadline are named in the error", async () => {
+    const tree = fakeTree({ launcherPid: 60, servePid: 61, onSignal: () => {} });
+    const stopping = stopLaunchedServe(tree.launcher, 61, 40, tree.ops, 40);
+    await expect(stopping).rejects.toBeInstanceOf(ServeSurvivedKillError);
+    await expect(stopping).rejects.toMatchObject({ pids: [60, 61] });
+    expect(tree.signals).toEqual([
+      [61, "SIGTERM"],
+      [61, "SIGKILL"],
+      [60, "SIGKILL"],
+    ]);
+  });
+
+  test("the corpus lock is kept only while a killed serve process may still be alive", async () => {
+    let releases = 0;
+    const release = () => {
+      releases += 1;
+    };
+    expect(await withCorpusLock(release, async () => "done")).toBe("done");
+    expect(releases).toBe(1);
+    await expect(
+      withCorpusLock(release, async () => {
+        throw new Error("replay failed");
+      }),
+    ).rejects.toThrow("replay failed");
+    expect(releases).toBe(2);
+    await expect(
+      withCorpusLock(release, async () => {
+        throw new ServeSurvivedKillError([70]);
+      }),
+    ).rejects.toBeInstanceOf(ServeSurvivedKillError);
+    expect(releases).toBe(2);
+  });
+
+  test("orphan discovery matches only this run's serve command, not its tracer", () => {
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const serve = [process.execPath, "run", cli, "serve", "--no-open", "--port", "4100"];
+    expect(isServeCommand(serve, 4100)).toBe(true);
+    expect(isServeCommand(serve, 4101)).toBe(false);
+    expect(isServeCommand(["strace", "-f", "-o", "s.txt", ...serve], 4100)).toBe(false);
+    expect(isServeCommand([process.execPath, "run", cli, "sync", "--port", "4100"], 4100)).toBe(
+      false,
+    );
   });
 
   test("an attach-mode tracer that already exited is rejected", () => {
@@ -515,5 +591,36 @@ describe("bench serve shutdown", () => {
     expect(() => requireTracerRunning({ exitCode: 1 }, "/logs")).toThrow(
       /strace -p exited with code 1/,
     );
+  });
+});
+
+describe("bench freshness check coalescing", () => {
+  test("a pass with nothing to do does not block later checks", async () => {
+    let passes = 0;
+    const check = coalescingCheck(async () => {
+      passes += 1;
+      return false;
+    });
+    await check();
+    await check();
+    expect(passes).toBe(2);
+  });
+
+  test("a check requested during a pass shares it and runs one more pass", async () => {
+    let passes = 0;
+    const gate = Promise.withResolvers<void>();
+    const check = coalescingCheck(async () => {
+      passes += 1;
+      if (passes === 1) await gate.promise;
+      return true;
+    });
+    const first = check();
+    const second = check();
+    expect(second).toBe(first);
+    gate.resolve();
+    await first;
+    expect(passes).toBe(2);
+    await check();
+    expect(passes).toBe(3);
   });
 });

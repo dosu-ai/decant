@@ -16,16 +16,19 @@ afterAll(() => rmSync(workDir, { recursive: true, force: true }));
 
 const liveWorkers = new Set<Worker>();
 const cleanups: Array<() => unknown> = [];
+const CLEANUP_TIMEOUT_MS = 3_000;
+
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
-    await Promise.resolve()
-      .then(cleanup)
-      .catch(() => {});
+  try {
+    for (const cleanup of cleanups.splice(0).reverse()) {
+      await settlesWithin(Promise.resolve().then(cleanup), CLEANUP_TIMEOUT_MS);
+    }
+  } finally {
+    for (const worker of liveWorkers) {
+      worker.terminate();
+    }
+    liveWorkers.clear();
   }
-  for (const worker of liveWorkers) {
-    worker.terminate();
-  }
-  liveWorkers.clear();
 });
 
 function once<T>(run: () => T): () => T {

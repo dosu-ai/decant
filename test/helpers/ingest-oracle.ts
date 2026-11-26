@@ -198,17 +198,21 @@ export interface FtsCapture {
   search: { total: number | null; hits: Row[] };
 }
 
+const SEARCH_PAGE_LIMIT = 100;
+
 export function captureFtsResults(db: Database, queries: string[]): FtsCapture[] {
   const ordinalOf = db.query("SELECT ordinal FROM block WHERE id = ?1");
   const sessionKeyOf = db.query(
     "SELECT tool || ':' || source_session_id AS session_key FROM session WHERE id = ?1",
   );
   const tieKey = (row: Row) => [row.session_key, row.message_seq, row.block_ordinal];
+  const identity = (row: Row) => JSON.stringify(tieKey(row));
   return queries.map((query) => {
     const scored = rows(
       db,
       `SELECT b.id AS block_id, ${SESSION_KEY_SQL} AS session_key, m.seq AS message_seq,
               b.ordinal AS block_ordinal,
+              bm25(block_fts, 4.0, 2.0, 1.0) AS raw_score,
               ROUND(bm25(block_fts, 4.0, 2.0, 1.0), 9) AS score
          FROM block_fts
          JOIN block b ON b.id = block_fts.rowid
@@ -217,14 +221,15 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
         WHERE block_fts MATCH ?1`,
       [buildFtsQuery(query)],
     );
-    const scoreByBlock = new Map(scored.map((row) => [row.block_id, row.score]));
+    const scoredByBlock = new Map(scored.map((row) => [row.block_id, row]));
     const direct = sorted(
-      scored.map((row) => omit(row, ["block_id"])),
+      scored.map((row) => omit(row, ["block_id", "raw_score"])),
       (row) => [row.score, ...tieKey(row)],
     );
-    const page = searchPage(db, query, { includeSubagents: true, limit: 100 });
-    const hits = sortedWithinTies(
-      page.results.map((hit) => ({
+    const page = searchPage(db, query, { includeSubagents: true, limit: SEARCH_PAGE_LIMIT });
+    const ranked = page.results.map((hit) => {
+      const match = scoredByBlock.get(hit.block_id);
+      return {
         session_key: (sessionKeyOf.get(hit.session_id) as { session_key: string } | null)
           ?.session_key,
         session_title: hit.session_title,
@@ -236,11 +241,31 @@ export function captureFtsResults(db: Database, queries: string[]): FtsCapture[]
         timestamp: hit.timestamp,
         snippet: hit.snippet,
         has_snippet: hit.snippet !== "",
-        score: scoreByBlock.get(hit.block_id) ?? null,
-      })),
-      (row) => row.score,
-      tieKey,
+        raw_score: match?.raw_score ?? null,
+        score: match?.score ?? null,
+      };
+    });
+    const cutoff = ranked.length >= SEARCH_PAGE_LIMIT ? ranked.at(-1)?.raw_score : undefined;
+    const tieGroup = scored.filter((row) => cutoff !== undefined && row.raw_score === cutoff);
+    const returnedAtCutoff = ranked.filter((row) => row.raw_score === cutoff);
+    const cutoffSplitsTie = cutoff !== undefined && tieGroup.length > returnedAtCutoff.length;
+    if (cutoffSplitsTie) {
+      const members = new Set(tieGroup.map(identity));
+      expect(returnedAtCutoff.filter((row) => !members.has(identity(row)))).toEqual([]);
+    }
+    const kept = cutoffSplitsTie ? ranked.filter((row) => row.raw_score !== cutoff) : ranked;
+    const hits = sortedWithinTies(kept, (row) => row.raw_score, tieKey).map((row) =>
+      omit(row, ["raw_score"]),
     );
+    if (cutoffSplitsTie) {
+      hits.push({
+        cutoff_tie: {
+          score: returnedAtCutoff[0]?.score ?? null,
+          returned: returnedAtCutoff.length,
+          group_size: tieGroup.length,
+        },
+      });
+    }
     return { query, direct, search: { total: page.total, hits } };
   });
 }
@@ -290,7 +315,7 @@ export interface ScenarioStep {
   label: string;
   mutations: FileMutation[];
   clock?: "advance" | "hold";
-  afterSync?: (incremental: Database) => void;
+  afterSync?: (incremental: Database) => undefined;
 }
 
 export interface DifferentialScenario {
@@ -347,7 +372,13 @@ export function runDifferentialScenario(scenario: DifferentialScenario): Differe
       }
       reports.push(report);
       assertDatabaseIntegrity(incremental);
-      afterSync?.(incremental);
+      if (afterSync !== undefined) {
+        const returned: unknown = afterSync(incremental);
+        if (returned !== undefined) {
+          throw new Error(`${stepName}: afterSync must be synchronous and return nothing`);
+        }
+        assertDatabaseIntegrity(incremental);
+      }
     }
 
     fresh = openDb(join(workspace, "archive", "fresh.db"));

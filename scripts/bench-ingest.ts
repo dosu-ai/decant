@@ -425,45 +425,46 @@ async function runInDocker(options: Options): Promise<number> {
         : CONTAINER_RUN_ROOT;
   const userArgs = await resolveDockerUserArgs();
   const releaseLock = acquireCorpusLock(corpusLockPath(hostWorkDir, options.profile, options.seed));
-  const reportName = `report-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}.json`;
-  const containerOut =
-    options.outJson === null ? null : `${CONTAINER_WORK_DIR}/reports/${reportName}`;
-  const name = `decant-bench-${process.pid}-${Date.now()}`;
-  const cmd = [
-    "docker",
-    "run",
-    "--rm",
-    "--name",
-    name,
-    ...userArgs,
-    "--cap-add=SYS_PTRACE",
-    "--security-opt",
-    "seccomp=unconfined",
-    "-v",
-    `${REPO_ROOT}:/repo:ro`,
-    "-v",
-    `${hostWorkDir}:${CONTAINER_WORK_DIR}`,
-    ...(hostRunDir === null ? [] : ["-v", `${hostRunDir}:${CONTAINER_RUN_DIR_MOUNT}`]),
-    "-w",
-    "/tmp",
-    options.dockerImage,
-    "bun",
-    "run",
-    "/repo/scripts/bench-ingest.ts",
-    ...forwardedArgs(options, containerOut, containerRunDir),
-  ];
-  const proc = Bun.spawn(cmd, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+  let proc: ReturnType<typeof Bun.spawn> | null = null;
   let exited = false;
   let stopped = false;
+  let code = 1;
+  const name = `decant-bench-${process.pid}-${Date.now()}`;
   const stop = (): void => {
     if (stopped) return;
     stopped = true;
     Bun.spawnSync(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
   };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  let code = 1;
   try {
+    const reportName = `report-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}.json`;
+    const containerOut =
+      options.outJson === null ? null : `${CONTAINER_WORK_DIR}/reports/${reportName}`;
+    const cmd = [
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      name,
+      ...userArgs,
+      "--cap-add=SYS_PTRACE",
+      "--security-opt",
+      "seccomp=unconfined",
+      "-v",
+      `${REPO_ROOT}:/repo:ro`,
+      "-v",
+      `${hostWorkDir}:${CONTAINER_WORK_DIR}`,
+      ...(hostRunDir === null ? [] : ["-v", `${hostRunDir}:${CONTAINER_RUN_DIR_MOUNT}`]),
+      "-w",
+      "/tmp",
+      options.dockerImage,
+      "bun",
+      "run",
+      "/repo/scripts/bench-ingest.ts",
+      ...forwardedArgs(options, containerOut, containerRunDir),
+    ];
+    proc = Bun.spawn(cmd, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
     code = await proc.exited;
     exited = true;
     if (options.outJson !== null && !stopped) {
@@ -483,7 +484,7 @@ async function runInDocker(options: Options): Promise<number> {
   } finally {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
-    if (!exited) {
+    if (proc !== null && !exited) {
       stop();
       await proc.exited.catch(() => {});
     }
@@ -724,6 +725,29 @@ function decantChild(parentPid: number): number | null {
   }
 }
 
+export function coalescingCheck(pass: () => Promise<boolean>): () => Promise<void> {
+  let active: Promise<void> | null = null;
+  let rerun = false;
+  return () => {
+    if (active !== null) {
+      rerun = true;
+      return active;
+    }
+    const pending = (async () => {
+      do {
+        rerun = false;
+        if (!(await pass())) break;
+      } while (rerun);
+    })();
+    active = pending;
+    const clear = (): void => {
+      if (active === pending) active = null;
+    };
+    pending.then(clear, clear);
+    return pending;
+  };
+}
+
 function processAlive(pid: number): boolean {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -752,24 +776,77 @@ export interface ServeStopOps {
 
 export const SERVE_STOP_POLL_MS = 20;
 
-const liveServeStopOps: ServeStopOps = {
-  findServePid: decantChild,
-  isAlive: processAlive,
-  signal: (pid, signal) => {
+export function isServeCommand(argv: readonly string[], port: number): boolean {
+  if (argv[0] !== process.execPath || argv[1] !== "run" || argv[2] !== CLI_PATH) return false;
+  if (argv[3] !== "serve") return false;
+  const portFlag = argv.indexOf("--port", 4);
+  return portFlag !== -1 && argv[portFlag + 1] === String(port);
+}
+
+function orphanedServe(launcherPid: number, port: number): number | null {
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    if (pid === launcherPid || pid === process.pid) continue;
     try {
-      process.kill(pid, signal);
+      const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      if (isServeCommand(argv, port) && processAlive(pid)) return pid;
     } catch {}
-  },
-  sleep: (ms) => Bun.sleep(ms),
-};
+  }
+  return null;
+}
+
+function serveStopOps(port: number): ServeStopOps {
+  return {
+    findServePid: (launcherPid) => decantChild(launcherPid) ?? orphanedServe(launcherPid, port),
+    isAlive: processAlive,
+    signal: (pid, signal) => {
+      try {
+        process.kill(pid, signal);
+      } catch {}
+    },
+    sleep: (ms) => Bun.sleep(ms),
+  };
+}
+
+export class ServeSurvivedKillError extends Error {
+  constructor(readonly pids: number[]) {
+    super(
+      `serve pid(s) ${pids.join(", ")} did not exit after SIGKILL; keeping the corpus lock until they are gone`,
+    );
+    this.name = "ServeSurvivedKillError";
+  }
+}
+
+export async function withCorpusLock<T>(
+  releaseLock: () => void,
+  run: () => Promise<T>,
+): Promise<T> {
+  let serveSurvived = false;
+  try {
+    return await run();
+  } catch (error) {
+    serveSurvived = error instanceof ServeSurvivedKillError;
+    throw error;
+  } finally {
+    if (!serveSurvived) releaseLock();
+  }
+}
 
 export async function stopLaunchedServe(
   launcher: LaunchedServe,
   knownServePid: number | null,
   graceMs: number,
-  ops: ServeStopOps = liveServeStopOps,
+  ops: ServeStopOps,
+  killGraceMs = 10_000,
 ): Promise<{ exitCode: number | null; servePid: number | null; killed: boolean }> {
-  let servePid = knownServePid ?? ops.findServePid(launcher.pid);
+  let servePid = knownServePid;
   let launcherExited = false;
   let exitCode: number | null = null;
   void launcher.exited.then(
@@ -781,7 +858,23 @@ export async function stopLaunchedServe(
       launcherExited = true;
     },
   );
-  const allGone = (): boolean => launcherExited && (servePid === null || !ops.isAlive(servePid));
+  let stopSignal: "SIGTERM" | "SIGKILL" = "SIGTERM";
+  const sent = new Set<string>();
+  const signalOnce = (pid: number, signal: "SIGTERM" | "SIGKILL"): void => {
+    const key = `${pid}:${signal}`;
+    if (sent.has(key)) return;
+    sent.add(key);
+    ops.signal(pid, signal);
+  };
+  const discoverServe = (): void => {
+    if (servePid !== null) return;
+    servePid = ops.findServePid(launcher.pid);
+    if (servePid !== null) signalOnce(servePid, stopSignal);
+  };
+  const allGone = (): boolean => {
+    discoverServe();
+    return launcherExited && (servePid === null || !ops.isAlive(servePid));
+  };
   const waitGone = async (budgetMs: number): Promise<boolean> => {
     for (let waited = 0; !allGone(); waited += SERVE_STOP_POLL_MS) {
       if (waited >= budgetMs) return false;
@@ -790,13 +883,23 @@ export async function stopLaunchedServe(
     return true;
   };
 
-  ops.signal(servePid ?? launcher.pid, "SIGTERM");
+  discoverServe();
+  signalOnce(servePid ?? launcher.pid, "SIGTERM");
   if (await waitGone(graceMs)) return { exitCode, servePid, killed: false };
 
-  if (!launcherExited) servePid ??= ops.findServePid(launcher.pid);
-  if (servePid !== null && servePid !== launcher.pid) ops.signal(servePid, "SIGKILL");
-  if (!launcherExited) ops.signal(launcher.pid, "SIGKILL");
-  await waitGone(Number.POSITIVE_INFINITY);
+  stopSignal = "SIGKILL";
+  discoverServe();
+  if (servePid !== null && servePid !== launcher.pid) signalOnce(servePid, "SIGKILL");
+  if (!launcherExited) signalOnce(launcher.pid, "SIGKILL");
+  if (!(await waitGone(killGraceMs))) {
+    const survivors = [
+      ...(launcherExited ? [] : [launcher.pid]),
+      ...(servePid !== null && servePid !== launcher.pid && ops.isAlive(servePid)
+        ? [servePid]
+        : []),
+    ];
+    throw new ServeSurvivedKillError(survivors);
+  }
   return { exitCode: null, servePid, killed: true };
 }
 
@@ -1582,14 +1685,32 @@ interface ReplayContext {
 }
 
 async function runReplay(ctx: ReplayContext) {
-  const { options, corpus } = ctx;
-  const live = corpus.manifest.liveSession;
+  const { options } = ctx;
   const runStamp = stamp();
   const logsRoot = ensurePrivateDir(join(options.workDir, "runs"));
   const logDir = allocatePrivateDir(logsRoot, `${runStamp}-${options.profile}`);
   const runDir = allocatePrivateDir(options.runDir ?? logsRoot, `${runStamp}-replay`);
   const dbPath = join(runDir, "decant.db");
   copyDb(ctx.seed.path, dbPath);
+  let serveMayBeRunning = false;
+  try {
+    return await replayOnCopy(ctx, logDir, runDir, dbPath, (running) => {
+      serveMayBeRunning = running;
+    });
+  } finally {
+    if (!options.keepRunDb && !serveMayBeRunning) removeDbFiles(dbPath);
+  }
+}
+
+async function replayOnCopy(
+  ctx: ReplayContext,
+  logDir: string,
+  runDir: string,
+  dbPath: string,
+  noteServeRunning: (running: boolean) => void,
+) {
+  const { options, corpus } = ctx;
+  const live = corpus.manifest.liveSession;
   restoreSource(liveOrigPath(corpus.dir), live.filePath, pinnedMtimeSec(live.lastTimestampMs));
   const needsLeadingNewline = !endsWithNewline(live.filePath);
 
@@ -1629,6 +1750,7 @@ async function runReplay(ctx: ReplayContext) {
     stdout: Bun.file(join(logDir, "serve.stdout.log")),
     stderr: Bun.file(join(logDir, "serve.stderr.log")),
   });
+  noteServeRunning(true);
   let servePid = proc.pid;
   let servePidKnown = options.strace !== "launch";
   const cleanup = (): void => {
@@ -1644,8 +1766,12 @@ async function runReplay(ctx: ReplayContext) {
   let sse: AbortController | null = null;
   let attachProc: ReturnType<typeof Bun.spawn> | null = null;
   const drainAbort = new AbortController();
-  let serverStopped = false;
-  const stopServer = async (): Promise<{ shutdownMs: number; exitCode: number | null }> => {
+  let stopAttempt: Promise<{ shutdownMs: number; exitCode: number | null }> | null = null;
+  const stopServer = (): Promise<{ shutdownMs: number; exitCode: number | null }> => {
+    stopAttempt ??= stopServerOnce();
+    return stopAttempt;
+  };
+  const stopServerOnce = async (): Promise<{ shutdownMs: number; exitCode: number | null }> => {
     if (sampler !== null) {
       clearInterval(sampler);
       sampler = null;
@@ -1665,11 +1791,16 @@ async function runReplay(ctx: ReplayContext) {
       attachProc = null;
     }
     const stopAt = performance.now();
-    const stopped = await stopLaunchedServe(proc, servePidKnown ? servePid : null, 30_000);
+    const stopped = await stopLaunchedServe(
+      proc,
+      servePidKnown ? servePid : null,
+      30_000,
+      serveStopOps(port),
+    );
     const shutdownMs = performance.now() - stopAt;
     const exitCode = stopped.killed ? null : stopped.exitCode;
     process.off("exit", cleanup);
-    serverStopped = true;
+    noteServeRunning(false);
     return { shutdownMs, exitCode };
   };
 
@@ -1728,72 +1859,60 @@ async function runReplay(ctx: ReplayContext) {
     }
 
     let acceptResults = true;
-    let activeCheck: Promise<void> | null = null;
-    let rerun = false;
-    const check = (): Promise<void> => {
-      if (activeCheck !== null) {
-        rerun = true;
-        return activeCheck;
-      }
-      activeCheck = (async () => {
-        try {
-          do {
-            rerun = false;
-            if (!acceptResults || drainAbort.signal.aborted) break;
-            const hasPendingApi = markers.some((m) => m.apiMs === null);
-            const pendingFts = markers.filter((m) => m.ftsMs === null);
-            if (!hasPendingApi && pendingFts.length === 0) break;
-            checksRun += 1;
-            if (hasPendingApi) {
-              let offset = Math.max(0, scannedOffset - 20);
-              for (let page = 0; page < 10; page += 1) {
-                if (!acceptResults || drainAbort.signal.aborted) return;
-                const detail = sessionDetailPage(
-                  await api.get(
-                    `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
-                    drainAbort.signal,
-                  ),
-                );
-                if (!acceptResults || drainAbort.signal.aborted) return;
-                const seenAt = performance.now();
-                const text = detail.searchableText;
-                for (const marker of markers) {
-                  if (marker.apiMs === null && text.includes(`${marker.marker} `)) {
-                    marker.apiMs = seenAt - marker.appendedAtMs;
-                  }
-                }
-                offset += detail.messageCountOnPage;
-                scannedOffset = Math.max(scannedOffset, offset);
-                if (!detail.hasMoreMessages) break;
+    const checksHalted = (): boolean => !acceptResults || drainAbort.signal.aborted;
+    const check = coalescingCheck(async (): Promise<boolean> => {
+      try {
+        if (checksHalted()) return false;
+        const hasPendingApi = markers.some((m) => m.apiMs === null);
+        const pendingFts = markers.filter((m) => m.ftsMs === null);
+        if (!hasPendingApi && pendingFts.length === 0) return false;
+        checksRun += 1;
+        if (hasPendingApi) {
+          let offset = Math.max(0, scannedOffset - 20);
+          for (let page = 0; page < 10; page += 1) {
+            if (checksHalted()) return false;
+            const detail = sessionDetailPage(
+              await api.get(
+                `/api/sessions/${sessionId}?message_limit=200&message_offset=${offset}`,
+                drainAbort.signal,
+              ),
+            );
+            if (checksHalted()) return false;
+            const seenAt = performance.now();
+            const text = detail.searchableText;
+            for (const marker of markers) {
+              if (marker.apiMs === null && text.includes(`${marker.marker} `)) {
+                marker.apiMs = seenAt - marker.appendedAtMs;
               }
             }
-            for (const marker of pendingFts) {
-              if (!acceptResults || drainAbort.signal.aborted) return;
-              const result = await api.post(
-                "/api/search",
-                {
-                  query: marker.marker,
-                  include_subagents: true,
-                  include_total: false,
-                  limit: 5,
-                },
-                drainAbort.signal,
-              );
-              if (!acceptResults || drainAbort.signal.aborted) return;
-              if (searchHitCount(result) > 0)
-                marker.ftsMs = performance.now() - marker.appendedAtMs;
-            }
-          } while (rerun && acceptResults && !drainAbort.signal.aborted);
-        } catch (error) {
-          if (acceptResults && !drainAbort.signal.aborted) {
-            console.error(`[bench] freshness check failed: ${error}`);
+            offset += detail.messageCountOnPage;
+            scannedOffset = Math.max(scannedOffset, offset);
+            if (!detail.hasMoreMessages) break;
           }
-        } finally {
-          activeCheck = null;
         }
-      })();
-      return activeCheck;
-    };
+        for (const marker of pendingFts) {
+          if (checksHalted()) return false;
+          const result = await api.post(
+            "/api/search",
+            {
+              query: marker.marker,
+              include_subagents: true,
+              include_total: false,
+              limit: 5,
+            },
+            drainAbort.signal,
+          );
+          if (checksHalted()) return false;
+          if (searchHitCount(result) > 0) marker.ftsMs = performance.now() - marker.appendedAtMs;
+        }
+        return !checksHalted();
+      } catch (error) {
+        if (!checksHalted()) {
+          console.error(`[bench] freshness check failed: ${error}`);
+        }
+        return false;
+      }
+    });
     triggerCheck = () => void check();
 
     start = snapshot(servePid, dbPath);
@@ -1873,9 +1992,7 @@ async function runReplay(ctx: ReplayContext) {
     shutdownMs = stopped.shutdownMs;
     exitCode = stopped.exitCode;
   } finally {
-    if (!serverStopped) {
-      await stopServer();
-    }
+    await stopServer();
   }
 
   const windowFsync =
@@ -1884,7 +2001,6 @@ async function runReplay(ctx: ReplayContext) {
   const db = inspectDb(dbPath, { integrity: true });
   const finalMessageCount = readSessionRow(dbPath, live.sessionId).messageCount;
   const endFiles = fileSizes(dbPath);
-  if (!options.keepRunDb) removeDbFiles(dbPath);
 
   const windowSec = (end.tMs - t0) / 1000;
   const perMinute = (value: number): number => round((value / windowSec) * 60, 0);
@@ -2212,11 +2328,10 @@ async function runNative(options: Options): Promise<number> {
   const { corpus, releaseLock } = await prepareLockedCorpus(options);
   const live = corpus.manifest.liveSession;
 
-  let seed: SeedInfo | null = null;
-  let replay: Replay | null = null;
-  let scaling: Scaling | null = null;
-  try {
+  const { seed, replay, scaling } = await withCorpusLock(releaseLock, async () => {
     const clkTck = clockTicks();
+    let seed: SeedInfo | null = null;
+    let replay: Replay | null = null;
     if (!options.scalingOnly) {
       seed = await ensureSeed(
         options,
@@ -2240,10 +2355,9 @@ async function runNative(options: Options): Promise<number> {
       );
       replay = await runReplay({ options, corpus, seed, clkTck });
     }
-    scaling = options.scaling ? await runScaling(options, corpus, tag) : null;
-  } finally {
-    releaseLock();
-  }
+    const scaling: Scaling | null = options.scaling ? await runScaling(options, corpus, tag) : null;
+    return { seed, replay, scaling };
+  });
 
   const { lockHeld: _lockHeld, ...publicOptions } = options;
   const report = {

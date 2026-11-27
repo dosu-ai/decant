@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
 import { closeDb, openDb } from "../src/db.ts";
-import { bunVersionSupported, MIN_BUN_VERSION } from "../src/runtime.ts";
+import {
+  bunRuntimeSupported,
+  bunVersionSupported,
+  MIN_BUN_VERSION,
+  sqliteKeepsLeadingBom,
+} from "../src/runtime.ts";
 import { compareVersions, parseVersion } from "../src/update.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-runtime-test-"));
@@ -28,6 +33,12 @@ describe("bunVersionSupported", () => {
   });
 });
 
+test("the SQLite probe agrees with the version check on the Bun running the tests", () => {
+  expect(sqliteKeepsLeadingBom()).toBe(bunVersionSupported(Bun.version));
+  expect(bunRuntimeSupported()).toBe(bunVersionSupported(Bun.version));
+  expect(bunRuntimeSupported("1.4.3")).toBe(false);
+});
+
 test("the minimum Bun is the one package.json declares and CI pins at or above", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { engines: { bun: string } };
   expect(pkg.engines.bun).toBe(`>=${MIN_BUN_VERSION}`);
@@ -49,7 +60,7 @@ test("the CLI warns a person on an old Bun once, before the command runs", async
   const old = await ls("1.4.3");
   expect(old.code).toBe(0);
   expect(old.stderr).toBe(
-    `warning: Bun 1.4.3 is older than ${MIN_BUN_VERSION}, the oldest Bun that runs Decant from source without dropping a leading byte-order mark from stored text. Run: bun upgrade\n`,
+    `warning: Bun 1.4.3 drops a leading byte-order mark from text written to SQLite, so Decant stores that text without it. Decant needs Bun ${MIN_BUN_VERSION} or a later build. Run: bun upgrade\n`,
   );
 
   expect((await ls(MIN_BUN_VERSION)).stderr).toBe("");

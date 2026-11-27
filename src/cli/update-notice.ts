@@ -33,7 +33,8 @@ export function renderUpdateNotice(status: UpdateStatus): string | null {
 
 export function renderBunNotice(version: string): string {
   return (
-    `warning: Bun ${version} is older than ${MIN_BUN_VERSION}, the oldest Bun that runs Decant ` +
-    "from source without dropping a leading byte-order mark from stored text. Run: bun upgrade\n"
+    `warning: Bun ${version} drops a leading byte-order mark from text written to SQLite, ` +
+    `so Decant stores that text without it. Decant needs Bun ${MIN_BUN_VERSION} or a later build. ` +
+    "Run: bun upgrade\n"
   );
 }

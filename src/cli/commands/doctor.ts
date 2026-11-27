@@ -42,7 +42,9 @@ export function renderDoctor(report: DoctorReport): string {
     row(
       "platform",
       `${report.platform}, ${report.os_release}, Bun ${report.bun_version}` +
-        (report.bun_supported ? "" : ` (needs ${MIN_BUN_VERSION} or newer; run bun upgrade)`),
+        (report.bun_supported
+          ? ""
+          : ` (drops leading byte-order marks; needs ${MIN_BUN_VERSION} or a later build, run bun upgrade)`),
     ),
     row(
       "schema",

@@ -24,9 +24,10 @@ not a public issue.
 Requirements:
 
 - Bun 1.3 or newer.
+- [just](https://just.systems), which runs the full local gate and the
+  recipes in `justfile`.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
-- Optional: [just](https://just.systems) for the recipes in `justfile`.
 - Optional: [T3 Code](https://t3.codes). `t3.json` declares project actions,
   but T3 runs them only after you import them under Settings → Projects →
   Actions → Import from t3.json. Once imported, `Setup Worktree` installs
@@ -141,7 +142,9 @@ Do not weaken or remove tests to make a change pass.
   scan does not prove a fixture is synthetic.
 - Upload screenshots and recordings with the pull request: drag them into the
   description on GitHub, or, with push access, run
-  `gh pr edit <n> --body-file <file> --attach <image>`. Never commit PR-only
+  `gh pr edit <n> --attach <image>`, which appends the upload to the current
+  description. Add `--body-file <file>` only when that file holds the whole
+  current description, because it replaces the body. Never commit PR-only
   assets.
 - If a coding agent wrote the change, end the description with the model and
   harness.

@@ -26,12 +26,13 @@ Requirements:
 - Bun 1.3 or newer.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
+- Optional: [just](https://just.systems) for the recipes in `justfile`.
 - Optional: [T3 Code](https://t3.codes). `t3.json` declares project actions,
   but T3 runs them only after you import them under Settings → Projects →
   Actions → Import from t3.json. Once imported, `Setup Worktree` installs
-  dependencies in each new worktree before the agent starts, and the other
-  actions run `just` recipes: `ts-check`, `fmt`, `serve-scratch`, and
-  `build-binary`.
+  dependencies before the agent starts in worktrees you create, and in ones an
+  agent creates with Full access. The other actions need `just` and run its
+  `ts-check`, `fmt`, `serve-scratch`, and `build-binary` recipes.
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git
@@ -107,7 +108,7 @@ just check
 ```
 
 `scripts/pr-policy.ts` compares your branch with `origin/main` and fails if a
-committed migration changed, if a model rate or the route manifest
+migration already on `main` changed, if a model rate or the route manifest
 (`src/route-paths.ts`) changed without its docs, or if a fixture contains a
 real home-directory path, email address, or key-shaped string. Add the
 `docs-not-needed` label to a pull request when such a change truly needs no
@@ -133,11 +134,13 @@ Do not weaken or remove tests to make a change pass.
   and privacy checkboxes, and keep its layout. Verification names the commands
   and checks you ran and what you saw. "Tests pass" alone is not evidence.
 - Run `bun run scripts/pr-policy.ts` before pushing. It runs the same policy
-  checks as CI: committed migrations stay unchanged, docs change alongside
-  rate and route-manifest changes, and fixtures get a pattern scan for
-  real-looking home paths, emails, and credentials. Passing the scan does not
-  prove a fixture is synthetic.
-- Upload screenshots and recordings with the pull request, for example
+  checks as CI: migrations already on `main` stay unchanged, docs change
+  alongside rate and route-manifest changes, and fixtures get a pattern scan
+  for real-looking home paths, emails, and credentials. It cannot see an edit
+  to a migration you committed earlier on your own branch, and passing the
+  scan does not prove a fixture is synthetic.
+- Upload screenshots and recordings with the pull request: drag them into the
+  description on GitHub, or, with push access, run
   `gh pr edit <n> --body-file <file> --attach <image>`. Never commit PR-only
   assets.
 - If a coding agent wrote the change, end the description with the model and

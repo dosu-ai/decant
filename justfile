@@ -85,23 +85,34 @@ watch *ARGS:
 serve *ARGS:
     bun run src/cli.ts serve {{ARGS}}
 
-# Serve this checkout's UI from a reused copy of ~/.decant/decant.db, so a branch's migrations never touch the real archive. Delete the printed directory for a fresh copy.
+# Serve this checkout's UI from a private snapshot of ~/.decant/decant.db, so a branch's migrations never touch the real archive. The branch must support the archive's schema version. Delete the printed directory for a fresh snapshot.
 [group('cli')]
-serve-scratch *ARGS:
+serve-scratch:
     #!/usr/bin/env bash
     set -euo pipefail
-    dir="${TMPDIR:-/tmp}/decant-scratch-$(basename "$PWD")"
+    umask 077
+    checkout="$(pwd -P)"
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/decant-scratch"
+    dir="$base/$(basename "$checkout")-$(printf %s "$checkout" | cksum | cut -d' ' -f1)"
     mkdir -p "$dir/config"
+    for path in "$base" "$dir" "$dir/archive.db"; do
+      if [ -L "$path" ] || { [ -e "$path" ] && [ ! -O "$path" ]; }; then
+        echo "serve-scratch: $path is a symlink or not owned by you" >&2
+        exit 1
+      fi
+    done
     real="$HOME/.decant/decant.db"
     if [ ! -f "$dir/archive.db" ] && [ -f "$real" ]; then
-      for suffix in "" -wal; do
-        [ -f "$real$suffix" ] || continue
-        cp -c "$real$suffix" "$dir/archive.db$suffix" 2>/dev/null || cp "$real$suffix" "$dir/archive.db$suffix"
-      done
+      partial="$dir/archive.db.partial"
+      rm -f "$partial"
+      trap 'rm -f "$partial"' EXIT
+      bun -e 'import { Database } from "bun:sqlite"; const [src, dst] = process.argv.slice(-2); new Database(src, { readonly: true }).run("VACUUM INTO ?", [dst]);' "$real" "$partial"
+      mv "$partial" "$dir/archive.db"
+      trap - EXIT
     fi
     echo "Scratch archive: $dir/archive.db"
     DECANT_NO_SYNC=1 DECANT_UPDATE_CHECK=0 DECANT_CONFIG_DIR="$dir/config" \
-      exec bun run src/cli.ts --db "$dir/archive.db" --no-sync serve --no-open --port 0 {{ARGS}}
+      exec bun run src/cli.ts --db "$dir/archive.db" --no-sync serve --no-open --port 0
 
 [group('cli')]
 ls *ARGS:

@@ -55,7 +55,8 @@ The default archive is `~/.decant/decant.db`. Override it with `DECANT_DB` or
 scratch archive, or automatic sync may populate it from the real source
 directories listed in `docs/sources.md`. Opening an archive also migrates it,
 so serve a branch against a copy, never `~/.decant/decant.db` itself.
-`just serve-scratch` makes and serves that copy.
+`just serve-scratch` makes and serves that copy. A branch older than the
+archive's schema version cannot open it.
 
 ## Definition of done
 

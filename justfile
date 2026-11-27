@@ -94,20 +94,23 @@ serve-scratch:
     checkout="$(pwd -P)"
     base="${XDG_CACHE_HOME:-$HOME/.cache}/decant-scratch"
     dir="$base/$(basename "$checkout")-$(printf %s "$checkout" | cksum | cut -d' ' -f1)"
-    mkdir -p "$dir/config"
-    for path in "$base" "$dir" "$dir/archive.db"; do
-      if [ -L "$path" ] || { [ -e "$path" ] && [ ! -O "$path" ]; }; then
-        echo "serve-scratch: $path is a symlink or not owned by you" >&2
-        exit 1
-      fi
+    refuse() { echo "serve-scratch: $1 is a symlink or not owned by you" >&2; exit 1; }
+    mkdir -p "$(dirname "$base")"
+    for path in "$base" "$dir" "$dir/config"; do
+      [ -L "$path" ] && refuse "$path"
+      mkdir "$path" 2>/dev/null || true
+      { [ -L "$path" ] || [ ! -O "$path" ]; } && refuse "$path"
     done
+    archive="$dir/archive.db"
+    { [ -L "$archive" ] || { [ -e "$archive" ] && [ ! -O "$archive" ]; }; } && refuse "$archive"
     real="$HOME/.decant/decant.db"
-    if [ ! -f "$dir/archive.db" ] && [ -f "$real" ]; then
-      partial="$dir/archive.db.partial"
-      rm -f "$partial"
-      trap 'rm -f "$partial"' EXIT
-      bun -e 'import { Database } from "bun:sqlite"; const [src, dst] = process.argv.slice(-2); new Database(src, { readonly: true }).run("VACUUM INTO ?", [dst]);' "$real" "$partial"
-      mv "$partial" "$dir/archive.db"
+    if [ ! -e "$archive" ] && [ -f "$real" ]; then
+      stage="$(mktemp -d "$dir/stage.XXXXXX")"
+      trap 'rm -rf "$stage"' EXIT
+      # A read-only connection cannot open a WAL archive whose -shm file is absent.
+      bun -e 'import { Database } from "bun:sqlite"; const [src, dst] = process.argv.slice(-2); new Database(src, { readwrite: true }).run("VACUUM INTO ?", [dst]);' "$real" "$stage/archive.db"
+      ln "$stage/archive.db" "$archive" 2>/dev/null || true
+      rm -rf "$stage"
       trap - EXIT
     fi
     echo "Scratch archive: $dir/archive.db"

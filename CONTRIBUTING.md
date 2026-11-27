@@ -32,7 +32,7 @@ Requirements:
   Actions → Import from t3.json. Once imported, `Setup Worktree` installs
   dependencies before the agent starts in worktrees you create, and in ones an
   agent creates with Full access. The other actions need `just` and run its
-  `ts-check`, `fmt`, `serve-scratch`, and `build-binary` recipes.
+  `ts-check`, `fmt`, `serve-scratch`, and `dist-check` recipes.
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git

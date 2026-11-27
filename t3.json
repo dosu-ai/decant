@@ -25,8 +25,8 @@
       "stopOnSettle": true
     },
     {
-      "name": "Build native binary",
-      "command": "just build-binary --target native",
+      "name": "Distribution check",
+      "command": "just dist-check",
       "icon": "build"
     }
   ]

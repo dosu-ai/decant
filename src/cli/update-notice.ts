@@ -1,3 +1,4 @@
+import { MIN_BUN_VERSION } from "../runtime.ts";
 import type { UpdateStatus } from "../update.ts";
 import { label } from "./commands/update.ts";
 
@@ -28,4 +29,11 @@ export function renderUpdateNotice(status: UpdateStatus): string | null {
     return null;
   }
   return `\nDecant ${label(status.latest)} is available (you have ${label(status.current)}). Run: ${status.command}\n`;
+}
+
+export function renderBunNotice(version: string): string {
+  return (
+    `warning: Bun ${version} is older than ${MIN_BUN_VERSION}, the oldest Bun that runs Decant ` +
+    "from source without dropping a leading byte-order mark from stored text. Run: bun upgrade\n"
+  );
 }

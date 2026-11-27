@@ -23,11 +23,13 @@ import {
 import { installHelp } from "./cli/help.ts";
 import { assertFormatSupported, installValueValidation, parseOutputFormat } from "./cli/parse.ts";
 import {
+  renderBunNotice,
   renderUpdateNotice,
   shouldShowUpdateNotice,
   UPDATE_NOTICE_WAIT_MS,
 } from "./cli/update-notice.ts";
 import { configureLogging } from "./logging.ts";
+import { bunVersionSupported, runningBunVersion } from "./runtime.ts";
 import { checkForUpdate } from "./update.ts";
 import { DECANT_VERSION } from "./version.ts";
 
@@ -119,6 +121,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     });
     if (!show) {
       return;
+    }
+    const bunVersion = deps.bunVersion ?? runningBunVersion();
+    if (!bunVersionSupported(bunVersion)) {
+      io.writeErr(renderBunNotice(bunVersion));
     }
     noticeCommand = command;
     ctx.pendingUpdateNotice = checkForUpdate({

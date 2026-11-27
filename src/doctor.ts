@@ -6,6 +6,7 @@ import type { Config } from "./config.ts";
 import { LATEST_SCHEMA_VERSION } from "./db.ts";
 import { discover, INGEST_PIPELINE_REVISION } from "./ingest.ts";
 import { TOOLS, type Tool } from "./model.ts";
+import { bunVersionSupported, runningBunVersion } from "./runtime.ts";
 import { detectInstall, type InstallChannel, updateCheckEnabled } from "./update.ts";
 import { DECANT_VERSION } from "./version.ts";
 
@@ -15,6 +16,7 @@ export interface DoctorReport {
   platform: string;
   os_release: string;
   bun_version: string;
+  bun_supported: boolean;
   supported_schema_version: number;
   ingest_pipeline_revision: number;
   update_check: boolean;
@@ -76,7 +78,8 @@ export function collectDoctorReport(config: Config, options: DoctorOptions = {})
     install_channel: (options.install ?? detectInstall({ env })).channel,
     platform: `${process.platform} ${process.arch}`,
     os_release: release(),
-    bun_version: typeof Bun === "undefined" ? "unknown" : Bun.version,
+    bun_version: runningBunVersion(),
+    bun_supported: bunVersionSupported(runningBunVersion()),
     supported_schema_version: LATEST_SCHEMA_VERSION,
     ingest_pipeline_revision: INGEST_PIPELINE_REVISION,
     update_check: updateCheckEnabled({ env, homeDir: options.homeDir }),

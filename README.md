@@ -154,7 +154,7 @@ it. Run `docker volume rm decant-data` when you want it gone.
 
 ### From source
 
-Source builds need Bun 1.3 or newer. Follow the steps under
+Source builds need Bun 1.4.4 or newer. Follow the steps under
 [Contributing](#contributing).
 
 [Distribution](docs/distribution.md) covers installer options, native builds,
@@ -343,7 +343,7 @@ changes to existing behavior need an issue or a
 [discussion](https://github.com/dosu-ai/decant/discussions) first, where a
 maintainer agrees on the direction and scope.
 
-To run Decant from source, install Bun 1.3 or newer, then:
+To run Decant from source, install Bun 1.4.4 or newer, then:
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git

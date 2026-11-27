@@ -109,7 +109,12 @@ serve-scratch:
       trap 'rm -rf "$stage"' EXIT
       # A read-only connection cannot open a WAL archive whose -shm file is absent.
       bun -e 'import { Database } from "bun:sqlite"; const [src, dst] = process.argv.slice(-2); new Database(src, { readwrite: true }).run("VACUUM INTO ?", [dst]);' "$real" "$stage/archive.db"
-      ln "$stage/archive.db" "$archive" 2>/dev/null || true
+      if ! ln "$stage/archive.db" "$archive" 2>/dev/null; then
+        [ -f "$archive" ] && [ ! -L "$archive" ] && [ -O "$archive" ] || {
+          echo "serve-scratch: could not publish $archive" >&2
+          exit 1
+        }
+      fi
       rm -rf "$stage"
       trap - EXIT
     fi

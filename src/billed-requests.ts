@@ -90,12 +90,12 @@ export function reconcileBilledRequests(
   db: Database,
   sessionId: number,
   { refreshReconciledSession, unsettled = [] }: ReconcileBilledRequestsOptions,
-): void {
+): number[] {
   const session = queryRow<{ tool: string }>(db, "SELECT tool FROM session WHERE id = ?1", [
     sessionId,
   ]);
   if (session?.tool !== "claude_code") {
-    return;
+    return [];
   }
   const billed = queryRows<BilledRow>(
     db,
@@ -107,7 +107,7 @@ export function reconcileBilledRequests(
   );
   const pending = new Set(unsettled);
   if (billed.length === 0 && pending.size === 0) {
-    return;
+    return [];
   }
 
   const changes: Changes = { removed: new Map(), restored: new Map() };
@@ -142,9 +142,85 @@ export function reconcileBilledRequests(
     settle(db, requestId, null, NO_SESSIONS, changes);
   }
   applyChanges(db, changes, (affected) => affected !== sessionId || refreshReconciledSession);
+  const affectedPeers = new Set<number>();
+  for (const id of changes.removed.keys()) {
+    if (id !== sessionId) affectedPeers.add(id);
+  }
+  for (const id of changes.restored.keys()) {
+    if (id !== sessionId) affectedPeers.add(id);
+  }
+  return [...affectedPeers];
 }
 
-export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): void {
+export interface IncrementalBilledEntry {
+  messageId: number;
+  requestId: string;
+}
+
+export interface IncrementalBilledResult {
+  ownSessionModified: boolean;
+  affectedSessionIds: number[];
+}
+
+export function reconcileBilledRequestsIncremental(
+  db: Database,
+  sessionId: number,
+  entries: readonly IncrementalBilledEntry[],
+  replacedOldMessageIds: ReadonlySet<number>,
+): IncrementalBilledResult {
+  if (entries.length === 0 && replacedOldMessageIds.size === 0) {
+    return { ownSessionModified: false, affectedSessionIds: [] };
+  }
+  const changes: Changes = { removed: new Map(), restored: new Map() };
+  const findOwner = db.prepare<OwnerRow, [string]>(
+    "SELECT session_id, message_id FROM billed_request WHERE request_id = ?1",
+  );
+  const claim = db.prepare(
+    `INSERT INTO billed_request(request_id, session_id, message_id) VALUES (?1, ?2, ?3)
+     ON CONFLICT(request_id) DO UPDATE SET session_id = ?2, message_id = ?3`,
+  );
+  const delUnbilled = db.prepare(
+    "DELETE FROM unbilled_request WHERE session_id = ?1 AND message_id = ?2",
+  );
+  try {
+    for (const oldId of replacedOldMessageIds) {
+      delUnbilled.run(sessionId, oldId);
+    }
+    for (const entry of entries) {
+      if (entry.requestId === "") {
+        continue;
+      }
+      const owner = findOwner.get(entry.requestId);
+      if (owner == null) {
+        claim.run(entry.requestId, sessionId, entry.messageId);
+        continue;
+      }
+      if (owner.session_id === sessionId) {
+        if (replacedOldMessageIds.has(owner.message_id) && owner.message_id !== entry.messageId) {
+          claim.run(entry.requestId, sessionId, entry.messageId);
+        }
+        continue;
+      }
+      settle(db, entry.requestId, { sessionId, messageId: entry.messageId }, NO_SESSIONS, changes);
+    }
+  } finally {
+    delUnbilled.finalize();
+    claim.finalize();
+    findOwner.finalize();
+  }
+  const ownSessionModified = changes.removed.has(sessionId) || changes.restored.has(sessionId);
+  applyChanges(db, changes, (affected) => affected !== sessionId);
+  const affectedPeers = new Set<number>();
+  for (const id of changes.removed.keys()) {
+    if (id !== sessionId) affectedPeers.add(id);
+  }
+  for (const id of changes.restored.keys()) {
+    if (id !== sessionId) affectedPeers.add(id);
+  }
+  return { ownSessionModified, affectedSessionIds: [...affectedPeers] };
+}
+
+export function releaseBilledRequests(db: Database, sessionIds: readonly number[]): number[] {
   const gone = new Set(sessionIds);
   const requests = new Set<string>();
   for (const id of gone) {
@@ -157,6 +233,14 @@ export function releaseBilledRequests(db: Database, sessionIds: readonly number[
     settle(db, requestId, null, gone, changes);
   }
   applyChanges(db, changes, () => true);
+  const affected = new Set<number>();
+  for (const id of changes.removed.keys()) {
+    if (!gone.has(id)) affected.add(id);
+  }
+  for (const id of changes.restored.keys()) {
+    if (!gone.has(id)) affected.add(id);
+  }
+  return [...affected];
 }
 
 export function unsettledRequests(db: Database, sessionId: number): string[] {

@@ -29,6 +29,35 @@ export interface Facets {
 
 export const ACTIVE_GAP_CAP_SECONDS = 300;
 
+export function isRenderableReply(msg: NormalizedMessage): boolean {
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  for (const blk of msg.blocks) {
+    if (blk.blockType === "tool_use" || blk.blockType === "tool_result") {
+      return true;
+    }
+    if ((blk.blockType === "text" || blk.blockType === "thinking") && blk.text != null) {
+      for (let i = 0; i < blk.text.length; i += 1) {
+        if (blk.text.charCodeAt(i) !== 0x20) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export function countToolUseBlocks(msg: NormalizedMessage): number {
+  let count = 0;
+  for (const blk of msg.blocks) {
+    if (blk.blockType === "tool_use") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** A Pi fork starts at its own header but keeps the history it copied from
  * its parent, dated when the parent wrote it. That time was spent there. */
 export function copiedBeforeStart(
@@ -74,45 +103,77 @@ function namingTool(session: NormalizedSession): Tool {
   return session.tool === "atif" ? (atifNativeTool(session.rawMeta) ?? "atif") : session.tool;
 }
 
+export function isAgentSpawnTool(
+  tool: NormalizedSession["tool"],
+  toolName: string | null,
+): boolean {
+  return isAgentSpawn(tool, toolName);
+}
+
+export function fileRefsForMessage(
+  tool: Tool,
+  messageIdx: number,
+  message: NormalizedMessage,
+  cwd: string | null,
+): FileRef[] {
+  const refs: FileRef[] = [];
+  for (const block of message.blocks) {
+    if (block.blockType === "tool_use") {
+      blockFileRefs(tool, messageIdx, message, block, cwd, refs);
+    }
+  }
+  return refs;
+}
+
 export function fileRefs(session: NormalizedSession): FileRef[] {
-  const tool = namingTool(session);
   if (session.tool === "copilot") {
     return copilotRefs(session);
   }
+  const tool = namingTool(session);
   const refs: FileRef[] = [];
   for (const [messageIdx, message] of session.messages.entries()) {
     for (const block of message.blocks) {
-      if (block.blockType !== "tool_use") {
-        continue;
-      }
-      if (tool === "atif") {
-        const before = refs.length;
-        keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-        if (refs.length === before) {
-          codexRefs(messageIdx, message, block, session.cwd, refs);
-        }
-      } else if (tool === "copilot") {
-        keyedRef(COPILOT_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "claude_code") {
-        keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "gemini") {
-        keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "opencode") {
-        keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "cursor") {
-        keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "hermes") {
-        keyedRef(HERMES_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "pi") {
-        keyedRef(PI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
-      } else if (tool === "vscode_copilot") {
-        vscodeCopilotRefs(messageIdx, message, block, session.cwd, refs);
-      } else {
-        codexRefs(messageIdx, message, block, session.cwd, refs);
+      if (block.blockType === "tool_use") {
+        blockFileRefs(tool, messageIdx, message, block, session.cwd, refs);
       }
     }
   }
   return refs;
+}
+
+function blockFileRefs(
+  tool: Tool,
+  messageIdx: number,
+  message: NormalizedMessage,
+  block: NormalizedBlock,
+  cwd: string | null,
+  refs: FileRef[],
+): void {
+  if (tool === "atif") {
+    const before = refs.length;
+    keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+    if (refs.length === before) {
+      codexRefs(messageIdx, message, block, cwd, refs);
+    }
+  } else if (tool === "copilot") {
+    keyedRef(COPILOT_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "claude_code") {
+    keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "gemini") {
+    keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "opencode") {
+    keyedRef(OPENCODE_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "cursor") {
+    keyedRef(CURSOR_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "hermes") {
+    keyedRef(HERMES_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "pi") {
+    keyedRef(PI_FILE_TOOLS, messageIdx, message, block, cwd, refs);
+  } else if (tool === "vscode_copilot") {
+    vscodeCopilotRefs(messageIdx, message, block, cwd, refs);
+  } else {
+    codexRefs(messageIdx, message, block, cwd, refs);
+  }
 }
 
 type FileToolTable = Record<string, { key: string; fallbackKey?: string; operation: Operation }>;

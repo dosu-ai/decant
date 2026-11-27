@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { epochSecs, extension, type FileRef, facets, fileRefs, relativize } from "../src/enrich.ts";
+import {
+  epochSecs,
+  extension,
+  type FileRef,
+  facets,
+  fileRefs,
+  fileRefsForMessage,
+  relativize,
+} from "../src/enrich.ts";
 import type { NormalizedBlock, NormalizedSession, Tool } from "../src/model.ts";
 import { emptyUsage } from "../src/model.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
@@ -80,6 +88,17 @@ function oneBlockSession(tool: Tool, block: NormalizedBlock): NormalizedSession 
 }
 
 describe("fileRefs", () => {
+  test("per-message refs for append-only tools match whole-session refs", async () => {
+    const pi = oneBlockSession("pi", toolUse("read", { path: "src/a.ts" }));
+    for (const session of [await claudeSession(), await codexSession(), pi]) {
+      const perMessage = session.messages.flatMap((message, index) =>
+        fileRefsForMessage(session.tool, index, message, session.cwd),
+      );
+      expect(perMessage.length).toBeGreaterThan(0);
+      expect(perMessage).toEqual(fileRefs(session));
+    }
+  });
+
   test("Claude file refs are extracted with rel paths and extensions", async () => {
     const refs = fileRefs(await claudeSession());
     expect(refs.map(brief)).toEqual([

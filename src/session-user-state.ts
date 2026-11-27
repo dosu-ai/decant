@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { releaseBilledRequests } from "./billed-requests.ts";
 import { withImmediateTransaction } from "./db.ts";
+import { bumpEconomicsSeq } from "./sync-state.ts";
 
 export type SessionUserState = "archived" | "deleted";
 export type SessionUserStateUpdate = SessionUserState | "visible";
@@ -128,6 +129,7 @@ export function inheritDeletedSessionTombstone(
   }
 
   upsertSessionStateIdentities(db, [{ tool, source_session_id: sourceSessionId }], "deleted");
+  bumpEconomicsSeq(db);
   const ownedClaudeSpawnTombstones = claudeSpawnTombstoneIdentities(
     claudeRootSourceSessionId,
     context.ownedSpawnToolUseIds ?? [],
@@ -187,6 +189,7 @@ export function setSessionUserState(
         `DELETE FROM session_user_state
          WHERE tool = ?1 AND source_session_id = ?2`,
       ).run(selected.tool, selected.source_session_id);
+      bumpEconomicsSeq(db);
       options.afterApply?.();
       return true;
     }
@@ -204,6 +207,7 @@ export function setSessionUserState(
       return false;
     }
     upsertSessionStateIdentities(db, targets, state);
+    bumpEconomicsSeq(db);
 
     if (state === "deleted") {
       const spawnTombstones = claudeSpawnTombstonesForSessions(db, identities);

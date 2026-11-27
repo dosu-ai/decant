@@ -476,4 +476,31 @@ describe("resolveWorktreeRoots", () => {
     });
     db.close();
   });
+
+  test("holds the immediate write lock across project reads and updates", () => {
+    const dir = tempDir("decant-wt-lock-");
+    const dbPath = join(dir, "archive.db");
+    const dbA = openDb(dbPath);
+    const dbB = openDb(dbPath);
+    try {
+      dbA.query("INSERT INTO project(path, name) VALUES (?1, 'app')").run("/home/dev/app");
+      dbB.exec("PRAGMA busy_timeout = 0");
+      let sawWriteLock = false;
+      resolveWorktreeRoots(dbA, {
+        readText: () => {
+          try {
+            dbB.exec("BEGIN IMMEDIATE");
+            dbB.exec("ROLLBACK");
+          } catch {
+            sawWriteLock = true;
+          }
+          return null;
+        },
+      });
+      expect(sawWriteLock).toBe(true);
+    } finally {
+      dbA.close();
+      dbB.close();
+    }
+  });
 });

@@ -1,10 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
+import { afterAll, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb } from "../src/db.ts";
+import { closeDb, openDb } from "../src/db.ts";
 import {
   catalog,
   current,
@@ -707,6 +707,47 @@ describe("recommendations", () => {
       expect(found.find((s) => s.key === SEARCH_HEAVY_KEY)?.impact_label).toBe(
         "5 searches/session",
       );
+      db.close();
+    });
+
+    test("search-heavy reads its counts and session denominator from one snapshot", () => {
+      const db = searchHeavyBase();
+      for (let session = 0; session < 20; session += 1) {
+        const id = 1000 + session;
+        seedSearchSession(db, id);
+        db.query("UPDATE session SET search_count = 5 WHERE id = ?1").run(id);
+      }
+      const other = openDb(db.filename);
+      const realPrepare = db.prepare.bind(db);
+      let interleaved = false;
+      const prepareSpy = spyOn(db, "prepare").mockImplementation(((sql: string) => {
+        const statement = realPrepare(sql);
+        if (interleaved || !sql.includes("SUM(s.search_count)")) {
+          return statement;
+        }
+        interleaved = true;
+        const all = statement.all.bind(statement);
+        statement.all = ((...args: []) => {
+          const result = all(...args);
+          for (let session = 0; session < 20; session += 1) {
+            seedSearchSession(other, 2000 + session);
+          }
+          return result;
+        }) as typeof statement.all;
+        return statement;
+      }) as typeof db.prepare);
+      let found: ReturnType<typeof signals>;
+      try {
+        found = signals(db);
+      } finally {
+        prepareSpy.mockRestore();
+        closeDb(other);
+      }
+      expect(interleaved).toBe(true);
+      expect(found.find((s) => s.key === SEARCH_HEAVY_KEY)?.impact_label).toBe(
+        "5 searches/session",
+      );
+      expect(db.inTransaction).toBe(false);
       db.close();
     });
 

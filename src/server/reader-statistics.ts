@@ -1,9 +1,14 @@
 import type { Database } from "bun:sqlite";
+import { withReadSnapshot } from "../db.ts";
 import type { SyncProgress } from "../ingest.ts";
 
 const MIN_RELOAD_GAP = 25;
 
 export function storedPlannerStatistics(db: Database): string {
+  return withReadSnapshot(db, () => readPlannerStatistics(db));
+}
+
+function readPlannerStatistics(db: Database): string {
   // sqlite_stat1 does not exist until the first ANALYZE creates it.
   const analyzed =
     db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'").get() !=
@@ -67,5 +72,17 @@ export class ReaderStatistics {
     this.#loaded = this.#options.stored();
     this.#checkedAt = 0;
     this.#nextReloadAt = 0;
+  }
+
+  onCompleted(): boolean {
+    const stored = this.#options.stored();
+    const reloaded = stored !== this.#loaded;
+    if (reloaded) {
+      this.#options.reload();
+      this.#loaded = stored;
+    }
+    this.#checkedAt = 0;
+    this.#nextReloadAt = 0;
+    return reloaded;
   }
 }

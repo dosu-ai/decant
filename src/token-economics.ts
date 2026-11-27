@@ -19,6 +19,11 @@ import { modelUsageForScope, sessionCostParts, totalCost } from "./model-usage.t
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
 import { type SessionSource, sessionSourcePredicate } from "./source-filter.ts";
 import { queryRow, queryRows, runStatement } from "./sqlite-statements.ts";
+import {
+  bumpEconomicsSeq,
+  bumpSyncStateGeneration,
+  SYNC_STATE_RECOMMENDATIONS_PENDING,
+} from "./sync-state.ts";
 
 const CHARS_PER_TOKEN = 4;
 export const SESSION_ECONOMICS_FORMAT_VERSION = 12;
@@ -184,6 +189,26 @@ export function computeSessionEconomicsVectors(
      )`,
     [],
     options.cancelled,
+  );
+}
+
+export function computeSessionEconomicsVectorsByIds(
+  db: Database,
+  sessionIds: readonly number[],
+): SessionEconomicsVector[] {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+  const visibleSession = sessionUserStatePredicateForDatabase(db, "s");
+  const placeholders = sessionIds.map((_, index) => `?${index + 1}`).join(", ");
+  return cachedVectorsForScope(
+    db,
+    `WITH scoped_session AS (
+       SELECT s.id
+       FROM session s
+       WHERE s.id IN (${placeholders}) AND ${visibleSession}
+     )`,
+    [...sessionIds],
   );
 }
 
@@ -416,6 +441,9 @@ export function refreshSessionCosts(db: Database): number {
         storeEconomicsVector(db, refresh.staleVector);
       }
     }
+    if (pending.length > 0) {
+      bumpSyncStateGeneration(db, SYNC_STATE_RECOMMENDATIONS_PENDING);
+    }
     return pending.length;
   });
 }
@@ -564,7 +592,7 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
   }
 }
 
-function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
+export function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): void {
   runStatement(
     db,
     `INSERT INTO session_economics(session_id, format_version, vector_json, computed_at)
@@ -575,6 +603,7 @@ function storeEconomicsVector(db: Database, vector: SessionEconomicsVector): voi
        computed_at = excluded.computed_at`,
     [vector.id, SESSION_ECONOMICS_FORMAT_VERSION, JSON.stringify(vector)],
   );
+  bumpEconomicsSeq(db);
 }
 
 function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
@@ -592,7 +621,7 @@ function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[])
               CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
                    THEN COALESCE(b.tool_input, tc.input) END AS tool_input,
               CASE WHEN b.type = 'tool_result'
-                   THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
+                   THEN COALESCE(b.tool_result_bytes, length(CAST(b.tool_result AS BLOB)), 0)
                    -- An agent message's routing metadata outweighs its text,
                    -- and only the text reaches the model.
                    WHEN b.type = 'other' AND json_valid(b.text)
@@ -669,7 +698,7 @@ function vectorsForScope(
     db,
     `${scopeCte}
        SELECT t.session_id, t.tool_name, t.input,
-              COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
+              COALESCE(t.output_bytes, rb.tool_result_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
               cm.seq AS call_seq
        FROM scoped_session fs
        CROSS JOIN tool_call t INDEXED BY idx_toolcall_session

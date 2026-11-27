@@ -36,6 +36,32 @@ export function printableType(typ: string): string {
 
 export type UnknownTypes = Map<string, { count: number; firstLine: number }>;
 
+export function nullRecord<V>(
+  source?: Record<string, V> | Iterable<[string, V]> | null,
+): Record<string, V> {
+  const out = Object.create(null) as Record<string, V>;
+  if (source == null) {
+    return out;
+  }
+  if (Symbol.iterator in source) {
+    for (const [k, v] of source) {
+      out[k] = v;
+    }
+    return out;
+  }
+  for (const [k, v] of Object.entries(source)) {
+    out[k] = v;
+  }
+  return out;
+}
+
+export function ownGet<V>(
+  record: Record<string, V> | undefined | null,
+  key: string,
+): V | undefined {
+  return record != null && Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 export function parseJsonLine(line: string, lineNo: number, issues: Issue[]): Json | undefined {
   if (line.trim() === "") {
     return undefined;
@@ -58,6 +84,22 @@ export function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: nu
   const seen = unknownTypes.get(label) ?? { count: 0, firstLine: lineNo };
   seen.count += 1;
   unknownTypes.set(label, seen);
+}
+
+export type UnknownTypeCounts = Record<string, { count: number; firstLine: number }>;
+
+export function countUnknownInRecord(
+  unknownTypes: UnknownTypeCounts,
+  typ: string,
+  lineNo: number,
+): void {
+  const label = printableType(typ);
+  const seen = ownGet(unknownTypes, label);
+  if (seen == null) {
+    unknownTypes[label] = { count: 1, firstLine: lineNo };
+  } else {
+    seen.count += 1;
+  }
 }
 
 export type UnknownTypeHandling = "ignored" | 'kept as role "other"' | "read as ATIF-v1.8";

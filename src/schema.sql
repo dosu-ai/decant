@@ -1,4 +1,4 @@
--- decant:schema_version=31
+-- decant:schema_version=35
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -69,6 +69,9 @@ CREATE TABLE session (
   work_type TEXT,
   context_window_tokens INTEGER,
   peak_context_tokens INTEGER,
+  reply_count INTEGER,
+  tool_call_count INTEGER,
+  search_count INTEGER,
   UNIQUE(tool, source_session_id)
 );
 CREATE TABLE message (
@@ -100,7 +103,8 @@ CREATE TABLE block (
   tool_name TEXT,
   tool_use_id TEXT,
   tool_input TEXT,
-  tool_result TEXT
+  tool_result TEXT,
+  tool_result_bytes INTEGER
 );
 CREATE TABLE tool_call (
   id INTEGER PRIMARY KEY,
@@ -146,6 +150,17 @@ CREATE TABLE ingest_source (
   error TEXT,
   last_ingested_at TEXT
 );
+CREATE TABLE ingest_checkpoint (
+  path TEXT PRIMARY KEY REFERENCES ingest_source(path) ON DELETE CASCADE,
+  parsed_offset INTEGER NOT NULL,
+  parsed_line_count INTEGER NOT NULL,
+  prefix_hash TEXT NOT NULL,
+  state_blob BLOB NOT NULL
+);
+CREATE TABLE sync_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE ingest_issue (
   id INTEGER PRIMARY KEY,
   source_path TEXT,
@@ -274,7 +289,11 @@ CREATE TRIGGER block_ad AFTER DELETE ON block BEGIN
   INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
   VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
 END;
-CREATE TRIGGER block_au AFTER UPDATE ON block BEGIN
+CREATE TRIGGER block_au AFTER UPDATE ON block
+WHEN old.text IS NOT new.text
+  OR old.tool_name IS NOT new.tool_name
+  OR old.tool_input IS NOT new.tool_input
+BEGIN
   INSERT INTO block_fts(block_fts, rowid, text, tool_name, tool_input)
   VALUES ('delete', old.id, old.text, old.tool_name, old.tool_input);
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

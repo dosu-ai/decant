@@ -3,9 +3,12 @@ import {
   bashBucket,
   blockBucket,
   codexExecCalls,
+  countSearchCandidateToolCall,
   countSearches,
   isCodeEditTool,
+  isSearchCandidateTool,
   isUserQuestionTool,
+  SEARCH_CANDIDATE_TOOLS,
   toolBucket,
 } from "../src/buckets.ts";
 import type { Json } from "../src/model.ts";
@@ -463,6 +466,17 @@ describe("activity bucket classifier", () => {
       expect(countSearches("exec_command", '"{\\"cmd\\":\\"rg TODO\\"}"')).toBe(1);
       expect(countSearches("Bash", '{"command":"cat README.md"}')).toBe(0);
       expect(countSearches("Bash", '{"command":"git grep -n foo"}')).toBe(1);
+    });
+
+    test("search candidates cover every supported shell tool", () => {
+      const input = JSON.stringify({ command: "rg auth src" });
+      for (const tool of ["run_shell_command", "powershell", "run_in_terminal"]) {
+        expect(SEARCH_CANDIDATE_TOOLS).toContain(tool);
+        expect(isSearchCandidateTool(tool)).toBe(true);
+        expect(isSearchCandidateTool(`functions.${tool}`)).toBe(true);
+        expect(countSearchCandidateToolCall(tool, input)).toBe(1);
+      }
+      expect(isSearchCandidateTool("read_file")).toBe(false);
     });
 
     test("countSearches: compound statements count each search", () => {

@@ -83,7 +83,7 @@ function firstUserPrompt(session: NormalizedSession): string | null {
   return null;
 }
 
-function keywordWorkType(prompt: string): WorkType | null {
+export function keywordWorkType(prompt: string): WorkType | null {
   const head = headScalars(prompt, 400);
   const words = new Set(head.split(/[^\p{L}\p{N}]+/u).filter((word) => word !== ""));
   const has = (keys: readonly string[]): boolean =>
@@ -201,6 +201,10 @@ function toolMixWorkType(session: NormalizedSession, refs: readonly FileRef[]): 
     return "feature";
   }
   return null;
+}
+
+export function isWebSearchBlock(block: NormalizedBlock): boolean {
+  return isWebSearch(block);
 }
 
 function isWebSearch(block: NormalizedBlock): boolean {

@@ -6,7 +6,15 @@ import type { Config } from "../src/config.ts";
 import { closeDb, openDb } from "../src/db.ts";
 import type { EconomicsCache } from "../src/economics-cache.ts";
 import type { SyncReport } from "../src/ingest.ts";
-import { applyWatchEvent, noteArchiveOpened } from "../src/server/sync.ts";
+import { eventStream, publishServerEvent } from "../src/server/sse.ts";
+import {
+  applyWatchEvent,
+  noteArchiveOpened,
+  PersistentSyncWorker,
+  SyncWorkerStopTimeoutError,
+  syncNow,
+  syncStatus,
+} from "../src/server/sync.ts";
 import {
   createSyncCoordinator,
   handleRequest,
@@ -469,6 +477,117 @@ describe("sync status", () => {
     });
   });
 
+  test("a queued manual sync that takes over from a watch run starts with no reason or progress", async () => {
+    const config = freshConfig();
+    const watchProgress = { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 4 };
+    const manualProgress = { scanned: 3, ingested: 0, skipped: 3, failed: 0, total: 3 };
+    const watchEntered = Promise.withResolvers<void>();
+    const releaseWatch = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<void>();
+    const reportManualProgress = Promise.withResolvers<void>();
+    const manualReported = Promise.withResolvers<void>();
+    const releaseManual = Promise.withResolvers<void>();
+    let calls = 0;
+    const runner: SyncWorkerRunner = async (_config, _cancel, onProgress) => {
+      calls += 1;
+      if (calls === 1) {
+        onProgress?.(watchProgress);
+        watchEntered.resolve();
+        await releaseWatch.promise;
+        return report;
+      }
+      manualStarted.resolve();
+      await reportManualProgress.promise;
+      onProgress?.(manualProgress);
+      manualReported.resolve();
+      await releaseManual.promise;
+      return report;
+    };
+    const coordinator = createSyncCoordinator(runner);
+    try {
+      const status = new SyncStatusStore();
+      const watch = workerSyncRunner(
+        config,
+        status,
+        { aborted: false },
+        (progress) =>
+          applyWatchEvent(
+            { type: "sync_progress", reason: "watch", progress, status: status.snapshot() },
+            economics,
+            coordinator.isBusy,
+          ),
+        coordinator.runWithOwnership,
+        { candidatePaths: ["/claude/a.jsonl"], deferDerivedRefresh: true },
+      );
+      await watchEntered.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: "watch",
+        progress: watchProgress,
+      });
+
+      const manual = syncNow(config, economics, coordinator.run, coordinator.runWithOwnership);
+      releaseWatch.resolve();
+      const watchResult = await watch;
+      if (!("report" in watchResult)) {
+        throw new Error("watch run failed");
+      }
+      applyWatchEvent(
+        { type: "sync", reason: "watch", report: watchResult.report, status: status.snapshot() },
+        economics,
+        coordinator.isBusy,
+      );
+      await manualStarted.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: null,
+        progress: null,
+      });
+
+      reportManualProgress.resolve();
+      await manualReported.promise;
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: true,
+        reason: "manual",
+        progress: manualProgress,
+      });
+
+      releaseManual.resolve();
+      expect((await manual).status).toBe(200);
+      expect(await readStatus(config)).toMatchObject({
+        in_progress: false,
+        reason: null,
+        progress: null,
+      });
+    } finally {
+      releaseWatch.resolve();
+      reportManualProgress.resolve();
+      releaseManual.resolve();
+      await coordinator.close();
+    }
+  });
+
+  test("a finished watch run does not clear a successor that already reported progress", async () => {
+    const config = freshConfig();
+    const manualProgress = { scanned: 2, ingested: 1, skipped: 1, failed: 0, total: 2 };
+    applyWatchEvent(
+      { type: "sync_progress", reason: "manual", progress: manualProgress, status: idle },
+      economics,
+    );
+    applyWatchEvent({ type: "sync", reason: "watch", report, status: idle }, economics, () => true);
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: true,
+      reason: "manual",
+      progress: manualProgress,
+    });
+    applyWatchEvent({ type: "sync", reason: "manual", report, status: idle }, economics);
+    expect(await readStatus(config)).toMatchObject({
+      in_progress: false,
+      reason: null,
+      progress: null,
+    });
+  });
+
   test("a watcher run that joined another sync does not leave the status busy", async () => {
     const config = freshConfig();
     await workerSyncRunner(
@@ -516,6 +635,329 @@ describe("sync status", () => {
       expect(await readStatus(config)).toMatchObject({ archive_synced: true });
     } finally {
       closeDb(db);
+    }
+  });
+});
+
+const QUIET_REPORT: SyncReport = {
+  scanned: 1,
+  ingested: 0,
+  skipped: 1,
+  issues: 0,
+  issuesByCode: {},
+  failed: 0,
+  cancelled: false,
+};
+
+class ScriptedWorker extends EventTarget {
+  readonly posted: Record<string, unknown>[] = [];
+  terminated = false;
+
+  postMessage(message: Record<string, unknown>): void {
+    this.posted.push(message);
+    if (message.type === "close") {
+      queueMicrotask(() => this.exit(0));
+    }
+  }
+
+  terminate(): void {
+    this.terminated = true;
+  }
+
+  lastSyncId(): number {
+    const request = this.posted.findLast((message) => message.type === "sync");
+    if (request == null || typeof request.id !== "number") {
+      throw new Error("worker received no sync request");
+    }
+    return request.id;
+  }
+
+  complete(extra: Record<string, unknown> = {}, report: SyncReport = QUIET_REPORT): void {
+    this.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: "complete",
+          id: this.lastSyncId(),
+          ok: true,
+          report,
+          changedSessionIds: [],
+          tombstoned: false,
+          ownEconomicsWrites: 0,
+          ...extra,
+        },
+      }),
+    );
+  }
+
+  exit(code: number): void {
+    this.dispatchEvent(Object.assign(new Event("close"), { code }));
+  }
+
+  fail(message: string): void {
+    this.dispatchEvent(new ErrorEvent("error", { message }));
+  }
+}
+
+function scriptedSpawner() {
+  const spawned: ScriptedWorker[] = [];
+  return {
+    spawned,
+    spawn: (): Worker => {
+      const worker = new ScriptedWorker();
+      spawned.push(worker);
+      return worker as unknown as Worker;
+    },
+  };
+}
+
+async function syncRequestCount(worker: () => ScriptedWorker | undefined, count: number) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const posted = worker()?.posted.filter((message) => message.type === "sync").length ?? 0;
+    if (posted >= count) {
+      return;
+    }
+    await Bun.sleep(1);
+  }
+  throw new Error(`worker never received sync request ${count}`);
+}
+
+async function isPending(promise: Promise<unknown>): Promise<boolean> {
+  const marker = Symbol("pending");
+  const winner = await Promise.race([promise.catch(() => null), Bun.sleep(5).then(() => marker)]);
+  return winner === marker;
+}
+
+function eventNames() {
+  const response = eventStream(60_000);
+  const reader = response.body?.getReader();
+  if (reader == null) {
+    throw new Error("missing SSE body");
+  }
+  const decoder = new TextDecoder();
+  return async (): Promise<string[]> => {
+    const sentinel = `sentinel-${crypto.randomUUID()}`;
+    publishServerEvent({ type: sentinel });
+    let buffer = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        throw new Error("stream ended");
+      }
+      buffer += decoder.decode(chunk.value, { stream: true });
+      if (buffer.includes(`event: ${sentinel}`)) {
+        await reader.cancel();
+        return [...buffer.matchAll(/^event: (.*)$/gm)]
+          .map((match) => match[1] ?? "")
+          .filter((name) => name !== "hello" && name !== "ping" && name !== sentinel);
+      }
+    }
+  };
+}
+
+function countingEconomics() {
+  const calls = { invalidate: 0, refreshSessions: 0 };
+  const economics = {
+    invalidate() {
+      calls.invalidate += 1;
+    },
+    refreshSessions() {
+      calls.refreshSessions += 1;
+    },
+  } as unknown as EconomicsCache;
+  return { calls, economics };
+}
+
+describe("persistent sync worker replacement", () => {
+  test.each(["close", "error"] as const)(
+    "a retired worker's late %s event leaves its replacement's job alone",
+    async (lateEvent) => {
+      const config = freshConfig();
+      const { spawned, spawn } = scriptedSpawner();
+      const pool = new PersistentSyncWorker({ spawn, cancelGraceMs: 1 });
+      try {
+        const timedOut = pool.run(config, { aborted: true });
+        await expect(timedOut).rejects.toBeInstanceOf(SyncWorkerStopTimeoutError);
+        const [retired] = spawned;
+        expect(retired?.terminated).toBe(true);
+
+        const replacementJob = pool.run(config);
+        expect(spawned).toHaveLength(2);
+        const replacement = spawned[1] as ScriptedWorker;
+        expect(replacement).not.toBe(retired);
+
+        if (lateEvent === "close") {
+          retired?.exit(1);
+        } else {
+          retired?.fail("retired worker crashed late");
+        }
+        expect(await isPending(replacementJob)).toBe(true);
+
+        const report = { ...QUIET_REPORT, scanned: 7 };
+        replacement.complete({}, report);
+        await expect(replacementJob).resolves.toEqual(report);
+      } finally {
+        await pool.close();
+      }
+    },
+  );
+
+  test("a worker that exits mid-job still rejects its own job", async () => {
+    const config = freshConfig();
+    const { spawned, spawn } = scriptedSpawner();
+    const pool = new PersistentSyncWorker({ spawn });
+    try {
+      const job = pool.run(config);
+      spawned[0]?.exit(3);
+      await expect(job).rejects.toThrow("sync worker exited with code 3 before reporting");
+    } finally {
+      await pool.close();
+    }
+  });
+});
+
+describe("sync coordination of filesystem notifications", () => {
+  test("a watch event that arrives during a manual sync runs after it, merged with later events", async () => {
+    const config = freshConfig();
+    const manualEntered = Promise.withResolvers<void>();
+    const releaseManual = Promise.withResolvers<void>();
+    const calls: (readonly string[] | undefined)[] = [];
+    const runner: SyncWorkerRunner = async (_config, _cancel, _onProgress, syncOptions) => {
+      calls.push(syncOptions?.candidatePaths);
+      if (calls.length === 1) {
+        manualEntered.resolve();
+        await releaseManual.promise;
+      }
+      return { ...QUIET_REPORT, scanned: syncOptions?.candidatePaths?.length ?? 99 };
+    };
+    const coordinator = createSyncCoordinator(runner);
+    try {
+      const manual = coordinator.runWithOwnership(config);
+      await manualEntered.promise;
+
+      const watched = coordinator.runWithOwnership(config, { aborted: false }, undefined, {
+        candidatePaths: ["/claude/a.jsonl"],
+        deferDerivedRefresh: true,
+      });
+      expect(watched.promise).not.toBe(manual.promise);
+      expect(watched.owned).toBe(true);
+      const again = coordinator.runWithOwnership(config, { aborted: false }, undefined, {
+        candidatePaths: ["/claude/a.jsonl", "/claude/b.jsonl"],
+        deferDerivedRefresh: true,
+      });
+      expect(again.promise).toBe(watched.promise);
+
+      const sharedManual = coordinator.runWithOwnership(config);
+      expect(sharedManual.promise).toBe(manual.promise);
+      expect(sharedManual.owned).toBe(false);
+
+      releaseManual.resolve();
+      expect(await manual.promise).toMatchObject({ scanned: 99 });
+      expect(await watched.promise).toMatchObject({ scanned: 2 });
+      expect(calls).toEqual([undefined, ["/claude/a.jsonl", "/claude/b.jsonl"]]);
+    } finally {
+      await coordinator.close();
+    }
+  });
+});
+
+describe("sync terminal state", () => {
+  test("a recommendation-only refresh publishes archive_updated without touching economics", async () => {
+    const config = freshConfig();
+    const { spawned, spawn } = scriptedSpawner();
+    const coordinator = createSyncCoordinator(undefined, { workerOptions: { spawn } });
+    const { calls, economics } = countingEconomics();
+    try {
+      const status = new SyncStatusStore();
+      const sweep = workerSyncRunner(
+        config,
+        status,
+        { aborted: false },
+        () => {},
+        coordinator.runWithOwnership,
+        { recommendationMinIntervalMs: 1 },
+      );
+      await syncRequestCount(() => spawned[0], 1);
+      spawned[0]?.complete({ recommendationsRefreshed: true });
+      const result = await sweep;
+      if (!("report" in result)) {
+        throw new Error("sweep failed");
+      }
+      expect(result.report.ingested).toBe(0);
+
+      const collect = eventNames();
+      applyWatchEvent(
+        { type: "sync", reason: "sweep", report: result.report, status: status.snapshot() },
+        economics,
+        coordinator.isBusy,
+      );
+      expect(await collect()).toEqual(["sync", "archive_updated"]);
+      expect(calls).toEqual({ invalidate: 0, refreshSessions: 0 });
+
+      const manual = syncNow(config, economics, coordinator.run, coordinator.runWithOwnership);
+      await syncRequestCount(() => spawned[0], 2);
+      const collectManual = eventNames();
+      spawned[0]?.complete({ recommendationsRefreshed: false });
+      expect((await manual).status).toBe(200);
+      expect(await collectManual()).toEqual(["sync"]);
+      expect(calls).toEqual({ invalidate: 0, refreshSessions: 0 });
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  test("a manual sync queued behind a failing watch run clears the watch error when it succeeds", async () => {
+    const config = freshConfig();
+    const watchEntered = Promise.withResolvers<void>();
+    const failWatch = Promise.withResolvers<void>();
+    const manualStarted = Promise.withResolvers<void>();
+    const releaseManual = Promise.withResolvers<void>();
+    let calls = 0;
+    const runner: SyncWorkerRunner = async () => {
+      calls += 1;
+      if (calls === 1) {
+        watchEntered.resolve();
+        await failWatch.promise;
+        throw new Error("watch run failed");
+      }
+      manualStarted.resolve();
+      await releaseManual.promise;
+      return QUIET_REPORT;
+    };
+    const coordinator = createSyncCoordinator(runner);
+    const { economics } = countingEconomics();
+    try {
+      const status = new SyncStatusStore();
+      const watch = workerSyncRunner(
+        config,
+        status,
+        { aborted: false },
+        () => {},
+        coordinator.runWithOwnership,
+        { candidatePaths: ["/claude/a.jsonl"], deferDerivedRefresh: true },
+      );
+      await watchEntered.promise;
+      const manual = syncNow(config, economics, coordinator.run, coordinator.runWithOwnership);
+
+      failWatch.resolve();
+      const watchResult = await watch;
+      expect("error" in watchResult).toBe(true);
+      applyWatchEvent(
+        { type: "error", reason: "watch", error: "watch run failed", status: status.snapshot() },
+        economics,
+        coordinator.isBusy,
+      );
+      await manualStarted.promise;
+      expect(syncStatus.in_progress).toBe(true);
+      expect(syncStatus.last_error).toBeNull();
+
+      releaseManual.resolve();
+      expect((await manual).status).toBe(200);
+      const body = (await (
+        await handleRequest(new Request("http://127.0.0.1:3000/api/sync-status"), config)
+      ).json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ in_progress: false, last_error: null });
+    } finally {
+      await coordinator.close();
     }
   });
 });

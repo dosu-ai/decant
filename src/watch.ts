@@ -16,6 +16,7 @@ import {
   hermesDatabasePaths,
   sync as ingestSync,
   isOpenCodeDatabaseName,
+  type SyncOptions,
   type SyncProgress,
   type SyncReport,
 } from "./ingest.ts";
@@ -82,6 +83,7 @@ export type SyncRunner = (
   status: SyncStatusStore,
   cancel: { aborted: boolean },
   onProgress: (progress: SyncProgress) => void,
+  syncOptions?: SyncOptions,
 ) => Promise<SyncReport | SyncRunnerResult | SyncRunnerFailure>;
 
 export interface SyncRunnerResult {
@@ -162,6 +164,7 @@ export class SyncStatusStore {
 export interface WatchRoot {
   dir: string;
   recursive: boolean;
+  targetable?: boolean;
   accepts(filename: string | null): boolean;
   poll?: () => boolean;
 }
@@ -280,17 +283,24 @@ export function watchRoots(config: Config): WatchRoot[] {
     dir: string;
     recursive: boolean;
     polled?: boolean;
+    targetable?: boolean;
     accepts: () => EventFilter;
   }[] = [
-    { dir: config.claudeDir, recursive: true, accepts: () => anyEvent },
-    { dir: join(config.codexDir, "sessions"), recursive: true, accepts: () => anyEvent },
+    { dir: config.claudeDir, recursive: true, targetable: true, accepts: () => anyEvent },
+    {
+      dir: join(config.codexDir, "sessions"),
+      recursive: true,
+      targetable: true,
+      accepts: () => anyEvent,
+    },
     {
       dir: join(config.codexDir, "archived_sessions"),
       recursive: true,
+      targetable: true,
       accepts: () => anyEvent,
     },
     ...(config.geminiDir != null
-      ? [{ dir: config.geminiDir, recursive: true, accepts: () => anyEvent }]
+      ? [{ dir: config.geminiDir, recursive: true, targetable: true, accepts: () => anyEvent }]
       : []),
     {
       dir: config.opencodeDir,
@@ -313,7 +323,14 @@ export function watchRoots(config: Config): WatchRoot[] {
       ? [{ dir: config.cursorDir, recursive: true, accepts: () => cursorEvents }]
       : []),
     ...(config.copilotDir != null
-      ? [{ dir: config.copilotDir, recursive: true, accepts: () => copilotEvents }]
+      ? [
+          {
+            dir: config.copilotDir,
+            recursive: true,
+            targetable: true,
+            accepts: () => copilotEvents,
+          },
+        ]
       : []),
     ...[config.vscodeCopilotDir, config.vscodeCopilotInsidersDir].flatMap((userDir) =>
       userDir == null
@@ -332,10 +349,10 @@ export function watchRoots(config: Config): WatchRoot[] {
           ],
     ),
     ...(config.atifDir != null
-      ? [{ dir: config.atifDir, recursive: true, accepts: () => atifEvents }]
+      ? [{ dir: config.atifDir, recursive: true, targetable: true, accepts: () => atifEvents }]
       : []),
     ...(config.piDir != null
-      ? [{ dir: config.piDir, recursive: true, accepts: () => piEvents }]
+      ? [{ dir: config.piDir, recursive: true, targetable: true, accepts: () => piEvents }]
       : []),
     // A running Hermes keeps its connection open and appends to the `-wal`,
     // which is the same event gap OpenCode has, so each profile's directory
@@ -349,15 +366,24 @@ export function watchRoots(config: Config): WatchRoot[] {
   ];
   const roots = new Map<
     string,
-    { recursive: boolean; filters: { polled: boolean; make: () => EventFilter }[] }
+    {
+      recursive: boolean;
+      targetable: boolean;
+      filters: { polled: boolean; make: () => EventFilter }[];
+    }
   >();
   for (const candidate of candidates) {
     const filter = { polled: candidate.polled === true, make: candidate.accepts };
     const root = roots.get(candidate.dir);
     if (root == null) {
-      roots.set(candidate.dir, { recursive: candidate.recursive, filters: [filter] });
+      roots.set(candidate.dir, {
+        recursive: candidate.recursive,
+        targetable: candidate.targetable === true,
+        filters: [filter],
+      });
     } else {
       root.recursive ||= candidate.recursive;
+      root.targetable &&= candidate.targetable === true;
       root.filters.push(filter);
     }
   }
@@ -369,7 +395,7 @@ export function watchRoots(config: Config): WatchRoot[] {
         return false;
       }
     })
-    .map(([dir, { recursive, filters }]) => {
+    .map(([dir, { recursive, targetable, filters }]) => {
       const built = filters.map(({ polled, make }) => ({ polled, accept: make() }));
       const anyOf = (accepts: EventFilter[], filename: string | null): boolean =>
         accepts.reduce((any, accept) => accept(filename) || any, false);
@@ -378,6 +404,7 @@ export function watchRoots(config: Config): WatchRoot[] {
       return {
         dir,
         recursive,
+        ...(targetable ? { targetable: true } : {}),
         accepts: (filename: string | null) => anyOf(all, filename),
         ...(polled.length > 0 ? { poll: () => anyOf(polled, null) } : {}),
       };
@@ -405,13 +432,14 @@ export function runSyncOnce(
   cancel: { aborted: boolean } = { aborted: false },
   open: (path: string) => Database = openDb,
   onProgress?: (progress: SyncProgress) => void,
+  syncOptions?: SyncOptions,
 ): SyncReport {
   status.start();
   let db: Database | null = null;
   try {
     mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = open(config.dbPath);
-    const report = ingestSync(db, config, cancel, onProgress);
+    const report = ingestSync(db, config, cancel, onProgress, syncOptions);
     status.finishOk(report);
     return report;
   } catch (error) {
@@ -422,6 +450,21 @@ export function runSyncOnce(
       closeDb(db);
     }
   }
+}
+
+const MAX_TARGETED_WATCH_PATHS = 64;
+
+const SWEEP_RECOMMENDATION_INTERVAL_MS = 5 * 60 * 1000;
+
+function isTargetableWatchFile(filename: string | null): filename is string {
+  if (filename == null || filename === "") {
+    return false;
+  }
+  const base = basename(filename);
+  if (base === "session_index.jsonl" || base.endsWith(".meta.json") || base === ".project_root") {
+    return false;
+  }
+  return base.endsWith(".jsonl") || base.endsWith(".json");
 }
 
 export function startWatch(options: WatchOptions): WatchHandle {
@@ -437,8 +480,8 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const open = options.open ?? openDb;
   const runner: SyncRunner =
     options.runner ??
-    (async (config, syncStatus, cancelFlag, onProgress) =>
-      runSyncOnce(config, syncStatus, cancelFlag, open, onProgress));
+    (async (config, syncStatus, cancelFlag, onProgress, syncOptions) =>
+      runSyncOnce(config, syncStatus, cancelFlag, open, onProgress, syncOptions));
   const enableWatch = options.enableWatch !== false;
   const openCodePollMs = options.openCodePollMs ?? DEFAULT_OPENCODE_POLL_MS;
   const syncOnStart = options.syncOnStart !== false;
@@ -451,6 +494,8 @@ export function startWatch(options: WatchOptions): WatchHandle {
   let pollTimer: Timer | null = null;
   let running = false;
   let pendingReason: SyncReason | null = null;
+  const pendingWatchPaths = new Set<string>();
+  let forceFullScan = false;
   let activeRun = Promise.resolve();
   let resolveDone: (() => void) | null = null;
   const done = new Promise<void>((resolve) => {
@@ -460,8 +505,11 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const emit = (event: WatchEvent): void => options.onEvent?.(event);
 
   const requestRun = (reason: SyncReason): void => {
+    if (reason !== "watch") {
+      forceFullScan = true;
+    }
     if (running) {
-      pendingReason = reason;
+      pendingReason = pendingReason != null && pendingReason !== "watch" ? pendingReason : reason;
       return;
     }
     activeRun = run(reason);
@@ -470,6 +518,9 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const schedule = (reason: SyncReason, delay: number): void => {
     if (stopped) {
       return;
+    }
+    if (reason !== "watch") {
+      forceFullScan = true;
     }
     if (delay > 0) {
       if (debounceTimer != null) {
@@ -495,7 +546,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
       return;
     }
     if (running) {
-      pendingReason = reason;
+      pendingReason = pendingReason != null && pendingReason !== "watch" ? pendingReason : reason;
       return;
     }
     running = true;
@@ -505,10 +556,29 @@ export function startWatch(options: WatchOptions): WatchHandle {
         const current = nextReason;
         nextReason = null;
         pendingReason = null;
+        const candidatePaths = [...pendingWatchPaths];
+        pendingWatchPaths.clear();
+        const useTargeted = current === "watch" && !forceFullScan && candidatePaths.length > 0;
+        forceFullScan = false;
+        const syncOptions: SyncOptions | undefined =
+          current === "watch"
+            ? {
+                deferDerivedRefresh: true,
+                ...(useTargeted ? { candidatePaths } : {}),
+              }
+            : current === "sweep"
+              ? { recommendationMinIntervalMs: SWEEP_RECOMMENDATION_INTERVAL_MS }
+              : undefined;
         try {
-          const result = await runner(options.config, status, cancel, (progress) => {
-            emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
-          });
+          const result = await runner(
+            options.config,
+            status,
+            cancel,
+            (progress) => {
+              emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
+            },
+            syncOptions,
+          );
           if ("error" in result) {
             if (result.emitTerminal) {
               emit({
@@ -573,6 +643,16 @@ export function startWatch(options: WatchOptions): WatchHandle {
       try {
         const watcher = watch(root.dir, { recursive: root.recursive }, (eventType, filename) => {
           if ((eventType === "rename" || eventType === "change") && root.accepts(filename)) {
+            if (
+              root.targetable === true &&
+              !forceFullScan &&
+              isTargetableWatchFile(filename) &&
+              pendingWatchPaths.size < MAX_TARGETED_WATCH_PATHS
+            ) {
+              pendingWatchPaths.add(join(root.dir, filename));
+            } else {
+              forceFullScan = true;
+            }
             schedule("watch", debounceMs);
           }
         });
@@ -596,6 +676,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
   if (openCodePollMs > 0 && polls.length > 0) {
     pollTimer = setInterval(() => {
       if (polls.reduce((any, poll) => poll() || any, false)) {
+        forceFullScan = true;
         schedule("watch", debounceMs);
       }
     }, openCodePollMs);

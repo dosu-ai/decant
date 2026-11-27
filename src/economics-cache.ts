@@ -1,8 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { DateFilter } from "./date-filter.ts";
 import { exceptionAttributes, getDecantLogger } from "./logging.ts";
+import { readEconomicsSeq } from "./sync-state.ts";
 import {
   aggregateEconomicsVectors,
+  computeSessionEconomicsVectorsByIds,
   economicsVectorMatchesFilter,
   type SessionEconomicsVector,
   type TokenEconomics,
@@ -29,6 +31,7 @@ export interface EconomicsCacheOptions {
 export class EconomicsCache {
   #vectors: SessionEconomicsVector[] | null = null;
   #builtDataVersion: number | null = null;
+  #builtEconomicsSeq: number | null = null;
   #building: Promise<void> | null = null;
   #buildAbort: AbortController | null = null;
   #rebuildRequestedMidBuild = false;
@@ -42,7 +45,7 @@ export class EconomicsCache {
   async get(filter?: DateFilter | null): Promise<TokenEconomics> {
     if (this.#vectors == null) {
       await (this.#building ?? this.#rebuild());
-    } else if (this.#dataVersion() !== this.#builtDataVersion) {
+    } else if (this.#isStale()) {
       void this.#rebuild();
     }
     const vectors = this.#vectors ?? [];
@@ -53,6 +56,80 @@ export class EconomicsCache {
 
   invalidate(): void {
     void this.#rebuild();
+  }
+
+  dataVersion(): number | null {
+    return this.#dataVersion();
+  }
+
+  refreshSessions(
+    sessionIds: readonly number[],
+    expectedDataVersion?: number | null,
+    ownEconomicsWrites?: number,
+  ): void {
+    if (this.#disposed) {
+      return;
+    }
+    if (
+      this.#vectors == null ||
+      this.#building != null ||
+      this.#options.computeVectors != null ||
+      sessionIds.length === 0 ||
+      sessionIds.length > 16 ||
+      (expectedDataVersion !== undefined &&
+        (expectedDataVersion == null || expectedDataVersion !== this.#builtDataVersion))
+    ) {
+      this.invalidate();
+      return;
+    }
+    try {
+      const dvBefore = this.#dataVersion();
+      const seqBefore = readEconomicsSeq(this.#options.db);
+      if (ownEconomicsWrites !== undefined) {
+        if (
+          this.#builtEconomicsSeq == null ||
+          seqBefore == null ||
+          ownEconomicsWrites < 0 ||
+          seqBefore !== this.#builtEconomicsSeq + ownEconomicsWrites
+        ) {
+          this.invalidate();
+          return;
+        }
+      } else if (dvBefore !== this.#builtDataVersion || seqBefore !== this.#builtEconomicsSeq) {
+        this.invalidate();
+        return;
+      }
+      const uniqueIds = [...new Set(sessionIds)];
+      const updated = computeSessionEconomicsVectorsByIds(this.#options.db, uniqueIds);
+      const dvAfter = this.#dataVersion();
+      const seqAfter = readEconomicsSeq(this.#options.db);
+      if (seqAfter !== seqBefore || dvAfter !== dvBefore) {
+        this.invalidate();
+        return;
+      }
+      const updatedById = new Map(updated.map((vector) => [vector.id, vector]));
+      const touched = new Set(uniqueIds);
+      const next: SessionEconomicsVector[] = [];
+      for (const vector of this.#vectors) {
+        if (!touched.has(vector.id)) {
+          next.push(vector);
+          continue;
+        }
+        const replacement = updatedById.get(vector.id);
+        if (replacement != null) {
+          next.push(replacement);
+          updatedById.delete(vector.id);
+        }
+      }
+      for (const added of updatedById.values()) {
+        next.push(added);
+      }
+      this.#vectors = next;
+      this.#builtDataVersion = dvAfter;
+      this.#builtEconomicsSeq = seqAfter;
+    } catch {
+      this.invalidate();
+    }
   }
 
   prewarm(): void {
@@ -88,6 +165,21 @@ export class EconomicsCache {
     this.#buildAbort?.abort();
   }
 
+  #isStale(): boolean {
+    const dataVersion = this.#dataVersion();
+    const economicsSeq = readEconomicsSeq(this.#options.db);
+    if (economicsSeq == null || this.#builtEconomicsSeq == null) {
+      return dataVersion !== this.#builtDataVersion;
+    }
+    if (economicsSeq !== this.#builtEconomicsSeq) {
+      return true;
+    }
+    if (dataVersion != null && dataVersion !== this.#builtDataVersion) {
+      this.#builtDataVersion = dataVersion;
+    }
+    return false;
+  }
+
   #dataVersion(): number | null {
     try {
       // data_version only reflects other connections' commits after this
@@ -112,6 +204,7 @@ export class EconomicsCache {
     }
     const compute = this.#options.computeVectors ?? computeVectorsInWorker;
     const version = this.#dataVersion();
+    const economicsSeq = readEconomicsSeq(this.#options.db);
     const abort = new AbortController();
     this.#buildAbort = abort;
     this.#building = compute(this.#options.dbPath, { signal: abort.signal })
@@ -122,6 +215,7 @@ export class EconomicsCache {
         const replacedModel = this.#vectors != null;
         this.#vectors = vectors;
         this.#builtDataVersion = version;
+        this.#builtEconomicsSeq = economicsSeq;
         if (replacedModel) {
           this.#options.onRebuilt?.();
         }
@@ -150,50 +244,48 @@ export class EconomicsCache {
   }
 }
 
-function computeVectorsInWorker(
+export function computeVectorsInWorker(
   dbPath: string,
   { signal }: ComputeVectorsOptions,
+  spawn: () => Worker = () => new Worker(workerUrl("stats-worker.ts"), { type: "module" }),
 ): Promise<SessionEconomicsVector[]> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(new Error("aborted"));
       return;
     }
-    const worker = new Worker(workerUrl("stats-worker.ts"), { type: "module" });
+    const worker = spawn();
     const cancelBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
     const cancelView = new Int32Array(cancelBuffer);
     let promiseSettled = false;
-    const onAbort = (): void => {
-      Atomics.store(cancelView, 0, 1);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    const settle = (): void => {
+    const finish = (outcome: () => void): void => {
       signal.removeEventListener("abort", onAbort);
+      if (promiseSettled) {
+        return;
+      }
+      promiseSettled = true;
+      outcome();
     };
+    function onAbort(): void {
+      Atomics.store(cancelView, 0, 1);
+      finish(() => reject(new Error("aborted")));
+      worker.terminate();
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { ok: true; vectors: SessionEconomicsVector[] }
         | { ok: false; error: string };
-      settle();
-      if (promiseSettled) {
-        return;
-      }
-      promiseSettled = true;
-      if (signal.aborted) {
-        reject(new Error("aborted"));
-      } else if (data.ok) {
-        resolve(data.vectors);
-      } else {
-        reject(new Error(data.error));
-      }
+      finish(() => (data.ok ? resolve(data.vectors) : reject(new Error(data.error))));
     });
     worker.addEventListener("error", (event) => {
-      settle();
-      if (promiseSettled) {
-        return;
-      }
-      promiseSettled = true;
-      reject(workerError(event, "token economics worker failed"));
+      finish(() => reject(workerError(event, "token economics worker failed")));
+    });
+    worker.addEventListener("close", (event) => {
+      const code = (event as Event & { code?: number }).code ?? "unknown";
+      finish(() =>
+        reject(new Error(`token economics worker exited with code ${code} before reporting`)),
+      );
     });
     worker.postMessage({ dbPath, cancelBuffer });
   });

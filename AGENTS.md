@@ -40,7 +40,7 @@ Start with these files and guides:
 
 ## Setup and commands
 
-Run commands from the repository root. Bun 1.3 or newer is required. Docker is
+Run commands from the repository root. Bun 1.4.4 or newer is required. Docker is
 only needed when validating the container image.
 
 - `bun run dev` performs a frozen dependency install, startup sync, local UI,

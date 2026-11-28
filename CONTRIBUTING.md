@@ -23,7 +23,7 @@ not a public issue.
 
 Requirements:
 
-- Bun 1.3 or newer.
+- Bun 1.4.4 or newer.
 - [just](https://just.systems), which runs the full local gate and the
   recipes in `justfile`.
 - Docker only when changing the container build.

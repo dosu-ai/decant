@@ -45,6 +45,7 @@ export interface UpdateDeps {
   runCommand?: (argv: string[]) => number;
   installedOnPath?: () => { path: string; version: string | null } | null;
   stderrIsTTY?: boolean;
+  bunVersion?: string;
 }
 
 export interface GlobalOptions {

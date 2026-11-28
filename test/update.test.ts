@@ -19,6 +19,7 @@ import type { UpdateDeps } from "../src/cli/context.ts";
 import { shouldShowUpdateNotice } from "../src/cli/update-notice.ts";
 import { runCli } from "../src/cli.ts";
 import { closeDb, openDb } from "../src/db.ts";
+import { MIN_BUN_VERSION } from "../src/runtime.ts";
 import { saveSettings } from "../src/settings.ts";
 import {
   assertNpmPlatformPackage,
@@ -840,6 +841,7 @@ describe("decant update", () => {
           install: { channel: "npm", binaryPath: null },
           fetch: registry("0.12.0", calls),
           stderrIsTTY: true,
+          bunVersion: MIN_BUN_VERSION,
         },
       });
 

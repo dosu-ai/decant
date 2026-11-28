@@ -1,3 +1,4 @@
+import { MIN_BUN_VERSION } from "../runtime.ts";
 import type { UpdateStatus } from "../update.ts";
 import { label } from "./commands/update.ts";
 
@@ -28,4 +29,12 @@ export function renderUpdateNotice(status: UpdateStatus): string | null {
     return null;
   }
   return `\nDecant ${label(status.latest)} is available (you have ${label(status.current)}). Run: ${status.command}\n`;
+}
+
+export function renderBunNotice(version: string): string {
+  return (
+    `warning: Bun ${version} drops a leading byte-order mark from text written to SQLite, ` +
+    `so Decant stores that text without it. Decant needs Bun ${MIN_BUN_VERSION} or a later build. ` +
+    "Run: bun upgrade\n"
+  );
 }

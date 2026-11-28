@@ -85,6 +85,43 @@ watch *ARGS:
 serve *ARGS:
     bun run src/cli.ts serve {{ARGS}}
 
+# Serve this checkout's UI from a private snapshot of ~/.decant/decant.db, so a branch's migrations never touch the real archive. The branch must support the archive's schema version. Delete the printed directory for a fresh snapshot.
+[group('cli')]
+serve-scratch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    checkout="$(pwd -P)"
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/decant-scratch"
+    dir="$base/$(basename "$checkout")-$(printf %s "$checkout" | cksum | cut -d' ' -f1)"
+    refuse() { echo "serve-scratch: $1 is a symlink or not owned by you" >&2; exit 1; }
+    mkdir -p "$(dirname "$base")"
+    for path in "$base" "$dir" "$dir/config"; do
+      [ -L "$path" ] && refuse "$path"
+      mkdir "$path" 2>/dev/null || true
+      { [ -L "$path" ] || [ ! -O "$path" ]; } && refuse "$path"
+    done
+    archive="$dir/archive.db"
+    { [ -L "$archive" ] || { [ -e "$archive" ] && [ ! -O "$archive" ]; }; } && refuse "$archive"
+    real="$HOME/.decant/decant.db"
+    if [ ! -e "$archive" ] && [ -f "$real" ]; then
+      stage="$(mktemp -d "$dir/stage.XXXXXX")"
+      trap 'rm -rf "$stage"' EXIT
+      # A read-only connection cannot open a WAL archive whose -shm file is absent.
+      bun -e 'import { Database } from "bun:sqlite"; const [src, dst] = process.argv.slice(-2); new Database(src, { readwrite: true }).run("VACUUM INTO ?", [dst]);' "$real" "$stage/archive.db"
+      if ! ln "$stage/archive.db" "$archive" 2>/dev/null; then
+        [ -f "$archive" ] && [ ! -L "$archive" ] && [ -O "$archive" ] || {
+          echo "serve-scratch: could not publish $archive" >&2
+          exit 1
+        }
+      fi
+      rm -rf "$stage"
+      trap - EXIT
+    fi
+    echo "Scratch archive: $dir/archive.db"
+    DECANT_NO_SYNC=1 DECANT_UPDATE_CHECK=0 DECANT_CONFIG_DIR="$dir/config" \
+      exec bun run src/cli.ts --db "$dir/archive.db" --no-sync serve --no-open --port 0
+
 [group('cli')]
 ls *ARGS:
     bun run src/cli.ts ls {{ARGS}}

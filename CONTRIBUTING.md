@@ -24,10 +24,16 @@ not a public issue.
 Requirements:
 
 - Bun 1.4.4 or newer.
+- [just](https://just.systems), which runs the full local gate and the
+  recipes in `justfile`.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
-- Optional: [T3 Code](https://t3.codes) runs `t3.json`'s setup script, which
-  installs dependencies, in each new worktree.
+- Optional: [T3 Code](https://t3.codes). `t3.json` declares project actions,
+  but T3 runs them only after you import them under Settings → Projects →
+  Actions → Import from t3.json. Once imported, `Setup Worktree` installs
+  dependencies before the agent starts in worktrees you create, and in ones an
+  agent creates with Full access. The other actions need `just` and run its
+  `ts-check`, `fmt`, `serve-scratch`, and `dist-check` recipes.
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git
@@ -103,7 +109,7 @@ just check
 ```
 
 `scripts/pr-policy.ts` compares your branch with `origin/main` and fails if a
-committed migration changed, if a model rate or the route manifest
+migration already on `main` changed, if a model rate or the route manifest
 (`src/route-paths.ts`) changed without its docs, or if a fixture contains a
 real home-directory path, email address, or key-shaped string. Add the
 `docs-not-needed` label to a pull request when such a change truly needs no
@@ -125,9 +131,27 @@ Do not weaken or remove tests to make a change pass.
   `refactor:`, and `chore:`.
 - Sign commits. The protected `main` branch requires verified commits.
 - Keep one concern per pull request and explain the user-visible outcome.
-- Fill in every section of the pull request template. Verification names the
-  commands and checks you ran and what you saw.
+- Fill in every section of the pull request template, including the schema
+  and privacy checkboxes, and keep its layout. Verification names the commands
+  and checks you ran and what you saw. "Tests pass" alone is not evidence.
+- Run `bun run scripts/pr-policy.ts` before pushing. It runs the same policy
+  checks as CI: migrations already on `main` stay unchanged, docs change
+  alongside rate and route-manifest changes, and fixtures get a pattern scan
+  for real-looking home paths, emails, and credentials. It cannot see an edit
+  to a migration you committed earlier on your own branch, and passing the
+  scan does not prove a fixture is synthetic.
+- Upload screenshots and recordings with the pull request: drag them into the
+  description on GitHub, or, with push access, run
+  `gh pr edit <n> --attach <image>`, which appends the upload to the current
+  description. Add `--body-file <file>` only when that file holds the whole
+  current description, because it replaces the body. Never commit PR-only
+  assets.
+- If a coding agent wrote the change, end the description with the model and
+  harness.
 - Link the issue the pull request closes when one exists.
+- While a pull request waits on CI or review, wait for check and review events
+  instead of polling. Check each bot finding against the source, fix the real
+  ones, and answer false positives with a reason.
 - Keep `main` green, as every pull request needs passing CI and review.
 
 CodeRabbit reviews every pull request once it leaves draft. Its approval is

@@ -126,13 +126,20 @@ refuses to start when an entry is neither an IP address nor an IPv4 CIDR.
 
 ## Source
 
-Source builds need Bun 1.3 or newer:
+Source builds need Bun 1.4.4 or newer:
 
 ```sh
 git clone https://github.com/dosu-ai/decant.git
 cd decant
 bun run dev
 ```
+
+Older Bun releases drop a leading byte-order mark from text written to the
+archive. On one of them, CLI commands print a warning to stderr that asks you to
+run `bun upgrade`, and `decant doctor` flags the Bun version. The command still
+runs, and the warning stays off with `--json`, `--quiet`, in CI, or when stderr
+is not a terminal. Release binaries, npm, Homebrew, and Docker ship their own Bun and
+never show it.
 
 Build a native binary for the current platform with:
 

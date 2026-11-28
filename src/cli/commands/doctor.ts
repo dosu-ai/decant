@@ -1,4 +1,5 @@
 import { CUSTOM_PATH, collectDoctorReport, type DoctorReport } from "../../doctor.ts";
+import { MIN_BUN_VERSION } from "../../runtime.ts";
 import type { CliContext } from "../context.ts";
 import { label } from "./update.ts";
 
@@ -38,7 +39,13 @@ export function renderDoctor(report: DoctorReport): string {
   const rootsWidth = Math.max(0, ...sourceRoots.map((roots) => roots.length)) + 2;
   const lines = [
     row("decant", `${label(report.decant_version)} (${report.install_channel})`),
-    row("platform", `${report.platform}, ${report.os_release}, Bun ${report.bun_version}`),
+    row(
+      "platform",
+      `${report.platform}, ${report.os_release}, Bun ${report.bun_version}` +
+        (report.bun_supported
+          ? ""
+          : ` (drops leading byte-order marks; needs ${MIN_BUN_VERSION} or a later build, run bun upgrade)`),
+    ),
     row(
       "schema",
       `archive ${report.archive.schema_version == null ? "none" : `v${report.archive.schema_version}`}, ` +

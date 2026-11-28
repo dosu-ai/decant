@@ -23,7 +23,7 @@ not a public issue.
 
 Requirements:
 
-- Bun 1.3 or newer.
+- Bun 1.4.4 or newer.
 - Docker only when changing the container build.
 - Optional: [pre-commit](https://pre-commit.com) for local hooks.
 - Optional: [T3 Code](https://t3.codes) runs `t3.json`'s setup script, which
